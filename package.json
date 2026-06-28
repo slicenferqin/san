@@ -1,6 +1,6 @@
 {
-  "name": "omp-monorepo",
-  "homepage": "https://omp.sh",
+  "name": "san-monorepo",
+  "homepage": "https://github.com/slicenferqin/san",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.3.14",
@@ -94,7 +94,7 @@
   },
   "overrides": {},
   "scripts": {
-    "setup": "bun install && bun run build:native && bun --cwd=packages/coding-agent link && ln -sfn \"$(pwd)/packages/coding-agent/scripts/omp\" \"$(bun pm -g bin)/omp\"",
+    "setup": "bun install && bun run build:native && bun --cwd=packages/coding-agent link && mkdir -p \"${BUN_INSTALL:-$HOME/.bun}/bin\" && ln -sfn \"$(pwd)/packages/coding-agent/scripts/san\" \"${BUN_INSTALL:-$HOME/.bun}/bin/san\"",
     "dev": "bun --cwd=packages/coding-agent src/cli.ts",
     "dev:timing": "PI_TIMING=x bun --cwd=packages/coding-agent --preload ../utils/src/module-timer.ts src/cli.ts",
     "stats": "bun --cwd=packages/coding-agent src/cli.ts stats",

@@ -1,14 +1,14 @@
 /**
- * Centralized path helpers for omp config directories.
+ * Centralized path helpers for config directories.
  *
  * Uses PI_CONFIG_DIR (default ".omp") for the config root and
  * PI_CODING_AGENT_DIR to override the agent directory.
  *
  * On Linux, if XDG_DATA_HOME / XDG_STATE_HOME / XDG_CACHE_HOME environment
  * variables are set, paths are redirected to XDG-compliant locations under
- * $XDG_*_HOME/omp/. This requires running `omp config migrate` first to
+ * $XDG_*_HOME/omp/. This requires running `san config migrate` first to
  * move data to the new locations. No filesystem existence checks are performed
- * — if the env var is set, omp trusts that the migration has been done.
+ * — if the env var is set, san trusts that the migration has been done.
  */
 
 import * as fs from "node:fs";
@@ -16,8 +16,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { engines, version } from "../package.json" with { type: "json" };
 
-/** App name (e.g. "omp") */
-export const APP_NAME: string = "omp";
+/** App name (e.g. "san") */
+export const APP_NAME: string = "san";
+
+/** Storage app name used for OMP-compatible config roots and XDG paths. */
+export const CONFIG_APP_NAME: string = "omp";
 
 /** Config directory name (e.g. ".omp") */
 export const CONFIG_DIR_NAME: string = ".omp";
@@ -217,7 +220,7 @@ export function getConfigAgentDirName(): string {
 type XdgCategory = "data" | "state" | "cache";
 
 /**
- * Resolves and caches all omp directory paths. On Linux, when XDG environment
+ * Resolves and caches all config directory paths. On Linux, when XDG environment
  * variables are set, paths are redirected under $XDG_*_HOME/omp/. A new
  * instance is created whenever the agent directory changes, which naturally
  * invalidates all cached paths.
@@ -263,7 +266,7 @@ class DirResolver {
 				const value = process.env[envVar];
 				if (!value) return undefined;
 				try {
-					const appRoot = path.join(value, APP_NAME);
+					const appRoot = path.join(value, CONFIG_APP_NAME);
 					if (profile) {
 						const profilePath = path.join(appRoot, "profiles", profile);
 						if (fs.existsSync(profilePath)) {
@@ -510,7 +513,7 @@ export function getLogsDir(): string {
 	return dirs.rootSubdir("logs", "state");
 }
 
-/** Get the path to a dated log file (~/.omp/logs/omp.YYYY-MM-DD.log). */
+/** Get the path to a dated log file (~/.omp/logs/san.YYYY-MM-DD.log). */
 export function getLogPath(date = new Date()): string {
 	return path.join(getLogsDir(), `${APP_NAME}.${date.toISOString().slice(0, 10)}.log`);
 }
