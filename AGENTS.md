@@ -22,6 +22,11 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 
 **Catalog import convention**: code in this repo imports catalog *values* (bundled models, model-thinking helpers, identity, descriptors, model manager/cache) from `@oh-my-pi/pi-catalog/<module>` — never via `@oh-my-pi/pi-ai`. The pi-ai barrel re-exports only the model/effort *types* its own signatures use (`Model`, `Api`, `ThinkingConfig`, `Effort`, …); type-only imports of those from `@oh-my-pi/pi-ai` are fine.
 
+## User Working Preferences
+
+- Unless explicitly requested otherwise, produce research notes, design proposals, implementation plans, and architecture summaries as HTML documents.
+- Default location for these HTML proposal/research documents is `docs/research/`.
+
 ## GitHub
 
 Unless user tells you exactly what to write:

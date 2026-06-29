@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San 上下文稳态方案</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #20242a;
+      --muted: #697386;
+      --line: #d8e0ea;
+      --paper: #fbfcfd;
+      --panel: #ffffff;
+      --band: #f2f6f8;
+      --green: #0f766e;
+      --blue: #2457a6;
+      --amber: #a16207;
+      --red: #a33a3a;
+      --code: #edf2f7;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.65;
+    }
+
+    header {
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .wrap {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .hero {
+      padding: 52px 0 36px;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--green);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 940px;
+      margin: 0;
+      font-size: clamp(32px, 5vw, 56px);
+      line-height: 1.06;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 900px;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    main {
+      padding: 30px 0 62px;
+    }
+
+    section {
+      padding: 30px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    section:last-child {
+      border-bottom: 0;
+    }
+
+    h2 {
+      margin: 0 0 15px;
+      font-size: 25px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 10px 0;
+    }
+
+    ul,
+    ol {
+      margin: 12px 0;
+      padding-left: 22px;
+    }
+
+    li {
+      margin: 7px 0;
+    }
+
+    table {
+      width: 100%;
+      margin: 16px 0;
+      border-collapse: collapse;
+      background: var(--panel);
+    }
+
+    th,
+    td {
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--band);
+      font-weight: 700;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: var(--code);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow: auto;
+      margin: 16px 0;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #101820;
+      color: #eef6f3;
+      line-height: 1.55;
+      tab-size: 2;
+    }
+
+    pre code {
+      padding: 0;
+      border-radius: 0;
+      background: transparent;
+      color: inherit;
+    }
+
+    .callout {
+      margin: 18px 0;
+      padding: 16px 18px;
+      border-left: 4px solid var(--green);
+      background: var(--band);
+    }
+
+    .callout.warning {
+      border-left-color: var(--amber);
+    }
+
+    .callout.risk {
+      border-left-color: var(--red);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 18px 0 0;
+    }
+
+    .card {
+      min-height: 130px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .card strong {
+      display: block;
+      margin-bottom: 7px;
+      color: var(--blue);
+    }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin: 18px 0;
+    }
+
+    .step {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .step span {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      margin-bottom: 8px;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--green);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .stack {
+      margin: 18px 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    .layer {
+      display: grid;
+      grid-template-columns: 230px 1fr 160px;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .layer:last-child {
+      border-bottom: 0;
+    }
+
+    .layer strong {
+      color: var(--blue);
+    }
+
+    .budget {
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+    }
+
+    .badge {
+      display: inline-block;
+      margin: 2px 6px 2px 0;
+      padding: 3px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    @media (max-width: 900px) {
+      .grid,
+      .pipeline {
+        grid-template-columns: 1fr;
+      }
+
+      .layer {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap hero">
+      <p class="eyebrow">San Agent Design Memo</p>
+      <h1>上下文稳态：把长上下文从“能塞多少”改成“稳定工作在黄金窗口”</h1>
+      <p class="subtitle">
+        本文把 San 的上下文管理目标定义为 Context Steady State：每轮 agent 停下时都把上下文收敛到结构化、可裁剪、可缓存、可召回的工作态，而不是等到爆窗再被动压缩。
+      </p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h2>问题判断</h2>
+      <p>
+        现在很多模型标称 1M 甚至更长上下文，但实用质量窗口通常小于标称窗口。超过某个区间后，模型不是不能读，而是注意力分配、指令遵循、细节引用和输出稳定性都会下降。San 不应该把标称窗口当作目标，而应该维护自己的黄金工作窗口。
+      </p>
+      <div class="callout">
+        <strong>核心判断：</strong>长上下文的价值不是“持续堆历史”，而是给系统更多缓冲；真正进入模型主工作区的内容必须被选择、分层和稳定排布。
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>现象</th>
+            <th>风险</th>
+            <th>San 的策略</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>标称窗口越来越大</td>
+            <td>prompt 越堆越长，模型注意力被稀释</td>
+            <td>引入 <code>qualityWindowTokens</code>，默认按 272K-500K 工作</td>
+          </tr>
+          <tr>
+            <td>每轮工具调用产生大量噪声</td>
+            <td>下一轮带入原始日志，成本高且污染决策</td>
+            <td>每轮结束生成结构化 <code>TurnDigest</code></td>
+          </tr>
+          <tr>
+            <td>摘要频繁改写前缀</td>
+            <td>破坏 prompt cache 命中率</td>
+            <td>固定前缀稳定，动态上下文放尾部</td>
+          </tr>
+          <tr>
+            <td>近因上下文和长期记忆混在一起</td>
+            <td>模型分不清事实、计划、偏好、证据和噪声</td>
+            <td>按层组装 <code>ContextPacket</code>，每层有预算和来源</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>目标定义</h2>
+      <p>
+        上下文稳态是一个会话不变量：一次用户 prompt 触发一轮 agent run；这一轮内部可以多次 LLM 请求、工具调用、子 agent 派工；当这一轮停止时，San 必须把这轮经历沉淀为可复用状态，并在下一轮开始前重新组装上下文。
+      </p>
+      <div class="grid">
+        <div class="card">
+          <strong>稳定</strong>
+          每轮结束后上下文规模回到可控范围，不依赖模型最大窗口兜底。
+        </div>
+        <div class="card">
+          <strong>可解释</strong>
+          下一轮模型看到的每块上下文都有来源、用途和预算，不是历史拼接。
+        </div>
+        <div class="card">
+          <strong>可缓存</strong>
+          稳定前缀尽量不变；易变信息放后面，减少缓存失效范围。
+        </div>
+        <div class="card">
+          <strong>可召回</strong>
+          用户历史 prompt、项目摘要、事实记忆、工具证据按需召回，不默认全带。
+        </div>
+        <div class="card">
+          <strong>可裁剪</strong>
+          超预算时按层级、时效、相关性、证据强度裁剪，而不是简单砍旧消息。
+        </div>
+        <div class="card">
+          <strong>可演进</strong>
+          第一版不重写 agent loop，通过 session 层和 memory 层插入策略。
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>工作循环</h2>
+      <div class="pipeline">
+        <div class="step">
+          <span>1</span>
+          <strong>收到用户 prompt</strong>
+          <p>解析当前意图，保留完整原文，准备生成本轮 <code>ContextPacket</code>。</p>
+        </div>
+        <div class="step">
+          <span>2</span>
+          <strong>组装上下文</strong>
+          <p>固定前缀、历史摘要、近 5 轮、相关召回、当前 prompt 分层进入模型。</p>
+        </div>
+        <div class="step">
+          <span>3</span>
+          <strong>执行 agent run</strong>
+          <p>允许多次 LLM、工具、MCP、子 agent 调用；保留原始事件日志。</p>
+        </div>
+        <div class="step">
+          <span>4</span>
+          <strong>生成 TurnDigest</strong>
+          <p>本轮结束后沉淀意图、决策、文件、证据、风险、下一步。</p>
+        </div>
+        <div class="step">
+          <span>5</span>
+          <strong>进入稳态</strong>
+          <p>更新摘要账本、记忆候选、缓存布局和预算索引，等待下一轮。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>ContextPacket 分层</h2>
+      <p>
+        San 每轮不直接把 session history 全量交给模型，而是生成一个可审计的 <code>ContextPacket</code>。每层都有不同稳定性，决定它放在 prompt 的位置和缓存收益。
+      </p>
+      <div class="stack">
+        <div class="layer">
+          <strong>Stable Prefix</strong>
+          <div>San persona、工具协议、开发规则、稳定 system prompt、稳定 skills 索引。</div>
+          <div class="budget">cache: high</div>
+        </div>
+        <div class="layer">
+          <strong>Project State</strong>
+          <div>项目级事实、仓库地图、当前分支、重要约束。只在项目状态变化后刷新。</div>
+          <div class="budget">cache: high</div>
+        </div>
+        <div class="layer">
+          <strong>Checkpoint Summary</strong>
+          <div>每 N 轮合并一次的稳定摘要，不每轮改写，避免破坏大块缓存。</div>
+          <div class="budget">cache: medium</div>
+        </div>
+        <div class="layer">
+          <strong>Turn Digest Ledger</strong>
+          <div>append-only 的轮次摘要索引。新 digest 追加在尾部，旧 digest 不重写。</div>
+          <div class="budget">cache: medium</div>
+        </div>
+        <div class="layer">
+          <strong>Recent Exact Turns</strong>
+          <div>最近 5 轮原文，包括用户 prompt、关键 assistant 决策和关键工具结果短摘。</div>
+          <div class="budget">cache: low</div>
+        </div>
+        <div class="layer">
+          <strong>Retrieved Context</strong>
+          <div>Mnemopi、CodeGraph、文件状态、MCP 资源、用户历史 prompt 的相关召回。</div>
+          <div class="budget">cache: low</div>
+        </div>
+        <div class="layer">
+          <strong>Current Prompt</strong>
+          <div>当前用户 prompt 完整放最后，确保最高近因权重。</div>
+          <div class="budget">attention: high</div>
+        </div>
+      </div>
+      <div class="callout warning">
+        固定前缀不能塞每轮都会变化的摘要。摘要如果频繁插在最前面，缓存会被反复击穿；San 应该把稳定规则固定，把动态信息放在后段。
+      </div>
+    </section>
+
+    <section>
+      <h2>TurnDigest 结构</h2>
+      <p>
+        每轮结束后生成的不是普通自然语言总结，而是结构化摘要。它既服务下一轮上下文，也服务长期记忆、项目账本、调试和后续复盘。
+      </p>
+      <pre><code>turnId: "2026-06-28T14:52:10.123Z-0007"
+userIntent: "讨论并定义 San 的上下文稳态机制"
+promptRefs:
+  currentPromptHash: "sha256:..."
+  relatedHistoricalPrompts: ["prompt-0002", "prompt-0005"]
+actionsTaken:
+  - "分析现有 agent loop 与 session 注入点"
+  - "形成 ContextPacket 分层方案"
+decisions:
+  - "优先在 coding-agent session 层落地，不先改 core loop"
+  - "每轮 agent_end 后生成 TurnDigest"
+filesTouched:
+  - path: "docs/research/context-steady-state-san.html"
+    reason: "记录方案"
+toolEvidence:
+  - tool: "codegraph"
+    summary: "AgentSession.prompt 是下一轮上下文注入点"
+factsLearned:
+  - "Mnemopi 已支持 autoRecall / autoRetain / recallForCompaction"
+openQuestions:
+  - "TurnDigest 默认用 smol 还是 default 模型生成"
+risks:
+  - "每轮摘要会增加额外请求成本"
+nextSteps:
+  - "实现 ContextSteadyState service 的最小闭环"
+memoryCandidates:
+  - content: "用户希望所有方案默认输出 HTML"
+    type: "preference"
+    importance: 0.9</code></pre>
+      <p>
+        关键点是：文件内容、工具输出和长日志不直接塞进摘要，只保留证据索引、短摘、路径、行号、hash 和重读策略。下一轮如果需要原文，再由 read/codegraph/memory 重新取新鲜内容。
+      </p>
+    </section>
+
+    <section>
+      <h2>预算策略</h2>
+      <p>
+        San 应该把模型窗口拆成三层：标称窗口、质量窗口、可用上下文预算。标称窗口越大，San 的缓冲越多，但默认不把工作上下文推满。
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>参数</th>
+            <th>建议默认</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>model.contextWindow</code></td>
+            <td>来自模型 catalog</td>
+            <td>模型标称上限，只作为硬上限和应急缓冲。</td>
+          </tr>
+          <tr>
+            <td><code>san.contextSteady.qualityWindowTokens</code></td>
+            <td>384000</td>
+            <td>San 主工作窗口。1M 模型也默认控制在这个区间。</td>
+          </tr>
+          <tr>
+            <td><code>reserveRatio</code></td>
+            <td>0.20</td>
+            <td>给输出、工具结果、模型偏差和临时膨胀预留。</td>
+          </tr>
+          <tr>
+            <td><code>recentTurns</code></td>
+            <td>5</td>
+            <td>近因原文保留窗口，不和长期摘要混淆。</td>
+          </tr>
+          <tr>
+            <td><code>digestMaxTokens</code></td>
+            <td>2000</td>
+            <td>单轮 digest 上限。普通轮次可更小，复杂轮次可接近上限。</td>
+          </tr>
+          <tr>
+            <td><code>checkpointEveryTurns</code></td>
+            <td>8</td>
+            <td>每 8 轮把 digest ledger 合并成稳定 checkpoint。</td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>hardWindow = model.contextWindow
+qualityWindow = min(hardWindow, san.contextSteady.qualityWindowTokens)
+reserve = max(qualityWindow * reserveRatio, 24000)
+usableBudget = qualityWindow - reserve</code></pre>
+    </section>
+
+    <section>
+      <h2>缓存命中设计</h2>
+      <p>
+        Prompt cache 的重点不是“尽量短”，而是“前缀稳定”。San 的上下文组装必须减少前缀抖动。
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>规则</th>
+            <th>原因</th>
+            <th>落地方式</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>稳定内容放前面</td>
+            <td>缓存从前缀匹配开始，越前面的稳定内容收益越高。</td>
+            <td>system prompt、工具协议、稳定 skills、项目规则固定排序。</td>
+          </tr>
+          <tr>
+            <td>每轮摘要 append-only</td>
+            <td>重写旧摘要会导致大段缓存失效。</td>
+            <td>旧 <code>TurnDigest</code> 不改，只追加新 digest。</td>
+          </tr>
+          <tr>
+            <td>checkpoint 低频改写</td>
+            <td>合并摘要不可避免会改写，但可以降低频率。</td>
+            <td>每 8 轮或超预算时合并一次。</td>
+          </tr>
+          <tr>
+            <td>动态召回靠后</td>
+            <td>召回结果每轮变化大，放前面会污染缓存。</td>
+            <td>Mnemopi、CodeGraph、文件状态放在 current prompt 前。</td>
+          </tr>
+          <tr>
+            <td>当前 prompt 最后</td>
+            <td>近因权重最高，减少模型忽略当前任务的概率。</td>
+            <td>用户原文不摘要、不截断，除非超过硬限制。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>与现有 San 代码的接入点</h2>
+      <p>
+        第一版不要重写 <code>packages/agent</code> 的 core loop。更稳的做法是在 <code>packages/coding-agent</code> 的 session 层实现上下文策略。
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>目标</th>
+            <th>入口文件</th>
+            <th>建议改法</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>下一轮 prompt 前注入 ContextPacket</td>
+            <td><code>packages/coding-agent/src/session/agent-session.ts</code></td>
+            <td>在 <code>AgentSession.prompt()</code> 进入 <code>#promptWithMessage</code> 前组装 prelude messages。</td>
+          </tr>
+          <tr>
+            <td>每轮结束生成 TurnDigest</td>
+            <td><code>packages/coding-agent/src/session/agent-session.ts</code></td>
+            <td>监听 <code>agent_end</code>，调用 digest summarizer，写入 session entry 或 San ledger。</td>
+          </tr>
+          <tr>
+            <td>长期记忆召回</td>
+            <td><code>packages/coding-agent/src/mnemopi/state.ts</code></td>
+            <td>复用 <code>recallForContext</code>、<code>maybeRetainOnAgentEnd</code>，增加 San context tags。</td>
+          </tr>
+          <tr>
+            <td>应急压缩</td>
+            <td><code>packages/coding-agent/src/session/agent-session.ts</code></td>
+            <td>继续使用现有 <code>compact()</code>，但定位为超预算兜底，不是主流程。</td>
+          </tr>
+          <tr>
+            <td>Compaction 前补充记忆上下文</td>
+            <td><code>session_before_compact</code> hook</td>
+            <td>把相关 digest、memory recall、项目事实作为 extra context 给摘要器。</td>
+          </tr>
+          <tr>
+            <td>子 agent 上下文隔离</td>
+            <td><code>packages/coding-agent/src/task/executor.ts</code></td>
+            <td>给 subagent 传入子任务专属 ContextPacket，不继承父会话全量历史。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>配置草案</h2>
+      <pre><code>san:
+  contextSteady:
+    enabled: true
+    qualityWindowTokens: 384000
+    reserveRatio: 0.2
+    recentTurns: 5
+    summarizeEveryTurn: true
+    digestMaxTokens: 2000
+    checkpointEveryTurns: 8
+    checkpointMaxTokens: 12000
+    summaryModelRole: smol
+    recall:
+      enabled: true
+      includeHistoricalPrompts: true
+      includeMnemopi: true
+      includeCodegraph: false
+    cache:
+      stablePrefix: true
+      appendOnlyDigestLedger: true
+      checkpointRewritePolicy: "periodic"
+    trimming:
+      order:
+        - retrievedContext
+        - oldTurnDigests
+        - recentToolResults
+        - recentAssistantText
+      preserve:
+        - currentPrompt
+        - latestUserTurns
+        - openDecisions
+        - modifiedFiles</code></pre>
+      <div class="callout">
+        配置命名建议先放在 <code>san.contextSteady</code> 下，不直接复用现有 <code>compaction</code>。两者语义不同：context steady 是常态工作流，compaction 是应急或手动压缩。
+      </div>
+    </section>
+
+    <section>
+      <h2>MVP 分阶段</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>阶段</th>
+            <th>交付物</th>
+            <th>验证方式</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Phase 1</td>
+            <td>实现 <code>TurnDigest</code> 生成和持久化；不改变下一轮上下文。</td>
+            <td>跑一轮 San，确认 agent_end 后有 digest entry。</td>
+          </tr>
+          <tr>
+            <td>Phase 2</td>
+            <td>实现 <code>ContextPacket</code> 组装，只注入 digest ledger + 近 5 轮。</td>
+            <td>打印调试视图，核对 prompt 层级和 token 预算。</td>
+          </tr>
+          <tr>
+            <td>Phase 3</td>
+            <td>接入 Mnemopi recall 和历史 prompt recall。</td>
+            <td>构造跨会话问题，确认能召回相关偏好和决策。</td>
+          </tr>
+          <tr>
+            <td>Phase 4</td>
+            <td>实现 checkpoint 合并和 append-only 缓存布局。</td>
+            <td>比较多轮后 provider prompt cache 命中和上下文规模。</td>
+          </tr>
+          <tr>
+            <td>Phase 5</td>
+            <td>给 subagent 传递任务专属 ContextPacket。</td>
+            <td>验证 worker 不继承无关父历史，但能拿到任务所需事实。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>风险与边界</h2>
+      <div class="grid">
+        <div class="card">
+          <strong>摘要成本</strong>
+          每轮摘要会增加请求。需要用 smol role、异步摘要、低优先级队列控制成本。
+        </div>
+        <div class="card">
+          <strong>摘要失真</strong>
+          Digest 不能替代证据。关键文件、工具输出必须保留可重读引用。
+        </div>
+        <div class="card">
+          <strong>缓存与质量冲突</strong>
+          为了缓存不能牺牲当前 prompt 的近因权重；动态上下文应靠后但仍在当前 prompt 前。
+        </div>
+        <div class="card">
+          <strong>过度自动记忆</strong>
+          不是所有信息都应该进入长期记忆。需要 memoryCandidates 和 retain policy。
+        </div>
+        <div class="card">
+          <strong>调试复杂度</strong>
+          上下文被组装后，必须有可查看的 ContextPacket debug view。
+        </div>
+        <div class="card">
+          <strong>早期不要重写 loop</strong>
+          core agent loop 是高风险区。第一版用 session 层策略验证价值。
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>结论</h2>
+      <p>
+        San 的上下文稳态可以成为它区别于普通 agent harness 的核心能力：不是让模型背负越来越长的历史，而是持续维护一个可用、可控、可缓存的工作记忆层。
+      </p>
+      <p>
+        最小落地路径是：每轮 <code>agent_end</code> 生成 <code>TurnDigest</code>，下一轮 <code>prompt()</code> 前组装 <code>ContextPacket</code>，默认控制在 <code>qualityWindowTokens</code> 内；现有 compaction 保留为兜底，Mnemopi 作为长期记忆和相关召回。
+      </p>
+      <p>
+        这条路线足够低侵入，也足够接近最终形态。先跑出稳定闭环，再逐步增强策略、缓存命中和 subagent 隔离。
+      </p>
+    </section>
+  </main>
+</body>
+</html>

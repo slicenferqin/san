@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San 上下文稳态 M1 技术实现方案</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #20242a;
+      --muted: #667085;
+      --line: #d9e0ea;
+      --paper: #fbfcfd;
+      --panel: #ffffff;
+      --band: #f2f6f8;
+      --green: #0f766e;
+      --blue: #2457a6;
+      --amber: #a16207;
+      --red: #9f1239;
+      --code: #edf2f7;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.64;
+    }
+
+    header {
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .wrap {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .hero {
+      padding: 52px 0 36px;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--green);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 960px;
+      margin: 0;
+      font-size: clamp(32px, 5vw, 54px);
+      line-height: 1.06;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 900px;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    main {
+      padding: 30px 0 62px;
+    }
+
+    section {
+      padding: 30px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    section:last-child {
+      border-bottom: 0;
+    }
+
+    h2 {
+      margin: 0 0 15px;
+      font-size: 25px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 10px 0;
+    }
+
+    ul,
+    ol {
+      margin: 12px 0;
+      padding-left: 22px;
+    }
+
+    li {
+      margin: 7px 0;
+    }
+
+    table {
+      width: 100%;
+      margin: 16px 0;
+      border-collapse: collapse;
+      background: var(--panel);
+    }
+
+    th,
+    td {
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--band);
+      font-weight: 700;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: var(--code);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow: auto;
+      margin: 16px 0;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #101820;
+      color: #eef6f3;
+      line-height: 1.55;
+      tab-size: 2;
+    }
+
+    pre code {
+      padding: 0;
+      border-radius: 0;
+      background: transparent;
+      color: inherit;
+    }
+
+    .callout {
+      margin: 18px 0;
+      padding: 16px 18px;
+      border-left: 4px solid var(--green);
+      background: var(--band);
+    }
+
+    .callout.warning {
+      border-left-color: var(--amber);
+    }
+
+    .callout.risk {
+      border-left-color: var(--red);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 18px 0 0;
+    }
+
+    .card {
+      min-height: 132px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .card strong {
+      display: block;
+      margin-bottom: 7px;
+      color: var(--blue);
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin: 18px 0;
+    }
+
+    .step {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .step span {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      margin-bottom: 8px;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--green);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    @media (max-width: 900px) {
+      .grid,
+      .flow {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap hero">
+      <p class="eyebrow">San Context Steady State · Milestone 1</p>
+      <h1>第一个里程碑：Post-turn TurnDigest 生成与持久化</h1>
+      <p class="subtitle">
+        v0.1 的最终目标仍然是上下文稳态。M1 只解决第一块：每轮 agent 停下后，San 能把本轮工作沉淀成结构化 TurnDigest，并可靠写入 session。后续 M2 才开始让下一轮 ContextPacket 消费这些 digest。
+      </p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h2>结论</h2>
+      <div class="callout">
+        <strong>M1 不改 core agent loop，不新增 session entry 类型。</strong>
+        在 <code>packages/coding-agent</code> 内新增 <code>context-steady</code> 模块，监听 <code>agent_end</code> 后生成 <code>TurnDigest</code>，用现有 <code>sessionManager.appendCustomEntry("san.turn_digest", data)</code> 持久化。这样最小化迁移风险，并为 M2 的 <code>ContextPacket</code> 组装提供稳定数据源。
+      </div>
+    </section>
+
+    <section>
+      <h2>M1 目标与非目标</h2>
+      <div class="grid">
+        <div class="card">
+          <strong>目标 1</strong>
+          每轮 <code>agent_end</code> 后自动生成一个结构化 <code>TurnDigest</code>。
+        </div>
+        <div class="card">
+          <strong>目标 2</strong>
+          Digest 持久化到当前 session JSONL，可 resume 后读取。
+        </div>
+        <div class="card">
+          <strong>目标 3</strong>
+          失败不影响主 agent 结果，只记录 warning/debug。
+        </div>
+        <div class="card">
+          <strong>非目标</strong>
+          M1 不把 digest 注入下一轮 prompt。那是 M2 的 <code>ContextPacket</code> 工作。
+        </div>
+        <div class="card">
+          <strong>非目标</strong>
+          M1 不做复杂 memory router，不写入长期 Mnemopi，最多产出 <code>memoryCandidates</code>。
+        </div>
+        <div class="card">
+          <strong>非目标</strong>
+          M1 不改变 compaction、append-only context、core agent-loop 语义。
+        </div>
+      </div>
+      <div class="callout warning">
+        M1 是 v0.1 的第一个里程碑，不是 v0.1 的完整目标。v0.1 发布验收仍然必须达到上下文稳态。
+      </div>
+    </section>
+
+    <section>
+      <h2>代码落点</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>文件/模块</th>
+            <th>新增或改动</th>
+            <th>理由</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>packages/coding-agent/src/context-steady/types.ts</code></td>
+            <td>定义 <code>TurnDigest</code>、<code>TurnDigestInput</code>、<code>ContextSteadySettings</code>。</td>
+            <td>避免把 San 结构散落到 <code>agent-session.ts</code>。</td>
+          </tr>
+          <tr>
+            <td><code>packages/coding-agent/src/context-steady/digest.ts</code></td>
+            <td>实现摘要输入提取、LLM 摘要、fallback 摘要、schema normalize。</td>
+            <td>M1 的核心业务逻辑集中在这里。</td>
+          </tr>
+          <tr>
+            <td><code>packages/coding-agent/src/context-steady/session.ts</code></td>
+            <td>封装 <code>appendTurnDigest</code>、<code>listTurnDigests</code>、去重逻辑。</td>
+            <td>对 session JSONL 的访问统一走现有 <code>CustomEntry</code>。</td>
+          </tr>
+          <tr>
+            <td><code>packages/coding-agent/src/prompts/context-steady/turn-digest.md</code></td>
+            <td>新增静态 prompt，用 Handlebars 渲染动态输入。</td>
+            <td>符合仓库规则：prompts 不写 inline string。</td>
+          </tr>
+          <tr>
+            <td><code>packages/coding-agent/src/config/settings-schema.ts</code></td>
+            <td>新增 <code>san.contextSteady.*</code> 配置。</td>
+            <td>用户可开关、调预算、选择摘要模型角色。</td>
+          </tr>
+          <tr>
+            <td><code>packages/coding-agent/src/session/agent-session.ts</code></td>
+            <td>在 settled <code>agent_end</code> 维护路径调用 digest service。</td>
+            <td>这里能拿到完整本轮消息，且消息持久化已完成。</td>
+          </tr>
+          <tr>
+            <td><code>packages/coding-agent/test/context-steady/*.test.ts</code></td>
+            <td>新增行为测试：生成、持久化、失败降级、resume 读取。</td>
+            <td>验证外部可观察 contract，不做源码 grep。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>为什么用 CustomEntry</h2>
+      <p>
+        当前 session 系统已经有 <code>CustomEntry</code>，用途就是给扩展或系统状态持久化自定义数据。它不会进入 LLM context，正好适合 M1：digest 先存下来，不影响现有上下文构建。
+      </p>
+      <pre><code>{
+  "type": "custom",
+  "customType": "san.turn_digest",
+  "data": {
+    "schemaVersion": 1,
+    "turnId": "entry-id-or-generated-id",
+    "source": {
+      "sessionId": "...",
+      "fromEntryId": "...",
+      "toEntryId": "..."
+    },
+    "digest": { "...": "..." }
+  },
+  "id": "...",
+  "parentId": "...",
+  "timestamp": "..."
+}</code></pre>
+      <div class="callout">
+        后续如果 digest 成为一等 session 概念，再考虑新增正式 <code>SessionEntry</code> 类型和 migration。M1 先不要引入这类迁移成本。
+      </div>
+    </section>
+
+    <section>
+      <h2>TurnDigest 数据结构</h2>
+      <pre><code>export interface TurnDigest {
+  schemaVersion: 1;
+  turnId: string;
+  sessionId: string;
+  createdAt: string;
+  model?: string;
+  userIntent: string;
+  actionsTaken: string[];
+  decisions: string[];
+  filesTouched: Array&lt;{
+    path: string;
+    action: "read" | "modified" | "created" | "deleted" | "unknown";
+    reason?: string;
+  }&gt;;
+  toolEvidence: Array&lt;{
+    tool: string;
+    summary: string;
+    entryIds?: string[];
+  }&gt;;
+  factsLearned: string[];
+  openQuestions: string[];
+  risks: string[];
+  nextSteps: string[];
+  memoryCandidates: Array&lt;{
+    content: string;
+    type: "preference" | "project_fact" | "decision" | "workflow" | "other";
+    importance: number;
+  }&gt;;
+  tokenStats?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+  fallback: boolean;
+}</code></pre>
+      <p>
+        字段设计原则：摘要保留“决策和证据索引”，不塞完整工具输出。文件内容要靠路径、entry id、后续 read/codegraph 重读保证新鲜。
+      </p>
+    </section>
+
+    <section>
+      <h2>事件时序</h2>
+      <div class="flow">
+        <div class="step">
+          <span>1</span>
+          <strong>message_end</strong>
+          <p><code>AgentSession</code> 已按现有逻辑持久化用户、assistant、toolResult 等消息。</p>
+        </div>
+        <div class="step">
+          <span>2</span>
+          <strong>agent_end</strong>
+          <p>等现有 agent_end maintenance 路径完成 pending bash/python/irc flush。</p>
+        </div>
+        <div class="step">
+          <span>3</span>
+          <strong>collect turn</strong>
+          <p>从 session branch 中定位本轮起止 entry，提取最近新增消息和工具证据。</p>
+        </div>
+        <div class="step">
+          <span>4</span>
+          <strong>summarize</strong>
+          <p>优先调用配置的 summary model；失败则 deterministic fallback。</p>
+        </div>
+        <div class="step">
+          <span>5</span>
+          <strong>persist</strong>
+          <p><code>appendCustomEntry("san.turn_digest", data)</code> 写入 session。</p>
+        </div>
+      </div>
+      <div class="callout warning">
+        触发点要放在 settled <code>agent_end</code> 后，而不是每个 <code>message_end</code>。否则工具结果尚未全部落盘，digest 会漏证据。
+      </div>
+    </section>
+
+    <section>
+      <h2>摘要生成策略</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>路径</th>
+            <th>行为</th>
+            <th>用途</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>LLM digest</td>
+            <td>用 <code>summaryModelRole</code> 解析模型，调用 <code>instrumentedCompleteSimple</code>，输出 JSON。</td>
+            <td>默认路径，质量最好，能提炼决策和风险。</td>
+          </tr>
+          <tr>
+            <td>Schema normalize</td>
+            <td>解析 JSON，缺字段补空数组，字符串长度和数组长度做上限。</td>
+            <td>防止模型输出污染 session。</td>
+          </tr>
+          <tr>
+            <td>Fallback digest</td>
+            <td>LLM 失败、超时、无模型时，从用户最后 prompt、assistant 文本、工具名生成保守摘要。</td>
+            <td>保证 M1 的持久化 contract 稳定。</td>
+          </tr>
+          <tr>
+            <td>Skip digest</td>
+            <td>没有真实用户/assistant 消息、synthetic housekeeping、已存在同 turn digest。</td>
+            <td>避免空会话和重复写入。</td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>san.contextSteady.enabled = true
+san.contextSteady.digest.enabled = true
+san.contextSteady.digest.maxInputMessages = 40
+san.contextSteady.digest.maxToolEvidence = 20
+san.contextSteady.digest.maxTokens = 2000
+san.contextSteady.digest.summaryModelRole = "smol"
+san.contextSteady.digest.timeoutMs = 30000
+san.contextSteady.digest.persistFallback = true</code></pre>
+    </section>
+
+    <section>
+      <h2>输入裁剪</h2>
+      <p>
+        M1 的 digest 不是要总结整段会话，而是总结“本轮”。输入给摘要模型时按下面规则裁剪，避免摘要本身变成上下文膨胀源。
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>内容</th>
+            <th>保留规则</th>
+            <th>上限建议</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>用户 prompt</td>
+            <td>完整保留本轮用户 prompt；如果极长，保留头尾并标记截断。</td>
+            <td>16K chars</td>
+          </tr>
+          <tr>
+            <td>assistant 文本</td>
+            <td>保留关键回答、计划、结论；丢弃重复思考和长解释。</td>
+            <td>24K chars</td>
+          </tr>
+          <tr>
+            <td>tool result</td>
+            <td>只保留工具名、状态、短摘要、文件路径、entry id。</td>
+            <td>20 条</td>
+          </tr>
+          <tr>
+            <td>文件变更</td>
+            <td>从 edit/write/apply_patch/bash git diff 线索提取路径和动作。</td>
+            <td>50 个路径</td>
+          </tr>
+          <tr>
+            <td>token usage</td>
+            <td>汇总本轮 assistant usage。</td>
+            <td>结构化数字</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>失败与并发处理</h2>
+      <ul>
+        <li><strong>失败不阻断：</strong>digest 生成失败不能影响用户看到的 agent 结果，也不能让 prompt promise 失败。</li>
+        <li><strong>去重：</strong>以 <code>source.fromEntryId + source.toEntryId</code> 或 <code>turnId</code> 去重，避免 resume/auto-continue 重复写。</li>
+        <li><strong>超时：</strong>LLM digest 超过 <code>timeoutMs</code> 后取消，写 fallback digest 或跳过。</li>
+        <li><strong>队列：</strong>同一 session 同时只允许一个 digest job，后续 agent_end 串行排队。</li>
+        <li><strong>dispose：</strong>session dispose 时等待短时间 drain；超时放弃，不阻塞退出。</li>
+        <li><strong>日志：</strong>用 <code>logger.debug/warn</code>，不碰 <code>console</code>。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>测试方案</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>测试</th>
+            <th>验证 contract</th>
+            <th>建议文件</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>生成并持久化 digest</td>
+            <td>一次真实 prompt 完成后，session entries 中出现 <code>customType=san.turn_digest</code>。</td>
+            <td><code>packages/coding-agent/test/context-steady/turn-digest.test.ts</code></td>
+          </tr>
+          <tr>
+            <td>resume 可读取 digest</td>
+            <td>重新 open session 后 <code>listTurnDigests</code> 能读到上一轮 digest。</td>
+            <td><code>turn-digest-session.test.ts</code></td>
+          </tr>
+          <tr>
+            <td>LLM 失败 fallback</td>
+            <td>summary model 抛错时仍写 fallback digest，且 <code>fallback=true</code>。</td>
+            <td><code>turn-digest-fallback.test.ts</code></td>
+          </tr>
+          <tr>
+            <td>关闭配置不写入</td>
+            <td><code>san.contextSteady.enabled=false</code> 时不产生 custom entry。</td>
+            <td><code>context-steady-settings.test.ts</code></td>
+          </tr>
+          <tr>
+            <td>不污染 LLM context</td>
+            <td><code>buildSessionContext()</code> 不把 <code>CustomEntry</code> 转成消息。</td>
+            <td>可复用 session-context 测试模式</td>
+          </tr>
+          <tr>
+            <td>重复 agent_end 不重复写</td>
+            <td>同一 turnId 只保留一个 digest。</td>
+            <td><code>turn-digest-dedupe.test.ts</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>验收标准</h2>
+      <ol>
+        <li>开启 <code>san.contextSteady.enabled</code> 后，任意真实用户轮次结束都会生成一条 <code>san.turn_digest</code> custom entry。</li>
+        <li>Digest 包含 <code>userIntent</code>、<code>actionsTaken</code>、<code>decisions</code>、<code>filesTouched</code>、<code>nextSteps</code> 等核心字段。</li>
+        <li>LLM 摘要失败时，主 agent 结果不失败，session 中可选择写入 fallback digest。</li>
+        <li>Resume 同一 session 后能读取历史 digest。</li>
+        <li><code>buildSessionContext()</code> 不把 digest 自动注入 LLM 上下文。</li>
+        <li>新增测试可通过 <code>bun check</code> 和 package-local test。</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>后续承接</h2>
+      <p>
+        M1 完成后，M2 的技术方案就可以围绕 <code>ContextPacket</code> 展开：读取 <code>san.turn_digest</code> ledger，选择最近 N 条和 checkpoint summary，插入到下一轮 <code>AgentSession.prompt()</code> 的 prelude messages，并开始验证 <code>qualityWindowTokens</code>。
+      </p>
+      <div class="callout">
+        M1 的关键价值不是“多一个摘要文件”，而是建立 San 上下文稳态的数据账本。没有这个账本，M2 无法稳定组装 ContextPacket。
+      </div>
+    </section>
+  </main>
+</body>
+</html>

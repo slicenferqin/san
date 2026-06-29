@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San v0.1 研究方案评估</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #20242a;
+      --muted: #667085;
+      --line: #d9e0ea;
+      --paper: #fbfcfd;
+      --panel: #ffffff;
+      --band: #f2f6f8;
+      --green: #0f766e;
+      --blue: #2457a6;
+      --amber: #a16207;
+      --red: #9f1239;
+      --code: #edf2f7;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.64;
+    }
+
+    header {
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .wrap {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .hero {
+      padding: 52px 0 36px;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--green);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 920px;
+      margin: 0;
+      font-size: clamp(32px, 5vw, 54px);
+      line-height: 1.06;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 900px;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    main {
+      padding: 30px 0 62px;
+    }
+
+    section {
+      padding: 30px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    section:last-child {
+      border-bottom: 0;
+    }
+
+    h2 {
+      margin: 0 0 15px;
+      font-size: 25px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 10px 0;
+    }
+
+    ul,
+    ol {
+      margin: 12px 0;
+      padding-left: 22px;
+    }
+
+    li {
+      margin: 7px 0;
+    }
+
+    table {
+      width: 100%;
+      margin: 16px 0;
+      border-collapse: collapse;
+      background: var(--panel);
+    }
+
+    th,
+    td {
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--band);
+      font-weight: 700;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: var(--code);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow: auto;
+      margin: 16px 0;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #101820;
+      color: #eef6f3;
+      line-height: 1.55;
+    }
+
+    pre code {
+      padding: 0;
+      border-radius: 0;
+      background: transparent;
+      color: inherit;
+    }
+
+    .callout {
+      margin: 18px 0;
+      padding: 16px 18px;
+      border-left: 4px solid var(--green);
+      background: var(--band);
+    }
+
+    .callout.warning {
+      border-left-color: var(--amber);
+    }
+
+    .callout.risk {
+      border-left-color: var(--red);
+    }
+
+    .score {
+      display: inline-block;
+      min-width: 44px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      color: #fff;
+      background: var(--green);
+      font-size: 12px;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .score.mid {
+      background: var(--amber);
+    }
+
+    .score.low {
+      background: var(--red);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 18px 0 0;
+    }
+
+    .card {
+      min-height: 132px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .card strong {
+      display: block;
+      margin-bottom: 7px;
+      color: var(--blue);
+    }
+
+    .rank {
+      display: grid;
+      grid-template-columns: 72px 1fr;
+      gap: 14px;
+      align-items: start;
+      margin: 14px 0;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .rank-number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 46px;
+      height: 46px;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--green);
+      font-size: 20px;
+      font-weight: 800;
+    }
+
+    .rank:nth-of-type(2) .rank-number {
+      background: var(--blue);
+    }
+
+    .rank:nth-of-type(3) .rank-number {
+      background: var(--amber);
+    }
+
+    @media (max-width: 860px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .rank {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap hero">
+      <p class="eyebrow">San v0.1 Decision</p>
+      <h1>v0.1 目标锁定“上下文稳态”，范围只做里程碑拆分</h1>
+      <p class="subtitle">
+        本文对三份研究方案做 v0.1 适配评估：GBrain 启发、Agent Loop/Amp 启发、上下文稳态。结论是：上下文稳态就是 San v0.1 的最终目标；Agent Loop 方案适合作为后续执行闭环增强；GBrain 方案适合作为后续 memory/brain 外接路线。
+      </p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h2>一句话结论</h2>
+      <div class="callout">
+        <strong>San v0.1 的最终目标就是 Context Steady State：</strong>
+        每轮 <code>agent_end</code> 后生成 <code>TurnDigest</code>，下一轮 prompt 前组装可调试的 <code>ContextPacket</code>，默认控制在黄金上下文窗口内，并能证明上下文在多轮后保持稳定。可以按内部里程碑推进，但不改变 v0.1 的最终目标。
+      </div>
+    </section>
+
+    <section>
+      <h2>评估标准</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>标准</th>
+            <th>为什么重要</th>
+            <th>v0.1 判断口径</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>闭环完整性</td>
+            <td>v0.1 必须能让用户实际感受到 San 变好了。</td>
+            <td>一次会话内能观察到输入、处理、状态沉淀、下一轮复用。</td>
+          </tr>
+          <tr>
+            <td>改动半径</td>
+            <td>fork 初期最怕一上来改 core loop，风险高且难 debug。</td>
+            <td>优先在 <code>packages/coding-agent</code> session 层落地。</td>
+          </tr>
+          <tr>
+            <td>可验证性</td>
+            <td>v0.1 要能明确判断做成没做成。</td>
+            <td>能通过 debug view、session entry、token 预算、下一轮上下文确认。</td>
+          </tr>
+          <tr>
+            <td>差异化</td>
+            <td>San 不只是 OMP 改名，v0.1 要有一个明确方向。</td>
+            <td>用户能感知“San 会管理上下文”，而不只是多几个 prompt。</td>
+          </tr>
+          <tr>
+            <td>后续承接</td>
+            <td>v0.1 不应是一次性实验，要能接 v0.2/v0.3。</td>
+            <td>能自然接入 memory、subagent、checks、brain adapter。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>方案评分</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>方案</th>
+            <th>闭环</th>
+            <th>改动半径</th>
+            <th>可验证</th>
+            <th>差异化</th>
+            <th>v0.1 适配结论</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>上下文稳态</td>
+            <td><span class="score">9/10</span></td>
+            <td><span class="score mid">7/10</span></td>
+            <td><span class="score">9/10</span></td>
+            <td><span class="score">9/10</span></td>
+            <td>最佳 v0.1 主线。目标不变，实施上拆成里程碑推进。</td>
+          </tr>
+          <tr>
+            <td>Agent Loop / Amp</td>
+            <td><span class="score">8/10</span></td>
+            <td><span class="score mid">6/10</span></td>
+            <td><span class="score mid">7/10</span></td>
+            <td><span class="score mid">7/10</span></td>
+            <td>适合作 v0.2。v0.1 做三角色会偏 prompt/workflow，产品核心不够集中。</td>
+          </tr>
+          <tr>
+            <td>GBrain 启发</td>
+            <td><span class="score mid">6/10</span></td>
+            <td><span class="score">8/10</span></td>
+            <td><span class="score mid">6/10</span></td>
+            <td><span class="score">8/10</span></td>
+            <td>适合作 v0.3+ 的 brain/memory 方向。v0.1 做会过早发散。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>排序</h2>
+      <div class="rank">
+        <div class="rank-number">1</div>
+        <div>
+          <h3>上下文稳态：v0.1 主线</h3>
+          <p>
+            它最贴近 San 的底层差异化：不是“多一个 agent loop”，而是让 agent 在长任务中持续保持可控上下文。这个方向可以直接利用现有 <code>AgentSession.prompt()</code>、<code>agent_end</code> event、Mnemopi 和 compaction，不需要先重写 core loop。
+          </p>
+          <p>
+            v0.1 的最终验收不能降级为两个能力；<code>TurnDigest</code> 和 <code>ContextPacket debug view</code> 只是最早的内部里程碑。最终仍要证明“San 能沉淀每轮、影响下一轮，并在多轮之后把上下文稳定控制在黄金窗口内”。
+          </p>
+        </div>
+      </div>
+
+      <div class="rank">
+        <div class="rank-number">2</div>
+        <div>
+          <h3>Agent Loop / Amp：v0.2 执行闭环</h3>
+          <p>
+            三角色、San Checks、yield contract 很有价值，但更像“任务执行质量提升”。如果作为 v0.1，容易变成一组 agents/commands，而不是 San 的核心能力。它应该建立在上下文稳态之上：Commander、Worker、Supervisor 都应该消费同一个 ContextPacket。
+          </p>
+        </div>
+      </div>
+
+      <div class="rank">
+        <div class="rank-number">3</div>
+        <div>
+          <h3>GBrain 启发：v0.3+ 记忆和外脑</h3>
+          <p>
+            GBrain 的 brain-first、compiled truth、push context 是长期方向，但 v0.1 不应引入外部 brain 复杂度。当前最合适的吸收方式是只拿“分层思想”：session、memory、brain 不混层。等 San 的 TurnDigest 和 ContextPacket 跑稳，再接 GBrain 或做 brain adapter。
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>v0.1 最终范围</h2>
+      <div class="grid">
+        <div class="card">
+          <strong>必须做</strong>
+          每轮结束生成 <code>TurnDigest</code>，记录用户意图、动作、决策、文件、证据、风险、下一步。
+        </div>
+        <div class="card">
+          <strong>必须做</strong>
+          下一轮 prompt 前组装 <code>ContextPacket</code>，至少包含稳定摘要、最近 5 轮、当前 prompt。
+        </div>
+        <div class="card">
+          <strong>必须做</strong>
+          提供 debug view 或 transcript marker，让用户和开发者能看到本轮实际注入了什么上下文。
+        </div>
+        <div class="card">
+          <strong>必须做</strong>
+          多轮后上下文仍稳定在 <code>qualityWindowTokens</code> 内，并有裁剪日志说明删了什么、为什么删。
+        </div>
+        <div class="card">
+          <strong>必须做</strong>
+          下一轮必须实际消费上一轮 digest，而不是只生成摘要文件给人看。
+        </div>
+        <div class="card">
+          <strong>可以做</strong>
+          接入 Mnemopi recall，但只做轻量相关召回，不做复杂 memory router。
+        </div>
+        <div class="card">
+          <strong>暂不做</strong>
+          不做完整三角色 orchestrator，不做 supervisor 自动循环。
+        </div>
+        <div class="card">
+          <strong>暂不做</strong>
+          不接 GBrain，不做后台 dream cycle，不做完整 schema pack。
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>交付定义</h2>
+      <pre><code>San v0.1 = Context Steady State
+
+1. san.contextSteady.enabled 配置可开关
+2. agent_end 后生成 TurnDigest
+3. TurnDigest 可持久化并可查看
+4. 下一轮 prompt 前组装 ContextPacket
+5. ContextPacket 包含：
+   - stable summary / digest ledger
+   - recent 5 turns
+   - current prompt
+   - optional mnemopi recall
+6. 有 token budget 统计和裁剪日志
+7. 多轮后上下文规模稳定在 qualityWindowTokens 内
+8. 下一轮实际复用上一轮 digest
+9. 不改变 core agent-loop 语义</code></pre>
+      <div class="callout warning">
+        <strong>里程碑可以拆，目标不能拆。</strong>
+        Phase 1 可以只做 digest，Phase 2 可以只做 ContextPacket，但 v0.1 发布口径必须是完整上下文稳态，而不是“摘要 MVP”。
+      </div>
+    </section>
+
+    <section>
+      <h2>为什么不是三角色作为 v0.1</h2>
+      <p>
+        三角色方案更容易快速做出“看起来很 agentic”的东西，但它的问题是：早期效果高度依赖 prompt，评估也容易漂。没有上下文稳态时，Commander、Worker、Supervisor 共享的仍然是未治理的上下文，循环越多，噪声越多。
+      </p>
+      <div class="callout warning">
+        三角色应该成为上下文稳态的消费者，而不是 v0.1 的基础层。先把 ContextPacket 做出来，后续每个角色都按自己的职责接收裁剪后的上下文，这样 v0.2 会更稳。
+      </div>
+    </section>
+
+    <section>
+      <h2>为什么不是 GBrain 作为 v0.1</h2>
+      <p>
+        GBrain 启发很强，但 v0.1 做外脑会引入过多外部系统问题：数据库、MCP server、知识 schema、资料 ingest、引用一致性、后台整理。它很适合作为 San 的长期记忆路线，但不适合作为第一个版本的产品闭环。
+      </p>
+      <div class="callout risk">
+        v0.1 的目标不是“拥有一个 brain”，而是“每轮上下文能稳定收敛”。外脑要等 San 能清楚地区分 session、memory、brain 后再接。
+      </div>
+    </section>
+
+    <section>
+      <h2>推荐路线</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>版本</th>
+            <th>主题</th>
+            <th>核心交付</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>v0.1</td>
+            <td>上下文稳态</td>
+            <td><code>TurnDigest</code>、<code>ContextPacket</code>、多轮预算稳态、下一轮复用、裁剪日志、debug view。</td>
+          </tr>
+          <tr>
+            <td>v0.2</td>
+            <td>执行闭环</td>
+            <td>Commander / Worker / Supervisor、San Checks、结构化验收。</td>
+          </tr>
+          <tr>
+            <td>v0.3</td>
+            <td>记忆路由</td>
+            <td>Mnemopi policy、用户偏好、项目决策、post-turn retain candidates。</td>
+          </tr>
+          <tr>
+            <td>v0.4</td>
+            <td>外脑接入</td>
+            <td>GBrain MCP adapter、brain-first lookup、compiled truth 工作流。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>最终建议</h2>
+      <p>
+        选择“上下文稳态”作为 San v0.1，且不要修改这个目标。实现可以分里程碑：先 digest，再 ContextPacket，再预算稳态，再 recall；但 v0.1 的最终判断标准必须是“San 能把每轮工作沉淀成稳定上下文，并在下一轮被可解释地复用，同时多轮后仍控制在黄金窗口内”。
+      </p>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,683 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Loop、Amp 与 San 的落地方向</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #20242a;
+      --muted: #667085;
+      --line: #d9e0ea;
+      --paper: #fcfcfd;
+      --panel: #ffffff;
+      --band: #f3f6fa;
+      --green: #0f766e;
+      --blue: #1d4ed8;
+      --red: #9f1239;
+      --violet: #6d28d9;
+      --code: #eef2f7;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.62;
+    }
+
+    header {
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .wrap {
+      width: min(1080px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .hero {
+      padding: 48px 0 34px;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--green);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 920px;
+      margin: 0;
+      font-size: clamp(32px, 5vw, 54px);
+      line-height: 1.06;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 860px;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    main {
+      padding: 32px 0 58px;
+    }
+
+    section {
+      padding: 30px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    section:last-child {
+      border-bottom: 0;
+    }
+
+    h2 {
+      margin: 0 0 15px;
+      font-size: 25px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 10px 0;
+    }
+
+    ul,
+    ol {
+      margin: 12px 0;
+      padding-left: 22px;
+    }
+
+    li {
+      margin: 7px 0;
+    }
+
+    table {
+      width: 100%;
+      margin: 16px 0;
+      border-collapse: collapse;
+      background: var(--panel);
+    }
+
+    th,
+    td {
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--band);
+      font-weight: 700;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: var(--code);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    .callout {
+      margin: 18px 0;
+      padding: 16px 18px;
+      border-left: 4px solid var(--green);
+      background: var(--band);
+    }
+
+    .callout.warning {
+      border-left-color: var(--red);
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 18px 0 0;
+    }
+
+    .card {
+      min-height: 120px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .card strong {
+      display: block;
+      margin-bottom: 7px;
+      color: var(--blue);
+    }
+
+    .loop {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin: 18px 0;
+    }
+
+    .step {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .step span {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      margin-bottom: 8px;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--green);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .role-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .role {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .role h3 {
+      margin: 0;
+      padding: 12px 14px;
+      color: #fff;
+      background: var(--blue);
+    }
+
+    .role:nth-child(2) h3 {
+      background: var(--green);
+    }
+
+    .role:nth-child(3) h3 {
+      background: var(--violet);
+    }
+
+    .role div {
+      padding: 13px 14px;
+    }
+
+    .roadmap {
+      counter-reset: item;
+      display: grid;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .roadmap-item {
+      position: relative;
+      padding: 15px 16px 15px 52px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .roadmap-item::before {
+      counter-increment: item;
+      content: counter(item);
+      position: absolute;
+      left: 16px;
+      top: 18px;
+      display: grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--green);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .roadmap-item h3 {
+      margin-top: 0;
+    }
+
+    .sources a {
+      color: var(--blue);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+    }
+
+    @media (max-width: 820px) {
+      .wrap {
+        width: min(100% - 28px, 1080px);
+      }
+
+      .hero {
+        padding-top: 34px;
+      }
+
+      .cards,
+      .loop,
+      .role-grid {
+        grid-template-columns: 1fr;
+      }
+
+      th,
+      td {
+        padding: 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap hero">
+      <p class="eyebrow">Research Note · 2026-06-28</p>
+      <h1>Agent Loop、Amp 与 San 的落地方向</h1>
+      <p class="subtitle">
+        这份笔记把本地 tabbit 调研、Amp 公开手册和 San 当前基于 Oh My Pi 的能力对齐，
+        目标是提炼一组可以在 San 中逐步落地的 loop 工程方案。
+      </p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h2>一句话结论</h2>
+      <div class="callout">
+        <strong>San 不应该只是一个更会聊天的 agent，而应该成为一个更会组织 agent 工作的 agent。</strong>
+        也就是：用 Oh My Pi 做执行底座，用 Amp 式多线程和角色体验改善使用方式，用 GBrain 式长期脑处理知识，
+        再用 San 自己的 loop discipline 把任务拆解、执行、验收、复盘和记忆串起来。
+      </div>
+
+      <div class="cards">
+        <div class="card">
+          <strong>核心抽象</strong>
+          从 prompt 转向 loop：优化的不再是一句话，而是行动、观察、评估、重试、终止的控制结构。
+        </div>
+        <div class="card">
+          <strong>核心组织</strong>
+          Commander、Worker、Supervisor 分离，尤其是 supervisor 要有独立上下文、独立模型和门禁权。
+        </div>
+        <div class="card">
+          <strong>核心资产</strong>
+          每次 loop 的计划、产出、验收报告、失败原因和复盘，都应该沉淀为可检索、可复用的项目资产。
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>为什么 Agent Loop 比 Prompt 更关键</h2>
+      <p>
+        Prompt 仍然重要，但它已经从“产品本身”降级成 loop 的一个组件。一个能工作的 agent 系统，
+        真正的上限来自它如何持续选择动作、读取观察、更新状态、处理错误、决定是否停止。
+      </p>
+
+      <div class="loop">
+        <div class="step">
+          <span>1</span>
+          <strong>Act</strong>
+          <p>调用工具、执行代码、写文件、派发子任务。</p>
+        </div>
+        <div class="step">
+          <span>2</span>
+          <strong>Observe</strong>
+          <p>读取 stdout、diff、测试结果、错误码和外部平台数据。</p>
+        </div>
+        <div class="step">
+          <span>3</span>
+          <strong>Judge</strong>
+          <p>对照目标、验收标准和预算判断是否有进展。</p>
+        </div>
+        <div class="step">
+          <span>4</span>
+          <strong>Repeat / Finish</strong>
+          <p>继续、打回、升级给人，或显式结束。</p>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>工程问题</th>
+            <th>Prompt 做不到的点</th>
+            <th>San 应该落地的机制</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>终止</td>
+            <td>靠模型“自觉停”很不可靠。</td>
+            <td>显式 yield/finish、最大轮数、预算上限、无进展检测。</td>
+          </tr>
+          <tr>
+            <td>上下文</td>
+            <td>长上下文会腐烂，注意力会稀释。</td>
+            <td>子任务隔离、压缩、结构化任务账本、memory/brain recall。</td>
+          </tr>
+          <tr>
+            <td>错误恢复</td>
+            <td>自然语言错误很难稳定驱动下一步。</td>
+            <td>结构化错误和结构化验收报告。</td>
+          </tr>
+          <tr>
+            <td>可观测性</td>
+            <td>没有轨迹就无法调试 loop。</td>
+            <td>保存 plan、tool calls、diff、report、cost、retry reason。</td>
+          </tr>
+          <tr>
+            <td>复盘</td>
+            <td>一次任务成功不等于系统变聪明。</td>
+            <td>把失败模式写入 checks、skills、memory 或 brain。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>三角色闭环</h2>
+      <p>
+        本地 tabbit 文档里最值得保留的判断是：executor 和 looper 不应该是同一个 agent；
+        干活、监督、指挥最好分离，甚至使用不同模型。原因不是形式主义，而是上下文隔离、权限隔离和失败模式隔离。
+      </p>
+
+      <div class="role-grid">
+        <article class="role">
+          <h3>Commander</h3>
+          <div>
+            <p>负责需求分析、任务拆解、读取报告、决定下一轮动作。</p>
+            <p>工具权限应该偏只读和派发，避免它亲自改代码导致职责混乱。</p>
+          </div>
+        </article>
+        <article class="role">
+          <h3>Worker</h3>
+          <div>
+            <p>负责执行一个边界明确的子任务。</p>
+            <p>可以拥有 edit/write/bash，但不应该能继续无限派发任务。</p>
+          </div>
+        </article>
+        <article class="role">
+          <h3>Supervisor</h3>
+          <div>
+            <p>负责写验收标准、跑测试、做 code review、产出门禁报告。</p>
+            <p>最好使用不同 provider/model，并且不能直接修改代码。</p>
+          </div>
+        </article>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>角色</th>
+            <th>上下文</th>
+            <th>工具边界</th>
+            <th>模型策略</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Commander</td>
+            <td>全局目标、任务 DAG、历史验收报告、复盘。</td>
+            <td>Read、Task、Todo，尽量无 Edit/Write/Bash。</td>
+            <td>强模型，少调用，重决策。</td>
+          </tr>
+          <tr>
+            <td>Worker</td>
+            <td>当前子任务、相关文件、验收标准。</td>
+            <td>Edit、Write、Bash、Read、Grep，限制 Task。</td>
+            <td>中低成本模型，多调用，重执行。</td>
+          </tr>
+          <tr>
+            <td>Supervisor</td>
+            <td>任务说明、验收标准、diff、测试输出。</td>
+            <td>Read、Grep、Bash，禁止 Edit/Write。</td>
+            <td>异构模型，重判断。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Amp 可借鉴的点</h2>
+      <p>
+        Amp 的公开手册和新闻里有几个很直接的产品/工程启发：multi-model、threads、subagents、oracle、
+        librarian、checks、skills 懒加载、MCP-in-skill、plugin API、durable agent loop 和 remote control。
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Amp 设计</th>
+            <th>价值</th>
+            <th>San 中的对应方案</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>deep / smart / rush</td>
+            <td>按任务复杂度控制模型、token 和检查强度。</td>
+            <td>San modes：rush、smart、deep。</td>
+          </tr>
+          <tr>
+            <td>Threads</td>
+            <td>一个任务一个线程，可搜索、可引用、可分享。</td>
+            <td>San run ledger：一个 loop 一个 run id，保存计划和报告。</td>
+          </tr>
+          <tr>
+            <td>Subagents</td>
+            <td>隔离上下文、并行探索、减少主线程污染。</td>
+            <td>使用 OMP task agents 作为 Worker/Supervisor。</td>
+          </tr>
+          <tr>
+            <td>Oracle</td>
+            <td>复杂推理时调用更强的第二意见模型。</td>
+            <td>San oracle：只在 deep 或 supervisor 不确定时调用。</td>
+          </tr>
+          <tr>
+            <td>Librarian</td>
+            <td>远程代码库和外部源码研究。</td>
+            <td>San research/librarian skill，绑定 GitHub/GBrain/web MCP。</td>
+          </tr>
+          <tr>
+            <td>Checks</td>
+            <td>把团队隐性规则变成 review 子代理。</td>
+            <td><code>.omp/checks/*.md</code>，每个 check 生成一个 supervisor 子任务。</td>
+          </tr>
+          <tr>
+            <td>MCP in skills</td>
+            <td>工具只在需要时出现，降低上下文和工具污染。</td>
+            <td>San skill-bound MCP：research/browser/brain/ops 分别加载工具。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Oh My Pi 已经给了什么</h2>
+      <p>
+        San 不是从零开始。当前仓库已经有 task agent discovery、skills、hooks、extensions、MCP、memory、
+        compaction、yield、session tree 等能力。第一阶段应该尽量组合这些能力，而不是先改 agent loop 核心。
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>OMP 能力</th>
+            <th>当前位置</th>
+            <th>San 用法</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Task agents</td>
+            <td><code>.omp/agents</code>、<code>docs/task-agent-discovery.md</code></td>
+            <td>定义 commander、worker、supervisor、oracle、librarian。</td>
+          </tr>
+          <tr>
+            <td>Agent output schema</td>
+            <td>agent frontmatter <code>output</code>、SDK <code>outputSchema</code></td>
+            <td>强制 worker/supervisor 输出结构化结果。</td>
+          </tr>
+          <tr>
+            <td>Yield tool</td>
+            <td>SDK <code>requireYieldTool</code></td>
+            <td>让子代理显式结束并交付报告。</td>
+          </tr>
+          <tr>
+            <td>Hooks / extensions</td>
+            <td><code>.omp/extensions</code>、<code>tool_call</code>、<code>tool_result</code></td>
+            <td>实现权限门禁、预算上限、危险命令拦截。</td>
+          </tr>
+          <tr>
+            <td>Skills</td>
+            <td><code>.omp/skills/*/SKILL.md</code></td>
+            <td>把 San loop 工作流写成可懒加载的能力包。</td>
+          </tr>
+          <tr>
+            <td>Mnemopi</td>
+            <td><code>memory.backend=mnemopi</code></td>
+            <td>保存项目操作记忆、失败模式、用户偏好。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>第一阶段落地方案</h2>
+      <div class="roadmap">
+        <div class="roadmap-item">
+          <h3>新增 San 三角色 agents</h3>
+          <p>
+            在 <code>.omp/agents/</code> 下新增 <code>san-commander.md</code>、
+            <code>san-worker.md</code>、<code>san-supervisor.md</code>。
+            先通过 prompt、工具白名单和 output schema 分离职责。
+          </p>
+        </div>
+        <div class="roadmap-item">
+          <h3>新增 San Checks 规范</h3>
+          <p>
+            建立 <code>.omp/checks/</code> 目录。每个 markdown check 描述一个可审查规则：
+            安全、性能、边界条件、产品体验、项目约定。后续由 supervisor 子代理逐个执行。
+          </p>
+        </div>
+        <div class="roadmap-item">
+          <h3>新增 san-loop 命令</h3>
+          <p>
+            在 <code>.omp/commands/san-loop.md</code> 中定义闭环工作流：
+            commander 拆解、worker 执行、supervisor 验收、commander 复盘并决定是否 retry。
+          </p>
+        </div>
+        <div class="roadmap-item">
+          <h3>定义结构化报告</h3>
+          <p>
+            统一 WorkerResult 和 ReviewReport：
+            <code>verdict</code>、<code>changed_files</code>、<code>tests_run</code>、
+            <code>defects</code>、<code>retryable</code>、<code>next_action</code>。
+          </p>
+        </div>
+        <div class="roadmap-item">
+          <h3>打开项目记忆</h3>
+          <p>
+            使用 <code>mnemopi</code> 保存 loop 复盘：反复失败的模式、有效 checks、用户偏好、
+            项目特殊约定。先做人可见的 retain，不做静默污染。
+          </p>
+        </div>
+        <div class="roadmap-item">
+          <h3>再做代码级 orchestrator</h3>
+          <p>
+            当前四步跑稳后，再考虑用 SDK 写真正的 San orchestrator，获得更强的状态机、预算统计、
+            并发任务和远程控制能力。
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>San Modes 草案</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>模式</th>
+            <th>适合任务</th>
+            <th>默认 loop</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>rush</code></td>
+            <td>小改动、机械任务、明确修复。</td>
+            <td>单 worker，轻量检查，低成本模型。</td>
+          </tr>
+          <tr>
+            <td><code>smart</code></td>
+            <td>默认开发任务、中等复杂度需求。</td>
+            <td>commander → worker → supervisor → commander。</td>
+          </tr>
+          <tr>
+            <td><code>deep</code></td>
+            <td>架构改动、难 bug、高风险修改。</td>
+            <td>强 commander、异构 supervisor、oracle 二审、brain/memory recall。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>必须装的护栏</h2>
+      <ul>
+        <li>同一子任务最多重试 N 轮，超过后升级给用户。</li>
+        <li>连续两轮 diff 无实质变化时停止循环。</li>
+        <li>预算和 token 上限必须对 commander 可见。</li>
+        <li>危险 bash 命令必须走 hook 或 supervisor gate。</li>
+        <li>Supervisor 的结论必须结构化，不能只写自然语言感想。</li>
+        <li>能用确定性测试解决的，不交给 LLM judge。</li>
+      </ul>
+
+      <div class="callout warning">
+        <strong>循环不是越多越好。</strong>
+        不可验证、低价值、一次性的任务不应该进入复杂闭环。San 的目标是把可重复、可验收、高价值任务做成复利系统。
+      </div>
+    </section>
+
+    <section class="sources">
+      <h2>研究来源</h2>
+      <ul>
+        <li>本地文档：<code>/Users/sanjiu/Downloads/tabbit_优化Agent Loop的重要性分析.md</code></li>
+        <li><a href="https://ampcode.com/manual">Amp Owner's Manual</a></li>
+        <li><a href="https://ampcode.com/news/agents-everywhere">Amp: Agents, Everywhere</a></li>
+        <li><a href="https://ampcode.com/">Amp homepage</a></li>
+        <li>本仓库：<code>docs/task-agent-discovery.md</code></li>
+        <li>本仓库：<code>docs/skills.md</code></li>
+        <li>本仓库：<code>docs/extension-loading.md</code></li>
+        <li>本仓库：<code>docs/mnemosyne-memory-backend.md</code></li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
