@@ -2509,6 +2509,22 @@ export const SETTINGS_SCHEMA = {
 	"mnemopi.injectionTokenLimit": { type: "number", default: 5000 },
 	"mnemopi.debug": { type: "boolean", default: false },
 
+	// San Context Steady State — M1 TurnDigest settings
+	"san.contextSteady.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "context",
+			group: "Experimental",
+			label: "Context Steady State",
+			description:
+				"Enable San context steady state: after each settled turn, generate a structured TurnDigest and persist it to the session. M1 only generates digests; context injection comes in a later release.",
+		},
+	},
+	"san.contextSteady.digest.enabled": { type: "boolean", default: true },
+	"san.contextSteady.digest.persistFallback": { type: "boolean", default: true },
+	"san.contextSteady.digest.timeoutMs": { type: "number", default: 30000 },
+
 	// Hindsight (https://hindsight.vectorize.io)
 	"hindsight.apiUrl": {
 		type: "string",

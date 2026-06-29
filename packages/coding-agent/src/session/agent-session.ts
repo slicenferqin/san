@@ -167,6 +167,8 @@ import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-temp
 import { resolveServiceTierSetting } from "../config/service-tier";
 import type { Settings, SkillsSettings } from "../config/settings";
 import { getDefault, onAppendOnlyModeChanged, validateProviderMaxInFlightRequests } from "../config/settings";
+import { generateDigest as generateContextSteadyDigest } from "../context-steady/digest";
+import { computeTurnSourceSpan, extractSpanMessages } from "../context-steady/session";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability } from "../discovery";
 import { expandApplyPatchToEntries, normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
@@ -1437,6 +1439,7 @@ export class AgentSession {
 	#emptyStopRetryCount = 0;
 	#unexpectedStopRetryCount = 0;
 	#promptGeneration = 0;
+	#contextSteadyPreTurnLeafId: string | null = null;
 	#pendingAgentEndEmit: AgentSessionEvent | undefined;
 	#pendingContextSnapshot:
 		| {
@@ -1447,6 +1450,12 @@ export class AgentSession {
 		| undefined = undefined;
 	#sessionStopContinuationCount = 0;
 	#sessionStopHookActive = false;
+	/** When a session_stop continuation is active, holds the original pre-turn
+	 * leaf ID from the user's initial prompt. The continuation's own prompt
+	 * cycle would overwrite #contextSteadyPreTurnLeafId; this field preserves
+	 * the original boundary so the consolidated digest covers the full
+	 * logical turn (original user prompt + all continuations). */
+	#contextSteadyOriginalPreTurnLeafId: string | null = null;
 	// Bumped whenever the pending in-flight snapshot is set/cleared. The
 	// status-line context memo includes this so clearing the snapshot on
 	// turn-end/abort invalidates the cache even though the message list is
@@ -3249,7 +3258,9 @@ export class AgentSession {
 			if (msg.stopReason === "aborted") {
 				this.#resolveRetry();
 				this.#resetSessionStopContinuationState();
+				const settledLeafId = this.sessionManager.getLeafId();
 				await emitAgentEndNotification();
+				void this.#generateTurnDigest(settledLeafId);
 				return;
 			}
 			// Fireworks Fast variants degrade to their base model on a failed turn —
@@ -3314,8 +3325,28 @@ export class AgentSession {
 					return;
 				}
 			}
-			await this.#emitSessionStopEvent(settledMessages, msg);
+			const sessionStopResult = await this.#emitSessionStopEvent(settledMessages, msg);
+			// Capture the leaf immediately after session_stop settles and
+			// before agent_end notification (which may append entries via
+			// extension hooks and advance the leaf). This ensures
+			// #generateTurnDigest uses a stable endpoint that points to the
+			// final assistant entry, not a hook-side-effect entry.
+			const settledLeafId = this.sessionManager.getLeafId();
 			await emitAgentEndNotification();
+			if (sessionStopResult.continuationScheduled) {
+				// Continuation is queued and will run as a hidden next turn.
+				// Do NOT generate a digest yet — the continuation's own settled
+				// path will produce the consolidated digest spanning the full
+				// logical turn.
+			} else if (sessionStopResult.chainEnded) {
+				// Continuation chain ended (or was never started). Generate the
+				// consolidated digest. It uses #contextSteadyOriginalPreTurnLeafId
+				// if a continuation chain was active, or #contextSteadyPreTurnLeafId
+				// for a normal turn — covering the full logical turn in either case.
+				void this.#generateTurnDigest(settledLeafId);
+			}
+			// When invalidated: no digest, no cleanup needed — the next prompt
+			// cycle will start fresh.
 		}
 	};
 
@@ -3326,6 +3357,109 @@ export class AgentSession {
 			this.#retryResolve = undefined;
 			this.#retryPromise = undefined;
 		}
+	}
+
+	/**
+	 * Generate and persist a TurnDigest for the just-settled turn.
+	 * Fire-and-forget — failures are logged but never propagate.
+	 *
+	 * The source span always uses #contextSteadyOriginalPreTurnLeafId when
+	 * available (covering the full logical turn including any session_stop
+	 * continuations), falling back to #contextSteadyPreTurnLeafId for a
+	 * normal turn boundary.
+	 *
+	 * After generation (or when skipped/failed), continuation boundary state
+	 * is cleaned up so the next logical turn starts with a clean slate.
+	 */
+	#generateTurnDigest(settledLeafId?: string | null): void {
+		const settings = this.settings;
+
+		// Capture the original boundary BEFORE any cleanup, so the source
+		// span computation uses the stable snapshot.
+		const originalBoundary = this.#contextSteadyOriginalPreTurnLeafId ?? this.#contextSteadyPreTurnLeafId;
+
+		// Whether we write a digest or not, continuation boundary state must
+		// be cleaned up so the next turn starts fresh.
+		const scheduleCleanup = () => {
+			this.#contextSteadyOriginalPreTurnLeafId = null;
+		};
+
+		const enabled = settings.get("san.contextSteady.enabled") as boolean;
+		if (!enabled) {
+			scheduleCleanup();
+			return;
+		}
+
+		const digestEnabled = settings.get("san.contextSteady.digest.enabled") as boolean;
+		const persistFallback = settings.get("san.contextSteady.digest.persistFallback") as boolean;
+
+		if (!digestEnabled) {
+			scheduleCleanup();
+			return;
+		}
+		if (!persistFallback) {
+			scheduleCleanup();
+			return;
+		}
+
+		// Abort/dispose during the digest dispatch render the turn invalid.
+		if (this.#abortInProgress || this.#isDisposed) {
+			scheduleCleanup();
+			return;
+		}
+
+		const sessionManager = this.sessionManager;
+		const preTurnLeafId = originalBoundary;
+		// Use the caller-captured leaf when provided (captured before
+		// agent_end notification which may advance the leaf via hook side
+		// effects). Fall back to getLeafId() for callers that don't capture.
+		const currentLeafId = settledLeafId ?? sessionManager.getLeafId();
+
+		// Compute source range using shared pure helper
+		const branch = sessionManager.getBranch();
+		const span = computeTurnSourceSpan(branch, preTurnLeafId, currentLeafId);
+		if (!span) {
+			scheduleCleanup();
+			return;
+		}
+		const { fromEntryId, toEntryId } = span;
+
+		// Extract messages from the branch within the source span.
+		// Both regular messages and custom_message entries are included so that
+		// agent-initiated prompts (hidden next-turn, session-stop continuation)
+		// are captured in the digest's input.
+		const spanMessages = extractSpanMessages(branch, fromEntryId, toEntryId);
+
+		if (spanMessages.length === 0) {
+			scheduleCleanup();
+			return;
+		}
+
+		const source = {
+			sessionId: this.sessionId,
+			fromEntryId,
+			toEntryId,
+			promptGeneration: this.#promptGeneration,
+		};
+
+		const steadySettings = {
+			enabled,
+			digest: {
+				enabled: digestEnabled,
+				persistFallback,
+				timeoutMs: (settings.get("san.contextSteady.digest.timeoutMs") as number) ?? 30000,
+			},
+		};
+
+		// Fire-and-forget: never block the main agent_end flow
+		generateContextSteadyDigest(spanMessages, source, sessionManager, settings, steadySettings, undefined).catch(
+			() => {
+				// Errors are already logged inside generateDigest
+			},
+		);
+
+		// Clean up continuation boundary state after digest is dispatched.
+		scheduleCleanup();
 	}
 
 	/** Create the TTSR resume gate promise if one doesn't already exist. */
@@ -4440,8 +4574,10 @@ export class AgentSession {
 	#resetSessionStopContinuationState(): void {
 		this.#sessionStopContinuationCount = 0;
 		this.#sessionStopHookActive = false;
+		this.#contextSteadyOriginalPreTurnLeafId = null;
 	}
 
+	/** Remove queued session-stop continuations from the pending queue. */
 	#clearPendingSessionStopContinuations(): void {
 		if (!this.#pendingNextTurnMessages.some(message => message.customType === "session-stop-continuation")) {
 			return;
@@ -4471,11 +4607,25 @@ export class AgentSession {
 		await this.#extensionRunner?.emit({ type: "agent_end", messages });
 	}
 
+	/**
+	 * Emit the `session_stop` event and determine what the settled path
+	 * should do next.
+	 *
+	 * Returns a result describing the disposition:
+	 * - `{ continuationScheduled: true }` — hook queued a continuation;
+	 *   caller should NOT generate a digest yet.
+	 * - `{ chainEnded: true }` — hook returned no context or cap reached;
+	 *   final turn has settled; caller should generate the consolidated digest.
+	 * - `{ invalidated: true }` — generation/abort/dispose invalidated this
+	 *   turn; caller should NOT generate a digest.
+	 */
 	async #emitSessionStopEvent(
 		messages: AgentMessage[],
 		lastAssistantMessage = this.getLastAssistantMessage(),
-	): Promise<void> {
-		if (this.#agentKind === "sub" || !this.#extensionRunner?.hasHandlers("session_stop")) return;
+	): Promise<{ continuationScheduled?: boolean; chainEnded?: boolean; invalidated?: boolean }> {
+		if (this.#agentKind === "sub" || !this.#extensionRunner?.hasHandlers("session_stop")) {
+			return { chainEnded: true };
+		}
 		const generation = this.#promptGeneration;
 		const result = await this.#extensionRunner.emitSessionStop({
 			messages,
@@ -4487,23 +4637,32 @@ export class AgentSession {
 		});
 		if (this.#promptGeneration !== generation || this.#abortInProgress || this.#isDisposed) {
 			this.#resetSessionStopContinuationState();
-			return;
+			return { invalidated: true };
 		}
 		const additionalContext = this.#sessionStopContinuationContext(result);
 		if (!additionalContext) {
-			this.#resetSessionStopContinuationState();
-			return;
+			// Continuation chain ended (or never started). The caller should
+			// generate the consolidated digest. Keep #contextSteadyOriginalPreTurnLeafId
+			// so the digest can span the full logical turn.
+			this.#sessionStopContinuationCount = 0;
+			this.#sessionStopHookActive = false;
+			return { chainEnded: true };
 		}
 		if (this.#sessionStopContinuationCount >= SESSION_STOP_CONTINUATION_CAP) {
 			logger.warn("session_stop continuation cap reached", {
 				sessionId: this.sessionId,
 				cap: SESSION_STOP_CONTINUATION_CAP,
 			});
-			this.#resetSessionStopContinuationState();
-			return;
+			this.#sessionStopContinuationCount = 0;
+			this.#sessionStopHookActive = false;
+			return { chainEnded: true };
 		}
 		this.#sessionStopContinuationCount++;
 		this.#sessionStopHookActive = true;
+		// Preserve the original pre-turn leaf boundary so the final
+		// consolidated digest covers the full logical turn including
+		// all continuations.
+		this.#contextSteadyOriginalPreTurnLeafId ??= this.#contextSteadyPreTurnLeafId;
 		this.#queueHiddenNextTurnMessage(
 			{
 				role: "custom",
@@ -4515,6 +4674,7 @@ export class AgentSession {
 			},
 			true,
 		);
+		return { continuationScheduled: true };
 	}
 
 	/** Emit extension events based on session events */
@@ -6748,6 +6908,9 @@ export class AgentSession {
 				nonMessageTokens,
 				cutoffCount: this.messages.length + messages.length,
 			});
+			// Context steady: capture leaf entry ID before this prompt cycle's
+			// entries are appended, so the source range spans the full turn.
+			this.#contextSteadyPreTurnLeafId = this.sessionManager.getLeafId();
 			try {
 				await this.#promptAgentWithIdleRetry(messages, agentPromptOptions);
 			} finally {
@@ -7063,6 +7226,14 @@ export class AgentSession {
 
 		const prependMessages = queuedMessages.slice(0, -1);
 		const textContent = this.#getCustomMessageTextContent(message);
+		// Context steady: the continuation prompt overwrites
+		// #contextSteadyPreTurnLeafId at line 6905. Save and restore it so the
+		// consolidated digest (triggered by chainEnded) can use the original
+		// boundary via #contextSteadyOriginalPreTurnLeafId ?? the restored
+		// #contextSteadyPreTurnLeafId. The restored value is the fallback;
+		// #contextSteadyOriginalPreTurnLeafId set at line 4665 is the primary
+		// source of truth when available.
+		const steadyLeafBeforeContinuation = this.#contextSteadyPreTurnLeafId;
 		try {
 			await this.#promptWithMessage(message, textContent, {
 				prependMessages,
@@ -7071,6 +7242,8 @@ export class AgentSession {
 		} catch (error) {
 			this.#pendingNextTurnMessages = [...queuedMessages, ...this.#pendingNextTurnMessages];
 			throw error;
+		} finally {
+			this.#contextSteadyPreTurnLeafId = steadyLeafBeforeContinuation;
 		}
 	}
 
@@ -7104,6 +7277,9 @@ export class AgentSession {
 	async #promptAgentInitiatedMessage(message: CustomMessage): Promise<void> {
 		this.#beginInFlight();
 		try {
+			// Capture leaf entry ID before this agent-initiated prompt cycle's entries
+			// are appended, matching #promptWithMessage's pre-turn boundary setup.
+			this.#contextSteadyPreTurnLeafId = this.sessionManager.getLeafId();
 			await this.agent.prompt(message);
 			await this.#waitForPostPromptRecovery();
 		} finally {

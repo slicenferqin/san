@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San v0.1 上下文稳态落地审阅</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #20242a;
+      --muted: #637083;
+      --line: #d9e0ea;
+      --paper: #fbfcfd;
+      --panel: #ffffff;
+      --band: #f2f6f8;
+      --green: #0f766e;
+      --blue: #2457a6;
+      --amber: #a16207;
+      --red: #9f1239;
+      --code: #edf2f7;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.64;
+    }
+
+    header {
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .wrap {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .hero {
+      padding: 52px 0 36px;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--green);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 980px;
+      margin: 0;
+      font-size: clamp(32px, 5vw, 54px);
+      line-height: 1.06;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 920px;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    main {
+      padding: 30px 0 62px;
+    }
+
+    section {
+      padding: 30px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    section:last-child {
+      border-bottom: 0;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 24px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 10px 0;
+    }
+
+    ul,
+    ol {
+      margin: 10px 0 0;
+      padding-left: 22px;
+    }
+
+    li {
+      margin: 8px 0;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: var(--code);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow-x: auto;
+      margin: 16px 0 0;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    pre code {
+      padding: 0;
+      background: transparent;
+      font-size: 13px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+
+    th,
+    td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--band);
+      font-size: 13px;
+      color: #394150;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .callout {
+      margin: 16px 0 0;
+      padding: 16px 18px;
+      border-left: 4px solid var(--green);
+      background: #fff;
+      box-shadow: inset 0 0 0 1px var(--line);
+    }
+
+    .warning {
+      border-left-color: var(--amber);
+    }
+
+    .risk {
+      border-left-color: var(--red);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .card {
+      padding: 16px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .card strong {
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .verdict {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .verdict .label {
+      padding: 14px 16px;
+      color: #fff;
+      background: var(--green);
+      border-radius: 8px;
+      font-weight: 700;
+    }
+
+    .verdict .body {
+      padding: 14px 16px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .score {
+      font-weight: 700;
+      color: var(--green);
+    }
+
+    .score.mid {
+      color: var(--amber);
+    }
+
+    .score.bad {
+      color: var(--red);
+    }
+
+    .source-list a {
+      color: var(--blue);
+    }
+
+    @media (max-width: 900px) {
+      .grid,
+      .verdict {
+        grid-template-columns: 1fr;
+      }
+
+      th,
+      td {
+        padding: 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap hero">
+      <p class="eyebrow">San v0.1 Review · 2026-06-29</p>
+      <h1>上下文稳态规划方向正确，但落地要把“摘要账本”和“上下文注入”当成两个不同系统</h1>
+      <p class="subtitle">
+        本文基于 <code>docs/research</code> 的五份研究文档、当前 <code>packages/coding-agent</code> 代码路径、CodeGraph 查询以及 Amp/GBrain 当前公开资料，对 San v0.1 计划做可行性审阅和落地风险拆解。
+      </p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h2>直接结论</h2>
+      <div class="verdict">
+        <div class="label">Verdict</div>
+        <div class="body">
+          <strong>按当前大方向推进，可以达成 San v0.1 的目标。</strong>
+          选择 Context Steady State 作为 v0.1 主线是正确的：它足够差异化，也能承接后续 Agent Loop 和 GBrain/brain 路线。M1 用 <code>CustomEntry</code> 保存 <code>TurnDigest</code> 的方案也与现有 session 设计匹配。
+        </div>
+      </div>
+      <div class="callout warning">
+        需要修正的是落地口径：M1 不是“监听任意 <code>agent_end</code> 就写摘要”，而是要接在 <code>AgentSession</code> 已经判定本轮真正 settled 的维护路径之后；M2 也不是“把 digest 简单塞进 prelude messages”，而是要明确注入消息的生命周期、token 统计、append-only cache 影响和 debug view。
+      </div>
+    </section>
+
+    <section>
+      <h2>读完规划后的目标理解</h2>
+      <p>
+        五份文档实际形成了一个清晰的路线：
+      </p>
+      <ol>
+        <li><code>san-v0.1-plan-evaluation.html</code> 把 v0.1 锁定为 Context Steady State，不把 v0.1 降级成“摘要 MVP”。</li>
+        <li><code>context-steady-state-san.html</code> 定义完整目标：每轮结束沉淀 <code>TurnDigest</code>，下一轮前组装 <code>ContextPacket</code>，并把上下文稳定控制在质量窗口内。</li>
+        <li><code>context-steady-state-m1-technical-plan.html</code> 把第一个里程碑收窄为 post-turn <code>TurnDigest</code> 生成与持久化。</li>
+        <li><code>agent-loop-amp-san.html</code> 把 Commander/Worker/Supervisor、Checks、Oracle 等执行闭环放到 v0.2 更合理。</li>
+        <li><code>gbrain-san-ideas.html</code> 把 brain/memory/session 分层放到 v0.3+，避免 v0.1 过早外接完整 brain。</li>
+      </ol>
+      <p>
+        这个排序是对的。先做上下文稳态，再做执行闭环，再做 memory/brain 路由，能避免一开始把 prompt、agent orchestration、长期知识库和 session state 搅在一起。
+      </p>
+    </section>
+
+    <section>
+      <h2>规划正确的地方</h2>
+      <div class="grid">
+        <div class="card">
+          <strong>v0.1 目标没有选偏</strong>
+          Context Steady State 是底层能力，不是表层 workflow。它能让后续三角色、checks、brain recall 都消费同一套受控上下文。
+        </div>
+        <div class="card">
+          <strong>M1 范围拆得合理</strong>
+          只做 digest ledger，不改 core agent loop，不注入下一轮 prompt，能先建立数据来源和调试面。
+        </div>
+        <div class="card">
+          <strong>CustomEntry 是合适载体</strong>
+          当前类型注释明确说 <code>CustomEntry</code> 不进入 LLM context，而 <code>CustomMessageEntry</code> 才进入上下文。这正好符合 M1 的“先存不注入”。
+        </div>
+        <div class="card">
+          <strong>外脑没有提前引入</strong>
+          GBrain 当前公开定位就是 brain layer，提供 synthesis、graph traversal、gap analysis、MCP 等。v0.1 直接接它会明显扩大复杂度。
+        </div>
+        <div class="card">
+          <strong>Amp 启发放到 v0.2 合理</strong>
+          Amp Owner's Manual 当前入口仍是产品/手册形态；subagent、checks、oracle、librarian 类能力适合作为 San 执行闭环，而不是上下文底座。
+        </div>
+        <div class="card">
+          <strong>质量窗口思路正确</strong>
+          不把模型标称窗口当作工作目标，而是把 1M 当缓冲，把可控上下文控制在稳定窗口内，符合长期 agent 使用经验。
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>主要问题</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>问题</th>
+            <th>为什么会影响目标</th>
+            <th>建议修正</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>M1 文档把 <code>agent_end</code> 说得过于简单</td>
+            <td>
+              当前 <code>AgentSession</code> 的 <code>agent_end</code> 不是单一事件点。它会经过 empty stop、unexpected stop、retry、compaction、todo continuation、session_stop continuation 等维护路由。
+            </td>
+            <td>
+              Digest 生成要挂在“最终 settled turn”的内部维护路径上，并且只对真正终止的用户轮次写入。不要用普通 async subscriber 在外面监听所有 <code>agent_end</code>。
+            </td>
+          </tr>
+          <tr>
+            <td>“每轮”边界需要更精确定义</td>
+            <td>
+              一个用户 prompt 内可能有多次 model call、tool-use turn、auto-retry、auto-continue、session_stop continuation。直接按底层 <code>agent_end</code> 或 <code>turn_end</code> 计数会重复或漏写。
+            </td>
+            <td>
+              M1 先定义 <code>source.fromEntryId</code> / <code>source.toEntryId</code> / <code>promptGeneration</code> / 用户消息 entry id 的组合，并用它做去重和可追溯范围。
+            </td>
+          </tr>
+          <tr>
+            <td>M2 的“prelude messages”说法不够</td>
+            <td>
+              <code>#promptWithMessage()</code> 里已经有 plan/goal/eager todo/eager task/keyword/image/custom hook/file mention/Mnemopi 相关消息。新增 ContextPacket 如果只插在 <code>prependMessages</code>，容易和现有动态上下文排序、token 统计、pre-prompt compaction、append-only context 产生副作用。
+            </td>
+            <td>
+              给 ContextPacket 单独建 builder 和 debug record，明确排序：稳定/半稳定内容尽量走 system prompt 或低频 checkpoint；动态 digest/retrieval 放在 current prompt 前，但必须参与预算和 debug view。
+            </td>
+          </tr>
+          <tr>
+            <td>ContextPacket debug view 还没有技术落点</td>
+            <td>
+              v0.1 的验收依赖“可解释地复用”。如果只有 session entry 和隐式 prompt 注入，用户无法判断模型到底看到了什么。
+            </td>
+            <td>
+              M2 前先规划 <code>san.context_packet</code> custom entry 或 debug-only transcript marker，记录 layers、entry refs、token estimate、trim decisions 和 final injected message ids。
+            </td>
+          </tr>
+          <tr>
+            <td>预算稳态不能只依赖本地估算</td>
+            <td>
+              现有代码已经把 assistant message 的 <code>contextSnapshot</code> 当作 provider-anchored usage。只用 <code>estimateTokens()</code> 可能无法证明多轮后真实请求稳定。
+            </td>
+            <td>
+              v0.1 验收同时记录 local estimate 和 provider/contextSnapshot 两套数据。debug view 要显示差值，而不是只显示一个估算数字。
+            </td>
+          </tr>
+          <tr>
+            <td>memoryCandidates 的边界容易越界</td>
+            <td>
+              M1 输出 <code>memoryCandidates</code> 是合理的，但如果后续直接 auto-retain，很容易把 session 临时状态、项目事实、用户偏好和 world knowledge 混层。
+            </td>
+            <td>
+              M1 只产候选，不写长期 memory。v0.3 前保留人工/显式策略。分类上沿用 GBrain 的 brain vs memory vs session 边界。
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>代码证据</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>假设</th>
+            <th>代码证据</th>
+            <th>结论</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>CustomEntry</code> 适合保存 M1 digest ledger</td>
+            <td>
+              <code>session-entries.ts</code> 注释说明 <code>CustomEntry</code> 用于扩展状态持久化，不参与 LLM context；同文件说明 <code>CustomMessageEntry</code> 才进入 LLM context。<code>SessionManager.appendCustomEntry()</code> 已存在并写入当前 session。
+            </td>
+            <td>成立。M1 用 <code>appendCustomEntry("san.turn_digest", data)</code> 是低风险路径。</td>
+          </tr>
+          <tr>
+            <td><code>buildSessionContext()</code> 不会自动把 digest 带给模型</td>
+            <td>
+              <code>session-context.ts</code> 只处理 message、custom_message、branch_summary、compaction 等上下文消息；没有把 <code>custom</code> entry append 成 message。
+            </td>
+            <td>成立。M1 不会污染当前 LLM context，M2 必须显式读取 digest ledger。</td>
+          </tr>
+          <tr>
+            <td><code>agent_end</code> 是复杂 settled path，不是简单事件</td>
+            <td>
+              <code>AgentSession.#handleAgentEvent</code> 把 <code>agent_end</code> 注册为 post-prompt task；<code>#emitSessionEvent</code> 会在 prompt in-flight 时延后 wire-level <code>agent_end</code>；维护分支会处理 retry、compaction、todo、session_stop continuation。
+            </td>
+            <td>M1 需要在内部 settled 位置接入，且必须受 generation/abort/dispose 保护。</td>
+          </tr>
+          <tr>
+            <td>M2 的注入点存在，但不是唯一上下文入口</td>
+            <td>
+              <code>AgentSession.prompt()</code> 会构造 <code>prependMessages</code>；<code>#promptWithMessage()</code> 还会加入 plan/goal/pending nextTurn/file mentions/before_agent_start hook，随后运行 pre-prompt compaction 和 context token snapshot。
+            </td>
+            <td>M2 可以在这里接，但要统一排序、预算和 debug，而不是随手 push 一个 custom message。</td>
+          </tr>
+          <tr>
+            <td>当前已有 memory backend 可以后续复用</td>
+            <td>
+              <code>MnemopiSessionState</code> 已有 <code>recallForContext</code>、<code>beforeAgentStartPrompt</code>、<code>maybeRetainOnAgentEnd</code>，并监听 <code>agent_start</code> 和 <code>agent_end</code>。
+            </td>
+            <td>v0.3 可复用，但 v0.1 不应把 ContextPacket 和 Mnemopi auto-retain 混成一个系统。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>按规划能否达成目标</h2>
+      <p>
+        可以，但要把 v0.1 拆成四个明确闭环，而不是只按“Phase 1/2/3”粗分：
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>闭环</th>
+            <th>必要交付</th>
+            <th>验收口径</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>M1: Digest Ledger</td>
+            <td><code>san.turn_digest</code> custom entries、list/read helper、fallback digest、去重、失败不阻断。</td>
+            <td>真实用户轮次结束后能读到 digest；resume 后仍能读；不进入 LLM context。</td>
+          </tr>
+          <tr>
+            <td>M2: ContextPacket Injection</td>
+            <td>读取 digest ledger，组装最小 ContextPacket，注入下一轮，写 debug entry。</td>
+            <td>下一轮 payload 或 debug view 能证明上一轮 digest 被实际消费。</td>
+          </tr>
+          <tr>
+            <td>M3: Budget Steady State</td>
+            <td><code>qualityWindowTokens</code>、layer budget、trim decisions、provider/contextSnapshot 对照。</td>
+            <td>构造 10-20 轮噪声会话后，下一轮 prompt 仍稳定在质量窗口内，裁剪日志可解释。</td>
+          </tr>
+          <tr>
+            <td>M4: Recall Boundary</td>
+            <td>轻量 Mnemopi/historical recall 接入，只读或候选模式，不做长期静默写入。</td>
+            <td>跨轮/跨会话能召回相关偏好或项目决策，但不会把 session 临时信息污染长期 memory。</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        v0.1 发布口径应该是 M1-M3 必须完成，M4 可以作为受控增强。只有 M1 的话只是“摘要账本”，还不是上下文稳态。
+      </div>
+    </section>
+
+    <section>
+      <h2>最容易走偏的地方</h2>
+      <ol>
+        <li>
+          <strong>把摘要当成上下文稳态本身。</strong>
+          Digest 是原料，不是目标。目标是下一轮实际消费、可解释、可裁剪、预算稳定。
+        </li>
+        <li>
+          <strong>把所有 digest 都塞进下一轮。</strong>
+          这样只是把原始 transcript 换成摘要 transcript，长期仍会膨胀。必须有最近 N 条、checkpoint、相关召回和预算裁剪。
+        </li>
+        <li>
+          <strong>让 LLM 生成的 digest 覆盖证据。</strong>
+          Digest 只能存短摘、路径、entry id、hash、行号。文件内容和工具输出要按需重读，不能信摘要替代证据。
+        </li>
+        <li>
+          <strong>在错误/中断/自动续跑时重复写 digest。</strong>
+          aborted、retryable error、empty stop、session_stop continuation 都会制造边界错觉。必须用 source range 去重。
+        </li>
+        <li>
+          <strong>污染 append-only cache 前缀。</strong>
+          动态 ContextPacket 如果放在太靠前的位置或每轮重写稳定前缀，会破坏 prompt cache。稳定规则和低频 checkpoint 放前，动态召回靠后。
+        </li>
+        <li>
+          <strong>把 debug UI 做成产品噪声。</strong>
+          v0.1 必须可调试，但默认用户体验不要被内部 markers 淹没。建议用命令/debug view 或隐藏 custom entry 展示。
+        </li>
+        <li>
+          <strong>过早接 GBrain 或三角色。</strong>
+          它们都很诱人，但会把当前目标从 context system 拉成 orchestration/knowledge system。v0.1 先把底座跑稳。
+        </li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>落地护栏</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>护栏</th>
+            <th>具体做法</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>先做 deterministic fallback</td>
+            <td>M1 先保证不用 LLM 也能写出 schema 完整的 fallback digest，再接 summary model。这样测试和持久化 contract 稳定。</td>
+          </tr>
+          <tr>
+            <td>summary LLM 只能是 side request</td>
+            <td>不要把 digest 生成走主 agent loop，不要触发工具、session message 或新的 <code>agent_end</code>。用独立 helper 调 <code>completeSimple</code>/<code>instrumentedCompleteSimple</code>。</td>
+          </tr>
+          <tr>
+            <td>所有 digest job 绑定 generation 和 source range</td>
+            <td>创建任务时记录当前 session id、leaf id、from/to entry、prompt generation。写入前二次确认 session 未切换、未 abort、source range 仍在当前 branch。</td>
+          </tr>
+          <tr>
+            <td>失败默认不影响用户 turn</td>
+            <td>LLM 摘要失败、JSON parse 失败、timeout 只写 fallback 或 logger warning；不能让 <code>prompt()</code> promise 失败。</td>
+          </tr>
+          <tr>
+            <td>M2 先只读最近 digest</td>
+            <td>第一版只注入最近 1-3 条 digest 加当前 prompt，先证明“下一轮实际复用”。不要同时做 checkpoint、recall、brain、subagent。</td>
+          </tr>
+          <tr>
+            <td>debug entry 与注入 entry 分离</td>
+            <td>ContextPacket debug 可以持久化为 <code>san.context_packet</code> custom entry；实际注入可以是隐藏 custom message 或 transformContext 结果。两者要能互相引用。</td>
+          </tr>
+          <tr>
+            <td>验收用真实 session，不只测 helper</td>
+            <td>测试必须跑过 <code>AgentSession.prompt()</code> 或现有 message pipeline，验证 session entries、resume、buildSessionContext、下一轮 payload/ContextPacket debug。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>建议的实现顺序</h2>
+      <ol>
+        <li>
+          新增 <code>packages/coding-agent/src/context-steady/types.ts</code> 和纯函数 helpers：schema normalize、source range、fallback digest、list/filter digest entries。
+        </li>
+        <li>
+          加设置项，但默认先可控。建议先做 <code>san.contextSteady.enabled</code>、<code>san.contextSteady.digest.enabled</code>、<code>san.contextSteady.digest.persistFallback</code>、<code>san.contextSteady.digest.timeoutMs</code>。
+        </li>
+        <li>
+          在 <code>AgentSession</code> 内部 settled <code>agent_end</code> 维护尾部接入 digest service。不要走外部 subscriber 作为主路径。
+        </li>
+        <li>
+          先写 fallback digest 并持久化；测试通过后再接 LLM digest prompt。Prompt 必须放 <code>.md</code>，用 Handlebars 渲染。
+        </li>
+        <li>
+          M2 单独写 ContextPacket builder，先从 digest ledger 读最近 1-3 条，写 debug custom entry，再注入下一轮。
+        </li>
+        <li>
+          加多轮 fixture/e2e，证明 digest 被消费，且上下文 token 不随轮数线性增长。
+        </li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>外部背景</h2>
+      <ul class="source-list">
+        <li>
+          <a href="https://ampcode.com/manual">Amp Owner's Manual</a>：当前公开入口支持把 Amp 作为 agent 产品/手册参考；其 subagents、checks、oracle、librarian 等概念更适合 San v0.2 执行闭环。
+        </li>
+        <li>
+          <a href="https://github.com/garrytan/gbrain">GBrain README</a>：GBrain 明确定位为 agent brain layer，强调 synthesis、graph traversal、gap analysis、MCP 接入和 dream cycle。它适合外部 brain，不适合塞进 v0.1。
+        </li>
+        <li>
+          <a href="https://github.com/garrytan/gbrain/blob/master/docs/guides/brain-vs-memory.md">GBrain Brain vs Memory vs Session</a>：其分层规则支持 San 规划里的“不混层”判断：world knowledge 进 brain，operations/preferences 进 agent memory，当前任务留 session。
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>最终建议</h2>
+      <p>
+        不建议改 v0.1 目标。应该继续以“上下文稳态”为主线推进，但把规划文档里的 M1 接入点更新成更严格的 settled-turn contract，并在 M2 前补一份 <code>ContextPacket</code> 技术方案，重点写清楚 layer 顺序、注入位置、debug entry、token 预算和 append-only cache 策略。
+      </p>
+      <p>
+        最小可交付路径是：M1 先做可靠 digest ledger；M2 做可见、可验证的下一轮复用；M3 做质量窗口和裁剪日志。走完这三步，San v0.1 才真正达成“每轮上下文能稳定收敛”的目标。
+      </p>
+    </section>
+  </main>
+</body>
+</html>
