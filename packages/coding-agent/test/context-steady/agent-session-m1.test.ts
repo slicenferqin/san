@@ -400,4 +400,69 @@ describe("Context Steady State M1 — AgentSession integration", () => {
 		await session.waitForIdle();
 		expect(extractDigestEntries(sessionManager)).toHaveLength(0);
 	});
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Test 5: Regression — agent_end hook side effect does not pollute toEntryId
+	// ═══════════════════════════════════════════════════════════════════════
+
+	it("toEntryId is not polluted by agent_end hook that appends entries", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const extensionRunner = {
+			emit: vi.fn(async (event: { type: string }) => {
+				// Simulate an extension that writes a custom entry on agent_end.
+				// This advances the session leaf and would shift toEntryId if
+				// settledLeafId were not captured before the notification.
+				if (event.type === "agent_end") {
+					(sessionManager as unknown as { appendCustomEntry(ct: string, d?: unknown): string }).appendCustomEntry(
+						"test.agent_end_side_effect",
+						{},
+					);
+				}
+			}),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn(() => false),
+			emitSessionStop: vi.fn().mockResolvedValue(undefined),
+		} as unknown as ExtensionRunner;
+		const settings = Settings.isolated(BASE_SETTINGS);
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+		await session.prompt("Fix the bug");
+		await session.waitForIdle();
+
+		const digests = extractDigestEntries(sessionManager);
+		expect(digests).toHaveLength(1);
+
+		const data = digests[0]!.data as Record<string, unknown>;
+		const source = data.source as Record<string, string>;
+		const branch = sessionManager.getBranch();
+
+		// toEntryId must point to the final assistant message, not the
+		// test.agent_end_side_effect custom entry (the side-effect entry
+		// comes later in the branch).
+		const toEntry = branch.find(e => e.id === source.toEntryId);
+		expect(toEntry).toBeDefined();
+		expect(toEntry!.type).toBe("message");
+		const toMsg = "message" in toEntry! ? (toEntry as unknown as Record<string, unknown>).message : undefined;
+		expect((toMsg as Record<string, unknown>).role).toBe("assistant");
+
+		// The side-effect entry must exist in the branch AFTER the toEntry
+		const toIdx = branch.findIndex(e => e.id === source.toEntryId);
+		const sideEffectIdx = branch.findIndex(
+			e =>
+				e.type === "custom" && (e as unknown as Record<string, string>).customType === "test.agent_end_side_effect",
+		);
+		expect(sideEffectIdx).toBeGreaterThan(toIdx);
+	});
 });

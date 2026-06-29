@@ -42,6 +42,8 @@ packages/ai/test/.temp-images/
 !.omp/
 .omp/plugins/
 .pi_config/
+.codegraph/
+.reasonix/
 .opencode/
 .worktrees/
 .worktree/

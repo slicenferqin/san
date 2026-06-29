@@ -7227,11 +7227,12 @@ export class AgentSession {
 		const prependMessages = queuedMessages.slice(0, -1);
 		const textContent = this.#getCustomMessageTextContent(message);
 		// Context steady: the continuation prompt overwrites
-		// #contextSteadyPreTurnLeafId at line 6905. Save and restore it so the
-		// consolidated digest (triggered by chainEnded) can use the original
-		// boundary via #contextSteadyOriginalPreTurnLeafId ?? the restored
-		// #contextSteadyPreTurnLeafId. The restored value is the fallback;
-		// #contextSteadyOriginalPreTurnLeafId set at line 4665 is the primary
+		// #contextSteadyPreTurnLeafId (in #promptWithMessage). Save and restore
+		// it so the consolidated digest (triggered by chainEnded) can use the
+		// original boundary via #contextSteadyOriginalPreTurnLeafId ?? the
+		// restored #contextSteadyPreTurnLeafId. The restored value is the
+		// fallback; #contextSteadyOriginalPreTurnLeafId set by
+		// #emitSessionStopEvent is the primary source of truth when available.
 		// source of truth when available.
 		const steadyLeafBeforeContinuation = this.#contextSteadyPreTurnLeafId;
 		try {
