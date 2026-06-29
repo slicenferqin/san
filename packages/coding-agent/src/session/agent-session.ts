@@ -3257,10 +3257,17 @@ export class AgentSession {
 			// A deliberate abort should settle the current turn, not trigger queued continuations.
 			if (msg.stopReason === "aborted") {
 				this.#resolveRetry();
+				// Capture the original logical-turn boundary before
+				// #resetSessionStopContinuationState clears it. If this abort
+				// fires during a session_stop continuation, the original
+				// boundary must still be used so the digest spans from the
+				// original user prompt (not just the continuation cycle).
+				const persistedOriginalBoundary =
+					this.#contextSteadyOriginalPreTurnLeafId ?? this.#contextSteadyPreTurnLeafId;
 				this.#resetSessionStopContinuationState();
 				const settledLeafId = this.sessionManager.getLeafId();
 				await emitAgentEndNotification();
-				void this.#generateTurnDigest(settledLeafId);
+				void this.#generateTurnDigest(settledLeafId, persistedOriginalBoundary);
 				return;
 			}
 			// Fireworks Fast variants degrade to their base model on a failed turn —
@@ -3371,12 +3378,15 @@ export class AgentSession {
 	 * After generation (or when skipped/failed), continuation boundary state
 	 * is cleaned up so the next logical turn starts with a clean slate.
 	 */
-	#generateTurnDigest(settledLeafId?: string | null): void {
+	#generateTurnDigest(settledLeafId?: string | null, overrideBoundary?: string | null): void {
 		const settings = this.settings;
 
 		// Capture the original boundary BEFORE any cleanup, so the source
 		// span computation uses the stable snapshot.
-		const originalBoundary = this.#contextSteadyOriginalPreTurnLeafId ?? this.#contextSteadyPreTurnLeafId;
+		// When overrideBoundary is provided (e.g. abort path after reset),
+		// it takes precedence — it was captured before reset cleared the fields.
+		const originalBoundary =
+			overrideBoundary ?? this.#contextSteadyOriginalPreTurnLeafId ?? this.#contextSteadyPreTurnLeafId;
 
 		// Whether we write a digest or not, continuation boundary state must
 		// be cleaned up so the next turn starts fresh.
@@ -7233,7 +7243,6 @@ export class AgentSession {
 		// restored #contextSteadyPreTurnLeafId. The restored value is the
 		// fallback; #contextSteadyOriginalPreTurnLeafId set by
 		// #emitSessionStopEvent is the primary source of truth when available.
-		// source of truth when available.
 		const steadyLeafBeforeContinuation = this.#contextSteadyPreTurnLeafId;
 		try {
 			await this.#promptWithMessage(message, textContent, {

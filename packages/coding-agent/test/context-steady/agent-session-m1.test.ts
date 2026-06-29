@@ -363,7 +363,10 @@ describe("Context Steady State M1 — AgentSession integration", () => {
 
 		session = new AgentSession({ agent: localAgent, sessionManager, settings, modelRegistry });
 		const promptPromise = session.prompt("Do something").catch(() => {});
-		await Bun.sleep(10);
+		for (let i = 0; i < 200; i++) {
+			if (session.isStreaming) break;
+			await Bun.sleep(20);
+		}
 		await session.abort();
 		await promptPromise;
 		await session.waitForIdle();
@@ -464,5 +467,78 @@ describe("Context Steady State M1 — AgentSession integration", () => {
 				e.type === "custom" && (e as unknown as Record<string, string>).customType === "test.agent_end_side_effect",
 		);
 		expect(sideEffectIdx).toBeGreaterThan(toIdx);
+	});
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Test 6: Regression — abort during continuation preserves full turn boundary
+	// ═══════════════════════════════════════════════════════════════════════
+
+	it("abort during session_stop continuation produces consolidated digest from original boundary", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+
+		// First session_stop queues a continuation; abort fires inside it
+		const stopHook = Promise.withResolvers<{ continue: true; additionalContext: string }>();
+		const emitSessionStop = vi.fn(() => (emitSessionStop.mock.calls.length === 1 ? stopHook.promise : undefined));
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop,
+		} as unknown as ExtensionRunner;
+
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated(BASE_SETTINGS);
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+		const promptPromise = session.prompt("Fix the bug").catch(() => {});
+		for (let i = 0; i < 200; i++) {
+			if (emitSessionStop.mock.calls.length > 0) break;
+			await Bun.sleep(20);
+		}
+		expect(emitSessionStop).toHaveBeenCalled();
+		stopHook.resolve({ continue: true, additionalContext: "Continue." });
+		// Wait for continuation to start, then abort it
+		await Bun.sleep(100);
+		await session.abort();
+		await promptPromise;
+		await session.waitForIdle();
+
+		const digests = extractDigestEntries(sessionManager);
+		// Should be exactly one digest covering the full logical turn
+		expect(digests).toHaveLength(1);
+
+		const data = digests[0]!.data as Record<string, unknown>;
+		const source = data.source as Record<string, string>;
+		const branch = sessionManager.getBranch();
+
+		// userIntent must come from the original user prompt, not
+		// "System-driven continuation"
+		expect(data.userIntent).not.toBe("System-driven continuation");
+		expect(data.userIntent).toContain("Fix the bug");
+
+		// fromEntryId must be at or before the original user message
+		const firstUserIdx = branch.findIndex(e => e.type === "message" && "message" in e);
+		const fromIdx = branch.findIndex(e => e.id === source.fromEntryId);
+		expect(fromIdx).toBeLessThanOrEqual(firstUserIdx);
+
+		// Span must include the continuation custom_message
+		const contIdx = branch.findIndex(
+			e =>
+				e.type === "custom_message" &&
+				(e as unknown as Record<string, string>).customType === "session-stop-continuation",
+		);
+		expect(contIdx).toBeGreaterThanOrEqual(0);
+		expect(fromIdx).toBeLessThanOrEqual(contIdx);
 	});
 });
