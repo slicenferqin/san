@@ -38,6 +38,7 @@ interface InlinedMessage {
 	provider: string;
 	model: string;
 	status?: string;
+	isError?: boolean;
 	toolCallId?: string;
 	toolName?: string;
 	details?: Record<string, unknown>;
@@ -128,7 +129,7 @@ function collectTools(msgs: readonly InlinedMessage[]): TurnDigestToolEvidence[]
 }
 
 function toolSummary(m: InlinedMessage): string {
-	const st = m.status;
+	const st = toolResultStatus(m);
 	const p = typeof m.details?.path === "string" ? m.details.path : undefined;
 	let s = `${m.toolName ?? "unknown"}: ${st}`;
 	if (st === "error" && typeof m.details?.error === "string") {
@@ -137,6 +138,12 @@ function toolSummary(m: InlinedMessage): string {
 	}
 	if (p) s += ` (${p})`;
 	return s;
+}
+
+function toolResultStatus(m: InlinedMessage): string {
+	if (typeof m.status === "string" && m.status.length > 0) return m.status;
+	if (m.isError === true) return "error";
+	return "completed";
 }
 
 // ── Text extraction ─────────────────────────────────────────────────────────

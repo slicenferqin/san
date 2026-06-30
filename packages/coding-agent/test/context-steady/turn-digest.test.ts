@@ -49,6 +49,7 @@ interface Msg {
 	provider: string;
 	model: string;
 	status?: string;
+	isError?: boolean;
 	toolCallId?: string;
 	toolName?: string;
 	details?: Record<string, unknown>;
@@ -171,6 +172,37 @@ describe("fallback digest", () => {
 
 		expect(d.filesTouched).toContainEqual({ path: "src/app.ts", action: "modified" });
 		expect(d.toolEvidence.map(t => t.tool)).toContain("edit");
+	});
+
+	test("summarizes real toolResult entries that only expose isError", () => {
+		const msgs = asM([
+			umsg("Read and edit config"),
+			{
+				role: "toolResult",
+				toolCallId: "tc_read",
+				toolName: "read",
+				content: "OK",
+				isError: false,
+				timestamp: Date.now(),
+				provider: "x",
+				model: "x",
+			},
+			{
+				role: "toolResult",
+				toolCallId: "tc_edit",
+				toolName: "edit",
+				content: "File not found",
+				isError: true,
+				timestamp: Date.now(),
+				provider: "x",
+				model: "x",
+			},
+			amsg("Done."),
+		]);
+		const src = { sessionId: "s", fromEntryId: "e1", toEntryId: "e4", promptGeneration: 1 };
+		const d = generateFallbackDigest(msgs, src, "turn-tool-status", "s");
+
+		expect(d.toolEvidence.map(t => t.summary)).toEqual(["read: completed", "edit: error"]);
 	});
 });
 
