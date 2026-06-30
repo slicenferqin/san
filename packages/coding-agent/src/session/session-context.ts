@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ProviderPayload, ServiceTier } from "@oh-my-pi/pi-ai";
 import * as snapcompact from "@oh-my-pi/snapcompact";
+import { CONTEXT_PACKET_MESSAGE_TYPE } from "../context-steady/types";
 import { createBranchSummaryMessage, createCompactionSummaryMessage, createCustomMessage } from "./messages";
 import { type CompactionEntry, EPHEMERAL_MODEL_CHANGE_ROLE, type SessionEntry } from "./session-entries";
 
@@ -241,6 +242,9 @@ export function buildSessionContext(
 		if (entry.type === "message") {
 			pushMessage(entry.message);
 		} else if (entry.type === "custom_message") {
+			if (!options?.transcript && entry.customType === CONTEXT_PACKET_MESSAGE_TYPE) {
+				return;
+			}
 			pushMessage(
 				createCustomMessage(
 					entry.customType,

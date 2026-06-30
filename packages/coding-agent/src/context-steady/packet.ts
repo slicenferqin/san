@@ -78,6 +78,14 @@ function renderPacketContent(digests: readonly DigestEntryRef[]): string {
 	return prompt.render(packetTemplate, { digests: views });
 }
 
+function estimatePacketTokens(content: string): number {
+	return estimateTokens({
+		role: "user",
+		content: [{ type: "text", text: content }],
+		timestamp: Date.now(),
+	});
+}
+
 function selectedWithinBudget(
 	digests: readonly DigestEntryRef[],
 	maxTokens: number,
@@ -90,41 +98,20 @@ function selectedWithinBudget(
 		const content = renderPacketContent(digests);
 		return {
 			selected: [...digests],
-			tokenEstimate: estimateTokens({
-				role: "custom",
-				customType: CONTEXT_PACKET_MESSAGE_TYPE,
-				content,
-				display: false,
-				attribution: "agent",
-				timestamp: Date.now(),
-			}),
+			tokenEstimate: estimatePacketTokens(content),
 			tokenTrimmed: 0,
 		};
 	}
 
 	let selected = [...digests];
 	let content = renderPacketContent(selected);
-	let tokenEstimate = estimateTokens({
-		role: "custom",
-		customType: CONTEXT_PACKET_MESSAGE_TYPE,
-		content,
-		display: false,
-		attribution: "agent",
-		timestamp: Date.now(),
-	});
+	let tokenEstimate = estimatePacketTokens(content);
 	let tokenTrimmed = 0;
 	while (selected.length > 0 && tokenEstimate > maxTokens) {
 		selected = selected.slice(1);
 		tokenTrimmed++;
 		content = renderPacketContent(selected);
-		tokenEstimate = estimateTokens({
-			role: "custom",
-			customType: CONTEXT_PACKET_MESSAGE_TYPE,
-			content,
-			display: false,
-			attribution: "agent",
-			timestamp: Date.now(),
-		});
+		tokenEstimate = estimatePacketTokens(content);
 	}
 	return { selected, tokenEstimate, tokenTrimmed };
 }

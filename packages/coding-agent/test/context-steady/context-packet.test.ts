@@ -69,6 +69,7 @@ describe("ContextPacket builder", () => {
 		expect(built!.packet.schemaVersion).toBe(CONTEXT_PACKET_SCHEMA_VERSION);
 		expect(built!.packet.injectedMessageCustomType).toBe(CONTEXT_PACKET_MESSAGE_TYPE);
 		expect(built!.packet.digestRefs).toEqual(["d2", "d3"]);
+		expect(built!.packet.tokenEstimate).toBeGreaterThan(0);
 		expect(built!.packet.trimDecisions).toContainEqual({
 			layer: "turn_digest_ledger",
 			reason: "recent_limit",
@@ -90,5 +91,27 @@ describe("ContextPacket builder", () => {
 		expect(
 			buildContextPacket(asEntries([]), "s1", "p", { enabled: true, recentDigests: 3, maxTokens: 2000 }),
 		).toBeNull();
+	});
+
+	test("trims old digests when the packet exceeds the token budget", () => {
+		const built = buildContextPacket(
+			asEntries([
+				customEntry("d1", TURN_DIGEST_CUSTOM_TYPE, digest("t1", "first task")),
+				customEntry("d2", TURN_DIGEST_CUSTOM_TYPE, digest("t2", "second task")),
+				customEntry("d3", TURN_DIGEST_CUSTOM_TYPE, digest("t3", "third task")),
+			]),
+			"s1",
+			"current prompt",
+			{ enabled: true, recentDigests: 3, maxTokens: 180 },
+		);
+
+		expect(built).not.toBeNull();
+		expect(built!.packet.digestRefs.length).toBeLessThan(3);
+		expect(built!.packet.tokenEstimate).toBeLessThanOrEqual(180);
+		expect(built!.packet.trimDecisions).toContainEqual({
+			layer: "turn_digest_ledger",
+			reason: "token_budget",
+			omitted: 1,
+		});
 	});
 });

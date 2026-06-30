@@ -22,15 +22,29 @@ import {
 	findExistingDigest,
 	hasExistingDigest,
 	listTurnDigests,
+	skipContextPacketPreludeInDigestSource,
 } from "../../src/context-steady/session";
 import type { TurnDigest } from "../../src/context-steady/types";
-import { TURN_DIGEST_CUSTOM_TYPE, TURN_DIGEST_SCHEMA_VERSION } from "../../src/context-steady/types";
+import {
+	CONTEXT_PACKET_MESSAGE_TYPE,
+	TURN_DIGEST_CUSTOM_TYPE,
+	TURN_DIGEST_SCHEMA_VERSION,
+} from "../../src/context-steady/types";
 
 // Minimal message shapes to avoid pulling in @oh-my-pi/pi-agent-core
 // (which transitively loads @oh-my-pi/pi-natives native modules).
 interface Msg {
 	role: string;
-	content: string | Array<{ type: string; text?: string; id?: string; name?: string; args?: Record<string, unknown> }>;
+	content:
+		| string
+		| Array<{
+				type: string;
+				text?: string;
+				id?: string;
+				name?: string;
+				args?: Record<string, unknown>;
+				arguments?: Record<string, unknown>;
+		  }>;
 	timestamp: number;
 	provider: string;
 	model: string;
@@ -67,6 +81,20 @@ function tmsg(tool: string, status: "completed" | "error", path?: string): Msg {
 
 function centry(id: string, ct: string, data: unknown): Record<string, unknown> {
 	return { type: "custom", id, parentId: null, timestamp: new Date().toISOString(), customType: ct, data };
+}
+
+function msgEntry(id: string, role: string, content = ""): Record<string, unknown> {
+	return {
+		type: "message",
+		id,
+		parentId: null,
+		timestamp: new Date().toISOString(),
+		message: { role, content, timestamp: Date.now(), provider: "x", model: "x" },
+	};
+}
+
+function customMsgEntry(id: string, customType: string, content = ""): Record<string, unknown> {
+	return { type: "custom_message", id, parentId: null, timestamp: new Date().toISOString(), customType, content };
 }
 
 const asM = (m: Msg[]) => m as unknown as Parameters<typeof generateFallbackDigest>[0];
@@ -123,6 +151,26 @@ describe("fallback digest", () => {
 			"s",
 		);
 		expect(d.fallback).toBe(true);
+	});
+
+	test("collects file paths from real AgentMessage toolCall arguments", () => {
+		const msgs = asM([
+			umsg("Patch src/app.ts"),
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tc_edit", name: "edit", arguments: { filePath: "src/app.ts" } }],
+				timestamp: Date.now(),
+				provider: "x",
+				model: "x",
+			},
+			tmsg("edit", "completed", "src/app.ts"),
+			amsg("Patched."),
+		]);
+		const src = { sessionId: "s", fromEntryId: "e1", toEntryId: "e4", promptGeneration: 1 };
+		const d = generateFallbackDigest(msgs, src, "turn-real-toolcall", "s");
+
+		expect(d.filesTouched).toContainEqual({ path: "src/app.ts", action: "modified" });
+		expect(d.toolEvidence.map(t => t.tool)).toContain("edit");
 	});
 });
 
@@ -404,6 +452,28 @@ describe("computeTurnSourceSpan", () => {
 	test("preTurnLeafId at end of branch uses its id as fromEntryId", () => {
 		const span = computeTurnSourceSpan(branch, "e5", "e5");
 		expect(span).toEqual({ fromEntryId: "e5", toEntryId: "e5" });
+	});
+});
+
+describe("skipContextPacketPreludeInDigestSource", () => {
+	test("starts digest at user after ContextPacket prelude even when other prelude messages come first", () => {
+		const branch = asE([
+			customMsgEntry("eager", "eager-task-prelude", "delegate reminder"),
+			customMsgEntry("packet", CONTEXT_PACKET_MESSAGE_TYPE, "<san_context_packet>"),
+			msgEntry("user", "user", "Continue with tests"),
+			msgEntry("assistant", "assistant", "Done"),
+		]);
+
+		expect(skipContextPacketPreludeInDigestSource(branch, "eager", "assistant")).toBe("user");
+	});
+
+	test("leaves agent-only continuations digestible when no ContextPacket was injected", () => {
+		const branch = asE([
+			customMsgEntry("continuation", "session-stop-continuation", "keep working"),
+			msgEntry("assistant", "assistant", "Done"),
+		]);
+
+		expect(skipContextPacketPreludeInDigestSource(branch, "continuation", "assistant")).toBe("continuation");
 	});
 });
 

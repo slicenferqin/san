@@ -20,7 +20,8 @@ interface InlinedToolCall {
 	type: "toolCall";
 	id: string;
 	name: string;
-	args: Record<string, unknown>;
+	args?: Record<string, unknown>;
+	arguments?: Record<string, unknown>;
 }
 
 interface InlinedTextBlock {
@@ -103,7 +104,7 @@ function guessAction(tool: string): TurnDigestFile["action"] {
 }
 
 function extractPath(tc: InlinedToolCall): string | undefined {
-	const a = tc.args;
+	const a = tc.args ?? tc.arguments ?? {};
 	if (typeof a.filePath === "string") return a.filePath;
 	if (typeof a.path === "string") return a.path;
 	if (typeof a.file_path === "string") return a.file_path;

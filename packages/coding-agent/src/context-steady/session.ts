@@ -9,7 +9,7 @@
 import type { SessionEntry } from "../session/session-entries";
 import type { ReadonlySessionManager } from "../session/session-manager";
 import type { TurnDigest, TurnDigestSource } from "./types";
-import { TURN_DIGEST_CUSTOM_TYPE } from "./types";
+import { CONTEXT_PACKET_MESSAGE_TYPE, TURN_DIGEST_CUSTOM_TYPE } from "./types";
 
 /** Internal session manager interface we need at runtime. */
 interface SessionManagerInternal {
@@ -50,6 +50,48 @@ export function computeTurnSourceSpan(
 
 	if (!fromEntryId) return null;
 	return { fromEntryId, toEntryId };
+}
+
+/**
+ * Move a turn digest source boundary past any M2 ContextPacket injection that
+ * belongs to the prompt prelude. Other custom_message entries stay in the span:
+ * agent-driven continuations still need to be digestible as system-driven work.
+ */
+export function skipContextPacketPreludeInDigestSource(
+	branch: ReadonlyArray<{ id: string; type: string; customType?: string; message?: unknown }>,
+	fromEntryId: string,
+	toEntryId: string,
+): string {
+	const fromIndex = branch.findIndex(entry => entry.id === fromEntryId);
+	const toIndex = branch.findIndex(entry => entry.id === toEntryId);
+	if (fromIndex < 0 || toIndex < 0 || fromIndex >= toIndex) return fromEntryId;
+
+	let packetIndex = -1;
+	for (let index = fromIndex; index <= toIndex; index++) {
+		const entry = branch[index];
+		if (!entry) break;
+		if (entry.type === "custom_message" && entry.customType === CONTEXT_PACKET_MESSAGE_TYPE) {
+			packetIndex = index;
+			break;
+		}
+	}
+
+	if (packetIndex < 0) return fromEntryId;
+	for (let index = packetIndex + 1; index <= toIndex; index++) {
+		const entry = branch[index];
+		if (!entry) break;
+		if (entry.type === "message" && messageRole(entry.message) === "user") {
+			return entry.id;
+		}
+	}
+
+	return fromEntryId;
+}
+
+function messageRole(message: unknown): string | undefined {
+	if (!message || typeof message !== "object" || !("role" in message)) return undefined;
+	const role = (message as { role?: unknown }).role;
+	return typeof role === "string" ? role : undefined;
 }
 
 // ── Message extraction from branch ──────────────────────────────────────────

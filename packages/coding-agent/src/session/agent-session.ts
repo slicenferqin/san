@@ -169,7 +169,11 @@ import type { Settings, SkillsSettings } from "../config/settings";
 import { getDefault, onAppendOnlyModeChanged, validateProviderMaxInFlightRequests } from "../config/settings";
 import { generateDigest as generateContextSteadyDigest } from "../context-steady/digest";
 import { appendContextPacketDebugEntry, buildContextPacket } from "../context-steady/packet";
-import { computeTurnSourceSpan, extractSpanMessages } from "../context-steady/session";
+import {
+	computeTurnSourceSpan,
+	extractSpanMessages,
+	skipContextPacketPreludeInDigestSource,
+} from "../context-steady/session";
 import { CONTEXT_PACKET_CUSTOM_TYPE, CONTEXT_PACKET_MESSAGE_TYPE } from "../context-steady/types";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability } from "../discovery";
@@ -2704,6 +2708,14 @@ export class AgentSession {
 		await this.#pendingMessageEndPersistence.get(key);
 	}
 
+	async #waitForMessageEndPersistence(): Promise<void> {
+		await this.#messageEndPersistenceTail;
+	}
+
+	#latestAssistantMessage(messages: readonly AgentMessage[]): AssistantMessage | undefined {
+		return [...messages].reverse().find((message): message is AssistantMessage => message.role === "assistant");
+	}
+
 	/**
 	 * Index every message entry on the current branch by persistence key, so
 	 * the mid-run-compaction planner can ask "is this turn message already on
@@ -3111,7 +3123,9 @@ export class AgentSession {
 
 		// Check auto-retry and auto-compaction after agent completes
 		if (event.type === "agent_end") {
+			await this.#waitForMessageEndPersistence();
 			const settledMessages = this.agent.state.messages;
+			const eventAssistant = this.#latestAssistantMessage(event.messages);
 			const emitAgentEndNotification = async () => {
 				await this.#emitAgentEndNotification(settledMessages);
 			};
@@ -3124,10 +3138,8 @@ export class AgentSession {
 					cacheWrite: usage.cacheWrite,
 				},
 			});
-			const fallbackAssistant = [...settledMessages]
-				.reverse()
-				.find((message): message is AssistantMessage => message.role === "assistant");
-			const msg = this.#lastAssistantMessage ?? fallbackAssistant;
+			const fallbackAssistant = this.#latestAssistantMessage(settledMessages);
+			const msg = eventAssistant ?? fallbackAssistant ?? this.#lastAssistantMessage;
 			this.#lastAssistantMessage = undefined;
 			if (!msg) {
 				this.#lastSuccessfulYieldToolCallId = undefined;
@@ -3271,10 +3283,12 @@ export class AgentSession {
 				this.#resetSessionStopContinuationState();
 				const settledLeafId = this.sessionManager.getLeafId();
 				await emitAgentEndNotification();
-				void this.#generateTurnDigest(settledLeafId, {
-					allowAbortInProgress: true,
-					boundaryOverride: persistedOriginalBoundary,
-				});
+				this.#trackPostPromptTask(
+					this.#generateTurnDigest(settledLeafId, {
+						allowAbortInProgress: true,
+						boundaryOverride: persistedOriginalBoundary,
+					}),
+				);
 				return;
 			}
 			// Fireworks Fast variants degrade to their base model on a failed turn —
@@ -3313,6 +3327,7 @@ export class AgentSession {
 			// Check for incomplete todos only after a final assistant stop, not intermediate tool-use turns.
 			const hasToolCalls = msg.content.some(content => content.type === "toolCall");
 			if (hasToolCalls) {
+				maintenanceRoute("tool-call-turn-skip-final-maintenance");
 				await emitAgentEndNotification();
 				return;
 			}
@@ -3325,16 +3340,23 @@ export class AgentSession {
 				compactionResult.continuationScheduled ||
 				compactionResult.automaticContinuationBlocked
 			) {
+				maintenanceRoute("compaction-handled-before-session-stop", {
+					deferredHandoff: compactionResult.deferredHandoff,
+					continuationScheduled: compactionResult.continuationScheduled,
+					automaticContinuationBlocked: compactionResult.automaticContinuationBlocked === true,
+				});
 				await emitAgentEndNotification();
 				return;
 			}
 			if (msg.stopReason !== "error") {
 				if (this.#enforceRewindBeforeYield()) {
+					maintenanceRoute("rewind-reminder-scheduled");
 					await emitAgentEndNotification();
 					return;
 				}
 				const todoContinuationScheduled = await this.#checkTodoCompletion();
 				if (todoContinuationScheduled) {
+					maintenanceRoute("todo-reminder-scheduled");
 					await emitAgentEndNotification();
 					return;
 				}
@@ -3357,7 +3379,7 @@ export class AgentSession {
 				// consolidated digest. It uses #contextSteadyOriginalPreTurnLeafId
 				// if a continuation chain was active, or #contextSteadyPreTurnLeafId
 				// for a normal turn — covering the full logical turn in either case.
-				void this.#generateTurnDigest(settledLeafId);
+				this.#trackPostPromptTask(this.#generateTurnDigest(settledLeafId));
 			}
 			// When invalidated: no digest, no cleanup needed — the next prompt
 			// cycle will start fresh.
@@ -3388,7 +3410,7 @@ export class AgentSession {
 	#generateTurnDigest(
 		settledLeafId?: string | null,
 		options?: { allowAbortInProgress?: boolean; boundaryOverride?: string | null },
-	): void {
+	): Promise<void> {
 		const settings = this.settings;
 
 		// Capture the original boundary BEFORE any cleanup, so the source
@@ -3410,104 +3432,86 @@ export class AgentSession {
 			this.#contextSteadyOriginalPreTurnLeafCaptured = false;
 		};
 
-		const enabled = settings.get("san.contextSteady.enabled") as boolean;
-		if (!enabled) {
-			scheduleCleanup();
-			return;
-		}
+		return (async () => {
+			try {
+				const enabled = settings.get("san.contextSteady.enabled") as boolean;
+				if (!enabled) return;
 
-		const digestEnabled = settings.get("san.contextSteady.digest.enabled") as boolean;
-		const persistFallback = settings.get("san.contextSteady.digest.persistFallback") as boolean;
+				const digestEnabled = settings.get("san.contextSteady.digest.enabled") as boolean;
+				const persistFallback = settings.get("san.contextSteady.digest.persistFallback") as boolean;
 
-		if (!digestEnabled) {
-			scheduleCleanup();
-			return;
-		}
-		if (!persistFallback) {
-			scheduleCleanup();
-			return;
-		}
+				if (!digestEnabled || !persistFallback) return;
 
-		// A deliberate abort is itself a settled turn and should still write
-		// its digest. Other abort/dispose races render the turn invalid.
-		if ((this.#abortInProgress && options?.allowAbortInProgress !== true) || this.#isDisposed) {
-			scheduleCleanup();
-			return;
-		}
+				// A deliberate abort is itself a settled turn and should still write
+				// its digest. Other abort/dispose races render the turn invalid.
+				if ((this.#abortInProgress && options?.allowAbortInProgress !== true) || this.#isDisposed) {
+					return;
+				}
 
-		const sessionManager = this.sessionManager;
-		const preTurnLeafId = originalBoundary;
-		// Use the caller-captured leaf when provided (captured before
-		// agent_end notification which may advance the leaf via hook side
-		// effects). Fall back to getLeafId() for callers that don't capture.
-		const currentLeafId = settledLeafId ?? sessionManager.getLeafId();
+				const sessionManager = this.sessionManager;
+				const preTurnLeafId = originalBoundary;
+				// Use the caller-captured leaf when provided (captured before
+				// agent_end notification which may advance the leaf via hook side
+				// effects). Fall back to getLeafId() for callers that don't capture.
+				const currentLeafId = settledLeafId ?? sessionManager.getLeafId();
 
-		// Compute source range using shared pure helper
-		const branch = sessionManager.getBranch();
-		const span = computeTurnSourceSpan(branch, preTurnLeafId, currentLeafId);
-		if (!span) {
-			scheduleCleanup();
-			return;
-		}
-		const toEntryId = span.toEntryId;
-		const fromEntryId = this.#skipContextSteadyPacketPreludeInDigestSource(branch, span.fromEntryId, toEntryId);
+				// Compute source range using shared pure helper
+				const branch = sessionManager.getBranch();
+				const span = computeTurnSourceSpan(branch, preTurnLeafId, currentLeafId);
+				if (!span) return;
+				const toEntryId = span.toEntryId;
+				const fromEntryId = skipContextPacketPreludeInDigestSource(branch, span.fromEntryId, toEntryId);
 
-		// Extract messages from the branch within the source span.
-		// Both regular messages and custom_message entries are included so that
-		// agent-initiated prompts (hidden next-turn, session-stop continuation)
-		// are captured in the digest's input.
-		const spanMessages = extractSpanMessages(branch, fromEntryId, toEntryId);
+				// Extract messages from the branch within the source span.
+				// Both regular messages and custom_message entries are included so that
+				// agent-initiated prompts (hidden next-turn, session-stop continuation)
+				// are captured in the digest's input.
+				const spanMessages = extractSpanMessages(branch, fromEntryId, toEntryId);
+				if (spanMessages.length === 0) return;
 
-		if (spanMessages.length === 0) {
-			scheduleCleanup();
-			return;
-		}
+				const source = {
+					sessionId: this.sessionId,
+					fromEntryId,
+					toEntryId,
+					promptGeneration: this.#promptGeneration,
+				};
 
-		const source = {
-			sessionId: this.sessionId,
-			fromEntryId,
-			toEntryId,
-			promptGeneration: this.#promptGeneration,
-		};
+				const steadySettings = {
+					enabled,
+					digest: {
+						enabled: digestEnabled,
+						persistFallback,
+						timeoutMs: (settings.get("san.contextSteady.digest.timeoutMs") as number) ?? 30000,
+					},
+				};
 
-		const steadySettings = {
-			enabled,
-			digest: {
-				enabled: digestEnabled,
-				persistFallback,
-				timeoutMs: (settings.get("san.contextSteady.digest.timeoutMs") as number) ?? 30000,
-			},
-		};
-
-		// Fire-and-forget: never block the main agent_end flow
-		generateContextSteadyDigest(spanMessages, source, sessionManager, settings, steadySettings, undefined).catch(
-			() => {
-				// Errors are already logged inside generateDigest
-			},
-		);
-
-		// Clean up continuation boundary state after digest is dispatched.
-		scheduleCleanup();
+				await generateContextSteadyDigest(
+					spanMessages,
+					source,
+					sessionManager,
+					settings,
+					steadySettings,
+					undefined,
+				);
+			} catch (error) {
+				logger.warn("Failed to generate TurnDigest", {
+					error: error instanceof Error ? error.message : String(error),
+					sessionId: this.sessionId,
+				});
+			} finally {
+				scheduleCleanup();
+			}
+		})();
 	}
 
-	#skipContextSteadyPacketPreludeInDigestSource(
-		branch: ReadonlyArray<{ id: string; type: string; customType?: string }>,
-		fromEntryId: string,
-		toEntryId: string,
-	): string {
-		const fromIndex = branch.findIndex(entry => entry.id === fromEntryId);
-		const toIndex = branch.findIndex(entry => entry.id === toEntryId);
-		if (fromIndex < 0 || toIndex < 0 || fromIndex >= toIndex) return fromEntryId;
-
-		for (let index = fromIndex; index <= toIndex; index++) {
-			const entry = branch[index];
-			if (!entry) break;
-			if (entry.type === "custom_message" && entry.customType === CONTEXT_PACKET_MESSAGE_TYPE) {
-				continue;
-			}
-			return entry.id;
+	#dropContextSteadyPacketMessagesFromActiveContext(): void {
+		const messages = this.agent.state.messages;
+		if (!messages.some(message => message.role === "custom" && message.customType === CONTEXT_PACKET_MESSAGE_TYPE)) {
+			return;
 		}
-		return fromEntryId;
+		this.agent.replaceMessages(
+			messages.filter(message => !(message.role === "custom" && message.customType === CONTEXT_PACKET_MESSAGE_TYPE)),
+		);
 	}
 
 	/** Create the TTSR resume gate promise if one doesn't already exist. */
@@ -6742,6 +6746,7 @@ export class AgentSession {
 
 	#buildContextSteadyPacketPrelude(expandedText: string): CustomMessage | undefined {
 		if (this.settings.get("san.contextSteady.enabled") !== true) return undefined;
+		this.#dropContextSteadyPacketMessagesFromActiveContext();
 		if (this.settings.get("san.contextSteady.contextPacket.enabled") !== true) return undefined;
 
 		const built = buildContextPacket(this.sessionManager.getEntries(), this.sessionId, expandedText, {
