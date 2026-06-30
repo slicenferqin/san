@@ -6753,6 +6753,8 @@ export class AgentSession {
 			enabled: true,
 			recentDigests: this.settings.get("san.contextSteady.contextPacket.recentDigests") as number,
 			maxTokens: this.settings.get("san.contextSteady.contextPacket.maxTokens") as number,
+			qualityWindowTokens: this.settings.get("san.contextSteady.qualityWindowTokens") as number,
+			reserveRatio: this.settings.get("san.contextSteady.reserveRatio") as number,
 		});
 		if (!built) return undefined;
 

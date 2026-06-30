@@ -50,6 +50,34 @@ function clampCount(value: number): number {
 	return Math.max(0, Math.floor(value));
 }
 
+function clampNonNegativeInteger(value: number): number {
+	if (!Number.isFinite(value)) return 0;
+	return Math.max(0, Math.floor(value));
+}
+
+function clampReserveRatio(value: number): number {
+	if (!Number.isFinite(value)) return 0;
+	return Math.min(1, Math.max(0, value));
+}
+
+function resolvePacketBudget(settings: ContextPacketSettings): ContextPacket["budget"] {
+	const configuredPacketMaxTokens = clampNonNegativeInteger(settings.maxTokens);
+	const qualityWindowTokens = clampNonNegativeInteger(settings.qualityWindowTokens);
+	const reserveRatio = clampReserveRatio(settings.reserveRatio);
+	const reservedTokens = qualityWindowTokens > 0 ? Math.floor(qualityWindowTokens * reserveRatio) : 0;
+	const qualityPacketBudget = qualityWindowTokens > 0 ? Math.max(0, qualityWindowTokens - reservedTokens) : 0;
+	const packetTokenBudget =
+		qualityWindowTokens > 0 ? Math.min(configuredPacketMaxTokens, qualityPacketBudget) : configuredPacketMaxTokens;
+
+	return {
+		qualityWindowTokens,
+		reserveRatio,
+		reservedTokens,
+		packetTokenBudget,
+		configuredPacketMaxTokens,
+	};
+}
+
 function clampString(value: string, maxLength: number): string {
 	return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
 }
@@ -95,11 +123,10 @@ function selectedWithinBudget(
 	tokenTrimmed: number;
 } {
 	if (maxTokens <= 0) {
-		const content = renderPacketContent(digests);
 		return {
-			selected: [...digests],
-			tokenEstimate: estimatePacketTokens(content),
-			tokenTrimmed: 0,
+			selected: [],
+			tokenEstimate: 0,
+			tokenTrimmed: digests.length,
 		};
 	}
 
@@ -145,7 +172,8 @@ export function buildContextPacket(
 
 	const recentTrimmed = Math.max(0, allDigests.length - recentCount);
 	const recentDigests = allDigests.slice(-recentCount);
-	const budgeted = selectedWithinBudget(recentDigests, settings.maxTokens);
+	const budget = resolvePacketBudget(settings);
+	const budgeted = selectedWithinBudget(recentDigests, budget.packetTokenBudget);
 	if (budgeted.selected.length === 0) return null;
 
 	const content = renderPacketContent(budgeted.selected);
@@ -169,12 +197,14 @@ export function buildContextPacket(
 				name: "turn_digest_ledger",
 				entryRefs: digestRefs,
 				tokenEstimate: budgeted.tokenEstimate,
+				tokenBudget: budget.packetTokenBudget,
 				trimmed: recentTrimmed + budgeted.tokenTrimmed,
 			},
 		],
 		digestRefs,
 		tokenEstimate: budgeted.tokenEstimate,
-		tokenBudget: settings.maxTokens,
+		tokenBudget: budget.packetTokenBudget,
+		budget,
 		trimDecisions,
 		injectedMessageCustomType: CONTEXT_PACKET_MESSAGE_TYPE,
 	};

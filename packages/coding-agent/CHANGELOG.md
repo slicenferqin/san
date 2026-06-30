@@ -5,6 +5,7 @@
 ### Added
 
 - Added San context steady state M1: post-turn TurnDigest generation and persistence to session journal via `sessionManager.appendCustomEntry("san.turn_digest", data)`. Each settled agent turn now produces a structured digest capturing user intent, actions taken, decisions, files touched, tool evidence, and more. Digest generation is deterministic (non-LLM) in M1, with LLM-based summarization planned for a future release. Controlled via `san.contextSteady.enabled` setting (default: off).
+- Added San context steady state M3 packet budget snapshots via `san.contextSteady.qualityWindowTokens`, `san.contextSteady.reserveRatio`, and per-layer ContextPacket token budgets with trim decisions in `san.context_packet` debug entries.
 
 ## [16.2.2] - 2026-06-27
 

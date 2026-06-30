@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { buildContextPacket, collectDigestRefs } from "../../src/context-steady/packet";
-import type { TurnDigest } from "../../src/context-steady/types";
+import type { ContextPacketSettings, TurnDigest } from "../../src/context-steady/types";
 import {
 	CONTEXT_PACKET_MESSAGE_TYPE,
 	CONTEXT_PACKET_SCHEMA_VERSION,
@@ -40,6 +40,17 @@ function customEntry(id: string, customType: string, data: unknown): Record<stri
 const asEntries = (entries: Record<string, unknown>[]) =>
 	entries as unknown as Parameters<typeof buildContextPacket>[0];
 
+function packetSettings(overrides: Partial<ContextPacketSettings> = {}): ContextPacketSettings {
+	return {
+		enabled: true,
+		recentDigests: 3,
+		maxTokens: 2000,
+		qualityWindowTokens: 0,
+		reserveRatio: 0.2,
+		...overrides,
+	};
+}
+
 describe("ContextPacket builder", () => {
 	test("collects only TurnDigest custom entries", () => {
 		const refs = collectDigestRefs(
@@ -62,7 +73,7 @@ describe("ContextPacket builder", () => {
 			]),
 			"s1",
 			"current prompt",
-			{ enabled: true, recentDigests: 2, maxTokens: 2000 },
+			packetSettings({ recentDigests: 2 }),
 		);
 
 		expect(built).not.toBeNull();
@@ -70,6 +81,14 @@ describe("ContextPacket builder", () => {
 		expect(built!.packet.injectedMessageCustomType).toBe(CONTEXT_PACKET_MESSAGE_TYPE);
 		expect(built!.packet.digestRefs).toEqual(["d2", "d3"]);
 		expect(built!.packet.tokenEstimate).toBeGreaterThan(0);
+		expect(built!.packet.layers[0]!.tokenBudget).toBe(2000);
+		expect(built!.packet.budget).toMatchObject({
+			qualityWindowTokens: 0,
+			reserveRatio: 0.2,
+			reservedTokens: 0,
+			packetTokenBudget: 2000,
+			configuredPacketMaxTokens: 2000,
+		});
 		expect(built!.packet.trimDecisions).toContainEqual({
 			layer: "turn_digest_ledger",
 			reason: "recent_limit",
@@ -83,14 +102,11 @@ describe("ContextPacket builder", () => {
 	test("returns null when disabled or no digests exist", () => {
 		expect(
 			buildContextPacket(asEntries([customEntry("d1", TURN_DIGEST_CUSTOM_TYPE, digest("t1", "first"))]), "s1", "p", {
+				...packetSettings(),
 				enabled: false,
-				recentDigests: 3,
-				maxTokens: 2000,
 			}),
 		).toBeNull();
-		expect(
-			buildContextPacket(asEntries([]), "s1", "p", { enabled: true, recentDigests: 3, maxTokens: 2000 }),
-		).toBeNull();
+		expect(buildContextPacket(asEntries([]), "s1", "p", packetSettings())).toBeNull();
 	});
 
 	test("trims old digests when the packet exceeds the token budget", () => {
@@ -102,7 +118,7 @@ describe("ContextPacket builder", () => {
 			]),
 			"s1",
 			"current prompt",
-			{ enabled: true, recentDigests: 3, maxTokens: 180 },
+			packetSettings({ maxTokens: 180 }),
 		);
 
 		expect(built).not.toBeNull();
@@ -113,5 +129,68 @@ describe("ContextPacket builder", () => {
 			reason: "token_budget",
 			omitted: 1,
 		});
+	});
+
+	test("derives packet budget from quality window and reserve ratio", () => {
+		const built = buildContextPacket(
+			asEntries([
+				customEntry("d1", TURN_DIGEST_CUSTOM_TYPE, digest("t1", "first task")),
+				customEntry("d2", TURN_DIGEST_CUSTOM_TYPE, digest("t2", "second task")),
+				customEntry("d3", TURN_DIGEST_CUSTOM_TYPE, digest("t3", "third task")),
+			]),
+			"s1",
+			"current prompt",
+			packetSettings({ maxTokens: 2000, qualityWindowTokens: 220, reserveRatio: 0.25 }),
+		);
+
+		expect(built).not.toBeNull();
+		expect(built!.packet.tokenBudget).toBe(165);
+		expect(built!.packet.budget).toEqual({
+			qualityWindowTokens: 220,
+			reserveRatio: 0.25,
+			reservedTokens: 55,
+			packetTokenBudget: 165,
+			configuredPacketMaxTokens: 2000,
+		});
+		expect(built!.packet.layers[0]!.tokenBudget).toBe(165);
+		expect(built!.packet.tokenEstimate).toBeLessThanOrEqual(165);
+		expect(built!.packet.trimDecisions).toContainEqual({
+			layer: "turn_digest_ledger",
+			reason: "token_budget",
+			omitted: 1,
+		});
+	});
+
+	test("returns null when the effective packet budget cannot hold any digest", () => {
+		const built = buildContextPacket(
+			asEntries([customEntry("d1", TURN_DIGEST_CUSTOM_TYPE, digest("t1", "first task"))]),
+			"s1",
+			"current prompt",
+			packetSettings({ maxTokens: 2000, qualityWindowTokens: 1, reserveRatio: 0.9 }),
+		);
+
+		expect(built).toBeNull();
+	});
+
+	test("returns null when the configured packet budget is disabled by zero tokens", () => {
+		const built = buildContextPacket(
+			asEntries([customEntry("d1", TURN_DIGEST_CUSTOM_TYPE, digest("t1", "first task"))]),
+			"s1",
+			"current prompt",
+			packetSettings({ maxTokens: 0, qualityWindowTokens: 0 }),
+		);
+
+		expect(built).toBeNull();
+	});
+
+	test("keeps maxTokens as a hard packet cap when quality window is configured", () => {
+		const built = buildContextPacket(
+			asEntries([customEntry("d1", TURN_DIGEST_CUSTOM_TYPE, digest("t1", "first task"))]),
+			"s1",
+			"current prompt",
+			packetSettings({ maxTokens: 0, qualityWindowTokens: 220, reserveRatio: 0.25 }),
+		);
+
+		expect(built).toBeNull();
 	});
 });

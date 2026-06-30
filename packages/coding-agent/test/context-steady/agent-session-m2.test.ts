@@ -28,6 +28,8 @@ const BASE_SETTINGS = {
 	"san.contextSteady.digest.enabled": true,
 	"san.contextSteady.digest.persistFallback": true,
 	"san.contextSteady.digest.timeoutMs": 5000,
+	"san.contextSteady.qualityWindowTokens": 0,
+	"san.contextSteady.reserveRatio": 0.2,
 	"san.contextSteady.contextPacket.enabled": true,
 	"san.contextSteady.contextPacket.maxTokens": 2000,
 };
@@ -143,6 +145,16 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		const packetData = debugEntries[0]!.data as Record<string, unknown>;
 		expect(packetData.injectedMessageCustomType).toBe(CONTEXT_PACKET_MESSAGE_TYPE);
 		expect(packetData.digestRefs).toHaveLength(1);
+		expect(packetData.tokenBudget).toBe(2000);
+		expect(packetData.budget).toEqual({
+			qualityWindowTokens: 0,
+			reserveRatio: 0.2,
+			reservedTokens: 0,
+			packetTokenBudget: 2000,
+			configuredPacketMaxTokens: 2000,
+		});
+		const layers = packetData.layers as Array<Record<string, unknown>>;
+		expect(layers[0]?.tokenBudget).toBe(2000);
 
 		const injectedEntries = customMessageEntries(sessionManager, CONTEXT_PACKET_MESSAGE_TYPE);
 		expect(injectedEntries).toHaveLength(1);
@@ -238,6 +250,59 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		expect(finalPacketContent).toContain("M2 default window task 1");
 		expect(finalPacketContent).toContain("M2 default window task 5");
 		expect(finalPacketContent).not.toContain("M2 default window task 6");
+	});
+
+	it("derives the injected ContextPacket budget from quality window settings", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"san.contextSteady.qualityWindowTokens": 220,
+			"san.contextSteady.reserveRatio": 0.25,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		const budgetPressure = "x".repeat(140);
+		await session.prompt(`M3 quality window baseline ${budgetPressure} one`);
+		await session.waitForIdle();
+		await session.prompt(`M3 quality window baseline ${budgetPressure} two`);
+		await session.waitForIdle();
+		await session.prompt("M3 quality window baseline three");
+		await session.waitForIdle();
+
+		const debugEntries = customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE);
+		expect(debugEntries.length).toBeGreaterThan(0);
+		const finalPacket = debugEntries.at(-1)!.data as Record<string, unknown>;
+		expect(finalPacket.tokenBudget).toBe(165);
+		expect(finalPacket.budget).toEqual({
+			qualityWindowTokens: 220,
+			reserveRatio: 0.25,
+			reservedTokens: 55,
+			packetTokenBudget: 165,
+			configuredPacketMaxTokens: 2000,
+		});
+		expect(finalPacket.tokenEstimate as number).toBeLessThanOrEqual(165);
+		const layers = finalPacket.layers as Array<Record<string, unknown>>;
+		expect(layers[0]?.tokenBudget).toBe(165);
+		expect(finalPacket.trimDecisions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					layer: "turn_digest_ledger",
+					reason: "token_budget",
+				}),
+			]),
+		);
 	});
 
 	it("writes a digest for a tool-using turn after injecting ContextPacket", async () => {

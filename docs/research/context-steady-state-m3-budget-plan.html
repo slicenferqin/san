@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San 上下文稳态 M3 预算稳态方案</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #20242a;
+      --muted: #667085;
+      --line: #d9e0ea;
+      --paper: #fbfcfd;
+      --panel: #ffffff;
+      --band: #f2f6f8;
+      --green: #0f766e;
+      --blue: #2457a6;
+      --amber: #a16207;
+      --red: #9f1239;
+      --code: #edf2f7;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.64;
+    }
+
+    header {
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .wrap {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .hero { padding: 52px 0 36px; }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--green);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 960px;
+      margin: 0;
+      font-size: clamp(32px, 5vw, 54px);
+      line-height: 1.06;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 900px;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    main { padding: 30px 0 62px; }
+
+    section {
+      padding: 30px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 26px;
+      letter-spacing: 0;
+    }
+
+    p { max-width: 920px; margin: 0 0 14px; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 18px 0;
+      background: var(--panel);
+      border: 1px solid var(--line);
+    }
+
+    th, td {
+      padding: 13px 15px;
+      border: 1px solid var(--line);
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th { background: var(--band); }
+
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    code {
+      background: var(--code);
+      padding: 2px 5px;
+      border-radius: 4px;
+    }
+
+    pre {
+      overflow: auto;
+      padding: 16px;
+      background: var(--code);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      line-height: 1.5;
+    }
+
+    .callout {
+      margin: 18px 0;
+      padding: 16px 18px;
+      border-left: 4px solid var(--blue);
+      background: #eef5ff;
+    }
+
+    .risk {
+      border-left-color: var(--amber);
+      background: #fffbeb;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap hero">
+      <p class="eyebrow">Context Steady State · M3</p>
+      <h1>预算稳态是 v0.1 的闭环，不是再加一层摘要</h1>
+      <p class="subtitle">
+        M1 建立 TurnDigest 账本，M2 证明下一轮能消费 ContextPacket。M3 的目标是证明多轮后上下文不会线性膨胀：
+        每层有预算、裁剪可解释、debug entry 能对照本地估算与真实请求规模。
+      </p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h2>范围</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>做</th>
+            <th>不做</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              增加 <code>qualityWindowTokens</code> 和 <code>reserveRatio</code>，把 ContextPacket 可用预算从配置推导出来。
+            </td>
+            <td>不接 Mnemopi recall，不做 GBrain，不做 checkpoint rewrite。</td>
+          </tr>
+          <tr>
+            <td>给 <code>turn_digest_ledger</code> 写 layer budget、token estimate、裁剪原因和保留 refs。</td>
+            <td>不改变 TurnDigest schema 的核心含义，不把 digest 写入长期 memory。</td>
+          </tr>
+          <tr>
+            <td>在 <code>san.context_packet</code> debug entry 中记录 context budget snapshot，方便真实会话验收。</td>
+            <td>不重写 compaction 策略；compaction 仍是兜底，不是 M3 主逻辑。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>配置</h2>
+      <pre><code>"san.contextSteady.qualityWindowTokens": 0
+"san.contextSteady.reserveRatio": 0.2
+"san.contextSteady.contextPacket.maxTokens": 2000</code></pre>
+      <p>
+        <code>qualityWindowTokens = 0</code> 表示不强行覆盖模型窗口；M3 先只把它作为 debug/预算推导输入。
+        有效 ContextPacket 预算取 <code>min(contextPacket.maxTokens, qualityWindowTokens * (1 - reserveRatio))</code>。
+        如果 quality window 为 0，则沿用 <code>contextPacket.maxTokens</code>。
+      </p>
+    </section>
+
+    <section>
+      <h2>Debug Payload</h2>
+      <pre><code>{
+  "tokenEstimate": 1800,
+  "tokenBudget": 2000,
+  "budget": {
+    "qualityWindowTokens": 12000,
+    "reserveRatio": 0.2,
+    "reservedTokens": 2400,
+    "packetTokenBudget": 2000,
+    "configuredPacketMaxTokens": 2000
+  },
+  "layers": [
+    {
+      "name": "turn_digest_ledger",
+      "entryRefs": ["..."],
+      "tokenEstimate": 1800,
+      "tokenBudget": 2000,
+      "trimmed": 3
+    }
+  ],
+  "trimDecisions": [
+    { "layer": "turn_digest_ledger", "reason": "token_budget", "omitted": 3 }
+  ]
+}</code></pre>
+      <p>
+        这份 debug entry 是验收依据：它需要回答本轮为什么保留这些 digest、为什么裁掉那些 digest、最终注入大约占多少 token。
+      </p>
+    </section>
+
+    <section>
+      <h2>验收</h2>
+      <ol>
+        <li>构造 8-12 轮会话，每轮写出 <code>san.turn_digest</code>。</li>
+        <li>每个真实用户轮前写出 <code>san.context_packet</code> 和隐藏 <code>san.context_packet.injected</code>。</li>
+        <li>当 digest ledger 超过预算时，<code>trimDecisions</code> 包含 <code>token_budget</code> 或 <code>recent_limit</code>。</li>
+        <li>最终 packet 的 <code>tokenEstimate</code> 小于等于 <code>tokenBudget</code>。</li>
+        <li>ContextPacket 注入消息不在 active context 或 resumed session 中重复累积。</li>
+      </ol>
+      <div class="callout">
+        M3 完成后，San v0.1 才能说“上下文稳定收敛”。M4 的 recall 可以增强相关性，但不能替代 M3 的预算闭环。
+      </div>
+    </section>
+
+    <section>
+      <h2>踩坑</h2>
+      <div class="callout risk">
+        不要把模型最大窗口当工作目标。500K 或 1M 只是硬上限，San 的目标是质量窗口内的可解释上下文。
+      </div>
+      <div class="callout risk">
+        不要只测 builder helper。至少要有 AgentSession 集成测试，验证 session entry、下一轮 payload 和恢复路径都符合预算语义。
+      </div>
+    </section>
+  </main>
+</body>
+</html>

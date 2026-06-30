@@ -2524,6 +2524,8 @@ export const SETTINGS_SCHEMA = {
 	"san.contextSteady.digest.enabled": { type: "boolean", default: true },
 	"san.contextSteady.digest.persistFallback": { type: "boolean", default: true },
 	"san.contextSteady.digest.timeoutMs": { type: "number", default: 30000 },
+	"san.contextSteady.qualityWindowTokens": { type: "number", default: 0 },
+	"san.contextSteady.reserveRatio": { type: "number", default: 0.2 },
 	"san.contextSteady.contextPacket.enabled": { type: "boolean", default: true },
 	"san.contextSteady.contextPacket.recentDigests": { type: "number", default: 5 },
 	"san.contextSteady.contextPacket.maxTokens": { type: "number", default: 2000 },

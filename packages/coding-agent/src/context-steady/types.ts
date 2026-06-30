@@ -106,12 +106,15 @@ export interface ContextPacketSettings {
 	enabled: boolean;
 	recentDigests: number;
 	maxTokens: number;
+	qualityWindowTokens: number;
+	reserveRatio: number;
 }
 
 export interface ContextPacketLayer {
 	name: "turn_digest_ledger";
 	entryRefs: string[];
 	tokenEstimate: number;
+	tokenBudget: number;
 	trimmed: number;
 }
 
@@ -131,6 +134,13 @@ export interface ContextPacket {
 	digestRefs: string[];
 	tokenEstimate: number;
 	tokenBudget: number;
+	budget: {
+		qualityWindowTokens: number;
+		reserveRatio: number;
+		reservedTokens: number;
+		packetTokenBudget: number;
+		configuredPacketMaxTokens: number;
+	};
 	trimDecisions: ContextPacketTrimDecision[];
 	injectedMessageCustomType: typeof CONTEXT_PACKET_MESSAGE_TYPE;
 	injectedMessageId?: string;
