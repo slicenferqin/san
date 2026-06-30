@@ -1,12 +1,12 @@
 /**
- * Context Steady State M1 — TurnDigest types.
- *
- * M1 only: post-turn TurnDigest generation + persistence.
- * No ContextPacket injection, no LLM context mutation, no mnemopi recall/retain.
+ * Context Steady State types.
  */
 
 export const TURN_DIGEST_SCHEMA_VERSION = 1;
 export const TURN_DIGEST_CUSTOM_TYPE = "san.turn_digest";
+export const CONTEXT_PACKET_SCHEMA_VERSION = 1;
+export const CONTEXT_PACKET_CUSTOM_TYPE = "san.context_packet";
+export const CONTEXT_PACKET_MESSAGE_TYPE = "san.context_packet.injected";
 
 /** Identifies the session span this digest covers. */
 export interface TurnDigestSource {
@@ -100,4 +100,38 @@ export interface ContextSteadySettings {
 		persistFallback: boolean;
 		timeoutMs: number;
 	};
+}
+
+export interface ContextPacketSettings {
+	enabled: boolean;
+	recentDigests: number;
+	maxTokens: number;
+}
+
+export interface ContextPacketLayer {
+	name: "turn_digest_ledger";
+	entryRefs: string[];
+	tokenEstimate: number;
+	trimmed: number;
+}
+
+export interface ContextPacketTrimDecision {
+	layer: ContextPacketLayer["name"];
+	reason: "recent_limit" | "token_budget";
+	omitted: number;
+}
+
+export interface ContextPacket {
+	schemaVersion: typeof CONTEXT_PACKET_SCHEMA_VERSION;
+	packetId: string;
+	sessionId: string;
+	createdAt: string;
+	currentPromptPreview: string;
+	layers: ContextPacketLayer[];
+	digestRefs: string[];
+	tokenEstimate: number;
+	tokenBudget: number;
+	trimDecisions: ContextPacketTrimDecision[];
+	injectedMessageCustomType: typeof CONTEXT_PACKET_MESSAGE_TYPE;
+	injectedMessageId?: string;
 }

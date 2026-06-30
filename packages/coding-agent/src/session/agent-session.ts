@@ -168,7 +168,9 @@ import { resolveServiceTierSetting } from "../config/service-tier";
 import type { Settings, SkillsSettings } from "../config/settings";
 import { getDefault, onAppendOnlyModeChanged, validateProviderMaxInFlightRequests } from "../config/settings";
 import { generateDigest as generateContextSteadyDigest } from "../context-steady/digest";
+import { appendContextPacketDebugEntry, buildContextPacket } from "../context-steady/packet";
 import { computeTurnSourceSpan, extractSpanMessages } from "../context-steady/session";
+import { CONTEXT_PACKET_CUSTOM_TYPE, CONTEXT_PACKET_MESSAGE_TYPE } from "../context-steady/types";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability } from "../discovery";
 import { expandApplyPatchToEntries, normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
@@ -3447,7 +3449,8 @@ export class AgentSession {
 			scheduleCleanup();
 			return;
 		}
-		const { fromEntryId, toEntryId } = span;
+		const toEntryId = span.toEntryId;
+		const fromEntryId = this.#skipContextSteadyPacketPreludeInDigestSource(branch, span.fromEntryId, toEntryId);
 
 		// Extract messages from the branch within the source span.
 		// Both regular messages and custom_message entries are included so that
@@ -3485,6 +3488,26 @@ export class AgentSession {
 
 		// Clean up continuation boundary state after digest is dispatched.
 		scheduleCleanup();
+	}
+
+	#skipContextSteadyPacketPreludeInDigestSource(
+		branch: ReadonlyArray<{ id: string; type: string; customType?: string }>,
+		fromEntryId: string,
+		toEntryId: string,
+	): string {
+		const fromIndex = branch.findIndex(entry => entry.id === fromEntryId);
+		const toIndex = branch.findIndex(entry => entry.id === toEntryId);
+		if (fromIndex < 0 || toIndex < 0 || fromIndex >= toIndex) return fromEntryId;
+
+		for (let index = fromIndex; index <= toIndex; index++) {
+			const entry = branch[index];
+			if (!entry) break;
+			if (entry.type === "custom_message" && entry.customType === CONTEXT_PACKET_MESSAGE_TYPE) {
+				continue;
+			}
+			return entry.id;
+		}
+		return fromEntryId;
 	}
 
 	/** Create the TTSR resume gate promise if one doesn't already exist. */
@@ -6692,6 +6715,10 @@ export class AgentSession {
 		if (eagerTaskPrelude) {
 			preludeMessages.push(eagerTaskPrelude);
 		}
+		const contextPacketPrelude = options?.synthetic ? undefined : this.#buildContextSteadyPacketPrelude(expandedText);
+		if (contextPacketPrelude) {
+			preludeMessages.push(contextPacketPrelude);
+		}
 
 		try {
 			await this.#promptWithMessage(message, expandedText, {
@@ -6711,6 +6738,29 @@ export class AgentSession {
 			await this.#enforcePlanModeToolDecision();
 		}
 		return true;
+	}
+
+	#buildContextSteadyPacketPrelude(expandedText: string): CustomMessage | undefined {
+		if (this.settings.get("san.contextSteady.enabled") !== true) return undefined;
+		if (this.settings.get("san.contextSteady.contextPacket.enabled") !== true) return undefined;
+
+		const built = buildContextPacket(this.sessionManager.getEntries(), this.sessionId, expandedText, {
+			enabled: true,
+			recentDigests: this.settings.get("san.contextSteady.contextPacket.recentDigests") as number,
+			maxTokens: this.settings.get("san.contextSteady.contextPacket.maxTokens") as number,
+		});
+		if (!built) return undefined;
+
+		appendContextPacketDebugEntry(this.sessionManager, CONTEXT_PACKET_CUSTOM_TYPE, built.packet);
+		return {
+			role: "custom",
+			customType: CONTEXT_PACKET_MESSAGE_TYPE,
+			content: built.content,
+			display: false,
+			details: { packetId: built.packet.packetId, digestRefs: built.packet.digestRefs },
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
 	}
 
 	async promptCustomMessage<T = unknown>(
