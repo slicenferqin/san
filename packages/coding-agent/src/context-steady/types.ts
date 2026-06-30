@@ -4,6 +4,8 @@
 
 export const TURN_DIGEST_SCHEMA_VERSION = 1;
 export const TURN_DIGEST_CUSTOM_TYPE = "san.turn_digest";
+export const CONTEXT_CHECKPOINT_SCHEMA_VERSION = 1;
+export const CONTEXT_CHECKPOINT_CUSTOM_TYPE = "san.context_checkpoint";
 export const CONTEXT_PACKET_SCHEMA_VERSION = 1;
 export const CONTEXT_PACKET_CUSTOM_TYPE = "san.context_packet";
 export const CONTEXT_PACKET_MESSAGE_TYPE = "san.context_packet.injected";
@@ -110,17 +112,46 @@ export interface ContextPacketSettings {
 	reserveRatio: number;
 }
 
+export interface ContextCheckpointSummaryItem {
+	text: string;
+	entryRefs: string[];
+}
+
+export interface ContextCheckpoint {
+	schemaVersion: typeof CONTEXT_CHECKPOINT_SCHEMA_VERSION;
+	checkpointId: string;
+	sessionId: string;
+	createdAt: string;
+	entryRefs: string[];
+	fromDigestEntryId: string;
+	toDigestEntryId: string;
+	digestCount: number;
+	summary: {
+		userIntents: ContextCheckpointSummaryItem[];
+		decisions: ContextCheckpointSummaryItem[];
+		filesTouched: Array<ContextCheckpointSummaryItem & { action: TurnDigestFile["action"] }>;
+		risks: ContextCheckpointSummaryItem[];
+		nextSteps: ContextCheckpointSummaryItem[];
+	};
+	tokenEstimate: number;
+	tokenBudget: number;
+	stability: "stable";
+	cachePriority: "high";
+}
+
 export interface ContextPacketLayer {
-	name: "turn_digest_ledger";
+	name: "stable_checkpoint" | "turn_digest_ledger";
 	entryRefs: string[];
 	tokenEstimate: number;
 	tokenBudget: number;
 	trimmed: number;
+	stability: "stable" | "append-only";
+	cachePriority: "high" | "medium";
 }
 
 export interface ContextPacketTrimDecision {
 	layer: ContextPacketLayer["name"];
-	reason: "recent_limit" | "token_budget";
+	reason: "recent_limit" | "token_budget" | "checkpoint_covered";
 	omitted: number;
 }
 
@@ -131,6 +162,7 @@ export interface ContextPacket {
 	createdAt: string;
 	currentPromptPreview: string;
 	layers: ContextPacketLayer[];
+	checkpointRef?: string;
 	digestRefs: string[];
 	tokenEstimate: number;
 	tokenBudget: number;

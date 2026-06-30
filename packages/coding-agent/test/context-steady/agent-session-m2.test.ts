@@ -18,6 +18,7 @@ import type { CustomEntry, CustomMessageEntry } from "@oh-my-pi/pi-coding-agent/
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import {
+	CONTEXT_CHECKPOINT_CUSTOM_TYPE,
 	CONTEXT_PACKET_CUSTOM_TYPE,
 	CONTEXT_PACKET_MESSAGE_TYPE,
 	TURN_DIGEST_CUSTOM_TYPE,
@@ -32,6 +33,9 @@ const BASE_SETTINGS = {
 	"san.contextSteady.reserveRatio": 0.2,
 	"san.contextSteady.contextPacket.enabled": true,
 	"san.contextSteady.contextPacket.maxTokens": 2000,
+	"san.contextSteady.checkpoint.enabled": true,
+	"san.contextSteady.checkpoint.everyTurns": 8,
+	"san.contextSteady.checkpoint.maxTokens": 12000,
 };
 
 const echoToolSchema = {
@@ -303,6 +307,79 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 				}),
 			]),
 		);
+	});
+
+	it("writes stable checkpoints and injects them before the append-only digest tail", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"san.contextSteady.checkpoint.everyTurns": 2,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		await session.prompt("M4 checkpoint stable task one");
+		await session.waitForIdle();
+		await session.prompt("M4 checkpoint stable task two");
+		await session.waitForIdle();
+
+		const checkpointEntries = customEntries(sessionManager, CONTEXT_CHECKPOINT_CUSTOM_TYPE);
+		expect(checkpointEntries).toHaveLength(1);
+		const checkpointData = checkpointEntries[0]!.data as Record<string, unknown>;
+		expect(checkpointData.entryRefs).toEqual(
+			customEntries(sessionManager, TURN_DIGEST_CUSTOM_TYPE).map(entry => entry.id),
+		);
+		expect(checkpointData.stability).toBe("stable");
+		expect(checkpointData.cachePriority).toBe("high");
+
+		await session.prompt("M4 checkpoint stable task three");
+		await session.waitForIdle();
+		await session.prompt("M4 checkpoint stable task four");
+		await session.waitForIdle();
+
+		const packetEntries = customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE);
+		const finalPacket = packetEntries.at(-1)!.data as Record<string, unknown>;
+		expect(finalPacket.checkpointRef).toBe(checkpointEntries[0]!.id);
+		const layers = finalPacket.layers as Array<Record<string, unknown>>;
+		expect(layers.map(layer => layer.name)).toEqual(["stable_checkpoint", "turn_digest_ledger"]);
+		expect(layers[0]).toMatchObject({
+			entryRefs: [checkpointEntries[0]!.id],
+			stability: "stable",
+			cachePriority: "high",
+		});
+		expect(layers[1]).toMatchObject({
+			stability: "append-only",
+			cachePriority: "medium",
+		});
+		expect(finalPacket.trimDecisions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					layer: "turn_digest_ledger",
+					reason: "checkpoint_covered",
+					omitted: 2,
+				}),
+			]),
+		);
+
+		const finalPacketMessage = mock.calls
+			.at(-1)!
+			.context.messages.find(message => JSON.stringify(message.content).includes("<san_context_packet>"));
+		const finalPacketContent = JSON.stringify(finalPacketMessage?.content);
+		expect(finalPacketContent).toContain("Stable checkpoint");
+		expect(finalPacketContent).toContain("M4 checkpoint stable task one");
+		expect(finalPacketContent).toContain("M4 checkpoint stable task three");
+		expect(finalPacketContent).not.toContain("M4 checkpoint stable task four");
 	});
 
 	it("writes a digest for a tool-using turn after injecting ContextPacket", async () => {

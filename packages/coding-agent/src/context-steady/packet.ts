@@ -1,10 +1,8 @@
 /**
- * ContextPacket builder for M2.
+ * ContextPacket builder for Context Steady State.
  *
- * M2 intentionally stays small: read the TurnDigest ledger, select the most
- * recent digests, render a hidden context message for the next real user turn,
- * and create a debug CustomEntry payload. No checkpoint, recall, or brain
- * integration belongs here yet.
+ * Reads stable checkpoints plus the append-only TurnDigest ledger, then renders
+ * a hidden context message for the next real user turn and a debug payload.
  */
 
 import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
@@ -12,9 +10,11 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import packetTemplate from "../prompts/context-steady/context-packet.md" with { type: "text" };
 import type { SessionEntry } from "../session/session-entries";
 import type { ReadonlySessionManager } from "../session/session-manager";
+import { latestContextCheckpoint } from "./checkpoint";
 import {
 	CONTEXT_PACKET_MESSAGE_TYPE,
 	CONTEXT_PACKET_SCHEMA_VERSION,
+	type ContextCheckpoint,
 	type ContextPacket,
 	type ContextPacketSettings,
 	TURN_DIGEST_CUSTOM_TYPE,
@@ -35,6 +35,14 @@ interface PacketDigestView {
 	index: number;
 	userIntent: string;
 	actionsTaken: string[];
+	decisions: string[];
+	filesTouched: Array<{ path: string; action: string }>;
+	risks: string[];
+	nextSteps: string[];
+}
+
+interface PacketCheckpointView {
+	userIntents: string[];
 	decisions: string[];
 	filesTouched: Array<{ path: string; action: string }>;
 	risks: string[];
@@ -101,7 +109,28 @@ function digestView(index: number, digest: TurnDigest): PacketDigestView {
 	};
 }
 
-function renderPacketContent(digests: readonly DigestEntryRef[]): string {
+function checkpointView(checkpoint: ContextCheckpoint): PacketCheckpointView {
+	return {
+		userIntents: checkpoint.summary.userIntents.map(item => clampString(item.text, 220)),
+		decisions: checkpoint.summary.decisions.map(item => clampString(item.text, 180)),
+		filesTouched: checkpoint.summary.filesTouched.map(item => ({
+			path: clampString(item.text, 240),
+			action: item.action,
+		})),
+		risks: checkpoint.summary.risks.map(item => clampString(item.text, 180)),
+		nextSteps: checkpoint.summary.nextSteps.map(item => clampString(item.text, 180)),
+	};
+}
+
+function renderPacketContent(digests: readonly DigestEntryRef[], checkpoint?: ContextCheckpoint): string {
+	const views = digests.map((entry, index) => digestView(index + 1, entry.digest));
+	return prompt.render(packetTemplate, {
+		checkpoint: checkpoint ? checkpointView(checkpoint) : undefined,
+		digests: views,
+	});
+}
+
+function renderDigestLedgerContent(digests: readonly DigestEntryRef[]): string {
 	const views = digests.map((entry, index) => digestView(index + 1, entry.digest));
 	return prompt.render(packetTemplate, { digests: views });
 }
@@ -131,13 +160,13 @@ function selectedWithinBudget(
 	}
 
 	let selected = [...digests];
-	let content = renderPacketContent(selected);
+	let content = renderDigestLedgerContent(selected);
 	let tokenEstimate = estimatePacketTokens(content);
 	let tokenTrimmed = 0;
 	while (selected.length > 0 && tokenEstimate > maxTokens) {
 		selected = selected.slice(1);
 		tokenTrimmed++;
-		content = renderPacketContent(selected);
+		content = renderDigestLedgerContent(selected);
 		tokenEstimate = estimatePacketTokens(content);
 	}
 	return { selected, tokenEstimate, tokenTrimmed };
@@ -170,15 +199,28 @@ export function buildContextPacket(
 	const allDigests = collectDigestRefs(entries);
 	if (allDigests.length === 0) return null;
 
-	const recentTrimmed = Math.max(0, allDigests.length - recentCount);
-	const recentDigests = allDigests.slice(-recentCount);
+	const checkpointRef = latestContextCheckpoint(entries);
+	const checkpointCovered = checkpointRef ? new Set(checkpointRef.checkpoint.entryRefs) : new Set<string>();
+	const uncoveredDigests = allDigests.filter(entry => !checkpointCovered.has(entry.entryId));
+	const checkpointCoveredTrimmed = allDigests.length - uncoveredDigests.length;
+	const recentTrimmed = Math.max(0, uncoveredDigests.length - recentCount);
+	const recentDigests = uncoveredDigests.slice(-recentCount);
 	const budget = resolvePacketBudget(settings);
 	const budgeted = selectedWithinBudget(recentDigests, budget.packetTokenBudget);
-	if (budgeted.selected.length === 0) return null;
+	if (budgeted.selected.length === 0 && !checkpointRef) return null;
 
-	const content = renderPacketContent(budgeted.selected);
+	const content = renderPacketContent(budgeted.selected, checkpointRef?.checkpoint);
+	const packetTokenEstimate = estimatePacketTokens(content);
+	const totalPacketTokenBudget = budget.packetTokenBudget + (checkpointRef?.checkpoint.tokenBudget ?? 0);
 	const digestRefs = budgeted.selected.map(entry => entry.entryId);
 	const trimDecisions: ContextPacket["trimDecisions"] = [];
+	if (checkpointCoveredTrimmed > 0) {
+		trimDecisions.push({
+			layer: "turn_digest_ledger",
+			reason: "checkpoint_covered",
+			omitted: checkpointCoveredTrimmed,
+		});
+	}
 	if (recentTrimmed > 0) {
 		trimDecisions.push({ layer: "turn_digest_ledger", reason: "recent_limit", omitted: recentTrimmed });
 	}
@@ -193,17 +235,33 @@ export function buildContextPacket(
 		createdAt: new Date().toISOString(),
 		currentPromptPreview: clampString(currentPrompt, 240),
 		layers: [
+			...(checkpointRef
+				? [
+						{
+							name: "stable_checkpoint" as const,
+							entryRefs: [checkpointRef.entryId],
+							tokenEstimate: checkpointRef.checkpoint.tokenEstimate,
+							tokenBudget: checkpointRef.checkpoint.tokenBudget,
+							trimmed: 0,
+							stability: "stable" as const,
+							cachePriority: "high" as const,
+						},
+					]
+				: []),
 			{
 				name: "turn_digest_ledger",
 				entryRefs: digestRefs,
 				tokenEstimate: budgeted.tokenEstimate,
 				tokenBudget: budget.packetTokenBudget,
 				trimmed: recentTrimmed + budgeted.tokenTrimmed,
+				stability: "append-only",
+				cachePriority: "medium",
 			},
 		],
+		checkpointRef: checkpointRef?.entryId,
 		digestRefs,
-		tokenEstimate: budgeted.tokenEstimate,
-		tokenBudget: budget.packetTokenBudget,
+		tokenEstimate: packetTokenEstimate,
+		tokenBudget: totalPacketTokenBudget,
 		budget,
 		trimDecisions,
 		injectedMessageCustomType: CONTEXT_PACKET_MESSAGE_TYPE,

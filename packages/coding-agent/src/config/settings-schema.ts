@@ -2529,6 +2529,9 @@ export const SETTINGS_SCHEMA = {
 	"san.contextSteady.contextPacket.enabled": { type: "boolean", default: true },
 	"san.contextSteady.contextPacket.recentDigests": { type: "number", default: 5 },
 	"san.contextSteady.contextPacket.maxTokens": { type: "number", default: 2000 },
+	"san.contextSteady.checkpoint.enabled": { type: "boolean", default: true },
+	"san.contextSteady.checkpoint.everyTurns": { type: "number", default: 8 },
+	"san.contextSteady.checkpoint.maxTokens": { type: "number", default: 12000 },
 
 	// Hindsight (https://hindsight.vectorize.io)
 	"hindsight.apiUrl": {

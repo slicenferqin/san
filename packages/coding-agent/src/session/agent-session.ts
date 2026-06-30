@@ -167,6 +167,7 @@ import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-temp
 import { resolveServiceTierSetting } from "../config/service-tier";
 import type { Settings, SkillsSettings } from "../config/settings";
 import { getDefault, onAppendOnlyModeChanged, validateProviderMaxInFlightRequests } from "../config/settings";
+import { appendContextCheckpoint, buildContextCheckpoint } from "../context-steady/checkpoint";
 import { generateDigest as generateContextSteadyDigest } from "../context-steady/digest";
 import { appendContextPacketDebugEntry, buildContextPacket } from "../context-steady/packet";
 import {
@@ -3493,6 +3494,7 @@ export class AgentSession {
 					steadySettings,
 					undefined,
 				);
+				this.#maybeAppendContextSteadyCheckpoint();
 			} catch (error) {
 				logger.warn("Failed to generate TurnDigest", {
 					error: error instanceof Error ? error.message : String(error),
@@ -3502,6 +3504,19 @@ export class AgentSession {
 				scheduleCleanup();
 			}
 		})();
+	}
+
+	#maybeAppendContextSteadyCheckpoint(): void {
+		if (this.settings.get("san.contextSteady.enabled") !== true) return;
+		if (this.settings.get("san.contextSteady.checkpoint.enabled") !== true) return;
+
+		const built = buildContextCheckpoint(this.sessionManager.getEntries(), this.sessionId, {
+			enabled: true,
+			checkpointEveryTurns: this.settings.get("san.contextSteady.checkpoint.everyTurns") as number,
+			checkpointMaxTokens: this.settings.get("san.contextSteady.checkpoint.maxTokens") as number,
+		});
+		if (!built) return;
+		appendContextCheckpoint(this.sessionManager, built.checkpoint);
 	}
 
 	#dropContextSteadyPacketMessagesFromActiveContext(): void {
