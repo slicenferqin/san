@@ -1456,6 +1456,7 @@ export class AgentSession {
 	 * the original boundary so the consolidated digest covers the full
 	 * logical turn (original user prompt + all continuations). */
 	#contextSteadyOriginalPreTurnLeafId: string | null = null;
+	#contextSteadyOriginalPreTurnLeafCaptured = false;
 	// Bumped whenever the pending in-flight snapshot is set/cleared. The
 	// status-line context memo includes this so clearing the snapshot on
 	// turn-end/abort invalidates the cache even though the message list is
@@ -3262,12 +3263,16 @@ export class AgentSession {
 				// fires during a session_stop continuation, the original
 				// boundary must still be used so the digest spans from the
 				// original user prompt (not just the continuation cycle).
-				const persistedOriginalBoundary =
-					this.#contextSteadyOriginalPreTurnLeafId ?? this.#contextSteadyPreTurnLeafId;
+				const persistedOriginalBoundary = this.#contextSteadyOriginalPreTurnLeafCaptured
+					? this.#contextSteadyOriginalPreTurnLeafId
+					: this.#contextSteadyPreTurnLeafId;
 				this.#resetSessionStopContinuationState();
 				const settledLeafId = this.sessionManager.getLeafId();
 				await emitAgentEndNotification();
-				void this.#generateTurnDigest(settledLeafId, persistedOriginalBoundary);
+				void this.#generateTurnDigest(settledLeafId, {
+					allowAbortInProgress: true,
+					boundaryOverride: persistedOriginalBoundary,
+				});
 				return;
 			}
 			// Fireworks Fast variants degrade to their base model on a failed turn —
@@ -3378,20 +3383,29 @@ export class AgentSession {
 	 * After generation (or when skipped/failed), continuation boundary state
 	 * is cleaned up so the next logical turn starts with a clean slate.
 	 */
-	#generateTurnDigest(settledLeafId?: string | null, overrideBoundary?: string | null): void {
+	#generateTurnDigest(
+		settledLeafId?: string | null,
+		options?: { allowAbortInProgress?: boolean; boundaryOverride?: string | null },
+	): void {
 		const settings = this.settings;
 
 		// Capture the original boundary BEFORE any cleanup, so the source
 		// span computation uses the stable snapshot.
-		// When overrideBoundary is provided (e.g. abort path after reset),
-		// it takes precedence — it was captured before reset cleared the fields.
-		const originalBoundary =
-			overrideBoundary ?? this.#contextSteadyOriginalPreTurnLeafId ?? this.#contextSteadyPreTurnLeafId;
+		// When boundaryOverride is provided (e.g. abort path after reset),
+		// it takes precedence even when its value is null. Null is a valid
+		// boundary for a first-turn continuation and means "start at branch root".
+		const hasBoundaryOverride = options && "boundaryOverride" in options;
+		const originalBoundary = hasBoundaryOverride
+			? (options.boundaryOverride ?? null)
+			: this.#contextSteadyOriginalPreTurnLeafCaptured
+				? this.#contextSteadyOriginalPreTurnLeafId
+				: this.#contextSteadyPreTurnLeafId;
 
 		// Whether we write a digest or not, continuation boundary state must
 		// be cleaned up so the next turn starts fresh.
 		const scheduleCleanup = () => {
 			this.#contextSteadyOriginalPreTurnLeafId = null;
+			this.#contextSteadyOriginalPreTurnLeafCaptured = false;
 		};
 
 		const enabled = settings.get("san.contextSteady.enabled") as boolean;
@@ -3412,8 +3426,9 @@ export class AgentSession {
 			return;
 		}
 
-		// Abort/dispose during the digest dispatch render the turn invalid.
-		if (this.#abortInProgress || this.#isDisposed) {
+		// A deliberate abort is itself a settled turn and should still write
+		// its digest. Other abort/dispose races render the turn invalid.
+		if ((this.#abortInProgress && options?.allowAbortInProgress !== true) || this.#isDisposed) {
 			scheduleCleanup();
 			return;
 		}
@@ -4585,6 +4600,7 @@ export class AgentSession {
 		this.#sessionStopContinuationCount = 0;
 		this.#sessionStopHookActive = false;
 		this.#contextSteadyOriginalPreTurnLeafId = null;
+		this.#contextSteadyOriginalPreTurnLeafCaptured = false;
 	}
 
 	/** Remove queued session-stop continuations from the pending queue. */
@@ -4672,7 +4688,10 @@ export class AgentSession {
 		// Preserve the original pre-turn leaf boundary so the final
 		// consolidated digest covers the full logical turn including
 		// all continuations.
-		this.#contextSteadyOriginalPreTurnLeafId ??= this.#contextSteadyPreTurnLeafId;
+		if (!this.#contextSteadyOriginalPreTurnLeafCaptured) {
+			this.#contextSteadyOriginalPreTurnLeafId = this.#contextSteadyPreTurnLeafId;
+			this.#contextSteadyOriginalPreTurnLeafCaptured = true;
+		}
 		this.#queueHiddenNextTurnMessage(
 			{
 				role: "custom",
@@ -7239,10 +7258,9 @@ export class AgentSession {
 		// Context steady: the continuation prompt overwrites
 		// #contextSteadyPreTurnLeafId (in #promptWithMessage). Save and restore
 		// it so the consolidated digest (triggered by chainEnded) can use the
-		// original boundary via #contextSteadyOriginalPreTurnLeafId ?? the
-		// restored #contextSteadyPreTurnLeafId. The restored value is the
-		// fallback; #contextSteadyOriginalPreTurnLeafId set by
-		// #emitSessionStopEvent is the primary source of truth when available.
+		// captured original boundary. The restored value is only the fallback
+		// for non-continuation prompts; the captured flag lets a first-turn
+		// continuation preserve a deliberate null boundary.
 		const steadyLeafBeforeContinuation = this.#contextSteadyPreTurnLeafId;
 		try {
 			await this.#promptWithMessage(message, textContent, {

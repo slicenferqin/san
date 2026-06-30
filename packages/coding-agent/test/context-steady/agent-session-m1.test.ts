@@ -43,6 +43,15 @@ function extractDigestEntries(sessionManager: SessionManager): CustomEntry[] {
 	) as CustomEntry[];
 }
 
+async function waitUntil(predicate: () => boolean, timeoutMs = 4000): Promise<void> {
+	const startedAt = Date.now();
+	while (Date.now() - startedAt < timeoutMs) {
+		if (predicate()) return;
+		await Bun.sleep(10);
+	}
+	expect(predicate()).toBe(true);
+}
+
 describe("Context Steady State M1 — AgentSession integration", () => {
 	let session: AgentSession;
 	let tempDir: string;
@@ -327,17 +336,68 @@ describe("Context Steady State M1 — AgentSession integration", () => {
 		expect(digests).toHaveLength(1);
 	});
 
+	it("abort while session_stop hook is pending invalidates the turn without writing digest", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+
+		const stopHook = Promise.withResolvers<{ continue: true; additionalContext: string }>();
+		const emitSessionStop = vi.fn(() => stopHook.promise);
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop,
+		} as unknown as ExtensionRunner;
+
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated(BASE_SETTINGS);
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+		const promptPromise = session.prompt("Fix the bug").catch(() => {});
+		await waitUntil(() => emitSessionStop.mock.calls.length > 0);
+
+		const abortPromise = session.abort();
+		stopHook.resolve({ continue: true, additionalContext: "Continue after abort." });
+		await abortPromise;
+		await promptPromise;
+		await session.waitForIdle();
+
+		expect(emitSessionStop).toHaveBeenCalledTimes(1);
+		expect(extractDigestEntries(sessionManager)).toHaveLength(0);
+		expect(
+			sessionManager
+				.getBranch()
+				.some(
+					e =>
+						e.type === "custom_message" &&
+						(e as unknown as Record<string, string>).customType === "session-stop-continuation",
+				),
+		).toBe(false);
+	});
+
 	// ═══════════════════════════════════════════════════════════════════════
 	// Test 3: Aborted turn
 	// ═══════════════════════════════════════════════════════════════════════
 
 	it("aborted turn writes a digest (turn did settle)", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		let streamStarted = false;
 		const localAgent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: { model, systemPrompt: ["Test"], tools: [] },
 			streamFn: (_model, _context, options) => {
 				const stream = new AssistantMessageEventStream();
+				streamStarted = true;
 				queueMicrotask(() => {
 					stream.push({ type: "start", partial: createAssistantMessage("") });
 				});
@@ -363,10 +423,7 @@ describe("Context Steady State M1 — AgentSession integration", () => {
 
 		session = new AgentSession({ agent: localAgent, sessionManager, settings, modelRegistry });
 		const promptPromise = session.prompt("Do something").catch(() => {});
-		for (let i = 0; i < 200; i++) {
-			if (session.isStreaming) break;
-			await Bun.sleep(20);
-		}
+		await waitUntil(() => streamStarted);
 		await session.abort();
 		await promptPromise;
 		await session.waitForIdle();
@@ -460,7 +517,7 @@ describe("Context Steady State M1 — AgentSession integration", () => {
 		const toMsg = "message" in toEntry! ? (toEntry as unknown as Record<string, unknown>).message : undefined;
 		expect((toMsg as Record<string, unknown>).role).toBe("assistant");
 
-		// The side-effect entry must exist in the branch AFTER the toEntry
+		// The side-effect entry must exist in the branch AFTER the toEntry.
 		const toIdx = branch.findIndex(e => e.id === source.toEntryId);
 		const sideEffectIdx = branch.findIndex(
 			e =>
@@ -473,17 +530,53 @@ describe("Context Steady State M1 — AgentSession integration", () => {
 	// Test 6: Regression — abort during continuation preserves full turn boundary
 	// ═══════════════════════════════════════════════════════════════════════
 
-	it("abort during session_stop continuation produces consolidated digest from original boundary", async () => {
+	it("abort during session_stop continuation writes one digest for the original logical turn", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		let streamCallCount = 0;
+		let continuationStarted = false;
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: { model, systemPrompt: ["Test"], tools: [] },
-			streamFn: mock.stream,
+			streamFn: (_model, _context, options) => {
+				const callIndex = ++streamCallCount;
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					if (callIndex === 1) {
+						const done = createAssistantMessage("Done");
+						stream.push({ type: "start", partial: done });
+						stream.push({ type: "text_start", contentIndex: 0, partial: done });
+						stream.push({ type: "text_delta", contentIndex: 0, delta: "Done", partial: done });
+						stream.push({ type: "text_end", contentIndex: 0, content: "Done", partial: done });
+						stream.push({ type: "done", reason: "stop", message: done });
+						return;
+					}
+
+					const partial = createAssistantMessage("Working in continuation");
+					stream.push({ type: "start", partial });
+					stream.push({ type: "text_start", contentIndex: 0, partial });
+					stream.push({
+						type: "text_delta",
+						contentIndex: 0,
+						delta: "Working in continuation",
+						partial,
+					});
+					continuationStarted = true;
+				});
+				options?.signal?.addEventListener(
+					"abort",
+					() => {
+						const aborted = createAssistantMessage("Aborted during continuation");
+						aborted.stopReason = "aborted";
+						aborted.errorMessage = "Request was aborted";
+						stream.push({ type: "error", reason: "aborted", error: aborted });
+					},
+					{ once: true },
+				);
+				return stream;
+			},
 			convertToLlm,
 		});
 
-		// First session_stop queues a continuation; abort fires inside it
 		const stopHook = Promise.withResolvers<{ continue: true; additionalContext: string }>();
 		const emitSessionStop = vi.fn(() => (emitSessionStop.mock.calls.length === 1 ? stopHook.promise : undefined));
 		const extensionRunner = {
@@ -502,43 +595,47 @@ describe("Context Steady State M1 — AgentSession integration", () => {
 
 		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
 		const promptPromise = session.prompt("Fix the bug").catch(() => {});
-		for (let i = 0; i < 200; i++) {
-			if (emitSessionStop.mock.calls.length > 0) break;
-			await Bun.sleep(20);
-		}
-		expect(emitSessionStop).toHaveBeenCalled();
+		await waitUntil(() => emitSessionStop.mock.calls.length > 0);
 		stopHook.resolve({ continue: true, additionalContext: "Continue." });
-		// Wait for continuation to start, then abort it
-		await Bun.sleep(100);
+		await waitUntil(() => continuationStarted);
+
 		await session.abort();
 		await promptPromise;
 		await session.waitForIdle();
 
 		const digests = extractDigestEntries(sessionManager);
-		// Should be exactly one digest covering the full logical turn
 		expect(digests).toHaveLength(1);
 
 		const data = digests[0]!.data as Record<string, unknown>;
 		const source = data.source as Record<string, string>;
 		const branch = sessionManager.getBranch();
 
-		// userIntent must come from the original user prompt, not
-		// "System-driven continuation"
 		expect(data.userIntent).not.toBe("System-driven continuation");
 		expect(data.userIntent).toContain("Fix the bug");
 
-		// fromEntryId must be at or before the original user message
-		const firstUserIdx = branch.findIndex(e => e.type === "message" && "message" in e);
 		const fromIdx = branch.findIndex(e => e.id === source.fromEntryId);
-		expect(fromIdx).toBeLessThanOrEqual(firstUserIdx);
-
-		// Span must include the continuation custom_message
+		const toIdx = branch.findIndex(e => e.id === source.toEntryId);
 		const contIdx = branch.findIndex(
 			e =>
 				e.type === "custom_message" &&
 				(e as unknown as Record<string, string>).customType === "session-stop-continuation",
 		);
+		expect(fromIdx).toBeGreaterThanOrEqual(0);
 		expect(contIdx).toBeGreaterThanOrEqual(0);
-		expect(fromIdx).toBeLessThanOrEqual(contIdx);
+		expect(toIdx).toBeGreaterThan(contIdx);
+		expect(fromIdx).toBeLessThan(contIdx);
+
+		const fromEntry = branch[fromIdx];
+		expect(fromEntry?.type).toBe("message");
+		const fromMsg =
+			fromEntry && "message" in fromEntry ? (fromEntry as unknown as Record<string, unknown>).message : undefined;
+		expect((fromMsg as Record<string, unknown>).role).toBe("user");
+
+		const toEntry = branch[toIdx];
+		expect(toEntry?.type).toBe("message");
+		const toMsg =
+			toEntry && "message" in toEntry ? (toEntry as unknown as Record<string, unknown>).message : undefined;
+		expect((toMsg as Record<string, unknown>).role).toBe("assistant");
+		expect((toMsg as Record<string, unknown>).stopReason).toBe("aborted");
 	});
 });
