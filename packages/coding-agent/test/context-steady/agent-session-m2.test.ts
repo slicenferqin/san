@@ -2,7 +2,7 @@
  * Context Steady State M2 — AgentSession ContextPacket integration tests.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -11,6 +11,8 @@ import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import * as memoryBackend from "@oh-my-pi/pi-coding-agent/memory-backend";
+import type { MemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -99,6 +101,7 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		for (const authStorage of authStorages) {
 			await authStorage.close();
 		}
+		vi.restoreAllMocks();
 		removeSyncWithRetries(tempDir);
 	});
 
@@ -256,6 +259,46 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		expect(finalPacketContent).not.toContain("M2 default window task 6");
 	});
 
+	it("does not replay stale persisted ContextPacket injections into later active turns", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated(BASE_SETTINGS);
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		await session.prompt("M10 replay first turn");
+		await session.waitForIdle();
+		await session.prompt("M10 replay second turn");
+		await session.waitForIdle();
+		await session.prompt("M10 replay third turn");
+		await session.waitForIdle();
+
+		expect(customMessageEntries(sessionManager, CONTEXT_PACKET_MESSAGE_TYPE)).toHaveLength(2);
+		const activeContext = sessionManager.buildSessionContext();
+		const transcriptContext = sessionManager.buildSessionContext({ transcript: true });
+		expect(JSON.stringify(activeContext.messages)).not.toContain("<san_context_packet>");
+		expect(JSON.stringify(transcriptContext.messages)).toContain("<san_context_packet>");
+
+		const thirdCallPackets = mock.calls[2]!.context.messages.filter(message =>
+			JSON.stringify(message.content).includes("<san_context_packet>"),
+		);
+		expect(thirdCallPackets).toHaveLength(1);
+		const thirdPacketText = JSON.stringify(thirdCallPackets[0]!.content);
+		expect(thirdPacketText).toContain("M10 replay first turn");
+		expect(thirdPacketText).toContain("M10 replay second turn");
+		expect(thirdPacketText).not.toContain("M10 replay third turn");
+	});
+
 	it("derives the injected ContextPacket budget from quality window settings", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
@@ -380,6 +423,256 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		expect(finalPacketContent).toContain("M4 checkpoint stable task one");
 		expect(finalPacketContent).toContain("M4 checkpoint stable task three");
 		expect(finalPacketContent).not.toContain("M4 checkpoint stable task four");
+	});
+
+	it("injects read-only recalled memory as a volatile ContextPacket layer", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mockModel = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mockModel.stream,
+			convertToLlm,
+		});
+		const search = vi.fn(async () => ({
+			backend: "mnemopi" as const,
+			query: "Recall San project decisions",
+			count: 1,
+			items: [
+				{
+					id: "mem-1",
+					content: "San project decision: keep planning documents in HTML",
+					source: "mnemopi",
+					timestamp: "2026-06-30T00:00:00.000Z",
+					score: 0.92,
+				},
+			],
+		}));
+		const fakeBackend: MemoryBackend = {
+			id: "mnemopi",
+			async start() {},
+			async buildDeveloperInstructions() {
+				return "static memory instructions";
+			},
+			async clear() {},
+			async enqueue() {},
+			async beforeAgentStartPrompt() {
+				throw new Error("San recall should not use memory system-prompt injection");
+			},
+			search,
+			async save() {
+				throw new Error("San recall should not write memory");
+			},
+		};
+		vi.restoreAllMocks();
+		vi.spyOn(memoryBackend, "resolveMemoryBackend").mockResolvedValue(fakeBackend);
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"memory.backend": "mnemopi",
+			"san.contextSteady.recall.enabled": true,
+			"san.contextSteady.recall.maxItems": 2,
+			"san.contextSteady.recall.maxTokens": 500,
+			"san.contextSteady.recall.maxQueryChars": 2000,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		await session.prompt("Recall San project decisions");
+		await session.waitForIdle();
+
+		expect(search).toHaveBeenCalledTimes(1);
+		const firstCallMessages = mockModel.calls[0]!.context.messages;
+		const packetMessage = firstCallMessages.find(message =>
+			JSON.stringify(message.content).includes("<san_context_packet>"),
+		);
+		expect(packetMessage).toBeDefined();
+		const packetContent = JSON.stringify(packetMessage?.content);
+		expect(packetContent).toContain("Retrieved context");
+		expect(packetContent).toContain("San project decision: keep planning documents in HTML");
+		expect(packetContent).toContain("Treat retrieved context as read-only background memory");
+
+		const packetEntries = customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE);
+		expect(packetEntries).toHaveLength(1);
+		const packetData = packetEntries[0]!.data as Record<string, unknown>;
+		expect(packetData.digestRefs).toEqual([]);
+		expect(packetData.recallRefs).toEqual(["mem-1"]);
+		expect(packetData.recallQuery).toBe("Recall San project decisions");
+		const layers = packetData.layers as Array<Record<string, unknown>>;
+		expect(layers.map(layer => layer.name)).toEqual(["turn_digest_ledger", "retrieved_context"]);
+		expect(layers[1]).toMatchObject({
+			entryRefs: ["mem-1"],
+			stability: "volatile",
+			cachePriority: "low",
+			tokenBudget: 500,
+		});
+	});
+
+	it("restores stable system prompt when San recall replaces legacy memory prompt injection", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mockModel = createMockModel({
+			responses: [{ content: ["First done"] }, { content: ["Second done"] }],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Stable base"], tools: [] },
+			streamFn: mockModel.stream,
+			convertToLlm,
+		});
+		const search = vi.fn(async () => ({
+			backend: "mnemopi" as const,
+			query: "Second prompt",
+			count: 1,
+			items: [
+				{
+					id: "mem-1",
+					content: "San recall belongs in the volatile ContextPacket layer",
+					source: "mnemopi",
+				},
+			],
+		}));
+		const fakeBackend: MemoryBackend = {
+			id: "mnemopi",
+			async start() {},
+			async buildDeveloperInstructions() {
+				return undefined;
+			},
+			async clear() {},
+			async enqueue() {},
+			async beforeAgentStartPrompt() {
+				return "<memories>legacy volatile memory injection</memories>";
+			},
+			search,
+		};
+		vi.restoreAllMocks();
+		vi.spyOn(memoryBackend, "resolveMemoryBackend").mockResolvedValue(fakeBackend);
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"memory.backend": "mnemopi",
+			"san.contextSteady.enabled": false,
+			"san.contextSteady.recall.maxQueryChars": 2000,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		await session.prompt("First prompt");
+		await session.waitForIdle();
+		expect(mockModel.calls[0]!.context.systemPrompt).toEqual([
+			"Stable base",
+			"<memories>legacy volatile memory injection</memories>",
+		]);
+
+		settings.override("san.contextSteady.enabled", true);
+		settings.override("san.contextSteady.recall.enabled", true);
+		await session.prompt("Second prompt");
+		await session.waitForIdle();
+
+		expect(search).toHaveBeenCalledTimes(1);
+		expect(mockModel.calls[1]!.context.systemPrompt).toEqual(["Stable base"]);
+		const secondPromptContent = JSON.stringify(mockModel.calls[1]!.context.messages);
+		expect(secondPromptContent).toContain("Retrieved context");
+		expect(secondPromptContent).toContain("San recall belongs in the volatile ContextPacket layer");
+		expect(secondPromptContent).not.toContain("legacy volatile memory injection");
+	});
+
+	it("uses recent digest context for San recall queries and deduplicates recall items", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mockModel = createMockModel({
+			responses: [{ content: ["First done"] }, { content: ["Second done"] }],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mockModel.stream,
+			convertToLlm,
+		});
+		const search = vi.fn(async (_context, query: string) => ({
+			backend: "mnemopi" as const,
+			query,
+			count: 3,
+			items: [
+				{
+					id: "mem-1",
+					content: "San recall should use recent digest context",
+					source: "mnemopi",
+					score: 0.95,
+				},
+				{
+					id: "mem-1",
+					content: "San recall should use recent digest context",
+					source: "mnemopi",
+					score: 0.4,
+				},
+				{
+					content: "   ",
+					source: "mnemopi",
+				},
+				{
+					id: "mem-2",
+					content: "Stable checkpoint content must stay before recall",
+					source: "mnemopi",
+				},
+			],
+		}));
+		const fakeBackend: MemoryBackend = {
+			id: "mnemopi",
+			async start() {},
+			async buildDeveloperInstructions() {
+				return undefined;
+			},
+			async clear() {},
+			async enqueue() {},
+			search,
+			async save() {
+				throw new Error("San recall should not write memory");
+			},
+		};
+		vi.restoreAllMocks();
+		vi.spyOn(memoryBackend, "resolveMemoryBackend").mockResolvedValue(fakeBackend);
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"memory.backend": "mnemopi",
+			"san.contextSteady.recall.enabled": true,
+			"san.contextSteady.recall.maxItems": 3,
+			"san.contextSteady.recall.maxTokens": 500,
+			"san.contextSteady.recall.maxQueryChars": 2000,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		await session.prompt("Write the first San digest");
+		await session.waitForIdle();
+		await session.prompt("Continue recall quality work");
+		await session.waitForIdle();
+
+		expect(search).toHaveBeenCalledTimes(2);
+		const secondQuery = search.mock.calls[1]![1];
+		expect(secondQuery).toContain("Recent San turn digests:");
+		expect(secondQuery).toContain("Write the first San digest");
+		expect(secondQuery).toContain("Current prompt:");
+		expect(secondQuery).toContain("Continue recall quality work");
+
+		const packetEntries = customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE);
+		const finalPacket = packetEntries.at(-1)!.data as Record<string, unknown>;
+		expect(finalPacket.recallRefs).toEqual(["mem-1", "mem-2"]);
+		const layers = finalPacket.layers as Array<Record<string, unknown>>;
+		expect(layers.at(-1)).toMatchObject({
+			name: "retrieved_context",
+			entryRefs: ["mem-1", "mem-2"],
+			stability: "volatile",
+			cachePriority: "low",
+		});
 	});
 
 	it("writes a digest for a tool-using turn after injecting ContextPacket", async () => {

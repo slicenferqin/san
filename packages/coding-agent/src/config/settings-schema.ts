@@ -2532,6 +2532,10 @@ export const SETTINGS_SCHEMA = {
 	"san.contextSteady.checkpoint.enabled": { type: "boolean", default: true },
 	"san.contextSteady.checkpoint.everyTurns": { type: "number", default: 8 },
 	"san.contextSteady.checkpoint.maxTokens": { type: "number", default: 12000 },
+	"san.contextSteady.recall.enabled": { type: "boolean", default: false },
+	"san.contextSteady.recall.maxItems": { type: "number", default: 3 },
+	"san.contextSteady.recall.maxTokens": { type: "number", default: 1000 },
+	"san.contextSteady.recall.maxQueryChars": { type: "number", default: 2000 },
 
 	// Hindsight (https://hindsight.vectorize.io)
 	"hindsight.apiUrl": {

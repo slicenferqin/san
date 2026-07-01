@@ -35,6 +35,7 @@ import { expandTilde, resolveToCwd } from "../tools/path-utils";
 import { urlHyperlinkAlways } from "../tui";
 import { getChangelogPath, parseChangelog } from "../utils/changelog";
 import { CollabQrCodeComponent } from "./helpers/collab-qrcode";
+import { buildContextPacketReportText, parseContextPacketReportCount } from "./helpers/context-packet-report";
 import { buildContextReportText } from "./helpers/context-report";
 import { formatDuration } from "./helpers/format";
 import { createMarketplaceManager } from "./helpers/marketplace-manager";
@@ -1098,16 +1099,44 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "context",
 		description: "Show estimated context usage breakdown",
 		acpDescription: "Show context usage",
+		acpInputHint: "[packet [count]]",
+		allowArgs: true,
+		subcommands: [{ name: "packet", description: "Show San ContextPacket debug view", usage: "[count]" }],
 		getTuiAutocompleteDescription: runtime => {
 			const usage = runtime.ctx.session.getContextUsage();
 			if (!usage) return "Context: unavailable";
 			return `Context: ${Math.round(usage.percent)}% (${formatTokenCount(usage.tokens)}/${formatTokenCount(usage.contextWindow)})`;
 		},
-		handle: async (_command, runtime) => {
+		handle: async (command, runtime) => {
+			const { verb, rest } = parseSubcommand(command.args);
+			if (verb === "packet") {
+				const count = parseContextPacketReportCount(rest);
+				if (typeof count !== "number") return usage(count.error, runtime);
+				await runtime.output(buildContextPacketReportText(runtime.sessionManager.getEntries(), { count }));
+				return commandConsumed();
+			}
+			if (verb) return usage("Usage: /context [packet [count]]", runtime);
 			await runtime.output(buildContextReportText(runtime));
 			return commandConsumed();
 		},
-		handleTui: (_command, runtime) => {
+		handleTui: (command, runtime) => {
+			const { verb, rest } = parseSubcommand(command.args);
+			if (verb === "packet") {
+				const count = parseContextPacketReportCount(rest);
+				runtime.ctx.showStatus(
+					typeof count === "number"
+						? buildContextPacketReportText(runtime.ctx.session.sessionManager.getEntries(), { count })
+						: count.error,
+					{ dim: false },
+				);
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			if (verb) {
+				runtime.ctx.showStatus("Usage: /context [packet [count]]");
+				runtime.ctx.editor.setText("");
+				return;
+			}
 			runtime.ctx.handleContextCommand();
 			runtime.ctx.editor.setText("");
 		},

@@ -1,4 +1,5 @@
 export * from "./digest";
+export * from "./dogfood";
 export * from "./fallback";
 export * from "./normalize";
 export * from "./packet";

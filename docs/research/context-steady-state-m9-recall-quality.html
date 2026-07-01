@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San Context Steady State M9 Recall 质量收敛</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #20242a;
+      --muted: #667085;
+      --line: #d9e0ea;
+      --paper: #fbfcfd;
+      --panel: #ffffff;
+      --band: #f2f6f8;
+      --green: #0f766e;
+      --blue: #2457a6;
+      --amber: #a16207;
+      --code: #edf2f7;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.64;
+    }
+
+    header {
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .wrap {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .hero { padding: 48px 0 34px; }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--green);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 980px;
+      margin: 0;
+      font-size: clamp(32px, 5vw, 52px);
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 900px;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    main { padding: 28px 0 62px; }
+
+    section {
+      padding: 28px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 25px;
+      letter-spacing: 0;
+    }
+
+    p { max-width: 920px; margin: 0 0 14px; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 18px 0;
+      background: var(--panel);
+      border: 1px solid var(--line);
+    }
+
+    th, td {
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th { background: var(--band); }
+
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: var(--code);
+    }
+
+    pre {
+      overflow: auto;
+      padding: 16px;
+      background: var(--code);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      line-height: 1.5;
+    }
+
+    .callout {
+      margin: 18px 0;
+      padding: 16px 18px;
+      border-left: 4px solid var(--blue);
+      background: #eef5ff;
+    }
+
+    .risk {
+      border-left-color: var(--amber);
+      background: #fffbeb;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap hero">
+      <p class="eyebrow">Context Steady State · M9</p>
+      <h1>Recall 质量优化：更准的 query，更干净的结果，更低的缓存污染</h1>
+      <p class="subtitle">
+        M9 不改变 recall 默认关闭的产品边界。它优化启用 recall 后的 query 构造和结果归一化，
+        让 retrieved context 继续作为 volatile low-cache layer 留在稳定前缀之后。
+      </p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h2>代码改动</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>文件</th>
+            <th>职责</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>packages/coding-agent/src/context-steady/recall.ts</code></td>
+            <td>新增 San 专用 recall helper：基于当前 prompt 和最近 TurnDigest 构造 query，并对 backend results 去重、清空白、限数。</td>
+          </tr>
+          <tr>
+            <td><code>packages/coding-agent/src/session/agent-session.ts</code></td>
+            <td>ContextPacket recall 路径改用 helper；只调用 backend <code>search</code>，不调用 <code>save</code>、retain 或 memory prompt 注入。</td>
+          </tr>
+          <tr>
+            <td><code>packages/coding-agent/src/config/settings-schema.ts</code></td>
+            <td>新增 <code>san.contextSteady.recall.maxQueryChars</code>，默认 <code>2000</code>。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Query 结构</h2>
+      <pre><code>Recent San turn digests:
+- d2: write M7 dogfood verifier | decided t2 | continue t2
+- d3: settle M8 recommended config | decided t3 | continue t3
+
+Current prompt:
+Improve recall quality</code></pre>
+      <p>
+        这样做的原因是：单独拿当前 prompt 召回，容易错过上一轮已经明确的项目决策和任务方向；
+        直接拿完整 transcript 又会过长、噪声大、破坏 retriever 聚焦。最近 digest 是更稳的中间层。
+      </p>
+    </section>
+
+    <section>
+      <h2>结果归一化</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>规则</th>
+            <th>目的</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>空白 content 直接丢弃</td>
+            <td>避免无意义 recall item 占用 volatile layer 预算。</td>
+          </tr>
+          <tr>
+            <td>优先按 id 去重</td>
+            <td>同一条 memory 被 backend 重复返回时只保留最高排序的第一条。</td>
+          </tr>
+          <tr>
+            <td>无 id 时按 source + normalized content 去重</td>
+            <td>覆盖纯文本 backend 或旧数据没有 id 的情况。</td>
+          </tr>
+          <tr>
+            <td>最多保留 <code>maxItems</code></td>
+            <td>召回数量受配置控制，后续仍由 ContextPacket recall token budget 二次裁剪。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>验证</h2>
+      <pre><code>bun test packages/coding-agent/test/context-steady/recall.test.ts \
+  packages/coding-agent/test/context-steady/context-packet.test.ts \
+  packages/coding-agent/test/context-steady/agent-session-m2.test.ts</code></pre>
+      <div class="callout">
+        测试覆盖了 digest-aware query、query 长度兜底、结果去重、AgentSession 集成路径、只读 recall、低缓存 volatile layer 和 debug refs。
+      </div>
+    </section>
+
+    <section>
+      <h2>边界</h2>
+      <div class="callout risk">
+        M9 仍不把 recall 默认打开。推荐配置保持 <code>recall.enabled: false</code>，因为长期记忆召回质量需要真实 dogfood 后再决定是否升级默认策略。
+      </div>
+    </section>
+  </main>
+</body>
+</html>

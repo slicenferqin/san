@@ -780,6 +780,36 @@ describe("Settings", () => {
 					Settings.init({ cwd: projectDir, agentDir, inMemory: true, configFiles: [overlayPath] }),
 				).rejects.toThrow("Provider request limits must be positive numbers: umans");
 			});
+
+			it("loads the recommended San context steady overlay", async () => {
+				const overlayPath = path.join(
+					process.cwd(),
+					"packages/coding-agent/examples/config/san-context-steady-recommended.yml",
+				);
+
+				const settings = await Settings.init({
+					cwd: projectDir,
+					agentDir,
+					inMemory: true,
+					configFiles: [overlayPath],
+				});
+
+				expect(settings.get("san.contextSteady.enabled")).toBe(true);
+				expect(settings.get("san.contextSteady.digest.enabled")).toBe(true);
+				expect(settings.get("san.contextSteady.digest.persistFallback")).toBe(true);
+				expect(settings.get("san.contextSteady.qualityWindowTokens")).toBe(24000);
+				expect(settings.get("san.contextSteady.reserveRatio")).toBe(0.25);
+				expect(settings.get("san.contextSteady.contextPacket.enabled")).toBe(true);
+				expect(settings.get("san.contextSteady.contextPacket.recentDigests")).toBe(5);
+				expect(settings.get("san.contextSteady.contextPacket.maxTokens")).toBe(3000);
+				expect(settings.get("san.contextSteady.checkpoint.enabled")).toBe(true);
+				expect(settings.get("san.contextSteady.checkpoint.everyTurns")).toBe(6);
+				expect(settings.get("san.contextSteady.checkpoint.maxTokens")).toBe(12000);
+				expect(settings.get("san.contextSteady.recall.enabled")).toBe(false);
+				expect(settings.get("san.contextSteady.recall.maxItems")).toBe(3);
+				expect(settings.get("san.contextSteady.recall.maxTokens")).toBe(1000);
+				expect(settings.get("san.contextSteady.recall.maxQueryChars")).toBe(2000);
+			});
 		});
 	});
 });

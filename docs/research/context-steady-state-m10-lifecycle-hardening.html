@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San Context Steady State M10 生命周期加固</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #20242a;
+      --muted: #667085;
+      --line: #d9e0ea;
+      --paper: #fbfcfd;
+      --panel: #ffffff;
+      --band: #f2f6f8;
+      --green: #0f766e;
+      --blue: #2457a6;
+      --amber: #a16207;
+      --code: #edf2f7;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.64;
+    }
+
+    header {
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .wrap {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .hero { padding: 48px 0 34px; }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--green);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 980px;
+      margin: 0;
+      font-size: clamp(32px, 5vw, 52px);
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 900px;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    main { padding: 28px 0 62px; }
+
+    section {
+      padding: 28px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 25px;
+      letter-spacing: 0;
+    }
+
+    p { max-width: 920px; margin: 0 0 14px; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 18px 0;
+      background: var(--panel);
+      border: 1px solid var(--line);
+    }
+
+    th, td {
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th { background: var(--band); }
+
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: var(--code);
+    }
+
+    pre {
+      overflow: auto;
+      padding: 16px;
+      background: var(--code);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      line-height: 1.5;
+    }
+
+    .callout {
+      margin: 18px 0;
+      padding: 16px 18px;
+      border-left: 4px solid var(--blue);
+      background: #eef5ff;
+    }
+
+    .risk {
+      border-left-color: var(--amber);
+      background: #fffbeb;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap hero">
+      <p class="eyebrow">Context Steady State · M10</p>
+      <h1>生命周期加固的重点是 replay/resume 不重复注入旧 ContextPacket</h1>
+      <p class="subtitle">
+        M10 把已有 digest/continuation/abort 保护和新增 ContextPacket replay contract 固定成测试。
+        目标是 session 恢复和后续轮次仍可 debug，但不会把旧 hidden packet 重新送进模型上下文。
+      </p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h2>已覆盖风险</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>风险</th>
+            <th>测试证据</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>旧 <code>san.context_packet.injected</code> 在 replay/resume 后进入 active LLM context</td>
+            <td><code>packages/coding-agent/test/session-manager/build-context.test.ts</code> 验证 active context 隐藏，transcript 保留。</td>
+          </tr>
+          <tr>
+            <td>多轮后历史 packet 叠加，第三轮模型收到多个 ContextPacket</td>
+            <td><code>packages/coding-agent/test/context-steady/agent-session-m2.test.ts</code> 验证第三轮 provider context 只有一个 live ContextPacket。</td>
+          </tr>
+          <tr>
+            <td>digest source 被 ContextPacket prelude 污染</td>
+            <td>现有 <code>skipContextPacketPreludeInDigestSource</code> 和 tool-using turn 集成测试持续覆盖。</td>
+          </tr>
+          <tr>
+            <td>session_stop continuation 重复写 digest 或丢失原始用户边界</td>
+            <td><code>agent-session-m1.test.ts</code> 覆盖 consolidated digest、abort during hook、abort during continuation。</td>
+          </tr>
+          <tr>
+            <td>recall 失败或结果重复导致上下文污染</td>
+            <td>M9 helper 和 AgentSession 集成测试覆盖只读搜索、失败降级、去重和 volatile layer。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>新增验证命令</h2>
+      <pre><code>bun test packages/coding-agent/test/session-manager/build-context.test.ts \
+  packages/coding-agent/test/context-steady/agent-session-m2.test.ts</code></pre>
+      <div class="callout">
+        M10 没有改动默认生命周期策略；它把关键 replay 合同固定为测试，避免后续 resume/session-context refactor 误把 hidden ContextPacket 当普通 custom_message 重放。
+      </div>
+    </section>
+
+    <section>
+      <h2>仍需真实 dogfood 观察</h2>
+      <div class="callout risk">
+        自动 compaction、provider overflow retry 和真实用户中断下的 ContextPacket 行为仍建议在本地启用 M8 overlay 后继续观察。
+        当前 M10 已覆盖核心 replay contract，但真实 CLI 长会话仍是后续质量信号。
+      </div>
+    </section>
+  </main>
+</body>
+</html>

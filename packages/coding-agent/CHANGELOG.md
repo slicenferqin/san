@@ -7,6 +7,12 @@
 - Added San context steady state M1: post-turn TurnDigest generation and persistence to session journal via `sessionManager.appendCustomEntry("san.turn_digest", data)`. Each settled agent turn now produces a structured digest capturing user intent, actions taken, decisions, files touched, tool evidence, and more. Digest generation is deterministic (non-LLM) in M1, with LLM-based summarization planned for a future release. Controlled via `san.contextSteady.enabled` setting (default: off).
 - Added San context steady state M3 packet budget snapshots via `san.contextSteady.qualityWindowTokens`, `san.contextSteady.reserveRatio`, and per-layer ContextPacket token budgets with trim decisions in `san.context_packet` debug entries.
 - Added San context steady state M4 stable checkpoints via `san.contextSteady.checkpoint.*`; ContextPacket now layers stable checkpoint content ahead of the append-only digest tail for cache-aware continuity.
+- Added default-off San context steady state read-only recall via `san.contextSteady.recall.*`; retrieved memory now enters ContextPacket as a volatile low-cache layer after stable checkpoints and digest tails instead of contaminating the stable system prompt.
+- Added San ContextPacket debug view via `/context packet [count]`, showing packet layers, budget snapshots, trim decisions, recall refs, and injected message links for dogfood verification.
+- Added a deterministic San context steady state dogfood verifier and report for M7, covering multi-turn digests, checkpoint coverage, ContextPacket layer ordering, budget bounds, injected message linkage, and active-context replay behavior.
+- Added a recommended San context steady state dogfood config overlay at `packages/coding-agent/examples/config/san-context-steady-recommended.yml`, with docs and settings-loader coverage for M8.
+- Added San context steady state M9 recall quality helpers: recall queries now include recent TurnDigest context, enforce `san.contextSteady.recall.maxQueryChars`, and deduplicate/trim backend recall results before adding the volatile ContextPacket layer.
+- Added San context steady state M10 lifecycle hardening coverage for ContextPacket replay and resume behavior, ensuring persisted hidden packet injections stay out of active LLM context while transcripts and debug views retain them.
 
 ## [16.2.2] - 2026-06-27
 

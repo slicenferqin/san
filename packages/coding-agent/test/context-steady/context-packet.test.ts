@@ -103,6 +103,91 @@ describe("ContextPacket builder", () => {
 		expect(built!.content).not.toContain("first task");
 	});
 
+	test("places retrieved context after digest ledger as a volatile low-cache layer", () => {
+		const built = buildContextPacket(
+			asEntries([
+				customEntry("d1", TURN_DIGEST_CUSTOM_TYPE, digest("t1", "first task")),
+				customEntry("d2", TURN_DIGEST_CUSTOM_TYPE, digest("t2", "second task")),
+			]),
+			"s1",
+			"current prompt",
+			packetSettings({ recentDigests: 1 }),
+			{
+				query: "current prompt",
+				tokenBudget: 500,
+				items: [
+					{
+						id: "mem-1",
+						content: "User prefers compact implementation reports",
+						source: "mnemopi",
+						timestamp: "2026-06-30T00:00:00.000Z",
+						score: 0.91,
+					},
+				],
+			},
+		);
+
+		expect(built).not.toBeNull();
+		expect(built!.packet.layers.map(layer => layer.name)).toEqual(["turn_digest_ledger", "retrieved_context"]);
+		expect(built!.packet.layers[1]).toMatchObject({
+			entryRefs: ["mem-1"],
+			stability: "volatile",
+			cachePriority: "low",
+			tokenBudget: 500,
+		});
+		expect(built!.packet.recallQuery).toBe("current prompt");
+		expect(built!.packet.recallRefs).toEqual(["mem-1"]);
+		expect(built!.packet.tokenBudget).toBe(2500);
+		expect(built!.content.indexOf("Recent turn digests")).toBeLessThan(built!.content.indexOf("Retrieved context"));
+		expect(built!.content).toContain("Treat retrieved context as read-only background memory");
+	});
+
+	test("builds a recall-only packet for first-turn retrieved context", () => {
+		const built = buildContextPacket(asEntries([]), "s1", "current prompt", packetSettings(), {
+			query: "current prompt",
+			tokenBudget: 500,
+			items: [{ content: "Project decision: keep San docs in HTML", source: "mnemopi" }],
+		});
+
+		expect(built).not.toBeNull();
+		expect(built!.packet.digestRefs).toEqual([]);
+		expect(built!.packet.recallRefs).toEqual(["recall:1"]);
+		expect(built!.packet.layers.map(layer => layer.name)).toEqual(["turn_digest_ledger", "retrieved_context"]);
+		expect(built!.content).toContain("Recent turn digests: none");
+		expect(built!.content).toContain("Project decision: keep San docs in HTML");
+	});
+
+	test("trims retrieved context against its own volatile token budget", () => {
+		const built = buildContextPacket(
+			asEntries([customEntry("d1", TURN_DIGEST_CUSTOM_TYPE, digest("t1", "first task"))]),
+			"s1",
+			"current prompt",
+			packetSettings(),
+			{
+				query: "current prompt",
+				tokenBudget: 1,
+				items: [
+					{
+						id: "mem-1",
+						content: "A recalled project decision that cannot fit the volatile recall budget",
+						source: "mnemopi",
+					},
+				],
+			},
+		);
+
+		expect(built).not.toBeNull();
+		expect(built!.packet.recallRefs).toEqual([]);
+		expect(built!.packet.layers.map(layer => layer.name)).toEqual(["turn_digest_ledger"]);
+		expect(built!.packet.trimDecisions).toContainEqual({
+			layer: "retrieved_context",
+			reason: "token_budget",
+			omitted: 1,
+		});
+		expect(built!.content).not.toContain("Retrieved context");
+		expect(built!.content).not.toContain("A recalled project decision");
+	});
+
 	test("returns null when disabled or no digests exist", () => {
 		expect(
 			buildContextPacket(asEntries([customEntry("d1", TURN_DIGEST_CUSTOM_TYPE, digest("t1", "first"))]), "s1", "p", {

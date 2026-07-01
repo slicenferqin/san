@@ -9,6 +9,11 @@ import type {
 	UsageReport,
 } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import {
+	CONTEXT_PACKET_CUSTOM_TYPE,
+	CONTEXT_PACKET_MESSAGE_TYPE,
+	CONTEXT_PACKET_SCHEMA_VERSION,
+} from "@oh-my-pi/pi-coding-agent/context-steady/types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
@@ -58,7 +63,7 @@ interface FakeAcpBuiltinSession {
 interface FakeAcpBuiltinSessionManager {
 	_sessionFile: string | undefined;
 	_cwd: string;
-	_entries: { type: string }[];
+	_entries: Array<Record<string, unknown>>;
 	_customEntries: Array<{ customType: string; data: unknown }>;
 	_movedTo: string | undefined;
 	_flushed: boolean;
@@ -66,8 +71,8 @@ interface FakeAcpBuiltinSessionManager {
 	_sessionName: string | undefined;
 	getSessionId(): string;
 	getSessionFile(): string | undefined;
-	getEntries(): { type: string }[];
-	getBranch(): { type: string }[];
+	getEntries(): Array<Record<string, unknown>>;
+	getBranch(): Array<Record<string, unknown>>;
 	appendCustomEntry(customType: string, data?: unknown): string;
 	flush(): Promise<void>;
 	moveTo(newCwd: string): Promise<void>;
@@ -158,7 +163,7 @@ function createRuntime() {
 	fakeSessionManager = {
 		_sessionFile: undefined as string | undefined,
 		_cwd: "/tmp/project",
-		_entries: [] as { type: string }[],
+		_entries: [] as Array<Record<string, unknown>>,
 		_customEntries: [] as Array<{ customType: string; data: unknown }>,
 		_movedTo: undefined as string | undefined,
 		_flushed: false,
@@ -170,10 +175,10 @@ function createRuntime() {
 		getSessionFile(): string | undefined {
 			return this._sessionFile;
 		},
-		getEntries(): { type: string }[] {
+		getEntries(): Array<Record<string, unknown>> {
 			return this._entries;
 		},
-		getBranch(): { type: string }[] {
+		getBranch(): Array<Record<string, unknown>> {
 			return this._entries;
 		},
 		appendCustomEntry(customType: string, data?: unknown): string {
@@ -1075,6 +1080,82 @@ describe("wave 5 — adapters and polish", () => {
 		const text = output[0] ?? "";
 		expect(text).toContain("tokens");
 		expect(text.split("\n").length).toBeGreaterThan(1);
+	});
+
+	it("/context packet: renders San ContextPacket debug entries", async () => {
+		const { output, fakeSessionManager, runtime } = createRuntime();
+		fakeSessionManager._entries.push(
+			{
+				type: "custom",
+				id: "packet-entry",
+				parentId: null,
+				timestamp: "2026-06-30T00:00:00.000Z",
+				customType: CONTEXT_PACKET_CUSTOM_TYPE,
+				data: {
+					schemaVersion: CONTEXT_PACKET_SCHEMA_VERSION,
+					packetId: "ctx_acp",
+					sessionId: "fake-session-id",
+					createdAt: "2026-06-30T00:00:00.000Z",
+					currentPromptPreview: "Inspect context packet",
+					layers: [
+						{
+							name: "turn_digest_ledger",
+							entryRefs: ["digest-1"],
+							tokenEstimate: 220,
+							tokenBudget: 2000,
+							trimmed: 0,
+							stability: "append-only",
+							cachePriority: "medium",
+						},
+						{
+							name: "retrieved_context",
+							entryRefs: ["mem-1"],
+							tokenEstimate: 80,
+							tokenBudget: 500,
+							trimmed: 0,
+							stability: "volatile",
+							cachePriority: "low",
+						},
+					],
+					digestRefs: ["digest-1"],
+					recallQuery: "Inspect context packet",
+					recallRefs: ["mem-1"],
+					tokenEstimate: 300,
+					tokenBudget: 2500,
+					budget: {
+						qualityWindowTokens: 24000,
+						reserveRatio: 0.2,
+						reservedTokens: 4800,
+						packetTokenBudget: 2000,
+						configuredPacketMaxTokens: 2000,
+					},
+					trimDecisions: [],
+					injectedMessageCustomType: CONTEXT_PACKET_MESSAGE_TYPE,
+				},
+			},
+			{
+				type: "custom_message",
+				id: "injected-entry",
+				parentId: "packet-entry",
+				timestamp: "2026-06-30T00:00:01.000Z",
+				customType: CONTEXT_PACKET_MESSAGE_TYPE,
+				content: "<san_context_packet>",
+				display: false,
+				details: { packetId: "ctx_acp" },
+				attribution: "agent",
+			},
+		);
+
+		const result = await executeAcpBuiltinSlashCommand("/context packet", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		const text = output[0] ?? "";
+		expect(text).toContain("San ContextPacket debug view (1/1 shown)");
+		expect(text).toContain("## ContextPacket ctx_acp");
+		expect(text).toContain("Injected message: injected-entry");
+		expect(text).toContain("- turn_digest_ledger: 220/2,000 tokens");
+		expect(text).toContain("- retrieved_context: 80/500 tokens");
+		expect(text).toContain("Recall refs: mem-1");
 	});
 
 	// /jobs empty state

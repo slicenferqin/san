@@ -1,0 +1,30 @@
+# Recommended San context steady state dogfood overlay.
+#
+# Use as a process-local overlay:
+#   san --config packages/coding-agent/examples/config/san-context-steady-recommended.yml
+#
+# Keep this file free of provider keys and user-specific model ids. It only
+# enables the context steady pipeline and leaves model selection to the user's
+# normal Codex/San configuration.
+san:
+  contextSteady:
+    enabled: true
+    digest:
+      enabled: true
+      persistFallback: true
+      timeoutMs: 30000
+    qualityWindowTokens: 24000
+    reserveRatio: 0.25
+    contextPacket:
+      enabled: true
+      recentDigests: 5
+      maxTokens: 3000
+    checkpoint:
+      enabled: true
+      everyTurns: 6
+      maxTokens: 12000
+    recall:
+      enabled: false
+      maxItems: 3
+      maxTokens: 1000
+      maxQueryChars: 2000

@@ -112,6 +112,20 @@ export interface ContextPacketSettings {
 	reserveRatio: number;
 }
 
+export interface ContextRecallItem {
+	id?: string;
+	content: string;
+	source?: string;
+	timestamp?: string;
+	score?: number;
+}
+
+export interface ContextPacketRecallLayer {
+	query: string;
+	items: ContextRecallItem[];
+	tokenBudget: number;
+}
+
 export interface ContextCheckpointSummaryItem {
 	text: string;
 	entryRefs: string[];
@@ -140,13 +154,13 @@ export interface ContextCheckpoint {
 }
 
 export interface ContextPacketLayer {
-	name: "stable_checkpoint" | "turn_digest_ledger";
+	name: "stable_checkpoint" | "turn_digest_ledger" | "retrieved_context";
 	entryRefs: string[];
 	tokenEstimate: number;
 	tokenBudget: number;
 	trimmed: number;
-	stability: "stable" | "append-only";
-	cachePriority: "high" | "medium";
+	stability: "stable" | "append-only" | "volatile";
+	cachePriority: "high" | "medium" | "low";
 }
 
 export interface ContextPacketTrimDecision {
@@ -164,6 +178,8 @@ export interface ContextPacket {
 	layers: ContextPacketLayer[];
 	checkpointRef?: string;
 	digestRefs: string[];
+	recallQuery?: string;
+	recallRefs: string[];
 	tokenEstimate: number;
 	tokenBudget: number;
 	budget: {

@@ -170,12 +170,17 @@ import { getDefault, onAppendOnlyModeChanged, validateProviderMaxInFlightRequest
 import { appendContextCheckpoint, buildContextCheckpoint } from "../context-steady/checkpoint";
 import { generateDigest as generateContextSteadyDigest } from "../context-steady/digest";
 import { appendContextPacketDebugEntry, buildContextPacket } from "../context-steady/packet";
+import { buildContextSteadyRecallQuery, normalizeContextSteadyRecallItems } from "../context-steady/recall";
 import {
 	computeTurnSourceSpan,
 	extractSpanMessages,
 	skipContextPacketPreludeInDigestSource,
 } from "../context-steady/session";
-import { CONTEXT_PACKET_CUSTOM_TYPE, CONTEXT_PACKET_MESSAGE_TYPE } from "../context-steady/types";
+import {
+	CONTEXT_PACKET_CUSTOM_TYPE,
+	CONTEXT_PACKET_MESSAGE_TYPE,
+	type ContextPacketRecallLayer,
+} from "../context-steady/types";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability } from "../discovery";
 import { expandApplyPatchToEntries, normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
@@ -479,6 +484,11 @@ const NON_WHITESPACE_RE = /\S/;
 
 function hasNonWhitespace(value: string): boolean {
 	return NON_WHITESPACE_RE.test(value);
+}
+
+function clampPositiveInteger(value: number, fallback: number): number {
+	if (!Number.isFinite(value)) return fallback;
+	return Math.max(1, Math.floor(value));
 }
 
 export interface AsyncJobSnapshot {
@@ -5796,6 +5806,18 @@ export class AgentSession {
 	}
 
 	async #buildSystemPromptForAgentStart(promptText: string): Promise<string[]> {
+		if (
+			this.settings.get("san.contextSteady.enabled") === true &&
+			this.settings.get("san.contextSteady.recall.enabled") === true
+		) {
+			if (this.#baseSystemPromptBeforeMemoryPromotion) {
+				this.#baseSystemPrompt = this.#baseSystemPromptBeforeMemoryPromotion;
+				this.#baseSystemPromptBeforeMemoryPromotion = undefined;
+				this.agent.setSystemPrompt(this.#baseSystemPrompt);
+			}
+			return this.#baseSystemPrompt;
+		}
+
 		const backend = await resolveMemoryBackend(this.settings);
 		if (!backend.beforeAgentStartPrompt) return this.#baseSystemPrompt;
 
@@ -6734,7 +6756,9 @@ export class AgentSession {
 		if (eagerTaskPrelude) {
 			preludeMessages.push(eagerTaskPrelude);
 		}
-		const contextPacketPrelude = options?.synthetic ? undefined : this.#buildContextSteadyPacketPrelude(expandedText);
+		const contextPacketPrelude = options?.synthetic
+			? undefined
+			: await this.#buildContextSteadyPacketPrelude(expandedText);
 		if (contextPacketPrelude) {
 			preludeMessages.push(contextPacketPrelude);
 		}
@@ -6759,18 +6783,25 @@ export class AgentSession {
 		return true;
 	}
 
-	#buildContextSteadyPacketPrelude(expandedText: string): CustomMessage | undefined {
+	async #buildContextSteadyPacketPrelude(expandedText: string): Promise<CustomMessage | undefined> {
 		if (this.settings.get("san.contextSteady.enabled") !== true) return undefined;
 		this.#dropContextSteadyPacketMessagesFromActiveContext();
 		if (this.settings.get("san.contextSteady.contextPacket.enabled") !== true) return undefined;
 
-		const built = buildContextPacket(this.sessionManager.getEntries(), this.sessionId, expandedText, {
-			enabled: true,
-			recentDigests: this.settings.get("san.contextSteady.contextPacket.recentDigests") as number,
-			maxTokens: this.settings.get("san.contextSteady.contextPacket.maxTokens") as number,
-			qualityWindowTokens: this.settings.get("san.contextSteady.qualityWindowTokens") as number,
-			reserveRatio: this.settings.get("san.contextSteady.reserveRatio") as number,
-		});
+		const recall = await this.#buildContextSteadyRecallLayer(expandedText);
+		const built = buildContextPacket(
+			this.sessionManager.getEntries(),
+			this.sessionId,
+			expandedText,
+			{
+				enabled: true,
+				recentDigests: this.settings.get("san.contextSteady.contextPacket.recentDigests") as number,
+				maxTokens: this.settings.get("san.contextSteady.contextPacket.maxTokens") as number,
+				qualityWindowTokens: this.settings.get("san.contextSteady.qualityWindowTokens") as number,
+				reserveRatio: this.settings.get("san.contextSteady.reserveRatio") as number,
+			},
+			recall,
+		);
 		if (!built) return undefined;
 
 		appendContextPacketDebugEntry(this.sessionManager, CONTEXT_PACKET_CUSTOM_TYPE, built.packet);
@@ -6783,6 +6814,38 @@ export class AgentSession {
 			attribution: "agent",
 			timestamp: Date.now(),
 		};
+	}
+
+	async #buildContextSteadyRecallLayer(expandedText: string): Promise<ContextPacketRecallLayer | undefined> {
+		if (this.settings.get("san.contextSteady.recall.enabled") !== true) return undefined;
+
+		const query = buildContextSteadyRecallQuery(this.sessionManager.getEntries(), expandedText, {
+			recentDigests: this.settings.get("san.contextSteady.contextPacket.recentDigests") as number,
+			maxQueryChars: this.settings.get("san.contextSteady.recall.maxQueryChars") as number,
+		});
+		if (!query) return undefined;
+
+		const backend = await resolveMemoryBackend(this.settings);
+		if (!backend.search) return undefined;
+
+		const maxItems = clampPositiveInteger(this.settings.get("san.contextSteady.recall.maxItems") as number, 3);
+		const maxTokens = clampPositiveInteger(this.settings.get("san.contextSteady.recall.maxTokens") as number, 1000);
+		try {
+			const result = await backend.search(
+				{ agentDir: this.sessionManager.getCwd(), cwd: this.sessionManager.getCwd(), session: this },
+				query,
+				{ limit: maxItems },
+			);
+			const items = normalizeContextSteadyRecallItems(result.items, { maxItems });
+			if (items.length === 0) return undefined;
+			return { query: result.query, items, tokenBudget: maxTokens };
+		} catch (error) {
+			logger.debug("San context steady recall failed", {
+				backend: backend.id,
+				error: String(error),
+			});
+			return undefined;
+		}
 	}
 
 	async promptCustomMessage<T = unknown>(

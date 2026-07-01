@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San Context Steady State M8 推荐配置</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #20242a;
+      --muted: #667085;
+      --line: #d9e0ea;
+      --paper: #fbfcfd;
+      --panel: #ffffff;
+      --band: #f2f6f8;
+      --green: #0f766e;
+      --blue: #2457a6;
+      --amber: #a16207;
+      --code: #edf2f7;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.64;
+    }
+
+    header {
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .wrap {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .hero { padding: 48px 0 34px; }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--green);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 980px;
+      margin: 0;
+      font-size: clamp(32px, 5vw, 52px);
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 900px;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    main { padding: 28px 0 62px; }
+
+    section {
+      padding: 28px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 25px;
+      letter-spacing: 0;
+    }
+
+    p { max-width: 920px; margin: 0 0 14px; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 18px 0;
+      background: var(--panel);
+      border: 1px solid var(--line);
+    }
+
+    th, td {
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th { background: var(--band); }
+
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: var(--code);
+    }
+
+    pre {
+      overflow: auto;
+      padding: 16px;
+      background: var(--code);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      line-height: 1.5;
+    }
+
+    .callout {
+      margin: 18px 0;
+      padding: 16px 18px;
+      border-left: 4px solid var(--blue);
+      background: #eef5ff;
+    }
+
+    .risk {
+      border-left-color: var(--amber);
+      background: #fffbeb;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap hero">
+      <p class="eyebrow">Context Steady State · M8</p>
+      <h1>推荐配置应该开启稳态闭环，但不要默认开启长期记忆召回</h1>
+      <p class="subtitle">
+        M8 把 San context steady state 收敛成一份可直接用于 dogfood 的 <code>--config</code> overlay。
+        它启用 digest、ContextPacket、budget 和 checkpoint，保留 recall 为显式 opt-in。
+      </p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h2>配置文件</h2>
+      <p>
+        推荐 overlay 位于
+        <code>packages/coding-agent/examples/config/san-context-steady-recommended.yml</code>。
+        它不包含 provider key，也不覆盖 <code>modelRoles</code>，所以会沿用用户当前 San/Codex 模型配置。
+      </p>
+      <pre><code>san:
+  contextSteady:
+    enabled: true
+    digest:
+      enabled: true
+      persistFallback: true
+      timeoutMs: 30000
+    qualityWindowTokens: 24000
+    reserveRatio: 0.25
+    contextPacket:
+      enabled: true
+      recentDigests: 5
+      maxTokens: 3000
+    checkpoint:
+      enabled: true
+      everyTurns: 6
+      maxTokens: 12000
+    recall:
+      enabled: false
+      maxItems: 3
+      maxTokens: 1000
+      maxQueryChars: 2000</code></pre>
+    </section>
+
+    <section>
+      <h2>使用方式</h2>
+      <pre><code>san --config packages/coding-agent/examples/config/san-context-steady-recommended.yml</code></pre>
+      <p>
+        对单次 dogfood 推荐使用 <code>--config</code> overlay。确认稳定后，再把相同 YAML 合并进
+        <code>~/.omp/agent/config.yml</code> 或项目级 <code>.omp/config.yml</code>。
+      </p>
+    </section>
+
+    <section>
+      <h2>推荐值理由</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>设置</th>
+            <th>推荐值</th>
+            <th>理由</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>san.contextSteady.enabled</code></td>
+            <td><code>true</code></td>
+            <td>dogfood 要完整启用 M1-M4/M6/M7 闭环，否则只能测试孤立 helper。</td>
+          </tr>
+          <tr>
+            <td><code>digest.persistFallback</code></td>
+            <td><code>true</code></td>
+            <td>v0.1 当前依赖 deterministic fallback digest，保证没有 summary model 时仍有稳定 ledger。</td>
+          </tr>
+          <tr>
+            <td><code>qualityWindowTokens</code></td>
+            <td><code>24000</code></td>
+            <td>用质量窗口约束工作上下文，不把 500K/1M 等硬上限当日常目标。</td>
+          </tr>
+          <tr>
+            <td><code>reserveRatio</code></td>
+            <td><code>0.25</code></td>
+            <td>保留当前用户输入、工具结果和模型输出空间，避免 ContextPacket 占满窗口。</td>
+          </tr>
+          <tr>
+            <td><code>contextPacket.maxTokens</code></td>
+            <td><code>3000</code></td>
+            <td>比默认 2000 更适合 dogfood，但仍足够保守，避免摘要尾部线性膨胀。</td>
+          </tr>
+          <tr>
+            <td><code>checkpoint.everyTurns</code></td>
+            <td><code>6</code></td>
+            <td>比 8 更快形成 stable checkpoint，便于本地验收 cache-aware 层顺序。</td>
+          </tr>
+          <tr>
+            <td><code>recall.enabled</code></td>
+            <td><code>false</code></td>
+            <td>M9 前不默认启用 recall 质量路径，避免把不稳定召回混进日常上下文。</td>
+          </tr>
+          <tr>
+            <td><code>recall.maxQueryChars</code></td>
+            <td><code>2000</code></td>
+            <td>给 M9 的 digest-aware recall query 留足空间，同时避免把过长历史摘要送进 retriever。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>验证</h2>
+      <p>
+        M8 增加了 settings loader 测试，确保推荐 YAML 能作为 <code>--config</code> overlay 被解析成正确的
+        <code>san.contextSteady.*</code> setting path。
+      </p>
+      <pre><code>bun test packages/coding-agent/test/settings-manager.test.ts</code></pre>
+      <div class="callout">
+        这一步刻意不改变 schema defaults。默认关闭仍是产品安全边界；推荐配置是显式 dogfood 入口。
+      </div>
+    </section>
+
+    <section>
+      <h2>后续</h2>
+      <div class="callout risk">
+        M9 应在 recall query、去重、排序和失败降级上继续收敛。只有当召回质量和稳定性被验证后，才考虑把
+        <code>recall.enabled</code> 纳入更激进的 dogfood overlay。
+      </div>
+    </section>
+  </main>
+</body>
+</html>

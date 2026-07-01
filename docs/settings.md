@@ -318,6 +318,16 @@ enabledModels:
 
 See [Models](./models.md) for the `models.yml` schema and custom-provider definitions.
 
+### San Context Steady State
+
+San's experimental context steady state settings live under `san.contextSteady`. The schema defaults keep the feature off; for dogfood, use the process-local overlay at `packages/coding-agent/examples/config/san-context-steady-recommended.yml`:
+
+```bash
+san --config packages/coding-agent/examples/config/san-context-steady-recommended.yml
+```
+
+The recommended overlay enables digest ledger, ContextPacket injection, budget snapshots, and stable checkpoints while keeping recall disabled until recall quality is explicitly validated. The rationale and current validation notes are in `docs/research/context-steady-state-m8-recommended-config.html`.
+
 ### Advisor
 
 The advisor is a second model that reviews each completed turn and can inject advice into the primary session. Assign a model with `modelRoles.advisor`, then enable it with `advisor.enabled`, `/advisor on`, or by launching with the `--advisor` flag.

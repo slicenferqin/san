@@ -3,11 +3,13 @@ import { buildSessionContext } from "@oh-my-pi/pi-coding-agent/session/session-c
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
+	CustomMessageEntry,
 	ModelChangeEntry,
 	SessionEntry,
 	SessionMessageEntry,
 	ThinkingLevelChangeEntry,
 } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import { CONTEXT_PACKET_MESSAGE_TYPE } from "../../src/context-steady/types";
 
 function msg(id: string, parentId: string | null, role: "user" | "assistant", text: string): SessionMessageEntry {
 	const base = { type: "message" as const, id, parentId, timestamp: "2025-01-01T00:00:00Z" };
@@ -115,6 +117,28 @@ describe("buildSessionContext", () => {
 			if (customMessage?.role !== "custom") throw new Error("Expected custom message");
 			expect(customMessage.attribution).toBeUndefined();
 		});
+
+		it("hides persisted San ContextPacket injections from active context but keeps them in transcripts", () => {
+			const packetMessage: CustomMessageEntry = {
+				type: "custom_message",
+				id: "1",
+				parentId: null,
+				timestamp: "2025-01-01T00:00:00Z",
+				customType: CONTEXT_PACKET_MESSAGE_TYPE,
+				content: "<san_context_packet>old packet</san_context_packet>",
+				display: false,
+				details: { packetId: "ctx_old" },
+				attribution: "agent",
+			};
+			const entries: SessionEntry[] = [packetMessage, msg("2", "1", "user", "next prompt")];
+
+			const active = buildSessionContext(entries);
+			const transcript = buildSessionContext(entries, undefined, undefined, { transcript: true });
+
+			expect(JSON.stringify(active.messages)).not.toContain("<san_context_packet>");
+			expect(JSON.stringify(transcript.messages)).toContain("<san_context_packet>");
+		});
+
 		it("simple conversation", () => {
 			const entries: SessionEntry[] = [
 				msg("1", null, "user", "hello"),
