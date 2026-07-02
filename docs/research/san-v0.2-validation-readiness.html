@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San v0.2 Validation Readiness</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #5f6b7a;
+      --line: #d9dee7;
+      --accent: #165dff;
+      --ok: #16794c;
+      --warn: #9a5b00;
+      --code: #f2f4f8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+    main { width: min(1120px, calc(100vw - 48px)); margin: 0 auto; padding: 40px 0 56px; }
+    header, section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 28px;
+      margin-bottom: 18px;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { font-size: 34px; line-height: 1.18; margin-bottom: 12px; }
+    h2 { font-size: 22px; margin-bottom: 14px; }
+    h3 { font-size: 16px; margin-bottom: 6px; }
+    p { color: var(--muted); }
+    code {
+      background: var(--code);
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }
+    th { background: #eef1f6; font-weight: 700; }
+    .eyebrow { color: var(--accent); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; font-size: 12px; margin-bottom: 8px; }
+    .callout {
+      border-left: 4px solid var(--ok);
+      background: #f0fbf5;
+      padding: 14px 16px;
+      color: #1f4f38;
+      margin-top: 14px;
+    }
+    .callout.warn { border-left-color: var(--warn); background: #fff7e8; color: #5f3a00; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      background: #fbfcfe;
+    }
+    .card strong { display: block; font-size: 24px; color: var(--ok); }
+    .phase {
+      display: grid;
+      grid-template-columns: 72px 1fr;
+      gap: 16px;
+      border-top: 1px solid var(--line);
+      padding: 16px 0;
+    }
+    .phase:first-of-type { border-top: 0; }
+    .phase-id {
+      color: var(--accent);
+      font-weight: 800;
+      font-size: 18px;
+    }
+    ul { margin: 8px 0 0; padding-left: 20px; }
+    li { margin: 6px 0; }
+    @media (max-width: 760px) {
+      main { width: min(100vw - 24px, 1120px); padding-top: 24px; }
+      header, section { padding: 22px; }
+      .grid { grid-template-columns: 1fr; }
+      .phase { grid-template-columns: 1fr; gap: 4px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">San v0.2 · Validation Readiness</p>
+      <h1>交付验收清单与 Phase 收口</h1>
+      <p>
+        本文把 v0.2 从“规划文档”收口到“可交付给用户验收”的状态：逐项映射需求、phase、实现文件和验证命令，
+        并明确真实模型任务是验收抽样，不再阻塞当前版本交付。
+      </p>
+      <div class="callout">
+        <strong>结论</strong>
+        v0.2 mature execution loop 已具备可验收交付面：显式启用的 <code>/san-loop</code> 入口、三角色 task-agent bridge、
+        代码级 runner、hard budget、Oracle gate、恢复/中止、run ledger、role context 和 deterministic dogfood gate 均已落地。
+      </div>
+    </header>
+
+    <section>
+      <h2>验收总览</h2>
+      <div class="grid">
+        <div class="card"><strong>6</strong><span>dogfood 场景</span></div>
+        <div class="card"><strong>3</strong><span>执行模式：rush / smart / deep</span></div>
+        <div class="card"><strong>4</strong><span>角色：Commander / Worker / Supervisor / Oracle</span></div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>能力</th>
+            <th>交付状态</th>
+            <th>主要证据</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>成熟三角色闭环</td>
+            <td>完成</td>
+            <td><code>src/san-loop/runner.ts</code>、<code>src/san-loop/task-executor.ts</code>、<code>src/prompts/agents/san-*.md</code></td>
+          </tr>
+          <tr>
+            <td>可审计 run ledger</td>
+            <td>完成</td>
+            <td><code>src/san-loop/ledger.ts</code>、<code>src/slash-commands/helpers/san-loop-report.ts</code></td>
+          </tr>
+          <tr>
+            <td>role ContextPacket</td>
+            <td>完成</td>
+            <td><code>src/san-loop/context.ts</code>、<code>src/session/agent-session.ts</code></td>
+          </tr>
+          <tr>
+            <td>Checks gate 与 retry</td>
+            <td>完成</td>
+            <td><code>src/san-loop/checks.ts</code>、<code>src/prompts/san-loop/checks/*.md</code></td>
+          </tr>
+          <tr>
+            <td>预算、恢复、中止</td>
+            <td>完成</td>
+            <td><code>runSanLoop()</code> hard budget、active-run recovery、<code>/san-loop stop</code></td>
+          </tr>
+          <tr>
+            <td>交付级 dogfood gate</td>
+            <td>完成</td>
+            <td><code>src/san-loop/dogfood.ts</code>、<code>scripts/san-loop-dogfood.ts</code>、<code>test/san-loop/dogfood.test.ts</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Phase 收口</h2>
+      <div class="phase">
+        <div class="phase-id">P0</div>
+        <div>
+          <h3>设计冻结</h3>
+          <p>完成需求文档、技术设计、状态机、settings tree、agent 角色和测试矩阵。</p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-id">P1</div>
+        <div>
+          <h3>LoopRun Ledger</h3>
+          <p>完成 entry schema、append/rebuild helpers、run report renderer 和 <code>/san-loop status</code>。</p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-id">P2</div>
+        <div>
+          <h3>角色化 Task Agents</h3>
+          <p>完成 Commander / Worker / Supervisor / Oracle definitions、工具边界和 role-scoped context。</p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-id">P3</div>
+        <div>
+          <h3>Checks Gate</h3>
+          <p>完成 bundled checks、project checks discovery、Supervisor check plan 和 needs_fix retry payload。</p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-id">P4</div>
+        <div>
+          <h3>代码级 Orchestrator</h3>
+          <p>完成状态机、真实 task-agent executor bridge、budget policy、abort/recovery 和 slash command 入口。</p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-id">P5</div>
+        <div>
+          <h3>Dogfood 与发布门槛</h3>
+          <p>完成 deterministic dogfood verifier 和 6 场景验收；真实模型任务作为交付后的用户验收抽样继续记录。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>验证矩阵</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>命令</th>
+            <th>验证内容</th>
+            <th>当前结果</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>bun test test/san-loop/runner.test.ts test/san-loop/dogfood.test.ts</code></td>
+            <td>runner pass/retry/block、Oracle gate、hard budget、dogfood verifier。</td>
+            <td>PASS</td>
+          </tr>
+          <tr>
+            <td><code>bun scripts/san-loop-dogfood.ts</code></td>
+            <td>6 个端到端 dogfood 场景和 ledger/report 合同。</td>
+            <td>PASS</td>
+          </tr>
+          <tr>
+            <td><code>bun test test/acp-builtins.test.ts test/san-loop test/context-steady/agent-session-m2.test.ts test/settings-manager.test.ts</code></td>
+            <td>slash command、san-loop 模块、role context 注入、settings schema。</td>
+            <td>PASS</td>
+          </tr>
+          <tr>
+            <td><code>bun run check</code></td>
+            <td>package-wide formatting、lint 和 TypeScript 合同。</td>
+            <td>PASS</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>用户验收建议</h2>
+      <ul>
+        <li>使用 <code>packages/coding-agent/examples/config/san-execution-loop-recommended.yml</code> 显式启用 v0.2。</li>
+        <li>优先抽样 3 类真实模型任务：小 bug fix、跨文件功能、测试补强。</li>
+        <li>deep 模式只用于架构或发布门禁任务，重点观察 Oracle second opinion 和 Supervisor blocked 质量。</li>
+        <li>验收时保留 <code>/san-loop status</code> 报告、dogfood script 输出和失败样本，作为 v0.2.1 的改进输入。</li>
+      </ul>
+      <div class="callout warn">
+        <strong>默认关闭</strong>
+        v0.2 交付时仍建议默认关闭 execution loop，通过配置或 slash command 显式启用。这样可以交付成熟闭环，同时不改变未选择用户的默认交互路径。
+      </div>
+    </section>
+  </main>
+</body>
+</html>

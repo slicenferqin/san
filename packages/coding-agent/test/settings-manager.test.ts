@@ -782,10 +782,7 @@ describe("Settings", () => {
 			});
 
 			it("loads the recommended San context steady overlay", async () => {
-				const overlayPath = path.join(
-					process.cwd(),
-					"packages/coding-agent/examples/config/san-context-steady-recommended.yml",
-				);
+				const overlayPath = path.join(process.cwd(), "examples/config/san-context-steady-recommended.yml");
 
 				const settings = await Settings.init({
 					cwd: projectDir,
@@ -809,6 +806,40 @@ describe("Settings", () => {
 				expect(settings.get("san.contextSteady.recall.maxItems")).toBe(3);
 				expect(settings.get("san.contextSteady.recall.maxTokens")).toBe(1000);
 				expect(settings.get("san.contextSteady.recall.maxQueryChars")).toBe(2000);
+			});
+
+			it("loads the recommended San execution loop overlay", async () => {
+				const overlayPath = path.join(process.cwd(), "examples/config/san-execution-loop-recommended.yml");
+
+				const settings = await Settings.init({
+					cwd: projectDir,
+					agentDir,
+					inMemory: true,
+					configFiles: [overlayPath],
+				});
+
+				expect(settings.get("san.contextSteady.enabled")).toBe(true);
+				expect(settings.get("san.executionLoop.enabled")).toBe(true);
+				expect(settings.get("san.executionLoop.defaultMode")).toBe("smart");
+				expect(settings.get("san.executionLoop.maxRetries")).toBe(2);
+				expect(settings.get("san.executionLoop.maxWorkers")).toBe(3);
+				expect(settings.get("san.executionLoop.ledger.enabled")).toBe(true);
+				expect(settings.get("san.executionLoop.ledger.persistRolePackets")).toBe(true);
+				expect(settings.get("san.executionLoop.checks.enabled")).toBe(true);
+				expect(settings.get("san.executionLoop.checks.includeBuiltins")).toBe(true);
+				expect(settings.get("san.executionLoop.checks.projectDir")).toBe(".omp/checks");
+				expect(settings.get("san.executionLoop.roles.commander.modelRole")).toBe("slow");
+				expect(settings.get("san.executionLoop.roles.worker.modelRole")).toBe("default");
+				expect(settings.get("san.executionLoop.roles.supervisor.modelRole")).toBe("advisor");
+				expect(settings.get("san.executionLoop.roles.oracle.modelRole")).toBe("plan");
+				expect(settings.get("san.executionLoop.roles.oracle.enabledInModes")).toEqual(["deep"]);
+				expect(settings.get("san.executionLoop.roleContext.tokenBudget")).toBe(2000);
+				expect(settings.get("san.executionLoop.roleContext.maxEvents")).toBe(8);
+				expect(settings.get("san.executionLoop.roleContext.maxDecisions")).toBe(8);
+				expect(settings.get("san.executionLoop.budget.rushMaxTurns")).toBe(3);
+				expect(settings.get("san.executionLoop.budget.smartMaxTurns")).toBe(8);
+				expect(settings.get("san.executionLoop.budget.deepMaxTurns")).toBe(16);
+				expect(settings.get("san.executionLoop.budget.reserveRatio")).toBe(0.25);
 			});
 		});
 	});

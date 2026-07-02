@@ -6,7 +6,7 @@ import { type AutocompleteItem, Spacer } from "@oh-my-pi/pi-tui";
 import { APP_NAME, getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import { COLLAB_GUEST_ALLOWED_COMMANDS, CollabGuestLink } from "../collab/guest";
 import { CollabHost } from "../collab/host";
-import type { SettingPath, SettingValue } from "../config/settings";
+import type { SettingPath, Settings, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";
 import {
 	clearPluginRootsAndCaches,
@@ -26,8 +26,18 @@ import { resolveMemoryBackend } from "../memory-backend";
 import { describeLoopLimitRuntime } from "../modes/loop-limit";
 import { theme } from "../modes/theme/theme";
 import type { InteractiveModeContext } from "../modes/types";
+import {
+	abortSanLoopRun,
+	createSanLoopTaskAgentExecutor,
+	findLatestSanLoopRun,
+	isSanLoopTerminalStatus,
+	type RunSanLoopResult,
+	runSanLoop,
+	type SanLoopMode,
+} from "../san-loop";
 import type { AgentSession, FreshSessionResult } from "../session/agent-session";
 import { COMPACT_MODES, parseCompactArgs } from "../session/compact-modes";
+import type { SessionEntry } from "../session/session-entries";
 import { resolveResumableSession } from "../session/session-listing";
 import { SessionManager } from "../session/session-manager";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
@@ -42,6 +52,7 @@ import { createMarketplaceManager } from "./helpers/marketplace-manager";
 import { handleMcpAcp } from "./helpers/mcp";
 import { commandConsumed, errorMessage, parseSlashCommand, parseSubcommand, usage } from "./helpers/parse";
 import { describeRedeemOutcome, type ResetUsageAccount, toResetUsageAccounts } from "./helpers/reset-usage";
+import { buildSanLoopReportText, parseSanLoopArgs, sanLoopUsageText } from "./helpers/san-loop-report";
 import { handleSshAcp } from "./helpers/ssh";
 import { launchStatsDashboard, parseStatsDashboardArgs } from "./helpers/stats-dashboard";
 import { handleTodoAcp } from "./helpers/todo";
@@ -96,6 +107,42 @@ function shortDetail(value: string, limit = AUTOCOMPLETE_DETAIL_LIMIT): string {
 
 function formatTokenCount(value: number): string {
 	return value.toLocaleString();
+}
+
+function formatSanLoopRunResult(result: RunSanLoopResult): string {
+	return [
+		`San execution loop ${result.run.runId} finished with status ${result.run.status}.`,
+		`Mode: ${result.run.mode}`,
+		`Objective: ${result.run.objective}`,
+		`Final verdict: ${result.run.finalVerdict ?? "none"}`,
+		`Transitions: ${result.transitions.length}`,
+		`Review entries: ${result.reviewEntryIds.length}`,
+	].join("\n");
+}
+
+function sanLoopMaxTurnsForMode(settingsSource: Settings, mode: SanLoopMode): number {
+	switch (mode) {
+		case "rush":
+			return settingsSource.get("san.executionLoop.budget.rushMaxTurns");
+		case "deep":
+			return settingsSource.get("san.executionLoop.budget.deepMaxTurns");
+		case "smart":
+			return settingsSource.get("san.executionLoop.budget.smartMaxTurns");
+	}
+}
+
+function stopSanLoop(
+	entries: readonly SessionEntry[],
+	sessionManager: { appendCustomEntry(customType: string, data?: unknown): string },
+	runId?: string,
+): string {
+	const run = findLatestSanLoopRun(entries, runId);
+	if (!run) return runId ? `No San execution loop run found for ${runId}.` : "No San execution loop runs found.";
+	if (isSanLoopTerminalStatus(run.data.status)) {
+		return `San execution loop ${run.data.runId} is already ${run.data.status}.`;
+	}
+	const aborted = abortSanLoopRun(sessionManager, run.data);
+	return `San execution loop ${aborted.run.runId} stopped with status aborted.`;
 }
 
 /** Scheme-less display form of a browser deep link: accent + underline, OSC-8 linked to the full URL. */
@@ -1138,6 +1185,95 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 			runtime.ctx.handleContextCommand();
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "san-loop",
+		description: "Start or inspect San execution loop runs",
+		acpDescription: "Start or inspect San execution loop runs",
+		acpInputHint: "[status [count]] | run [--mode rush|smart|deep] <objective> | stop [runId]",
+		allowArgs: true,
+		subcommands: [
+			{ name: "status", description: "Show San execution loop ledger", usage: "[count]" },
+			{ name: "run", description: "Create a San execution loop run", usage: "[--mode rush|smart|deep] <objective>" },
+			{ name: "stop", description: "Abort an active San execution loop run", usage: "[runId]" },
+		],
+		handle: async (command, runtime) => {
+			const parsed = parseSanLoopArgs(command.args);
+			if ("error" in parsed) return usage(parsed.error, runtime);
+			if (parsed.action === "run") {
+				const mode = parsed.mode ?? runtime.settings.get("san.executionLoop.defaultMode");
+				const result = await runSanLoop({
+					sessionManager: runtime.sessionManager,
+					objective: parsed.objective,
+					mode,
+					maxRetries: runtime.settings.get("san.executionLoop.maxRetries"),
+					maxWorkers: runtime.settings.get("san.executionLoop.maxWorkers"),
+					maxTurns: sanLoopMaxTurnsForMode(runtime.settings, mode),
+					executor: createSanLoopTaskAgentExecutor({
+						session: runtime.session,
+						cwd: runtime.cwd,
+					}),
+				});
+				await runtime.output(formatSanLoopRunResult(result));
+				return commandConsumed();
+			}
+			if (parsed.action === "stop") {
+				await runtime.output(
+					stopSanLoop(runtime.sessionManager.getEntries(), runtime.sessionManager, parsed.runId),
+				);
+				return commandConsumed();
+			}
+			await runtime.output(buildSanLoopReportText(runtime.sessionManager.getEntries(), { count: parsed.count }));
+			return commandConsumed();
+		},
+		handleTui: async (command, runtime) => {
+			const parsed = parseSanLoopArgs(command.args);
+			if ("error" in parsed) {
+				runtime.ctx.showStatus(sanLoopUsageText());
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			if (parsed.action === "run") {
+				runtime.ctx.showStatus("Running San execution loop...", { dim: false });
+				try {
+					const mode = parsed.mode ?? runtime.ctx.settings.get("san.executionLoop.defaultMode");
+					const result = await runSanLoop({
+						sessionManager: runtime.ctx.session.sessionManager,
+						objective: parsed.objective,
+						mode,
+						maxRetries: runtime.ctx.settings.get("san.executionLoop.maxRetries"),
+						maxWorkers: runtime.ctx.settings.get("san.executionLoop.maxWorkers"),
+						maxTurns: sanLoopMaxTurnsForMode(runtime.ctx.settings, mode),
+						executor: createSanLoopTaskAgentExecutor({
+							session: runtime.ctx.session,
+							cwd: runtime.ctx.sessionManager.getCwd(),
+						}),
+					});
+					runtime.ctx.showStatus(formatSanLoopRunResult(result), { dim: false });
+				} catch (error) {
+					runtime.ctx.showStatus(`San execution loop failed: ${errorMessage(error)}`, { dim: false });
+				}
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			if (parsed.action === "stop") {
+				runtime.ctx.showStatus(
+					stopSanLoop(
+						runtime.ctx.session.sessionManager.getEntries(),
+						runtime.ctx.session.sessionManager,
+						parsed.runId,
+					),
+					{ dim: false },
+				);
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			runtime.ctx.showStatus(
+				buildSanLoopReportText(runtime.ctx.session.sessionManager.getEntries(), { count: parsed.count }),
+				{ dim: false },
+			);
 			runtime.ctx.editor.setText("");
 		},
 	},

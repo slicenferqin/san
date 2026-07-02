@@ -18,6 +18,7 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import * as sanLoopModule from "../src/san-loop";
 
 interface FakeAcpBuiltinSession {
 	fastMode: boolean;
@@ -71,8 +72,8 @@ interface FakeAcpBuiltinSessionManager {
 	_sessionName: string | undefined;
 	getSessionId(): string;
 	getSessionFile(): string | undefined;
-	getEntries(): Array<Record<string, unknown>>;
-	getBranch(): Array<Record<string, unknown>>;
+	getEntries(): Array<Record<string, unknown> & { type?: string; customType?: string; data?: unknown }>;
+	getBranch(): Array<Record<string, unknown> & { type?: string; customType?: string; data?: unknown }>;
 	appendCustomEntry(customType: string, data?: unknown): string;
 	flush(): Promise<void>;
 	moveTo(newCwd: string): Promise<void>;
@@ -163,7 +164,7 @@ function createRuntime() {
 	fakeSessionManager = {
 		_sessionFile: undefined as string | undefined,
 		_cwd: "/tmp/project",
-		_entries: [] as Array<Record<string, unknown>>,
+		_entries: [] as Array<Record<string, unknown> & { type?: string; customType?: string; data?: unknown }>,
 		_customEntries: [] as Array<{ customType: string; data: unknown }>,
 		_movedTo: undefined as string | undefined,
 		_flushed: false,
@@ -175,15 +176,23 @@ function createRuntime() {
 		getSessionFile(): string | undefined {
 			return this._sessionFile;
 		},
-		getEntries(): Array<Record<string, unknown>> {
+		getEntries(): Array<Record<string, unknown> & { type?: string; customType?: string; data?: unknown }> {
 			return this._entries;
 		},
-		getBranch(): Array<Record<string, unknown>> {
+		getBranch(): Array<Record<string, unknown> & { type?: string; customType?: string; data?: unknown }> {
 			return this._entries;
 		},
 		appendCustomEntry(customType: string, data?: unknown): string {
 			this._customEntries.push({ customType, data });
-			return "fake-entry-id";
+			const id = `fake-entry-${this._entries.length + 1}`;
+			this._entries.push({
+				id,
+				type: "custom",
+				timestamp: "2026-07-01T00:00:00.000Z",
+				customType,
+				data,
+			});
+			return id;
 		},
 		async flush() {
 			this._flushed = true;
@@ -241,6 +250,124 @@ describe("ACP builtin slash commands", () => {
 
 		expect(result).toEqual({ consumed: true });
 		expect(output).toEqual(["Fast mode is off."]);
+	});
+
+	it("runs the San execution loop instead of only creating a ledger entry", async () => {
+		const { output, runtime } = createRuntime();
+		const runSpy = spyOn(sanLoopModule, "runSanLoop").mockResolvedValue({
+			run: {
+				schemaVersion: 1,
+				runId: "loop-acp",
+				sessionId: "fake-session-id",
+				createdAt: "2026-07-01T00:00:00.000Z",
+				updatedAt: "2026-07-01T00:01:00.000Z",
+				objective: "ship v0.2",
+				mode: "smart",
+				status: "passed",
+				contextPacketRefs: [],
+				assignments: [],
+				workerResults: [],
+				reviewReports: [],
+				decisions: [],
+				budget: [],
+				retryCount: 0,
+				maxRetries: 2,
+				finalVerdict: "pass",
+			},
+			runCreated: {
+				run: {} as sanLoopModule.SanLoopRunSnapshot,
+				runEntryId: "run-entry",
+				event: {} as sanLoopModule.SanLoopEvent,
+				eventEntryId: "event-entry",
+			},
+			transitions: [
+				{
+					run: {} as sanLoopModule.SanLoopRunSnapshot,
+					runEntryId: "transition-run",
+					event: {} as sanLoopModule.SanLoopEvent,
+					eventEntryId: "transition-event",
+				},
+			],
+			reviewEntryIds: ["review-entry"],
+		});
+
+		const result = await executeAcpBuiltinSlashCommand("/san-loop run ship v0.2", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(runSpy).toHaveBeenCalledTimes(1);
+		expect(runSpy.mock.calls[0]?.[0]).toMatchObject({
+			objective: "ship v0.2",
+			mode: "smart",
+			maxRetries: 2,
+			maxTurns: 8,
+		});
+		expect(output[0]).toContain("San execution loop loop-acp finished with status passed.");
+		expect(output[0]).toContain("Final verdict: pass");
+	});
+
+	it("stops the latest active San execution loop run", async () => {
+		const { fakeSessionManager, output, runtime } = createRuntime();
+		const run: sanLoopModule.SanLoopRunSnapshot = {
+			schemaVersion: sanLoopModule.SAN_LOOP_SCHEMA_VERSION,
+			runId: "loop-stop",
+			sessionId: "fake-session-id",
+			createdAt: "2026-07-01T00:00:00.000Z",
+			updatedAt: "2026-07-01T00:00:00.000Z",
+			objective: "stop v0.2 loop",
+			mode: "smart",
+			status: "working",
+			contextPacketRefs: [],
+			assignments: [],
+			workerResults: [],
+			reviewReports: [],
+			decisions: [],
+			budget: [],
+			retryCount: 0,
+			maxRetries: 2,
+		};
+		fakeSessionManager.appendCustomEntry(sanLoopModule.SAN_LOOP_RUN_CUSTOM_TYPE, run);
+
+		const result = await executeAcpBuiltinSlashCommand("/san-loop stop", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(output).toEqual(["San execution loop loop-stop stopped with status aborted."]);
+		expect(fakeSessionManager._customEntries.at(-2)).toMatchObject({
+			customType: sanLoopModule.SAN_LOOP_RUN_CUSTOM_TYPE,
+			data: { runId: "loop-stop", status: "aborted" },
+		});
+		expect(fakeSessionManager._customEntries.at(-1)).toMatchObject({
+			customType: sanLoopModule.SAN_LOOP_EVENT_CUSTOM_TYPE,
+			data: { runId: "loop-stop", type: "aborted" },
+		});
+	});
+
+	it("does not stop a terminal San execution loop run", async () => {
+		const { fakeSessionManager, output, runtime } = createRuntime();
+		fakeSessionManager.appendCustomEntry(sanLoopModule.SAN_LOOP_RUN_CUSTOM_TYPE, {
+			schemaVersion: sanLoopModule.SAN_LOOP_SCHEMA_VERSION,
+			runId: "loop-done",
+			sessionId: "fake-session-id",
+			createdAt: "2026-07-01T00:00:00.000Z",
+			updatedAt: "2026-07-01T00:01:00.000Z",
+			objective: "already done",
+			mode: "smart",
+			status: "passed",
+			contextPacketRefs: [],
+			assignments: [],
+			workerResults: [],
+			reviewReports: [],
+			decisions: [],
+			budget: [],
+			retryCount: 0,
+			maxRetries: 2,
+			finalVerdict: "pass",
+		} satisfies sanLoopModule.SanLoopRunSnapshot);
+
+		const result = await executeAcpBuiltinSlashCommand("/san-loop stop loop-done", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(output).toEqual(["San execution loop loop-done is already passed."]);
+		expect(fakeSessionManager._customEntries).toHaveLength(1);
 	});
 
 	it("forces a tool and returns remaining prompt text", async () => {

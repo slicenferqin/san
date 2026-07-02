@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>San v0.2 成熟执行闭环技术设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fb;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #667085;
+      --line: #d8deea;
+      --brand: #1f5fbf;
+      --brand-soft: #e8f1ff;
+      --green: #067647;
+      --yellow: #b54708;
+      --red: #b42318;
+      --code-bg: #111827;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.65;
+    }
+    main {
+      width: min(1160px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 46px 0 76px;
+    }
+    header {
+      padding: 34px 38px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: linear-gradient(135deg, #ffffff 0%, #edf4ff 100%);
+      box-shadow: 0 18px 48px rgba(23, 32, 51, 0.07);
+    }
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--brand);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(34px, 5vw, 56px);
+      line-height: 1.04;
+      letter-spacing: -0.03em;
+    }
+    header p {
+      max-width: 920px;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+    section {
+      margin-top: 22px;
+      padding: 28px 32px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+    }
+    h2 {
+      margin: 0 0 14px;
+      font-size: 24px;
+      letter-spacing: -0.02em;
+    }
+    h3 {
+      margin: 0 0 8px;
+      font-size: 17px;
+    }
+    p { margin: 0 0 14px; }
+    p:last-child { margin-bottom: 0; }
+    code {
+      padding: 2px 6px;
+      border-radius: 6px;
+      background: #f2f4f7;
+      color: #101828;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      overflow-x: auto;
+      margin: 16px 0 0;
+      padding: 16px;
+      border-radius: 12px;
+      background: var(--code-bg);
+      color: #f9fafb;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    pre code {
+      padding: 0;
+      background: transparent;
+      color: inherit;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    th, td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f2f5fb;
+      color: #344054;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    tr:last-child td { border-bottom: 0; }
+    ul, ol {
+      margin: 10px 0 0;
+      padding-left: 22px;
+    }
+    li { margin: 6px 0; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+    .card {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fbfcff;
+    }
+    .callout {
+      margin-top: 14px;
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #f8fafc;
+    }
+    .callout strong { display: block; margin-bottom: 6px; }
+    .callout.ok { border-color: #abefc6; background: #ecfdf3; color: #074d31; }
+    .callout.warn { border-color: #fedf89; background: #fffaeb; color: #7a2e0e; }
+    .callout.risk { border-color: #fecdca; background: #fff1f3; color: #7a271a; }
+    .phase {
+      display: grid;
+      grid-template-columns: 84px 1fr;
+      gap: 16px;
+      padding: 16px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .phase:last-child { border-bottom: 0; }
+    .phase-id {
+      font-weight: 900;
+      color: var(--brand);
+    }
+    @media (max-width: 760px) {
+      main { width: min(100vw - 24px, 1160px); padding-top: 24px; }
+      header, section { padding: 22px; }
+      .grid { grid-template-columns: 1fr; }
+      .phase { grid-template-columns: 1fr; gap: 4px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">San v0.2 · Technical Design</p>
+      <h1>成熟执行闭环的代码级设计</h1>
+      <p>
+        本文把 <code>san-v0.2-requirements-plan.html</code> 落成实现设计：session entries、settings、
+        task agents、role ContextPacket、San Checks、orchestrator 状态机、测试策略和 phase 交付顺序。
+      </p>
+    </header>
+
+    <section>
+      <h2>设计原则</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>先有账本，再有自动化</h3>
+          <p>任何 loop 行为都先写入可恢复的 <code>LoopRun</code> ledger；不要让闭环状态只存在于 prompt 或内存里。</p>
+        </div>
+        <div class="card">
+          <h3>角色视图来自 ContextPacket</h3>
+          <p>v0.2 不另建上下文系统，而是在 v0.1 ContextPacket 上做 role view 裁剪和 debug refs。</p>
+        </div>
+        <div class="card">
+          <h3>Prompt workflow 可引导，不能作为终态</h3>
+          <p>M1-M3 可复用 task agents 加速，但成熟交付必须由代码级 orchestrator 管状态、预算、retry 和恢复。</p>
+        </div>
+        <div class="card">
+          <h3>Supervisor 是 gate，不是 summary</h3>
+          <p>Supervisor 输出必须可执行：缺陷、证据、复现、修复要求、是否 retryable、最终 verdict。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>模块布局</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>路径</th>
+            <th>职责</th>
+            <th>Phase</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>packages/coding-agent/src/san-loop/types.ts</code></td>
+            <td>定义 <code>LoopRun</code>、<code>LoopPlan</code>、<code>WorkerResult</code>、<code>ReviewReport</code>、状态枚举和 schema helpers。</td>
+            <td>P1</td>
+          </tr>
+          <tr>
+            <td><code>packages/coding-agent/src/san-loop/ledger.ts</code></td>
+            <td>扫描 session custom entries，重建 run 状态，追加 loop event，生成 report view。</td>
+            <td>P1</td>
+          </tr>
+          <tr>
+            <td><code>packages/coding-agent/src/san-loop/context.ts</code></td>
+            <td>基于 ContextPacket 构造 Commander / Worker / Supervisor role view。</td>
+            <td>P2</td>
+          </tr>
+          <tr>
+            <td><code>packages/coding-agent/src/san-loop/checks.ts</code></td>
+            <td>发现 <code>.omp/checks/*.md</code>，合并内置 checks，生成 Supervisor check plan。</td>
+            <td>P3</td>
+          </tr>
+          <tr>
+            <td><code>packages/coding-agent/src/san-loop/orchestrator.ts</code></td>
+            <td>代码级状态转换：plan、dispatch、worker result、review、retry、finish；输出可持久化 transition。</td>
+            <td>P4</td>
+          </tr>
+          <tr>
+            <td><code>packages/coding-agent/src/san-loop/runner.ts</code></td>
+            <td>代码级 runner：用 pluggable Commander / Worker / Supervisor executor 驱动完整 pass / retry 闭环并写入 ledger。</td>
+            <td>P4</td>
+          </tr>
+          <tr>
+            <td><code>packages/coding-agent/src/san-loop/task-executor.ts</code></td>
+            <td>真实 task-agent bridge：调用 bundled Commander / Worker / Supervisor agent，将 yield/JSON 输出解析成 runner executor 结果，并把子 agent transcript 写入当前 session artifacts。</td>
+            <td>P4</td>
+          </tr>
+          <tr>
+            <td><code>packages/coding-agent/src/session/agent-session.ts</code></td>
+            <td>真实用户 prompt 前注入 latest loop 的 Commander role context，并持久化 role packet debug entry。</td>
+            <td>P4</td>
+          </tr>
+          <tr>
+            <td><code>packages/coding-agent/src/slash-commands/helpers/san-loop-report.ts</code></td>
+            <td>格式化 run ledger、review report、phase progress，供 slash command / RPC / TUI 使用。</td>
+            <td>P1-P4</td>
+          </tr>
+          <tr>
+            <td><code>packages/coding-agent/src/prompts/san-loop/*.md</code></td>
+            <td>Commander、Worker、Supervisor、Oracle 和 checks prompt 模板。</td>
+            <td>P2-P3</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Session Entry 合同</h2>
+      <p>
+        v0.2 继续使用 <code>CustomEntry</code> 保存机器可读状态，避免污染 LLM context；需要进入模型的内容走
+        role ContextPacket 的 <code>CustomMessageEntry</code>，且必须可 debug。
+      </p>
+      <pre><code>const SAN_LOOP_RUN_TYPE = "san.loop_run";
+const SAN_LOOP_EVENT_TYPE = "san.loop_event";
+const SAN_LOOP_REVIEW_TYPE = "san.review_report";
+const SAN_LOOP_PACKET_TYPE = "san.loop_context_packet";
+
+type SanLoopCustomEntry =
+  | { customType: "san.loop_run"; data: LoopRunSnapshot }
+  | { customType: "san.loop_event"; data: LoopEvent }
+  | { customType: "san.review_report"; data: ReviewReport }
+  | { customType: "san.loop_context_packet"; data: RoleContextPacketDebug };
+</code></pre>
+      <table>
+        <thead>
+          <tr>
+            <th>Entry</th>
+            <th>写入时机</th>
+            <th>恢复用途</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>san.loop_run</code></td>
+            <td>run 创建、状态变化、final verdict。</td>
+            <td>恢复 run header、mode、objective、当前状态、预算策略。</td>
+          </tr>
+          <tr>
+            <td><code>san.loop_event</code></td>
+            <td>Commander 决策、Worker assignment、retry、blocked、abort。</td>
+            <td>重建 timeline 和下一步决策。</td>
+          </tr>
+          <tr>
+            <td><code>san.review_report</code></td>
+            <td>Supervisor 每次 gate 后。</td>
+            <td>恢复缺陷列表、retry payload、最终质量判断。</td>
+          </tr>
+          <tr>
+            <td><code>san.loop_context_packet</code></td>
+            <td>每次 role prompt 前。</td>
+            <td>debug 角色上下文、digest refs、裁剪决策和 token 估算。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Settings</h2>
+      <p>
+        建议新增 <code>san.executionLoop</code>，默认关闭。v0.2 dogfood 使用 overlay 开启，发布前再决定是否暴露为稳定 CLI 模式。
+      </p>
+      <pre><code>san:
+  executionLoop:
+    enabled: false
+    defaultMode: smart
+    maxRetries: 2
+    maxWorkers: 3
+    ledger:
+      enabled: true
+      persistRolePackets: true
+    checks:
+      enabled: true
+      includeBuiltins: true
+      projectDir: .omp/checks
+    roles:
+      commander:
+        modelRole: slow
+        tools: [read, search, find, task, todo]
+      worker:
+        modelRole: default
+        tools: [read, search, find, write, edit, bash]
+      supervisor:
+        modelRole: advisor
+        tools: [read, search, find, bash]
+      oracle:
+        modelRole: plan
+        enabledInModes: [deep]
+    budget:
+      rushMaxTurns: 3
+      smartMaxTurns: 8
+      deepMaxTurns: 16
+      reserveRatio: 0.25</code></pre>
+      <div class="callout warn">
+        <strong>默认策略</strong>
+        <code>enabled</code> 默认 false；推荐 overlay 用于 dogfood 和用户验收。当前 P4 已有代码级 transition/runner 合同、真实 task-agent executor bridge、
+        Commander role context 注入、<code>/san-loop run</code>、<code>/san-loop stop</code>、active-run recovery 和确定性 dogfood verifier；
+        预算硬上限已接入 <code>san.executionLoop.budget.*MaxTurns</code>，run 会在启动下一次 Commander / Worker / Supervisor 前耗尽预算时转为 <code>blocked</code>。
+        默认交互路径仍保持关闭，避免未选择用户被动进入新 loop；v0.2 以显式启用和推荐 overlay 交付验收。
+      </div>
+    </section>
+
+    <section>
+      <h2>角色 Agent Definitions</h2>
+      <p>
+        P2 先用 OMP task agent 体系承载角色。项目可覆盖 bundled agent，但内置版本必须能直接工作。
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>文件</th>
+            <th>Frontmatter</th>
+            <th>关键规则</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>src/prompts/agents/san-commander.md</code></td>
+            <td><code>tools: read,search,find,task,todo,yield</code><br><code>spawns: san-worker,san-supervisor,san-oracle</code></td>
+            <td>只能产出计划和派发，不直接修改代码；必须引用 run ledger。</td>
+          </tr>
+          <tr>
+            <td><code>src/prompts/agents/san-worker.md</code></td>
+            <td><code>tools: read,search,find,write,edit,bash,yield</code><br><code>spawns: ""</code></td>
+            <td>只做 assignment 范围内的实现；输出 <code>WorkerResult</code>。</td>
+          </tr>
+          <tr>
+            <td><code>src/prompts/agents/san-supervisor.md</code></td>
+            <td><code>tools: read,search,find,bash,yield</code><br><code>spawns: san-oracle</code></td>
+            <td>禁止 edit/write；输出 <code>ReviewReport</code>，verdict 必须可执行。</td>
+          </tr>
+          <tr>
+            <td><code>src/prompts/agents/san-oracle.md</code></td>
+            <td><code>tools: read,search,find,yield</code><br><code>spawns: ""</code></td>
+            <td>只给第二意见；必须声明不确定性，不改变 run 状态。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Role ContextPacket</h2>
+      <p>
+        角色上下文不是复制完整 session。P2 新增 role view builder，输入是 v0.1 ContextPacket、run ledger 和 assignment，
+        输出是 role-scoped prompt prelude。
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>角色</th>
+            <th>必须包含</th>
+            <th>必须裁剪</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Commander</td>
+            <td>用户目标、全局 constraints、run ledger、Worker/Supervisor reports、recent digests。</td>
+            <td>大段文件内容、低层 shell 输出、Worker 私有 scratch。</td>
+          </tr>
+          <tr>
+            <td>Worker</td>
+            <td>assignment、acceptance criteria、相关文件 refs、必要 checks、上一轮 defects。</td>
+            <td>无关任务 DAG、其他 Worker 细节、Oracle 争议上下文。</td>
+          </tr>
+          <tr>
+            <td>Supervisor</td>
+            <td>plan、assignment、diff summary、tests run、checks、WorkerResult、用户验收标准。</td>
+            <td>Worker 过程性思考、无关历史 digest。</td>
+          </tr>
+          <tr>
+            <td>Oracle</td>
+            <td>争议问题、证据 refs、候选判断、风险。</td>
+            <td>执行细节和可由普通 Supervisor 判断的低风险事项。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Orchestrator 状态机</h2>
+      <pre><code>idle
+  -> planning
+  -> dispatching
+  -> working
+  -> reviewing
+  -> passed
+
+reviewing
+  -> retrying      when verdict = needs_fix and retry budget remains
+  -> blocked       when verdict = blocked or user input required
+  -> failed        when retry budget exhausted
+  -> passed        when verdict = pass
+
+retrying
+  -> planning      when Commander must replan
+  -> dispatching   when defects map directly to WorkerAssignment
+
+any active state
+  -> aborted       on user abort
+  -> blocked       on missing external dependency
+</code></pre>
+      <div class="callout ok">
+        <strong>恢复规则</strong>
+        resume 时从 session entries 重建最新 <code>LoopRunSnapshot</code>，如果最后状态是 active 但没有 running child process，
+        转为 <code>blocked</code> 并写入 recovery event，避免幽灵任务继续执行。
+      </div>
+    </section>
+
+    <section>
+      <h2>San Checks 设计</h2>
+      <p>
+        Checks 是 markdown 规则文件，不是代码插件。P3 先实现发现、解析、分组和 prompt 注入；后续可升级成 extension-backed checks。
+      </p>
+      <pre><code>---
+name: project-typescript-contracts
+description: TypeScript implementation rules for this repository.
+scope:
+  paths: ["packages/coding-agent/**"]
+severity: error
+appliesTo: ["worker", "supervisor"]
+---
+
+- Do not use `any` unless explicitly justified.
+- Do not use `ReturnType&lt;&gt;`.
+- Prompts must live in static `.md` files.
+- Run `bun check` for package-wide TypeScript validation.</code></pre>
+      <table>
+        <thead>
+          <tr>
+            <th>阶段</th>
+            <th>行为</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Discovery</td>
+            <td>读取 nearest project <code>.omp/checks</code>、user checks、bundled checks，按 first-wins 合并。</td>
+          </tr>
+          <tr>
+            <td>Planning</td>
+            <td>Commander 将相关 checks 绑定到 task graph。</td>
+          </tr>
+          <tr>
+            <td>Worker</td>
+            <td>Worker 看到 assignment 相关 checks，但不能自行关闭 gate。</td>
+          </tr>
+          <tr>
+            <td>Supervisor</td>
+            <td>Supervisor 必须逐条给出 pass / fail / not_applicable 和证据。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Slash / SDK 入口</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>入口</th>
+            <th>行为</th>
+            <th>Phase</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>/san-loop run [--mode rush|smart|deep] &lt;objective&gt;</code></td>
+            <td>创建 execution loop run ledger，调用真实 Commander / Worker / Supervisor task agents 执行 pass / retry 闭环，并让后续真实用户 prompt 自动获得 Commander role context。</td>
+            <td>P1-P4</td>
+          </tr>
+          <tr>
+            <td><code>/san-loop status</code></td>
+            <td>展示当前 run ledger、active state、latest review、retry budget。</td>
+            <td>P1</td>
+          </tr>
+          <tr>
+            <td><code>/san-loop stop</code></td>
+            <td>写入 aborted event，停止未完成 loop，不删除历史。</td>
+            <td>P4</td>
+          </tr>
+          <tr>
+            <td>SDK <code>runSanLoop()</code></td>
+            <td>供 dogfood、测试和未来远程控制调用；当前接受 pluggable executor，并已覆盖 pass / needs_fix retry / blocked / abort / recovery / deep Oracle gate。</td>
+            <td>P4</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>测试策略</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>测试文件</th>
+            <th>合同</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>test/san-loop/ledger.test.ts</code></td>
+            <td>append/rebuild/idempotency/resume；custom entries 不进入 LLM context。</td>
+          </tr>
+          <tr>
+            <td><code>test/san-loop/context.test.ts</code></td>
+            <td>role ContextPacket 包含/裁剪规则、debug refs、token budget。</td>
+          </tr>
+          <tr>
+            <td><code>test/san-loop/checks.test.ts</code></td>
+            <td>checks discovery、first-wins、scope filtering、invalid file 降级。</td>
+          </tr>
+          <tr>
+            <td><code>test/san-loop/orchestrator.test.ts</code></td>
+            <td>状态机 transition、needs_fix retry、blocked、abort、resume。</td>
+          </tr>
+          <tr>
+            <td><code>test/san-loop/runner.test.ts</code></td>
+            <td>代码级 runner 驱动完整 pass 闭环和 needs_fix retry 闭环，并验证 ledger 事件顺序。</td>
+          </tr>
+          <tr>
+            <td><code>test/context-steady/agent-session-m2.test.ts</code></td>
+            <td>启用 execution loop 后，真实用户 prompt 会注入 latest Commander role context 并写入 debug packet。</td>
+          </tr>
+          <tr>
+            <td><code>test/san-loop/agents.test.ts</code></td>
+            <td>角色 agent 的工具边界、spawns、output schema。</td>
+          </tr>
+          <tr>
+            <td><code>test/san-loop/dogfood.test.ts</code></td>
+            <td>deterministic fake model 跑 v0.2 成熟闭环验收：rush pass、smart retry、deep Oracle gate、deep blocked、hard budget、active-run recovery 和 operator abort。</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout warn">
+        <strong>验证命令</strong>
+        代码改动后优先跑 <code>bun test packages/coding-agent/test/san-loop</code> 和 <code>bun check</code>。
+        文档阶段不需要跑完整 suite。
+      </div>
+    </section>
+
+    <section>
+      <h2>Phase 实施计划</h2>
+      <div class="phase">
+        <div class="phase-id">P0</div>
+        <div>
+          <h3>设计冻结</h3>
+          <p>确认需求文档、技术设计、entry names、settings tree、状态机和测试矩阵。输出可以直接转 issue 的 implementation checklist。</p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-id">P1</div>
+        <div>
+          <h3>LoopRun Ledger</h3>
+          <p>新增 <code>san-loop</code> 类型、ledger helpers、report renderer、<code>/san-loop status</code>。不启动三角色前，先保证状态可审计、可恢复。</p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-id">P2</div>
+        <div>
+          <h3>角色化 Task Agents</h3>
+          <p>添加 bundled agent definitions、output schemas、role ContextPacket builder。先支持顺序闭环：Commander -> Worker -> Supervisor。</p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-id">P3</div>
+        <div>
+          <h3>Checks Gate 与 Retry</h3>
+          <p>实现 checks discovery 和 Supervisor gate，支持 <code>needs_fix</code> 自动生成修复 assignment，限制 retry 次数并写入 ledger。</p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-id">P4</div>
+        <div>
+          <h3>代码级 Orchestrator</h3>
+          <p>把 slash workflow 固化为 <code>SanLoopOrchestrator</code> / <code>runSanLoop()</code>：状态机、mode policy、并发 Worker、budget、abort/resume、SDK 入口。
+          当前已完成 transition helpers、runner 合同、pass/retry 持久化、Commander role context 注入、真实 task-agent executor bridge、<code>/san-loop run</code>、
+          <code>/san-loop stop</code>、hard turn budget、active-run recovery 和确定性 dogfood verifier；P4 可进入用户验收。</p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-id">P5</div>
+        <div>
+          <h3>Dogfood 与发布</h3>
+          <p>先用确定性 verifier 固化 rush/smart/deep、retry、blocked、recovery、abort 合同，再用 5-8 个交付型任务或用户验收任务记录质量、失败、成本和上下文稳定性，形成发布口径。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>实现清单</h2>
+      <ol>
+        <li>新增 <code>packages/coding-agent/src/san-loop/</code> 并导出 types、ledger、context、checks、orchestrator。</li>
+        <li>新增 <code>san.executionLoop</code> settings schema 和 recommended dogfood overlay。</li>
+        <li>添加 bundled <code>san-commander</code>、<code>san-worker</code>、<code>san-supervisor</code>、<code>san-oracle</code> agent definitions。</li>
+        <li>新增 role ContextPacket debug entry，复用 v0.1 packet builder 的 digest refs 和 token estimates。</li>
+        <li>实现 <code>.omp/checks</code> discovery 和 bundled San checks。</li>
+        <li>新增 <code>/san-loop</code> registry 入口和 status/report helper。</li>
+        <li>实现 P4 transition helpers、<code>runSanLoop()</code> runner、Commander role context 注入和 <code>/san-loop run</code> 执行入口。</li>
+        <li>接入真实 task-agent executor，把 Commander / Worker / Supervisor agent 输出转换为 runner executor 结果，并持久化子 agent artifacts。</li>
+        <li>补齐 <code>/san-loop stop</code>、hard turn budget、active-run recovery、确定性 dogfood verifier 和 dogfood CLI script。</li>
+        <li>补齐 san-loop 测试目录，并在 changelog 的 Unreleased 记录 v0.2 execution loop 交付。</li>
+      </ol>
+    </section>
+  </main>
+</body>
+</html>

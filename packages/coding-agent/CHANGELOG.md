@@ -4,6 +4,13 @@
 
 ### Added
 
+- Added the San v0.2 execution loop P1 ledger foundation with `san.loop_run`, `san.loop_event`, `san.review_report`, and `san.loop_context_packet` custom entry contracts plus `/san-loop status` reporting.
+- Added San v0.2 execution loop P2 scaffolding with bundled `san-commander`, `san-worker`, `san-supervisor`, and `san-oracle` task agents plus role-scoped ContextPacket debug helpers.
+- Added San v0.2 execution loop P3 San Checks discovery and rendering, including project/user `.omp/checks/*.md` support, bundled default checks, role filtering, and path-scoped check selection.
+- Added San v0.2 execution loop P4 runner scaffolding with a code-level `runSanLoop()` state machine, pluggable Commander/Worker/Supervisor executor contract, pass/retry ledger persistence, and focused runner tests.
+- Added `/san-loop run [--mode rush|smart|deep] <objective>` with a real task-agent executor bridge for bundled Commander/Worker/Supervisor agents plus AgentSession injection of the latest San loop Commander role context into real user prompts when the execution loop is enabled.
+- Added `/san-loop stop`, hard turn-budget enforcement, deep-mode Oracle second-opinion gating, persisted active-run recovery to blocked, and a deterministic San v0.2 dogfood verifier/report covering rush pass, smart retry, deep blocked, hard budget, recovery, and abort paths.
+- Added San v0.2 `san.executionLoop.*` settings and a recommended dogfood overlay at `packages/coding-agent/examples/config/san-execution-loop-recommended.yml`.
 - Added San context steady state M1: post-turn TurnDigest generation and persistence to session journal via `sessionManager.appendCustomEntry("san.turn_digest", data)`. Each settled agent turn now produces a structured digest capturing user intent, actions taken, decisions, files touched, tool evidence, and more. Digest generation is deterministic (non-LLM) in M1, with LLM-based summarization planned for a future release. Controlled via `san.contextSteady.enabled` setting (default: off).
 - Added San context steady state M3 packet budget snapshots via `san.contextSteady.qualityWindowTokens`, `san.contextSteady.reserveRatio`, and per-layer ContextPacket token budgets with trim decisions in `san.context_packet` debug entries.
 - Added San context steady state M4 stable checkpoints via `san.contextSteady.checkpoint.*`; ContextPacket now layers stable checkpoint content ahead of the append-only digest tail for cache-aware continuity.

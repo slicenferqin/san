@@ -25,6 +25,12 @@ import {
 	CONTEXT_PACKET_MESSAGE_TYPE,
 	TURN_DIGEST_CUSTOM_TYPE,
 } from "../../src/context-steady/types";
+import {
+	findLatestSanLoopRun,
+	recordSanLoopRunCreated,
+	SAN_LOOP_CONTEXT_PACKET_CUSTOM_TYPE,
+	SAN_LOOP_EVENT_CUSTOM_TYPE,
+} from "../../src/san-loop";
 
 const BASE_SETTINGS = {
 	"san.contextSteady.enabled": true,
@@ -176,6 +182,98 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		const secondDigestSource = secondDigest.source as Record<string, string>;
 		const fromEntry = sessionManager.getEntry(secondDigestSource.fromEntryId);
 		expect(fromEntry?.type).toBe("message");
+	});
+
+	it("injects latest San execution loop role context into real user prompts", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		recordSanLoopRunCreated(sessionManager, {
+			sessionId: sessionManager.getSessionId(),
+			runId: "loop_agent_session",
+			objective: "Ship mature v0.2 loop",
+			mode: "smart",
+			createdAt: "2026-07-01T00:00:00.000Z",
+		});
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"san.executionLoop.enabled": true,
+			"san.executionLoop.ledger.enabled": true,
+			"san.executionLoop.ledger.persistRolePackets": true,
+			"san.executionLoop.roleContext.tokenBudget": 1200,
+			"san.executionLoop.roleContext.maxEvents": 4,
+			"san.executionLoop.roleContext.maxDecisions": 4,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		await session.prompt("Continue the San loop");
+		await session.waitForIdle();
+
+		const promptContent = JSON.stringify(mock.calls[0]!.context.messages);
+		expect(promptContent).toContain("san_execution_loop_context");
+		expect(promptContent).toContain("commander");
+		expect(promptContent).toContain("Ship mature v0.2 loop");
+		const loopPackets = customEntries(sessionManager, SAN_LOOP_CONTEXT_PACKET_CUSTOM_TYPE);
+		expect(loopPackets).toHaveLength(1);
+		const packetData = loopPackets[0]!.data as Record<string, unknown>;
+		expect(packetData).toMatchObject({
+			runId: "loop_agent_session",
+			role: "commander",
+			tokenBudget: 1200,
+		});
+	});
+
+	it("recovers active San execution loop runs as blocked on session construction", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		recordSanLoopRunCreated(sessionManager, {
+			sessionId: sessionManager.getSessionId(),
+			runId: "loop_recover_session",
+			objective: "Recover interrupted v0.2 loop",
+			mode: "smart",
+			createdAt: "2026-07-01T00:00:00.000Z",
+		});
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"san.executionLoop.enabled": true,
+			"san.executionLoop.ledger.enabled": true,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+
+		const latest = findLatestSanLoopRun(sessionManager.getEntries());
+		expect(latest?.data).toMatchObject({
+			runId: "loop_recover_session",
+			status: "blocked",
+			finalVerdict: undefined,
+		});
+		const events = customEntries(sessionManager, SAN_LOOP_EVENT_CUSTOM_TYPE);
+		expect(events.at(-1)?.data).toMatchObject({
+			runId: "loop_recover_session",
+			type: "recovered",
+			data: { previousStatus: "planning" },
+		});
 	});
 
 	it("does not inject ContextPacket when context packet setting is disabled", async () => {

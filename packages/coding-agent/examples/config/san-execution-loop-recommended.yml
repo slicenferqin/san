@@ -1,0 +1,61 @@
+# Recommended San v0.2 execution loop dogfood overlay.
+#
+# Use as a process-local overlay:
+#   san --config packages/coding-agent/examples/config/san-execution-loop-recommended.yml
+#
+# This enables the execution-loop scaffolding while leaving provider keys and
+# model selection to the user's normal San configuration.
+san:
+  contextSteady:
+    enabled: true
+    digest:
+      enabled: true
+      persistFallback: true
+      timeoutMs: 30000
+    qualityWindowTokens: 24000
+    reserveRatio: 0.25
+    contextPacket:
+      enabled: true
+      recentDigests: 5
+      maxTokens: 3000
+    checkpoint:
+      enabled: true
+      everyTurns: 6
+      maxTokens: 12000
+    recall:
+      enabled: false
+      maxItems: 3
+      maxTokens: 1000
+      maxQueryChars: 2000
+  executionLoop:
+    enabled: true
+    defaultMode: smart
+    maxRetries: 2
+    maxWorkers: 3
+    ledger:
+      enabled: true
+      persistRolePackets: true
+    checks:
+      enabled: true
+      includeBuiltins: true
+      projectDir: .omp/checks
+    roles:
+      commander:
+        modelRole: slow
+      worker:
+        modelRole: default
+      supervisor:
+        modelRole: advisor
+      oracle:
+        modelRole: plan
+        enabledInModes:
+          - deep
+    roleContext:
+      tokenBudget: 2000
+      maxEvents: 8
+      maxDecisions: 8
+    budget:
+      rushMaxTurns: 3
+      smartMaxTurns: 8
+      deepMaxTurns: 16
+      reserveRatio: 0.25

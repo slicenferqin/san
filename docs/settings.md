@@ -328,6 +328,14 @@ san --config packages/coding-agent/examples/config/san-context-steady-recommende
 
 The recommended overlay enables digest ledger, ContextPacket injection, budget snapshots, and stable checkpoints while keeping recall disabled until recall quality is explicitly validated. The rationale and current validation notes are in `docs/research/context-steady-state-m8-recommended-config.html`.
 
+San's experimental v0.2 execution loop settings live under `san.executionLoop`. The schema defaults keep the feature off; for dogfood, use the process-local overlay at `packages/coding-agent/examples/config/san-execution-loop-recommended.yml`:
+
+```bash
+san --config packages/coding-agent/examples/config/san-execution-loop-recommended.yml
+```
+
+The recommended overlay enables the v0.1 context steady base plus the v0.2 run ledger, role context packet debug entries, San Checks, role policy settings, and hard turn budgets. `/san-loop run` maps the selected mode onto `san.executionLoop.budget.{rush,smart,deep}MaxTurns`, so a run stops as `blocked` before launching another Commander/Worker/Supervisor agent once its turn budget is exhausted. The implementation plan and phase split are in `docs/research/san-v0.2-requirements-plan.html` and `docs/research/san-v0.2-technical-design.html`.
+
 ### Advisor
 
 The advisor is a second model that reviews each completed turn and can inject advice into the primary session. Assign a model with `modelRoles.advisor`, then enable it with `advisor.enabled`, `/advisor on`, or by launching with the `--advisor` flag.

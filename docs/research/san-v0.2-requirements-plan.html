@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>San v0.2 成熟执行闭环需求规划</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7fb;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #667085;
+      --line: #d8deea;
+      --brand: #2656d9;
+      --brand-soft: #e8eeff;
+      --ok: #067647;
+      --warn: #b54708;
+      --risk: #b42318;
+      --code: #101828;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.65;
+    }
+    main {
+      width: min(1120px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 48px 0 72px;
+    }
+    header {
+      padding: 34px 38px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: linear-gradient(135deg, #ffffff 0%, #eef3ff 100%);
+      box-shadow: 0 18px 45px rgba(23, 32, 51, 0.07);
+    }
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--brand);
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-size: 12px;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(34px, 5vw, 58px);
+      line-height: 1.04;
+      letter-spacing: -0.03em;
+    }
+    header p {
+      max-width: 880px;
+      margin: 20px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+    section {
+      margin-top: 22px;
+      padding: 28px 32px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+    }
+    h2 {
+      margin: 0 0 14px;
+      font-size: 24px;
+      letter-spacing: -0.02em;
+    }
+    h3 {
+      margin: 0 0 8px;
+      font-size: 17px;
+    }
+    p { margin: 0 0 14px; }
+    p:last-child { margin-bottom: 0; }
+    code {
+      padding: 2px 6px;
+      border-radius: 6px;
+      background: #f2f4f7;
+      color: var(--code);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      overflow-x: auto;
+      margin: 16px 0 0;
+      padding: 16px;
+      border-radius: 12px;
+      background: #101828;
+      color: #f9fafb;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    pre code {
+      padding: 0;
+      background: transparent;
+      color: inherit;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+    }
+    th, td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f2f5fb;
+      color: #344054;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    tr:last-child td { border-bottom: 0; }
+    ul {
+      margin: 10px 0 0;
+      padding-left: 20px;
+    }
+    li { margin: 6px 0; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+    .card {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fbfcff;
+    }
+    .callout {
+      margin-top: 14px;
+      padding: 16px 18px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: #f8fafc;
+    }
+    .callout strong { display: block; margin-bottom: 6px; }
+    .callout.ok { border-color: #abefc6; background: #ecfdf3; color: #074d31; }
+    .callout.warn { border-color: #fedf89; background: #fffaeb; color: #7a2e0e; }
+    .callout.risk { border-color: #fecdca; background: #fff1f3; color: #7a271a; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--brand-soft);
+      color: var(--brand);
+      font-weight: 700;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .milestone {
+      display: grid;
+      grid-template-columns: 96px 1fr;
+      gap: 14px;
+      padding: 16px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .milestone:last-child { border-bottom: 0; }
+    .milestone-label {
+      font-weight: 800;
+      color: var(--brand);
+    }
+    @media (max-width: 760px) {
+      main { width: min(100vw - 24px, 1120px); padding-top: 24px; }
+      header, section { padding: 22px; }
+      .grid { grid-template-columns: 1fr; }
+      .milestone { grid-template-columns: 1fr; gap: 4px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">San v0.2 · Requirements Plan</p>
+      <h1>成熟执行闭环，而不是最小三角色 Demo</h1>
+      <p>
+        v0.2 的目标应从“能跑一遍 Commander / Worker / Supervisor”上调为“可交付的成熟执行闭环”：
+        它必须能持续接手复杂开发任务，拆解、执行、验收、修复、复盘，并把闭环状态沉淀到 v0.1 的
+        Context Steady State 之上。
+      </p>
+    </header>
+
+    <section>
+      <h2>版本定位</h2>
+      <p>
+        v0.1 已解决上下文稳态问题：每轮工作可以被结构化沉淀、裁剪、复用。v0.2 应解决执行质量问题：
+        San 不只是“连续调用工具的单 agent”，而是一个能管理任务生命周期的闭环系统。
+      </p>
+      <div class="callout ok">
+        <strong>v0.2 定义</strong>
+        San v0.2 = Mature Execution Loop。核心交付是一个可用于真实开发任务的 Commander / Worker /
+        Supervisor 闭环，带结构化计划、权限隔离、检查门禁、失败重试、预算控制、可审计 run ledger 和 dogfood 验收。
+      </div>
+    </section>
+
+    <section>
+      <h2>非目标</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>不做</th>
+            <th>原因</th>
+            <th>后续版本</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>GBrain MCP adapter / 外脑接入</td>
+            <td>会引入资料库、schema、MCP 生命周期和引用一致性问题，容易稀释 v0.2 的执行闭环目标。</td>
+            <td>v0.3+</td>
+          </tr>
+          <tr>
+            <td>长期 brain schema / dream cycle</td>
+            <td>属于长期知识整理系统，不是执行闭环的必要依赖。</td>
+            <td>v0.4+</td>
+          </tr>
+          <tr>
+            <td>重写底层 agent-loop runtime</td>
+            <td>优先组合现有 session、task agent、hooks、skills、context packet、todo 和 SDK 能力。</td>
+            <td>仅在 M4 发现 workflow 无法满足时局部引入。</td>
+          </tr>
+          <tr>
+            <td>静默自动写长期 memory</td>
+            <td>v0.2 可以产出 retain candidates，但不应把临时任务状态污染到长期记忆。</td>
+            <td>v0.3 memory routing</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>成熟闭环标准</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>任务状态可控</h3>
+          <p>每个 run 有明确目标、范围、任务 DAG、当前状态、阻塞项、预算和最终 verdict。</p>
+        </div>
+        <div class="card">
+          <h3>角色职责硬隔离</h3>
+          <p>Commander 不直接改代码，Worker 不无限派发，Supervisor 不写代码；权限边界由工具集和 prompt 双重限制。</p>
+        </div>
+        <div class="card">
+          <h3>验收不是口头总结</h3>
+          <p>Supervisor 必须基于 diff、测试输出、静态检查、用户验收标准和项目规则给出结构化报告。</p>
+        </div>
+        <div class="card">
+          <h3>失败能闭环</h3>
+          <p>缺陷必须分类为 retryable / blocked / out-of-scope，并生成下一轮修复任务，而不是让主 agent 自行猜测。</p>
+        </div>
+        <div class="card">
+          <h3>上下文受治理</h3>
+          <p>Commander、Worker、Supervisor 都消费 ContextPacket，但每个角色获得裁剪后的角色视图。</p>
+        </div>
+        <div class="card">
+          <h3>运行可审计</h3>
+          <p>run ledger 保存计划、子任务、worker 结果、supervisor 报告、测试证据、预算、重试和最终交付。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>角色需求</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>角色</th>
+            <th>职责</th>
+            <th>工具边界</th>
+            <th>输出合同</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="badge">Commander</span></td>
+            <td>理解目标、拆解任务 DAG、选择执行模式、分配 Worker、读取报告、决定 retry / stop / escalate。</td>
+            <td>读、搜索、任务派发、todo、run ledger；默认不写文件、不跑高风险命令。</td>
+            <td><code>LoopPlan</code>、<code>WorkerAssignment</code>、<code>LoopDecision</code>。</td>
+          </tr>
+          <tr>
+            <td><span class="badge">Worker</span></td>
+            <td>执行边界明确的子任务，提交 diff、运行局部验证，说明假设和残留风险。</td>
+            <td>读、编辑、写入、shell、测试；默认不能创建新子任务或改 run policy。</td>
+            <td><code>WorkerResult</code>，包含 touched files、commands、verification、risks。</td>
+          </tr>
+          <tr>
+            <td><span class="badge">Supervisor</span></td>
+            <td>审查计划和结果，跑/建议检查，识别缺陷、回归风险、缺失测试和验收缺口。</td>
+            <td>读、搜索、shell 验证；禁止 edit/write。</td>
+            <td><code>ReviewReport</code>，包含 verdict、defects、required fixes、confidence。</td>
+          </tr>
+          <tr>
+            <td><span class="badge">Oracle</span></td>
+            <td>只在 deep 模式、Supervisor 不确定、或关键架构争议时给第二意见。</td>
+            <td>只读上下文和报告；不直接改代码、不派发任务。</td>
+            <td><code>OracleOpinion</code>，必须引用证据和不确定性。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>核心数据结构</h2>
+      <pre><code>LoopRun {
+  schemaVersion: 1,
+  runId,
+  sessionId,
+  objective,
+  mode: "rush" | "smart" | "deep",
+  status: "planning" | "working" | "reviewing" | "retrying" | "blocked" | "passed" | "failed",
+  contextPacketRefs,
+  plan: LoopPlan,
+  assignments: WorkerAssignment[],
+  workerResults: WorkerResult[],
+  reviewReports: ReviewReport[],
+  decisions: LoopDecision[],
+  budget: LoopBudgetSnapshot[],
+  finalVerdict
+}
+
+LoopPlan {
+  objective,
+  constraints,
+  acceptanceCriteria,
+  taskGraph: TaskNode[],
+  checkPlan,
+  riskRegister
+}
+
+ReviewReport {
+  verdict: "pass" | "needs_fix" | "blocked" | "out_of_scope",
+  defects: Defect[],
+  testsRun,
+  evidence,
+  retryable,
+  requiredNextActions,
+  confidence
+}</code></pre>
+    </section>
+
+    <section>
+      <h2>执行模式</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>模式</th>
+            <th>适用任务</th>
+            <th>闭环强度</th>
+            <th>模型/预算策略</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>rush</code></td>
+            <td>小修、小范围变更、明确 bug。</td>
+            <td>1 Commander + 1 Worker + lightweight Supervisor。</td>
+            <td>低预算，最多一次 retry。</td>
+          </tr>
+          <tr>
+            <td><code>smart</code></td>
+            <td>默认开发任务，跨 2-6 个文件，有测试风险。</td>
+            <td>完整计划、Worker 执行、Supervisor gate、必要 retry。</td>
+            <td>中预算，最多两轮 retry。</td>
+          </tr>
+          <tr>
+            <td><code>deep</code></td>
+            <td>架构、跨模块重构、发布前质量门禁。</td>
+            <td>多 Worker 可并行探索，Supervisor 可调用 Oracle。</td>
+            <td>高预算，要求更完整证据和复盘。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>San Checks</h2>
+      <p>
+        v0.2 的成熟度关键在 checks。Checks 不是普通提示词，而是可复用的验收规则，可以来自仓库、团队或用户配置。
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Check 类型</th>
+            <th>示例</th>
+            <th>Supervisor 如何使用</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Project Convention</td>
+            <td>不使用 <code>any</code>、不使用 <code>ReturnType&lt;&gt;</code>、prompts 必须在 <code>.md</code>。</td>
+            <td>检查 diff 和实现方案是否违反项目规则。</td>
+          </tr>
+          <tr>
+            <td>Behavior Contract</td>
+            <td>用户可见输出、错误映射、状态转换、CLI 参数行为。</td>
+            <td>要求 Worker 补足合同级测试或解释为何不需要。</td>
+          </tr>
+          <tr>
+            <td>Safety Gate</td>
+            <td>危险命令、权限升级、外部写操作、敏感文件。</td>
+            <td>阻止或要求用户确认，不让 Worker 自行越权。</td>
+          </tr>
+          <tr>
+            <td>UX / TUI</td>
+            <td>渲染 sanitization、路径缩短、预览截断、streaming preview。</td>
+            <td>对 UI/TUI 变更跑专门 review prompt。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>里程碑</h2>
+      <div class="milestone">
+        <div class="milestone-label">M1</div>
+        <div>
+          <h3>LoopRun Ledger 与结构化合同</h3>
+          <p>新增 run ledger、LoopPlan、WorkerResult、ReviewReport、LoopDecision 类型和持久化。验收标准是单 agent workflow 也能完整记录一次 run 的状态、证据和 verdict。</p>
+        </div>
+      </div>
+      <div class="milestone">
+        <div class="milestone-label">M2</div>
+        <div>
+          <h3>三角色 Task Agents 与角色 ContextPacket</h3>
+          <p>实现 Commander / Worker / Supervisor agent 定义、工具边界和角色视图裁剪。验收标准是同一任务可由三角色顺序完成，且每个角色只看到所需上下文。</p>
+        </div>
+      </div>
+      <div class="milestone">
+        <div class="milestone-label">M3</div>
+        <div>
+          <h3>San Checks 与 Supervisor Gate</h3>
+          <p>实现 <code>.omp/checks</code> 规范、内置项目检查、Supervisor 报告聚合、needs_fix retry。验收标准是故意引入缺陷时 gate 能稳定拦截并生成修复任务。</p>
+        </div>
+      </div>
+      <div class="milestone">
+        <div class="milestone-label">M4</div>
+        <div>
+          <h3>成熟 Orchestrator</h3>
+          <p>从命令/skill workflow 升级到代码级 orchestrator：状态机、预算、并发 Worker、retry policy、abort/resume、run report。验收标准是真实复杂任务能自动闭环到 pass 或 blocked。</p>
+        </div>
+      </div>
+      <div class="milestone">
+        <div class="milestone-label">M5</div>
+        <div>
+          <h3>Dogfood 与发布门槛</h3>
+          <p>用确定性闭环 verifier 和 5-8 个交付型任务验证 rush/smart/deep，形成 v0.2 dogfood 报告。验收标准是闭环合同稳定、质量门禁有效、失败能收敛到 pass / blocked / aborted，且不会污染上下文或无限循环。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Phase 拆分</h2>
+      <p>
+        v0.2 的 phase 不按“先做一个最小 demo”拆，而按成熟闭环的依赖链拆。每个 phase 都必须留下可 dogfood
+        的端到端能力，同时给下一 phase 提供稳定合同。
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Phase</th>
+            <th>主题</th>
+            <th>交付</th>
+            <th>验收</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>P0</td>
+            <td>设计冻结</td>
+            <td>需求基线、技术设计、状态机、entry schema、settings 和测试矩阵。</td>
+            <td>能从文档直接拆出 M1-M5 issue，不再争论 v0.2 是否只是 prompt workflow。</td>
+          </tr>
+          <tr>
+            <td>P1</td>
+            <td>Run Ledger 底座</td>
+            <td><code>san.loop_run</code>、<code>san.loop_event</code>、<code>san.review_report</code> custom entries，run report renderer。</td>
+            <td>不用三角色也能记录一次完整 run，resume 后状态可恢复。</td>
+          </tr>
+          <tr>
+            <td>P2</td>
+            <td>角色化执行</td>
+            <td>Commander / Worker / Supervisor agent definitions、角色 ContextPacket、权限边界、结构化输出。</td>
+            <td>同一真实任务可按三角色顺序完成，且 Worker/Supervisor 的可见上下文和工具集不同。</td>
+          </tr>
+          <tr>
+            <td>P3</td>
+            <td>Checks Gate</td>
+            <td><code>.omp/checks</code> 规范、内置 San checks、Supervisor gate、needs_fix retry payload。</td>
+            <td>故意引入项目规则违规或缺测试变更时，Supervisor 能稳定拦截并生成修复任务。</td>
+          </tr>
+          <tr>
+            <td>P4</td>
+            <td>代码级 Orchestrator</td>
+            <td>loop 状态机、mode policy、预算上限、并发 Worker、retry policy、abort/resume。</td>
+            <td>复杂任务可自动推进到 pass / blocked / failed，不依赖主 agent 记住流程。</td>
+          </tr>
+          <tr>
+            <td>P5</td>
+            <td>质量收敛</td>
+            <td>dogfood 报告、回归测试、失败样本复盘、默认配置建议、发布说明。</td>
+            <td>6 个交付型验收场景覆盖 rush/smart/deep、retry、Oracle、预算、恢复和 abort；真实模型任务作为用户验收阶段继续抽样。</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout warn">
+        <strong>Phase 约束</strong>
+        P1-P3 可以通过 workflow 和 task agents 加速，但 P4 必须落到代码级 orchestrator。否则 v0.2 只有“能演示的闭环”，没有可恢复、可审计、可限制预算的成熟闭环。
+      </div>
+    </section>
+
+    <section>
+      <h2>验收标准</h2>
+      <ul>
+        <li>能用一个命令或模式启动成熟闭环，例如 <code>/san-loop</code> 或等价 CLI/SDK 入口。</li>
+        <li>每个 run 都有可查看的 run ledger，包含计划、任务、执行结果、审查、重试和最终 verdict。</li>
+        <li>Commander / Worker / Supervisor 权限边界可测试，越权行为会被拒绝或降级。</li>
+        <li>Supervisor 不只总结，而是基于 diff、测试和 checks 产出可执行缺陷列表。</li>
+        <li>至少支持 needs_fix 自动回到 Commander 生成修复任务，并限制最大 retry 次数。</li>
+        <li>支持 rush/smart/deep 三种闭环强度，且预算和模型选择有明确策略。</li>
+        <li>ContextPacket 被角色化消费，run 多轮后不破坏 v0.1 的上下文稳态。</li>
+        <li>dogfood 验收覆盖 bug fix、跨文件功能、测试补强、CLI 行为、预算耗尽、恢复和用户中止；真实模型任务在用户验收阶段继续抽样。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>实现取舍</h2>
+      <div class="callout warn">
+        <strong>建议路线</strong>
+        M1-M3 可以先利用现有 task agents、skills、hooks、ContextPacket 和 session custom entries 快速成型；
+        但 v0.2 不能停在 prompt workflow。M4 必须收敛到代码级 orchestrator，否则“成熟闭环”的状态、预算、retry 和 resume 都不够可靠。
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>方案</th>
+            <th>优点</th>
+            <th>缺点</th>
+            <th>v0.2 判断</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>纯 slash command / prompt workflow</td>
+            <td>最快，可 dogfood。</td>
+            <td>状态机弱，难做预算和恢复。</td>
+            <td>只适合作 M1-M2 引导，不是最终交付。</td>
+          </tr>
+          <tr>
+            <td>Skill + task agents</td>
+            <td>复用现有能力，职责隔离清晰。</td>
+            <td>跨轮状态和重试仍需宿主协调。</td>
+            <td>作为角色定义和 checks 分发层。</td>
+          </tr>
+          <tr>
+            <td>代码级 orchestrator</td>
+            <td>状态、预算、并发、retry、resume 都可控。</td>
+            <td>实现成本高，需要更强测试。</td>
+            <td>v0.2 必须完成，否则不算成熟闭环。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>推荐下一步</h2>
+      <ol>
+        <li>把本文作为 v0.2 需求基线，先审一轮范围：成熟闭环、GBrain 后移、memory 保持候选态。</li>
+        <li>使用 <code>san-v0.2-technical-design.html</code> 作为实现设计，落到具体模块、entry 类型、settings、agent definitions 和测试文件。</li>
+        <li>先实现 M1 LoopRun ledger，避免三角色 workflow 先跑起来但没有可审计状态。</li>
+        <li>M2/M3 已用 role ContextPacket、San Checks、agent definitions 和 focused tests 验证角色边界与 gate 合同。</li>
+        <li>M4 已完成代码级 orchestrator、真实 task-agent bridge、预算硬上限、role context 注入、run/stop/status 入口和 active-run recovery。</li>
+        <li>M5 已用确定性 verifier 固化 rush pass、smart retry、deep Oracle blocked、hard budget、active-run recovery、operator abort 合同；交付后用真实模型任务继续抽样即可。</li>
+      </ol>
+    </section>
+  </main>
+</body>
+</html>

@@ -258,6 +258,14 @@ import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { t
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
 import unexpectedStopRetryTemplate from "../prompts/system/unexpected-stop-retry.md" with { type: "text" };
 import {
+	appendSanLoopRoleContextDebugEntry,
+	buildSanLoopRoleContext,
+	findLatestSanLoopRun,
+	isSanLoopTerminalStatus,
+	recoverSanLoopRun,
+} from "../san-loop";
+import { SAN_LOOP_CONTEXT_PACKET_CUSTOM_TYPE } from "../san-loop/types";
+import {
 	deobfuscateAssistantContent,
 	deobfuscateSessionContext,
 	obfuscateMessages,
@@ -1692,6 +1700,7 @@ export class AgentSession {
 		this.#customCommands = config.customCommands ?? [];
 		this.#skillsSettings = config.skillsSettings;
 		this.#modelRegistry = config.modelRegistry;
+		this.#recoverPersistedSanLoopRun();
 		// Resolve the wire service-tier per request so the Fireworks Priority
 		// toggle scopes priority to Fireworks alone, without mutating the shared
 		// session `serviceTier` that drives `/fast` and OpenAI/Anthropic priority.
@@ -3536,6 +3545,22 @@ export class AgentSession {
 		}
 		this.agent.replaceMessages(
 			messages.filter(message => !(message.role === "custom" && message.customType === CONTEXT_PACKET_MESSAGE_TYPE)),
+		);
+	}
+
+	#dropSanLoopRoleContextMessagesFromActiveContext(): void {
+		const messages = this.agent.state.messages;
+		if (
+			!messages.some(
+				message => message.role === "custom" && message.customType === SAN_LOOP_CONTEXT_PACKET_CUSTOM_TYPE,
+			)
+		) {
+			return;
+		}
+		this.agent.replaceMessages(
+			messages.filter(
+				message => !(message.role === "custom" && message.customType === SAN_LOOP_CONTEXT_PACKET_CUSTOM_TYPE),
+			),
 		);
 	}
 
@@ -6762,6 +6787,10 @@ export class AgentSession {
 		if (contextPacketPrelude) {
 			preludeMessages.push(contextPacketPrelude);
 		}
+		const sanLoopPrelude = options?.synthetic ? undefined : this.#buildSanLoopCommanderPrelude();
+		if (sanLoopPrelude) {
+			preludeMessages.push(sanLoopPrelude);
+		}
 
 		try {
 			await this.#promptWithMessage(message, expandedText, {
@@ -6814,6 +6843,47 @@ export class AgentSession {
 			attribution: "agent",
 			timestamp: Date.now(),
 		};
+	}
+
+	#buildSanLoopCommanderPrelude(): CustomMessage | undefined {
+		if (this.settings.get("san.executionLoop.enabled") !== true) return undefined;
+		if (this.settings.get("san.executionLoop.ledger.enabled") !== true) return undefined;
+		this.#dropSanLoopRoleContextMessagesFromActiveContext();
+
+		const built = buildSanLoopRoleContext(this.sessionManager.getEntries(), {
+			role: "commander",
+			settings: {
+				tokenBudget: this.settings.get("san.executionLoop.roleContext.tokenBudget") as number,
+				maxEvents: this.settings.get("san.executionLoop.roleContext.maxEvents") as number,
+				maxDecisions: this.settings.get("san.executionLoop.roleContext.maxDecisions") as number,
+			},
+		});
+		if (!built) return undefined;
+		if (this.settings.get("san.executionLoop.ledger.persistRolePackets") === true) {
+			appendSanLoopRoleContextDebugEntry(this.sessionManager, built.packet);
+		}
+		return {
+			role: "custom",
+			customType: SAN_LOOP_CONTEXT_PACKET_CUSTOM_TYPE,
+			content: built.content,
+			display: false,
+			details: {
+				packetId: built.packet.packetId,
+				runId: built.packet.runId,
+				role: built.packet.role,
+				sourceContextPacketRefs: built.packet.sourceContextPacketRefs,
+			},
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+	}
+
+	#recoverPersistedSanLoopRun(): void {
+		if (this.settings.get("san.executionLoop.enabled") !== true) return;
+		if (this.settings.get("san.executionLoop.ledger.enabled") !== true) return;
+		const latest = findLatestSanLoopRun(this.sessionManager.getEntries());
+		if (!latest || isSanLoopTerminalStatus(latest.data.status)) return;
+		recoverSanLoopRun(this.sessionManager, latest.data);
 	}
 
 	async #buildContextSteadyRecallLayer(expandedText: string): Promise<ContextPacketRecallLayer | undefined> {

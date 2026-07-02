@@ -15,6 +15,10 @@ import oracleMd from "../prompts/agents/oracle.md" with { type: "text" };
 
 import planMd from "../prompts/agents/plan.md" with { type: "text" };
 import reviewerMd from "../prompts/agents/reviewer.md" with { type: "text" };
+import sanCommanderMd from "../prompts/agents/san-commander.md" with { type: "text" };
+import sanOracleMd from "../prompts/agents/san-oracle.md" with { type: "text" };
+import sanSupervisorMd from "../prompts/agents/san-supervisor.md" with { type: "text" };
+import sanWorkerMd from "../prompts/agents/san-worker.md" with { type: "text" };
 import taskMd from "../prompts/agents/task.md" with { type: "text" };
 
 import type { AgentDefinition, AgentSource } from "./types";
@@ -48,6 +52,10 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	{ fileName: "reviewer.md", template: reviewerMd },
 	{ fileName: "librarian.md", template: librarianMd },
 	{ fileName: "oracle.md", template: oracleMd },
+	{ fileName: "san-commander.md", template: sanCommanderMd },
+	{ fileName: "san-worker.md", template: sanWorkerMd },
+	{ fileName: "san-supervisor.md", template: sanSupervisorMd },
+	{ fileName: "san-oracle.md", template: sanOracleMd },
 	{
 		fileName: "task.md",
 		frontmatter: {

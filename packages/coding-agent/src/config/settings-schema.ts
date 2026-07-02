@@ -2537,6 +2537,39 @@ export const SETTINGS_SCHEMA = {
 	"san.contextSteady.recall.maxTokens": { type: "number", default: 1000 },
 	"san.contextSteady.recall.maxQueryChars": { type: "number", default: 2000 },
 
+	// San v0.2 Execution Loop
+	"san.executionLoop.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "context",
+			group: "Experimental",
+			label: "Execution Loop",
+			description:
+				"Enable San v0.2 execution loop scaffolding: run ledger, role context packets, San Checks, and orchestrator entrypoints.",
+		},
+	},
+	"san.executionLoop.defaultMode": { type: "enum", values: ["rush", "smart", "deep"] as const, default: "smart" },
+	"san.executionLoop.maxRetries": { type: "number", default: 2 },
+	"san.executionLoop.maxWorkers": { type: "number", default: 3 },
+	"san.executionLoop.ledger.enabled": { type: "boolean", default: true },
+	"san.executionLoop.ledger.persistRolePackets": { type: "boolean", default: true },
+	"san.executionLoop.checks.enabled": { type: "boolean", default: true },
+	"san.executionLoop.checks.includeBuiltins": { type: "boolean", default: true },
+	"san.executionLoop.checks.projectDir": { type: "string", default: ".omp/checks" },
+	"san.executionLoop.roles.commander.modelRole": { type: "string", default: "slow" },
+	"san.executionLoop.roles.worker.modelRole": { type: "string", default: "default" },
+	"san.executionLoop.roles.supervisor.modelRole": { type: "string", default: "advisor" },
+	"san.executionLoop.roles.oracle.modelRole": { type: "string", default: "plan" },
+	"san.executionLoop.roles.oracle.enabledInModes": { type: "array", default: ["deep"] as const },
+	"san.executionLoop.roleContext.tokenBudget": { type: "number", default: 2000 },
+	"san.executionLoop.roleContext.maxEvents": { type: "number", default: 8 },
+	"san.executionLoop.roleContext.maxDecisions": { type: "number", default: 8 },
+	"san.executionLoop.budget.rushMaxTurns": { type: "number", default: 3 },
+	"san.executionLoop.budget.smartMaxTurns": { type: "number", default: 8 },
+	"san.executionLoop.budget.deepMaxTurns": { type: "number", default: 16 },
+	"san.executionLoop.budget.reserveRatio": { type: "number", default: 0.25 },
+
 	// Hindsight (https://hindsight.vectorize.io)
 	"hindsight.apiUrl": {
 		type: "string",

@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>San v0.2 确定性 Dogfood 报告</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7fb;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #667085;
+      --line: #d8deea;
+      --brand: #2656d9;
+      --ok: #067647;
+      --warn: #b54708;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.65;
+    }
+    main {
+      width: min(1080px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 48px 0 72px;
+    }
+    header, section {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+      box-shadow: 0 16px 38px rgba(23, 32, 51, 0.06);
+    }
+    header {
+      padding: 34px 38px;
+      background: linear-gradient(135deg, #ffffff 0%, #eef3ff 100%);
+    }
+    section {
+      margin-top: 20px;
+      padding: 28px 32px;
+    }
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--brand);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(32px, 5vw, 54px);
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+    }
+    h2 {
+      margin: 0 0 14px;
+      font-size: 23px;
+      letter-spacing: -0.02em;
+    }
+    p { margin: 0 0 14px; color: var(--muted); }
+    code {
+      padding: 2px 6px;
+      border-radius: 6px;
+      background: #f2f4f7;
+      color: #101828;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.92em;
+    }
+    table {
+      width: 100%;
+      margin-top: 14px;
+      border-collapse: collapse;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    th, td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f2f5fb;
+      color: #344054;
+      font-size: 13px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    tr:last-child td { border-bottom: 0; }
+    .callout {
+      margin-top: 14px;
+      padding: 16px 18px;
+      border: 1px solid #abefc6;
+      border-radius: 12px;
+      background: #ecfdf3;
+      color: #074d31;
+    }
+    .callout.warn {
+      border-color: #fedf89;
+      background: #fffaeb;
+      color: #7a2e0e;
+    }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+    .metric {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fbfcff;
+    }
+    .metric strong {
+      display: block;
+      font-size: 28px;
+      color: var(--brand);
+      line-height: 1;
+    }
+    .metric span {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    ul { margin: 10px 0 0; padding-left: 20px; }
+    li { margin: 6px 0; }
+    @media (max-width: 760px) {
+      main { width: min(100vw - 24px, 1080px); padding-top: 24px; }
+      header, section { padding: 22px; }
+      .metric-grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">San v0.2 · Dogfood Gate</p>
+      <h1>成熟闭环验收已补齐</h1>
+      <p>
+        本报告记录 v0.2 mature execution loop 的交付验收：无模型 dogfood verifier 复用真实 <code>runSanLoop()</code>、
+        ledger 和 report renderer，把 rush / smart / deep、retry、blocked、hard budget、recovery 和 abort 的核心合同固定下来。
+        真实模型任务不再作为阻塞项，而作为用户验收阶段的抽样验证。
+      </p>
+    </header>
+
+    <section>
+      <h2>验证结论</h2>
+      <div class="callout">
+        <strong>结果：PASS</strong>
+        <code>bun scripts/san-loop-dogfood.ts</code> 和 <code>bun test test/san-loop/dogfood.test.ts</code> 已通过。
+      </div>
+      <div class="metric-grid">
+        <div class="metric"><strong>6</strong><span>总 run 数</span></div>
+        <div class="metric"><strong>2</strong><span>passed runs</span></div>
+        <div class="metric"><strong>3</strong><span>blocked runs</span></div>
+        <div class="metric"><strong>1</strong><span>aborted run</span></div>
+        <div class="metric"><strong>26</strong><span>ledger events</span></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>覆盖场景</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>场景</th>
+            <th>模式</th>
+            <th>期望</th>
+            <th>实际</th>
+            <th>关键事件</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Rush pass</td>
+            <td><code>rush</code></td>
+            <td>单轮完成并 finalized。</td>
+            <td><code>passed</code></td>
+            <td><code>run_created -> plan_created -> assignment_created -> worker_completed -> finalized</code></td>
+          </tr>
+          <tr>
+            <td>Smart retry</td>
+            <td><code>smart</code></td>
+            <td>Supervisor 先 <code>needs_fix</code>，Commander 带 review context 重新计划，第二轮 pass。</td>
+            <td><code>passed</code>，retry=1</td>
+            <td><code>retry_requested</code> 后再次 plan/dispatch/work/finalized。</td>
+          </tr>
+          <tr>
+            <td>Deep blocked</td>
+            <td><code>deep</code></td>
+            <td>deep policy 先运行 Oracle second opinion，再由 Supervisor 终止为 blocked。</td>
+            <td><code>blocked</code></td>
+            <td><code>finalized</code> by Oracle 后 <code>review_completed</code> by Supervisor。</td>
+          </tr>
+          <tr>
+            <td>Budget exhausted</td>
+            <td><code>rush</code></td>
+            <td>预算耗尽时不再启动下一次 Supervisor agent，直接 blocked。</td>
+            <td><code>blocked</code>，reviews=0</td>
+            <td><code>blocked</code> with <code>remainingTurns=0</code></td>
+          </tr>
+          <tr>
+            <td>Recovery</td>
+            <td><code>smart</code></td>
+            <td>active run resume 时没有 running child process，转为 blocked 并写 recovery event。</td>
+            <td><code>blocked</code></td>
+            <td><code>recovered</code></td>
+          </tr>
+          <tr>
+            <td>Abort</td>
+            <td><code>rush</code></td>
+            <td>operator stop 不删历史，只写 aborted event。</td>
+            <td><code>aborted</code></td>
+            <td><code>aborted</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>新增交付</h2>
+      <ul>
+        <li><code>packages/coding-agent/src/san-loop/dogfood.ts</code>：确定性 verifier，复用真实 <code>runSanLoop()</code>、ledger、report renderer。</li>
+        <li><code>packages/coding-agent/scripts/san-loop-dogfood.ts</code>：可直接运行的 dogfood gate。</li>
+        <li><code>packages/coding-agent/test/san-loop/dogfood.test.ts</code>：把 mature loop 合同纳入自动化测试。</li>
+        <li><code>docs/research/san-v0.2-technical-design.html</code> 与需求规划已更新 P4/P5 状态。</li>
+      </ul>
+      <div class="callout warn">
+        <strong>后续抽样</strong>
+        交付后建议继续用真实模型任务抽样：至少覆盖 bug fix、跨文件功能、测试补强、TUI/UX 或 CLI 行为变更，并记录成本、失败样本和上下文稳定性。
+      </div>
+    </section>
+  </main>
+</body>
+</html>
