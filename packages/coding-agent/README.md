@@ -4,7 +4,7 @@ Core implementation package for the `san` coding agent. San is a fork of `omp` t
 
 For installation, setup, provider configuration, model roles, slash commands, and full CLI reference, see:
 - [Monorepo README (local)](../../README.md)
-- [Monorepo README (GitHub)](https://github.com/can1357/oh-my-pi#readme)
+- [Monorepo README (GitHub)](https://github.com/slicenferqin/san#readme)
 
 Package-specific references:
 - [CHANGELOG](./CHANGELOG.md)
