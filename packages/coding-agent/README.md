@@ -1,6 +1,6 @@
-# @oh-my-pi/pi-coding-agent
+# San coding agent
 
-Core implementation package for the `omp` coding agent in the `oh-my-pi` monorepo.
+Core implementation package for the `san` coding agent. San is a fork of `omp` that keeps the original tool-rich coding-agent surface and adds context steady state work for long-running, resumable engineering sessions.
 
 For installation, setup, provider configuration, model roles, slash commands, and full CLI reference, see:
 - [Monorepo README (local)](../../README.md)
@@ -12,6 +12,31 @@ Package-specific references:
 - [MCP runtime lifecycle](../../docs/mcp-runtime-lifecycle.md)
 - [MCP server/tool authoring](../../docs/mcp-server-tool-authoring.md)
 - [DEVELOPMENT](./DEVELOPMENT.md)
+
+## San context steady v0.1
+
+San v0.1 turns completed agent turns into durable state and feeds a compact, bounded ContextPacket back into later turns. It is designed for dogfooding real coding sessions where a raw transcript grows quickly, but the agent still needs stable continuity across 10+ turns.
+
+The v0.1 surface includes:
+
+- `san.turn_digest` entries for settled turns, capturing intent, actions, decisions, files touched, risks, next steps, memory candidates, and tool evidence.
+- `san.context_checkpoint` entries that roll older digest history into stable checkpoint summaries.
+- `san.context_packet` debug entries plus hidden `san.context_packet.injected` messages for layered packet injection.
+- Provider-payload pruning for transcript spans already covered by ContextPacket evidence.
+- Read-only recall integration that adds retrieved memory as a volatile ContextPacket layer instead of rewriting the stable system prompt.
+- Optional LLM-backed TurnDigest generation controlled by `san.contextSteady.digest.llm.*`, with deterministic fallback preserved.
+
+Recommended dogfood config:
+
+```sh
+san --config packages/coding-agent/examples/config/san-context-steady-recommended.yml
+```
+
+Useful verification artifacts:
+
+- `docs/research/context-steady-v0.1-quality-acceptance-report.html`
+- `docs/research/context-steady-v0.1-fix-plan.html`
+- `docs/research/context-steady-dogfood-runs/`
 
 ## Memory backends
 

@@ -22,9 +22,30 @@
   Fork of <a href="https://github.com/badlogic/pi-mono">Pi</a> by <a href="https://github.com/mariozechner">@mariozechner</a> 
 </p>
 
-The most capable agent surface that ships. Continuously tuned by real-world use — complete out of the box, open all the way down.
+San is a fork of omp focused on long-running, resumable coding agents. It keeps the original tool-rich agent surface, then adds context steady state work so multi-turn engineering sessions remain coherent after context growth, resume, and compaction.
 
-**40+** providers · **32** built-in tools · **14** lsp ops · **28** dap ops · **~55k** lines of Rust core.
+**40+** providers · **32** built-in tools · **14** lsp ops · **28** dap ops · **context steady v0.1**.
+
+## San v0.1: context that stays useful
+
+San v0.1 is the first public milestone for context steady state: the agent turns each completed turn into durable, structured state, then injects a bounded ContextPacket before the next real user prompt. The goal is simple: a 10-turn dogfood session should not balloon into a fragile raw transcript, and the next turn should still know what matters.
+
+What is ready to claim in v0.1:
+
+- **TurnDigest ledger** — every settled turn can persist a structured digest with intent, actions, decisions, touched files, risks, next steps, and tool evidence.
+- **Stable checkpoints** — older digest history rolls into low-frequency checkpoints so durable project state remains available without replaying every raw message.
+- **Bounded ContextPackets** — the next turn receives a layered packet with stable checkpoints, recent digest tail, and optional recalled memory under an explicit token budget.
+- **Provider-payload pruning** — raw transcript spans covered by a packet can be removed before provider send, keeping active context small while preserving transcript/debug history.
+- **Optional LLM digest polish** — local deterministic digests remain the fallback; an optional side LLM can improve digest quality without becoming a hard dependency.
+- **Dogfood acceptance harness** — the repo includes deterministic and real-session dogfood artifacts for 10-turn context steady validation.
+
+Recommended local dogfood config:
+
+```sh
+san --config packages/coding-agent/examples/config/san-context-steady-recommended.yml
+```
+
+The v0.2 branch of work, already merged into `main`, adds the San execution loop foundation on top of this: Commander, Worker, Supervisor, Oracle roles, append-only loop ledger entries, checks, and `/san-loop` reporting.
 
 ## Install
 
