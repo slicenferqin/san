@@ -43,7 +43,7 @@ describe("Context steady recall quality helpers", () => {
 				digestEntry("d2", digest("t2", "write M7 dogfood verifier")),
 				digestEntry("d3", digest("t3", "settle M8 recommended config")),
 			],
-			"Improve recall quality",
+			"Continue recall quality",
 			{ recentDigests: 2, maxQueryChars: 2000 },
 		);
 
@@ -52,7 +52,7 @@ describe("Context steady recall quality helpers", () => {
 		expect(query).toContain("d3: settle M8 recommended config");
 		expect(query).not.toContain("d1: implement M6 debug view");
 		expect(query).toContain("Current prompt:");
-		expect(query).toContain("Improve recall quality");
+		expect(query).toContain("Continue recall quality");
 	});
 
 	test("preserves the current prompt when digest context exceeds the query budget", () => {

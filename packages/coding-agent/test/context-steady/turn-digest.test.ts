@@ -13,7 +13,11 @@
  * 6. Span extraction includes both message and custom_message entries
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
+import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
+import * as ai from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { generateDigest } from "../../src/context-steady/digest";
 import { generateFallbackDigest, generateTurnId } from "../../src/context-steady/fallback";
 import { normalizeDigest } from "../../src/context-steady/normalize";
 import {
@@ -53,6 +57,7 @@ interface Msg {
 	toolCallId?: string;
 	toolName?: string;
 	details?: Record<string, unknown>;
+	entryId?: string;
 }
 
 function umsg(text: string): Msg {
@@ -100,6 +105,60 @@ function customMsgEntry(id: string, customType: string, content = ""): Record<st
 
 const asM = (m: Msg[]) => m as unknown as Parameters<typeof generateFallbackDigest>[0];
 const asE = (e: Record<string, unknown>[]) => e as unknown as Parameters<typeof listTurnDigests>[0];
+
+function getDigestModel(): Model<Api> {
+	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+	if (!model) throw new Error("Expected bundled digest test model");
+	return model;
+}
+
+function assistantWithDigest(args: Record<string, unknown>): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [{ type: "toolCall", id: "call-digest", name: "record_turn_digest", arguments: args }],
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "claude-sonnet-4-5",
+		usage: {
+			input: 10,
+			output: 5,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 15,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "toolUse",
+		timestamp: Date.now(),
+	};
+}
+
+function createSessionManager(entries: Record<string, unknown>[] = []) {
+	const stored = [...entries];
+	return {
+		getEntries: () => stored,
+		appendCustomEntry(customType: string, data: unknown) {
+			const entry = centry(`custom-${stored.length + 1}`, customType, data);
+			stored.push(entry);
+			return entry.id;
+		},
+	};
+}
+
+function steadySettings(llmEnabled: boolean, persistFallback = true) {
+	return {
+		enabled: true,
+		digest: {
+			enabled: true,
+			persistFallback,
+			timeoutMs: 5000,
+			llm: { enabled: llmEnabled, modelRole: "pi/smol" },
+		},
+	};
+}
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -204,6 +263,62 @@ describe("fallback digest", () => {
 
 		expect(d.toolEvidence.map(t => t.summary)).toEqual(["read: completed", "edit: error"]);
 	});
+
+	test("collects decisions from every assistant message in the source span", () => {
+		const msgs = asM([
+			umsg("Fix the parser"),
+			amsg("I will inspect the parser first."),
+			amsg("We should keep the fix scoped to parse errors."),
+			tmsg("read", "completed", "src/parser.ts"),
+			amsg("Done."),
+		]);
+		const src = { sessionId: "s", fromEntryId: "e1", toEntryId: "e5", promptGeneration: 1 };
+		const d = generateFallbackDigest(msgs, src, "turn-decisions", "s");
+
+		expect(d.decisions).toEqual([
+			"I will inspect the parser first.",
+			"We should keep the fix scoped to parse errors.",
+		]);
+	});
+
+	test("fallback digest extracts facts, risks, open questions, and next steps from assistant text", () => {
+		const msgs = asM([
+			umsg("Assess context steady"),
+			amsg(
+				[
+					"Evidence: provider-bound pruning removed raw transcript markers.",
+					"Risk: source span could over-prune custom context.",
+					"Open question: LLM digest quality is not covered yet.",
+					"Next step: rerun the real dogfood benchmark.",
+				].join("\n"),
+			),
+		]);
+		const src = { sessionId: "s", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 };
+		const d = generateFallbackDigest(msgs, src, "turn-quality", "s");
+
+		expect(d.factsLearned).toEqual(["Evidence: provider-bound pruning removed raw transcript markers."]);
+		expect(d.risks).toEqual(["Risk: source span could over-prune custom context."]);
+		expect(d.openQuestions).toEqual(["Open question: LLM digest quality is not covered yet."]);
+		expect(d.nextSteps).toEqual(["Next step: rerun the real dogfood benchmark."]);
+	});
+
+	test("tool evidence keeps source entry ids when span extraction provides them", () => {
+		const msgs = asM([
+			umsg("Read a file"),
+			{
+				...tmsg("read", "completed", "src/app.ts"),
+				entryId: "tool-result-entry",
+			},
+			amsg("Done."),
+		]);
+		const src = { sessionId: "s", fromEntryId: "e1", toEntryId: "e3", promptGeneration: 1 };
+		const d = generateFallbackDigest(msgs, src, "turn-entry-ids", "s");
+
+		expect(d.toolEvidence[0]).toMatchObject({
+			tool: "read",
+			entryIds: ["tool-result-entry"],
+		});
+	});
 });
 
 describe("normalize", () => {
@@ -242,6 +357,221 @@ describe("normalize", () => {
 	test("clamps array lengths", () => {
 		const d = normalizeDigest({ actionsTaken: Array.from({ length: 100 }, (_, i) => `item-${i}`) }, fb);
 		expect(d.actionsTaken.length).toBeLessThanOrEqual(20);
+	});
+
+	test("normalizes memory candidate importance as a zero-to-one score", () => {
+		const d = normalizeDigest(
+			{
+				userIntent: "remember preferences",
+				memoryCandidates: [
+					{ content: "high", type: "preference", importance: 0.9 },
+					{ content: "too high", type: "decision", importance: 2 },
+					{ content: "too low", type: "workflow", importance: -1 },
+					{ content: "missing", type: "other" },
+					{ content: "invalid", type: "other", importance: Number.NaN },
+				],
+			},
+			fb,
+		);
+
+		expect(d.memoryCandidates.map(candidate => candidate.importance)).toEqual([0.9, 1, 0, 0.5, 0.5]);
+	});
+
+	test("preserves tool evidence entry ids", () => {
+		const d = normalizeDigest(
+			{
+				userIntent: "inspect files",
+				toolEvidence: [{ tool: "read", summary: "read: completed", entryIds: ["entry-a", 7, "entry-b"] }],
+			},
+			fb,
+		);
+
+		expect(d.toolEvidence[0]).toEqual({
+			tool: "read",
+			summary: "read: completed",
+			entryIds: ["entry-a", "entry-b"],
+		});
+	});
+});
+
+describe("LLM digest orchestration", () => {
+	test("persists normalized LLM digest while keeping local source and evidence fields authoritative", async () => {
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue(
+			assistantWithDigest({
+				userIntent: "Validate whether context steady stays stable over a 10-turn benchmark.",
+				actionsTaken: ["Inspected the prior dogfood run and identified digest quality as the next bottleneck."],
+				decisions: ["Keep packet and checkpoint boundaries unchanged while replacing digest generation."],
+				filesTouched: [{ path: "packages/coding-agent/src/context-steady/digest.ts", action: "modified" }],
+				factsLearned: ["The current fallback digest misses implicit acceptance constraints."],
+				openQuestions: [],
+				risks: ["LLM digest failures must not block the main agent turn."],
+				nextSteps: ["Run the context-steady test suite and bun check."],
+				memoryCandidates: [
+					{
+						content: "San context steady should solve continuity generically, not with benchmark-specific rules.",
+						type: "decision",
+						importance: 0.9,
+					},
+				],
+			}),
+		);
+		const source = { sessionId: "s", fromEntryId: "e1", toEntryId: "e3", promptGeneration: 1 };
+		const sessionManager = createSessionManager();
+
+		await generateDigest(
+			asM([
+				umsg("上下文窗口现在稳住了吗，质量怎么样"),
+				{
+					...tmsg("read", "completed", "packages/coding-agent/src/context-steady/digest.ts"),
+					entryId: "tool-entry",
+				},
+				amsg("Conclusion: stable, but digest quality needs LLM structure."),
+			]),
+			source,
+			sessionManager as never,
+			{} as never,
+			steadySettings(true),
+			{ model: getDigestModel(), apiKey: async () => "test-key" },
+		);
+
+		const entries = sessionManager.getEntries();
+		const stored = entries[0]?.data as TurnDigest;
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+		expect(stored.fallback).toBe(false);
+		expect(stored.source).toEqual(source);
+		expect(stored.userIntent).toContain("context steady");
+		expect(stored.decisions).toContain(
+			"Keep packet and checkpoint boundaries unchanged while replacing digest generation.",
+		);
+		expect(stored.toolEvidence[0]).toMatchObject({
+			tool: "read",
+			entryIds: ["tool-entry"],
+		});
+	});
+
+	test("normalizes minor LLM schema drift instead of falling back", async () => {
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(
+			assistantWithDigest({
+				userIntent: "第十轮：最终验收 San context steady 是否稳住。",
+				actionsTaken: ["第十轮给出最终验收结论。"],
+				decisions: ["上下文已基本稳住。"],
+				filesTouched: [],
+				factsLearned: [],
+				openQuestions: [],
+				risks: ["Digest 可能继续历史化。"],
+				nextSteps: ["继续控制 digest 膨胀。"],
+				memoryCandidates: [
+					{
+						content: "Digest 可能继续历史化，这是本轮风险。",
+						type: "risk",
+						importance: 0.7,
+					},
+					{
+						content: "Digest 应压缩为通用状态摘要，而不是逐轮聊天复刻。",
+						type: "workflow",
+						importance: 0.9,
+					},
+				],
+			}),
+		);
+		const source = { sessionId: "s", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 };
+		const sessionManager = createSessionManager();
+
+		await generateDigest(
+			asM([umsg("第十轮：最终验收 San context steady 是否稳住。"), amsg("上下文已基本稳住。")]),
+			source,
+			sessionManager as never,
+			{} as never,
+			steadySettings(true),
+			{ model: getDigestModel(), apiKey: async () => "test-key" },
+		);
+
+		const stored = sessionManager.getEntries()[0]?.data as TurnDigest;
+		expect(stored.fallback).toBe(false);
+		expect(stored.userIntent).toBe("最终验收 San context steady 是否稳住。");
+		expect(stored.actionsTaken).toEqual(["给出最终验收结论。"]);
+		expect(stored.memoryCandidates).toEqual([
+			{
+				content: "Digest 应压缩为通用状态摘要，而不是逐轮聊天复刻。",
+				type: "workflow",
+				importance: 0.9,
+			},
+		]);
+	});
+
+	test("retries transient LLM digest failures before falling back", async () => {
+		const completeSimpleMock = vi
+			.spyOn(ai, "completeSimple")
+			.mockRejectedValueOnce(
+				new Error("OpenAI responses stream closed before a terminal response event was received"),
+			)
+			.mockResolvedValue(
+				assistantWithDigest({
+					userIntent: "Finalize context steady acceptance.",
+					actionsTaken: ["Recorded a stable acceptance conclusion."],
+					decisions: ["Treat a transient digest stream close as retryable."],
+					filesTouched: [],
+					factsLearned: ["The final response completed successfully before digest generation."],
+					openQuestions: [],
+					risks: [],
+					nextSteps: [],
+					memoryCandidates: [],
+				}),
+			);
+		const source = { sessionId: "s", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 };
+		const sessionManager = createSessionManager();
+
+		await generateDigest(
+			asM([umsg("最终验收"), amsg("通过。")]),
+			source,
+			sessionManager as never,
+			{} as never,
+			steadySettings(true),
+			{ model: getDigestModel(), apiKey: async () => "test-key" },
+		);
+
+		const stored = sessionManager.getEntries()[0]?.data as TurnDigest;
+		expect(completeSimpleMock).toHaveBeenCalledTimes(2);
+		expect(stored.fallback).toBe(false);
+		expect(stored.userIntent).toBe("Finalize context steady acceptance.");
+		expect(stored.decisions).toEqual(["Treat a transient digest stream close as retryable."]);
+	});
+
+	test("falls back to deterministic digest when LLM generation fails and fallback persistence is enabled", async () => {
+		vi.spyOn(ai, "completeSimple").mockRejectedValue(new Error("provider unavailable"));
+		const source = { sessionId: "s", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 };
+		const sessionManager = createSessionManager();
+
+		await generateDigest(
+			asM([umsg("Fix src/app.ts"), { ...tmsg("read", "completed", "src/app.ts"), entryId: "tool-entry" }]),
+			source,
+			sessionManager as never,
+			{} as never,
+			steadySettings(true, true),
+			{ model: getDigestModel(), apiKey: async () => "test-key" },
+		);
+
+		const stored = sessionManager.getEntries()[0]?.data as TurnDigest;
+		expect(stored.fallback).toBe(true);
+		expect(stored.userIntent).toContain("Fix src/app.ts");
+		expect(stored.toolEvidence[0]).toMatchObject({ entryIds: ["tool-entry"] });
+	});
+
+	test("skips persistence when LLM generation fails and fallback persistence is disabled", async () => {
+		vi.spyOn(ai, "completeSimple").mockRejectedValue(new Error("provider unavailable"));
+		const source = { sessionId: "s", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 };
+		const sessionManager = createSessionManager();
+
+		await generateDigest(
+			asM([umsg("Fix src/app.ts")]),
+			source,
+			sessionManager as never,
+			{} as never,
+			steadySettings(true, false),
+			{ model: getDigestModel(), apiKey: async () => "test-key" },
+		);
+
+		expect(sessionManager.getEntries()).toEqual([]);
 	});
 });
 
@@ -545,13 +875,21 @@ describe("extractSpanMessages", () => {
 		const msgs = extractSpanMessages(branch as Parameters<typeof extractSpanMessages>[0], "e1", "e4");
 		// e1 (message/assistant), e3 (custom_message → shim), e4 (message/user)
 		expect(msgs).toHaveLength(3);
-		expect(msgs[0]).toEqual({ role: "assistant", content: "hello", timestamp: 2, provider: "x", model: "x" });
+		expect(msgs[0]).toEqual({
+			role: "assistant",
+			content: "hello",
+			timestamp: 2,
+			provider: "x",
+			model: "x",
+			entryId: "e1",
+		});
 		expect(msgs[1]).toMatchObject({
 			role: "custom",
 			content: "continue please",
 			customType: "session-stop-continuation",
+			entryId: "e3",
 		});
-		expect(msgs[2]).toMatchObject({ role: "user", content: "hi2" });
+		expect(msgs[2]).toMatchObject({ role: "user", content: "hi2", entryId: "e4" });
 	});
 
 	test("custom_message without .message uses top-level content", () => {
@@ -636,8 +974,8 @@ describe("extractSpanMessages", () => {
 		const msgs = extractSpanMessages(branch as Parameters<typeof extractSpanMessages>[0], "e0", "e1");
 		expect(msgs).toHaveLength(2);
 		expect(msgs).toEqual([
-			{ role: "user", content: "hi", timestamp: 1, provider: "x", model: "x" },
-			{ role: "assistant", content: "hello", timestamp: 2, provider: "x", model: "x" },
+			{ role: "user", content: "hi", timestamp: 1, provider: "x", model: "x", entryId: "e0" },
+			{ role: "assistant", content: "hello", timestamp: 2, provider: "x", model: "x", entryId: "e1" },
 		]);
 	});
 

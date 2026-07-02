@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>San Context Steady v0.1 — 修复方案</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161a22;
+    --panel-2: #1b2029;
+    --border: #2a313d;
+    --fg: #d7dce4;
+    --fg-dim: #9aa4b2;
+    --accent: #7aa2f7;
+    --p1: #f7768e;
+    --p2: #e0af68;
+    --p3: #9ece6a;
+    --code-bg: #10141b;
+    --ok: #73daca;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    padding: 0 0 80px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 24px; }
+  header {
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, #171b24, #0f1115);
+    padding: 44px 0 30px;
+    margin-bottom: 32px;
+  }
+  header h1 { margin: 0 0 6px; font-size: 28px; letter-spacing: .3px; }
+  header .sub { color: var(--fg-dim); font-size: 14px; }
+  header .meta { color: var(--fg-dim); font-size: 13px; margin-top: 14px; }
+  header .meta code { color: var(--accent); }
+  h2 {
+    font-size: 21px; margin: 40px 0 14px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 { font-size: 17px; margin: 26px 0 10px; }
+  h4 { font-size: 14px; margin: 16px 0 6px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .5px; }
+  p { margin: 10px 0; }
+  code {
+    font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 13px; background: var(--code-bg); padding: 1px 5px; border-radius: 4px;
+    color: #c0caf5; border: 1px solid var(--border);
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px; overflow-x: auto; font-size: 12.5px; line-height: 1.55;
+    font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  pre code { background: none; border: none; padding: 0; color: #a9b1d6; }
+  .del { color: var(--p1); }
+  .add { color: var(--p3); }
+  .cmt { color: #565f89; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 11px; text-align: left; vertical-align: top; }
+  th { background: var(--panel-2); color: var(--fg); font-weight: 600; }
+  td { background: var(--panel); }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+  .tag.p1 { background: rgba(247,118,142,.15); color: var(--p1); border: 1px solid rgba(247,118,142,.4); }
+  .tag.p2 { background: rgba(224,175,104,.15); color: var(--p2); border: 1px solid rgba(224,175,104,.4); }
+  .tag.p3 { background: rgba(158,206,106,.15); color: var(--p3); border: 1px solid rgba(158,206,106,.4); }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 4px 22px 20px; margin: 22px 0;
+  }
+  .card.p1 { border-left: 4px solid var(--p1); }
+  .card.p2 { border-left: 4px solid var(--p2); }
+  .card.p3 { border-left: 4px solid var(--p3); }
+  .card h3 { display: flex; align-items: center; gap: 10px; }
+  .loc { color: var(--fg-dim); font-size: 12.5px; margin: 2px 0 12px; }
+  .loc code { color: var(--accent); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+  .box { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 15px; }
+  .box .lbl { font-size: 12px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+  ul, ol { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  .note { color: var(--fg-dim); font-size: 13px; font-style: italic; }
+  .seq { counter-reset: step; list-style: none; padding-left: 0; }
+  .seq li { position: relative; padding: 10px 0 10px 44px; border-bottom: 1px dashed var(--border); }
+  .seq li::before {
+    counter-increment: step; content: counter(step);
+    position: absolute; left: 0; top: 8px; width: 28px; height: 28px;
+    background: var(--accent); color: #0f1115; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px;
+  }
+  .kw { color: var(--accent); font-weight: 600; }
+  .callout { background: rgba(122,162,247,.08); border: 1px solid rgba(122,162,247,.3); border-radius: 8px; padding: 12px 16px; margin: 16px 0; }
+  .callout.warn { background: rgba(247,118,142,.07); border-color: rgba(247,118,142,.3); }
+  .seqdiag { font-family: "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.8; }
+  .seqdiag .keep { color: var(--ok); }
+  .seqdiag .break { color: var(--p1); text-decoration: line-through; }
+  .seqdiag .new { color: var(--p2); }
+  .review {
+    background: rgba(115,218,202,.08);
+    border: 1px solid rgba(115,218,202,.32);
+    border-left: 4px solid var(--ok);
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin: 24px 0 28px;
+  }
+  .review h2 {
+    margin-top: 0;
+    border-bottom-color: rgba(115,218,202,.32);
+  }
+  .review strong { color: var(--ok); }
+  footer { margin-top: 50px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--fg-dim); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>San Context Steady v0.1 — 修复方案</h1>
+    <div class="sub">针对代码审查发现的 cache 失效、预算失控、证据链断裂等问题的分级修复计划</div>
+    <div class="meta">
+      范围:<code>packages/coding-agent/src/context-steady/</code> + <code>session/agent-session.ts</code> 集成路径 ·
+      日期:2026-07-01 · 状态:待评审
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section class="review">
+    <h2>Codex 批注 · 2026-07-01</h2>
+    <p>
+      本文问题清单大体成立，尤其是 <strong>P1-B</strong>、<strong>P2-C</strong>、<strong>P2-D</strong>、<strong>P2-E</strong>
+      和 <strong>P3-F</strong>。这些问题会影响 v0.1 的预算可信度、证据回溯和 fallback digest 质量，应该先修。
+    </p>
+    <p>
+      <strong>P1-A 的问题成立，但本文的方案 B 不应直接执行。</strong>
+      简单删除 <code>#dropContextSteadyPacketMessagesFromActiveContext()</code> 会让旧的全量 packet 在 active LLM context 中累积，
+      与 M10 的 replay 合同冲突，也会造成 digest 重复注入和 token 线性放大。P1-A 应单独设计 append-only delta packet：
+      checkpoint 低频稳定注入，turn digest 逐轮追加 delta，避免每轮重写全量 packet。
+    </p>
+    <p>
+      本轮质量修复范围调整为：先实现 <strong>P1-B 总预算 gate</strong>、<strong>P2-C entryIds</strong>、
+      <strong>P2-D importance 0-1 契约</strong>、<strong>P2-E 多 assistant 决策提取</strong>、
+      <strong>P3-F digest 降级日志</strong>。P1-A append-only delta 和 P3-G/P3-H 留作后续独立设计/清理。
+    </p>
+  </section>
+
+  <h2>0. 摘要</h2>
+  <p>
+    v0.1 的 turn boundary 处理、CustomEntry/CustomMessageEntry 契约分层、never-throw 鲁棒性都做得扎实。
+    但有 <strong>2 个 P1</strong> 直接动摇"上下文稳态"的价值主张(cache 失效、预算失控),以及若干
+    P2/P3 缺陷会在 LLM digest 上线后放大。本方案按<strong>严重度 + 修复成本</strong>给出改法与测试契约。
+  </p>
+
+  <table>
+    <thead>
+      <tr><th style="width:64px">级别</th><th>问题</th><th>影响</th><th style="width:96px">修复成本</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><span class="tag p1">P1-A</span></td><td>每轮 drop + 重注入 packet,active context 非 append-only</td><td>prompt cache 从首个被删位置起全部失效,与文档核心承诺矛盾</td><td>中(需选架构)</td></tr>
+      <tr><td><span class="tag p1">P1-B</span></td><td>packet 无总量 gate,三层预算相加</td><td>单条注入可达 ~15K tokens,<code>maxTokens=2000</code> 名不副实</td><td>低</td></tr>
+      <tr><td><span class="tag p2">P2-C</span></td><td><code>toolEvidence.entryIds</code> 恒为 undefined</td><td>证据回溯链路断裂,digest 无法回指 journal entry</td><td>极低(1 处)</td></tr>
+      <tr><td><span class="tag p2">P2-D</span></td><td><code>importance</code> 契约不一致(文档 0–1 vs normalize 1–5)</td><td>LLM digest 上线即踩,0.9 被压成 1 语义全丢</td><td>极低</td></tr>
+      <tr><td><span class="tag p2">P2-E</span></td><td><code>decisions</code> 只扫最后一条 assistant 文本</td><td>多步 turn 的中间决策全部丢失</td><td>低</td></tr>
+      <tr><td><span class="tag p3">P3-F</span></td><td>compaction 后 span 脱轨,digest 静默丢弃无日志</td><td>难排查</td><td>极低</td></tr>
+      <tr><td><span class="tag p3">P3-G</span></td><td>每轮 O(n) 多次全 journal 扫描</td><td>长会话退化</td><td>低</td></tr>
+      <tr><td><span class="tag p3">P3-H</span></td><td><code>normalizeDigest</code> 死代码 + <code>checkpoint.digestCount</code> 语义漂移</td><td>latent,LLM path 上线前需清理</td><td>极低</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ============ P1-A ============ -->
+  <h2>1. P1 级问题</h2>
+
+  <div class="card p1">
+    <h3><span class="tag p1">P1-A</span> active context 非 append-only,cache 每轮失效</h3>
+    <div class="loc">
+      <code>agent-session.ts:6788</code> <code>#buildContextSteadyPacketPrelude</code> →
+      <code>agent-session.ts:3532</code> <code>#dropContextSteadyPacketMessagesFromActiveContext</code>
+    </div>
+
+    <h4>现状</h4>
+    <p>
+      每轮 build packet 前无条件 filter 掉 active context 里<strong>所有</strong> packet 消息,再把当轮新 packet
+      通过 <code>prependMessages</code> 插在 user message 之前。发给模型的 token 序列因此每轮被 rewrite:
+    </p>
+    <div class="box">
+      <div class="seqdiag">
+        <div>第2轮:[sys, U1, A1, <span class="new">P2</span>, U2, A2]</div>
+        <div>第3轮:[sys, U1, A1, <span class="break">P2</span>&nbsp;&nbsp;&nbsp;&nbsp;U2, A2, <span class="new">P3</span>, U3]&nbsp;&nbsp;<span style="color:var(--p1)">← P2 被删,序列在第 4 个位置分叉</span></div>
+      </div>
+    </div>
+    <p>
+      prefix cache 按 token 前缀匹配。第 3 轮与第 2 轮的公共前缀止于 <code>[sys, U1, A1]</code>,
+      其后全部 recompute。<strong>等于每轮只能命中到首轮结束</strong>。
+    </p>
+
+    <div class="callout warn">
+      这恰好触发文档 <code>context-steady-state-san.html</code> 明确要避免的模式:
+      <br>"<em>每轮摘要 append-only … 重写旧摘要会导致大段缓存失效 … 稳定前缀尽量不变</em>"。
+      <br>journal 层确实 append-only(persist 的 entry 不删,resume 时 <code>session-context.ts:245</code> 过滤),
+      但<strong>注入 LLM 的 active context 是每轮删旧加新</strong>——正是文档反对的做法。
+    </div>
+
+    <h4>根因</h4>
+    <p>
+      <code>drop</code> 是为了防止历史 packet 在 active context 里累积(否则每轮都带 checkpoint+5 digests,token 翻倍)。
+      它用<strong>牺牲 cache</strong> 换取<strong>token 不膨胀</strong>。但当前设计两头都没占到:packet 放对话流末尾 + 每轮 drop,
+      是对 cache 最不友好的组合。
+    </p>
+
+    <h4>修复方案</h4>
+    <p>关键洞察:packet 就紧贴在当轮 user message 前。<strong>只要不删,序列天然是 append-only 的:</strong></p>
+    <div class="box">
+      <div class="seqdiag">
+        <div>第2轮:[sys, U1, A1, <span class="keep">P2, U2, A2</span>]</div>
+        <div>第3轮:[sys, U1, A1, <span class="keep">P2, U2, A2</span>, <span class="new">P3, U3</span>]&nbsp;&nbsp;<span style="color:var(--ok)">← 完整前缀命中,growing prefix</span></div>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="box">
+        <div class="lbl">方案 A(推荐 · 目标形态)</div>
+        <p style="margin-top:0"><strong>append-only delta:</strong> 每轮只追加<em>刚沉淀的那一条 digest</em> 作为小消息;checkpoint 拆成独立消息,仅在 checkpoint 变化(每 8 轮)时刷新一次。</p>
+        <ul>
+          <li>cache:近乎完美(只在 checkpoint 刷新那一轮失效一次)</li>
+          <li>冗余:无。digest-1 只出现一次</li>
+          <li>契合文档"append-only ledger + 低频 checkpoint"原意</li>
+          <li>成本:中。需拆分 packet builder,digest/checkpoint 分别注入</li>
+        </ul>
+      </div>
+      <div class="box">
+        <div class="lbl">方案 B(即时止血)</div>
+        <p style="margin-top:0"><strong>删掉 drop 调用</strong>,保留现有全量 packet builder。</p>
+        <ul>
+          <li>cache:稳定(growing prefix)✅</li>
+          <li>冗余:P3 重述 P2 内容,token O(N·window) 增长 ⚠️</li>
+          <li>成本:极低(删 1 个方法调用 + 相关状态)</li>
+          <li>定位:方案 A 落地前的过渡</li>
+        </ul>
+      </div>
+    </div>
+
+    <p><strong>建议</strong>:先上<span class="kw">方案 B</span> 止血(本迭代),把<span class="kw">方案 A</span> 列为 M5 目标。方案 A 的注入结构:</p>
+    <pre><code><span class="cmt">// 稳定层:仅在 latestCheckpoint.entryId 变化时重新注入,否则复用上一轮的同一条消息</span>
+[sys] → [checkpoint_message?] → [U1, A1, digest1, U2, A2, digest2, ...] → [U_now]
+        <span class="cmt">↑ 稳定前缀            ↑ append-only,每轮只 +1 条 digest</span></code></pre>
+
+    <h4>测试契约</h4>
+    <ul>
+      <li>新增多轮(≥4)测试:断言第 N 轮的 <code>mock.calls[N].context.messages</code> 的前缀与第 N-1 轮<strong>逐条相等</strong>直到上一轮末尾(证明 growing prefix)。这是当前 M2 测试缺失的核心契约——它只跑 2 轮且只断言"packet 出现/不出现"。</li>
+      <li>断言历史 packet 消息在后续轮次的<strong>位置索引不变</strong>。</li>
+    </ul>
+    <p class="note">注:cache 命中率本身依赖 provider,无法单测;但"token 序列 append-only"是可确定断言的可观测契约,等价保证。</p>
+  </div>
+
+  <div class="card p1">
+    <h3><span class="tag p1">P1-B</span> packet 无总量 gate,三层预算相加</h3>
+    <div class="loc"><code>packet.ts:302</code> <code>buildContextPacket</code> · <code>resolvePacketBudget</code></div>
+
+    <h4>现状</h4>
+    <pre><code>const totalPacketTokenBudget =
+    budget.packetTokenBudget          <span class="cmt">// digest,默认 2000</span>
+    + (checkpointRef?.checkpoint.tokenBudget ?? 0)   <span class="cmt">// 默认 12000,不参与 packet 级裁剪</span>
+    + (recallLayer?.tokenBudget ?? 0);               <span class="cmt">// 默认 1000</span></code></pre>
+    <ul>
+      <li>digest ledger 按 <code>packetTokenBudget</code> 裁剪(<code>selectedWithinBudget</code>)✅</li>
+      <li>recall 按自身 budget 裁剪 ✅</li>
+      <li><strong>checkpoint 整块进 <code>renderPacketContent</code>,只在 build 时按 12000 限过,从不参与 packet 级裁剪</strong> ❌</li>
+    </ul>
+    <p>
+      三层拼成<strong>一条</strong> <code>custom_message</code> 注入,单条实际可达 <code>~12000 + 2000 + 1000 ≈ 15K tokens</code>,
+      而用户配置的 <code>contextPacket.maxTokens=2000</code> 只约束了其中一层。<code>packet.tokenEstimate</code>(整块 estimate)
+      算出来了却<strong>从不与总预算比较后再裁</strong>。与文档"每层有预算,超预算按层裁剪"偏移。
+    </p>
+
+    <h4>修复方案</h4>
+    <ol>
+      <li>引入 <code>packetTotalBudget</code> = <code>qualityWindowTokens>0 ? min(configuredTotal, qualityWindow−reserve) : configuredTotal</code>。</li>
+      <li>整块渲染后,若 <code>tokenEstimate > packetTotalBudget</code>,按文档<strong>裁剪顺序</strong>逐层削减并重估:
+        <div class="box" style="margin-top:8px">
+          <code>retrievedContext</code> → <code>oldTurnDigests</code>(ledger 头部) → checkpoint 尾部 summary items
+          &nbsp;&nbsp;<span class="note">(preserve: currentPrompt / 最近 digest / openDecisions / modifiedFiles)</span>
+        </div>
+      </li>
+      <li>每次裁剪写入 <code>trimDecisions</code>(已有结构),新增 <code>reason: "packet_total_budget"</code>。</li>
+      <li>让 checkpoint 可裁:复用已有的 <code>summary.nextSteps.slice(0,-1)</code> / <code>risks.slice(0,-1)</code> 收缩逻辑。</li>
+    </ol>
+
+    <h4>测试契约</h4>
+    <ul>
+      <li>构造 checkpoint + 5 digests + recall 使整块超总预算,断言最终 <code>packet.tokenEstimate ≤ packetTotalBudget</code>。</li>
+      <li>断言裁剪顺序:recall 先于 old digests 先于 checkpoint 被削(检查 <code>trimDecisions</code> 的 layer 序列)。</li>
+      <li>断言 <code>currentPromptPreview</code> 与最近 1 条 digest 永不被裁。</li>
+    </ul>
+  </div>
+
+  <!-- ============ P2 ============ -->
+  <h2>2. P2 级问题</h2>
+
+  <div class="card p2">
+    <h3><span class="tag p2">P2-C</span> <code>toolEvidence.entryIds</code> 恒为 undefined</h3>
+    <div class="loc"><code>fallback.ts:124</code> 依赖 <code>m.entryId</code> · <code>session.ts</code> <code>extractSpanMessages</code></div>
+
+    <h4>现状</h4>
+    <p>
+      <code>ToolResultMessage</code>(<code>ai/src/types.ts:561</code>)<strong>没有 <code>entryId</code> 字段</strong>;
+      <code>extractSpanMessages</code> 对 <code>type==="message"</code> 的 entry 直接 push <code>entry.message</code>,不带 entry.id。
+      因此 <code>entryIds</code> 恒为 undefined。文档承诺 digest "保留证据索引 entryId,下一轮按需重读原文"——<strong>该链路当前是断的</strong>。
+    </p>
+
+    <h4>修复方案</h4>
+    <p>在 <code>extractSpanMessages</code> 里给 message shim 附上 <code>entry.id</code>(浅拷贝,勿改原 message 对象):</p>
+    <pre><code>if (entry.type === "message" && entry.message !== undefined) {
+<span class="del">-   messages.push(entry.message);</span>
+<span class="add">+   messages.push({ ...(entry.message as object), entryId: entry.id });</span>
+}</code></pre>
+    <p><code>InlinedMessage.entryId</code> 已是可选字段(<code>fallback.ts:45</code>),<code>collectTools</code> 直接消费,无需改 fallback。</p>
+
+    <h4>测试契约</h4>
+    <ul>
+      <li>已存在的 <code>turn-digest.test.ts</code> 里,构造带 toolResult entry 的 branch,断言产出 digest 的
+        <code>toolEvidence[].entryIds</code> 指向正确的 journal entry id,且该 id 可被 <code>sessionManager.getEntry()</code> 解析。</li>
+    </ul>
+  </div>
+
+  <div class="card p2">
+    <h3><span class="tag p2">P2-D</span> <code>importance</code> 契约不一致</h3>
+    <div class="loc"><code>normalize.ts:87</code> · <code>types.ts</code> <code>TurnDigestMemoryCandidate</code> · 文档示例</div>
+
+    <h4>现状</h4>
+    <p>
+      文档与 <code>types.ts</code> 示例用 <code>importance: 0.9</code>(0–1 浮点),但 normalize 把它 <code>round</code> + clamp 到 <strong>1–5 整数</strong>:
+    </p>
+    <pre><code>Math.max(1, Math.min(5, Math.round(obj.importance)))  <span class="cmt">// 0.9 → round → 1,语义丢失</span></code></pre>
+    <p>目前 <code>memoryCandidates</code> 恒为空(fallback 不产出),是 latent bug;LLM digest 一上线即踩。</p>
+
+    <h4>修复方案</h4>
+    <p>统一到 <strong>0–1 浮点</strong>(与文档/types 一致,也贴合 memory 后端的相关性打分语义):</p>
+    <pre><code><span class="del">- const importance = ... ? Math.max(1, Math.min(5, Math.round(obj.importance))) : 1;</span>
+<span class="add">+ const importance = typeof obj.importance === "number" && Number.isFinite(obj.importance)</span>
+<span class="add">+     ? Math.max(0, Math.min(1, obj.importance))</span>
+<span class="add">+     : 0.5;  // 缺省中性值</span></code></pre>
+    <p class="note">同步:在 digest 的 prompt 模板(LLM path)里明确要求 importance ∈ [0,1]。</p>
+
+    <h4>测试契约</h4>
+    <ul>
+      <li><code>normalizeDigest({ memoryCandidates: [{ content, type, importance: 0.9 }] })</code> → 断言 importance 保持 0.9。</li>
+      <li>越界值(如 2、-1、NaN)→ 断言分别 clamp 到 1、0、0.5。</li>
+    </ul>
+  </div>
+
+  <div class="card p2">
+    <h3><span class="tag p2">P2-E</span> <code>decisions</code> 只扫最后一条 assistant 文本</h3>
+    <div class="loc"><code>fallback.ts:228</code> <code>lastAssistantText</code> → <code>collectDecisions</code></div>
+
+    <h4>现状</h4>
+    <p>
+      <code>generateFallbackDigest</code> 只对<strong>最后一个 assistant 消息</strong>抓决策。多步 turn(多次 tool call、中间多条 assistant 文本)的
+      中间决策全部丢失——而多步 turn 恰恰是 digest 最该捕获的。
+    </p>
+
+    <h4>修复方案</h4>
+    <p>遍历 span 内<strong>所有</strong> assistant 消息收集决策,总量 cap 到 <code>MAX_ARRAY_ITEMS</code>:</p>
+    <pre><code><span class="add">function collectAllDecisions(msgs: readonly InlinedMessage[]): string[] {</span>
+<span class="add">    const out: string[] = [];</span>
+<span class="add">    for (const m of msgs) {</span>
+<span class="add">        if (m.role === "assistant") out.push(...collectDecisions(msgText(m)));</span>
+<span class="add">        if (out.length >= MAX_ARRAY_ITEMS) break;</span>
+<span class="add">    }</span>
+<span class="add">    return truncate(out, MAX_ARRAY_ITEMS);</span>
+<span class="add">}</span>
+<span class="cmt">// generateFallbackDigest: decisions: collectAllDecisions(msgs)  (替代 collectDecisions(at))</span></code></pre>
+
+    <h4>测试契约</h4>
+    <ul>
+      <li>构造含 2 条 assistant 文本(各带一个决策句)的 span,断言两个决策都进入 <code>digest.decisions</code>。</li>
+    </ul>
+  </div>
+
+  <!-- ============ P3 ============ -->
+  <h2>3. P3 级问题</h2>
+
+  <div class="card p3">
+    <h3><span class="tag p3">P3-F</span> compaction 后 span 脱轨,digest 静默丢弃</h3>
+    <div class="loc"><code>session.ts</code> <code>computeTurnSourceSpan</code> / <code>extractSpanMessages</code> · <code>digest.ts</code></div>
+    <h4>现状 / 修复</h4>
+    <p>
+      若 <code>preTurnLeafId</code> 因 compaction/rewind 脱离当前 branch,<code>fromEntryId</code> 指向不存在的 id →
+      <code>extractSpanMessages</code> 返回空 → <code>generateDigest</code> 静默 <code>return</code>。degrade 合理,但<strong>无日志</strong>。
+      在 <code>#generateTurnDigest</code> 的 <code>span==null</code> 或 <code>spanMessages.length===0</code> 分支加一条 <code>logger.debug</code>,
+      记录 <code>fromEntryId / toEntryId / branchLen</code> 便于排查。
+    </p>
+  </div>
+
+  <div class="card p3">
+    <h3><span class="tag p3">P3-G</span> 每轮 O(n) 多次全 journal 扫描</h3>
+    <div class="loc"><code>packet.ts</code> <code>collectDigestRefs</code> · <code>checkpoint.ts</code> <code>collectContextCheckpoints</code> / <code>coveredDigestEntryIds</code></div>
+    <h4>现状 / 修复</h4>
+    <p>
+      <code>collectDigestRefs</code>、<code>latestContextCheckpoint</code>、<code>coveredDigestEntryIds</code> 每轮各自全遍历 <code>getEntries()</code>,
+      多次重复。<strong>v0.1 缓解</strong>:每轮在 prelude 构建入口<strong>只取一次</strong> <code>entries</code>,单次遍历分类出
+      <code>{ digests, checkpoints }</code>,再传给 <code>buildContextPacket</code> / <code>buildContextCheckpoint</code>,消除重复扫描。
+      彻底方案(增量索引)留到 M5,当前不必过度设计。
+    </p>
+  </div>
+
+  <div class="card p3">
+    <h3><span class="tag p3">P3-H</span> 死代码与字段语义漂移</h3>
+    <div class="loc"><code>normalize.ts</code> <code>normalizeDigest</code> · <code>checkpoint.ts:201-210</code> <code>digestCount</code>/<code>fromDigestEntryId</code></div>
+    <h4>现状 / 修复</h4>
+    <ul>
+      <li><strong><code>normalizeDigest</code> 目前是死代码</strong>(仅测试引用,生产只走 fallback)。它是 LLM path 的预置件——
+        <strong>保留</strong>,但必须先修 P2-D(importance)再随 LLM path 启用。不建议现在从 barrel 移除。</li>
+      <li><strong><code>checkpoint.digestCount</code> 语义漂移</strong>:<code>entryRefs</code> 累积增长后,<code>digestCount: entryRefs.length</code>
+        变成"累计覆盖总数"而非"本次合并数"。当前无消费方,建议正名:保留累计值改名
+        <code>coveredDigestCount</code>,另加 <code>appendedDigestCount = appendedEntryRefs.length</code>,避免后续误用。</li>
+    </ul>
+  </div>
+
+  <!-- ============ 顺序 ============ -->
+  <h2>4. 建议实施顺序</h2>
+  <ol class="seq">
+    <li><strong>P1-A 方案 B(止血)</strong> + <strong>P1-B(总量 gate)</strong>:一次提交。这两条是"稳态"价值主张的成立前提,且都低风险。配套多轮 cache-prefix 稳定性测试 + 总预算测试。</li>
+    <li><strong>P2-C(entryIds)</strong> + <strong>P2-E(多 assistant decisions)</strong>:fallback digest 质量修复,一次提交,补 <code>turn-digest.test.ts</code> 契约。</li>
+    <li><strong>P2-D(importance)</strong> + <strong>P3-H(死代码/命名)</strong>:LLM path 上线前的清障,一次提交。</li>
+    <li><strong>P3-F(日志)</strong> + <strong>P3-G(单次遍历)</strong>:可观测性与性能,可并入任意批次。</li>
+    <li><strong>P1-A 方案 A(append-only delta)</strong>:列为 <span class="kw">M5</span> 目标,拆分 packet builder,单独评审。</li>
+  </ol>
+
+  <div class="callout">
+    <strong>验证纪律</strong>(遵循 <code>AGENTS.md</code> 测试规范):每条修复配<strong>可观测契约测试</strong>——运行代码断言输出/状态,
+    不做 source-grep,不加 <code>expect(true)</code> 类占位。改完跑 <code>bun check</code> + <code>packages/coding-agent/test/context-steady/</code> 全套。
+    P1-A 的 cache 契约用"token 序列 append-only"这一可确定断言替代不可单测的命中率。
+  </div>
+
+  <h2>5. 不在本次范围</h2>
+  <ul>
+    <li><strong>LLM digest 实现</strong>:M1 只有 fallback。本方案只把 importance/normalize 契约备好,不实现 LLM path。</li>
+    <li><strong><code>qualityWindowTokens</code> 默认值决策</strong>:当前默认 0 → 预算体系默认不生效。是否按文档设 384K 属产品决策,不在修复范围,但 P1-B 的总量 gate 会在其被启用时立即受益。</li>
+    <li><strong>checkpoint 语义合并</strong>(替代机械提取):文档已承认 deterministic,留待后续。</li>
+    <li><strong><code>enabled</code> 默认 false → true 的开关决策</strong>:属灰度节奏,不在代码修复范围。</li>
+  </ul>
+
+  <footer>
+    生成:San context steady 代码审查后续 · 修复方案 v1 · 路径 <code>docs/research/context-steady-v0.1-fix-plan.html</code>
+    <br>所有 file:line 基于审查时的工作区快照,实施前请以最新代码为准。
+  </footer>
+
+</div>
+</body>
+</html>

@@ -65,7 +65,8 @@ function clampToolEvidenceArray(value: unknown): TurnDigestToolEvidence[] {
 		const tool = clampString(obj.tool, 50);
 		if (!tool) continue;
 		const summary = clampString(obj.summary, MAX_TOOL_SUMMARY_LENGTH);
-		result.push({ tool, summary });
+		const entryIds = clampStringArray(obj.entryIds, MAX_ARRAY_ITEMS, 100);
+		result.push({ tool, summary, ...(entryIds.length > 0 ? { entryIds } : {}) });
 	}
 	return result;
 }
@@ -84,8 +85,8 @@ function clampMemoryCandidateArray(value: unknown): TurnDigestMemoryCandidate[] 
 		const type = validTypes.has(obj.type as string) ? (obj.type as TurnDigestMemoryCandidate["type"]) : "other";
 		const importance =
 			typeof obj.importance === "number" && Number.isFinite(obj.importance)
-				? Math.max(1, Math.min(5, Math.round(obj.importance)))
-				: 1;
+				? Math.max(0, Math.min(1, obj.importance))
+				: 0.5;
 		result.push({ content, type, importance });
 	}
 	return result;

@@ -830,6 +830,10 @@ export class Agent {
 		this.#state.tools = t;
 	}
 
+	setTransformContext(fn: ((messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>) | undefined) {
+		this.#transformContext = fn;
+	}
+
 	replaceMessages(ms: AgentMessage[]) {
 		// New array assignment is intentional: caller-owned `ms` may be mutated
 		// after handoff; snapshot it so external mutations cannot leak in.

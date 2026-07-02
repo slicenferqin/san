@@ -1,6 +1,7 @@
 import type { MemoryBackendSearchItem } from "../memory-backend/types";
 import type { SessionEntry } from "../session/session-entries";
 import { collectDigestRefs } from "./packet";
+import { isContinuationPrompt, isDigestRelevantToPrompt } from "./relevance";
 import type { ContextRecallItem, TurnDigest } from "./types";
 
 interface DigestEntryRef {
@@ -51,9 +52,13 @@ export function buildContextSteadyRecallQuery(
 	if (maxQueryChars === 0) return "";
 
 	const recentDigests = Math.max(0, Math.floor(options.recentDigests));
+	const collectedDigests = collectDigestRefs(entries);
+	const relevantDigests = isContinuationPrompt(currentPrompt)
+		? collectedDigests
+		: collectedDigests.filter(entry => isDigestRelevantToPrompt(currentPrompt, entry.digest));
 	const digestLines =
 		recentDigests > 0
-			? collectDigestRefs(entries)
+			? relevantDigests
 					.slice(-recentDigests)
 					.map(digestContextLine)
 					.filter((line): line is string => line !== undefined)

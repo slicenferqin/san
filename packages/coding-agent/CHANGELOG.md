@@ -20,6 +20,11 @@
 - Added a recommended San context steady state dogfood config overlay at `packages/coding-agent/examples/config/san-context-steady-recommended.yml`, with docs and settings-loader coverage for M8.
 - Added San context steady state M9 recall quality helpers: recall queries now include recent TurnDigest context, enforce `san.contextSteady.recall.maxQueryChars`, and deduplicate/trim backend recall results before adding the volatile ContextPacket layer.
 - Added San context steady state M10 lifecycle hardening coverage for ContextPacket replay and resume behavior, ensuring persisted hidden packet injections stay out of active LLM context while transcripts and debug views retain them.
+- Added optional LLM-backed San TurnDigest generation via `san.contextSteady.digest.llm.*`, preserving deterministic fallback digests when the side request is unavailable.
+
+### Fixed
+
+- Fixed San context steady state quality issues: ContextPacket now enforces a total injected packet budget, fallback digests retain source entry IDs and collect decisions from every assistant message in the turn, memory candidate importance normalizes to a 0-1 score, and skipped digest spans emit debug logs.
 
 ## [16.2.2] - 2026-06-27
 

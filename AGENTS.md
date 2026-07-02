@@ -261,3 +261,6 @@ Location: `packages/*/CHANGELOG.md` (per package).
 2. Run `bun run release`.
 
 The script handles version bump, CHANGELOG finalization, commit, tag, publish, and adding new `[Unreleased]` sections.
+
+# Important
+DO NOT send optional commentary

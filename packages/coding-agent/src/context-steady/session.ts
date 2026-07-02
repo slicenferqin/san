@@ -126,7 +126,11 @@ export function extractSpanMessages(
 		if (entry.id === fromEntryId) inSpan = true;
 		if (inSpan) {
 			if (entry.type === "message" && entry.message !== undefined) {
-				messages.push(entry.message);
+				if (entry.message && typeof entry.message === "object") {
+					messages.push({ ...entry.message, entryId: entry.id });
+				} else {
+					messages.push(entry.message);
+				}
 			} else if (entry.type === "custom_message") {
 				// CustomMessageEntry does not carry a nested .message. Build a
 				// digest-compatible shim so the fallback digest can read role,
@@ -144,6 +148,7 @@ export function extractSpanMessages(
 					provider: "custom",
 					model: "custom",
 					customType: entry.customType ?? "unknown",
+					entryId: entry.id,
 				});
 			}
 		}

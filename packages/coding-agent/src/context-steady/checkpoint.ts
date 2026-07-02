@@ -9,6 +9,7 @@
 import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import type { SessionEntry } from "../session/session-entries";
 import type { ReadonlySessionManager } from "../session/session-manager";
+import { polishContextSteadyText } from "./text";
 import {
 	CONTEXT_CHECKPOINT_CUSTOM_TYPE,
 	CONTEXT_CHECKPOINT_SCHEMA_VERSION,
@@ -99,7 +100,8 @@ function coveredDigestEntryIds(entries: readonly SessionEntry[]): Set<string> {
 }
 
 function summaryItem(text: string, entryId: string): ContextCheckpointSummaryItem {
-	return { text: clampString(text, 180), entryRefs: [entryId] };
+	const polished = polishContextSteadyText(text);
+	return { text: clampString(polished || text.trim(), 180), entryRefs: [entryId] };
 }
 
 function cloneSummaryItem<T extends ContextCheckpointSummaryItem>(item: T): T {
@@ -113,7 +115,26 @@ function mergeSummaryItems<T extends ContextCheckpointSummaryItem>(
 ): T[] {
 	const appendedItems = newItems.slice(-maxItems).map(cloneSummaryItem);
 	const stablePrefixLength = Math.max(0, maxItems - appendedItems.length);
-	return [...stableItems.slice(0, stablePrefixLength).map(cloneSummaryItem), ...appendedItems];
+	return dedupeSummaryItems([...stableItems.slice(0, stablePrefixLength).map(cloneSummaryItem), ...appendedItems]);
+}
+
+function summaryItemKey(item: ContextCheckpointSummaryItem): string {
+	const action = "action" in item && typeof item.action === "string" ? item.action : "";
+	return `${item.text.toLowerCase()}|${action}`;
+}
+
+function dedupeSummaryItems<T extends ContextCheckpointSummaryItem>(items: readonly T[]): T[] {
+	const byKey = new Map<string, T>();
+	for (const item of items) {
+		const key = summaryItemKey(item);
+		const existing = byKey.get(key);
+		if (!existing) {
+			byKey.set(key, cloneSummaryItem(item));
+			continue;
+		}
+		byKey.set(key, { ...existing, entryRefs: uniqueEntryRefs([...existing.entryRefs, ...item.entryRefs]) } as T);
+	}
+	return [...byKey.values()];
 }
 
 function uniqueEntryRefs(entryRefs: readonly string[]): string[] {
@@ -155,11 +176,11 @@ function checkpointSummary(refs: readonly DigestEntryRef[]): ContextCheckpoint["
 	}
 
 	return {
-		userIntents: userIntents.slice(0, 20),
-		decisions: decisions.slice(0, 20),
-		filesTouched: filesTouched.slice(0, 30),
-		risks: risks.slice(0, 12),
-		nextSteps: nextSteps.slice(0, 12),
+		userIntents: dedupeSummaryItems(userIntents).slice(0, 20),
+		decisions: dedupeSummaryItems(decisions).slice(0, 20),
+		filesTouched: dedupeSummaryItems(filesTouched).slice(0, 30),
+		risks: dedupeSummaryItems(risks).slice(0, 12),
+		nextSteps: dedupeSummaryItems(nextSteps).slice(0, 12),
 	};
 }
 

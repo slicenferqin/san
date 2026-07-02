@@ -64,7 +64,7 @@ function packet(overrides: Partial<ContextPacket> = {}): ContextPacket {
 		recallQuery: "Continue San work",
 		recallRefs: ["mem-1"],
 		tokenEstimate: 840,
-		tokenBudget: 14500,
+		tokenBudget: 2000,
 		budget: {
 			qualityWindowTokens: 24000,
 			reserveRatio: 0.2,
@@ -109,7 +109,7 @@ describe("ContextPacket debug report", () => {
 		expect(report).toContain("## ContextPacket ctx_test");
 		expect(report).toContain("Debug entry: packet-entry");
 		expect(report).toContain("Injected message: injected-entry");
-		expect(report).toContain("Packet tokens: 840/14,500");
+		expect(report).toContain("Packet tokens: 840/2,000");
 		expect(report).toContain("Checkpoint ref: ck1");
 		expect(report).toContain("Digest refs: d1, d2");
 		expect(report).toContain("Budget:");

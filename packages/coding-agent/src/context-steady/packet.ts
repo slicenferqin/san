@@ -11,13 +11,17 @@ import packetTemplate from "../prompts/context-steady/context-packet.md" with { 
 import type { SessionEntry } from "../session/session-entries";
 import type { ReadonlySessionManager } from "../session/session-manager";
 import { latestContextCheckpoint } from "./checkpoint";
+import { isCheckpointRelevantToPrompt, isContinuationPrompt, isDigestRelevantToPrompt } from "./relevance";
+import { polishContextSteadyText } from "./text";
 import {
 	CONTEXT_PACKET_MESSAGE_TYPE,
 	CONTEXT_PACKET_SCHEMA_VERSION,
 	type ContextCheckpoint,
+	type ContextCheckpointSummaryItem,
 	type ContextPacket,
 	type ContextPacketRecallLayer,
 	type ContextPacketSettings,
+	type ContextPacketTrimDecision,
 	type ContextRecallItem,
 	TURN_DIGEST_CUSTOM_TYPE,
 	type TurnDigest,
@@ -102,14 +106,30 @@ function clampString(value: string, maxLength: number): string {
 	return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
 }
 
+function clampNarrative(value: string, maxLength: number): string {
+	const polished = polishContextSteadyText(value);
+	return clampString(polished || value.trim(), maxLength);
+}
+
 function clampStringArray(values: readonly string[], maxItems: number, maxLength: number): string[] {
-	return values.slice(0, maxItems).map(value => clampString(value, maxLength));
+	const seen = new Set<string>();
+	const result: string[] = [];
+	for (const value of values) {
+		if (result.length >= maxItems) break;
+		const clamped = clampNarrative(value, maxLength);
+		if (!clamped) continue;
+		const key = clamped.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		result.push(clamped);
+	}
+	return result;
 }
 
 function digestView(index: number, digest: TurnDigest): PacketDigestView {
 	return {
 		index,
-		userIntent: clampString(digest.userIntent, 240),
+		userIntent: clampNarrative(digest.userIntent, 240),
 		actionsTaken: clampStringArray(digest.actionsTaken, 5, 180),
 		decisions: clampStringArray(digest.decisions, 5, 180),
 		filesTouched: digest.filesTouched.slice(0, 8).map(file => ({
@@ -123,14 +143,14 @@ function digestView(index: number, digest: TurnDigest): PacketDigestView {
 
 function checkpointView(checkpoint: ContextCheckpoint): PacketCheckpointView {
 	return {
-		userIntents: checkpoint.summary.userIntents.map(item => clampString(item.text, 220)),
-		decisions: checkpoint.summary.decisions.map(item => clampString(item.text, 180)),
+		userIntents: checkpoint.summary.userIntents.map(item => clampNarrative(item.text, 220)),
+		decisions: checkpoint.summary.decisions.map(item => clampNarrative(item.text, 180)),
 		filesTouched: checkpoint.summary.filesTouched.map(item => ({
 			path: clampString(item.text, 240),
 			action: item.action,
 		})),
-		risks: checkpoint.summary.risks.map(item => clampString(item.text, 180)),
-		nextSteps: checkpoint.summary.nextSteps.map(item => clampString(item.text, 180)),
+		risks: checkpoint.summary.risks.map(item => clampNarrative(item.text, 180)),
+		nextSteps: checkpoint.summary.nextSteps.map(item => clampNarrative(item.text, 180)),
 	};
 }
 
@@ -253,6 +273,114 @@ function selectedRecallWithinBudget(recall: ContextPacketRecallLayer | undefined
 	return { selected, tokenEstimate, tokenTrimmed };
 }
 
+function cloneSummaryItem<T extends ContextCheckpointSummaryItem>(item: T): T {
+	return { ...item, entryRefs: [...item.entryRefs] };
+}
+
+function cloneCheckpoint(checkpoint: ContextCheckpoint): ContextCheckpoint {
+	return {
+		...checkpoint,
+		entryRefs: [...checkpoint.entryRefs],
+		summary: {
+			userIntents: checkpoint.summary.userIntents.map(cloneSummaryItem),
+			decisions: checkpoint.summary.decisions.map(cloneSummaryItem),
+			filesTouched: checkpoint.summary.filesTouched.map(cloneSummaryItem),
+			risks: checkpoint.summary.risks.map(cloneSummaryItem),
+			nextSteps: checkpoint.summary.nextSteps.map(cloneSummaryItem),
+		},
+	};
+}
+
+function trimCheckpointTail(checkpoint: ContextCheckpoint): {
+	checkpoint: ContextCheckpoint;
+	trimmed: number;
+} {
+	if (checkpoint.summary.nextSteps.length > 0) {
+		return {
+			checkpoint: {
+				...checkpoint,
+				summary: {
+					...checkpoint.summary,
+					nextSteps: checkpoint.summary.nextSteps.slice(0, -1),
+				},
+			},
+			trimmed: 1,
+		};
+	}
+	if (checkpoint.summary.risks.length > 0) {
+		return {
+			checkpoint: {
+				...checkpoint,
+				summary: {
+					...checkpoint.summary,
+					risks: checkpoint.summary.risks.slice(0, -1),
+				},
+			},
+			trimmed: 1,
+		};
+	}
+	if (checkpoint.summary.decisions.length > 0) {
+		return {
+			checkpoint: {
+				...checkpoint,
+				summary: {
+					...checkpoint.summary,
+					decisions: checkpoint.summary.decisions.slice(0, -1),
+				},
+			},
+			trimmed: 1,
+		};
+	}
+	if (checkpoint.summary.filesTouched.length > 0) {
+		return {
+			checkpoint: {
+				...checkpoint,
+				summary: {
+					...checkpoint.summary,
+					filesTouched: checkpoint.summary.filesTouched.slice(0, -1),
+				},
+			},
+			trimmed: 1,
+		};
+	}
+	if (checkpoint.summary.userIntents.length > 1) {
+		return {
+			checkpoint: {
+				...checkpoint,
+				summary: {
+					...checkpoint.summary,
+					userIntents: checkpoint.summary.userIntents.slice(0, -1),
+				},
+			},
+			trimmed: 1,
+		};
+	}
+	return { checkpoint, trimmed: 0 };
+}
+
+function checkpointTokenEstimate(checkpoint: ContextCheckpoint | undefined): number {
+	if (!checkpoint) return 0;
+	return estimatePacketTokens(renderPacketContent([], checkpoint));
+}
+
+function appendTrimDecision(
+	trimDecisions: ContextPacket["trimDecisions"],
+	layer: ContextPacketTrimDecision["layer"],
+	reason: ContextPacketTrimDecision["reason"],
+	omitted: number,
+): void {
+	if (omitted <= 0) return;
+	const lastDecision = trimDecisions.at(-1);
+	if (lastDecision?.layer === layer && lastDecision.reason === reason) {
+		trimDecisions[trimDecisions.length - 1] = {
+			...lastDecision,
+			omitted: lastDecision.omitted + omitted,
+		};
+		return;
+	}
+	trimDecisions.push({ layer, reason, omitted });
+}
+
 export function collectDigestRefs(entries: readonly SessionEntry[]): DigestEntryRef[] {
 	const refs: DigestEntryRef[] = [];
 	for (const entry of entries) {
@@ -281,43 +409,80 @@ export function buildContextPacket(
 	const recallItems = recallLayer?.items ?? [];
 
 	const allDigests = collectDigestRefs(entries);
-	const checkpointRef = latestContextCheckpoint(entries);
+	const continuationPrompt = isContinuationPrompt(currentPrompt);
+	const relevantDigests = continuationPrompt
+		? allDigests
+		: allDigests.filter(entry => isDigestRelevantToPrompt(currentPrompt, entry.digest));
+	const topicShiftTrimmed = allDigests.length - relevantDigests.length;
+	const checkpointCandidate = latestContextCheckpoint(entries);
+	const checkpointRef =
+		checkpointCandidate &&
+		(continuationPrompt || isCheckpointRelevantToPrompt(currentPrompt, checkpointCandidate.checkpoint))
+			? checkpointCandidate
+			: null;
 	const checkpointCovered = checkpointRef ? new Set(checkpointRef.checkpoint.entryRefs) : new Set<string>();
-	const uncoveredDigests = allDigests.filter(entry => !checkpointCovered.has(entry.entryId));
-	const checkpointCoveredTrimmed = allDigests.length - uncoveredDigests.length;
+	const uncoveredDigests = relevantDigests.filter(entry => !checkpointCovered.has(entry.entryId));
+	const checkpointCoveredTrimmed = relevantDigests.length - uncoveredDigests.length;
 	const recentTrimmed = recentCount > 0 ? Math.max(0, uncoveredDigests.length - recentCount) : uncoveredDigests.length;
 	const recentDigests = recentCount > 0 ? uncoveredDigests.slice(-recentCount) : [];
 	const budget = resolvePacketBudget(settings);
-	const budgeted = selectedWithinBudget(recentDigests, budget.packetTokenBudget);
-	if (budgeted.selected.length === 0 && !checkpointRef && recallItems.length === 0) return null;
-
-	const content = renderPacketContent(budgeted.selected, checkpointRef?.checkpoint, recallLayer);
-	const packetTokenEstimate = estimatePacketTokens(content);
-	const totalPacketTokenBudget =
-		budget.packetTokenBudget + (checkpointRef?.checkpoint.tokenBudget ?? 0) + (recallLayer?.tokenBudget ?? 0);
-	const digestRefs = budgeted.selected.map(entry => entry.entryId);
-	const recallRefs = recallItems.map(recallItemRef);
+	const packetTotalBudget = budget.packetTokenBudget;
+	let selectedDigests = selectedWithinBudget(recentDigests, packetTotalBudget).selected;
+	let digestTokenEstimate = estimatePacketTokens(renderDigestLedgerContent(selectedDigests));
+	let digestTokenTrimmed = recentDigests.length - selectedDigests.length;
+	let selectedCheckpoint = checkpointRef ? cloneCheckpoint(checkpointRef.checkpoint) : undefined;
+	let checkpointLayerTrimmed = 0;
+	let selectedRecall = recallLayer;
+	let selectedRecallItems = [...recallItems];
+	let recallTokenEstimate = budgetedRecall.tokenEstimate;
+	let recallTokenTrimmed = budgetedRecall.tokenTrimmed;
 	const trimDecisions: ContextPacket["trimDecisions"] = [];
-	if (checkpointCoveredTrimmed > 0) {
-		trimDecisions.push({
-			layer: "turn_digest_ledger",
-			reason: "checkpoint_covered",
-			omitted: checkpointCoveredTrimmed,
-		});
+	appendTrimDecision(trimDecisions, "turn_digest_ledger", "topic_shift", topicShiftTrimmed);
+	appendTrimDecision(trimDecisions, "stable_checkpoint", "topic_shift", checkpointCandidate && !checkpointRef ? 1 : 0);
+	appendTrimDecision(trimDecisions, "turn_digest_ledger", "checkpoint_covered", checkpointCoveredTrimmed);
+	appendTrimDecision(trimDecisions, "turn_digest_ledger", "recent_limit", recentTrimmed);
+	appendTrimDecision(trimDecisions, "turn_digest_ledger", "token_budget", digestTokenTrimmed);
+	appendTrimDecision(trimDecisions, "retrieved_context", "token_budget", recallTokenTrimmed);
+
+	let content = renderPacketContent(selectedDigests, selectedCheckpoint, selectedRecall);
+	let packetTokenEstimate = estimatePacketTokens(content);
+	if (packetTotalBudget <= 0) return null;
+	while (packetTokenEstimate > packetTotalBudget && selectedRecallItems.length > 0) {
+		selectedRecallItems = selectedRecallItems.slice(0, -1);
+		recallTokenTrimmed++;
+		selectedRecall = selectedRecallItems.length > 0 ? { ...recallLayer!, items: selectedRecallItems } : undefined;
+		recallTokenEstimate = selectedRecall ? estimatePacketTokens(renderRecallLayerContent(selectedRecall)) : 0;
+		content = renderPacketContent(selectedDigests, selectedCheckpoint, selectedRecall);
+		packetTokenEstimate = estimatePacketTokens(content);
+		appendTrimDecision(trimDecisions, "retrieved_context", "packet_total_budget", 1);
 	}
-	if (recentTrimmed > 0) {
-		trimDecisions.push({ layer: "turn_digest_ledger", reason: "recent_limit", omitted: recentTrimmed });
+	while (packetTokenEstimate > packetTotalBudget && selectedDigests.length > 1) {
+		selectedDigests = selectedDigests.slice(1);
+		digestTokenTrimmed++;
+		digestTokenEstimate = estimatePacketTokens(renderDigestLedgerContent(selectedDigests));
+		content = renderPacketContent(selectedDigests, selectedCheckpoint, selectedRecall);
+		packetTokenEstimate = estimatePacketTokens(content);
+		appendTrimDecision(trimDecisions, "turn_digest_ledger", "packet_total_budget", 1);
 	}
-	if (budgeted.tokenTrimmed > 0) {
-		trimDecisions.push({ layer: "turn_digest_ledger", reason: "token_budget", omitted: budgeted.tokenTrimmed });
+	while (packetTokenEstimate > packetTotalBudget && selectedCheckpoint) {
+		const trimmed = trimCheckpointTail(selectedCheckpoint);
+		if (trimmed.trimmed === 0) break;
+		selectedCheckpoint = trimmed.checkpoint;
+		checkpointLayerTrimmed += trimmed.trimmed;
+		content = renderPacketContent(selectedDigests, selectedCheckpoint, selectedRecall);
+		packetTokenEstimate = estimatePacketTokens(content);
+		appendTrimDecision(trimDecisions, "stable_checkpoint", "packet_total_budget", trimmed.trimmed);
 	}
-	if (budgetedRecall.tokenTrimmed > 0) {
-		trimDecisions.push({
-			layer: "retrieved_context",
-			reason: "token_budget",
-			omitted: budgetedRecall.tokenTrimmed,
-		});
+	if (
+		packetTokenEstimate > packetTotalBudget ||
+		(selectedDigests.length === 0 && !selectedCheckpoint && selectedRecallItems.length === 0)
+	) {
+		return null;
 	}
+
+	const digestRefs = selectedDigests.map(entry => entry.entryId);
+	const recallRefs = selectedRecallItems.map(recallItemRef);
+	const checkpointEstimate = checkpointTokenEstimate(selectedCheckpoint);
 
 	const packet: ContextPacket = {
 		schemaVersion: CONTEXT_PACKET_SCHEMA_VERSION,
@@ -326,14 +491,14 @@ export function buildContextPacket(
 		createdAt: new Date().toISOString(),
 		currentPromptPreview: clampString(currentPrompt, 240),
 		layers: [
-			...(checkpointRef
+			...(selectedCheckpoint && checkpointRef
 				? [
 						{
 							name: "stable_checkpoint" as const,
 							entryRefs: [checkpointRef.entryId],
-							tokenEstimate: checkpointRef.checkpoint.tokenEstimate,
+							tokenEstimate: checkpointEstimate,
 							tokenBudget: checkpointRef.checkpoint.tokenBudget,
-							trimmed: 0,
+							trimmed: checkpointLayerTrimmed,
 							stability: "stable" as const,
 							cachePriority: "high" as const,
 						},
@@ -342,32 +507,32 @@ export function buildContextPacket(
 			{
 				name: "turn_digest_ledger",
 				entryRefs: digestRefs,
-				tokenEstimate: budgeted.tokenEstimate,
+				tokenEstimate: digestTokenEstimate,
 				tokenBudget: budget.packetTokenBudget,
-				trimmed: recentTrimmed + budgeted.tokenTrimmed,
+				trimmed: recentTrimmed + digestTokenTrimmed,
 				stability: "append-only",
 				cachePriority: "medium",
 			},
-			...(recallLayer && recallItems.length > 0
+			...(selectedRecall && selectedRecallItems.length > 0
 				? [
 						{
 							name: "retrieved_context" as const,
 							entryRefs: recallRefs,
-							tokenEstimate: budgetedRecall.tokenEstimate,
-							tokenBudget: recallLayer.tokenBudget,
-							trimmed: budgetedRecall.tokenTrimmed,
+							tokenEstimate: recallTokenEstimate,
+							tokenBudget: selectedRecall.tokenBudget,
+							trimmed: recallTokenTrimmed,
 							stability: "volatile" as const,
 							cachePriority: "low" as const,
 						},
 					]
 				: []),
 		],
-		checkpointRef: checkpointRef?.entryId,
+		checkpointRef: selectedCheckpoint ? checkpointRef?.entryId : undefined,
 		digestRefs,
-		recallQuery: recallLayer && recallItems.length > 0 ? recallLayer.query : undefined,
+		recallQuery: selectedRecall && selectedRecallItems.length > 0 ? selectedRecall.query : undefined,
 		recallRefs,
 		tokenEstimate: packetTokenEstimate,
-		tokenBudget: totalPacketTokenBudget,
+		tokenBudget: packetTotalBudget,
 		budget,
 		trimDecisions,
 		injectedMessageCustomType: CONTEXT_PACKET_MESSAGE_TYPE,

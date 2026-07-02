@@ -101,6 +101,10 @@ export interface ContextSteadySettings {
 		enabled: boolean;
 		persistFallback: boolean;
 		timeoutMs: number;
+		llm?: {
+			enabled: boolean;
+			modelRole: string;
+		};
 	};
 }
 
@@ -165,7 +169,7 @@ export interface ContextPacketLayer {
 
 export interface ContextPacketTrimDecision {
 	layer: ContextPacketLayer["name"];
-	reason: "recent_limit" | "token_budget" | "checkpoint_covered";
+	reason: "recent_limit" | "token_budget" | "checkpoint_covered" | "topic_shift" | "packet_total_budget";
 	omitted: number;
 }
 

@@ -170,6 +170,7 @@ import { getDefault, onAppendOnlyModeChanged, validateProviderMaxInFlightRequest
 import { appendContextCheckpoint, buildContextCheckpoint } from "../context-steady/checkpoint";
 import { generateDigest as generateContextSteadyDigest } from "../context-steady/digest";
 import { appendContextPacketDebugEntry, buildContextPacket } from "../context-steady/packet";
+import { buildContextSteadyPrunedMessages, estimateContextSteadyPrunedTokens } from "../context-steady/prune";
 import { buildContextSteadyRecallQuery, normalizeContextSteadyRecallItems } from "../context-steady/recall";
 import {
 	computeTurnSourceSpan,
@@ -1714,6 +1715,7 @@ export class AgentSession {
 		this.#builtInToolNames = new Set(config.builtInToolNames ?? []);
 		this.#requestedToolNames = config.requestedToolNames;
 		this.#transformContext = config.transformContext ?? (messages => messages);
+		this.agent.setTransformContext((messages, signal) => this.#transformContextForProvider(messages, signal));
 		this.#transformProviderContext = config.transformProviderContext;
 		this.#advisorStreamFn = config.advisorStreamFn;
 		this.#onPayload = config.onPayload;
@@ -3460,7 +3462,7 @@ export class AgentSession {
 				const digestEnabled = settings.get("san.contextSteady.digest.enabled") as boolean;
 				const persistFallback = settings.get("san.contextSteady.digest.persistFallback") as boolean;
 
-				if (!digestEnabled || !persistFallback) return;
+				if (!digestEnabled) return;
 
 				// A deliberate abort is itself a settled turn and should still write
 				// its digest. Other abort/dispose races render the turn invalid.
@@ -3478,7 +3480,15 @@ export class AgentSession {
 				// Compute source range using shared pure helper
 				const branch = sessionManager.getBranch();
 				const span = computeTurnSourceSpan(branch, preTurnLeafId, currentLeafId);
-				if (!span) return;
+				if (!span) {
+					logger.debug("Skipping TurnDigest because source span is empty", {
+						sessionId: this.sessionId,
+						preTurnLeafId,
+						currentLeafId,
+						branchLength: branch.length,
+					});
+					return;
+				}
 				const toEntryId = span.toEntryId;
 				const fromEntryId = skipContextPacketPreludeInDigestSource(branch, span.fromEntryId, toEntryId);
 
@@ -3487,7 +3497,17 @@ export class AgentSession {
 				// agent-initiated prompts (hidden next-turn, session-stop continuation)
 				// are captured in the digest's input.
 				const spanMessages = extractSpanMessages(branch, fromEntryId, toEntryId);
-				if (spanMessages.length === 0) return;
+				if (spanMessages.length === 0) {
+					logger.debug("Skipping TurnDigest because source span has no digestible messages", {
+						sessionId: this.sessionId,
+						preTurnLeafId,
+						currentLeafId,
+						fromEntryId,
+						toEntryId,
+						branchLength: branch.length,
+					});
+					return;
+				}
 
 				const source = {
 					sessionId: this.sessionId,
@@ -3502,8 +3522,23 @@ export class AgentSession {
 						enabled: digestEnabled,
 						persistFallback,
 						timeoutMs: (settings.get("san.contextSteady.digest.timeoutMs") as number) ?? 30000,
+						llm: {
+							enabled: settings.get("san.contextSteady.digest.llm.enabled") as boolean,
+							modelRole: settings.get("san.contextSteady.digest.llm.modelRole") as string,
+						},
 					},
 				};
+				const digestModelRole = steadySettings.digest.llm.modelRole || "pi/smol";
+				const resolvedDigestModel = steadySettings.digest.llm.enabled
+					? resolveModelOverride([digestModelRole], this.#modelRegistry, settings).model
+					: undefined;
+				const digestModel = resolvedDigestModel
+					? {
+							model: resolvedDigestModel,
+							apiKey: this.#modelRegistry.resolver(resolvedDigestModel, this.sessionId),
+							metadata: this.agent.metadataForProvider(resolvedDigestModel.provider),
+						}
+					: undefined;
 
 				await generateContextSteadyDigest(
 					spanMessages,
@@ -3511,7 +3546,7 @@ export class AgentSession {
 					sessionManager,
 					settings,
 					steadySettings,
-					undefined,
+					digestModel,
 				);
 				this.#maybeAppendContextSteadyCheckpoint();
 			} catch (error) {
@@ -6201,8 +6236,15 @@ export class AgentSession {
 
 	/** Convert session messages using the same pre-LLM pipeline as the active session. */
 	async convertMessagesToLlm(messages: AgentMessage[], signal?: AbortSignal): Promise<Message[]> {
-		const transformedMessages = await this.#transformContext(messages, signal);
+		const transformedMessages = await this.#transformContextForProvider(messages, signal);
 		return await this.#convertToLlm(transformedMessages);
+	}
+
+	async #transformContextForProvider(messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> {
+		const transformedMessages = await this.#transformContext(messages, signal);
+		if (this.settings.get("san.contextSteady.enabled") !== true) return transformedMessages;
+		if (this.settings.get("san.contextSteady.contextPacket.enabled") !== true) return transformedMessages;
+		return buildContextSteadyPrunedMessages(transformedMessages, this.sessionManager.getBranch());
 	}
 
 	/** Apply session-level stream hooks to a direct side request. */
@@ -6839,7 +6881,11 @@ export class AgentSession {
 			customType: CONTEXT_PACKET_MESSAGE_TYPE,
 			content: built.content,
 			display: false,
-			details: { packetId: built.packet.packetId, digestRefs: built.packet.digestRefs },
+			details: {
+				packetId: built.packet.packetId,
+				checkpointRef: built.packet.checkpointRef,
+				digestRefs: built.packet.digestRefs,
+			},
 			attribution: "agent",
 			timestamp: Date.now(),
 		};
@@ -9322,10 +9368,14 @@ export class AgentSession {
 		// would let a thinking-heavy turn falsely trip the floor. The provider usage
 		// (the other arm of compactionContextTokens) already accounts for it.
 		const opts = { excludeEncryptedReasoning: true } as const;
+		const estimate = (msg: AgentMessage) => estimateTokens(msg, opts);
 		return (
 			computeNonMessageTokens(this) +
-			this.messages.reduce((sum, msg) => sum + estimateTokens(msg, opts), 0) +
-			pendingMessages.reduce((sum, msg) => sum + estimateTokens(msg, opts), 0)
+			estimateContextSteadyPrunedTokens(
+				[...this.messages, ...pendingMessages],
+				this.sessionManager.getBranch(),
+				estimate,
+			)
 		);
 	}
 
@@ -13764,7 +13814,11 @@ export class AgentSession {
 			}
 		}
 
-		const resolvedActiveMessages = this.messages;
+		const resolvedActiveMessages = buildContextSteadyPrunedMessages(
+			[...this.messages, ...pendingMessages],
+			branchEntries,
+		);
+		const resolvedPendingStartIndex = Math.max(0, resolvedActiveMessages.length - pendingMessages.length);
 		let resolvedAnchorIndex = -1;
 		let anchorAssistant: AssistantMessage | undefined;
 		if (anchorEntry) {
@@ -13799,24 +13853,18 @@ export class AgentSession {
 			for (let i = resolvedAnchorIndex + 1; i < resolvedActiveMessages.length; i++) {
 				tailTokens += estimateTokens(resolvedActiveMessages[i]);
 			}
-			usedTokens =
-				promptTokens +
-				Math.max(0, currentNonMessageTokens - nonMessageTokens) +
-				tailTokens +
-				pendingMessages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
+			usedTokens = promptTokens + Math.max(0, currentNonMessageTokens - nonMessageTokens) + tailTokens + 0;
 		} else if (pending) {
 			anchored = true;
 			let tailTokens = 0;
-			if (resolvedActiveMessages.length > pending.cutoffCount) {
-				for (let i = pending.cutoffCount; i < resolvedActiveMessages.length; i++) {
+			const pendingCutoffCount = Math.min(pending.cutoffCount, resolvedPendingStartIndex);
+			if (resolvedActiveMessages.length > pendingCutoffCount) {
+				for (let i = pendingCutoffCount; i < resolvedActiveMessages.length; i++) {
 					tailTokens += estimateTokens(resolvedActiveMessages[i]);
 				}
 			}
 			usedTokens =
-				pending.promptTokens +
-				Math.max(0, currentNonMessageTokens - pending.nonMessageTokens) +
-				tailTokens +
-				pendingMessages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
+				pending.promptTokens + Math.max(0, currentNonMessageTokens - pending.nonMessageTokens) + tailTokens;
 		}
 
 		if (!anchored && !pending && branchEntries.length === 0) {
@@ -13847,10 +13895,7 @@ export class AgentSession {
 			for (const msg of resolvedActiveMessages) {
 				messagesTokens += estimateTokens(msg);
 			}
-			usedTokens =
-				currentNonMessageTokens +
-				messagesTokens +
-				pendingMessages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
+			usedTokens = currentNonMessageTokens + messagesTokens;
 		}
 
 		const messagesTokens = Math.max(0, usedTokens - categoryNonMessageTokens);

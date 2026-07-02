@@ -167,13 +167,6 @@ function userIntent(msgs: readonly InlinedMessage[]): string {
 	return "System-driven continuation";
 }
 
-function lastAssistantText(msgs: readonly InlinedMessage[]): string {
-	for (let i = msgs.length - 1; i >= 0; i--) {
-		if (msgs[i].role === "assistant") return msgText(msgs[i]);
-	}
-	return "";
-}
-
 function collectDecisions(text: string): string[] {
 	const decisions: string[] = [];
 	for (const line of text.split("\n")) {
@@ -184,6 +177,37 @@ function collectDecisions(text: string): string[] {
 		}
 	}
 	return truncate(decisions, MAX_ARRAY_ITEMS);
+}
+
+function collectLineMatches(text: string, patterns: readonly RegExp[]): string[] {
+	const matches: string[] = [];
+	for (const line of text.split("\n")) {
+		const t = line.replace(/^[-*]\s*/, "").trim();
+		if (!t) continue;
+		if (!patterns.some(pattern => pattern.test(t))) continue;
+		matches.push(t.length > 120 ? `${t.slice(0, 117)}...` : t);
+	}
+	return truncate(matches, MAX_ARRAY_ITEMS);
+}
+
+function collectAllDecisions(msgs: readonly InlinedMessage[]): string[] {
+	const decisions: string[] = [];
+	for (const m of msgs) {
+		if (m.role !== "assistant") continue;
+		decisions.push(...collectDecisions(msgText(m)));
+		if (decisions.length >= MAX_ARRAY_ITEMS) break;
+	}
+	return truncate(decisions, MAX_ARRAY_ITEMS);
+}
+
+function collectAssistantLineMatches(msgs: readonly InlinedMessage[], patterns: readonly RegExp[]): string[] {
+	const matches: string[] = [];
+	for (const m of msgs) {
+		if (m.role !== "assistant") continue;
+		matches.push(...collectLineMatches(msgText(m), patterns));
+		if (matches.length >= MAX_ARRAY_ITEMS) break;
+	}
+	return truncate(matches, MAX_ARRAY_ITEMS);
 }
 
 function tokenStats(msgs: readonly InlinedMessage[]): TurnDigest["tokenStats"] {
@@ -225,7 +249,6 @@ export function generateFallbackDigest(
 	sessionId: string,
 	model?: string,
 ): TurnDigest {
-	const at = lastAssistantText(msgs);
 	const tools = collectTools(msgs);
 
 	return {
@@ -237,13 +260,25 @@ export function generateFallbackDigest(
 		source,
 		userIntent: userIntent(msgs),
 		actionsTaken: tools.map(t => t.summary),
-		decisions: collectDecisions(at),
+		decisions: collectAllDecisions(msgs),
 		filesTouched: collectFiles(msgs),
 		toolEvidence: tools,
-		factsLearned: [],
-		openQuestions: [],
-		risks: [],
-		nextSteps: [],
+		factsLearned: collectAssistantLineMatches(msgs, [
+			/\b(evidence|found|observed|confirmed|verified|result|shows|means)\b/i,
+			/(证据|发现|观察到|确认|验证|结果|说明|表明)/u,
+		]),
+		openQuestions: collectAssistantLineMatches(msgs, [
+			/\b(open question|unknown|unclear|not covered|still need|needs follow-up)\b/i,
+			/(未覆盖|不确定|还需要|待确认|待验证|开放问题)/u,
+		]),
+		risks: collectAssistantLineMatches(msgs, [
+			/\b(risk|risky|could fail|may fail|edge case|not safe|over-prun|under-prun)\b/i,
+			/(风险|可能失败|边界|误剪|过剪|漏剪|不安全)/u,
+		]),
+		nextSteps: collectAssistantLineMatches(msgs, [
+			/\b(next step|next|should|need to|follow[- ]?up|todo)\b/i,
+			/(下一步|后续|应该|需要|待办|继续)/u,
+		]),
 		memoryCandidates: [],
 		tokenStats: tokenStats(msgs),
 		fallback: true,

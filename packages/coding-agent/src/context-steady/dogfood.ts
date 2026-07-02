@@ -261,10 +261,10 @@ export function runContextSteadyDogfood(options: ContextSteadyDogfoodOptions = {
 	const built = buildContextPacket(
 		entries,
 		resolved.sessionId,
-		"Dogfood final verification prompt",
+		"Continue San context steady dogfood final verification prompt",
 		packetSettings(resolved),
 		{
-			query: "Dogfood final verification prompt",
+			query: "Continue San context steady dogfood final verification prompt",
 			items: [...resolved.recallItems],
 			tokenBudget: resolved.recallMaxTokens,
 		},

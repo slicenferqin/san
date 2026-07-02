@@ -276,6 +276,49 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		});
 	});
 
+	it("replaces packet-covered raw transcript before provider send", async () => {
+		const rawUserMarker = "RAW_USER_CONTEXT_STEADY_PRUNE_MARKER";
+		const rawAssistantMarker = "RAW_ASSISTANT_CONTEXT_STEADY_PRUNE_MARKER";
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [{ content: [`First answer ${rawAssistantMarker}`] }, { content: ["Second answer"] }],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated(BASE_SETTINGS);
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		await session.prompt(`Layer one baseline task ${"x".repeat(260)} ${rawUserMarker}`);
+		await session.waitForIdle();
+		const firstProviderPayload = JSON.stringify(mock.calls[0]!.context.messages);
+		expect(firstProviderPayload).toContain(rawUserMarker);
+		expect(firstProviderPayload).not.toContain("<san_context_packet>");
+
+		await session.prompt("Continue after provider pruning");
+		await session.waitForIdle();
+
+		const secondProviderPayload = JSON.stringify(mock.calls[1]!.context.messages);
+		expect(secondProviderPayload).toContain("<san_context_packet>");
+		expect(secondProviderPayload).toContain("Layer one baseline task");
+		expect(secondProviderPayload).toContain("Continue after provider pruning");
+		expect(secondProviderPayload).not.toContain(rawUserMarker);
+		expect(secondProviderPayload).not.toContain(rawAssistantMarker);
+
+		const debugEntries = customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE);
+		expect(debugEntries).toHaveLength(1);
+		const packetData = debugEntries[0]!.data as Record<string, unknown>;
+		expect(packetData.digestRefs).toHaveLength(1);
+	});
+
 	it("does not inject ContextPacket when context packet setting is disabled", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
@@ -798,13 +841,13 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
 		await session.prompt("Remember the baseline");
 		await session.waitForIdle();
-		await session.prompt("Use a tool, then conclude");
+		await session.prompt("Continue the baseline with a tool, then conclude");
 		await session.waitForIdle();
 
 		const digests = customEntries(sessionManager, TURN_DIGEST_CUSTOM_TYPE);
 		expect(digests).toHaveLength(2);
 		const secondDigest = digests[1]!.data as Record<string, unknown>;
-		expect(secondDigest.userIntent).toBe("Use a tool, then conclude");
+		expect(secondDigest.userIntent).toBe("Continue the baseline with a tool, then conclude");
 		expect(JSON.stringify(secondDigest.toolEvidence)).toContain("echo");
 
 		const source = secondDigest.source as Record<string, string>;
