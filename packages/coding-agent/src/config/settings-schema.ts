@@ -2526,7 +2526,11 @@ export const SETTINGS_SCHEMA = {
 	"san.contextSteady.digest.timeoutMs": { type: "number", default: 30000 },
 	"san.contextSteady.digest.llm.enabled": { type: "boolean", default: false },
 	"san.contextSteady.digest.llm.modelRole": { type: "string", default: "pi/smol" },
-	"san.contextSteady.qualityWindowTokens": { type: "number", default: 0 },
+	"san.contextSteady.qualityWindowTokens": {
+		type: "number",
+		default: 0,
+		description: "Quality-window token cap used to derive the ContextPacket budget; 0 means no quality-window cap.",
+	},
 	"san.contextSteady.reserveRatio": { type: "number", default: 0.2 },
 	"san.contextSteady.contextPacket.enabled": { type: "boolean", default: true },
 	"san.contextSteady.contextPacket.recentDigests": { type: "number", default: 5 },

@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>San Context Steady v0.1 Code Review</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #20242a; --muted: #697386; --line: #d8e0ea;
+      --paper: #fbfcfd; --panel: #ffffff; --band: #f2f6f8;
+      --green: #0f766e; --blue: #2457a6; --amber: #a16207;
+      --red: #a33a3a; --code: #edf2f7;
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; color:var(--ink); background:var(--paper);
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; line-height:1.65; }
+    header { background:#fff; border-bottom:1px solid var(--line); }
+    .wrap { width:min(1100px,calc(100% - 40px)); margin:0 auto; }
+    .hero { padding:52px 0 36px; }
+    .eyebrow { margin:0 0 10px; color:var(--green); font-size:13px; font-weight:700; text-transform:uppercase; }
+    h1 { max-width:900px; margin:0; font-size:clamp(28px,4vw,48px); line-height:1.08; }
+    .subtitle { max-width:860px; margin:16px 0 0; color:var(--muted); font-size:17px; }
+    main { padding:28px 0 62px; }
+    section { padding:28px 0; border-bottom:1px solid var(--line); }
+    section:last-child { border-bottom:0; }
+    h2 { margin:0 0 14px; font-size:22px; line-height:1.25; }
+    h3 { margin:20px 0 8px; font-size:17px; }
+    p { margin:10px 0; }
+    ul,ol { margin:10px 0; padding-left:22px; }
+    li { margin:6px 0; }
+    table { width:100%; margin:14px 0; border-collapse:collapse; background:var(--panel); font-size:14px; }
+    th,td { padding:10px 13px; border:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { background:var(--band); font-weight:700; }
+    code { padding:2px 5px; border-radius:4px; background:var(--code);
+      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em; }
+    pre { overflow:auto; margin:14px 0; padding:14px 16px; border:1px solid var(--line);
+      border-radius:8px; background:#101820; color:#eef6f3; line-height:1.55; font-size:13px; }
+    pre code { padding:0; border-radius:0; background:transparent; color:inherit; }
+    .callout { margin:16px 0; padding:14px 16px; border-left:4px solid var(--green);
+      background:var(--band); font-size:14.5px; }
+    .callout.warning { border-left-color:var(--amber); }
+    .callout.risk    { border-left-color:var(--red); }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px;
+      font-weight:700; color:#fff; vertical-align:middle; margin-right:4px; }
+    .badge.red   { background:var(--red); }
+    .badge.amber { background:var(--amber); }
+    .badge.blue  { background:var(--blue); }
+    .badge.green { background:var(--green); }
+    .verdict-box { margin:0 0 20px; padding:18px 20px; border:2px solid var(--green);
+      border-radius:8px; background:#f0faf8; }
+    .verdict-box p { margin:6px 0; }
+    .meta { color:var(--muted); font-size:13px; margin-top:8px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="hero">
+      <p class="eyebrow">San · Code Review</p>
+      <h1>Context Steady v0.1 CR</h1>
+      <p class="subtitle">
+        对 <code>packages/coding-agent/src/context-steady/</code> 及相关集成的代码审阅。<br>
+        覆盖范围：M1 Digest Ledger、M2 ContextPacket 注入、M3 预算稳态、M4 召回边界、Checkpoint、Prune。
+      </p>
+      <p class="meta">审阅日期：2026-07-02 &nbsp;·&nbsp; 审阅人：Kiro / Claude Fable 5</p>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+
+    <!-- ── 一、总体结论 ──────────────────────────────────────── -->
+    <section>
+      <h2>一、总体结论</h2>
+      <div class="verdict-box">
+        <p><strong>v0.1 达标，可以交付。</strong></p>
+        <p>研究文档定义的 M1（Digest Ledger）、M2（ContextPacket 注入）、M3（预算稳态）均已完整落地，
+        M4（召回边界）已基础实现（默认关闭）。额外还交付了 Checkpoint（每 N 轮折叠稳定层）和
+        Prune（从活跃上下文移除被摘要覆盖的原始消息），超过了 v0.1 最小交付定义。</p>
+        <p>架构方向没有跑偏——没有过早接 GBrain，没有在 M1 混入 auto-retain，
+        设计文档的核心护栏（side request only、fallback always first、append-only ledger、
+        stable prefix before volatile）在代码里都能找到对应实现。</p>
+      </div>
+
+      <table>
+        <thead><tr><th>里程碑</th><th>核心文件</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>M1 TurnDigest 账本</td>
+            <td><code>digest.ts</code> / <code>fallback.ts</code> / <code>normalize.ts</code> / <code>session.ts</code></td>
+            <td><span class="badge green">✓ 完整</span></td>
+          </tr>
+          <tr>
+            <td>M2 ContextPacket 注入</td>
+            <td><code>packet.ts</code> + <code>agent-session.ts</code> 注入路径</td>
+            <td><span class="badge green">✓ 完整</span></td>
+          </tr>
+          <tr>
+            <td>M3 预算稳态</td>
+            <td><code>packet.ts</code> <code>resolvePacketBudget</code> + trim 循环</td>
+            <td><span class="badge green">✓ 完整</span></td>
+          </tr>
+          <tr>
+            <td>M4 召回边界</td>
+            <td><code>recall.ts</code> + dogfood recall 集成</td>
+            <td><span class="badge green">✓ 基础实现（默认关闭）</span></td>
+          </tr>
+          <tr>
+            <td>Checkpoint 稳定层</td>
+            <td><code>checkpoint.ts</code></td>
+            <td><span class="badge green">✓ 完整</span></td>
+          </tr>
+          <tr>
+            <td>Prune 覆盖消息裁剪</td>
+            <td><code>prune.ts</code></td>
+            <td><span class="badge green">✓ 完整</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ── 二、架构层面正确的地方 ─────────────────────────────── -->
+    <section>
+      <h2>二、架构层面——正确的地方</h2>
+
+      <h3>1. 落地口径严格遵守了文档审阅结论</h3>
+      <p><code>san-v0.1-plan-implementation-review.html</code> 里的护栏基本全部落地：</p>
+      <ul>
+        <li><code>generateDigest</code> 永不 throw，失败只 warn，不阻断用户 turn。</li>
+        <li>LLM digest 是独立 side request，走 <code>completeSimple</code>，不进主 agent loop，不触发新的 <code>agent_end</code>。</li>
+        <li>所有 digest job 绑定 <code>sessionId + fromEntryId + toEntryId</code> 去重；刻意排除
+          <code>promptGeneration</code>，因为 resume 后 generation 会重置，entry ID 才是稳定锚点（代码注释有说明）。</li>
+        <li><code>fallback.ts</code> 不依赖 <code>@oh-my-pi/pi-agent-core</code>，避免了 pi-natives transitive import。</li>
+      </ul>
+
+      <h3>2. <code>#generateTurnDigest</code> 的边界逻辑是对的</h3>
+      <p>文档审阅指出"不要用普通 async subscriber 在外面监听 agent_end"。最终实现在维护路径内部精确接入：</p>
+      <ul>
+        <li><code>session_stop continuation</code> 期间只记录边界，不写 digest。</li>
+        <li><code>chainEnded</code> 时才产出覆盖完整逻辑 turn 的 digest。</li>
+        <li>abort path 用 <code>boundaryOverride</code> 保全了 continuation 前的原始边界。</li>
+        <li><code>finally</code> 块负责清理边界状态，即使 LLM 超时或抛出也不留脏状态。</li>
+      </ul>
+
+      <h3>3. ContextPacket trim 顺序正确</h3>
+      <p><code>buildContextPacket</code> 超预算时：先砍 recall（最 volatile），再从旧到新砍 digest，最后裁剪
+      checkpoint 尾部字段。这个顺序精确匹配文档对缓存友好度的设计：stable &gt; append-only &gt; volatile。</p>
+
+      <h3>4. Dogfood 验证了完整流水线</h3>
+      <p><code>dogfood.ts</code> 的 assertions 覆盖了关键不变量："active context hides injected packet,
+      transcript retains it"，用 <code>buildSessionContext</code> 的两个视图（默认 vs transcript）来验证
+      <code>CustomMessageEntry display: false</code> 合约，是 M2 注入语义的直接验收。</p>
+
+      <h3>5. <code>mergeAuthoritativeDigestFields</code> 防止 LLM 篡改系统字段</h3>
+      <p>LLM 生成 digest 后，<code>turnId / sessionId / createdAt / source / tokenStats</code> 全部从
+      fallback 里强制覆盖，LLM 只负责语义内容（intent、decisions、risks 等）。账本完整性不依赖 LLM 输出合规性。</p>
+    </section>
+
+    <!-- ── 三、具体问题 ───────────────────────────────────────── -->
+    <section>
+      <h2>三、具体问题</h2>
+      <p>按严重度排列。
+        <span class="badge red">需要修复</span> 为阻断项；
+        <span class="badge amber">建议改进</span> 为重要但不阻断；
+        <span class="badge blue">小问题</span> 为低优先级建议。
+      </p>
+
+      <h3><span class="badge red">需要修复</span> [1] fallback.ts:218 — token stats total 计算过度累加</h3>
+      <pre><code>const total = input + output + cacheRead + cacheWrite;</code></pre>
+      <p><code>cacheRead</code> 和 <code>cacheWrite</code> 是 <code>input</code> 的组成部分（provider 拆分计费），
+      不是独立的额外 token。叠加到 <code>input + output</code> 之上会产生虚高的 <code>total</code>。</p>
+      <p>对照 <code>dogfood.ts</code> 里的测试数据：<code>total = input + output</code>（cacheRead/cacheWrite 均为 0），
+      二者不一致。</p>
+      <div class="callout warning">
+        建议：将 <code>total = input + output</code>，或在 <code>TurnDigestTokenStats</code>
+        类型注释里明确 total 语义，避免后续消费方做成本统计时误用。
+      </div>
+
+      <h3><span class="badge red">需要修复</span> [2] digest.ts:289 — JSON fallback 贪婪 regex</h3>
+      <pre><code>const match = /\{[\s\S]*\}/.exec(text);</code></pre>
+      <p>贪婪匹配会把第一个 <code>{</code> 到最后一个 <code>}</code> 之间所有内容都吃进去。如果 LLM
+      回复了多个 JSON 对象或正文里有大括号，parse 会失败或抓到错误内容。</p>
+      <p>工具调用已强制 <code>toolChoice: { type: "tool", name: ... }</code>，fallback 路径触发概率低，
+      但仍是可靠性风险。建议改为从末尾反向定位最后一个完整 JSON 对象。</p>
+
+      <h3><span class="badge amber">建议改进</span> [3] 四处 <code>as unknown as</code> 双重类型断言</h3>
+      <pre><code>// session.ts, digest.ts, packet.ts, checkpoint.ts 各一处
+(sessionManager as unknown as SessionManagerInternal).appendCustomEntry(...)</code></pre>
+      <p><code>ReadonlySessionManager</code> 没有暴露 <code>getEntries()</code> 和 <code>appendCustomEntry()</code>，
+      所有调用者用双重 cast 绕过类型系统。类型错误会逃逸到运行时。</p>
+      <div class="callout warning">
+        建议：在 <code>ReadonlySessionManager</code> 上增加这两个方法，或单独暴露一个
+        <code>ContextSteadySessionManager</code> narrow interface。
+      </div>
+
+      <h3><span class="badge amber">建议改进</span> [4] checkpoint.ts:217 — 尾部 digest 无法被折叠（行为未文档化）</h3>
+      <pre><code>if (candidates.length &lt; checkpointEveryTurns) return null;
+const selected = candidates.slice(0, checkpointEveryTurns);</code></pre>
+      <p>10 轮、<code>checkpointEveryTurns=8</code>：第 8 轮创建 checkpoint，第 9–10 轮 digest 永远悬空。
+      行为是正确的（悬空尾部由 <code>recentDigests</code> 窗口处理），但没有文档说明，未来维护者容易困惑。</p>
+      <div class="callout">
+        建议在函数注释里加一句：余数 digest 不折叠，留给 <code>recentDigests</code> 窗口处理。
+      </div>
+
+      <h3><span class="badge amber">建议改进</span> [5] relevance.ts — 短 CJK prompt 相关性阈值过宽</h3>
+      <pre><code>return overlap >= 2 ? overlapRatio >= 0.3 : currentTokens.size &lt;= 3 &amp;&amp; overlapRatio >= 0.5;</code></pre>
+      <p>CJK bigram 分词后，短 prompt（≤3 个 bigram）走 <code>overlapRatio &gt;= 0.5</code> 分支，
+      只需一半 token 重叠就判为相关。类似"继续改"这类短 prompt 只有 1–2 个 bigram，
+      可能误匹配内容完全不同的 digest，导致不相关上下文被注入。</p>
+      <div class="callout warning">
+        建议补充 CJK 短 prompt 的误匹配回归测试，明确当前阈值是否符合预期。
+      </div>
+
+      <h3><span class="badge amber">建议改进</span> [6] packet.ts:453 — <code>recallLayer!</code> 依赖隐式不变量</h3>
+      <pre><code>selectedRecall = selectedRecallItems.length > 0 ? { ...recallLayer!, items: selectedRecallItems } : undefined;</code></pre>
+      <p>不变量成立（<code>selectedRecallItems</code> 来自 <code>recallLayer?.items</code>），
+      但需追溯三层赋值才能验证。建议在循环外加一行防御性 guard 或将 <code>recallLayer</code> 加入 while 条件。</p>
+
+      <h3><span class="badge blue">小问题</span> [7] fallback.ts — <code>guessAction</code> 覆盖不全</h3>
+      <p><code>write</code> 返回 <code>"created"</code> 但 write 是覆盖写，并非总是创建；
+      <code>ast_edit</code>、<code>notebook</code> 会走到 <code>"unknown"</code>。
+      建议把常用写操作工具补进 <code>modified</code> 分支。</p>
+
+      <h3><span class="badge blue">小问题</span> [8] session.ts:47 — preTurnLeafId 不在 branch 时静默跳过</h3>
+      <p>compaction 后 branch 重建，旧 leaf ID 不存在时 digest 被静默跳过，无诊断信息。
+      建议加 <code>logger.debug("preTurnLeafId not found in branch, skipping digest", ...)</code>，
+      方便排查 compaction 后的 digest gap。</p>
+
+      <h3><span class="badge blue">小问题</span> [9] packet.ts:430 — <code>selectedWithinBudget</code> 后重复 estimate</h3>
+      <p><code>selectedWithinBudget</code> 内部已算了 <code>tokenEstimate</code>，这里丢弃后重算。
+      建议 destructure 返回值直接复用，减少重复渲染。</p>
+
+      <h3><span class="badge blue">小问题</span> [10] agent-session.ts — abort 路径三变量协议注释分散</h3>
+      <p><code>persistedOriginalBoundary</code> + <code>#resetSessionStopContinuationState()</code> +
+      <code>boundaryOverride</code> 构成三方协议，相关注释分布在 L3299 和 L3420–3428 两处。
+      建议将不变量集中在 <code>#generateTurnDigest</code> 函数头注释里。</p>
+
+      <h3><span class="badge blue">小问题</span> [11] settings-schema.ts — <code>qualityWindowTokens</code> 默认 0 不直观</h3>
+      <p>默认 <code>0</code> 的语义是"不设质量窗口限制"，但名字暗示应填 token 数。
+      建议描述字段里加 <code>"0 = no quality-window cap"</code>。</p>
+
+      <h3><span class="badge blue">小问题</span> [12] prune.ts:71 — min/max 掩盖了反向 span</h3>
+      <pre><code>const start = Math.min(fromIndex, toIndex);
+const end   = Math.max(fromIndex, toIndex);</code></pre>
+      <p>span 倒置时应产出空结果，而非静默裁剪错误范围。建议加显式断言或早期返回。</p>
+    </section>
+
+    <!-- ── 四、测试覆盖评估 ──────────────────────────────────── -->
+    <section>
+      <h2>四、测试覆盖评估</h2>
+      <table>
+        <thead><tr><th>测试文件</th><th>覆盖范围</th><th>建议补充</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>context-packet.test.ts</code></td>
+            <td>budget trim 循环、层级结构、recall 层</td>
+            <td>checkpoint 字段裁剪顺序（nextSteps → risks → decisions）</td>
+          </tr>
+          <tr>
+            <td><code>recall.test.ts</code></td>
+            <td>query 构建、dedup、maxQueryChars 截断</td>
+            <td>CJK 短 prompt（≤3 bigram）误匹配回归</td>
+          </tr>
+          <tr>
+            <td><code>turn-digest.test.ts</code></td>
+            <td>fallback + LLM path、normalize</td>
+            <td>JSON fallback regex 边缘用例（多大括号、嵌套对象）</td>
+          </tr>
+          <tr>
+            <td><code>agent-session-m2.test.ts</code></td>
+            <td>注入集成、active context 隐藏逻辑</td>
+            <td>abort 路径 boundaryOverride 不变量</td>
+          </tr>
+          <tr>
+            <td><code>prune.test.ts</code></td>
+            <td>覆盖消息裁剪、checkpoint + digest 联合裁剪</td>
+            <td>span 倒置时的防御行为</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>整体覆盖面对 v0.1 已经足够，没有发现明显的测试空洞。上表里的缺失项均为低风险回归用例，不影响交付。</p>
+    </section>
+
+    <!-- ── 五、风险汇总 ───────────────────────────────────────── -->
+    <section>
+      <h2>五、风险汇总与优先级</h2>
+      <table>
+        <thead><tr><th>#</th><th>问题</th><th>优先级</th><th>影响</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td><code>fallback.ts</code> token stats total 过度累加</td>
+            <td><span class="badge red">需要修复</span></td>
+            <td>M1 数据准确性；成本统计虚高</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td><code>digest.ts</code> JSON fallback 贪婪 regex</td>
+            <td><span class="badge red">需要修复</span></td>
+            <td>低概率 LLM digest 解析失败</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td>四处 <code>as unknown as</code> 双重断言</td>
+            <td><span class="badge amber">建议改进</span></td>
+            <td>技术债；类型错误逃逸到运行时</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td>checkpoint 尾部不折叠行为未文档化</td>
+            <td><span class="badge amber">建议改进</span></td>
+            <td>维护风险；未来 contributor 可能误改</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td>CJK 短 prompt 相关性阈值过宽</td>
+            <td><span class="badge amber">建议改进</span></td>
+            <td>不相关 digest 被注入，污染上下文</td>
+          </tr>
+          <tr>
+            <td>6</td>
+            <td><code>recallLayer!</code> 依赖隐式不变量</td>
+            <td><span class="badge amber">建议改进</span></td>
+            <td>未来重构时容易引入 NPE</td>
+          </tr>
+          <tr>
+            <td>7–12</td>
+            <td>其余小问题（guessAction、日志缺失、重复 estimate 等）</td>
+            <td><span class="badge blue">小问题</span></td>
+            <td>低风险，不影响功能正确性</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ── 六、v0.2 前建议 ────────────────────────────────────── -->
+    <section>
+      <h2>六、v0.2 前建议</h2>
+      <ul>
+        <li>修复 <code>fallback.ts</code> token stats total 计算，在 <code>TurnDigestTokenStats</code> 注释里明确各字段语义。</li>
+        <li>替换 <code>digest.ts</code> JSON fallback regex 为更健壮的解析逻辑。</li>
+        <li>将 <code>SessionManagerInternal</code> 提升到 <code>ReadonlySessionManager</code> 类型层，消灭四处双重 cast。</li>
+        <li>补充 CJK 短 prompt 相关性回归测试，验证阈值是否符合预期。</li>
+        <li>在 <code>buildContextCheckpoint</code> 和 <code>#generateTurnDigest</code> 注释里把已知不变量写清楚，降低维护成本。</li>
+        <li>在 <code>settings-schema.ts</code> 的 <code>qualityWindowTokens</code> 描述里加上 <code>"0 = no cap"</code> 说明。</li>
+      </ul>
+    </section>
+
+  </div>
+</main>
+</body>
+</html>

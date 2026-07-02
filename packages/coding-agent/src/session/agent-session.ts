@@ -3479,6 +3479,14 @@ export class AgentSession {
 
 				// Compute source range using shared pure helper
 				const branch = sessionManager.getBranch();
+				if (preTurnLeafId && !branch.some(entry => entry.id === preTurnLeafId)) {
+					logger.debug("preTurnLeafId not found in branch while generating TurnDigest", {
+						sessionId: this.sessionId,
+						preTurnLeafId,
+						currentLeafId,
+						branchLength: branch.length,
+					});
+				}
 				const span = computeTurnSourceSpan(branch, preTurnLeafId, currentLeafId);
 				if (!span) {
 					logger.debug("Skipping TurnDigest because source span is empty", {

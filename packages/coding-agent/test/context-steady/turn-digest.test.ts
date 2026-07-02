@@ -58,6 +58,14 @@ interface Msg {
 	toolName?: string;
 	details?: Record<string, unknown>;
 	entryId?: string;
+	usage?: {
+		input?: number;
+		output?: number;
+		cacheRead?: number;
+		cacheWrite?: number;
+		totalTokens?: number;
+		cost?: Record<string, number>;
+	};
 }
 
 function umsg(text: string): Msg {
@@ -319,6 +327,52 @@ describe("fallback digest", () => {
 			entryIds: ["tool-result-entry"],
 		});
 	});
+
+	test("classifies write-like tools as modified file touches", () => {
+		const msgs = asM([
+			umsg("Update generated files"),
+			amsg("Writing.", [
+				{ name: "write", args: { filePath: "src/generated.ts" } },
+				{ name: "ast_edit", args: { path: "src/refactor.ts" } },
+				{ name: "notebook", args: { path: "notes.ipynb" } },
+			]),
+		]);
+		const src = { sessionId: "s", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 };
+		const d = generateFallbackDigest(msgs, src, "turn-write-actions", "s");
+
+		expect(d.filesTouched).toEqual([
+			{ path: "src/generated.ts", action: "modified" },
+			{ path: "src/refactor.ts", action: "modified" },
+			{ path: "notes.ipynb", action: "modified" },
+		]);
+	});
+
+	test("token stats total counts input and output without double-counting cache splits", () => {
+		const msgs = asM([
+			umsg("Summarize context usage"),
+			{
+				...amsg("Done."),
+				usage: {
+					input: 100,
+					output: 20,
+					cacheRead: 60,
+					cacheWrite: 10,
+					totalTokens: 120,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+			},
+		]);
+		const src = { sessionId: "s", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 };
+		const d = generateFallbackDigest(msgs, src, "turn-token-stats", "s");
+
+		expect(d.tokenStats).toEqual({
+			input: 100,
+			output: 20,
+			cacheRead: 60,
+			cacheWrite: 10,
+			total: 120,
+		});
+	});
 });
 
 describe("normalize", () => {
@@ -497,6 +551,60 @@ describe("LLM digest orchestration", () => {
 				importance: 0.9,
 			},
 		]);
+	});
+
+	test("extracts the final valid JSON object from text fallback without greedy brace capture", async () => {
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			role: "assistant",
+			content: [
+				{
+					type: "text",
+					text: [
+						'ignore this diagnostic object: {"note":"not the digest"}',
+						JSON.stringify({
+							userIntent: "Recover digest JSON from text fallback.",
+							actionsTaken: ["Parsed the final structured digest object."],
+							decisions: ["Avoid greedy brace matching across multiple JSON objects."],
+							filesTouched: [],
+							factsLearned: [],
+							openQuestions: [],
+							risks: [],
+							nextSteps: [],
+							memoryCandidates: [],
+						}),
+					].join("\n"),
+				},
+			],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			usage: {
+				input: 10,
+				output: 5,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 15,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		const source = { sessionId: "s", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 };
+		const sessionManager = createSessionManager();
+
+		await generateDigest(
+			asM([umsg("Need digest JSON fallback"), amsg("Done.")]),
+			source,
+			sessionManager as never,
+			{} as never,
+			steadySettings(true),
+			{ model: getDigestModel(), apiKey: async () => "test-key" },
+		);
+
+		const stored = sessionManager.getEntries()[0]?.data as TurnDigest;
+		expect(stored.fallback).toBe(false);
+		expect(stored.userIntent).toBe("Recover digest JSON from text fallback.");
+		expect(stored.decisions).toEqual(["Avoid greedy brace matching across multiple JSON objects."]);
 	});
 
 	test("retries transient LLM digest failures before falling back", async () => {

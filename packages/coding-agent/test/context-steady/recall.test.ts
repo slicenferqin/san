@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildContextSteadyRecallQuery, normalizeContextSteadyRecallItems } from "../../src/context-steady/recall";
+import { isTextRelevantToPrompt } from "../../src/context-steady/relevance";
 import { TURN_DIGEST_CUSTOM_TYPE, TURN_DIGEST_SCHEMA_VERSION, type TurnDigest } from "../../src/context-steady/types";
 import type { SessionEntry } from "../../src/session/session-entries";
 
@@ -83,5 +84,10 @@ describe("Context steady recall quality helpers", () => {
 			{ content: "Cache stable content first", source: "mnemopi" },
 			{ id: "mem-3", content: "Recall is read-only", source: "hindsight" },
 		]);
+	});
+
+	test("does not treat one-token CJK overlap as topic relevance", () => {
+		expect(isTextRelevantToPrompt("模型", "模型价格调研")).toBe(false);
+		expect(isTextRelevantToPrompt("上下文稳态", "上下文稳态验收报告")).toBe(true);
 	});
 });

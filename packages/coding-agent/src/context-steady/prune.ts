@@ -85,9 +85,8 @@ function digestCoveredEntryIds(
 		const fromIndex = branchEntries.findIndex(candidate => candidate.id === digest.source.fromEntryId);
 		const toIndex = branchEntries.findIndex(candidate => candidate.id === digest.source.toEntryId);
 		if (fromIndex >= 0 && toIndex >= 0) {
-			const start = Math.min(fromIndex, toIndex);
-			const end = Math.max(fromIndex, toIndex);
-			for (let index = start; index <= end; index++) {
+			if (fromIndex > toIndex) continue;
+			for (let index = fromIndex; index <= toIndex; index++) {
 				const coveredEntry = branchEntries[index]!;
 				if (coveredEntry.type === "message") {
 					covered.add(coveredEntry.id);

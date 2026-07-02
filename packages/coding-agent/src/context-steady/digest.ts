@@ -9,7 +9,6 @@ import { type Api, type ApiKey, type AssistantMessage, completeSimple, type Mode
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 
 import type { Settings } from "../config/settings";
-import type { SessionEntry } from "../session/session-entries";
 import type { ReadonlySessionManager } from "../session/session-manager";
 import { generateFallbackDigest, generateTurnId } from "./fallback";
 import { normalizeDigest } from "./normalize";
@@ -139,9 +138,7 @@ export async function generateDigest(
 	if (!steadySettings.enabled || !steadySettings.digest.enabled) return;
 
 	// Dedupe: skip if this source range already has a digest
-	const entries = (
-		sessionManager as unknown as { getEntries(): Array<Record<string, unknown>> }
-	).getEntries() as unknown as readonly SessionEntry[];
+	const entries = sessionManager.getEntries();
 	if (hasExistingDigest(entries, source)) return;
 
 	const turnId = generateTurnId();
@@ -286,16 +283,21 @@ function extractJsonObjectFromText(response: AssistantMessage): Record<string, u
 		.join("\n")
 		.trim();
 	if (!text) return undefined;
-	const match = /\{[\s\S]*\}/.exec(text);
-	if (!match) return undefined;
-	try {
-		const parsed = JSON.parse(match[0]);
-		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-			? (parsed as Record<string, unknown>)
-			: undefined;
-	} catch {
-		return undefined;
+
+	for (let start = text.lastIndexOf("{"); start >= 0; start = text.lastIndexOf("{", start - 1)) {
+		for (let end = text.indexOf("}", start); end >= 0; end = text.indexOf("}", end + 1)) {
+			try {
+				const parsed = JSON.parse(text.slice(start, end + 1));
+				if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+					return parsed as Record<string, unknown>;
+				}
+			} catch {
+				// Keep scanning candidate braces in case surrounding text contains non-JSON objects.
+			}
+		}
 	}
+
+	return undefined;
 }
 
 function formatDigestUserMessage(messages: readonly unknown[], fallbackDigest: TurnDigest): string {

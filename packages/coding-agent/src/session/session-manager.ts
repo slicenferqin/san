@@ -288,6 +288,7 @@ export type ReadonlySessionManager = Pick<
 	| "getHeader"
 	| "getEntries"
 	| "getTree"
+	| "appendCustomEntry"
 	| "getUsageStatistics"
 	| "putBlob"
 	| "putBlobSync"

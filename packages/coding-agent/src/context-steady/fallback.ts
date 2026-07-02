@@ -98,8 +98,17 @@ function collectFiles(msgs: readonly InlinedMessage[]): TurnDigestFile[] {
 }
 
 function guessAction(tool: string): TurnDigestFile["action"] {
-	if (tool === "write") return "created";
-	if (tool === "edit" || tool === "apply_patch" || tool === "replace" || tool === "patch") return "modified";
+	if (
+		tool === "write" ||
+		tool === "edit" ||
+		tool === "apply_patch" ||
+		tool === "replace" ||
+		tool === "patch" ||
+		tool === "ast_edit" ||
+		tool === "notebook"
+	) {
+		return "modified";
+	}
 	if (tool === "read" || tool === "glob" || tool === "grep" || tool === "lsp") return "read";
 	return "unknown";
 }
@@ -223,7 +232,7 @@ function tokenStats(msgs: readonly InlinedMessage[]): TurnDigest["tokenStats"] {
 			cacheWrite += m.usage.cacheWrite ?? 0;
 		}
 	}
-	const total = input + output + cacheRead + cacheWrite;
+	const total = input + output;
 	return total > 0 ? { input, output, cacheRead, cacheWrite, total } : undefined;
 }
 

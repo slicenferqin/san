@@ -65,10 +65,6 @@ interface PacketRecallView {
 	}>;
 }
 
-interface AppendCustomEntrySessionManager {
-	appendCustomEntry(customType: string, data?: unknown): string;
-}
-
 function clampCount(value: number): number {
 	if (!Number.isFinite(value)) return 3;
 	return Math.max(0, Math.floor(value));
@@ -427,9 +423,10 @@ export function buildContextPacket(
 	const recentDigests = recentCount > 0 ? uncoveredDigests.slice(-recentCount) : [];
 	const budget = resolvePacketBudget(settings);
 	const packetTotalBudget = budget.packetTokenBudget;
-	let selectedDigests = selectedWithinBudget(recentDigests, packetTotalBudget).selected;
-	let digestTokenEstimate = estimatePacketTokens(renderDigestLedgerContent(selectedDigests));
-	let digestTokenTrimmed = recentDigests.length - selectedDigests.length;
+	const budgetedDigests = selectedWithinBudget(recentDigests, packetTotalBudget);
+	let selectedDigests = budgetedDigests.selected;
+	let digestTokenEstimate = budgetedDigests.tokenEstimate;
+	let digestTokenTrimmed = budgetedDigests.tokenTrimmed;
 	let selectedCheckpoint = checkpointRef ? cloneCheckpoint(checkpointRef.checkpoint) : undefined;
 	let checkpointLayerTrimmed = 0;
 	let selectedRecall = recallLayer;
@@ -447,10 +444,10 @@ export function buildContextPacket(
 	let content = renderPacketContent(selectedDigests, selectedCheckpoint, selectedRecall);
 	let packetTokenEstimate = estimatePacketTokens(content);
 	if (packetTotalBudget <= 0) return null;
-	while (packetTokenEstimate > packetTotalBudget && selectedRecallItems.length > 0) {
+	while (packetTokenEstimate > packetTotalBudget && recallLayer && selectedRecallItems.length > 0) {
 		selectedRecallItems = selectedRecallItems.slice(0, -1);
 		recallTokenTrimmed++;
-		selectedRecall = selectedRecallItems.length > 0 ? { ...recallLayer!, items: selectedRecallItems } : undefined;
+		selectedRecall = selectedRecallItems.length > 0 ? { ...recallLayer, items: selectedRecallItems } : undefined;
 		recallTokenEstimate = selectedRecall ? estimatePacketTokens(renderRecallLayerContent(selectedRecall)) : 0;
 		content = renderPacketContent(selectedDigests, selectedCheckpoint, selectedRecall);
 		packetTokenEstimate = estimatePacketTokens(content);
@@ -546,5 +543,5 @@ export function appendContextPacketDebugEntry(
 	customType: string,
 	packet: ContextPacket,
 ): string {
-	return (sessionManager as unknown as AppendCustomEntrySessionManager).appendCustomEntry(customType, packet);
+	return sessionManager.appendCustomEntry(customType, packet);
 }

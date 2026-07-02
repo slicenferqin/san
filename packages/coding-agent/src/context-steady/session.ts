@@ -11,12 +11,6 @@ import type { ReadonlySessionManager } from "../session/session-manager";
 import type { TurnDigest, TurnDigestSource } from "./types";
 import { CONTEXT_PACKET_MESSAGE_TYPE, TURN_DIGEST_CUSTOM_TYPE } from "./types";
 
-/** Internal session manager interface we need at runtime. */
-interface SessionManagerInternal {
-	appendCustomEntry(customType: string, data?: unknown): string;
-	getEntries(): Array<Record<string, unknown>>;
-}
-
 // ── Source span extraction ──────────────────────────────────────────────────
 
 /**
@@ -162,7 +156,7 @@ export function extractSpanMessages(
  * Returns the entry id of the newly created entry.
  */
 export function appendTurnDigest(sessionManager: ReadonlySessionManager, digest: TurnDigest): string {
-	return (sessionManager as unknown as SessionManagerInternal).appendCustomEntry(TURN_DIGEST_CUSTOM_TYPE, digest);
+	return sessionManager.appendCustomEntry(TURN_DIGEST_CUSTOM_TYPE, digest);
 }
 
 /**

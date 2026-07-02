@@ -2,6 +2,7 @@ import type { ContextCheckpoint, TurnDigest } from "./types";
 
 const ASCII_TOKEN = /[a-z0-9][a-z0-9._-]*/g;
 const HAN_RUN = /[\p{Script=Han}]+/gu;
+const HAS_HAN = /[\p{Script=Han}]/u;
 
 const ASCII_GENERIC_TOKENS = new Set([
 	"agent",
@@ -299,7 +300,9 @@ export function isTextRelevantToPrompt(currentPrompt: string, candidateText: str
 	const overlap = overlapSize(currentTokens, candidateTokens);
 	if (overlap === 0) return false;
 	const overlapRatio = overlap / Math.min(currentTokens.size, candidateTokens.size);
-	return overlap >= 2 ? overlapRatio >= 0.3 : currentTokens.size <= 3 && overlapRatio >= 0.5;
+	if (overlap >= 2) return overlapRatio >= 0.3;
+	if (HAS_HAN.test(currentPrompt) && currentTokens.size <= 3) return false;
+	return currentTokens.size <= 3 && overlapRatio >= 0.5;
 }
 
 export function digestRelevanceText(digest: TurnDigest): string {

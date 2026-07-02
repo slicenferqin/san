@@ -24,10 +24,6 @@ interface DigestEntryRef {
 	digest: TurnDigest;
 }
 
-interface AppendCustomEntrySessionManager {
-	appendCustomEntry(customType: string, data?: unknown): string;
-}
-
 export interface ContextCheckpointSettings {
 	enabled: boolean;
 	checkpointEveryTurns: number;
@@ -214,6 +210,8 @@ export function buildContextCheckpoint(
 
 	const covered = coveredDigestEntryIds(entries);
 	const candidates = digestRefs(entries).filter(ref => !covered.has(ref.entryId));
+	// Residual digest tails smaller than checkpointEveryTurns intentionally stay
+	// unfolded; the ContextPacket recent-digest tail carries those fresh turns.
 	if (candidates.length < checkpointEveryTurns) return null;
 
 	const previousCheckpoint = latestContextCheckpoint(entries);
@@ -265,8 +263,5 @@ export function buildContextCheckpoint(
 }
 
 export function appendContextCheckpoint(sessionManager: ReadonlySessionManager, checkpoint: ContextCheckpoint): string {
-	return (sessionManager as unknown as AppendCustomEntrySessionManager).appendCustomEntry(
-		CONTEXT_CHECKPOINT_CUSTOM_TYPE,
-		checkpoint,
-	);
+	return sessionManager.appendCustomEntry(CONTEXT_CHECKPOINT_CUSTOM_TYPE, checkpoint);
 }

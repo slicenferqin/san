@@ -167,4 +167,35 @@ describe("buildContextSteadyPrunedMessages", () => {
 		expect(JSON.stringify(pruned)).not.toContain("large tool evidence");
 		expect(JSON.stringify(pruned)).toContain("<san_context_packet>");
 	});
+
+	test("does not prune a reversed digest source span", () => {
+		const oldUser = { role: "user", content: "old raw user", timestamp: 1, provider: "x", model: "x" };
+		const oldAssistant = { role: "assistant", content: "old raw assistant", timestamp: 2, provider: "x", model: "x" };
+		const packetMessage = {
+			role: "custom",
+			customType: CONTEXT_PACKET_MESSAGE_TYPE,
+			content: "<san_context_packet>",
+			display: false,
+			timestamp: 3,
+			details: { packetId: "ctx-test" },
+		};
+
+		const pruned = buildContextSteadyPrunedMessages(
+			asMessages([oldUser, oldAssistant, packetMessage]),
+			asEntries([
+				messageEntry("u1", oldUser),
+				messageEntry("a1", oldAssistant),
+				customEntry(
+					"d1",
+					TURN_DIGEST_CUSTOM_TYPE,
+					digest({ sessionId: "s1", fromEntryId: "a1", toEntryId: "u1", promptGeneration: 1 }),
+				),
+				customEntry("p1", CONTEXT_PACKET_CUSTOM_TYPE, packet(["d1"])),
+			]),
+		);
+
+		expect(JSON.stringify(pruned)).toContain("old raw user");
+		expect(JSON.stringify(pruned)).toContain("old raw assistant");
+		expect(JSON.stringify(pruned)).toContain("<san_context_packet>");
+	});
 });
