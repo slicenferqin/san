@@ -1,0 +1,54 @@
+<svg width="1200" height="620" viewBox="0 0 1200 620" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="San Context Steady v0.1 acceptance dashboard">
+  <rect width="1200" height="620" rx="28" fill="#0B1020"/>
+  <rect x="38" y="38" width="1124" height="544" rx="24" fill="#111827" stroke="#26334D" stroke-width="2"/>
+  <text x="72" y="92" fill="#E5ECFF" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="800">v0.1 Real Dogfood Acceptance Dashboard</text>
+  <text x="72" y="126" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="16">Same 10-turn engineering theme: provider-bound input, continuity carrier, and long-term state shape.</text>
+
+  <g transform="translate(72 168)">
+    <rect width="324" height="154" rx="20" fill="#0F172A" stroke="#334155"/>
+    <text x="24" y="42" fill="#93C5FD" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="700">San turn 10 input</text>
+    <text x="24" y="96" fill="#60A5FA" font-family="Inter, Arial, sans-serif" font-size="56" font-weight="850">598</text>
+    <text x="162" y="95" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="18">tokens</text>
+    <text x="24" y="128" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="14">Old context carried by packet/checkpoint</text>
+  </g>
+
+  <g transform="translate(438 168)">
+    <rect width="324" height="154" rx="20" fill="#0F172A" stroke="#334155"/>
+    <text x="24" y="42" fill="#FDA4AF" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="700">No-steady turn 10 input</text>
+    <text x="24" y="96" fill="#FB7185" font-family="Inter, Arial, sans-serif" font-size="48" font-weight="850">198,340</text>
+    <text x="230" y="95" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="18">tokens</text>
+    <text x="24" y="128" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="14">Raw transcript keeps entering model context</text>
+  </g>
+
+  <g transform="translate(804 168)">
+    <rect width="300" height="154" rx="20" fill="#0F172A" stroke="#334155"/>
+    <text x="24" y="42" fill="#FCD34D" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="700">Turn 10 reduction</text>
+    <text x="24" y="96" fill="#FBBF24" font-family="Inter, Arial, sans-serif" font-size="52" font-weight="850">331.7x</text>
+    <text x="24" y="128" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="14">Based on 198,340 / 598</text>
+  </g>
+
+  <g transform="translate(72 366)">
+    <rect width="496" height="154" rx="20" fill="#101B2F" stroke="#2563EB"/>
+    <text x="24" y="42" fill="#DBEAFE" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800">Steady: ContextPacket carries continuity</text>
+    <text x="24" y="78" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="15">1,612-token ContextPacket</text>
+    <text x="24" y="106" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="14">Stable checkpoint, recent digest tail, and optional recall layer.</text>
+    <path d="M24 126H448" stroke="#1D4ED8" stroke-width="8" stroke-linecap="round"/>
+    <path d="M24 126H340" stroke="#60A5FA" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="340" cy="126" r="8" fill="#BFDBFE"/>
+  </g>
+
+  <g transform="translate(608 366)">
+    <rect width="496" height="154" rx="20" fill="#2B121A" stroke="#E11D48"/>
+    <text x="24" y="42" fill="#FFE4E6" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800">No steady state: long-window pressure</text>
+    <text x="24" y="78" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="15">10-turn cumulative input: 1,035,270 tokens</text>
+    <text x="24" y="106" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="14">Dialogue and tool results keep piling up as raw model context.</text>
+    <path d="M24 126H448" stroke="#881337" stroke-width="8" stroke-linecap="round"/>
+    <path d="M24 126H448" stroke="#FB7185" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="448" cy="126" r="8" fill="#FFE4E6"/>
+  </g>
+
+  <g transform="translate(72 548)">
+    <circle cx="8" cy="0" r="5" fill="#22C55E"/>
+    <text x="24" y="5" fill="#A7F3D0" font-family="Inter, Arial, sans-serif" font-size="14">Conclusion: v0.1 turns long-window dependence into auditable, budgeted, pruneable provider-bound context state.</text>
+  </g>
+</svg>

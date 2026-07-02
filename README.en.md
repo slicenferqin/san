@@ -2,9 +2,40 @@
 
 [中文](README.md) | **English**
 
+<p align="center">
+  <img src="docs/assets/readme/hero-en.svg" alt="San Context Steady v0.1" />
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Context%20Steady-v0.1-2563EB?style=flat&colorA=0B1020" alt="Context Steady v0.1" />
+  <img src="https://img.shields.io/badge/Execution%20Loop-v0.2-16A34A?style=flat&colorA=0B1020" alt="Execution Loop v0.2" />
+  <img src="https://img.shields.io/badge/Bun-%3E%3D1.3.14-F472B6?style=flat&colorA=0B1020" alt="Bun >= 1.3.14" />
+  <img src="https://img.shields.io/badge/source--first-active-D97706?style=flat&colorA=0B1020" alt="Source first" />
+</p>
+
 San is a coding agent for long-running, resumable engineering work. It started as a fork of `omp`, keeps the mature tool-driven coding surface, and focuses on a narrower systems problem: after many turns of discussion, code changes, verification, and resume, the agent should still preserve stable, auditable, and compact context state.
 
 San's first public milestone is **San Context Steady v0.1**.
+
+**One-line version**: San does not treat "fit more transcript into a larger window" as the answer. It turns long-running dialogue into an auditable ledger, stable checkpoints, and bounded ContextPackets so model-bound context can reach steady state.
+
+## What You Can See Today
+
+| Result | v0.1 evidence | Why it matters |
+| --- | ---: | --- |
+| Stable input size | turn 10 at `598 tokens` | provider-bound context no longer grows linearly with raw transcript |
+| Lower long-window pressure | control turn 10 at `198,340 tokens` | San moves old context into packet/checkpoint state for the same class of work |
+| Recoverable continuity | `1,612-token ContextPacket` | later turns still carry goals, files, decisions, risks, and acceptance criteria |
+| Preserved audit trail | `1 checkpoint` covering the first 6 digests | raw session journal stays append-only for resume/debug/audit |
+
+These numbers are not meant to show that one fixed prompt was matched. They show the runtime property San is aiming for: old state becomes structured, model-bound history becomes pruneable, and the next turn can still recover the task context.
+
+**Fast Acceptance Entry Points**:
+
+- **Recommended config**: `san --config packages/coding-agent/examples/config/san-context-steady-recommended.yml`
+- **Quality report**: `docs/research/context-steady-v0.1-quality-acceptance-report.html`
+- **Core contract test**: `packages/coding-agent/test/context-steady/agent-session-m2.test.ts`
+- **Local verification**: `bun check` + `HOME=/private/tmp/san-test-home bun test packages/coding-agent/test/context-steady packages/coding-agent/test/san-loop`
 
 ## Why San
 
@@ -29,11 +60,59 @@ The v0.1 surface is ready to describe publicly:
 - **Optional LLM digesting**: deterministic fallback digests remain available; `san.contextSteady.digest.llm.*` can enable a side LLM to improve semantic digest quality without becoming a hard dependency.
 - **Dogfood acceptance baseline**: deterministic verifiers and real 10-turn dogfood artifacts are included to validate whether the system is actually steady, not merely injecting another summary.
 
+### v0.1 Acceptance Evidence
+
+San v0.1 is not validated by checking whether a summary was injected. The acceptance question is whether provider-bound context stops carrying equivalent raw transcript while later turns still preserve task continuity.
+
+The current public report is based on two real 10-turn conversations:
+
+<p align="center">
+  <img src="docs/assets/readme/evidence-dashboard-en.svg" alt="San Context Steady v0.1 acceptance dashboard" />
+</p>
+
+<p align="center">
+  <img src="docs/assets/readme/input-curve-en.svg" alt="10-turn input token comparison between San and the no-steady control" />
+</p>
+
+| Metric | San Context Steady v0.1 | No San steady-state control |
+| --- | ---: | ---: |
+| Turn 10 input | 598 tokens | 198,340 tokens |
+| 10-turn cumulative input | small window + ContextPacket continuity | 1,035,270 tokens |
+| Turn 10 continuity carrier | 1,612-token ContextPacket | large raw-history surface |
+| Long-term state | 1 checkpoint covering the first 6 digests | raw transcript keeps accumulating |
+| Acceptance result | provider-bound steady-state mechanism is present | long-window pressure, not engineering steady state |
+
+In concrete terms: San's 10th turn needed only 598 input tokens plus a 1,612-token ContextPacket to carry continuity. Under the same 10-turn theme, the control run reached 198,340 input tokens on turn 10. This is the core v0.1 claim: long-context behavior is converted into auditable, budgeted, pruneable context state.
+
+This is not a prompt-specific rule. The acceptance target is a general runtime property: old state becomes structured, model-bound history becomes pruneable, and later turns can still recover files, decisions, risks, and acceptance criteria. In other words, San v0.1 stabilizes how an agent receives context during long engineering tasks.
+
+<p align="center">
+  <img src="docs/assets/readme/packet-layers-en.svg" alt="ContextPacket steady-state layer structure" />
+</p>
+
+The ContextPacket is not just a shorter summary. It separates old state into a stable layer, keeps new changes in a short tail, and places optional recall in a low-cache layer. Later turns keep access to prior conclusions without repeatedly carrying the same raw transcript in provider-bound payloads.
+
+Evidence sources:
+
+- Quality acceptance report: `docs/research/context-steady-v0.1-quality-acceptance-report.html`
+- Real 10-turn dogfood summaries: `docs/research/context-steady-dogfood-runs/`
+- Key test: `packages/coding-agent/test/context-steady/agent-session-m2.test.ts`
+- Steady-state pruning implementation: `packages/coding-agent/src/context-steady/prune.ts`
+- ContextPacket builder: `packages/coding-agent/src/context-steady/packet.ts`
+
+The boundary is explicit: v0.1 stabilizes **provider-bound context**. It does not physically delete the session journal. Raw transcript remains append-only for audit, resume, and debug; model-bound context is controlled by packets, checkpoints, the quality window, and pruning.
+
 Recommended v0.1 dogfood config:
 
 ```sh
 san --config packages/coding-agent/examples/config/san-context-steady-recommended.yml
 ```
+
+The external v0.1 claim is threefold:
+
+- **Stable input size**: turn-10 provider-bound input no longer grows linearly with raw transcript.
+- **Stable task continuity**: ContextPacket preserves goals, key changes, evidence, risks, and next steps.
+- **Stable audit path**: raw session journal remains append-only while digest/checkpoint/packet control model-side context budget.
 
 ## San v0.2 Execution Loop
 

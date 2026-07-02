@@ -1,0 +1,28 @@
+<svg width="1200" height="420" viewBox="0 0 1200 420" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="San Context Steady">
+  <rect width="1200" height="420" rx="28" fill="#0B1020"/>
+  <rect x="34" y="34" width="1132" height="352" rx="24" fill="#111827" stroke="#26334D" stroke-width="2"/>
+  <text x="76" y="112" fill="#E5ECFF" font-family="Inter, Arial, sans-serif" font-size="58" font-weight="800">San</text>
+  <text x="76" y="160" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="24">A coding agent for long-running, resumable engineering work</text>
+  <text x="76" y="214" fill="#D7E2FF" font-family="Inter, Arial, sans-serif" font-size="20">Context Steady v0.1 turns long conversations into auditable, budgeted, pruneable runtime state.</text>
+  <g transform="translate(76 266)">
+    <rect width="210" height="58" rx="14" fill="#122A3D" stroke="#2563EB"/>
+    <text x="22" y="36" fill="#DBEAFE" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="700">TurnDigest Ledger</text>
+    <rect x="232" width="188" height="58" rx="14" fill="#193323" stroke="#16A34A"/>
+    <text x="254" y="36" fill="#DCFCE7" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="700">Stable Checkpoint</text>
+    <rect x="442" width="196" height="58" rx="14" fill="#3A2B12" stroke="#D97706"/>
+    <text x="464" y="36" fill="#FEF3C7" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="700">Bounded Packet</text>
+    <rect x="660" width="188" height="58" rx="14" fill="#3A1725" stroke="#E11D48"/>
+    <text x="682" y="36" fill="#FFE4E6" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="700">Provider Prune</text>
+  </g>
+  <g transform="translate(815 78)">
+    <rect x="0" y="0" width="288" height="220" rx="18" fill="#0F172A" stroke="#334155"/>
+    <text x="24" y="42" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700">10-turn real acceptance</text>
+    <text x="24" y="88" fill="#60A5FA" font-family="Inter, Arial, sans-serif" font-size="46" font-weight="800">598</text>
+    <text x="145" y="88" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="18">input tokens</text>
+    <text x="24" y="126" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="15">San turn 10 input</text>
+    <path d="M24 150H264" stroke="#26334D"/>
+    <text x="24" y="182" fill="#FCA5A5" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="800">198,340</text>
+    <text x="154" y="182" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="15">control tokens</text>
+    <text x="24" y="206" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="14">No steady-state control</text>
+  </g>
+</svg>

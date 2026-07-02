@@ -1,0 +1,30 @@
+<svg width="1200" height="420" viewBox="0 0 1200 420" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="ContextPacket 稳态层结构">
+  <rect width="1200" height="420" rx="24" fill="#0F172A"/>
+  <text x="56" y="60" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="800">第 10 轮前的 ContextPacket：旧状态稳定，新变化短尾</text>
+  <text x="56" y="94" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="16">最终 packet 1,612 / 3,000 tokens；checkpoint 覆盖前 6 个 digest。</text>
+  <g transform="translate(72 142)">
+    <rect x="0" y="0" width="330" height="150" rx="18" fill="#102A43" stroke="#38BDF8" stroke-width="2"/>
+    <text x="26" y="44" fill="#E0F2FE" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="800">Stable Checkpoint</text>
+    <text x="26" y="82" fill="#BAE6FD" font-family="Inter, Arial, sans-serif" font-size="16">覆盖前 6 个 digest</text>
+    <text x="26" y="112" fill="#BAE6FD" font-family="Inter, Arial, sans-serif" font-size="16">旧项目状态进入稳定层</text>
+    <text x="26" y="136" fill="#7DD3FC" font-family="Inter, Arial, sans-serif" font-size="14">cache priority: high</text>
+    <path d="M346 75H440" stroke="#64748B" stroke-width="3" stroke-linecap="round"/>
+    <path d="M430 62L446 75L430 88" stroke="#64748B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="462" y="0" width="260" height="150" rx="18" fill="#17351F" stroke="#22C55E" stroke-width="2"/>
+    <text x="488" y="44" fill="#DCFCE7" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="800">Digest Tail</text>
+    <text x="488" y="82" fill="#BBF7D0" font-family="Inter, Arial, sans-serif" font-size="16">最近 2-3 个 turn</text>
+    <text x="488" y="112" fill="#BBF7D0" font-family="Inter, Arial, sans-serif" font-size="16">只保留新变化</text>
+    <text x="488" y="136" fill="#86EFAC" font-family="Inter, Arial, sans-serif" font-size="14">cache priority: medium</text>
+    <path d="M738 75H832" stroke="#64748B" stroke-width="3" stroke-linecap="round"/>
+    <path d="M822 62L838 75L822 88" stroke="#64748B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="854" y="0" width="210" height="150" rx="18" fill="#422006" stroke="#F59E0B" stroke-width="2"/>
+    <text x="880" y="44" fill="#FEF3C7" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="800">Recall</text>
+    <text x="880" y="82" fill="#FDE68A" font-family="Inter, Arial, sans-serif" font-size="16">可选低缓存层</text>
+    <text x="880" y="112" fill="#FDE68A" font-family="Inter, Arial, sans-serif" font-size="16">不污染系统提示</text>
+    <text x="880" y="136" fill="#FBBF24" font-family="Inter, Arial, sans-serif" font-size="14">cache priority: low</text>
+  </g>
+  <g transform="translate(200 340)">
+    <rect width="800" height="44" rx="12" fill="#111827" stroke="#334155"/>
+    <text x="28" y="28" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="16">Provider-bound context = 当前 prompt + bounded packet + 剪裁后的必要 raw context</text>
+  </g>
+</svg>
