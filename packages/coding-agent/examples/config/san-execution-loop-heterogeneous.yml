@@ -1,0 +1,69 @@
+# San v0.2 heterogeneous-role execution loop dogfood overlay.
+#
+# Use with a temporary agent dir produced by:
+#   bun packages/coding-agent/scripts/san-v02-prepare-local-models.ts
+#
+# Example:
+#   PI_CODING_AGENT_DIR=/private/tmp/san-v02-agent \
+#     san --config packages/coding-agent/examples/config/san-execution-loop-heterogeneous.yml
+#
+# This file intentionally contains no provider keys. It only selects the role
+# model selectors used by v0.2 acceptance runs.
+san:
+  contextSteady:
+    enabled: true
+    digest:
+      enabled: true
+      persistFallback: true
+      timeoutMs: 30000
+      llm:
+        enabled: true
+        modelRole: vb/gpt-5.5
+    qualityWindowTokens: 24000
+    reserveRatio: 0.25
+    contextPacket:
+      enabled: true
+      recentDigests: 5
+      maxTokens: 3000
+    checkpoint:
+      enabled: true
+      everyTurns: 6
+      maxTokens: 12000
+    recall:
+      enabled: false
+      maxItems: 3
+      maxTokens: 1000
+      maxQueryChars: 2000
+  executionLoop:
+    enabled: true
+    defaultMode: deep
+    maxRetries: 2
+    maxWorkers: 3
+    ledger:
+      enabled: true
+      persistRolePackets: true
+    checks:
+      enabled: true
+      includeBuiltins: true
+      projectDir: .omp/checks
+    roles:
+      commander:
+        modelRole: vb/gpt-5.5:xhigh
+      worker:
+        modelRole: deepseek/deepseek-v4-pro
+      supervisor:
+        modelRole: claude-code/claude-sonnet-4-5-20250929
+      oracle:
+        modelRole: vb/gpt-5.5:xhigh
+        enabledInModes:
+          - smart
+          - deep
+    roleContext:
+      tokenBudget: 2000
+      maxEvents: 8
+      maxDecisions: 8
+    budget:
+      rushMaxTurns: 3
+      smartMaxTurns: 8
+      deepMaxTurns: 16
+      reserveRatio: 0.25

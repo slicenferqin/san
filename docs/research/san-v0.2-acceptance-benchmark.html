@@ -1,0 +1,1021 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San v0.2 执行闭环验收测试集与评判标准</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #667085;
+      --line: #d8deea;
+      --brand: #2358d4;
+      --brand-soft: #eaf0ff;
+      --ok: #067647;
+      --ok-soft: #ecfdf3;
+      --warn: #b54708;
+      --warn-soft: #fffaeb;
+      --risk: #b42318;
+      --risk-soft: #fff1f3;
+      --code: #101828;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.62;
+    }
+
+    main {
+      width: min(1180px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 46px 0 72px;
+    }
+
+    header {
+      padding: 36px 40px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: linear-gradient(135deg, #ffffff 0%, #eef4ff 100%);
+      box-shadow: 0 18px 45px rgba(23, 32, 51, 0.07);
+    }
+
+    section {
+      margin-top: 22px;
+      padding: 28px 32px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--brand);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(34px, 5vw, 58px);
+      line-height: 1.04;
+      letter-spacing: -0.03em;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 24px;
+      letter-spacing: -0.02em;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 17px;
+    }
+
+    p {
+      margin: 0 0 14px;
+      color: var(--muted);
+    }
+
+    p:last-child { margin-bottom: 0; }
+
+    code {
+      padding: 2px 6px;
+      border-radius: 6px;
+      background: #f2f4f7;
+      color: var(--code);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow-x: auto;
+      margin: 16px 0 0;
+      padding: 16px;
+      border-radius: 12px;
+      background: #101828;
+      color: #f9fafb;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    pre code {
+      padding: 0;
+      background: transparent;
+      color: inherit;
+    }
+
+    table {
+      width: 100%;
+      margin-top: 14px;
+      border-collapse: collapse;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    th,
+    td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f2f5fb;
+      color: #344054;
+      font-size: 13px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    ul,
+    ol {
+      margin: 10px 0 0;
+      padding-left: 22px;
+    }
+
+    li { margin: 6px 0; }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: var(--brand-soft);
+      color: var(--brand);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .card {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fbfcff;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .metric {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fbfcff;
+    }
+
+    .metric strong {
+      display: block;
+      color: var(--brand);
+      font-size: 30px;
+      line-height: 1;
+    }
+
+    .metric span {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .callout {
+      margin-top: 14px;
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #f8fafc;
+    }
+
+    .callout strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--ink);
+    }
+
+    .callout.ok {
+      border-color: #abefc6;
+      background: var(--ok-soft);
+      color: #074d31;
+    }
+
+    .callout.warn {
+      border-color: #fedf89;
+      background: var(--warn-soft);
+      color: #7a2e0e;
+    }
+
+    .callout.risk {
+      border-color: #fecdca;
+      background: var(--risk-soft);
+      color: #7a271a;
+    }
+
+    .score {
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    .pass { color: var(--ok); }
+    .warn { color: var(--warn); }
+    .fail { color: var(--risk); }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .flow-step {
+      min-height: 92px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fbfcff;
+    }
+
+    .flow-step strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--brand);
+    }
+
+    .timeline {
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+
+    .turn {
+      display: grid;
+      grid-template-columns: 82px 1fr 1fr;
+      gap: 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .turn:last-child { border-bottom: 0; }
+
+    .turn > div {
+      padding: 13px 14px;
+      border-right: 1px solid var(--line);
+    }
+
+    .turn > div:last-child { border-right: 0; }
+
+    .turn-id {
+      font-weight: 900;
+      color: var(--brand);
+      background: #f2f5fb;
+    }
+
+    .mono {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      color: #344054;
+      word-break: break-all;
+    }
+
+    @media (max-width: 900px) {
+      .grid,
+      .metric-grid,
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      .turn {
+        grid-template-columns: 1fr;
+      }
+
+      .turn > div {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .turn > div:last-child { border-bottom: 0; }
+    }
+
+    @media (max-width: 760px) {
+      main { width: min(100vw - 24px, 1180px); padding-top: 24px; }
+      header, section { padding: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">San v0.2 · Acceptance Benchmark</p>
+      <h1>执行闭环从“能跑”验收到“能交付”</h1>
+      <p>
+        v0.1 验收关注上下文稳态：长对话是否不膨胀、主线是否不丢。v0.2 验收的核心问题更明确：
+        多角色分工是否真的提升最终交付质量，而不只是把同一个 agent 的自然语言过程拆成更多步骤。
+        更进一步，San 必须证明 v0.1 的上下文稳态能托住 v0.2 的多角色协作：在不让上下文线性膨胀的前提下，
+        让 Commander / Worker / Supervisor / Oracle 的分工带来更好的计划、实现、审查、修复和收口。
+      </p>
+      <div class="pill-row">
+        <span class="pill">版本：v0.2 mature execution loop</span>
+        <span class="pill">配置：san-execution-loop-recommended.yml</span>
+        <span class="pill">样本：确定性 gate + 真实 provider dogfood</span>
+        <span class="pill">结论口径：质量 / 成本 / 稳态 ROI</span>
+        <span class="pill">模型策略：同模型控制组 + 异构模型验证组</span>
+      </div>
+    </header>
+
+    <section>
+      <h2>核心假设</h2>
+      <p>
+        v0.2 不应只证明“多 agent 能跑起来”，而要证明“多角色分工让交付质量更稳定”。因此验收要围绕同一组真实任务做对照：
+        普通 agent 是否容易遗漏计划、验收、复验和失败边界；San v0.2 是否因为角色分工，把这些质量控制动作结构化、强制化、可审计化。
+      </p>
+      <div class="flow">
+        <div class="flow-step">
+          <strong>Commander</strong>
+          负责目标澄清、范围控制、任务拆解、风险登记和验收标准，不直接写代码。
+        </div>
+        <div class="flow-step">
+          <strong>Worker</strong>
+          负责按 assignment 实现和自检，避免边做边改验收口径。
+        </div>
+        <div class="flow-step">
+          <strong>Supervisor</strong>
+          负责独立质量门禁，基于 diff、测试、规则和缺陷证据给 verdict。
+        </div>
+        <div class="flow-step">
+          <strong>Retry</strong>
+          负责把缺陷转回计划和实现，而不是靠最终回答口头补救。
+        </div>
+        <div class="flow-step">
+          <strong>Oracle</strong>
+          只在 deep 模式提供 second opinion，降低复杂决策的单点偏差。
+        </div>
+      </div>
+      <div class="callout ok">
+        <strong>主验收问题</strong>
+        同样的真实开发任务，San v0.2 的多角色执行链是否在 v0.1 上下文稳态支撑下，以可接受甚至更低的有效成本，
+        产出更少遗漏、更强证据、更可靠复验、更清晰失败收口的最终交付。
+      </div>
+    </section>
+
+    <section>
+      <h2>模型配置策略</h2>
+      <p>
+        多角色如果全部使用同一个模型，仍然可以验证代码级角色边界、ledger、retry 和检查门禁；但从产品说服力看，
+        v0.2 更应该验证“角色分工 + 模型分工”的组合价值。不同角色天然适合不同模型：Commander 需要规划和架构判断，
+        Worker 需要稳定执行和代码修改性价比，Supervisor 需要强审查能力，Oracle 需要高质量 second opinion。
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>组别</th>
+            <th>配置</th>
+            <th>验证目的</th>
+            <th>结论解释</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>控制组 A：普通 agent</td>
+            <td>单模型、不开 execution loop。</td>
+            <td>提供当前默认体验的成本和质量基线。</td>
+            <td>用于判断 v0.2 是否真的改善最终交付，而不是只增加流程。</td>
+          </tr>
+          <tr>
+            <td>控制组 B：同模型多角色</td>
+            <td>Commander / Worker / Supervisor / Oracle 使用同一模型。</td>
+            <td>隔离“角色分工本身”的收益。</td>
+            <td>如果同模型多角色也明显更好，说明 workflow 结构本身有效。</td>
+          </tr>
+          <tr>
+            <td>主验证组 C：异构模型多角色</td>
+            <td>按角色选择不同模型，例如 Worker 用高性价比代码模型，Commander 用强规划模型，Supervisor 用强审查模型。</td>
+            <td>验证 v0.2 作为产品形态的最佳推荐配置。</td>
+            <td>只有 C 相对 A/B 在质量和 ROI 上都更好，才说明“多角色 + 多模型”方向成立。</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout ok">
+        <strong>推荐角色映射</strong>
+        Worker 可以优先用 DeepSeek 这类高性价比代码执行模型；Commander / Oracle 可以用 GPT 这类强规划和综合判断模型；
+        Supervisor 可以用 Claude Code 这类强代码审查模型。验收时必须同时保留同模型控制组，避免把模型差异误判成 San workflow 收益。
+      </div>
+    </section>
+
+    <section>
+      <h2>验收目标</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>闭环是否稳住</h3>
+          <p>每个任务都必须形成明确 objective、plan、assignment、worker result、review、verdict；失败时进入 retry / blocked / aborted，而不是散落在对话里。</p>
+        </div>
+        <div class="card">
+          <h3>交付质量是否提升</h3>
+          <p>最终 diff、测试、文档、风险说明和用户可用性，必须因为独立计划和独立验收而更可靠。</p>
+        </div>
+        <div class="card">
+          <h3>ROI 是否成立</h3>
+          <p>多角色可能增加调用次数，但 v0.1 稳态应降低上下文浪费；验收要看单位成本交付质量是否提升。</p>
+        </div>
+      </div>
+      <div class="callout ok">
+        <strong>验收结论格式</strong>
+        最终报告回答三个问题：一是多角色 execution loop 是否稳住，二是多角色分工是否实质提升最终交付质量，
+        三是 v0.1 + v0.2 组合后的质量 / 成本投入产出比是否成立。
+      </div>
+    </section>
+
+    <section>
+      <h2>质量成本模型</h2>
+      <p>
+        v0.2 的产品方向验证不能只看“质量更高”，也不能只看“token 更少”。正确口径是质量收益是否超过多角色协作成本，
+        以及 v0.1 上下文稳态是否把协作成本压到可接受范围内。理想状态不是“多花很多 token 换质量”，而是进入更好的质量成本前沿：
+        更稳的交付、更少返工、更低上下文浪费、更高单位 token 产出。
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>组合</th>
+            <th>预期成本形态</th>
+            <th>预期质量形态</th>
+            <th>产品判断</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>普通 agent，无稳态</td>
+            <td>长任务上下文线性膨胀，后期 input tokens 快速变大。</td>
+            <td>依赖单 agent 自检，计划、实现、验收容易混在一起。</td>
+            <td>基线组：可能短任务快，但长任务成本和失误率不可控。</td>
+          </tr>
+          <tr>
+            <td>v0.1 上下文稳态</td>
+            <td>通过 digest、checkpoint、ContextPacket 控制上下文表面。</td>
+            <td>主线保持更稳，但不主动改变执行治理结构。</td>
+            <td>证明“便宜且稳”的上下文基础。</td>
+          </tr>
+          <tr>
+            <td>v0.2 多角色，无稳态</td>
+            <td>多角色带来更多调用，若无稳态支撑，成本可能放大。</td>
+            <td>审查和 retry 更强，但容易被上下文成本抵消。</td>
+            <td>不应作为推荐方向，只用于隔离多角色质量收益。</td>
+          </tr>
+          <tr>
+            <td>v0.1 + v0.2 推荐组合</td>
+            <td>多角色增加必要调用，但每轮上下文保持短、稳、可审计。</td>
+            <td>计划更清晰、缺陷更少逃逸、失败更能闭环。</td>
+            <td>目标组：用稳态降低协作成本，用分工提高交付质量。</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout ok">
+        <strong>ROI 验收口径</strong>
+        v0.2 只有在“质量提升 / 有效成本增加”明显优于普通 agent 时才算产品方向成立；如果质量提升不明显，或成本增长吞掉收益，
+        即使流程全绿也只能算技术验证，不算产品验收通过。
+      </div>
+    </section>
+
+    <section>
+      <h2>测试集结构</h2>
+      <div class="metric-grid">
+        <div class="metric"><strong>6</strong><span>确定性 gate 场景</span></div>
+        <div class="metric"><strong>10</strong><span>真实 provider 任务</span></div>
+        <div class="metric"><strong>3</strong><span>执行模式 rush/smart/deep</span></div>
+        <div class="metric"><strong>4</strong><span>角色 Commander/Worker/Supervisor/Oracle</span></div>
+        <div class="metric"><strong>100</strong><span>质量与 ROI 总分</span></div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>层级</th>
+            <th>用途</th>
+            <th>运行方式</th>
+            <th>通过门槛</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Layer A：确定性合同测试</td>
+            <td>证明代码级 runner、ledger、retry、budget、recovery、abort 合同没有退化。</td>
+            <td><code>bun packages/coding-agent/scripts/san-loop-dogfood.ts</code> + <code>bun test packages/coding-agent/test/san-loop</code></td>
+            <td>全部 PASS；不得有快照缺失、review 缺失、terminal status 错误。</td>
+          </tr>
+          <tr>
+            <td>Layer B：真实 provider dogfood</td>
+            <td>证明真实模型、工具调用、session、role context 和 checks 能在真实开发任务中带来更高质量交付。</td>
+            <td><code>san --config packages/coding-agent/examples/config/san-execution-loop-recommended.yml</code>；异构组先运行 <code>bun packages/coding-agent/scripts/san-v02-prepare-local-models.ts</code>，再使用 <code>san-execution-loop-heterogeneous.yml</code>。</td>
+            <td>10 个任务至少 8 个完成 terminal verdict；至少 6 个 pass；blocked 必须有清晰证据。</td>
+          </tr>
+          <tr>
+            <td>Layer C：对照评审</td>
+            <td>比较同一任务在普通 agent、同模型多角色、异构模型多角色下的最终交付质量。</td>
+            <td>同一任务集以三组配置执行，保留 session jsonl、diff、测试输出、模型用量和最终回答。</td>
+            <td>异构模型组应在最终缺陷率、验收证据、失败闭环、约束保持、复盘质量和 ROI 上优于对照。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>推荐运行命令</h2>
+      <pre><code># 1. 代码级确定性验收
+HOME=/private/tmp/san-test-home bun test packages/coding-agent/test/san-loop
+bun packages/coding-agent/scripts/san-loop-dogfood.ts
+bun check
+
+# 2. 真实 provider dogfood：同模型 / 默认配置组
+san --config packages/coding-agent/examples/config/san-execution-loop-recommended.yml
+
+# 3. 真实 provider dogfood：异构模型组
+bun packages/coding-agent/scripts/san-v02-prepare-local-models.ts --agent-dir /private/tmp/san-v02-agent
+PI_CODING_AGENT_DIR=/private/tmp/san-v02-agent \
+  san --config packages/coding-agent/examples/config/san-execution-loop-heterogeneous.yml
+
+# 4. 建议至少跑三组对照
+普通 agent 单模型基线
+San v0.2 同模型多角色
+San v0.2 异构模型多角色
+
+# 5. 每个任务结束后保留证据
+/san-loop status
+git status --short
+记录 session jsonl、run report、测试输出、最终 diff、模型调用与 token 用量</code></pre>
+      <div class="callout warn">
+        <strong>版本说明</strong>
+        如果本地已在当前仓库源码运行 San，不需要额外更新 San 版本；验收重点是使用 v0.2 推荐配置显式启用 executionLoop。
+      </div>
+    </section>
+
+    <section>
+      <h2>Layer A：确定性 Gate</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>场景</th>
+            <th>模式</th>
+            <th>要验证的通用能力</th>
+            <th>通过标准</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Rush Pass</td>
+            <td><code>rush</code></td>
+            <td>最短路径从 plan 到 worker 到 final verdict。</td>
+            <td>事件链包含 <code>plan_created -> assignment_created -> worker_completed -> finalized</code>，状态为 <code>passed</code>。</td>
+          </tr>
+          <tr>
+            <td>Smart Retry</td>
+            <td><code>smart</code></td>
+            <td>Supervisor 发现问题后，Commander 能消费缺陷上下文重新计划。</td>
+            <td>第一轮 <code>needs_fix</code>，出现 <code>retry_requested</code>，第二轮 <code>passed</code>，retryCount=1。</td>
+          </tr>
+          <tr>
+            <td>Deep Blocked</td>
+            <td><code>deep</code></td>
+            <td>深度模式必须先走 Oracle second opinion，再由 Supervisor 做最终门禁。</td>
+            <td>reviews=2，包含 Oracle evidence，最终可 pass 或 blocked，但必须证据完整。</td>
+          </tr>
+          <tr>
+            <td>Budget Exhausted</td>
+            <td><code>rush</code></td>
+            <td>hard budget 用完后不再启动额外 agent。</td>
+            <td>状态为 <code>blocked</code>，remainingTurns=0，Supervisor 不应被调用。</td>
+          </tr>
+          <tr>
+            <td>Recovery</td>
+            <td><code>smart</code></td>
+            <td>active run 恢复时没有 running child process，必须转为可审计 blocked。</td>
+            <td>事件包含 <code>recovered</code>，状态为 <code>blocked</code>，reason 可读。</td>
+          </tr>
+          <tr>
+            <td>Abort</td>
+            <td><code>rush</code></td>
+            <td>用户停止 run 时不删除历史，只追加 abort 事件。</td>
+            <td>状态为 <code>aborted</code>，事件包含 <code>aborted</code>，历史 run ledger 可重建。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Layer B：10 个真实任务</h2>
+      <p>
+        这组任务不是为了机械命中特定字符串，而是覆盖真实开发中常见的闭环形态：小修、跨文件、测试、文档、失败、预算、恢复、深度审查。
+        每个任务完成后都保留 session jsonl、<code>/san-loop status</code>、测试输出和 git diff，并记录多角色分工对最终质量的实际贡献。
+      </p>
+      <div class="timeline">
+        <div class="turn">
+          <div class="turn-id">T01</div>
+          <div><strong>小型 bug fix</strong><br>找一个低风险真实缺陷或 TODO，要求最小改动并补测试。</div>
+          <div>验收点：Commander 是否限定最小修复；Supervisor 是否发现普通 agent 容易漏掉的边界。</div>
+        </div>
+        <div class="turn">
+          <div class="turn-id">T02</div>
+          <div><strong>跨文件功能补齐</strong><br>实现一个涉及 src + test + docs 的小功能，例如报告字段或 CLI 输出增强。</div>
+          <div>验收点：Commander 拆解是否降低遗漏；Worker 是否按 assignment 交付；Supervisor 是否按文件证据验收。</div>
+        </div>
+        <div class="turn">
+          <div class="turn-id">T03</div>
+          <div><strong>测试补强</strong><br>为一个已有边界补 contract-level test，禁止源码 grep 型测试。</div>
+          <div>验收点：Supervisor 是否拒绝低价值测试；最终测试是否保护真实外部合同。</div>
+        </div>
+        <div class="turn">
+          <div class="turn-id">T04</div>
+          <div><strong>Supervisor needs_fix</strong><br>故意给出一个初版不完整的任务，让 Supervisor 要求修复。</div>
+          <div>验收点：needs_fix 是否证明独立验收有价值；第二轮是否真实关闭缺陷。</div>
+        </div>
+        <div class="turn">
+          <div class="turn-id">T05</div>
+          <div><strong>项目规则约束</strong><br>任务涉及 AGENTS.md 里的规则，例如不用 <code>any</code>、不用 <code>ReturnType&lt;&gt;</code>、用 Bun API。</div>
+          <div>验收点：多角色是否共同守住项目规则；Supervisor 能否指出违反规则的 diff。</div>
+        </div>
+        <div class="turn">
+          <div class="turn-id">T06</div>
+          <div><strong>文档交付</strong><br>生成或更新一份 docs/research HTML 报告，要求带结论、证据、矩阵。</div>
+          <div>验收点：Commander 是否定义报告结构；Supervisor 是否检查证据、矩阵和结论完整性。</div>
+        </div>
+        <div class="turn">
+          <div class="turn-id">T07</div>
+          <div><strong>失败命令闭环</strong><br>选择一个会先失败的验证命令或测试，让 San 诊断并修复。</div>
+          <div>验收点：失败输出是否进入 evidence；retry 是否避免盲改；最终是否重新验证。</div>
+        </div>
+        <div class="turn">
+          <div class="turn-id">T08</div>
+          <div><strong>Deep 模式架构审查</strong><br>让 deep 模式审查一个设计变更或 release gate。</div>
+          <div>验收点：Oracle 是否提供不同视角；Supervisor 是否吸收或反驳 second opinion。</div>
+        </div>
+        <div class="turn">
+          <div class="turn-id">T09</div>
+          <div><strong>预算边界</strong><br>设置较紧 maxTurns 或复杂任务，观察 hard budget 收口。</div>
+          <div>验收点：预算控制是否防止多角色扩散；blocked reason 是否能指导下一步。</div>
+        </div>
+        <div class="turn">
+          <div class="turn-id">T10</div>
+          <div><strong>综合验收报告</strong><br>要求 San 总结前 9 个任务的闭环质量、失败样本和改进建议。</div>
+          <div>验收点：最终报告是否能量化多角色分工带来的质量提升，不编造未发生证据。</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>真实任务 Prompt 模板</h2>
+      <pre><code>请用 San v0.2 execution loop 处理这个任务。
+
+目标：
+  [写清楚要交付的代码/测试/文档结果]
+
+约束：
+  - 遵守 AGENTS.md 项目规则。
+  - 先给出可执行拆解，再实现。
+  - 完成后必须运行相关验证。
+  - 如果 Supervisor 发现问题，进入 retry 并保留缺陷证据。
+
+验收：
+  - 产物路径：[文件/模块]
+  - 验证命令：[bun test ... / bun check / dogfood script]
+  - 最终输出包含 run status、verdict、changedFiles、testsRun、remaining risks。</code></pre>
+    </section>
+
+    <section>
+      <h2>评判标准：100 分制</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>维度</th>
+            <th>分值</th>
+            <th>评分口径</th>
+            <th>一票否决</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>工程产物质量</td>
+            <td class="score">20</td>
+            <td>最终代码/测试/文档是否比普通 agent 对照更少遗漏、更少返工、更符合项目规则；改动是否聚焦；验证是否通过。</td>
+            <td><code>bun check</code> 或关键测试失败仍宣称通过。</td>
+          </tr>
+          <tr>
+            <td>多角色增量价值</td>
+            <td class="score">15</td>
+            <td>Commander、Worker、Supervisor、Oracle 是否分别产生可见贡献：更好计划、更聚焦实现、更严格验收、更可靠决策。</td>
+            <td>角色输出高度同质化，只是重复总结，没有改变最终交付质量。</td>
+          </tr>
+          <tr>
+            <td>质量 / 成本 ROI</td>
+            <td class="score">15</td>
+            <td>相对普通 agent，最终质量提升是否足以覆盖多角色带来的额外 turn、tokens、耗时和复杂度。</td>
+            <td>成本显著上升但质量无明显提升，或高质量只靠不可接受的 token 堆叠换来。</td>
+          </tr>
+          <tr>
+            <td>上下文稳态成本控制</td>
+            <td class="score">10</td>
+            <td>v0.2 是否复用 v0.1 ContextPacket/checkpoint/digest，让多角色协作不导致上下文线性膨胀。</td>
+            <td>10 轮后上下文明显膨胀或丢失关键约束，导致协作成本不可控。</td>
+          </tr>
+          <tr>
+            <td>闭环完整性</td>
+            <td class="score">10</td>
+            <td>是否稳定形成 plan、assignment、worker result、review、terminal verdict；ledger 能否完整重建。</td>
+            <td>任务结束无 terminal status，或 ledger 无法重建。</td>
+          </tr>
+          <tr>
+            <td>证据质量</td>
+            <td class="score">10</td>
+            <td>review 是否引用 diff、测试、命令输出、文件路径和具体缺陷；blocked 是否给出可执行原因。</td>
+            <td>最终结论没有任何可复核证据。</td>
+          </tr>
+          <tr>
+            <td>Retry / 失败闭环</td>
+            <td class="score">10</td>
+            <td>needs_fix 是否进入 retry；新计划是否消费旧缺陷；失败命令是否被诊断并复验。</td>
+            <td>发现缺陷后仍 pass，或重复失败却无 blocked reason。</td>
+          </tr>
+          <tr>
+            <td>角色边界与预算</td>
+            <td class="score">10</td>
+            <td>角色职责是否清晰；turn budget、maxRetries、abort、recovery 是否可审计；预算耗尽是否停止继续派发。</td>
+            <td>Supervisor 直接改代码、Worker 绕过验收、预算耗尽后继续启动 agent，或 abort 丢历史。</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout ok">
+        <strong>通过门槛</strong>
+        总分 ≥ 85 为 v0.2 dogfood PASS；75-84 为可继续内测但需列出 v0.2.1 修复项；低于 75 或触发一票否决则不建议对外宣称。
+      </div>
+    </section>
+
+    <section>
+      <h2>自动指标采集</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>指标</th>
+            <th>来源</th>
+            <th>健康范围</th>
+            <th>解释</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>modelMixLift</td>
+            <td>异构模型组 vs 同模型多角色组</td>
+            <td>复杂任务更高</td>
+            <td>衡量模型分工是否在复杂任务上带来额外质量收益，而不是只增加配置复杂度。</td>
+          </tr>
+          <tr>
+            <td>workflowLift</td>
+            <td>同模型多角色组 vs 普通 agent 组</td>
+            <td>正向</td>
+            <td>隔离 San workflow 结构本身的收益，避免完全依赖模型差异解释结果。</td>
+          </tr>
+          <tr>
+            <td>qualityPerKToken</td>
+            <td>质量评分 / input+output tokens</td>
+            <td>高于普通 agent 对照</td>
+            <td>衡量单位 token 交付质量，避免只靠更多 token 堆质量。</td>
+          </tr>
+          <tr>
+            <td>reworkAvoidance</td>
+            <td>retry defects / final escaped defects / follow-up fixes</td>
+            <td>v0.2 更高</td>
+            <td>多角色如果能提前发现问题，应减少最终返工和后续补丁。</td>
+          </tr>
+          <tr>
+            <td>steadyContextSavings</td>
+            <td>San v0.2 input tokens vs 无稳态对照</td>
+            <td>随轮次保持稳定</td>
+            <td>验证 v0.1 是否把多角色协作的上下文成本压住。</td>
+          </tr>
+          <tr>
+            <td>elapsedQualityRatio</td>
+            <td>质量评分 / wall-clock minutes</td>
+            <td>复杂任务高于对照</td>
+            <td>多角色在复杂任务上可以更慢，但单位时间质量应有改善。</td>
+          </tr>
+          <tr>
+            <td>roleValueEvidence</td>
+            <td>plan / assignment / review / oracle reports</td>
+            <td>≥ 80%</td>
+            <td>至少 8 个真实任务能指出某个角色对最终质量的具体贡献，而不是只有流程痕迹。</td>
+          </tr>
+          <tr>
+            <td>defectEscapeDelta</td>
+            <td>San v0.2 vs 普通 agent 对照人工复审</td>
+            <td>v0.2 更低</td>
+            <td>比较最终 diff 和测试结果，San v0.2 不应比普通 agent 留下更多明显缺陷或未验证风险。</td>
+          </tr>
+          <tr>
+            <td>terminalRunRate</td>
+            <td>session jsonl / san-loop ledger</td>
+            <td>≥ 80%</td>
+            <td>10 个真实任务中，至少 8 个进入 passed/blocked/aborted，而不是悬空 active。</td>
+          </tr>
+          <tr>
+            <td>passRate</td>
+            <td>reviewReports verdict</td>
+            <td>≥ 60%</td>
+            <td>至少 6 个真实任务能通过 Supervisor gate；blocked 样本必须可解释。</td>
+          </tr>
+          <tr>
+            <td>retryClosureRate</td>
+            <td>retry_requested + final verdict</td>
+            <td>≥ 70%</td>
+            <td>发生 needs_fix 的任务中，大多数能在 retry 后关闭缺陷或明确 blocked。</td>
+          </tr>
+          <tr>
+            <td>evidenceCoverage</td>
+            <td>review evidence / testsRun / changedFiles</td>
+            <td>≥ 90%</td>
+            <td>review report 至少包含一项可复核证据：命令、文件、diff、测试或具体缺陷。</td>
+          </tr>
+          <tr>
+            <td>budgetViolation</td>
+            <td>budget entries</td>
+            <td>0</td>
+            <td>预算耗尽后不得继续派发下一角色 agent。</td>
+          </tr>
+          <tr>
+            <td>contextDrift</td>
+            <td>final report 人工评审</td>
+            <td>无严重漂移</td>
+            <td>最终报告必须记得任务目标、约束、失败样本和未解决项。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>对照组设计</h2>
+      <p>
+        v0.1 的对照重点是上下文膨胀；v0.2 的对照重点是最终交付质量。普通 agent 可能也能完成任务，
+        甚至在小任务上更快；同模型多角色可以证明 workflow 结构是否有效；异构模型多角色则验证推荐产品配置是否成立。
+        San v0.2 必须证明多角色分工能减少遗漏、提高复验质量、改善失败收口，并且在 v0.1 稳态支撑下，
+        把这些质量收益控制在合理 token 和时间成本内。
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>比较项</th>
+            <th>普通 agent 预期表现</th>
+            <th>San v0.2 预期表现</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>投入产出比</td>
+            <td>单 agent 调用少，但长任务后期上下文膨胀，返工成本可能隐藏在后续轮次。</td>
+            <td>多角色调用更多，但 ContextPacket 降低上下文浪费，Supervisor 降低缺陷逃逸和后续返工。</td>
+          </tr>
+          <tr>
+            <td>最终缺陷率</td>
+            <td>依赖单个 agent 自检，容易遗漏边界或项目规则。</td>
+            <td>Supervisor 独立复核 diff、测试和规则，缺陷应更少逃逸到最终交付。</td>
+          </tr>
+          <tr>
+            <td>计划质量</td>
+            <td>计划可能和实现混在一起，范围漂移时不明显。</td>
+            <td>Commander 先冻结 objective、constraints、taskGraph、acceptanceCriteria。</td>
+          </tr>
+          <tr>
+            <td>验收质量</td>
+            <td>容易把“测试跑了”当成结论，缺少独立审查视角。</td>
+            <td>Supervisor 基于 checks、diff、testsRun 和 defects 给 verdict。</td>
+          </tr>
+          <tr>
+            <td>失败处理</td>
+            <td>可能直接继续改，失败原因和复验边界不稳定。</td>
+            <td>needs_fix / blocked / retry_requested 是结构化状态，可回放、可复盘。</td>
+          </tr>
+          <tr>
+            <td>汇报复盘</td>
+            <td>靠最终回答回忆，可能遗漏中间决策。</td>
+            <td>最终报告能从 ledger 和 review reports 取证。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>最终验收报告模板</h2>
+      <pre><code># San v0.2 Acceptance Report
+
+## 结论
+- 多角色 execution loop 是否稳住：[PASS / WARN / FAIL]
+- 多角色分工是否提升最终交付质量：[分数 / 100]
+- v0.1 稳态 + v0.2 分工的投入产出比是否成立：[PASS / WARN / FAIL]
+- 是否建议作为 v0.2 对外 dogfood 版本：[是 / 否]
+
+## 数据
+- Deterministic gate：[runs / events / reviews / result]
+- Real provider tasks：[普通 agent / 同模型多角色 / 异构模型多角色三组 status/verdict/retry/tests]
+- Cost metrics：[tokens / turns / elapsed / retries / qualityPerKToken]
+- Session jsonl：[路径]
+- Config：[san-execution-loop-recommended.yml / san-execution-loop-heterogeneous.yml]
+
+## 关键发现
+- 模型配置收益：
+- 质量成本 ROI：
+- 上下文稳态成本控制：
+- 多角色增量价值：
+- 闭环完整性：
+- 角色边界：
+- 证据质量：
+- Retry/blocked：
+- 预算/恢复：
+- 上下文稳态继承：
+
+## 失败样本
+- 样本：
+- 原因：
+- 是否阻塞 v0.2：
+- v0.2.1 修复建议：</code></pre>
+    </section>
+
+    <section>
+      <h2>建议结论口径</h2>
+      <div class="callout ok">
+        <strong>PASS</strong>
+        Layer A 全绿，Layer B 真实任务总分 ≥ 85，同模型多角色相对普通 agent 有 workflow lift，
+        异构模型多角色相对同模型组有 model mix lift，且对照显示多角色分工带来明确交付质量提升，
+        同时质量 / 成本 ROI 优于普通 agent。可以对外宣称 v0.2 已具备成熟执行闭环 dogfood 能力。
+      </div>
+      <div class="callout warn">
+        <strong>WARN</strong>
+        Layer A 全绿，但真实任务 75-84 分、多角色分工证据不足，或质量提升需要明显更高成本才能换来。
+        可以继续内测，不建议扩大宣传。
+      </div>
+      <div class="callout risk">
+        <strong>FAIL</strong>
+        Layer A 失败、ledger 不可重建、预算失控、Supervisor 无证据 pass、关键测试失败仍宣称完成，或多角色流程没有带来任何交付质量增益，任一项触发即不通过。
+      </div>
+    </section>
+
+    <section>
+      <h2>当前仓库基线</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>项目</th>
+            <th>当前状态</th>
+            <th>证据</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>san-loop focused tests</td>
+            <td class="score pass">PASS</td>
+            <td><code>packages/coding-agent/test/san-loop</code> 已跑过：23 pass，0 fail，164 assertions。</td>
+          </tr>
+          <tr>
+            <td>full check</td>
+            <td class="score pass">PASS</td>
+            <td><code>bun check</code> 已跑过：biome + tsgo 全仓通过。</td>
+          </tr>
+          <tr>
+            <td>deterministic dogfood</td>
+            <td class="score pass">已有 gate</td>
+            <td><code>bun packages/coding-agent/scripts/san-loop-dogfood.ts</code> 覆盖 6 个执行闭环场景。</td>
+          </tr>
+          <tr>
+            <td>real provider dogfood</td>
+            <td class="score warn">待跑</td>
+            <td>下一步按本测试集执行 10 个真实任务，产出 session jsonl 和最终质量验收报告。</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="mono">Document: docs/research/san-v0.2-acceptance-benchmark.html</div>
+    </section>
+  </main>
+</body>
+</html>

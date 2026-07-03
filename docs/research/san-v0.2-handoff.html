@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>San v0.2 新电脑交接文档</title>
+		<style>
+			:root {
+				color-scheme: light;
+				--bg: #f6f7fb;
+				--panel: #ffffff;
+				--ink: #172033;
+				--muted: #5f6b7a;
+				--line: #d8dee9;
+				--blue: #2357c6;
+				--green: #188557;
+				--amber: #b26a00;
+				--red: #b42318;
+				--code: #101828;
+			}
+			* {
+				box-sizing: border-box;
+			}
+			body {
+				margin: 0;
+				background: var(--bg);
+				color: var(--ink);
+				font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			}
+			main {
+				width: min(1180px, calc(100vw - 48px));
+				margin: 0 auto;
+				padding: 40px 0 64px;
+			}
+			header,
+			section {
+				background: var(--panel);
+				border: 1px solid var(--line);
+				border-radius: 14px;
+				padding: 26px;
+				margin-bottom: 18px;
+				box-shadow: 0 10px 30px rgba(16, 24, 40, 0.05);
+			}
+			h1,
+			h2,
+			h3 {
+				margin: 0 0 12px;
+				line-height: 1.25;
+			}
+			h1 {
+				font-size: 30px;
+			}
+			h2 {
+				font-size: 21px;
+				padding-bottom: 8px;
+				border-bottom: 1px solid var(--line);
+			}
+			h3 {
+				font-size: 16px;
+				color: var(--blue);
+			}
+			p {
+				margin: 8px 0;
+			}
+			ul,
+			ol {
+				margin: 8px 0 0 22px;
+				padding: 0;
+			}
+			li {
+				margin: 5px 0;
+			}
+			code,
+			pre {
+				font-family: "SFMono-Regular", Consolas, monospace;
+			}
+			code {
+				color: var(--code);
+				background: #eef2f7;
+				border-radius: 5px;
+				padding: 1px 5px;
+			}
+			pre {
+				overflow: auto;
+				background: #111827;
+				color: #f9fafb;
+				border-radius: 10px;
+				padding: 14px 16px;
+				line-height: 1.45;
+			}
+			table {
+				width: 100%;
+				border-collapse: collapse;
+				margin-top: 12px;
+				overflow: hidden;
+				border-radius: 10px;
+			}
+			th,
+			td {
+				border: 1px solid var(--line);
+				padding: 10px 12px;
+				text-align: left;
+				vertical-align: top;
+			}
+			th {
+				background: #eef2f7;
+				font-weight: 700;
+			}
+			.badge {
+				display: inline-block;
+				border-radius: 999px;
+				padding: 3px 10px;
+				font-weight: 700;
+				font-size: 12px;
+			}
+			.pass {
+				background: #e7f7ef;
+				color: var(--green);
+			}
+			.warn {
+				background: #fff3d6;
+				color: var(--amber);
+			}
+			.block {
+				background: #ffe4e1;
+				color: var(--red);
+			}
+			.grid {
+				display: grid;
+				grid-template-columns: repeat(4, 1fr);
+				gap: 12px;
+				margin-top: 16px;
+			}
+			.metric {
+				border: 1px solid var(--line);
+				border-radius: 12px;
+				padding: 14px;
+				background: #fbfcff;
+			}
+			.metric strong {
+				display: block;
+				font-size: 28px;
+				line-height: 1;
+				margin-bottom: 6px;
+			}
+			.note {
+				color: var(--muted);
+				font-size: 14px;
+			}
+			.callout {
+				border-left: 5px solid var(--blue);
+				background: #eef4ff;
+				padding: 12px 14px;
+				border-radius: 8px;
+				margin: 14px 0;
+			}
+			@media (max-width: 820px) {
+				main {
+					width: min(100vw - 28px, 1180px);
+					padding-top: 24px;
+				}
+				.grid {
+					grid-template-columns: repeat(2, 1fr);
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<header>
+				<h1>San v0.2 新电脑交接文档</h1>
+				<p class="note">更新时间：2026-07-04 Asia/Shanghai。目标：在新电脑上快速恢复当前 v0.2 验收现场，继续完成剩余 blocked 样本归因与产品验收报告。</p>
+				<div class="callout">
+					当前结论：工程链路已从“真实 provider 下无法稳定调度”推进到“10 轮真实验收全部 terminal，3 个任务 pass”。产品验收尚未最终通过，剩余重点是 7 个 blocked 样本的质量归因与第四轮优化。
+				</div>
+			</header>
+
+			<section>
+				<h2>1. 当前状态</h2>
+				<div class="grid">
+					<div class="metric"><strong>10/10</strong><span>真实 suite 任务到达 terminal</span></div>
+					<div class="metric"><strong>3/10</strong><span>真实任务 passed</span></div>
+					<div class="metric"><strong>10</strong><span>workerResults 产出数量</span></div>
+					<div class="metric"><strong>7</strong><span>reviewReports 产出数量</span></div>
+				</div>
+				<table>
+					<thead>
+						<tr>
+							<th>维度</th>
+							<th>结果</th>
+							<th>说明</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td>本地测试</td>
+							<td><span class="badge pass">PASS</span></td>
+							<td><code>bun test packages/coding-agent/test/san-loop</code>：33 pass；<code>bun check</code>：通过。</td>
+						</tr>
+						<tr>
+							<td>Provider 配置</td>
+							<td><span class="badge pass">PASS</span></td>
+							<td>Commander/Oracle 使用当前 <code>~/.codex</code> 的 GPT；Worker 使用 DeepSeek；Supervisor 使用实测可调用 Claude Sonnet。</td>
+						</tr>
+						<tr>
+							<td>真实验收 v3</td>
+							<td><span class="badge warn">PARTIAL</span></td>
+							<td>10/10 ok、10/10 terminal、3 passed、7 blocked、1 retried。</td>
+						</tr>
+						<tr>
+							<td>产品验收</td>
+							<td><span class="badge block">NOT DONE</span></td>
+							<td>还不能宣称 v0.2 通过。需要继续分析 T03/T04/T05/T06/T07/T09/T10。</td>
+						</tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>2. 本次已提交范围</h2>
+				<ul>
+					<li><code>packages/coding-agent/src/san-loop/task-executor.ts</code>：增加多角色模型 override、provider 瞬断重试、Commander/Worker/Supervisor 真实输出兼容解析。</li>
+					<li><code>packages/coding-agent/test/san-loop/agents.test.ts</code>：补真实 provider 输出形态回归，包括 snake_case、workers、phases、dispatch、worker_batch、waves、transient retry、report-style worker。</li>
+					<li><code>packages/coding-agent/scripts/san-v02-prepare-local-models.ts</code>：从本机 <code>~/.reasonix</code>、<code>~/.claude</code>、<code>~/.codex</code> 生成临时 provider 配置。</li>
+					<li><code>packages/coding-agent/scripts/san-v02-acceptance-runner.ts</code>：单任务真实 San loop 验收 runner。</li>
+					<li><code>packages/coding-agent/scripts/san-v02-acceptance-suite.ts</code>：10 任务验收 suite runner，复制工作区到临时目录并输出 JSON evidence。</li>
+					<li><code>packages/coding-agent/examples/config/san-execution-loop-heterogeneous.yml</code>：v0.2 多角色异构模型配置。</li>
+					<li><code>packages/coding-agent/examples/san-v02-acceptance-tasks.json</code>：10 轮验收任务集。</li>
+					<li><code>docs/research/san-v0.2-acceptance-benchmark.html</code>：v0.2 验收 benchmark 说明。</li>
+					<li><code>docs/research/san-v0.2-dogfood-report.html</code>、<code>docs/research/san-v0.2-validation-readiness.html</code>：更新到当前验收口径。</li>
+				</ul>
+			</section>
+
+			<section>
+				<h2>3. 新电脑恢复步骤</h2>
+				<ol>
+					<li>克隆并进入仓库：<code>git clone git@github.com:slicenferqin/san.git && cd san</code>。</li>
+					<li>安装依赖：<code>bun install</code>。</li>
+					<li>确认本机 provider 配置存在：
+						<ul>
+							<li><code>~/.reasonix/config.json</code>：DeepSeek worker key/model。</li>
+							<li><code>~/.claude/settings.json</code>：Claude supervisor base URL/key。当前实测可用模型是 <code>claude-sonnet-4-5-20250929</code>。</li>
+							<li><code>~/.codex/config.toml</code> 与 <code>~/.codex/auth.json</code>：GPT commander/oracle provider 和 key。</li>
+						</ul>
+					</li>
+					<li>运行本地检查：<code>bun test packages/coding-agent/test/san-loop && bun check</code>。</li>
+					<li>生成临时模型配置并跑真实 suite。注意：生成的 <code>models.yml</code> 包含真实 key，只能放临时目录，不能提交。</li>
+				</ol>
+				<pre><code>rm -rf /private/tmp/san-v02-agent-suite-current-v4 \
+  /private/tmp/san-v02-suite-current-v4-workspaces \
+  /private/tmp/san-v02-suite-current-v4-evidence
+
+bun packages/coding-agent/scripts/san-v02-prepare-local-models.ts \
+  --agent-dir /private/tmp/san-v02-agent-suite-current-v4
+
+PI_CODING_AGENT_DIR=/private/tmp/san-v02-agent-suite-current-v4 HOME=$HOME \
+  bun packages/coding-agent/scripts/san-v02-acceptance-suite.ts \
+  --agent-dir /private/tmp/san-v02-agent-suite-current-v4 \
+  --config packages/coding-agent/examples/config/san-execution-loop-heterogeneous.yml \
+  --source-cwd "$PWD" \
+  --cwd-root /private/tmp/san-v02-suite-current-v4-workspaces \
+  --out-dir /private/tmp/san-v02-suite-current-v4-evidence \
+  --label san-v02-current-codex-suite-v4</code></pre>
+			</section>
+
+			<section>
+				<h2>4. 最近真实验收记录</h2>
+				<table>
+					<thead>
+						<tr>
+							<th>轮次</th>
+							<th>命令输出目录</th>
+							<th>结果</th>
+							<th>关键变化</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td>v1</td>
+							<td><code>/private/tmp/san-v02-suite-current-evidence</code></td>
+							<td>10 terminal，0 passed，workerResults 3，reviewReports 3</td>
+							<td>暴露 commander 输出形态漏解析、Claude supervisor 模型不可用。</td>
+						</tr>
+						<tr>
+							<td>v2</td>
+							<td><code>/private/tmp/san-v02-suite-current-v2-evidence</code></td>
+							<td>10 terminal，0 passed，workerResults 9，reviewReports 7</td>
+							<td>调度改善，但 <code>fable</code> / <code>claude-fable-5</code> 仍不可用。</td>
+						</tr>
+						<tr>
+							<td>v3</td>
+							<td><code>/private/tmp/san-v02-suite-current-v3-evidence</code></td>
+							<td>10 ok，10 terminal，3 passed，7 blocked，workerResults 10，reviewReports 7，retried 1</td>
+							<td>Supervisor 模型修复后真实闭环明显改善；剩余 blocked 需要逐项归因。</td>
+						</tr>
+					</tbody>
+				</table>
+				<p class="note">这些 evidence 目录位于旧电脑 <code>/private/tmp</code>，不应假设在新电脑可用。新电脑恢复后按上一节命令重跑。</p>
+			</section>
+
+			<section>
+				<h2>5. 剩余工作</h2>
+				<table>
+					<thead>
+						<tr>
+							<th>任务</th>
+							<th>v3 状态</th>
+							<th>下一步</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr><td>T01 小型 smoke</td><td><span class="badge pass">passed</span></td><td>作为基础回归样本保留。</td></tr>
+						<tr><td>T02 跨文件功能拆解</td><td><span class="badge pass">passed</span></td><td>作为多角色范围控制样本保留。</td></tr>
+						<tr><td>T03 contract test quality</td><td><span class="badge block">blocked</span></td><td>查看 supervisor 原始 yield，判断是测试建议质量不足还是 worker evidence 解析仍有缺口。</td></tr>
+						<tr><td>T04 needs_fix 闭环</td><td><span class="badge block">blocked</span></td><td>重点检查 commander 是否把 retry/supervisor 任务调度成 worker；确认 retryable verdict 是否进入 runner。</td></tr>
+						<tr><td>T05 项目规则约束</td><td><span class="badge block">blocked</span></td><td>核实 supervisor 是否因为 evidence matrix 不完整而 block，必要时调整任务期望或 worker 输出兼容。</td></tr>
+						<tr><td>T06 文档交付 gate</td><td><span class="badge block">blocked</span></td><td>判断是 docs evidence 不足还是验收任务要求过严。</td></tr>
+						<tr><td>T07 失败命令闭环</td><td><span class="badge block">blocked</span></td><td>检查 failed-command 样本是否应以 blocked 作为成功终态，或需要区分 expected blocked 与 failure。</td></tr>
+						<tr><td>T08 deep 架构审查</td><td><span class="badge pass">passed</span></td><td>作为 deep + Oracle 样本保留。</td></tr>
+						<tr><td>T09 预算边界</td><td><span class="badge block">blocked</span></td><td>确认 hard-budget blocked 是否其实是预期成功，避免验收标准把正确 blocked 算作失败。</td></tr>
+						<tr><td>T10 综合验收报告</td><td><span class="badge block">blocked</span></td><td>待前 9 项稳定后再跑，避免报告总结未稳定证据。</td></tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>6. 注意事项</h2>
+				<ul>
+					<li>不要提交任何 <code>/private/tmp/**/models.yml</code>，里面会包含 provider key。</li>
+					<li>不要把 <code>~/.reasonix</code>、<code>~/.claude</code>、<code>~/.codex/auth.json</code> 复制进仓库。</li>
+					<li>当前 benchmark 不是机械追求 10/10 pass；有些任务本来就是验证 blocked/retry 是否结构化。下一轮需要把“预期 blocked”与“产品失败 blocked”拆开计分。</li>
+					<li>最终 v0.2 质量验收报告建议基于第四轮或第五轮真实 evidence 生成，不要用 v3 直接宣称 GA。</li>
+				</ul>
+			</section>
+		</main>
+	</body>
+</html>
