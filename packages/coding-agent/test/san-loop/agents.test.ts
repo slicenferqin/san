@@ -570,6 +570,106 @@ describe("San loop bundled agents", () => {
 		]);
 	});
 
+	test("normalizes mixed dispatch arrays from real providers", async () => {
+		const settings = Settings.isolated({});
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options =>
+			makeResult(options.id, {
+				decision: "dispatch",
+				mode: "deep",
+				dispatch: [
+					{
+						agent: "san-worker",
+						id: "DeepArchitectureMapper",
+						role: "Deep architecture evidence mapper",
+						description: "只读梳理架构证据与产品方向风险",
+						assignment: "只读审查 San v0.2 Deep 模式相关实现、文档与验收上下文。",
+					},
+					{
+						agent: "san-oracle",
+						id: "DeepArchitectureOracle",
+						role: "Independent architecture second-opinion reviewer",
+						assignment: "只读形成 Oracle second opinion。",
+					},
+					{
+						agent: "san-supervisor",
+						id: "DeepArchitectureSupervisor",
+						role: "Architecture verdict gate supervisor",
+						assignment: "接收或反驳 Oracle 并给出终局判定。",
+					},
+				],
+				rationale: "Mapper 与 Oracle 可并行执行；Supervisor 必须在两份报告完成后运行。",
+			}),
+		);
+		const executor = createSanLoopTaskAgentExecutor({
+			cwd: "/tmp",
+			session: {
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry: { authStorage: {} } as never,
+			},
+		});
+
+		const result = await executor.commander({ run: runSnapshot(), mode: "deep" });
+
+		expect(result.assignments).toEqual([
+			expect.objectContaining({
+				assignmentId: "DeepArchitectureMapper",
+				objective: "只读梳理架构证据与产品方向风险",
+				instructions: "只读审查 San v0.2 Deep 模式相关实现、文档与验收上下文。",
+			}),
+		]);
+		expect(result.plan.taskGraph).toEqual([
+			expect.objectContaining({
+				id: "task-1",
+				title: "只读梳理架构证据与产品方向风险",
+			}),
+		]);
+	});
+
+	test("normalizes reviewer-labeled commander assignments without explicit agents", async () => {
+		const settings = Settings.isolated({});
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options =>
+			makeResult(options.id, {
+				decision: "dispatch",
+				mode: "rush",
+				assignments: [
+					{
+						id: "T02ScopeReview",
+						role: "Cross-file feature scope reviewer",
+						description: "Read-only T02 acceptance review across src, test, and docs",
+						assignment: {
+							target: "当前工作目录内与 T02 相关的最小交付面。",
+							change: ["只读识别 src、test、docs 入口。"],
+							acceptance: ["产出只读审查报告。"],
+						},
+					},
+				],
+			}),
+		);
+		const executor = createSanLoopTaskAgentExecutor({
+			cwd: "/tmp",
+			session: {
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry: { authStorage: {} } as never,
+			},
+		});
+
+		const result = await executor.commander({ run: runSnapshot(), mode: "rush" });
+
+		expect(result.assignments).toEqual([
+			expect.objectContaining({
+				assignmentId: "T02ScopeReview",
+				objective: "Read-only T02 acceptance review across src, test, and docs",
+				instructions: [
+					"Target:\n当前工作目录内与 T02 相关的最小交付面。",
+					"Change:\n只读识别 src、test、docs 入口。",
+					"Acceptance:\n产出只读审查报告。",
+				].join("\n\n"),
+			}),
+		]);
+	});
+
 	test("normalizes worker batch and waves commander yields from real providers", async () => {
 		const settings = Settings.isolated({});
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options =>
@@ -669,6 +769,102 @@ describe("San loop bundled agents", () => {
 			"mutations_performed=false",
 			"notes=The current working directory is empty. All operations were strictly read-only.",
 		]);
+	});
+
+	test("normalizes status and gate supervisor yields from real providers", async () => {
+		const settings = Settings.isolated({});
+		let callCount = 0;
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			callCount++;
+			if (callCount === 1) {
+				return makeResult(options.id, {
+					status: "pass",
+					gate: "ProjectRulesEvidenceReview",
+					summary: "验收通过：项目规则约束审查完整。",
+					evidence: {
+						verdict: "全部五项规则进入验收 evidence；零违规；无需修复",
+					},
+					defects: [],
+				});
+			}
+			return makeResult(options.id, {
+				gate: "needs_fix",
+				summary: "Worker result needs a repair pass.",
+				defects: [
+					{
+						severity: "critical",
+						description: "Missing next diagnostic step.",
+					},
+				],
+			});
+		});
+		const executor = createSanLoopTaskAgentExecutor({
+			cwd: "/tmp",
+			session: {
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry: { authStorage: {} } as never,
+			},
+		});
+
+		const first = await executor.supervisor({
+			run: runSnapshot(),
+			mode: "rush",
+			assignments: [assignment()],
+			workerResults: [workerResult()],
+		});
+		const second = await executor.supervisor({
+			run: runSnapshot(),
+			mode: "rush",
+			assignments: [assignment()],
+			workerResults: [workerResult()],
+		});
+
+		expect(first).toEqual(
+			expect.objectContaining({
+				verdict: "pass",
+				retryable: false,
+			}),
+		);
+		expect(second).toEqual(
+			expect.objectContaining({
+				verdict: "needs_fix",
+				retryable: true,
+			}),
+		);
+	});
+
+	test("normalizes supervisor error prefixes from aborted real-provider yields", async () => {
+		const settings = Settings.isolated({});
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options =>
+			makeResult(options.id, {
+				aborted: true,
+				error: "needs_fix: Worker deliverable missing required structural elements.",
+			}),
+		);
+		const executor = createSanLoopTaskAgentExecutor({
+			cwd: "/tmp",
+			session: {
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry: { authStorage: {} } as never,
+			},
+		});
+
+		const result = await executor.supervisor({
+			run: runSnapshot(),
+			mode: "rush",
+			assignments: [assignment()],
+			workerResults: [workerResult()],
+		});
+
+		expect(result).toEqual(
+			expect.objectContaining({
+				verdict: "needs_fix",
+				retryable: true,
+				requiredNextActions: ["needs_fix: Worker deliverable missing required structural elements."],
+			}),
+		);
 	});
 
 	test("normalizes snake_case supervisor yields from real providers", async () => {

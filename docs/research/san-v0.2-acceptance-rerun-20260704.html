@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>San v0.2 验收复跑报告</title>
+		<style>
+			:root {
+				color-scheme: light;
+				--bg: #f7f8fb;
+				--panel: #ffffff;
+				--ink: #172033;
+				--muted: #647084;
+				--line: #d9dee8;
+				--accent: #1f5fbf;
+				--ok: #16794c;
+				--warn: #9a5b00;
+				--code: #eef2f7;
+			}
+			* {
+				box-sizing: border-box;
+			}
+			body {
+				margin: 0;
+				background: var(--bg);
+				color: var(--ink);
+				font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			}
+			main {
+				width: min(1120px, calc(100vw - 48px));
+				margin: 0 auto;
+				padding: 40px 0 56px;
+			}
+			header,
+			section {
+				background: var(--panel);
+				border: 1px solid var(--line);
+				border-radius: 10px;
+				padding: 26px;
+				margin-bottom: 18px;
+			}
+			h1,
+			h2,
+			p {
+				margin-top: 0;
+			}
+			h1 {
+				font-size: 32px;
+				line-height: 1.2;
+				margin-bottom: 10px;
+			}
+			h2 {
+				font-size: 21px;
+				margin-bottom: 12px;
+			}
+			code {
+				background: var(--code);
+				border: 1px solid var(--line);
+				border-radius: 5px;
+				padding: 1px 5px;
+				font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+				font-size: 0.92em;
+			}
+			table {
+				width: 100%;
+				border-collapse: collapse;
+				margin-top: 12px;
+			}
+			th,
+			td {
+				border: 1px solid var(--line);
+				padding: 9px 11px;
+				text-align: left;
+				vertical-align: top;
+			}
+			th {
+				background: #eef2f7;
+				font-weight: 700;
+			}
+			.grid {
+				display: grid;
+				grid-template-columns: repeat(4, minmax(0, 1fr));
+				gap: 12px;
+				margin-top: 14px;
+			}
+			.metric {
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				padding: 14px;
+				background: #fbfcff;
+			}
+			.metric strong {
+				display: block;
+				font-size: 26px;
+				line-height: 1;
+				color: var(--ok);
+				margin-bottom: 6px;
+			}
+			.note {
+				color: var(--muted);
+			}
+			.callout {
+				border-left: 4px solid var(--ok);
+				background: #f0fbf5;
+				padding: 12px 14px;
+				margin-top: 14px;
+			}
+			.warn {
+				border-left-color: var(--warn);
+				background: #fff7e8;
+			}
+			.badge {
+				display: inline-block;
+				border-radius: 999px;
+				padding: 2px 9px;
+				font-size: 12px;
+				font-weight: 700;
+			}
+			.pass {
+				background: #e7f7ef;
+				color: var(--ok);
+			}
+			.blocked {
+				background: #fff3d6;
+				color: var(--warn);
+			}
+			@media (max-width: 780px) {
+				main {
+					width: min(100vw - 24px, 1120px);
+					padding-top: 24px;
+				}
+				header,
+				section {
+					padding: 22px;
+				}
+				.grid {
+					grid-template-columns: repeat(2, minmax(0, 1fr));
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<header>
+				<p class="note">更新时间：2026-07-04 Asia/Shanghai</p>
+				<h1>San v0.2 验收复跑报告</h1>
+				<p>
+					本报告记录按 <code>docs/research/san-v0.2-handoff.html</code> 继续推进后的修复、真实模型复跑证据和当前验收结论。
+					后续 GPT 角色统一使用 Commander/Oracle = <code>vb/gpt-5.5</code>、Worker = <code>deepseek/deepseek-v4-pro</code>、Supervisor =
+					<code>claude-code/claude-opus-4-8</code>。
+				</p>
+				<div class="callout">
+					<strong>结论：</strong>VB 渠道完整复跑已通过 suite gate：10/10 ok、10/10 terminal、9/10 passed、0 failed、0 aborted。
+				</div>
+			</header>
+
+			<section>
+				<h2>复跑摘要</h2>
+					<div class="grid">
+						<div class="metric"><strong>10/10</strong><span>任务满足期望</span></div>
+						<div class="metric"><strong>10/10</strong><span>任务到达 terminal</span></div>
+						<div class="metric"><strong>9/10</strong><span>任务 passed</span></div>
+						<div class="metric"><strong>11 / 12</strong><span>workerResults / reviewReports</span></div>
+					</div>
+					<p class="note">
+						完整证据目录：<code>/private/tmp/san-v02-full-vb-fixed-20260704-evidence</code>。本轮配置保持 GPT 角色走
+						<code>vb/gpt-5.5</code>，没有把所有角色切到 Claude。
+					</p>
+				<table>
+					<thead>
+						<tr>
+							<th>指标</th>
+							<th>结果</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr><td>total</td><td>10</td></tr>
+						<tr><td>ok</td><td>10</td></tr>
+						<tr><td>passed</td><td>9</td></tr>
+						<tr><td>terminal</td><td>10</td></tr>
+						<tr><td>blocked</td><td>1</td></tr>
+						<tr><td>failed / aborted</td><td>0 / 0</td></tr>
+						<tr><td>retried</td><td>1</td></tr>
+						<tr><td>workerResults / reviewReports</td><td>11 / 12</td></tr>
+						<tr><td>累计模型耗时</td><td>5,036,577 ms</td></tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>任务结果</h2>
+				<table>
+					<thead>
+						<tr>
+							<th>任务</th>
+							<th>状态</th>
+							<th>finalVerdict</th>
+							<th>调度证据</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr><td>T01 small-bug-fix</td><td><span class="badge pass">passed</span></td><td>pass</td><td>1 assignment, 1 worker, 1 review</td></tr>
+						<tr><td>T02 cross-file-feature-scope</td><td><span class="badge pass">passed</span></td><td>pass</td><td>1 assignment, 1 worker, 1 review</td></tr>
+						<tr><td>T03 contract-test-quality</td><td><span class="badge pass">passed</span></td><td>pass</td><td>1 assignment, 1 worker, 1 review</td></tr>
+						<tr><td>T04 needs-fix-closure</td><td><span class="badge blocked">blocked</span></td><td>none</td><td>2 assignments, 2 workers, 2 reviews；2 次 retry 后 terminal，符合 expect=terminal</td></tr>
+						<tr><td>T05 project-rules-guard</td><td><span class="badge pass">passed</span></td><td>pass</td><td>1 assignment, 1 worker, 1 review</td></tr>
+						<tr><td>T06 docs-report-gate</td><td><span class="badge pass">passed</span></td><td>pass</td><td>1 assignment, 1 worker, 1 review</td></tr>
+						<tr><td>T07 failed-command-loop</td><td><span class="badge pass">passed</span></td><td>pass</td><td>1 assignment, 1 worker, 1 review</td></tr>
+						<tr><td>T08 deep-architecture-review</td><td><span class="badge pass">passed</span></td><td>pass</td><td>1 assignment, 1 worker, 2 reviews；deep 路径触发 Oracle</td></tr>
+						<tr><td>T09 budget-boundary</td><td><span class="badge pass">passed</span></td><td>pass</td><td>1 assignment, 1 worker, 1 review</td></tr>
+						<tr><td>T10 acceptance-report-synthesis</td><td><span class="badge pass">passed</span></td><td>pass</td><td>1 assignment, 1 worker, 1 review</td></tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>本轮修复</h2>
+				<table>
+					<thead>
+						<tr>
+							<th>问题</th>
+							<th>处理</th>
+							<th>验证</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td>T08 的真实 provider 输出把 worker、oracle、supervisor 混在 <code>dispatch</code> 数组中，旧解析丢掉 leaf worker。</td>
+							<td>解析器保留 container 数组中的 leaf assignment，同时只把 <code>san-worker</code> 纳入 worker assignments。</td>
+							<td>新增 <code>normalizes mixed dispatch arrays from real providers</code> 合同测试。</td>
+						</tr>
+						<tr>
+							<td>Commander 会把 Oracle/Supervisor 当成显式 dispatch 项，和 runtime 自动编排职责冲突。</td>
+							<td>收紧 <code>san-commander.md</code>：Commander 只 yield worker assignments；Supervisor 和 deep Oracle 由 runtime 自动调用。</td>
+							<td>T08 targeted 与完整复跑均 passed，并出现 Oracle/Supervisor review 证据。</td>
+						</tr>
+						<tr>
+							<td>Rush 模式下 Commander 可能拆出过多 worker，导致预算在 Supervisor 前耗尽。</td>
+							<td>提示词要求 rush 优先一个 bounded worker，只有预算仍能到 Supervisor 时才使用多个 workers。</td>
+							<td>T02 targeted 与完整复跑均已有 worker 和 review；不再停在 worker 前。</td>
+						</tr>
+							<tr>
+								<td>真实模型常输出 <code>{ target, change, acceptance }</code> 或 <code>sequence</code>/<code>steps</code> 结构。</td>
+								<td>解析器支持结构化 assignment 文本、acceptance 合并和新增 collection key。</td>
+								<td><code>bun test packages/coding-agent/test/san-loop/agents.test.ts</code> 与 <code>bun check</code> 通过。</td>
+							</tr>
+							<tr>
+								<td>T02 真实输出把 worker role 写成 reviewer 类标签，旧过滤逻辑误判为非 worker。</td>
+								<td>只有 supervisor/oracle/commander 会被排除；reviewer 标签在没有显式 agent 时仍可成为 worker assignment。</td>
+								<td>新增 reviewer-labeled Commander assignment 合同测试；完整复跑 T02 passed。</td>
+							</tr>
+							<tr>
+								<td>T05/T07 的 Supervisor verdict 常落在 <code>status</code>/<code>gate</code>/<code>outcome</code>/<code>decision</code> 字段。</td>
+								<td>Supervisor 解析增加这些字段别名，并把 <code>error</code> 中的 <code>needs_fix:</code>/<code>passed</code>/<code>blocked</code> 前缀纳入判定。</td>
+								<td>新增 status/gate 与 error prefix 合同测试；目标复跑 T05/T06/T07 均 ok。</td>
+							</tr>
+						</tbody>
+					</table>
+				</section>
+
+				<section>
+					<h2>VB 完整复跑</h2>
+					<p class="note">
+						2026-07-04 18:54 启动完整 suite，使用 VB endpoint <code>https://api.vbcoding.cc/v1</code> 的 <code>vb/gpt-5.5</code>
+						作为 Commander/Oracle，Worker 使用 <code>deepseek/deepseek-v4-pro</code>，Supervisor 使用 <code>claude-code/claude-opus-4-8</code>。
+						证据目录：<code>/private/tmp/san-v02-full-vb-fixed-20260704-evidence</code>。
+					</p>
+				<table>
+					<thead>
+						<tr>
+							<th>指标</th>
+							<th>结果</th>
+							<th>说明</th>
+						</tr>
+					</thead>
+					<tbody>
+							<tr><td>summary.ok</td><td>true</td><td>suite gate 要求 total=10、terminal&gt;=8、passed&gt;=6、ok&gt;=8；本轮全部满足。</td></tr>
+							<tr><td>total / ok / terminal</td><td>10 / 10 / 10</td><td>所有任务都到达 terminal，且每个任务满足自身 expect 口径。</td></tr>
+							<tr><td>passed / blocked</td><td>9 / 1</td><td>T04 blocked 仍满足 expect=terminal，用于保留 needs_fix 闭环风险证据。</td></tr>
+							<tr><td>failed / aborted</td><td>0 / 0</td><td>没有失败或中止任务。</td></tr>
+							<tr><td>retried</td><td>1</td><td>T04 触发 retry，并最终以 blocked terminal 收束。</td></tr>
+							<tr><td>workerResults / reviewReports</td><td>11 / 12</td><td>完整运行中 Worker 与 review 证据都已产出；T08 包含 Oracle second opinion。</td></tr>
+							<tr><td>durationMs</td><td>5,036,577</td><td>约 84 分钟。</td></tr>
+						</tbody>
+					</table>
+				<table>
+					<thead>
+						<tr>
+							<th>任务</th>
+							<th>状态</th>
+							<th>ok</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr><td>T01 small-bug-fix</td><td><span class="badge pass">passed</span></td><td>true</td></tr>
+						<tr><td>T02 cross-file-feature-scope</td><td><span class="badge pass">passed</span></td><td>true</td></tr>
+						<tr><td>T03 contract-test-quality</td><td><span class="badge pass">passed</span></td><td>true</td></tr>
+						<tr><td>T04 needs-fix-closure</td><td><span class="badge blocked">blocked</span></td><td>true</td></tr>
+						<tr><td>T05 project-rules-guard</td><td><span class="badge pass">passed</span></td><td>true</td></tr>
+						<tr><td>T06 docs-report-gate</td><td><span class="badge pass">passed</span></td><td>true</td></tr>
+						<tr><td>T07 failed-command-loop</td><td><span class="badge pass">passed</span></td><td>true</td></tr>
+						<tr><td>T08 deep-architecture-review</td><td><span class="badge pass">passed</span></td><td>true</td></tr>
+						<tr><td>T09 budget-boundary</td><td><span class="badge pass">passed</span></td><td>true</td></tr>
+						<tr><td>T10 acceptance-report-synthesis</td><td><span class="badge pass">passed</span></td><td>true</td></tr>
+					</tbody>
+				</table>
+				<div class="callout">
+					<strong>判断：</strong>VB 渠道可用，并且单次完整 suite 已形成通过的 <code>summary.json</code>。
+				</div>
+			</section>
+
+			<section>
+				<h2>ASXS 恢复与完整复跑</h2>
+				<p class="note">
+					2026-07-04 20:28 重新把 GPT 角色切回 <code>asxs/gpt-5.5</code>。根因不是 endpoint 不存在：
+					<code>https://api.asxs.top/v1</code> 可访问；最初失败来自本地 asxs provider 使用了错误 key，模型调用返回
+					<code>401 invalid_api_key</code>。恢复本机历史可用 key 后，最小调用返回 <code>OK</code>，随后启动完整 suite。
+					证据目录：<code>/private/tmp/san-v02-asxs-20260704-203512-evidence</code>。
+				</p>
+				<table>
+					<thead>
+						<tr>
+							<th>指标</th>
+							<th>结果</th>
+							<th>说明</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr><td>summary.ok</td><td>true</td><td>suite gate 满足 total=10、terminal&gt;=8、passed&gt;=6、ok&gt;=8。</td></tr>
+						<tr><td>total / ok / terminal</td><td>10 / 10 / 10</td><td>所有任务都满足自身 expect 口径。</td></tr>
+						<tr><td>passed / blocked</td><td>9 / 1</td><td>T03 以 blocked terminal 收口，仍满足 expect=terminal。</td></tr>
+						<tr><td>failed / aborted</td><td>0 / 0</td><td>没有失败或中止任务。</td></tr>
+						<tr><td>retried</td><td>2</td><td>T04 与 T07 触发 retry，并最终通过。</td></tr>
+						<tr><td>workerResults / reviewReports</td><td>12 / 12</td><td>T08 deep 路径触发 Oracle，完整多角色链路可用。</td></tr>
+						<tr><td>durationMs</td><td>4,127,799</td><td>约 69 分钟。</td></tr>
+					</tbody>
+				</table>
+				<table>
+					<thead>
+						<tr>
+							<th>任务</th>
+							<th>状态</th>
+							<th>ok</th>
+							<th>备注</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr><td>T01 small-bug-fix</td><td><span class="badge pass">passed</span></td><td>true</td><td>基础闭环通过。</td></tr>
+						<tr><td>T02 cross-file-feature-scope</td><td><span class="badge pass">passed</span></td><td>true</td><td>跨文件范围控制通过。</td></tr>
+						<tr><td>T03 contract-test-quality</td><td><span class="badge blocked">blocked</span></td><td>true</td><td>terminal blocked 符合该任务 expect。</td></tr>
+						<tr><td>T04 needs-fix-closure</td><td><span class="badge pass">passed</span></td><td>true</td><td>1 次 retry 后通过，耗时约 22 分钟。</td></tr>
+						<tr><td>T05 project-rules-guard</td><td><span class="badge pass">passed</span></td><td>true</td><td>项目规则 evidence 通过。</td></tr>
+						<tr><td>T06 docs-report-gate</td><td><span class="badge pass">passed</span></td><td>true</td><td>文档 gate 通过。</td></tr>
+						<tr><td>T07 failed-command-loop</td><td><span class="badge pass">passed</span></td><td>true</td><td>1 次 retry 后通过。</td></tr>
+						<tr><td>T08 deep-architecture-review</td><td><span class="badge pass">passed</span></td><td>true</td><td>deep + Oracle 路径通过。</td></tr>
+						<tr><td>T09 budget-boundary</td><td><span class="badge pass">passed</span></td><td>true</td><td>预算边界通过。</td></tr>
+						<tr><td>T10 acceptance-report-synthesis</td><td><span class="badge pass">passed</span></td><td>true</td><td>综合报告任务通过。</td></tr>
+					</tbody>
+				</table>
+				<div class="callout warn">
+					<strong>稳定性风险：</strong>asxs 完整复跑期间日志出现多次 <code>503 service_unavailable</code>，Context Steady digest 走 fallback，
+					但 San loop 最终仍完成 10/10 ok。历史 Codex 日志还记录过 <code>https://api.asxs.top/v1/responses</code> 在
+					2026-07-04 15:51 左右连续 <code>502 Bad Gateway</code>。结论是 asxs 当前可用且更智能的 GPT 角色可以保留，但它比 VB 更容易出现上游 5xx 抖动。
+				</div>
+			</section>
+
+			<section>
+				<h2>验证命令</h2>
+				<table>
+					<thead>
+						<tr>
+							<th>命令</th>
+							<th>结果</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr><td><code>bun test packages/coding-agent/test/san-loop/agents.test.ts</code></td><td>15 pass, 0 fail</td></tr>
+						<tr><td><code>bun check</code></td><td>通过</td></tr>
+						<tr><td><code>san -p --model vb/gpt-5.5 --no-tools --no-session --max-time=60 '只输出 OK'</code></td><td>返回 OK</td></tr>
+						<tr><td><code>san -p --model asxs/gpt-5.5 --no-tools --no-session --max-time=90 '只输出 OK'</code></td><td>恢复 key 后返回 OK</td></tr>
+						<tr><td>targeted VB rerun T02/T05/T06/T07</td><td>4/4 ok，3 passed，1 blocked，证据目录 <code>/private/tmp/san-v02-targeted-vb-20260704-evidence</code></td></tr>
+						<tr><td>完整 VB suite</td><td>10/10 ok，9 passed，10 terminal，证据目录 <code>/private/tmp/san-v02-full-vb-fixed-20260704-evidence</code></td></tr>
+						<tr><td>完整 ASXS suite</td><td>10/10 ok，9 passed，10 terminal，证据目录 <code>/private/tmp/san-v02-asxs-20260704-203512-evidence</code></td></tr>
+					</tbody>
+				</table>
+				<div class="callout">
+					<strong>注意：</strong>完整 suite 输出 summary 后进程已自然退出；没有遗留验收进程。
+				</div>
+			</section>
+		</main>
+	</body>
+</html>

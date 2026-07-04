@@ -59,6 +59,9 @@ interface CommanderYieldAssignment {
 	role?: unknown;
 	assignment?: unknown;
 	instructions?: unknown;
+	target?: unknown;
+	change?: unknown;
+	acceptance?: unknown;
 	acceptanceCriteria?: unknown;
 	acceptance_criteria?: unknown;
 	checkRefs?: unknown;
@@ -138,6 +141,11 @@ interface SupervisorYieldDefect {
 
 interface SupervisorYieldData {
 	verdict?: unknown;
+	status?: unknown;
+	gate?: unknown;
+	outcome?: unknown;
+	decision?: unknown;
+	error?: unknown;
 	retryable?: unknown;
 	confidence?: unknown;
 	defects?: unknown;
@@ -213,7 +221,7 @@ function isCommanderWorkerAssignment(record: Record<string, unknown>): boolean {
 	if (agent) return agent === "san-worker" || agent === "worker";
 	const role = stringField(record, ["role"])?.toLowerCase();
 	if (!role) return true;
-	return !/\b(supervisor|reviewer|oracle|commander)\b/.test(role);
+	return !/\b(supervisor|oracle|commander)\b/.test(role);
 }
 
 function latestYieldData(result: SingleResult): unknown {
@@ -264,6 +272,35 @@ function parseMode(value: unknown, fallback: SanLoopMode): SanLoopMode {
 	return value === "rush" || value === "smart" || value === "deep" ? value : fallback;
 }
 
+function structuredAssignmentText(value: unknown): string | undefined {
+	if (typeof value === "string") return stringValue(value);
+	if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const record = value as Record<string, unknown>;
+	const sections: [string, string | undefined][] = [
+		["Target", stringValue(record.target)],
+		["Change", stringArray(record.change).join("\n")],
+		["Acceptance", stringArray(record.acceptance).join("\n")],
+	];
+	const text = sections
+		.filter((section): section is [string, string] => section[1] !== undefined && section[1].length > 0)
+		.map(([label, content]) => `${label}:\n${content}`)
+		.join("\n\n");
+	return text || compactEvidenceValue(value);
+}
+
+function commanderAssignmentInstructions(record: Record<string, unknown>, fallback: string): string {
+	return (
+		stringField(record, ["instructions"]) ??
+		structuredAssignmentText(record.assignment) ??
+		structuredAssignmentText({
+			target: record.target,
+			change: record.change,
+			acceptance: record.acceptance,
+		}) ??
+		fallback
+	);
+}
+
 function parseWorkerStatusWithFallback(
 	value: unknown,
 	fallback: SanLoopWorkerResult["status"],
@@ -293,6 +330,29 @@ function parseReviewVerdict(value: unknown): SanLoopReviewVerdict {
 	return "blocked";
 }
 
+function parseSupervisorErrorVerdict(value: unknown): SanLoopReviewVerdict | undefined {
+	const text = stringValue(value);
+	if (!text) return undefined;
+	const normalized = text
+		.trim()
+		.toLowerCase()
+		.replace(/[\s-]+/g, "_");
+	if (/^needs_fix\b/.test(normalized)) return "needs_fix";
+	if (/^pass(ed)?\b/.test(normalized)) return "pass";
+	if (/^block(ed)?\b/.test(normalized)) return "blocked";
+	if (/^out_of_scope\b/.test(normalized)) return "out_of_scope";
+	return undefined;
+}
+
+function parseSupervisorVerdict(
+	record: Record<string, unknown>,
+	typedRecord: SupervisorYieldData,
+): SanLoopReviewVerdict {
+	const explicit = recordValue(record, ["verdict", "status", "gate", "outcome", "decision"]);
+	if (explicit !== undefined) return parseReviewVerdict(explicit);
+	return parseSupervisorErrorVerdict(typedRecord.error) ?? "blocked";
+}
+
 const COMMANDER_ASSIGNMENT_COLLECTION_KEYS = [
 	"assignments",
 	"workers",
@@ -307,6 +367,8 @@ const COMMANDER_ASSIGNMENT_COLLECTION_KEYS = [
 	"workerBatch",
 	"worker_batches",
 	"workerBatches",
+	"sequence",
+	"steps",
 ] as const;
 
 const COMMANDER_ASSIGNMENT_CONTAINER_KEYS = [
@@ -348,7 +410,11 @@ function commanderAssignmentRecordsFromContainer(
 	const nestedAssignments = COMMANDER_ASSIGNMENT_CONTAINER_KEYS.flatMap(key => {
 		const recordValue = nestedRecordField(record, key);
 		if (recordValue) return commanderAssignmentRecordsFromContainer(recordValue, ownAgent);
-		return recordsField(record, [key]).flatMap(item => commanderAssignmentRecordsFromContainer(item, ownAgent));
+		return recordsField(record, [key]).flatMap(item => {
+			const itemAgent = stringField(item, ["agent"]) ?? ownAgent;
+			const nested = commanderAssignmentRecordsFromContainer(item, itemAgent);
+			return nested.length > 0 ? nested : [{ ...item, agent: itemAgent }];
+		});
 	});
 	return [...directAssignments, ...nestedAssignments] as CommanderYieldAssignment[];
 }
@@ -463,12 +529,15 @@ function parseCommanderResult(run: SanLoopRunSnapshot, mode: SanLoopMode, data: 
 			`${run.runId}_${sanitizeTaskId(objective, index)}`;
 		const taskNodeIds = stringArrayField(assignmentRecord, ["taskNodeIds", "task_node_ids"]);
 		const taskId = taskNodeIds[0] ?? sanitizeTaskId(objective, index);
-		const assignmentCriteria = stringArrayField(assignmentRecord, ["acceptanceCriteria", "acceptance_criteria"]);
+		const assignmentCriteria = [
+			...stringArrayField(assignmentRecord, ["acceptanceCriteria", "acceptance_criteria"]),
+			...stringArrayField(assignmentRecord, ["acceptance"]),
+		];
 		return {
 			assignmentId,
 			objective,
 			taskNodeIds: taskNodeIds.length > 0 ? taskNodeIds : [taskId],
-			instructions: stringField(assignmentRecord, ["instructions", "assignment"]) ?? objective,
+			instructions: commanderAssignmentInstructions(assignmentRecord, objective),
 			acceptanceCriteria: assignmentCriteria.length > 0 ? assignmentCriteria : criteria,
 			checkRefs: checks,
 			contextRefs: run.contextPacketRefs,
@@ -688,7 +757,8 @@ function parseSupervisorResult(data: unknown): SanLoopReviewInput {
 	const record =
 		data !== null && typeof data === "object" && !Array.isArray(data) ? (data as Record<string, unknown>) : {};
 	const typedRecord = record as SupervisorYieldData;
-	const verdict = parseReviewVerdict(typedRecord.verdict);
+	const verdict = parseSupervisorVerdict(record, typedRecord);
+	const error = stringValue(typedRecord.error);
 	return {
 		reviewer: "supervisor" as const,
 		verdict,
@@ -696,7 +766,10 @@ function parseSupervisorResult(data: unknown): SanLoopReviewInput {
 		testsRun: stringArrayField(record, ["testsRun", "tests_run"]),
 		evidence: stringArray(typedRecord.evidence),
 		retryable: typeof typedRecord.retryable === "boolean" ? typedRecord.retryable : verdict === "needs_fix",
-		requiredNextActions: stringArrayField(record, ["requiredNextActions", "required_next_actions"]),
+		requiredNextActions: [
+			...stringArrayField(record, ["requiredNextActions", "required_next_actions"]),
+			...(error ? [error] : []),
+		],
 		confidence: parseConfidence(typedRecord.confidence),
 	};
 }
