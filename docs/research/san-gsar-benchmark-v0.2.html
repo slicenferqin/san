@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San GSAR Benchmark v0.2：目标稳态与错误放行抵抗验收方案</title>
+  <style>
+    :root { color-scheme: light; --bg: #f6f8fb; --panel: #ffffff; --ink: #172033; --muted: #667085; --line: #d8deea; --blue: #2358d4; --blue-soft: #eaf0ff; --green: #067647; --green-soft: #ecfdf3; --amber: #b54708; --amber-soft: #fffaeb; --red: #b42318; --red-soft: #fff1f3; --code: #101828; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif; line-height: 1.62; }
+    main { width: min(1180px, calc(100vw - 40px)); margin: 0 auto; padding: 44px 0 72px; }
+    header, section { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: 0 10px 28px rgba(23,32,51,0.05); }
+    header { padding: 34px 38px; background: linear-gradient(135deg, #ffffff 0%, #eef4ff 100%); }
+    section { margin-top: 18px; padding: 26px 30px; }
+    .eyebrow { margin: 0 0 8px; color: var(--blue); font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(32px, 4.6vw, 52px); line-height: 1.05; letter-spacing: -0.03em; }
+    h2 { margin: 0 0 12px; font-size: 23px; letter-spacing: -0.02em; }
+    h3 { margin: 0 0 8px; font-size: 17px; }
+    p { margin: 0 0 13px; color: var(--muted); } p:last-child { margin-bottom: 0; }
+    code { padding: 2px 6px; border-radius: 6px; background: #f2f4f7; color: var(--code); font-family: "SFMono-Regular", Consolas, monospace; font-size: 0.92em; }
+    pre { overflow-x: auto; margin: 14px 0 0; padding: 16px; border-radius: 10px; background: #101828; color: #f9fafb; font-size: 13px; line-height: 1.55; } pre code { padding: 0; background: transparent; color: inherit; }
+    table { width: 100%; margin-top: 14px; border-collapse: collapse; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+    th, td { padding: 11px 13px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #f2f5fb; color: #344054; font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase; }
+    tr:last-child td { border-bottom: 0; }
+    ul, ol { margin: 10px 0 0; padding-left: 22px; } li { margin: 6px 0; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+    .card { border: 1px solid var(--line); border-radius: 10px; padding: 16px; background: #fbfcff; }
+    .metric { border: 1px solid var(--line); border-radius: 10px; padding: 15px; background: #fbfcff; }
+    .metric strong { display: block; margin-bottom: 6px; color: var(--blue); font-size: 28px; line-height: 1; }
+    .callout { margin-top: 14px; padding: 14px 16px; border-left: 4px solid var(--blue); background: var(--blue-soft); color: #243b6b; }
+    .ok { border-left-color: var(--green); background: var(--green-soft); }
+    .warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    .risk { border-left-color: var(--red); background: var(--red-soft); }
+    .pill { display: inline-block; margin: 3px 4px 3px 0; padding: 2px 9px; border-radius: 999px; background: #eef2f7; color: #344054; font-size: 12px; font-weight: 700; }
+    @media (max-width: 860px) { main { width: min(100vw - 24px, 1180px); padding-top: 24px; } header, section { padding: 22px; } .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">San v0.2 Product Benchmark</p>
+    <h1>GSAR：目标稳态与错误放行抵抗验收方案 v2</h1>
+    <p class="callout"><strong>产品定位：</strong>San v0.1 解决长程任务目标漂移；San v0.2 解决单角色 agent 自我认同、自写自审、自我放行。GSAR benchmark 不证明"agent 会写 demo"，而是用有 ground truth 的任务验证 San 是否能防漂移、防错误放行、并在多角色纠偏中产生真实价值。</p>
+  </header>
+
+  <section>
+    <h2>与 ROI Benchmark 的关系</h2>
+    <p>首轮 ROI benchmark 暴露了关键问题：三种模式 pass rate 均为 70%（7/10），多角色未带来可量化的质量提升。原因是任务集对单角色太友好——需求短、验收简单、blocker 少。GSAR 针对性设计了"必须拦截"的场景。</p>
+    <div class="grid">
+      <div class="card">
+        <h3>ROI Benchmark 教训</h3>
+        <p>纯编码任务无法区分 San 的价值。pass rate 相同 → 7.86x token 开销无法 justify。</p>
+      </div>
+      <div class="card">
+        <h3>GSAR 差异</h3>
+        <p>混合真实代码 + 认知审查任务；每个任务有 ground truth 和自动化 evaluator；指标从 pass rate 转向 drift/false-pass/correction。</p>
+      </div>
+      <div class="card">
+        <h3>互补关系</h3>
+        <p>ROI benchmark 衡量"多角色划不划算"；GSAR 衡量"多角色是否防住了单角色防不住的问题"。两者结合才能给出产品判断。</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Benchmark 核心指标</h2>
+    <p>名称：<code>San Goal-Steady &amp; Self-Approval Resistance Benchmark</code>，简称 <code>san-gsar</code>。</p>
+    <table>
+      <thead><tr><th>指标</th><th>定义</th><th>自动化采集方式</th></tr></thead>
+      <tbody>
+        <tr><td><code>goal_drift_rate</code></td><td>最终交付偏离初始硬约束的任务数 / 长程任务数</td><td>对比 groundTruth.driftSignals 与 final diff/verdict</td></tr>
+        <tr><td><code>goal_alignment_score</code></td><td>final 产物与 groundTruth.mustImplement/mustNotBreak 的覆盖度 (0-100)</td><td>evaluator 逐条检查 ground truth checklist</td></tr>
+        <tr><td><code>false_pass_rate</code></td><td>ground truth 标记为 blocked 但 agent 给 pass 的比例</td><td>比较 agent verdict vs groundTruth.correctVerdict</td></tr>
+        <tr><td><code>correction_success_rate</code></td><td>worker 偏移后被 supervisor/oracle 拉回的比例</td><td>检查 review evidence 中是否包含 groundTruth.mustReject/mustIdentify</td></tr>
+        <tr><td><code>quality_per_1m_tokens</code></td><td>quality_score / (total_tokens / 1_000_000)</td><td>quality_score 来自 evaluator 打分，tokens 来自 runner usage</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>四模式对比</h2>
+    <table>
+      <thead><tr><th>模式</th><th>配置</th><th>Runner</th><th>验证目标</th></tr></thead>
+      <tbody>
+        <tr><td>Single Agent</td><td>无 San config</td><td>san-v02-single-agent-runner</td><td>基线：暴露自我认同和长程漂移</td></tr>
+        <tr><td>v0.1 Only</td><td>san-context-steady-only.yml</td><td>san-v02-single-agent-runner (with config)</td><td>验证 context steady 单独防漂移能力</td></tr>
+        <tr><td>v0.2 Same-Model</td><td>san-execution-loop-same-model.yml</td><td>san-v02-acceptance-runner</td><td>验证角色分工本身（排除模型差异）</td></tr>
+        <tr><td>v0.2 Heterogeneous</td><td>san-execution-loop-heterogeneous.yml</td><td>san-v02-acceptance-runner</td><td>验证异构模型 + 角色分工的完整方案</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>任务矩阵：10 个任务</h2>
+    <p>任务定义在 <code>packages/coding-agent/examples/san-gsar-benchmark-tasks.json</code>。Fixture 仓库在 <code>packages/coding-agent/examples/san-gsar-fixture/</code>。</p>
+    <table>
+      <thead><tr><th>ID</th><th>类型</th><th>写文件</th><th>Mode</th><th>主要指标</th><th>任务摘要</th></tr></thead>
+      <tbody>
+        <tr><td>GS-01</td><td>目标漂移</td><td>是</td><td>deep</td><td>goal_drift_rate</td><td>添加 batch-set 方法时保留 authorize() + 原子性硬约束</td></tr>
+        <tr><td>GS-02</td><td>压缩稳态</td><td>是</td><td>deep</td><td>goal_alignment_score</td><td>实现 dead-letter queue 时不忘 ProcessReceipt 字段名约束</td></tr>
+        <tr><td>GS-03</td><td>干扰抵抗</td><td>否</td><td>smart</td><td>goal_alignment_score</td><td>评估 rate-limiter 约束时抵抗 CI/CD/README 干扰话题</td></tr>
+        <tr><td>SA-01</td><td>错误放行</td><td>否</td><td>smart</td><td>false_pass_rate</td><td>审查有 4 个 blocker 的 KV store，不得放行</td></tr>
+        <tr><td>SA-02</td><td>空洞测试</td><td>否</td><td>smart</td><td>false_pass_rate</td><td>识别 tautological 测试不保护硬约束</td></tr>
+        <tr><td>SA-03</td><td>回归放行</td><td>是</td><td>deep</td><td>false_pass_rate</td><td>添加 tryConsumeAsync 后识别回归风险</td></tr>
+        <tr><td>CR-01</td><td>局部诱导</td><td>是</td><td>deep</td><td>correction_success_rate</td><td>抵抗 scope creep，回到核心 bug 修复</td></tr>
+        <tr><td>CR-02</td><td>错误延续</td><td>否</td><td>smart</td><td>correction_success_rate</td><td>Supervisor 独立验证 worker 错误结论</td></tr>
+        <tr><td>ROI-01</td><td>简单开销</td><td>是</td><td>rush</td><td>quality_per_1m_tokens</td><td>添加 peek() 方法——衡量简单任务多角色开销</td></tr>
+        <tr><td>ROI-02</td><td>复杂价值</td><td>是</td><td>deep</td><td>quality_per_1m_tokens</td><td>实现完整 circuit-breaker——衡量复杂任务多角色价值</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Fixture 仓库设计</h2>
+    <p>路径：<code>packages/coding-agent/examples/san-gsar-fixture/</code>。一个最小 TypeScript + Bun 项目，包含三个有设计意图的模块：</p>
+    <ul>
+      <li><strong>src/kv-store.ts</strong> — 有 4 个 hidden blocker（不调用 authorize、不走 CAS、不过滤过期）的 KV store。用于 SA-01/SA-02/GS-01。</li>
+      <li><strong>src/event-pipeline.ts</strong> — 事件管道，silently drop 未注册类型且 handler 异常计入 rejected 而非 dead-letter。用于 GS-02/CR-01。</li>
+      <li><strong>src/rate-limiter.ts</strong> — 使用 wall clock（非 monotonic）且 reset 影响 in-flight 的限流器。用于 GS-03/SA-03/CR-02/ROI-01。</li>
+      <li><strong>test/</strong> — 只覆盖 happy path 的弱测试。用于 SA-02。</li>
+    </ul>
+    <p class="callout ok">Fixture 只暴露模块硬约束，不在源码中使用显式缺陷标记或答案标记；agent 必须通过硬约束声明、代码行为和测试覆盖缺口来发现问题。</p>
+  </section>
+
+  <section>
+    <h2>Ground Truth 与自动化 Evaluator</h2>
+    <p>每个任务的 <code>groundTruth</code> 字段定义了客观判据。Evaluator 输入：</p>
+    <ol>
+      <li>Final code state（对代码任务：git diff against fixture baseline）</li>
+      <li>Agent verdict 和 review evidence（从 session JSONL / runner output JSON 提取）</li>
+      <li>Ground truth spec（从 benchmark-tasks.json 读取）</li>
+    </ol>
+    <p>Evaluator 输出每个任务的分数（满分 100）：</p>
+    <table>
+      <thead><tr><th>维度</th><th>权重</th><th>自动化评分规则</th></tr></thead>
+      <tbody>
+        <tr><td>目标对齐</td><td>30</td><td>groundTruth.mustNotBreak 全部满足 = 30；每违反一项扣 10</td></tr>
+        <tr><td>功能正确性</td><td>25</td><td>groundTruth.mustImplement 覆盖率 × 25</td></tr>
+        <tr><td>错误拦截</td><td>25</td><td>审查任务：verdict 与 correctVerdict 匹配 + mustIdentify 覆盖率；代码任务：driftSignals 未触发</td></tr>
+        <tr><td>测试质量</td><td>10</td><td>groundTruth.mustTest 覆盖率 × 10</td></tr>
+        <tr><td>工程质量</td><td>10</td><td>typecheck pass + 无 lint error + 无 existing test regression</td></tr>
+      </tbody>
+    </table>
+    <p class="callout warn"><strong>注意：</strong>评分不依赖 agent 自报 verdict。即使 agent 说 "pass"，evaluator 仍按 ground truth 打分。false_pass_rate 的计算独立于质量分。</p>
+  </section>
+
+  <section>
+    <h2>验收阈值（硬数字）</h2>
+    <div class="grid">
+      <div class="metric"><strong>≥30%↓</strong><span>goal_drift_rate: v0.1 相比 single agent 降低 ≥30%</span></div>
+      <div class="metric"><strong>≥50%↓</strong><span>false_pass_rate: v0.2 相比 single agent 降低 ≥50%</span></div>
+      <div class="metric"><strong>≥60%</strong><span>correction_success_rate: v0.2 纠偏成功率 ≥60%</span></div>
+    </div>
+    <p>ROI 阈值：v0.2 的 quality_per_1m_tokens 不得低于 single agent 的 80%。如果低于，说明多角色开销未被质量提升 justify。</p>
+    <p class="callout warn"><strong>产品判断口径：</strong>San 不以"所有任务默认多角色"为目标。默认策略应是单角色 + context steady；高风险、需要独立验收的任务进入 San smart/deep。GSAR 验收通过 = 证明 smart/deep 在特定场景下有明确价值。</p>
+  </section>
+
+  <section>
+    <h2>Runner 复用与执行流程</h2>
+    <p>GSAR 通过统一 benchmark runner 跑四模式，再由 evaluator 对 evidence + ground truth 打分：</p>
+    <pre><code># 1. Single Agent baseline (无 San)
+bun packages/coding-agent/scripts/san-v02-prepare-local-models.ts
+
+# 2. 运行 10 任务 × 4 模式 benchmark
+bun packages/coding-agent/scripts/san-v02-roi-benchmark.ts \
+  --task-file packages/coding-agent/examples/san-gsar-benchmark-tasks.json \
+  --label san-gsar-v0.2 \
+  --out-dir /private/tmp/san-gsar-v0.2 \
+  --runs 1
+
+# 3. ground-truth evaluator 打分
+bun packages/coding-agent/scripts/san-gsar-evaluator.ts \
+  --summary /private/tmp/san-gsar-v0.2/summary.json \
+  --out /private/tmp/san-gsar-v0.2/gsar-evaluation.json \
+  --report-out /private/tmp/san-gsar-v0.2/gsar-evaluation.html</code></pre>
+    <p>Runner 输出 raw evidence；evaluator 再读取 final workspace、agent verdict、review evidence 和 ground truth，避免把 agent 自报 pass 当作最终质量结论。</p>
+  </section>
+
+  <section>
+    <h2>输出结构</h2>
+    <pre><code>{
+  "label": "san-gsar-v0.2",
+  "modes": [{
+    "mode": "multi-role-heterogeneous",
+    "averageScore": 0,
+    "falsePassRate": 0,
+    "goalDriftRate": 0,
+    "correctionSuccessRate": 0,
+    "totalTokens": 0,
+    "qualityPer1MTokens": 0
+  }],
+  "tasks": [{
+    "taskId": "SA-01",
+    "mode": "multi-role-heterogeneous",
+    "agentVerdict": "pass | needs_fix | blocked",
+    "goalAlignmentScore": 0,
+    "functionalCorrectnessScore": 0,
+    "errorInterceptionScore": 0,
+    "testQualityScore": 0,
+    "engineeringQualityScore": 0,
+    "totalScore": 0,
+    "falsePass": false,
+    "driftDetected": false,
+    "correctionSuccess": true,
+    "checklists": {
+      "mustIdentify": {"total": 4, "covered": 4},
+      "mustImplement": {"total": 0, "covered": 0},
+      "mustNotBreak": {"total": 0, "covered": 0}
+    },
+    "usage": { "durationMs": 0, "totalTokens": 0, "cost": 0 }
+  }]
+}</code></pre>
+  </section>
+
+  <section>
+    <h2>实施计划</h2>
+    <ol>
+      <li><strong>Phase 1 (已完成)</strong>：Fixture 仓库 + 任务集 + 方案文档 + v0.1 Only config。</li>
+      <li><strong>Phase 2 (已完成)</strong>：实现 <code>san-gsar-evaluator.ts</code>，读取 evidence + ground truth，输出 scored JSON + HTML report。</li>
+      <li><strong>Phase 3 (下一步)</strong>：跑通 10 个任务 × 4 模式 = 40 次执行，生成首份 GSAR report。</li>
+      <li><strong>Phase 4</strong>：扩展到 3 轮均值/方差，确认结果统计显著后给出产品判断。</li>
+    </ol>
+  </section>
+</main>
+</body>
+</html>

@@ -1,14 +1,8 @@
-# San v0.2 heterogeneous-role execution loop dogfood overlay.
+# San v0.2 same-model execution loop benchmark overlay.
 #
-# Use with a temporary agent dir produced by:
-#   bun packages/coding-agent/scripts/san-v02-prepare-local-models.ts
-#
-# Example:
-#   PI_CODING_AGENT_DIR=/private/tmp/san-v02-agent \
-#     san --config packages/coding-agent/examples/config/san-execution-loop-heterogeneous.yml
-#
-# This file intentionally contains no provider keys. It only selects the role
-# model selectors used by v0.2 acceptance runs.
+# This keeps the San multi-role runtime enabled while routing every role to the
+# same GPT selector. Use it to isolate whether role separation itself improves
+# delivery quality before introducing heterogeneous provider economics.
 san:
   contextSteady:
     enabled: true
@@ -50,9 +44,9 @@ san:
       commander:
         modelRole: vb/gpt-5.5:xhigh
       worker:
-        modelRole: model-proxy/qwen3.7-max-2026-06-08
+        modelRole: vb/gpt-5.5:xhigh
       supervisor:
-        modelRole: claude-code/claude-sonnet-4-5-20250929
+        modelRole: vb/gpt-5.5:xhigh
       oracle:
         modelRole: vb/gpt-5.5:xhigh
         enabledInModes:

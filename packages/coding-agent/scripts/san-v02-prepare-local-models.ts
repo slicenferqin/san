@@ -104,7 +104,6 @@ function normalizeClaudeModel(value: string | undefined): string {
 
 const agentDir = path.resolve(expandHome(argValue("--agent-dir") ?? "/private/tmp/san-v02-agent"));
 const modelsPath = path.join(agentDir, "models.yml");
-const reasonixConfig = await readJsonFile(path.join(os.homedir(), ".reasonix", "config.json"));
 const claudeSettings = await readJsonFile(path.join(os.homedir(), ".claude", "settings.json"));
 const codexConfig = await readTomlFile(path.join(os.homedir(), ".codex", "config.toml"));
 const codexAuth = await readJsonFile(path.join(os.homedir(), ".codex", "auth.json"));
@@ -114,11 +113,16 @@ const codexProviders = nestedRecord(codexConfig, "model_providers");
 const codexProviderName = stringField(codexConfig, "model_provider") ?? "custom";
 const codexSelectedProvider = nestedRecord(codexProviders, codexProviderName) ?? nestedRecord(codexProviders, "custom");
 
-const deepseekKey = stringField(reasonixConfig, "apiKey");
+const workerBaseUrl = "https://model-proxy.yowant.team";
+const workerModel = "qwen3.7-max-2026-06-08";
+const workerKey =
+	process.env.SAN_WORKER_ANTHROPIC_AUTH_TOKEN ??
+	process.env.ANTHROPIC_AUTH_TOKEN ??
+	process.env.SAN_WORKER_ANTHROPIC_API_KEY ??
+	process.env.ANTHROPIC_API_KEY;
 const claudeKey = stringField(claudeEnv, "ANTHROPIC_AUTH_TOKEN") ?? stringField(claudeEnv, "ANTHROPIC_API_KEY");
 const openaiKey = stringField(codexAuth, "OPENAI_API_KEY");
 
-const deepseekModel = stringField(reasonixConfig, "model") ?? "deepseek-v4-pro";
 const claudeModel = normalizeClaudeModel(
 	stringField(claudeSettings, "model") ?? stringField(claudeEnv, "ANTHROPIC_MODEL"),
 );
@@ -132,23 +136,17 @@ const openaiEffort = stringField(codexConfig, "model_reasoning_effort") ?? "xhig
 
 const modelsConfig = {
 	providers: {
-		deepseek: {
-			baseUrl: "https://api.deepseek.com/anthropic",
-			apiKey: deepseekKey ?? "DEEPSEEK_API_KEY",
+		"model-proxy": {
+			baseUrl: workerBaseUrl,
+			apiKey: workerKey ?? "SAN_WORKER_ANTHROPIC_AUTH_TOKEN",
 			api: "anthropic-messages",
 			models: [
 				{
-					id: deepseekModel,
-					name: `DeepSeek ${deepseekModel}`,
-					contextWindow: 128000,
-					maxTokens: 8192,
+					id: workerModel,
+					name: `Model Proxy ${workerModel}`,
+					contextWindow: 1000000,
+					maxTokens: 32768,
 					supportsTools: true,
-					reasoning: true,
-					thinking: {
-						mode: "effort",
-						efforts: ["low", "medium", "high"],
-						defaultLevel: "medium",
-					},
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				},
 			],
@@ -205,10 +203,10 @@ await Bun.write(modelsPath, YAML.stringify(modelsConfig, null, 2));
 const providers: PreparedProvider[] = [
 	{
 		name: "worker",
-		selector: `deepseek/${deepseekModel}`,
-		baseUrl: "https://api.deepseek.com/anthropic",
-		model: deepseekModel,
-		hasKey: Boolean(deepseekKey),
+		selector: `model-proxy/${workerModel}`,
+		baseUrl: workerBaseUrl,
+		model: workerModel,
+		hasKey: Boolean(workerKey),
 	},
 	{
 		name: "supervisor",
@@ -240,7 +238,7 @@ const result: PrepareResult = {
 const safeDebug = {
 	...result,
 	keys: {
-		deepseek: Boolean(deepseekKey),
+		"model-proxy": Boolean(workerKey),
 		"claude-code": Boolean(claudeKey),
 		vb: Boolean(openaiKey),
 	},

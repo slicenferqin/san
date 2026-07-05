@@ -41,6 +41,17 @@ export interface AcceptanceRunOutput {
 	risks: string[];
 	reportText: string;
 	durationMs: number;
+	usage: AcceptanceUsageTotals;
+}
+
+export interface AcceptanceUsageTotals {
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	totalTokens: number;
+	cost: number;
+	premiumRequests: number;
 }
 
 function usage(): string {
@@ -141,6 +152,113 @@ function uniqueStrings(values: readonly string[]): string[] {
 	return [...new Set(values.filter(value => value.trim().length > 0))];
 }
 
+function emptyUsageTotals(): AcceptanceUsageTotals {
+	return {
+		inputTokens: 0,
+		outputTokens: 0,
+		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
+		totalTokens: 0,
+		cost: 0,
+		premiumRequests: 0,
+	};
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function numberValue(value: unknown): number {
+	return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function addUsageTotals(total: AcceptanceUsageTotals, usage: Record<string, unknown>): void {
+	const input = numberValue(usage.input);
+	const output = numberValue(usage.output);
+	const cacheRead = numberValue(usage.cacheRead);
+	const cacheWrite = numberValue(usage.cacheWrite);
+	const cost = recordValue(usage.cost);
+	total.inputTokens += input;
+	total.outputTokens += output;
+	total.cacheReadTokens += cacheRead;
+	total.cacheWriteTokens += cacheWrite;
+	total.totalTokens += numberValue(usage.totalTokens) || input + output + cacheRead + cacheWrite;
+	total.cost += cost ? numberValue(cost.total) : numberValue(usage.cost);
+	total.premiumRequests += numberValue(usage.premiumRequests);
+}
+
+function addRecordUsage(total: AcceptanceUsageTotals, value: unknown): void {
+	const record = recordValue(value);
+	const message = recordValue(record?.message);
+	if (!record || !message) return;
+	if (message.role === "assistant") {
+		const usage = recordValue(message.usage);
+		if (usage) addUsageTotals(total, usage);
+		return;
+	}
+	if (message.role === "toolResult" && message.toolName === "task") {
+		const details = recordValue(message.details);
+		const usage = recordValue(details?.usage);
+		if (usage) addUsageTotals(total, usage);
+	}
+}
+
+async function collectJsonlUsage(filePath: string, total: AcceptanceUsageTotals): Promise<void> {
+	let text: string;
+	try {
+		text = await Bun.file(filePath).text();
+	} catch {
+		return;
+	}
+	for (const line of text.split("\n")) {
+		if (!line.trim()) continue;
+		try {
+			addRecordUsage(total, JSON.parse(line) as unknown);
+		} catch {
+			// Ignore partially-written or non-JSON lines in evidence files.
+		}
+	}
+}
+
+async function collectJsonlFiles(root: string): Promise<string[]> {
+	try {
+		const entries = await fs.readdir(root, { withFileTypes: true, encoding: "utf8" });
+		const files: string[] = [];
+		for (const entry of entries) {
+			const entryPath = path.join(root, entry.name);
+			if (entry.isDirectory()) {
+				files.push(...(await collectJsonlFiles(entryPath)));
+			} else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+				files.push(entryPath);
+			}
+		}
+		return files;
+	} catch {
+		return [];
+	}
+}
+
+export async function collectSessionUsage(sessionFile: string | undefined): Promise<AcceptanceUsageTotals> {
+	const total = emptyUsageTotals();
+	if (!sessionFile) return total;
+	const files = new Set<string>();
+	try {
+		const stat = await fs.stat(sessionFile);
+		if (stat.isFile()) files.add(sessionFile);
+	} catch {
+		// Some San loop parent sessions only persist child session files under the artifact directory.
+	}
+	if (sessionFile.endsWith(".jsonl")) {
+		for (const child of await collectJsonlFiles(sessionFile.slice(0, -".jsonl".length))) {
+			files.add(child);
+		}
+	}
+	for (const file of files) {
+		await collectJsonlUsage(file, total);
+	}
+	return total;
+}
+
 export async function writeAcceptanceOutput(output: AcceptanceRunOutput, outPath: string | undefined): Promise<void> {
 	const text = `${JSON.stringify(output, null, 2)}\n`;
 	if (outPath) {
@@ -185,6 +303,20 @@ export async function runAcceptanceTask(args: RunnerArgs): Promise<AcceptanceRun
 		const changedFiles = uniqueStrings(result.run.workerResults.flatMap(worker => worker.changedFiles));
 		const testsRun = uniqueStrings(result.run.reviewReports.flatMap(review => review.testsRun));
 		const risks = uniqueStrings(result.run.workerResults.flatMap(worker => worker.risks));
+		const stats = session.getSessionStats();
+		const sessionUsage = await collectSessionUsage(session.sessionFile);
+		const usage =
+			sessionUsage.totalTokens > 0
+				? sessionUsage
+				: {
+						inputTokens: stats.tokens.input,
+						outputTokens: stats.tokens.output,
+						cacheReadTokens: stats.tokens.cacheRead,
+						cacheWriteTokens: stats.tokens.cacheWrite,
+						totalTokens: stats.tokens.total,
+						cost: stats.cost,
+						premiumRequests: stats.premiumRequests,
+					};
 		const ok = args.expect === "passed" ? result.run.status === "passed" : isSanLoopTerminalStatus(result.run.status);
 		return {
 			ok,
@@ -208,6 +340,7 @@ export async function runAcceptanceTask(args: RunnerArgs): Promise<AcceptanceRun
 			risks,
 			reportText,
 			durationMs: Date.now() - startedAt,
+			usage,
 		};
 	} finally {
 		await session.dispose();

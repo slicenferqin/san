@@ -1,0 +1,14 @@
+{
+  "name": "san-gsar-fixture",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal fixture repo for San GSAR benchmark scenarios.",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/bun": "latest"
+  }
+}
