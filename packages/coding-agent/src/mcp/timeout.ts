@@ -1,18 +1,21 @@
 import { logger } from "@oh-my-pi/pi-utils";
 
 const DEFAULT_MCP_TIMEOUT_MS = 30_000;
-const MCP_TIMEOUT_ENV = "OMP_MCP_TIMEOUT_MS";
+const MCP_TIMEOUT_ENV_KEYS = ["SAN_MCP_TIMEOUT_MS", "OMP_MCP_TIMEOUT_MS"] as const;
 
 let neverAbortController: AbortController | undefined;
 
 export function resolveMCPTimeoutMs(configTimeout?: number): number {
-	const raw = Bun.env[MCP_TIMEOUT_ENV]?.trim();
+	const raw = MCP_TIMEOUT_ENV_KEYS.map(key => Bun.env[key]?.trim()).find(Boolean);
 	if (raw) {
 		const value = Number(raw);
 		if (Number.isFinite(value) && value >= 0) return value;
-		logger.warn("Ignoring invalid OMP_MCP_TIMEOUT_MS env value; expected a non-negative number", {
-			value: raw,
-		});
+		logger.warn(
+			"Ignoring invalid SAN_MCP_TIMEOUT_MS / OMP_MCP_TIMEOUT_MS env value; expected a non-negative number",
+			{
+				value: raw,
+			},
+		);
 	}
 	return configTimeout ?? DEFAULT_MCP_TIMEOUT_MS;
 }

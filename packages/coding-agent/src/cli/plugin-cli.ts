@@ -1,7 +1,7 @@
 /**
  * Plugin CLI command handlers.
  *
- * Handles `omp plugin <command>` subcommands for plugin lifecycle management.
+ * Handles `san plugin <command>` subcommands for plugin lifecycle management.
  */
 
 import { APP_NAME, getProjectDir } from "@oh-my-pi/pi-utils";
@@ -323,7 +323,7 @@ async function handleUpgrade(args: string[], flags: PluginCommandArgs["flags"]):
 			if (flags.scope) {
 				console.error(
 					chalk.yellow(
-						`Warning: --scope is ignored when upgrading all plugins. Use 'omp plugin upgrade <id> --scope ${flags.scope}' to target a specific plugin and scope.`,
+						`Warning: --scope is ignored when upgrading all plugins. Use 'san plugin upgrade <id> --scope ${flags.scope}' to target a specific plugin and scope.`,
 					),
 				);
 			}
@@ -350,7 +350,7 @@ async function handleInstall(
 	if (packages.length === 0) {
 		console.error(chalk.red(`Usage: ${APP_NAME} plugin install <source>[features] ...`));
 		console.error(chalk.dim("Examples:"));
-		console.error(chalk.dim(`  ${APP_NAME} plugin install @oh-my-pi/exa`));
+		console.error(chalk.dim(`  ${APP_NAME} plugin install @scope/plugin`));
 		console.error(chalk.dim(`  ${APP_NAME} plugin install name@marketplace`));
 		console.error(chalk.dim(`  ${APP_NAME} plugin install github:user/repo`));
 		console.error(chalk.dim(`  ${APP_NAME} plugin install https://github.com/user/repo#v1.0`));
@@ -386,7 +386,7 @@ async function handleInstall(
 		if (target.type === "local") {
 			// Local paths route to link(): symlink the directory into the plugins
 			// node_modules tree so source edits show up without a reinstall. Matches
-			// `omp plugin link <path>` so users can use either verb interchangeably.
+			// `san plugin link <path>` so users can use either verb interchangeably.
 			if (flags.scope) {
 				console.error(
 					chalk.yellow(

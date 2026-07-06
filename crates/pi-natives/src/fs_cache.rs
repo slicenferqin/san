@@ -68,10 +68,15 @@ env_uint! {
 	static MAX_CACHE_ENTRIES: usize = "FS_SCAN_CACHE_MAX_ENTRIES" or 16 => [0, usize::MAX];
 }
 
-env_uint! {
-	// Worker count for parallel filesystem walks. 0 lets ignore choose.
-	static GREP_WORKERS: usize = "PI_GREP_WORKERS" or 4 => [0, usize::MAX];
-}
+// Worker count for parallel filesystem walks. 0 lets ignore choose.
+static GREP_WORKERS: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
+	std::env::var("SAN_GREP_WORKERS")
+		.or_else(|_| std::env::var("PI_GREP_WORKERS"))
+		.ok()
+		.and_then(|v| std::str::FromStr::from_str(&v).ok())
+		.unwrap_or(4)
+		.clamp(0, usize::MAX)
+});
 
 pub fn cache_ttl_ms() -> u64 {
 	*CACHE_TTL_MS

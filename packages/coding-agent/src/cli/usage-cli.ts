@@ -1,7 +1,7 @@
 /**
  * Usage CLI command handler.
  *
- * Handles `omp usage` — fetches provider usage reports for every
+ * Handles `san usage` — fetches provider usage reports for every
  * authenticated account and prints a detailed per-account breakdown
  * (limits, windows, reset times, plan metadata). Accounts whose
  * credentials produced no usage report are listed too, so the output
@@ -679,7 +679,7 @@ function collectStoredAccounts(authStorage: AuthStorage): UsageAccountIdentity[]
  * `hasUsageProvider` is injected (in practice {@link AuthStorage.usageProviderFor})
  * so custom/broker resolvers stay authoritative — no provider list is duplicated
  * here. An explicit `--provider` request bypasses the cull, so
- * `omp usage --provider xai` can still confirm the stored credential has no
+ * `san usage --provider xai` can still confirm the stored credential has no
  * usage endpoint.
  */
 export function selectReportableAccounts(
@@ -748,7 +748,7 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 				const scope = cmd.provider ? ` for provider "${cmd.provider}"` : "";
 				process.stderr.write(
 					chalk.yellow(
-						`No usage history recorded${scope} yet. Snapshots accumulate whenever usage is fetched (TUI footer, /usage, omp usage).\n`,
+						`No usage history recorded${scope} yet. Snapshots accumulate whenever usage is fetched (TUI footer, /usage, san usage).\n`,
 					),
 				);
 				process.exitCode = 1;
@@ -815,7 +815,7 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 			const message =
 				storedAccounts.length > 0
 					? `No usage data${scope}. Stored credentials are for providers without a usage endpoint.\n`
-					: `No credentials found${scope}. Run \`omp\` and use /login to add accounts.\n`;
+					: `No credentials found${scope}. Run \`san\` and use /login to add accounts.\n`;
 			process.stderr.write(chalk.yellow(message));
 			process.exitCode = 1;
 			return;

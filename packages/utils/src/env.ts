@@ -32,6 +32,25 @@ export function isSafeEnvValue(value: string): boolean {
 	return !value.includes("\0");
 }
 
+function mirrorSanCompatibilityEnv(target: Record<string, string | undefined>): void {
+	// SAN_* is canonical; OMP_* and PI_* remain compatibility aliases.
+	for (const key in target) {
+		const value = target[key];
+		if (value === undefined) continue;
+		if (key.startsWith("OMP_")) {
+			target[`PI_${key.slice(4)}`] = value;
+		}
+	}
+	for (const key in target) {
+		const value = target[key];
+		if (value === undefined) continue;
+		if (key.startsWith("SAN_")) {
+			target[`OMP_${key.slice(4)}`] = value;
+			target[`PI_${key.slice(4)}`] = value;
+		}
+	}
+}
+
 export function isMacosMallocStackLoggingEnvName(name: string): boolean {
 	return name === "MallocStackLogging" || name === "MallocStackLoggingNoCompact";
 }
@@ -88,18 +107,8 @@ export function parseEnvFile(filePath: string): Record<string, string> {
 		// File doesn't exist or can't be read - return empty result
 	}
 
-	// SAN_ overrides OMP_ / PI_; OMP_ overrides PI_.
-	for (const k in result) {
-		if (k.startsWith("OMP_")) {
-			result[`PI_${k.slice(4)}`] = result[k];
-		}
-	}
-	for (const k in result) {
-		if (k.startsWith("SAN_")) {
-			result[`OMP_${k.slice(4)}`] = result[k];
-			result[`PI_${k.slice(4)}`] = result[k];
-		}
-	}
+	// SAN_* overrides OMP_ / PI_; OMP_* overrides PI_*.
+	mirrorSanCompatibilityEnv(result);
 
 	return result;
 }
@@ -116,6 +125,8 @@ for (const key of Object.keys(Bun.env)) {
 		delete Bun.env[key];
 	}
 }
+
+mirrorSanCompatibilityEnv(Bun.env as Record<string, string | undefined>);
 
 for (const file of [projectEnv, agentEnv, piEnv, homeEnv]) {
 	for (const key in file) {

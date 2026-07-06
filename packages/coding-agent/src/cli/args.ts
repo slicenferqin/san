@@ -320,11 +320,11 @@ export function getExtraHelpText(): string {
   SAN_PROFILE                 - Named profile for isolated agent state (same as --profile)
   Use \`san --profile <name> --alias <command>\` to create a shell shortcut for a profile
   SAN_CODING_AGENT_DIR        - Session storage directory (default: ~/${CONFIG_DIR_NAME}/agent)
-  PI_PACKAGE_DIR             - Override package directory (for Nix/Guix store paths)
-  PI_SMOL_MODEL              - Override smol/fast model (see --smol)
-  PI_SLOW_MODEL              - Override slow/reasoning model (see --slow)
-  PI_PLAN_MODEL              - Override planning model (see --plan)
-  PI_NO_PTY                  - Disable PTY-based interactive bash execution
+  SAN_PACKAGE_DIR             - Override package directory (legacy: PI_PACKAGE_DIR)
+  SAN_SMOL_MODEL              - Override smol/fast model (legacy: PI_SMOL_MODEL)
+  SAN_SLOW_MODEL              - Override slow/reasoning model (legacy: PI_SLOW_MODEL)
+  SAN_PLAN_MODEL              - Override planning model (legacy: PI_PLAN_MODEL)
+  SAN_NO_PTY                  - Disable PTY-based interactive bash execution (legacy: PI_NO_PTY)
   For complete environment variable reference, see:
   ${chalk.dim("docs/environment-variables.md")}
 ${chalk.bold("Available Tools (default-enabled unless noted):")}

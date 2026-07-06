@@ -1,11 +1,11 @@
 /**
- * `omp auth-gateway` command handlers.
+ * `san auth-gateway` command handlers.
  *
  * Boots a forward-proxy server that lets less-trusted clients (the macOS
- * usage widget, robomp containers, …) make provider API calls without ever
+ * usage widget, containers, …) make provider API calls without ever
  * seeing the access token. The gateway is itself a broker client and
  * resolves credentials through the configured broker (via the same
- * `OMP_AUTH_BROKER_URL` / `auth.broker.url` precedence used elsewhere).
+ * `SAN_AUTH_BROKER_URL` / `auth.broker.url` precedence used elsewhere).
  *
  * Sub-verbs:
  *   - `serve [--bind=…]` — boots the gateway against the configured broker.
@@ -139,7 +139,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	const brokerConfig = await resolveAuthBrokerConfig();
 	if (!brokerConfig) {
 		throw new Error(
-			"`omp auth-gateway serve` requires OMP_AUTH_BROKER_URL (or `auth.broker.url`/`auth.broker.token` in config.yml). The gateway is itself a broker client.",
+			"`san auth-gateway serve` requires SAN_AUTH_BROKER_URL (or legacy OMP_AUTH_BROKER_URL, or `auth.broker.url`/`auth.broker.token` in config.yml). The gateway is itself a broker client.",
 		);
 	}
 	const bind = flags.bind ?? DEFAULT_AUTH_GATEWAY_BIND;
@@ -266,7 +266,7 @@ async function runStatus(flags: AuthGatewayCommandArgs["flags"]): Promise<void> 
 		if (flags.json) {
 			process.stdout.write(`${JSON.stringify(status)}\n`);
 		} else {
-			process.stdout.write(`${chalk.yellow("No broker configured.")} Set OMP_AUTH_BROKER_URL.\n`);
+			process.stdout.write(`${chalk.yellow("No broker configured.")} Set SAN_AUTH_BROKER_URL.\n`);
 			process.stdout.write(
 				`token: ${status.tokenPresent ? chalk.green("present") : chalk.red("missing")} at ${status.tokenFile}\n`,
 			);
@@ -300,7 +300,7 @@ async function runStatus(flags: AuthGatewayCommandArgs["flags"]): Promise<void> 
 			);
 			if (!tokenPresent) {
 				process.stdout.write(
-					"Run `omp auth-gateway token` or `omp auth-gateway serve` to create a bearer token.\n",
+					"Run `san auth-gateway token` or `san auth-gateway serve` to create a bearer token.\n",
 				);
 			}
 		}
@@ -519,7 +519,7 @@ function formatCompletionStatus(completion: CredentialCompletionResult | undefin
 }
 
 /**
- * `omp auth-gateway check` — probe each broker-supplied credential and print
+ * `san auth-gateway check` — probe each broker-supplied credential and print
  * per-credential auth health. Use this when the gateway is returning 401s and
  * you need to find which row in a multi-account pool is the bad one. The
  * aggregate `/v1/usage` endpoint silently drops failed credentials, so a
@@ -534,7 +534,7 @@ async function runCheck(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	const brokerConfig = await resolveAuthBrokerConfig();
 	if (!brokerConfig) {
 		throw new Error(
-			"`omp auth-gateway check` requires OMP_AUTH_BROKER_URL (or `auth.broker.url`/`auth.broker.token` in config.yml). It probes the same credentials the gateway would serve.",
+			"`san auth-gateway check` requires SAN_AUTH_BROKER_URL (or legacy OMP_AUTH_BROKER_URL, or `auth.broker.url`/`auth.broker.token` in config.yml). It probes the same credentials the gateway would serve.",
 		);
 	}
 

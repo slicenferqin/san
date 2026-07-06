@@ -21,7 +21,7 @@ export async function runOnboardingSetup(deps: OnboardingSetupDependencies = {})
 	const stdinIsTTY = deps.stdinIsTTY ?? process.stdin.isTTY;
 	const stdoutIsTTY = deps.stdoutIsTTY ?? process.stdout.isTTY;
 	if (!stdinIsTTY || !stdoutIsTTY) {
-		(deps.writeStderr ?? (text => process.stderr.write(text)))("omp setup requires an interactive TTY.\n");
+		(deps.writeStderr ?? (text => process.stderr.write(text)))("san setup requires an interactive TTY.\n");
 		(deps.exit ?? process.exit)(1);
 		return;
 	}
@@ -48,7 +48,7 @@ export default class Setup extends Command {
 		const { args, flags } = await this.parse(Setup);
 		if (!args.component) {
 			if (flags.check || flags.json) {
-				renderCommandHelp("omp", "setup", Setup);
+				renderCommandHelp("san", "setup", Setup);
 				return;
 			}
 			await runOnboardingSetup();

@@ -1,7 +1,7 @@
 /**
  * report_tool_issue — automated QA tool for tracking unexpected tool behavior.
  *
- * Enabled by default; gated behind PI_AUTO_QA=1 / `dev.autoqa` so a user
+ * Enabled by default; gated behind SAN_AUTO_QA=1 / legacy PI_AUTO_QA=1 / `dev.autoqa` so a user
  * who flips the setting off short-circuits injection entirely.
  * Always injected into every agent (including subagents) regardless of tool selection.
  * Records grievances to a local SQLite database; never throws.
@@ -13,9 +13,9 @@
  * (including from subagents) read the cached decision without prompting.
  *
  * When the user grants consent, push is automatically active against the
- * bundled endpoint (`dev.autoqaPush.endpoint`, default `qa.omp.sh`). Each
+ * bundled endpoint (`dev.autoqaPush.endpoint`). Each
  * insert schedules a background flush that POSTs pending rows and deletes
- * them on HTTP 2xx. `PI_AUTO_QA_PUSH=1` forces push in non-interactive
+ * them on HTTP 2xx. `SAN_AUTO_QA_PUSH=1` (legacy: `PI_AUTO_QA_PUSH=1`) forces push in non-interactive
  * environments where the consent dialog never fires. Tool execution is
  * never blocked on the network and never throws.
  */
@@ -41,7 +41,7 @@ function buildReportToolIssueParams(activeBuiltinNames: readonly string[]) {
 }
 
 export function isAutoQaEnabled(settings?: Settings): boolean {
-	return $flag("PI_AUTO_QA", !!settings?.get("dev.autoqa"));
+	return $flag("SAN_AUTO_QA", $flag("PI_AUTO_QA", !!settings?.get("dev.autoqa")));
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -312,18 +312,25 @@ function resolvePushConfig(settings: Settings | undefined, bypassConsent: boolea
 	if (!isAutoQaEnabled(settings)) return null;
 
 	// Consent IS the push opt-in for the auto-flush path. `bypassConsent`
-	// covers explicit user-driven pushes (`omp grievances push`) where the
+	// covers explicit user-driven pushes (`san grievances push`) where the
 	// user clearly intends to ship regardless of dialog state. The
-	// `PI_AUTO_QA_PUSH` env flag stays as a CI/headless override too.
+	// `SAN_AUTO_QA_PUSH` env flag stays as a CI/headless override too; legacy
+	// `PI_AUTO_QA_PUSH` remains accepted.
 	if (!bypassConsent) {
 		const consented = settings?.get("dev.autoqa.consent") === "granted";
-		if (!consented && !$flag("PI_AUTO_QA_PUSH")) return null;
+		if (!consented && !$flag("SAN_AUTO_QA_PUSH", $flag("PI_AUTO_QA_PUSH"))) return null;
 	}
 
-	const endpoint = envOverrideString("PI_AUTO_QA_PUSH_URL") ?? settings?.get("dev.autoqaPush.endpoint");
+	const endpoint =
+		envOverrideString("SAN_AUTO_QA_PUSH_URL") ??
+		envOverrideString("PI_AUTO_QA_PUSH_URL") ??
+		settings?.get("dev.autoqaPush.endpoint");
 	if (!endpoint || endpoint.trim().length === 0) return null;
 
-	const token = envOverrideString("PI_AUTO_QA_PUSH_TOKEN") ?? settings?.get("dev.autoqaPush.token");
+	const token =
+		envOverrideString("SAN_AUTO_QA_PUSH_TOKEN") ??
+		envOverrideString("PI_AUTO_QA_PUSH_TOKEN") ??
+		settings?.get("dev.autoqaPush.token");
 	return { endpoint: endpoint.trim(), token: token && token.length > 0 ? token : undefined };
 }
 

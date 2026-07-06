@@ -1,7 +1,7 @@
 /**
  * Grep CLI command handlers.
  *
- * Handles `omp grep` subcommand for testing grep tool on Windows.
+ * Handles `san grep` subcommand for testing grep tool on Windows.
  */
 import * as path from "node:path";
 import { GrepOutputMode, grep } from "@oh-my-pi/pi-natives";
@@ -150,7 +150,7 @@ ${chalk.bold("Options:")}
   --no-gitignore        Include files excluded by .gitignore
 
 ${chalk.bold("Environment:")}
-  PI_GREP_WORKERS=N    Set filesystem walker workers (default 4, 0 = auto)
+  SAN_GREP_WORKERS=N   Set filesystem walker workers (default 4, 0 = auto; legacy: PI_GREP_WORKERS)
 
 ${chalk.bold("Examples:")}
   ${APP_NAME} grep "import" src/

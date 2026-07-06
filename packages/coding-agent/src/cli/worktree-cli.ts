@@ -1,7 +1,7 @@
 /**
- * CLI handler for `omp worktree` — list and clean up agent-managed worktrees.
+ * CLI handler for `san worktree` — list and clean up agent-managed worktrees.
  *
- * Layout under `~/.omp/wt/`:
+ * Layout under `~/.san/wt/`:
  *
  *   - **PR-checkout worktrees** (`tools/gh.ts`): a regular git worktree dir
  *     containing a `.git` *file* that points back at
@@ -23,7 +23,7 @@ import * as git from "../utils/git";
 type WorktreeKind = "pr-checkout" | "task-isolation" | "empty" | "stray";
 
 export interface WorktreeEntry {
-	/** Absolute path to the worktree dir (or stray container) under `~/.omp/wt/`. */
+	/** Absolute path to the worktree dir (or stray container) under `~/.san/wt/`. */
 	path: string;
 	/** Classification of what we found on disk. */
 	kind: WorktreeKind;
@@ -31,7 +31,7 @@ export interface WorktreeEntry {
 	parentRepo?: string;
 	/** Branch name extracted from the parent's tracking file, when available. */
 	branch?: string;
-	/** When set, the entry is unhealthy and `omp worktree clear` will remove it. */
+	/** When set, the entry is unhealthy and `san worktree clear` will remove it. */
 	orphanReason?: string;
 }
 
@@ -174,7 +174,7 @@ async function scanWorktrees(): Promise<WorktreeEntry[]> {
 			continue;
 		}
 
-		// Legacy nesting: ~/.omp/wt/<encoded-project>/<branch-or-id>
+		// Legacy nesting: ~/.omp/wt/<encoded-project>/<branch-or-id> remains readable for cleanup.
 		let children: string[];
 		try {
 			children = await fs.readdir(dir);

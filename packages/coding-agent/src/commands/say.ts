@@ -29,9 +29,9 @@ export default class Say extends Command {
 	};
 
 	static examples = [
-		'omp say "hello world"',
-		'omp say "hello world" --out /tmp/hello.wav',
-		'omp say "bonjour" --voice af_heart --model kokoro',
+		'san say "hello world"',
+		'san say "hello world" --out /tmp/hello.wav',
+		'san say "bonjour" --voice af_heart --model kokoro',
 	];
 
 	async run(): Promise<void> {
@@ -60,7 +60,7 @@ export default class Say extends Command {
 				process.stderr.write(
 					chalk.red(
 						`error: could not synthesize with local TTS model "${model}". ` +
-							"Run `omp setup speech` to install it.\n",
+							"Run `san setup speech` to install it.\n",
 					),
 				);
 				exitCode = 1;
@@ -79,7 +79,7 @@ export default class Say extends Command {
 				return;
 			}
 
-			const tmp = path.join(os.tmpdir(), `omp-say-${Snowflake.next()}.wav`);
+			const tmp = path.join(os.tmpdir(), `san-say-${Snowflake.next()}.wav`);
 			await Bun.write(tmp, wav);
 			try {
 				await playAudioFile(tmp);

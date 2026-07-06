@@ -268,7 +268,7 @@ class DirResolver {
 	readonly agentDir: string;
 
 	// Per-category base dirs. Without XDG, all three equal configRoot / agentDir.
-	// With XDG on Linux, they point to $XDG_*_HOME/omp/.
+	// With XDG on Linux, they point to $XDG_*_HOME/san/.
 	readonly #rootDirs: Record<XdgCategory, string>;
 	readonly #agentDirs: Record<XdgCategory, string>;
 
@@ -525,26 +525,26 @@ export function getProjectAgentDir(cwd: string = getProjectDir()): string {
 }
 
 // =============================================================================
-// Config-root subdirectories (~/.omp/*)
+// Config-root subdirectories (~/.san/*)
 // =============================================================================
 
-/** Get the reports directory (~/.omp/reports). */
+/** Get the reports directory (~/.san/reports). */
 export function getReportsDir(): string {
 	return dirs.rootSubdir("reports", "state");
 }
 
-/** Get the logs directory (~/.omp/logs). */
+/** Get the logs directory (~/.san/logs). */
 export function getLogsDir(): string {
 	return dirs.rootSubdir("logs", "state");
 }
 
-/** Get the path to a dated log file (~/.omp/logs/san.YYYY-MM-DD.log). */
+/** Get the path to a dated log file (~/.san/logs/san.YYYY-MM-DD.log). */
 export function getLogPath(date = new Date()): string {
 	return path.join(getLogsDir(), `${APP_NAME}.${date.toISOString().slice(0, 10)}.log`);
 }
 
 /**
- * Get the plugins directory (~/.omp/plugins or its XDG equivalent).
+ * Get the plugins directory (~/.san/plugins or its XDG equivalent).
  *
  * No-arg form (production callers) goes through the XDG-aware DirResolver so
  * reads and writes always agree. The optional `home` parameter is for test
@@ -560,22 +560,22 @@ export function getPluginsDir(home?: string): string {
 	return dirs.rootSubdir("plugins", "data");
 }
 
-/** Where npm installs packages (~/.omp/plugins/node_modules). */
+/** Where npm installs packages (~/.san/plugins/node_modules). */
 export function getPluginsNodeModules(home?: string): string {
 	return path.join(getPluginsDir(home), "node_modules");
 }
 
-/** Plugin manifest (~/.omp/plugins/package.json). */
+/** Plugin manifest (~/.san/plugins/package.json). */
 export function getPluginsPackageJson(home?: string): string {
 	return path.join(getPluginsDir(home), "package.json");
 }
 
-/** Plugin lock file (~/.omp/plugins/omp-plugins.lock.json). */
+/** Plugin lock file (~/.san/plugins/omp-plugins.lock.json; legacy basename kept for plugin runtime compatibility). */
 export function getPluginsLockfile(home?: string): string {
 	return path.join(getPluginsDir(home), "omp-plugins.lock.json");
 }
 
-/** Get the remote mount directory (~/.omp/remote). */
+/** Get the remote mount directory (~/.san/remote). */
 export function getRemoteDir(): string {
 	return dirs.rootSubdir("remote", "data");
 }
@@ -585,8 +585,8 @@ export function getRemoteDir(): string {
  * empty/whitespace input or a path that is still relative after expansion.
  *
  * A worktree base is process-global and consumed by both creation
- * (PR checkout, task isolation) and cleanup (`omp worktree`). A relative value
- * would resolve against whatever cwd happened to launch `omp`, so checkout and
+ * (PR checkout, task isolation) and cleanup (`san worktree`). A relative value
+ * would resolve against whatever cwd happened to launch `san`, so checkout and
  * cleanup could disagree — we refuse it rather than silently bind it to cwd.
  */
 function resolveWorktreeBase(value: string | undefined): string | undefined {
@@ -602,9 +602,9 @@ let worktreesDirOverride: string | undefined;
 
 /**
  * Relocate the base directory for agent-managed worktrees (PR checkouts, task
- * isolation, and `omp worktree` cleanup all read the same base). Driven by the
+ * isolation, and `san worktree` cleanup all read the same base). Driven by the
  * `worktree.base` setting in coding-agent; pass `undefined`/empty to clear and
- * fall back to `OMP_WORKTREE_DIR` or the `~/.omp/wt` default.
+ * fall back to `SAN_WORKTREE_DIR`, legacy `OMP_WORKTREE_DIR`, or the `~/.san/wt` default.
  *
  * `~` is expanded and a relative path is rejected (see {@link resolveWorktreeBase}).
  * Returns the absolute path that took effect, or `undefined` if the input was
@@ -618,36 +618,40 @@ export function setWorktreesDir(dir: string | undefined): string | undefined {
 
 /**
  * Get the agent-managed worktrees directory. Resolution order: the
- * `OMP_WORKTREE_DIR` env var, then the {@link setWorktreesDir} override (the
- * `worktree.base` setting), then the `~/.omp/wt` default. The env var and the
- * override are both `~`-expanded and must be absolute; a relative value is
- * ignored and resolution falls through.
+ * `SAN_WORKTREE_DIR` env var, legacy `OMP_WORKTREE_DIR`, then the
+ * {@link setWorktreesDir} override (the `worktree.base` setting), then the
+ * `~/.san/wt` default. Env vars and the override are `~`-expanded and must be
+ * absolute; a relative value is ignored and resolution falls through.
  */
 export function getWorktreesDir(): string {
-	return resolveWorktreeBase(process.env.OMP_WORKTREE_DIR) ?? worktreesDirOverride ?? dirs.rootSubdir("wt", "data");
+	return (
+		resolveWorktreeBase(process.env.SAN_WORKTREE_DIR ?? process.env.OMP_WORKTREE_DIR) ??
+		worktreesDirOverride ??
+		dirs.rootSubdir("wt", "data")
+	);
 }
 
-/** Get the SSH control socket directory (~/.omp/ssh-control). */
+/** Get the SSH control socket directory (~/.san/ssh-control). */
 export function getSshControlDir(): string {
 	return dirs.rootSubdir("ssh-control", "state");
 }
 
-/** Get the remote host info directory (~/.omp/remote-host). */
+/** Get the remote host info directory (~/.san/remote-host). */
 export function getRemoteHostDir(): string {
 	return dirs.rootSubdir("remote-host", "data");
 }
 
-/** Get the managed Python venv directory (~/.omp/python-env). */
+/** Get the managed Python venv directory (~/.san/python-env). */
 export function getPythonEnvDir(): string {
 	return dirs.rootSubdir("python-env", "data");
 }
 
-/** Get the shared Python gateway state directory (~/.omp/agent/python-gateway; XDG default: $XDG_STATE_HOME/omp/python-gateway). */
+/** Get the shared Python gateway state directory (~/.san/agent/python-gateway; XDG default: $XDG_STATE_HOME/san/python-gateway). */
 export function getPythonGatewayDir(): string {
 	return dirs.agentSubdir(undefined, "python-gateway", "state");
 }
 
-/** Get the puppeteer sandbox directory (~/.omp/puppeteer). */
+/** Get the puppeteer sandbox directory (~/.san/puppeteer). */
 export function getPuppeteerDir(): string {
 	return dirs.rootSubdir("puppeteer", "cache");
 }
@@ -665,7 +669,7 @@ export function getAutoQaDbDir(): string {
  * Stable 7-character hex digest of an absolute filesystem path.
  *
  * Used to pack the project identity into a single short fs-safe segment
- * (e.g. PR-checkout and task-isolation worktree dirs under `~/.omp/wt/`).
+ * (e.g. PR-checkout and task-isolation worktree dirs under `~/.san/wt/`).
  * Bun.hash is non-cryptographic — collision space is ~2^28, which is fine
  * for naming a handful of repos on a single machine. Same input on the
  * same Bun runtime yields the same output.
@@ -674,18 +678,18 @@ export function hashPath(absPath: string): string {
 	return Bun.hash(path.resolve(absPath)).toString(16).padStart(16, "0").slice(-7);
 }
 
-/** Get the path to a single worktree directory (~/.omp/wt/<segment>). */
+/** Get the path to a single worktree directory (~/.san/wt/<segment>). */
 export function getWorktreeDir(segment: string): string {
 	return path.join(getWorktreesDir(), segment);
 }
 
-/** Get the GPU cache path (~/.omp/gpu_cache.json). */
+/** Get the GPU cache path (~/.san/gpu_cache.json). */
 export function getGpuCachePath(): string {
 	return dirs.rootSubdir("gpu_cache.json", "cache");
 }
 
 /**
- * Get the GitHub view cache database path (~/.omp/cache/github-cache.db).
+ * Get the GitHub view cache database path (~/.san/cache/github-cache.db).
  * Honors the `OMP_GITHUB_CACHE_DB` env var when set so tests can isolate the
  * cache file without touching the rest of the config root.
  */
@@ -696,58 +700,59 @@ export function getGithubCacheDbPath(): string {
 }
 
 /**
- * Get the encrypted auth-broker snapshot cache path (~/.omp/cache/auth-broker-snapshot.enc).
- * Honors the `OMP_AUTH_BROKER_SNAPSHOT_CACHE` env var when set so tests and
- * operators can isolate or relocate the cache file.
+ * Get the encrypted auth-broker snapshot cache path (~/.san/cache/auth-broker-snapshot.enc).
+ * Honors the `SAN_AUTH_BROKER_SNAPSHOT_CACHE` env var and legacy
+ * `OMP_AUTH_BROKER_SNAPSHOT_CACHE` fallback when set so tests and operators can
+ * isolate or relocate the cache file.
  */
 export function getAuthBrokerSnapshotCachePath(): string {
-	const override = process.env.OMP_AUTH_BROKER_SNAPSHOT_CACHE;
+	const override = process.env.SAN_AUTH_BROKER_SNAPSHOT_CACHE ?? process.env.OMP_AUTH_BROKER_SNAPSHOT_CACHE;
 	if (override) return override;
 	return dirs.rootSubdir(path.join("cache", "auth-broker-snapshot.enc"), "cache");
 }
 
-/** Get the local FastEmbed model cache directory (~/.omp/cache/fastembed). */
+/** Get the local FastEmbed model cache directory (~/.san/cache/fastembed). */
 export function getFastembedCacheDir(): string {
 	return dirs.rootSubdir(path.join("cache", "fastembed"), "cache");
 }
 
-/** Get the on-demand fastembed runtime install root (~/.omp/cache/fastembed-runtime). */
+/** Get the on-demand fastembed runtime install root (~/.san/cache/fastembed-runtime). */
 export function getFastembedRuntimeDir(): string {
 	return dirs.rootSubdir(path.join("cache", "fastembed-runtime"), "cache");
 }
 
-/** Get the natives directory (~/.omp/natives). */
+/** Get the natives directory (~/.san/natives). */
 export function getNativesDir(): string {
 	return dirs.rootSubdir("natives", "cache");
 }
 
-/** Get the stats database path (~/.omp/stats.db). */
+/** Get the stats database path (~/.san/stats.db). */
 export function getStatsDbPath(): string {
 	return dirs.rootSubdir("stats.db", "data");
 }
 
-/** Get the autoresearch state directory (~/.omp/autoresearch). */
+/** Get the autoresearch state directory (~/.san/autoresearch). */
 export function getAutoresearchDir(): string {
 	return dirs.rootSubdir("autoresearch", "state");
 }
 
-/** Get the per-project autoresearch state directory (~/.omp/autoresearch/<encoded-project>). */
+/** Get the per-project autoresearch state directory (~/.san/autoresearch/<encoded-project>). */
 export function getAutoresearchProjectDir(encodedProject: string): string {
 	return path.join(getAutoresearchDir(), encodedProject);
 }
 
-/** Get the per-project autoresearch SQLite database path (~/.omp/autoresearch/<encoded-project>.db). */
+/** Get the per-project autoresearch SQLite database path (~/.san/autoresearch/<encoded-project>.db). */
 export function getAutoresearchDbPath(encodedProject: string): string {
 	return path.join(getAutoresearchDir(), `${encodedProject}.db`);
 }
 
-/** Get the per-run artifact directory (~/.omp/autoresearch/<encoded-project>/runs/<runId>). */
+/** Get the per-run artifact directory (~/.san/autoresearch/<encoded-project>/runs/<runId>). */
 export function getAutoresearchRunDir(encodedProject: string, runId: number): string {
 	return path.join(getAutoresearchProjectDir(encodedProject), "runs", String(runId).padStart(4, "0"));
 }
 
 // =============================================================================
-// Agent subdirectories (~/.omp/agent/*)
+// Agent subdirectories (~/.san/agent/*)
 // =============================================================================
 
 /** Get the path to agent.db (SQLite database for settings and auth storage). */
@@ -755,7 +760,7 @@ export function getAgentDbPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "agent.db", "data");
 }
 
-/** Get the last-seen-changelog-version marker file (~/.omp/agent/last-changelog-version). */
+/** Get the last-seen-changelog-version marker file (~/.san/agent/last-changelog-version). */
 export function getLastChangelogVersionPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "last-changelog-version", "state");
 }
@@ -770,86 +775,86 @@ export function getModelDbPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "models.db", "data");
 }
 
-/** Get the tiny title model cache directory (~/.omp/agent/cache/tiny-models). */
+/** Get the tiny title model cache directory (~/.san/agent/cache/tiny-models). */
 export function getTinyModelsCacheDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, path.join("cache", "tiny-models"), "cache");
 }
 
-/** Get the document conversion cache directory (~/.omp/agent/cache/document-conversions; XDG default: $XDG_CACHE_HOME/omp/cache/document-conversions). */
+/** Get the document conversion cache directory (~/.san/agent/cache/document-conversions; XDG default: $XDG_CACHE_HOME/san/cache/document-conversions). */
 export function getDocumentConversionCacheDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, path.join("cache", "document-conversions"), "cache");
 }
 
-/** Get the sessions directory (~/.omp/agent/sessions). */
+/** Get the sessions directory (~/.san/agent/sessions). */
 export function getSessionsDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "sessions", "data");
 }
 
-/** Get the content-addressed blob store directory (~/.omp/agent/blobs). */
+/** Get the content-addressed blob store directory (~/.san/agent/blobs). */
 export function getBlobsDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "blobs", "data");
 }
 
-/** Get the custom themes directory (~/.omp/agent/themes). */
+/** Get the custom themes directory (~/.san/agent/themes). */
 export function getCustomThemesDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "themes");
 }
 
-/** Get the tools directory (~/.omp/agent/tools). */
+/** Get the tools directory (~/.san/agent/tools). */
 export function getToolsDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "tools");
 }
 
-/** Get the slash commands directory (~/.omp/agent/commands). */
+/** Get the slash commands directory (~/.san/agent/commands). */
 export function getCommandsDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "commands");
 }
 
-/** Get the prompts directory (~/.omp/agent/prompts). */
+/** Get the prompts directory (~/.san/agent/prompts). */
 export function getPromptsDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "prompts");
 }
 
-/** Get the user-level Python modules directory (~/.omp/agent/modules). */
+/** Get the user-level Python modules directory (~/.san/agent/modules). */
 export function getAgentModulesDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "modules");
 }
 
-/** Get the memories directory (~/.omp/agent/memories). */
+/** Get the memories directory (~/.san/agent/memories). */
 export function getMemoriesDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "memories", "state");
 }
 
-/** Get the terminal sessions directory (~/.omp/agent/terminal-sessions). */
+/** Get the terminal sessions directory (~/.san/agent/terminal-sessions). */
 export function getTerminalSessionsDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "terminal-sessions", "state");
 }
 
-/** Get the crash log path (~/.omp/agent/omp-crash.log). */
+/** Get the crash log path (~/.san/agent/san-crash.log). */
 export function getCrashLogPath(agentDir?: string): string {
-	return dirs.agentSubdir(agentDir, "omp-crash.log", "state");
+	return dirs.agentSubdir(agentDir, "san-crash.log", "state");
 }
 
-/** Get the debug log path (~/.omp/agent/omp-debug.log). */
+/** Get the debug log path (~/.san/agent/san-debug.log). */
 export function getDebugLogPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, `${APP_NAME}-debug.log`, "state");
 }
 
 // =============================================================================
-// Project subdirectories (.omp/*)
+// Project subdirectories (.san/*)
 // =============================================================================
 
-/** Get the project-level Python modules directory (.omp/modules). */
+/** Get the project-level Python modules directory (.san/modules). */
 export function getProjectModulesDir(cwd: string = getProjectDir()): string {
 	return path.join(getProjectAgentDir(cwd), "modules");
 }
 
-/** Get the project-level prompts directory (.omp/prompts). */
+/** Get the project-level prompts directory (.san/prompts). */
 export function getProjectPromptsDir(cwd: string = getProjectDir()): string {
 	return path.join(getProjectAgentDir(cwd), "prompts");
 }
 
-/** Get the project-level plugin overrides path (.omp/plugin-overrides.json). */
+/** Get the project-level plugin overrides path (.san/plugin-overrides.json). */
 export function getProjectPluginOverridesPath(cwd: string = getProjectDir()): string {
 	return path.join(getProjectAgentDir(cwd), "plugin-overrides.json");
 }
@@ -884,15 +889,15 @@ const INSTALL_ID_FILE = "install-id";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Persistent per-install UUID stored at `~/.omp/install-id`.
+ * Persistent per-install UUID stored at `~/.san/install-id`.
  *
  * Generated lazily on first call and persisted with `O_CREAT|O_EXCL` so
  * concurrent first-call races don't clobber each other (loser re-reads the
  * winner's id). Survives independently of agent state: deleting
- * `~/.omp/agent/` does not regenerate it. Server-side dedup for grievance
+ * `~/.san/agent/` does not regenerate it. Server-side dedup for grievance
  * pushes (and similar telemetry) keys on this id.
  *
- * Anchored to the base config root (`~/.omp/install-id`) regardless of the
+ * Anchored to the base config root (`~/.san/install-id`) regardless of the
  * active profile: install identity is per-install, not per-profile, so every
  * profile shares one id and the global cache stays correct no matter the
  * profile / `getInstallId` call order.

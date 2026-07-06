@@ -26,13 +26,14 @@ export default class Index extends Command {
 			description: 'Model to use (fuzzy match: "opus", "gpt-5.2", or "openai/gpt-5.2")',
 		}),
 		smol: Flags.string({
-			description: "Smol/fast model for lightweight tasks (or PI_SMOL_MODEL env)",
+			description: "Smol/fast model for lightweight tasks (or SAN_SMOL_MODEL env; legacy PI_SMOL_MODEL also works)",
 		}),
 		slow: Flags.string({
-			description: "Slow/reasoning model for thorough analysis (or PI_SLOW_MODEL env)",
+			description:
+				"Slow/reasoning model for thorough analysis (or SAN_SLOW_MODEL env; legacy PI_SLOW_MODEL also works)",
 		}),
 		plan: Flags.string({
-			description: "Plan model for architectural planning (or PI_PLAN_MODEL env)",
+			description: "Plan model for architectural planning (or SAN_PLAN_MODEL env; legacy PI_PLAN_MODEL also works)",
 		}),
 		provider: Flags.string({
 			description: "Provider to use (legacy; prefer --model)",
@@ -169,7 +170,7 @@ export default class Index extends Command {
 		`# Create a shell shortcut for a work profile\n  ${APP_NAME} --profile work --alias san-work`,
 		`# Use different model (fuzzy matching)\n  ${APP_NAME} --model opus "Help me refactor this code"`,
 		`# Limit model cycling to specific models\n  ${APP_NAME} --models claude-sonnet,claude-haiku,gpt-4o`,
-		`# Export a session file to HTML\n  ${APP_NAME} --export ~/.omp/agent/sessions/--path--/session.jsonl`,
+		`# Export a session file to HTML\n  ${APP_NAME} --export ~/.san/agent/sessions/--path--/session.jsonl`,
 	];
 
 	static strict = false;

@@ -474,7 +474,7 @@ async function runInteractiveMode(
 		}
 	}
 
-	// `omp join <link>`: dispatch through the same builtin path as a typed
+	// `san join <link>`: dispatch through the same builtin path as a typed
 	// `/join` so collab guards and error rendering stay in one place.
 	if (joinLink !== undefined) {
 		await executeBuiltinSlashCommand(`/join ${joinLink}`, { ctx: mode });
@@ -644,7 +644,7 @@ export async function createSessionManager(
 		if (!match) {
 			throw new SessionResolutionError(
 				`Session "${forkSource}" not found.`,
-				"Run `omp --resume` without an argument to pick from recent sessions, or `omp` to start a new one.",
+				"Run `san --resume` without an argument to pick from recent sessions, or `san` to start a new one.",
 			);
 		}
 		return await SessionManager.forkFrom(match.session.path, cwd, parsed.sessionDir);
@@ -662,7 +662,7 @@ export async function createSessionManager(
 		if (!match) {
 			throw new SessionResolutionError(
 				`Session "${sessionArg}" not found.`,
-				"Run `omp --resume` without an argument to pick from recent sessions, or `omp` to start a new one.",
+				"Run `san --resume` without an argument to pick from recent sessions, or `san` to start a new one.",
 			);
 		}
 		if (match.scope === "local") {
@@ -739,7 +739,7 @@ export async function createSessionManager(
 
 /** Discover SYSTEM.md file if no CLI system prompt was provided */
 function discoverSystemPromptFile(): string | undefined {
-	// Check project-local first (.omp/SYSTEM.md, .pi/SYSTEM.md legacy)
+	// Check project-local first (.san/SYSTEM.md, legacy roots still handled by config providers)
 	const projectPath = findConfigFile("SYSTEM.md", { user: false });
 	if (projectPath) {
 		return projectPath;
@@ -1010,7 +1010,7 @@ export async function runRootCommand(
 	pluginPreloadPromise.catch(() => {});
 
 	// Register CLI-provided extension package paths (`--extension`, `--hook`) so
-	// the `omp-plugins` discovery provider can surface their `skills/`, `hooks/`,
+	// the plugin discovery provider can surface their `skills/`, `hooks/`,
 	// `tools/`, `commands/`, `rules/`, `prompts/`, and `.mcp.json` sub-trees.
 	// `--no-extensions` short-circuits both the factory load and the sub-discovery.
 	if (!parsedArgs.noExtensions) {
@@ -1038,6 +1038,7 @@ export async function runRootCommand(
 		applyAcpDefaultSettingOverrides(settingsInstance);
 	}
 	if (parsedArgs.noPty || parsedArgs.mode === "rpc-ui") {
+		Bun.env.SAN_NO_PTY = "1";
 		Bun.env.PI_NO_PTY = "1";
 	}
 	if (parsedArgs.noTitle || parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui" || parsedArgs.mode === "acp") {
@@ -1054,9 +1055,9 @@ export async function runRootCommand(
 	logger.time("initializeWithSettings", initializeWithSettings, settingsInstance);
 
 	// Apply model role overrides from CLI args or env vars (ephemeral, not persisted)
-	const smolModel = parsedArgs.smol ?? $env.PI_SMOL_MODEL;
-	const slowModel = parsedArgs.slow ?? $env.PI_SLOW_MODEL;
-	const planModel = parsedArgs.plan ?? $env.PI_PLAN_MODEL;
+	const smolModel = parsedArgs.smol ?? $env.SAN_SMOL_MODEL ?? $env.PI_SMOL_MODEL;
+	const slowModel = parsedArgs.slow ?? $env.SAN_SLOW_MODEL ?? $env.PI_SLOW_MODEL;
+	const planModel = parsedArgs.plan ?? $env.SAN_PLAN_MODEL ?? $env.PI_PLAN_MODEL;
 	if (smolModel || slowModel || planModel) {
 		settingsInstance.overrideModelRoles({
 			smol: smolModel,
@@ -1284,7 +1285,7 @@ export async function runRootCommand(
 			},
 		};
 		const initialArgs = applyExtensionFlags(extensionFlagSink, rawArgs) ?? parsedArgs;
-		// Fail fast on stale/typo flags (e.g. `omp --list-models`) now that we
+		// Fail fast on stale/typo flags (e.g. `san --list-models`) now that we
 		// know the real extension flag set. Without this check the unrecognized
 		// token gets silently consumed and any following positional leaks as the
 		// initial prompt — kicking off a real LLM session, MCP connection, and

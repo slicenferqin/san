@@ -119,8 +119,8 @@ export const miscFixtures: Record<string, GalleryFixture> = {
 				{
 					type: "text",
 					text: [
-						"● omp-api.service - Oh My Pi API",
-						"     Loaded: loaded (/etc/systemd/system/omp-api.service; enabled)",
+						"● san-api.service - San API",
+						"     Loaded: loaded (/etc/systemd/system/san-api.service; enabled)",
 						"     Active: active (running) since Sat 2026-06-06 09:14:02 UTC; 3h 21min ago",
 						"   Main PID: 4812 (bun)",
 						"      Tasks: 17 (limit: 4915)",

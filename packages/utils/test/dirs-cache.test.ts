@@ -5,9 +5,11 @@ import * as path from "node:path";
 import {
 	__resetDirsFromEnvForTests,
 	getActiveProfile,
+	getAuthBrokerSnapshotCachePath,
 	getConfigDirName,
 	getDocumentConversionCacheDir,
 	getProfileRootDir,
+	getWorktreesDir,
 	setAgentDir,
 } from "@oh-my-pi/pi-utils/dirs";
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
@@ -45,17 +47,17 @@ describe("document conversion cache directory", () => {
 		await fs.rm(tempRoot, { recursive: true, force: true });
 	});
 
-	it("uses XDG_CACHE_HOME for the default agent dir when $XDG_CACHE_HOME/omp exists", async () => {
+	it("uses XDG_CACHE_HOME for the default agent dir when $XDG_CACHE_HOME/san exists", async () => {
 		if (process.platform === "win32") return;
 
 		process.env.XDG_CACHE_HOME = path.join(tempRoot, "cache");
-		await fs.mkdir(path.join(process.env.XDG_CACHE_HOME, "omp"), { recursive: true });
+		await fs.mkdir(path.join(process.env.XDG_CACHE_HOME, "san"), { recursive: true });
 
 		const defaultAgentDir = path.join(os.homedir(), getConfigDirName(), "agent");
 		setAgentDir(defaultAgentDir);
 
 		expect(getDocumentConversionCacheDir()).toBe(
-			path.join(process.env.XDG_CACHE_HOME, "omp", "cache", "document-conversions"),
+			path.join(process.env.XDG_CACHE_HOME, "san", "cache", "document-conversions"),
 		);
 	});
 
@@ -100,5 +102,48 @@ describe("test directory state cleanup", () => {
 			restoreEnv("XDG_CACHE_HOME", originalXdgCacheHome);
 			__resetDirsFromEnvForTests();
 		}
+	});
+});
+
+describe("San runtime directory env aliases", () => {
+	let tempRoot = "";
+	let originalSanWorktreeDir: string | undefined;
+	let originalOmpWorktreeDir: string | undefined;
+	let originalSanAuthBrokerSnapshotCache: string | undefined;
+	let originalOmpAuthBrokerSnapshotCache: string | undefined;
+
+	beforeEach(async () => {
+		originalSanWorktreeDir = process.env.SAN_WORKTREE_DIR;
+		originalOmpWorktreeDir = process.env.OMP_WORKTREE_DIR;
+		originalSanAuthBrokerSnapshotCache = process.env.SAN_AUTH_BROKER_SNAPSHOT_CACHE;
+		originalOmpAuthBrokerSnapshotCache = process.env.OMP_AUTH_BROKER_SNAPSHOT_CACHE;
+		tempRoot = path.join(os.tmpdir(), "pi-utils-san-dirs", Snowflake.next());
+		await fs.mkdir(tempRoot, { recursive: true });
+	});
+
+	afterEach(async () => {
+		restoreEnv("SAN_WORKTREE_DIR", originalSanWorktreeDir);
+		restoreEnv("OMP_WORKTREE_DIR", originalOmpWorktreeDir);
+		restoreEnv("SAN_AUTH_BROKER_SNAPSHOT_CACHE", originalSanAuthBrokerSnapshotCache);
+		restoreEnv("OMP_AUTH_BROKER_SNAPSHOT_CACHE", originalOmpAuthBrokerSnapshotCache);
+		await fs.rm(tempRoot, { recursive: true, force: true });
+	});
+
+	it("prefers SAN_WORKTREE_DIR over legacy OMP_WORKTREE_DIR", () => {
+		const sanDir = path.join(tempRoot, "san-wt");
+		const ompDir = path.join(tempRoot, "omp-wt");
+		process.env.SAN_WORKTREE_DIR = sanDir;
+		process.env.OMP_WORKTREE_DIR = ompDir;
+
+		expect(getWorktreesDir()).toBe(sanDir);
+	});
+
+	it("prefers SAN_AUTH_BROKER_SNAPSHOT_CACHE over legacy OMP_AUTH_BROKER_SNAPSHOT_CACHE", () => {
+		const sanCache = path.join(tempRoot, "san-cache.enc");
+		const ompCache = path.join(tempRoot, "omp-cache.enc");
+		process.env.SAN_AUTH_BROKER_SNAPSHOT_CACHE = sanCache;
+		process.env.OMP_AUTH_BROKER_SNAPSHOT_CACHE = ompCache;
+
+		expect(getAuthBrokerSnapshotCachePath()).toBe(sanCache);
 	});
 });

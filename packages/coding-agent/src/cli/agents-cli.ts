@@ -1,7 +1,7 @@
 /**
  * Agents CLI command handlers.
  *
- * Handles `omp agents unpack` for writing bundled agent definitions to disk.
+ * Handles `san agents unpack` for writing bundled agent definitions to disk.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -46,7 +46,7 @@ function resolveTargetDir(flags: AgentsCommandArgs["flags"]): string {
 	}
 
 	if (flags.project) {
-		return path.resolve(getProjectDir(), ".omp", "agents");
+		return path.resolve(getProjectDir(), ".san", "agents");
 	}
 
 	return path.join(getAgentDir(), "agents");

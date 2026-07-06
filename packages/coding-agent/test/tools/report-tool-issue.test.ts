@@ -53,22 +53,21 @@ function selectPushedIds(db: Database): number[] {
 function pushSettings(overrides: Record<string, unknown> = {}): Settings {
 	return Settings.isolated({
 		"dev.autoqa": true,
-		// Consent is the push opt-in; `granted` is what `resolvePushConfig`
-		// gates on (or `PI_AUTO_QA_PUSH=1` for headless overrides).
+		// Consent gates push; env overrides are SAN_AUTO_QA_PUSH=1 / legacy PI_AUTO_QA_PUSH=1.
 		"dev.autoqa.consent": "granted",
 		"dev.autoqaPush.endpoint": "https://qa.example.com/grievances",
 		...overrides,
 	});
 }
 
+let originalSanAutoQa: string | undefined;
 let originalPiAutoQa: string | undefined;
 
 function restoreAutoQaEnv(): void {
-	if (originalPiAutoQa === undefined) {
-		delete Bun.env.PI_AUTO_QA;
-		return;
-	}
-	Bun.env.PI_AUTO_QA = originalPiAutoQa;
+	if (originalSanAutoQa === undefined) delete Bun.env.SAN_AUTO_QA;
+	else Bun.env.SAN_AUTO_QA = originalSanAutoQa;
+	if (originalPiAutoQa === undefined) delete Bun.env.PI_AUTO_QA;
+	else Bun.env.PI_AUTO_QA = originalPiAutoQa;
 }
 
 describe("flushGrievances", () => {
@@ -76,7 +75,9 @@ describe("flushGrievances", () => {
 
 	beforeEach(() => {
 		__resetAutoQaFlushStateForTests();
+		originalSanAutoQa = Bun.env.SAN_AUTO_QA;
 		originalPiAutoQa = Bun.env.PI_AUTO_QA;
+		delete Bun.env.SAN_AUTO_QA;
 		delete Bun.env.PI_AUTO_QA;
 		vi.spyOn(piUtils, "getInstallId").mockReturnValue("11111111-2222-3333-4444-555555555555");
 		db = openTempDb();
@@ -89,13 +90,20 @@ describe("flushGrievances", () => {
 		db.close();
 	});
 
-	it("lets PI_AUTO_QA=false disable auto QA when the setting is enabled", () => {
-		Bun.env.PI_AUTO_QA = "0";
+	it("lets SAN_AUTO_QA=false disable auto QA when the setting is enabled", () => {
+		Bun.env.SAN_AUTO_QA = "0";
+		Bun.env.PI_AUTO_QA = "1";
 
 		expect(isAutoQaEnabled(Settings.isolated({ "dev.autoqa": true }))).toBe(false);
 	});
 
-	it("lets PI_AUTO_QA=true enable auto QA when the setting is disabled", () => {
+	it("lets SAN_AUTO_QA=true enable auto QA when the setting is disabled", () => {
+		Bun.env.SAN_AUTO_QA = "1";
+
+		expect(isAutoQaEnabled(Settings.isolated({ "dev.autoqa": false }))).toBe(true);
+	});
+
+	it("keeps legacy PI_AUTO_QA as a fallback", () => {
 		Bun.env.PI_AUTO_QA = "1";
 
 		expect(isAutoQaEnabled(Settings.isolated({ "dev.autoqa": false }))).toBe(true);

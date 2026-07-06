@@ -50,7 +50,7 @@ export default class AuthGateway extends Command {
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(AuthGateway);
 		if (!args.action) {
-			renderCommandHelp("omp", "auth-gateway", AuthGateway);
+			renderCommandHelp("san", "auth-gateway", AuthGateway);
 			return;
 		}
 		const cmd: AuthGatewayCommandArgs = {

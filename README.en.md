@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/source--first-active-D97706?style=flat&colorA=0B1020" alt="Source first" />
 </p>
 
-San is a coding agent for long-running, resumable engineering work. It originated from the mature tool-driven `omp` coding-agent foundation and now moves forward as an independent project focused on a narrower systems problem: after many turns of discussion, code changes, verification, and resume, the agent should still preserve stable, auditable, and compact context state, then execute high-risk work through explicit roles, review, and closure.
+San is a coding agent for long-running, resumable engineering work. It originated from a mature tool-driven coding-agent foundation and now moves forward as an independent project focused on a narrower systems problem: after many turns of discussion, code changes, verification, and resume, the agent should still preserve stable, auditable, and compact context state, then execute high-risk work through explicit roles, review, and closure.
 
 San's current public release is **San v0.2 Execution Loop**. v0.1 Context Steady solved long-running context stability; v0.2 builds on that foundation and turns planning, execution, verification, and failure handling into an auditable engineering loop.
 

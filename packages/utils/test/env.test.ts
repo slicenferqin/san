@@ -49,6 +49,16 @@ describe("parseEnvFile", () => {
 			PI_FEATURE: "enabled",
 		});
 	});
+
+	it("mirrors valid SAN_ variables to OMP_ and PI_ compatibility variables", () => {
+		const filePath = writeTempEnv("SAN_FEATURE=enabled\nSAN_BAD=before\0after\n");
+
+		expect(parseEnvFile(filePath)).toEqual({
+			SAN_FEATURE: "enabled",
+			OMP_FEATURE: "enabled",
+			PI_FEATURE: "enabled",
+		});
+	});
 });
 
 describe("filterProcessEnv", () => {

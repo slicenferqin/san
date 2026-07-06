@@ -487,7 +487,7 @@ export async function runBenchCommand(command: BenchCommandArgs, deps: BenchDepe
 	const now = deps.now ?? (() => performance.now());
 	const interactive = deps.stdoutIsTTY ?? process.stdout.isTTY === true;
 	if (command.models.length === 0) {
-		throw new Error("Pass at least one model selector, e.g. `omp bench opus gpt-5.2`");
+		throw new Error("Pass at least one model selector, e.g. `san bench opus gpt-5.2`");
 	}
 
 	const runtime = await (deps.createRuntime ?? createDefaultRuntime)();
@@ -507,7 +507,7 @@ export async function runBenchCommand(command: BenchCommandArgs, deps: BenchDepe
 				if (!initialKey) {
 					const failure: BenchRunFailure = {
 						ok: false,
-						error: `No credentials for provider "${model.provider}". Run \`omp\` and use /login, or set the provider API key.`,
+						error: `No credentials for provider "${model.provider}". Run \`san\` and use /login, or set the provider API key.`,
 					};
 					results.push(failure);
 					if (!json) writeStdout(`${formatRunLine(failure, index, runs)}\n`);

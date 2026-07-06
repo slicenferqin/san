@@ -38,7 +38,7 @@ export interface DiscoverAuthStorageOptions {
 	sourceLabel?: string;
 }
 
-/** Path to the local bearer token file. Created by `omp auth-broker token`. */
+/** Path to the local bearer token file. Created by `san auth-broker token`. */
 export function getAuthBrokerTokenFilePath(): string {
 	return path.join(getConfigRootDir(), "auth-broker.token");
 }
@@ -90,22 +90,25 @@ async function readConfigYaml(agentDir: string): Promise<ConfigSnapshot> {
 }
 
 function resolveSnapshotTtlMs(): number {
-	const raw = process.env.OMP_AUTH_BROKER_SNAPSHOT_TTL_MS;
+	const raw = process.env.SAN_AUTH_BROKER_SNAPSHOT_TTL_MS ?? process.env.OMP_AUTH_BROKER_SNAPSHOT_TTL_MS;
 	if (raw === undefined) return DEFAULT_SNAPSHOT_CACHE_TTL_MS;
 	const value = raw.trim();
 	if (value === "") return DEFAULT_SNAPSHOT_CACHE_TTL_MS;
 	const ttlMs = Number(value);
 	if (Number.isFinite(ttlMs) && ttlMs >= 0) return ttlMs;
-	logger.warn("Invalid OMP_AUTH_BROKER_SNAPSHOT_TTL_MS; using default", { value: raw });
+	logger.warn("Invalid SAN_AUTH_BROKER_SNAPSHOT_TTL_MS / OMP_AUTH_BROKER_SNAPSHOT_TTL_MS; using default", {
+		value: raw,
+	});
 	return DEFAULT_SNAPSHOT_CACHE_TTL_MS;
 }
 
 /**
  * Resolve broker connection configuration using the same precedence as the TUI:
  *
- * 1. `OMP_AUTH_BROKER_URL` / `OMP_AUTH_BROKER_TOKEN` env vars.
- * 2. `auth.broker.url` / `auth.broker.token` in `<agentDir>/config.yml`.
- * 3. `<config-root>/auth-broker.token` file (paired with a URL from env/config).
+ * 1. `SAN_AUTH_BROKER_URL` / `SAN_AUTH_BROKER_TOKEN` env vars.
+ * 2. Legacy `OMP_AUTH_BROKER_URL` / `OMP_AUTH_BROKER_TOKEN` env vars.
+ * 3. `auth.broker.url` / `auth.broker.token` in `<agentDir>/config.yml`.
+ * 4. `<config-root>/auth-broker.token` file (paired with a URL from env/config).
  *
  * Returns `null` when no broker URL is configured — callers should fall back to
  * the local SQLite store. Throws when a URL is configured but no token is
@@ -117,8 +120,8 @@ export async function resolveAuthBrokerConfig(
 	const agentDir = options.agentDir ?? getAgentDir();
 	const resolveConfig = options.configValueResolver ?? defaultResolveConfigValue;
 
-	const envUrl = process.env.OMP_AUTH_BROKER_URL;
-	const envToken = process.env.OMP_AUTH_BROKER_TOKEN;
+	const envUrl = process.env.SAN_AUTH_BROKER_URL ?? process.env.OMP_AUTH_BROKER_URL;
+	const envToken = process.env.SAN_AUTH_BROKER_TOKEN ?? process.env.OMP_AUTH_BROKER_TOKEN;
 
 	let url = envUrl && envUrl.length > 0 ? envUrl : undefined;
 	let configToken: string | undefined;
@@ -140,8 +143,8 @@ export async function resolveAuthBrokerConfig(
 	if (!token) {
 		throw new AIError.MissingApiKeyError(
 			undefined,
-			`OMP_AUTH_BROKER_URL is set (${url}) but no bearer token is available. ` +
-				`Set OMP_AUTH_BROKER_TOKEN, the \`auth.broker.token\` config entry, or place one at ${getAuthBrokerTokenFilePath()}.`,
+			`Auth broker URL is set (${url}) but no bearer token is available. ` +
+				`Set SAN_AUTH_BROKER_TOKEN, legacy OMP_AUTH_BROKER_TOKEN, the \`auth.broker.token\` config entry, or place one at ${getAuthBrokerTokenFilePath()}.`,
 		);
 	}
 	return { url, token };
