@@ -1,0 +1,77 @@
+# San 仓库 self-hosting 项目配置。
+#
+# 只放模型选择和执行策略，不放 provider key。密钥继续放在用户级配置、
+# 环境变量或未跟踪的 agent dir 中。
+modelRoles:
+  default: asxs/gpt-5.5
+  smol: claude-code/claude-fable-5
+  slow: claude-code/claude-fable-5
+  plan: asxs/gpt-5.5:xhigh
+  advisor: claude-code/claude-opus-4-8
+  task: deepseek/deepseek-v4-pro
+
+setupVersion: 1
+
+startup:
+  quiet: true
+  showSplash: false
+  setupWizard: false
+
+san:
+  contextSteady:
+    enabled: true
+    digest:
+      enabled: true
+      persistFallback: true
+      timeoutMs: 30000
+      llm:
+        enabled: true
+        modelRole: claude-code/claude-fable-5
+    qualityWindowTokens: 24000
+    reserveRatio: 0.25
+    contextPacket:
+      enabled: true
+      recentDigests: 5
+      maxTokens: 3000
+    checkpoint:
+      enabled: true
+      everyTurns: 6
+      maxTokens: 12000
+    recall:
+      enabled: false
+      maxItems: 3
+      maxTokens: 1000
+      maxQueryChars: 2000
+
+  executionLoop:
+    enabled: true
+    defaultMode: solo
+    maxRetries: 2
+    maxWorkers: 3
+    ledger:
+      enabled: true
+      persistRolePackets: true
+    checks:
+      enabled: true
+      includeBuiltins: true
+      projectDir: .san/checks
+    roles:
+      commander:
+        modelRole: claude-code/claude-fable-5
+      worker:
+        modelRole: deepseek/deepseek-v4-pro
+      supervisor:
+        modelRole: claude-code/claude-opus-4-8
+      oracle:
+        modelRole: asxs/gpt-5.5:xhigh
+        enabledInModes:
+          - council
+    roleContext:
+      tokenBudget: 2000
+      maxEvents: 8
+      maxDecisions: 8
+    budget:
+      soloMaxTurns: 3
+      teamMaxTurns: 8
+      councilMaxTurns: 16
+      reserveRatio: 0.25

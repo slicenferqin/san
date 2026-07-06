@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>San v0.2 Self-hosting 交接文档</title>
+		<style>
+			:root {
+				color-scheme: light;
+				--bg: #f7f8fb;
+				--panel: #ffffff;
+				--ink: #172033;
+				--muted: #5c6675;
+				--line: #d9dee8;
+				--blue: #2457c5;
+				--green: #157a52;
+				--amber: #a85f00;
+				--red: #b42318;
+				--code: #111827;
+			}
+			* {
+				box-sizing: border-box;
+			}
+			body {
+				margin: 0;
+				background: var(--bg);
+				color: var(--ink);
+				font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			}
+			main {
+				width: min(1120px, calc(100vw - 48px));
+				margin: 0 auto;
+				padding: 40px 0 64px;
+			}
+			header,
+			section {
+				background: var(--panel);
+				border: 1px solid var(--line);
+				border-radius: 14px;
+				padding: 26px;
+				margin-bottom: 18px;
+				box-shadow: 0 10px 30px rgba(16, 24, 40, 0.05);
+			}
+			h1,
+			h2,
+			h3 {
+				margin: 0 0 12px;
+				line-height: 1.25;
+			}
+			h1 {
+				font-size: 30px;
+			}
+			h2 {
+				font-size: 21px;
+				padding-bottom: 8px;
+				border-bottom: 1px solid var(--line);
+			}
+			h3 {
+				font-size: 16px;
+				color: var(--blue);
+			}
+			p {
+				margin: 8px 0;
+			}
+			ul,
+			ol {
+				margin: 8px 0 0 22px;
+				padding: 0;
+			}
+			li {
+				margin: 5px 0;
+			}
+			code,
+			pre {
+				font-family: "SFMono-Regular", Consolas, monospace;
+			}
+			code {
+				color: var(--code);
+				background: #eef2f7;
+				border-radius: 5px;
+				padding: 1px 5px;
+			}
+			pre {
+				overflow: auto;
+				background: #111827;
+				color: #f9fafb;
+				border-radius: 10px;
+				padding: 14px 16px;
+				line-height: 1.45;
+			}
+			table {
+				width: 100%;
+				border-collapse: collapse;
+				margin-top: 12px;
+				border-radius: 10px;
+				overflow: hidden;
+			}
+			th,
+			td {
+				border: 1px solid var(--line);
+				padding: 10px 12px;
+				text-align: left;
+				vertical-align: top;
+			}
+			th {
+				background: #eef2f7;
+				font-weight: 700;
+			}
+			.badge {
+				display: inline-block;
+				border-radius: 999px;
+				padding: 3px 10px;
+				font-weight: 700;
+				font-size: 12px;
+			}
+			.done {
+				background: #e7f7ef;
+				color: var(--green);
+			}
+			.open {
+				background: #fff3d6;
+				color: var(--amber);
+			}
+			.risk {
+				background: #ffe4e1;
+				color: var(--red);
+			}
+			.grid {
+				display: grid;
+				grid-template-columns: repeat(3, 1fr);
+				gap: 12px;
+				margin-top: 16px;
+			}
+			.metric {
+				border: 1px solid var(--line);
+				border-radius: 12px;
+				padding: 14px;
+				background: #fbfcff;
+			}
+			.metric strong {
+				display: block;
+				font-size: 26px;
+				line-height: 1;
+				margin-bottom: 6px;
+			}
+			.note {
+				color: var(--muted);
+				font-size: 14px;
+			}
+			.callout {
+				border-left: 5px solid var(--blue);
+				background: #eef4ff;
+				padding: 12px 14px;
+				border-radius: 8px;
+				margin: 14px 0;
+			}
+			.warn {
+				border-left-color: var(--amber);
+				background: #fff7e6;
+			}
+			@media (max-width: 820px) {
+				main {
+					width: min(100vw - 28px, 1120px);
+					padding-top: 24px;
+				}
+				.grid {
+					grid-template-columns: 1fr;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<header>
+				<h1>San v0.2 Self-hosting 交接文档</h1>
+				<p class="note">更新时间：2026-07-06 Asia/Shanghai。范围：只交接 San 仓库当前进度、未提交的 <code>.san/</code> 配置、下一步计划和验证方式；不包含其他 CLI 或个人全局工具配置。</p>
+				<div class="callout">
+					当前目标：把 San 仓库整理成可以用 San 自己继续优化 San 的 self-hosting 现场。已完成 v0.2 README、GSAR benchmark 对照结论、仓库独立化提交；当前未提交工作集中在 <code>.san/</code> 项目配置。
+				</div>
+			</header>
+
+			<section>
+				<h2>1. 当前仓库状态</h2>
+				<div class="grid">
+					<div class="metric"><strong>3</strong><span>近期关键提交已完成并推送</span></div>
+					<div class="metric"><strong>1</strong><span>未提交目录：<code>.san/</code></span></div>
+					<div class="metric"><strong>0</strong><span>当前已知需要纳入仓库的密钥</span></div>
+				</div>
+				<table>
+					<thead>
+						<tr>
+							<th>事项</th>
+							<th>状态</th>
+							<th>说明</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td>San v0.2 发布文档</td>
+							<td><span class="badge done">已提交</span></td>
+							<td><code>README.md</code> 已改成面向 v0.2 对外发布的版本，包含 <code>solo/team/council</code>、GSAR benchmark 结论和关键文档入口。</td>
+						</tr>
+						<tr>
+							<td>GSAR benchmark 对照</td>
+							<td><span class="badge done">已提交</span></td>
+							<td>已形成单角色、同模型多角色、异构多角色对照结论：<code>solo</code> 5/10，同模型多角色 8/10，异构多角色 9/10。当前口径是单轮样本，不宣称长期均值。</td>
+						</tr>
+						<tr>
+							<td>模式命名</td>
+							<td><span class="badge done">已提交</span></td>
+							<td>旧 <code>rush/smart/deep</code> 已收敛为 <code>solo/team/council</code>。产品口径：日常默认 <code>solo</code>，高风险任务再打开多角色。</td>
+						</tr>
+						<tr>
+							<td>仓库独立化</td>
+							<td><span class="badge done">已提交</span></td>
+							<td>GitHub fork 状态已解除，package metadata、README 入口和仓库 URL 已指向 <code>slicenferqin/san</code>。</td>
+						</tr>
+						<tr>
+							<td>Self-hosting 配置</td>
+							<td><span class="badge open">未提交</span></td>
+							<td><code>.san/</code> 已创建，包含项目级配置、README 和 checks；下一步需要审查、验证、整理到可提交状态。</td>
+						</tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>2. 最近提交</h2>
+				<table>
+					<thead>
+						<tr>
+							<th>提交</th>
+							<th>内容</th>
+							<th>交接意义</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td><code>28d7aa6c2</code></td>
+							<td><code>chore(coding-agent): prepare san v0.2 release defaults</code></td>
+							<td>配置命名空间收敛到 <code>.san</code> / <code>SAN_*</code>，v0.2 模式改为 <code>solo/team/council</code>。</td>
+						</tr>
+						<tr>
+							<td><code>220397f2a</code></td>
+							<td><code>docs: update san v0.2 release readme</code></td>
+							<td>README 按正式发布口径重写，加入 benchmark 结论和 v0.2 产品定位。</td>
+						</tr>
+						<tr>
+							<td><code>357ab8a06</code></td>
+							<td><code>docs: mark san repository independent</code></td>
+							<td>完成仓库独立化标记和元数据更新，当前 <code>main</code> 与 <code>origin/main</code> 同步。</td>
+						</tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>3. Benchmark 结论口径</h2>
+				<p>当前对外可讲的结论是：San v0.2 不主张所有任务默认多角色，而是提供可开关的执行档位。单角色适合日常任务；<code>team</code> 和 <code>council</code> 用于复杂修复、发布验收、架构取舍和容易误判的任务。</p>
+				<table>
+					<thead>
+						<tr>
+							<th>运行形态</th>
+							<th>结果</th>
+							<th>产品解释</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td>单角色 <code>solo</code></td>
+							<td>5/10</td>
+							<td>证明日常路径仍需要保留，低成本但复杂目标和错误放行风险较高。</td>
+						</tr>
+						<tr>
+							<td>同模型多角色</td>
+							<td>8/10</td>
+							<td>证明角色拆分和独立复验本身有效，即使底层模型相同也能提升质量。</td>
+						</tr>
+						<tr>
+							<td>异构多角色</td>
+							<td>9/10</td>
+							<td>当前最强质量样本，适合 <code>team/council</code> 高风险档位。</td>
+						</tr>
+					</tbody>
+				</table>
+				<div class="callout warn">
+					报告边界：当前是单轮 benchmark，不应用作“长期稳定均值”。下一阶段需要补 3 轮以上重复跑，统计均值、方差、token 和墙钟时间。
+				</div>
+				<p>主要证据入口：</p>
+				<ul>
+					<li><code>docs/research/san-gsar-controls-run-20260706-111813.html</code></li>
+					<li><code>docs/research/san-gsar-qwen-opus-run-20260706-100034.html</code></li>
+					<li><code>docs/research/san-gsar-benchmark-v0.2.html</code></li>
+					<li><code>packages/coding-agent/examples/san-gsar-benchmark-tasks.json</code></li>
+				</ul>
+			</section>
+
+			<section>
+				<h2>4. 当前未提交的 .san 配置</h2>
+				<p><code>.san/</code> 是当前交接重点。它的目标是让 San 仓库自身能被 San 稳定接手，不保存密钥，只保存项目级 selector、执行策略和 San Checks。</p>
+				<table>
+					<thead>
+						<tr>
+							<th>文件</th>
+							<th>当前作用</th>
+							<th>下一步判断</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td><code>.san/config.yml</code></td>
+							<td>设置默认模型、context steady、execution loop、角色模型和 <code>solo/team/council</code> budget。</td>
+							<td>需要确认所有 selector 可解析，确认没有旧 <code>rush/smart/deep</code> 残留，确认 role 配置符合 self-hosting 目标。</td>
+						</tr>
+						<tr>
+							<td><code>.san/README.md</code></td>
+							<td>说明 <code>.san/</code> 的用途、边界和默认使用方式。</td>
+							<td>可以补一段“如何交给 San 接手”的短 prompt，方便新会话直接使用。</td>
+						</tr>
+						<tr>
+							<td><code>.san/checks/repo-change-contract.md</code></td>
+							<td>约束最小改动、项目约定、禁止手改生成文件。</td>
+							<td>基本合理，后续按实际误判补充。</td>
+						</tr>
+						<tr>
+							<td><code>.san/checks/self-hosting-loop.md</code></td>
+							<td>约束 San 优化 San 的执行模式选择。</td>
+							<td>基本合理，需要在真实 self-hosting 中观察是否过度触发多角色。</td>
+						</tr>
+						<tr>
+							<td><code>.san/checks/verification-gate.md</code></td>
+							<td>要求代码、配置、文档分别执行对应验证。</td>
+							<td>合理，提交前至少要跑 <code>bun check</code> 和 <code>git diff --check</code>。</td>
+						</tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>5. 当前模型策略</h2>
+				<p>项目级默认模型已设置为 <code>asxs/gpt-5.5</code>。模型密钥不进入仓库，依赖本机用户级模型配置。</p>
+				<table>
+					<thead>
+						<tr>
+							<th>用途</th>
+							<th>当前 selector</th>
+							<th>理由</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td>默认模型</td>
+							<td><code>asxs/gpt-5.5</code></td>
+							<td>普通 San 会话默认走 GPT-5.5。</td>
+						</tr>
+						<tr>
+							<td>Commander</td>
+							<td><code>claude-code/claude-fable-5</code></td>
+							<td>当前项目配置保留轻量指挥模型；是否改成 GPT-5.5 是下一步需要审查的点。</td>
+						</tr>
+						<tr>
+							<td>Worker</td>
+							<td><code>deepseek/deepseek-v4-pro</code></td>
+							<td>负责执行型工作，继续保留为异构 worker。</td>
+						</tr>
+						<tr>
+							<td>Supervisor</td>
+							<td><code>claude-code/claude-opus-4-8</code></td>
+							<td>负责高强度复验。</td>
+						</tr>
+						<tr>
+							<td>Oracle</td>
+							<td><code>asxs/gpt-5.5:xhigh</code></td>
+							<td>当前只在 <code>council</code> 启用；已统一 provider 命名到 <code>asxs/gpt-5.5:xhigh</code>，避免交接时出现双名混淆。</td>
+						</tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>6. 下一步计划</h2>
+				<ol>
+					<li><strong>审查 <code>.san/config.yml</code></strong>：确认默认模型、角色模型、budget、checks 目录和 <code>solo/team/council</code> 语义完全匹配 San v0.2。</li>
+					<li><strong>复核 GPT provider 命名</strong>：项目配置中的 GPT 角色已统一到 <code>asxs/gpt-5.5</code>；提交前只需确认没有重新引入 <code>vb/gpt-5.5</code>。</li>
+					<li><strong>补充 <code>.san/README.md</code></strong>：加入新 San 会话接手 prompt，说明先读哪些文件、先检查哪些配置、不要提交、必须验证。</li>
+					<li><strong>运行验证</strong>：至少执行 <code>san models asxs --json</code>、<code>san config get modelRoles</code>、selector 解析脚本、<code>git diff --check</code>、<code>bun check</code>。</li>
+					<li><strong>整理提交</strong>：确认 <code>.san/</code> 不含密钥、不含个人机器路径后，提交为项目级 self-hosting 配置。</li>
+					<li><strong>真实 dogfood</strong>：用 San 开新会话接手一个小任务，观察是否能按 <code>solo</code> 正常完成；再用一个高风险任务观察 <code>team/council</code> 的 ledger、checks 和复验是否有效。</li>
+				</ol>
+			</section>
+
+			<section>
+				<h2>7. 建议给 San 的接手提示</h2>
+				<p>在 San 会话中直接使用下面这段，不包含其他工具或全局配置干扰：</p>
+				<pre><code>接手当前仓库，延续 San v0.2 self-hosting 进度继续推进。
+
+先按 AGENTS.md 规则阅读仓库上下文，重点看 README.md、docs/research/san-v0.2-self-hosting-handoff-20260706.html、docs/research/san-gsar-controls-run-20260706-111813.html、docs/research/san-gsar-qwen-opus-run-20260706-100034.html、packages/coding-agent/ 和当前未提交的 .san/ 配置。不要凭空猜测，不做无关重构，不要提交。
+
+当前进度：
+- San v0.2 的 release README、GSAR benchmark 结论、solo/team/council 模式、仓库独立化已经提交并推送。
+- 当前未提交工作集中在 .san/，这是 San 仓库自己的 self-hosting 项目配置。
+- .san/config.yml 的默认模型已设为 asxs/gpt-5.5。
+- .san/ 只允许保存 key-free selector、执行策略和 checks，不能保存 provider key、token 或个人环境配置。
+
+下一步任务：
+1. 检查 .san/config.yml 是否符合 San v0.2 的 solo/team/council 语义，避免残留旧 rush/smart/deep 语义。
+2. 检查 default、commander、worker、supervisor、oracle 的模型 selector 是否合理且可解析，确认 GPT provider 命名保持在 asxs。
+3. 检查 .san/README.md 和 .san/checks/ 是否足够支撑 San 自己优化 San。
+4. 如有必要，做最小修改。
+5. 运行相关验证，至少 git diff --check 和 bun check；如果修改了 packages/coding-agent/ 行为，运行对应 focused tests。
+6. 完成后汇报改动文件、验证命令和剩余风险。
+
+现在开始执行，不要只给计划。</code></pre>
+			</section>
+
+			<section>
+				<h2>8. 验证命令</h2>
+				<pre><code>git --no-pager status --short --branch
+san models asxs --json
+san config get modelRoles
+git --no-pager diff -- .san docs/research/san-v0.2-self-hosting-handoff-20260706.html
+git --no-pager diff --check
+bun check</code></pre>
+				<p class="note">如果后续修改 <code>packages/coding-agent/</code> 行为，再追加 focused tests，例如 <code>bun test packages/coding-agent/test/san-loop</code>。</p>
+			</section>
+
+			<section>
+				<h2>9. 不要做的事</h2>
+				<ul>
+					<li>不要把 provider key、token、个人代理或临时 agent dir 写入仓库。</li>
+					<li>不要把交接范围扩展到非 San 的全局工具配置。</li>
+					<li>不要把单轮 benchmark 说成长期稳定结论。</li>
+					<li>不要在未验证前提交 <code>.san/</code>。</li>
+					<li>不要为了“顺手整理”改动与 self-hosting 无关的源码或文档。</li>
+				</ul>
+			</section>
+		</main>
+	</body>
+</html>
