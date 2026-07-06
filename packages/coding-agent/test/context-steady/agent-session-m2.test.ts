@@ -198,7 +198,7 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 			sessionId: sessionManager.getSessionId(),
 			runId: "loop_agent_session",
 			objective: "Ship mature v0.2 loop",
-			mode: "smart",
+			mode: "team",
 			createdAt: "2026-07-01T00:00:00.000Z",
 		});
 		const settings = Settings.isolated({
@@ -247,7 +247,7 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 			sessionId: sessionManager.getSessionId(),
 			runId: "loop_recover_session",
 			objective: "Recover interrupted v0.2 loop",
-			mode: "smart",
+			mode: "team",
 			createdAt: "2026-07-01T00:00:00.000Z",
 		});
 		const settings = Settings.isolated({

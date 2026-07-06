@@ -57,7 +57,7 @@ function runSnapshot(): SanLoopRunSnapshot {
 		runId: "loop_role_models",
 		sessionId: "session-role-models",
 		objective: "Verify role model routing",
-		mode: "deep",
+		mode: "council",
 		status: "working",
 		createdAt: now,
 		updatedAt: now,
@@ -158,7 +158,7 @@ describe("San loop bundled agents", () => {
 			if (options.agent.name === "san-commander") {
 				return makeResult(options.id, {
 					objective: "Verify role model routing",
-					mode: "deep",
+					mode: "council",
 					acceptanceCriteria: ["roles route to configured models"],
 					assignments: [
 						{
@@ -214,18 +214,18 @@ describe("San loop bundled agents", () => {
 		const workerAssignment = assignment();
 		const worker = workerResult();
 
-		await executor.commander({ run, mode: "deep" });
-		await executor.worker({ run, mode: "deep", assignment: workerAssignment });
+		await executor.commander({ run, mode: "council" });
+		await executor.worker({ run, mode: "council", assignment: workerAssignment });
 		await executor.supervisor({
 			run,
-			mode: "deep",
+			mode: "council",
 			assignments: [workerAssignment],
 			workerResults: [worker],
 			oracleReview: oracleReview(),
 		});
 		await executor.oracle?.({
 			run,
-			mode: "deep",
+			mode: "council",
 			assignments: [workerAssignment],
 			workerResults: [worker],
 		});
@@ -251,7 +251,7 @@ describe("San loop bundled agents", () => {
 			}
 			return makeResult(options.id, {
 				objective: "Recover from transient provider stream failure",
-				mode: "deep",
+				mode: "council",
 				acceptanceCriteria: ["commander dispatches after retry"],
 				assignments: [
 					{
@@ -274,7 +274,7 @@ describe("San loop bundled agents", () => {
 			},
 		});
 
-		const result = await executor.commander({ run: runSnapshot(), mode: "deep" });
+		const result = await executor.commander({ run: runSnapshot(), mode: "council" });
 
 		expect(calls).toBe(2);
 		expect(result.assignments).toEqual([
@@ -291,7 +291,7 @@ describe("San loop bundled agents", () => {
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options =>
 			makeResult(options.id, {
 				objective: "Verify real commander output",
-				mode: "deep",
+				mode: "council",
 				acceptance_criteria: ["terminal verdict includes validation evidence"],
 				worker_assignments: [
 					{
@@ -327,7 +327,7 @@ describe("San loop bundled agents", () => {
 			},
 		});
 
-		const result = await executor.commander({ run: runSnapshot(), mode: "deep" });
+		const result = await executor.commander({ run: runSnapshot(), mode: "council" });
 
 		expect(result.plan.acceptanceCriteria).toEqual(["terminal verdict includes validation evidence"]);
 		expect(result.plan.riskRegister).toEqual(["Dispatch one read-only smoke worker and review its evidence."]);
@@ -356,7 +356,7 @@ describe("San loop bundled agents", () => {
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options =>
 			makeResult(options.id, {
 				objective: "Verify staged commander output",
-				mode: "rush",
+				mode: "solo",
 				workerAssignments: [
 					{
 						agent: "san-worker",
@@ -388,7 +388,7 @@ describe("San loop bundled agents", () => {
 			},
 		});
 
-		const result = await executor.commander({ run: runSnapshot(), mode: "rush" });
+		const result = await executor.commander({ run: runSnapshot(), mode: "solo" });
 
 		expect(result.assignments).toEqual([
 			expect.objectContaining({
@@ -411,7 +411,7 @@ describe("San loop bundled agents", () => {
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options =>
 			makeResult(options.id, {
 				decision: "dispatch_workers",
-				mode: "rush",
+				mode: "solo",
 				rationale: "Dispatch one bounded worker before a supervisor gate.",
 				workers: [
 					{
@@ -441,7 +441,7 @@ describe("San loop bundled agents", () => {
 			},
 		});
 
-		const result = await executor.commander({ run: runSnapshot(), mode: "rush" });
+		const result = await executor.commander({ run: runSnapshot(), mode: "solo" });
 
 		expect(result.assignments).toEqual([
 			expect.objectContaining({
@@ -466,7 +466,7 @@ describe("San loop bundled agents", () => {
 			makeResult(options.id, {
 				current_status: "planning",
 				decision: "dispatch",
-				mode: "rush",
+				mode: "solo",
 				phases: [
 					{
 						agent: "san-worker",
@@ -507,7 +507,7 @@ describe("San loop bundled agents", () => {
 			},
 		});
 
-		const result = await executor.commander({ run: runSnapshot(), mode: "rush" });
+		const result = await executor.commander({ run: runSnapshot(), mode: "solo" });
 
 		expect(result.assignments).toEqual([
 			expect.objectContaining({
@@ -530,7 +530,7 @@ describe("San loop bundled agents", () => {
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options =>
 			makeResult(options.id, {
 				decision: "dispatch",
-				mode: "rush",
+				mode: "solo",
 				dispatch: {
 					agent: "san-worker",
 					tasks: [
@@ -559,7 +559,7 @@ describe("San loop bundled agents", () => {
 			},
 		});
 
-		const result = await executor.commander({ run: runSnapshot(), mode: "rush" });
+		const result = await executor.commander({ run: runSnapshot(), mode: "solo" });
 
 		expect(result.assignments).toEqual([
 			expect.objectContaining({
@@ -575,7 +575,7 @@ describe("San loop bundled agents", () => {
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options =>
 			makeResult(options.id, {
 				decision: "dispatch",
-				mode: "deep",
+				mode: "council",
 				dispatch: [
 					{
 						agent: "san-worker",
@@ -609,7 +609,7 @@ describe("San loop bundled agents", () => {
 			},
 		});
 
-		const result = await executor.commander({ run: runSnapshot(), mode: "deep" });
+		const result = await executor.commander({ run: runSnapshot(), mode: "council" });
 
 		expect(result.assignments).toEqual([
 			expect.objectContaining({
@@ -631,7 +631,7 @@ describe("San loop bundled agents", () => {
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options =>
 			makeResult(options.id, {
 				decision: "dispatch",
-				mode: "rush",
+				mode: "solo",
 				assignments: [
 					{
 						id: "T02ScopeReview",
@@ -655,7 +655,7 @@ describe("San loop bundled agents", () => {
 			},
 		});
 
-		const result = await executor.commander({ run: runSnapshot(), mode: "rush" });
+		const result = await executor.commander({ run: runSnapshot(), mode: "solo" });
 
 		expect(result.assignments).toEqual([
 			expect.objectContaining({
@@ -675,7 +675,7 @@ describe("San loop bundled agents", () => {
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options =>
 			makeResult(options.id, {
 				decision: "dispatch",
-				mode: "rush",
+				mode: "solo",
 				worker_batch: {
 					agent: "san-worker",
 					tasks: [
@@ -711,7 +711,7 @@ describe("San loop bundled agents", () => {
 			},
 		});
 
-		const result = await executor.commander({ run: runSnapshot(), mode: "rush" });
+		const result = await executor.commander({ run: runSnapshot(), mode: "solo" });
 
 		expect(result.assignments).toEqual([
 			expect.objectContaining({
@@ -748,7 +748,7 @@ describe("San loop bundled agents", () => {
 			},
 		});
 
-		const result = await executor.worker({ run: runSnapshot(), mode: "rush", assignment: assignment() });
+		const result = await executor.worker({ run: runSnapshot(), mode: "solo", assignment: assignment() });
 
 		expect(result).toEqual(
 			expect.objectContaining({
@@ -809,13 +809,13 @@ describe("San loop bundled agents", () => {
 
 		const first = await executor.supervisor({
 			run: runSnapshot(),
-			mode: "rush",
+			mode: "solo",
 			assignments: [assignment()],
 			workerResults: [workerResult()],
 		});
 		const second = await executor.supervisor({
 			run: runSnapshot(),
-			mode: "rush",
+			mode: "solo",
 			assignments: [assignment()],
 			workerResults: [workerResult()],
 		});
@@ -853,7 +853,7 @@ describe("San loop bundled agents", () => {
 
 		const result = await executor.supervisor({
 			run: runSnapshot(),
-			mode: "rush",
+			mode: "solo",
 			assignments: [assignment()],
 			workerResults: [workerResult()],
 		});
@@ -899,7 +899,7 @@ describe("San loop bundled agents", () => {
 
 		const result = await executor.supervisor({
 			run: runSnapshot(),
-			mode: "rush",
+			mode: "solo",
 			assignments: [assignment()],
 			workerResults: [workerResult()],
 		});

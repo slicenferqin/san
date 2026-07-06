@@ -2,70 +2,70 @@
   {
     "id": "T01",
     "label": "small-bug-fix",
-    "mode": "rush",
+    "mode": "solo",
     "expect": "passed",
     "objective": "San v0.2 验收 T01：小型 bug fix smoke。只读检查当前工作目录，识别一个最小可说明的问题或空目录事实，不创建或修改文件；最终必须由 Supervisor 给出 San loop terminal verdict，并在 evidence 中说明检查方法、范围和无写入确认。"
   },
   {
     "id": "T02",
     "label": "cross-file-feature-scope",
-    "mode": "rush",
+    "mode": "solo",
     "expect": "terminal",
     "objective": "San v0.2 验收 T02：跨文件功能补齐评估。只读审查当前工作目录，产出一个涉及 src/test/docs 三类交付面的最小功能拆解建议，不创建或修改文件；验收重点是 Commander 是否限制范围、Worker 是否给出可执行证据、Supervisor 是否给出 terminal verdict。"
   },
   {
     "id": "T03",
     "label": "contract-test-quality",
-    "mode": "rush",
+    "mode": "solo",
     "expect": "terminal",
     "objective": "San v0.2 验收 T03：测试补强评估。只读检查当前工作目录，提出一个 contract-level test 的候选边界，并明确为什么不是源码 grep 型测试；不创建或修改文件；最终 Supervisor 必须验证测试建议是否保护外部可观察合同。"
   },
   {
     "id": "T04",
     "label": "needs-fix-closure",
-    "mode": "smart",
+    "mode": "team",
     "expect": "terminal",
     "objective": "San v0.2 验收 T04：needs_fix 闭环。要求 Worker 先给出一个可能不完整的只读证据报告，Supervisor 必须严格审查是否缺 scope、method、no-mutation 或 verification；如需要修复，进入 retry 并保留缺陷证据，最终必须 terminal。"
   },
   {
     "id": "T05",
     "label": "project-rules-guard",
-    "mode": "rush",
+    "mode": "solo",
     "expect": "terminal",
     "objective": "San v0.2 验收 T05：项目规则约束。只读审查当前任务是否需要遵守不用 any、不用 ReturnType、用 Bun API、prompt 静态化等规则；不创建或修改文件；Supervisor 必须说明这些规则是否进入验收 evidence。"
   },
   {
     "id": "T06",
     "label": "docs-report-gate",
-    "mode": "rush",
+    "mode": "solo",
     "expect": "terminal",
     "objective": "San v0.2 验收 T06：文档交付 gate。只读评估 docs/research 报告应具备的结论、证据、矩阵、失败样本和路径引用；不创建或修改文件；Supervisor 必须判断该文档交付标准是否足以验收 v0.2。"
   },
   {
     "id": "T07",
     "label": "failed-command-loop",
-    "mode": "smart",
+    "mode": "team",
     "expect": "terminal",
     "objective": "San v0.2 验收 T07：失败命令闭环。只读构造一个会先失败的验证场景说明，要求 Worker 给出失败证据和下一步诊断，不执行会写缓存的命令；Supervisor 必须判断失败是否被结构化为 retry 或 blocked。"
   },
   {
     "id": "T08",
-    "label": "deep-architecture-review",
-    "mode": "deep",
+    "label": "council-architecture-review",
+    "mode": "council",
     "expect": "terminal",
-    "objective": "San v0.2 验收 T08：Deep 模式架构审查。只读审查 v0.2 多角色分工与 v0.1 上下文稳态组合的产品方向；必须触发 Oracle second opinion，再由 Supervisor 接收或反驳；最终必须 terminal verdict。"
+    "objective": "San v0.2 验收 T08：Council 模式架构审查。只读审查 v0.2 多角色分工与 v0.1 上下文稳态组合的产品方向；必须触发 Oracle second opinion，再由 Supervisor 接收或反驳；最终必须 terminal verdict。"
   },
   {
     "id": "T09",
     "label": "budget-boundary",
-    "mode": "rush",
+    "mode": "solo",
     "expect": "terminal",
     "objective": "San v0.2 验收 T09：预算边界。只读执行一个范围较大的验收拆解，观察 hard budget 是否阻止无界扩散；如果预算不足，必须 blocked 且说明 next action；不得启动超出预算的无关工作。"
   },
   {
     "id": "T10",
     "label": "acceptance-report-synthesis",
-    "mode": "smart",
+    "mode": "team",
     "expect": "terminal",
     "objective": "San v0.2 验收 T10：综合验收报告。只读总结本测试集应如何评价闭环质量、失败样本、多角色贡献、成本 ROI 和上下文稳态继承；不得编造未发生证据；最终必须给 terminal verdict。"
   }

@@ -176,7 +176,7 @@ function makeExecutor(options: {
 				reviewer: "oracle",
 				verdict: "pass",
 				testsRun: [],
-				evidence: ["oracle second opinion reviewed deterministic deep-mode evidence"],
+				evidence: ["oracle second opinion reviewed deterministic council-mode evidence"],
 				retryable: false,
 				requiredNextActions: ["continue supervisor gate"],
 				confidence: "high",
@@ -217,32 +217,32 @@ export async function runSanLoopDogfood(options: SanLoopDogfoodOptions = {}): Pr
 
 	await runSanLoop({
 		sessionManager: session,
-		objective: "Dogfood rush mode pass loop",
-		mode: "rush",
-		runId: "loop_dogfood_rush_pass",
-		executor: makeExecutor({ taskId: "rush-pass", taskTitle: "rush pass implementation", reviews: ["pass"] }),
+		objective: "Dogfood solo mode pass loop",
+		mode: "solo",
+		runId: "loop_dogfood_solo_pass",
+		executor: makeExecutor({ taskId: "solo-pass", taskTitle: "solo pass implementation", reviews: ["pass"] }),
 	});
 
 	await runSanLoop({
 		sessionManager: session,
-		objective: "Dogfood smart mode retry loop",
-		mode: "smart",
-		runId: "loop_dogfood_smart_retry",
+		objective: "Dogfood team mode retry loop",
+		mode: "team",
+		runId: "loop_dogfood_team_retry",
 		executor: makeExecutor({
-			taskId: "smart-retry",
-			taskTitle: "smart retry implementation",
+			taskId: "team-retry",
+			taskTitle: "team retry implementation",
 			reviews: ["needs_fix", "pass"],
 		}),
 	});
 
 	await runSanLoop({
 		sessionManager: session,
-		objective: "Dogfood deep mode blocked loop",
-		mode: "deep",
-		runId: "loop_dogfood_deep_blocked",
+		objective: "Dogfood council mode blocked loop",
+		mode: "council",
+		runId: "loop_dogfood_council_blocked",
 		executor: makeExecutor({
-			taskId: "deep-blocked",
-			taskTitle: "deep blocked implementation",
+			taskId: "council-blocked",
+			taskTitle: "council blocked implementation",
 			reviews: ["blocked"],
 			oracle: true,
 		}),
@@ -251,7 +251,7 @@ export async function runSanLoopDogfood(options: SanLoopDogfoodOptions = {}): Pr
 	await runSanLoop({
 		sessionManager: session,
 		objective: "Dogfood hard turn budget",
-		mode: "rush",
+		mode: "solo",
 		runId: "loop_dogfood_budget_exhausted",
 		executor: makeExecutor({
 			taskId: "budget-exhausted",
@@ -264,7 +264,7 @@ export async function runSanLoopDogfood(options: SanLoopDogfoodOptions = {}): Pr
 	const activeRun = createSanLoopRunSnapshot({
 		sessionId,
 		objective: "Dogfood active run recovery",
-		mode: "smart",
+		mode: "team",
 		runId: "loop_dogfood_recovered",
 	});
 	appendSanLoopRunSnapshot(session, activeRun);
@@ -273,7 +273,7 @@ export async function runSanLoopDogfood(options: SanLoopDogfoodOptions = {}): Pr
 	const abortRun = createSanLoopRunSnapshot({
 		sessionId,
 		objective: "Dogfood operator abort",
-		mode: "rush",
+		mode: "solo",
 		runId: "loop_dogfood_aborted",
 	});
 	appendSanLoopRunSnapshot(session, abortRun);
@@ -281,37 +281,37 @@ export async function runSanLoopDogfood(options: SanLoopDogfoodOptions = {}): Pr
 
 	const entries = session.getEntries();
 	const scenarios = [
-		reportScenario(entries, "rush pass", "loop_dogfood_rush_pass", "rush"),
-		reportScenario(entries, "smart retry", "loop_dogfood_smart_retry", "smart"),
-		reportScenario(entries, "deep blocked", "loop_dogfood_deep_blocked", "deep"),
-		reportScenario(entries, "budget exhausted", "loop_dogfood_budget_exhausted", "rush"),
-		reportScenario(entries, "recovery", "loop_dogfood_recovered", "smart"),
-		reportScenario(entries, "abort", "loop_dogfood_aborted", "rush"),
+		reportScenario(entries, "solo pass", "loop_dogfood_solo_pass", "solo"),
+		reportScenario(entries, "team retry", "loop_dogfood_team_retry", "team"),
+		reportScenario(entries, "council blocked", "loop_dogfood_council_blocked", "council"),
+		reportScenario(entries, "budget exhausted", "loop_dogfood_budget_exhausted", "solo"),
+		reportScenario(entries, "recovery", "loop_dogfood_recovered", "team"),
+		reportScenario(entries, "abort", "loop_dogfood_aborted", "solo"),
 	];
 	const ledger = rebuildSanLoopLedger(entries);
 	const recoveredRuns = ledger.events.filter(event => event.data.type === "recovered").length;
 	const assertions = [
 		assertResult(
-			"rush pass reaches final verdict",
+			"solo pass reaches final verdict",
 			scenarios[0]?.status === "passed" && scenarios[0].events.includes("finalized"),
 			`${scenarios[0]?.status ?? "missing"} with events=${scenarios[0]?.events.join(",") ?? "none"}`,
 		),
 		assertResult(
-			"smart retry repairs needs_fix",
+			"team retry repairs needs_fix",
 			scenarios[1]?.status === "passed" &&
 				scenarios[1].retryCount === 1 &&
 				scenarios[1].events.includes("retry_requested"),
 			`${scenarios[1]?.status ?? "missing"} retry=${scenarios[1]?.retryCount ?? -1}`,
 		),
 		assertResult(
-			"deep mode runs oracle before supervisor",
-			defaultSanLoopModePolicy("deep").requireOracle &&
+			"council mode runs oracle before supervisor",
+			defaultSanLoopModePolicy("council").requireOracle &&
 				scenarios[2]?.events.includes("finalized") &&
 				scenarios[2]?.reviews === 2,
-			`requireOracle=${defaultSanLoopModePolicy("deep").requireOracle}, reviews=${scenarios[2]?.reviews ?? -1}`,
+			`requireOracle=${defaultSanLoopModePolicy("council").requireOracle}, reviews=${scenarios[2]?.reviews ?? -1}`,
 		),
 		assertResult(
-			"deep blocked is terminal",
+			"council blocked is terminal",
 			scenarios[2]?.status === "blocked" && scenarios[2].events.includes("review_completed"),
 			`${scenarios[2]?.status ?? "missing"} with events=${scenarios[2]?.events.join(",") ?? "none"}`,
 		),

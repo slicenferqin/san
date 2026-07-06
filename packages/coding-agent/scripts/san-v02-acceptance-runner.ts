@@ -4,7 +4,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "../src/config/settings";
-import { createSanLoopTaskAgentExecutor, isSanLoopTerminalStatus, runSanLoop, type SanLoopMode } from "../src/san-loop";
+import {
+	createSanLoopTaskAgentExecutor,
+	isSanLoopTerminalStatus,
+	normalizeSanLoopMode,
+	runSanLoop,
+	type SanLoopMode,
+} from "../src/san-loop";
 import { createAgentSession } from "../src/sdk";
 import { buildSanLoopReportText } from "../src/slash-commands/helpers/san-loop-report";
 
@@ -60,12 +66,12 @@ function usage(): string {
 		"  bun packages/coding-agent/scripts/san-v02-acceptance-runner.ts [options] --objective <text>",
 		"",
 		"Options:",
-		"  --agent-dir <path>     Agent dir with models.yml (default: PI_CODING_AGENT_DIR or ~/.omp/agent)",
+		"  --agent-dir <path>     Agent dir with models.yml (default: SAN_CODING_AGENT_DIR or ~/.san/agent)",
 		"  --config <path>        San config overlay (default: heterogeneous v0.2 overlay)",
 		"  --cwd <path>           Workspace cwd for the run (default: current cwd)",
 		"  --expect <terminal|passed>  Exit success condition (default: terminal)",
 		"  --label <name>         Evidence label (default: san-v02-acceptance)",
-		"  --mode <rush|smart|deep>    San loop mode (default: rush)",
+		"  --mode <solo|team|council>  San loop mode (default: solo)",
 		"  --out <path>           Write JSON evidence to this path",
 	].join("\n");
 }
@@ -95,8 +101,7 @@ function resolvePath(value: string): string {
 }
 
 function parseMode(value: string | undefined): SanLoopMode {
-	if (value === "smart" || value === "deep" || value === "rush") return value;
-	return "rush";
+	return normalizeSanLoopMode(value) ?? "solo";
 }
 
 function parseExpect(value: string | undefined): RunnerArgs["expect"] {
@@ -121,7 +126,8 @@ function parseArgs(): RunnerArgs {
 	}
 
 	const cwd = resolvePath(argValue(args, "--cwd") ?? process.cwd());
-	const agentDir = argValue(args, "--agent-dir") ?? process.env.PI_CODING_AGENT_DIR;
+	const agentDir =
+		argValue(args, "--agent-dir") ?? process.env.SAN_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR;
 	const config = resolvePath(argValue(args, "--config") ?? defaultConfigPath());
 	const out = argValue(args, "--out");
 
@@ -139,12 +145,12 @@ function parseArgs(): RunnerArgs {
 
 function maxTurnsForMode(settings: Settings, mode: SanLoopMode): number {
 	switch (mode) {
-		case "rush":
-			return settings.get("san.executionLoop.budget.rushMaxTurns");
-		case "smart":
-			return settings.get("san.executionLoop.budget.smartMaxTurns");
-		case "deep":
-			return settings.get("san.executionLoop.budget.deepMaxTurns");
+		case "solo":
+			return settings.get("san.executionLoop.budget.soloMaxTurns");
+		case "team":
+			return settings.get("san.executionLoop.budget.teamMaxTurns");
+		case "council":
+			return settings.get("san.executionLoop.budget.councilMaxTurns");
 	}
 }
 

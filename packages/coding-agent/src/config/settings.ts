@@ -172,6 +172,80 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+const SAN_LOOP_MODE_RENAMES: Record<string, string> = {
+	rush: "solo",
+	smart: "team",
+	deep: "council",
+};
+
+function migrateSanLoopModeValue(value: unknown): unknown {
+	return typeof value === "string" ? (SAN_LOOP_MODE_RENAMES[value] ?? value) : value;
+}
+
+function migrateSanLoopModeList(value: unknown): unknown {
+	if (!Array.isArray(value)) return value;
+	const modes = value
+		.map(migrateSanLoopModeValue)
+		.filter((item): item is string => typeof item === "string" && item.length > 0);
+	return [...new Set(modes)];
+}
+
+function migrateSanLoopBudgetKey(budget: Record<string, unknown>, oldKey: string, newKey: string): void {
+	if (oldKey in budget && !(newKey in budget)) budget[newKey] = budget[oldKey];
+	delete budget[oldKey];
+}
+
+function migrateSanLoopExecutionLoopSettings(executionLoop: Record<string, unknown>): void {
+	if ("defaultMode" in executionLoop) {
+		executionLoop.defaultMode = migrateSanLoopModeValue(executionLoop.defaultMode);
+	}
+
+	const roles = executionLoop.roles;
+	if (isRecord(roles)) {
+		const oracle = roles.oracle;
+		if (isRecord(oracle) && "enabledInModes" in oracle) {
+			oracle.enabledInModes = migrateSanLoopModeList(oracle.enabledInModes);
+		}
+	}
+
+	const budget = executionLoop.budget;
+	if (isRecord(budget)) {
+		migrateSanLoopBudgetKey(budget, "rushMaxTurns", "soloMaxTurns");
+		migrateSanLoopBudgetKey(budget, "smartMaxTurns", "teamMaxTurns");
+		migrateSanLoopBudgetKey(budget, "deepMaxTurns", "councilMaxTurns");
+	}
+}
+
+function migrateFlatSanLoopSetting(
+	raw: RawSettings,
+	oldKey: string,
+	newKey: string,
+	mapValue: (value: unknown) => unknown = value => value,
+): void {
+	if (oldKey in raw && !(newKey in raw)) raw[newKey] = mapValue(raw[oldKey]);
+	delete raw[oldKey];
+}
+
+function migrateSanLoopSettings(raw: RawSettings): void {
+	const san = raw.san;
+	if (isRecord(san)) {
+		const executionLoop = san.executionLoop;
+		if (isRecord(executionLoop)) migrateSanLoopExecutionLoopSettings(executionLoop);
+	}
+
+	if ("san.executionLoop.defaultMode" in raw) {
+		raw["san.executionLoop.defaultMode"] = migrateSanLoopModeValue(raw["san.executionLoop.defaultMode"]);
+	}
+	if ("san.executionLoop.roles.oracle.enabledInModes" in raw) {
+		raw["san.executionLoop.roles.oracle.enabledInModes"] = migrateSanLoopModeList(
+			raw["san.executionLoop.roles.oracle.enabledInModes"],
+		);
+	}
+	migrateFlatSanLoopSetting(raw, "san.executionLoop.budget.rushMaxTurns", "san.executionLoop.budget.soloMaxTurns");
+	migrateFlatSanLoopSetting(raw, "san.executionLoop.budget.smartMaxTurns", "san.executionLoop.budget.teamMaxTurns");
+	migrateFlatSanLoopSetting(raw, "san.executionLoop.budget.deepMaxTurns", "san.executionLoop.budget.councilMaxTurns");
+}
+
 function shallowStringRecord(value: unknown): Record<string, string> {
 	if (!isRecord(value)) return {};
 
@@ -780,6 +854,8 @@ export class Settings {
 			this.#legacyLastChangelogVersion ??= raw.lastChangelogVersion;
 		}
 		delete raw.lastChangelogVersion;
+
+		migrateSanLoopSettings(raw);
 
 		// ask.timeout: ms -> seconds (if value > 1000, it's old ms format)
 		if (raw.ask && typeof (raw.ask as Record<string, unknown>).timeout === "number") {

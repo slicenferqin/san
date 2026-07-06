@@ -41,9 +41,12 @@ describe("profile directories", () => {
 	let configDir = "";
 	let originalAgentDir = "";
 	let originalProfile: string | undefined;
+	let originalSanAgentDirEnv: string | undefined;
 	let originalAgentDirEnv: string | undefined;
+	let originalSanProfileEnv: string | undefined;
 	let originalOmpProfileEnv: string | undefined;
 	let originalPiProfileEnv: string | undefined;
+	let originalSanConfigDir: string | undefined;
 	let originalConfigDir: string | undefined;
 	let originalXdgDataHome: string | undefined;
 	let originalXdgStateHome: string | undefined;
@@ -52,21 +55,25 @@ describe("profile directories", () => {
 	beforeEach(async () => {
 		originalAgentDir = getAgentDir();
 		originalProfile = getActiveProfile();
+		originalSanAgentDirEnv = process.env.SAN_CODING_AGENT_DIR;
 		originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+		originalSanProfileEnv = process.env.SAN_PROFILE;
 		originalOmpProfileEnv = process.env.OMP_PROFILE;
 		originalPiProfileEnv = process.env.PI_PROFILE;
+		originalSanConfigDir = process.env.SAN_CONFIG_DIR;
 		originalConfigDir = process.env.PI_CONFIG_DIR;
 		originalXdgDataHome = process.env.XDG_DATA_HOME;
 		originalXdgStateHome = process.env.XDG_STATE_HOME;
 		originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 		tempRoot = path.join(os.tmpdir(), "pi-utils-profiles", Snowflake.next());
-		configDir = `.omp-profile-test-${Snowflake.next()}`;
+		configDir = `.san-profile-test-${Snowflake.next()}`;
 		await fs.mkdir(tempRoot, { recursive: true });
-		process.env.PI_CONFIG_DIR = configDir;
+		process.env.SAN_CONFIG_DIR = configDir;
 		// Other suites that run before this one (e.g. dirs-python-gateway) may have
 		// called `setAgentDir`, which permanently mutates the module-level
 		// pre-profile snapshot. Reset it here so each test starts from a clean
-		// `PI_CODING_AGENT_DIR` baseline matching the env we just configured.
+		// agent-dir baseline matching the env we just configured.
+		delete process.env.SAN_CODING_AGENT_DIR;
 		delete process.env.PI_CODING_AGENT_DIR;
 		__resetProfileSnapshotForTests();
 		delete process.env.XDG_DATA_HOME;
@@ -76,6 +83,11 @@ describe("profile directories", () => {
 
 	afterEach(async () => {
 		setProfile(undefined);
+		if (originalSanConfigDir === undefined) {
+			delete process.env.SAN_CONFIG_DIR;
+		} else {
+			process.env.SAN_CONFIG_DIR = originalSanConfigDir;
+		}
 		if (originalConfigDir === undefined) {
 			delete process.env.PI_CONFIG_DIR;
 		} else {
@@ -102,6 +114,21 @@ describe("profile directories", () => {
 			setAgentDir(originalAgentDir);
 		} else {
 			setProfile(undefined);
+		}
+		if (originalSanAgentDirEnv === undefined) {
+			delete process.env.SAN_CODING_AGENT_DIR;
+		} else {
+			process.env.SAN_CODING_AGENT_DIR = originalSanAgentDirEnv;
+		}
+		if (originalAgentDirEnv === undefined) {
+			delete process.env.PI_CODING_AGENT_DIR;
+		} else {
+			process.env.PI_CODING_AGENT_DIR = originalAgentDirEnv;
+		}
+		if (originalSanProfileEnv === undefined) {
+			delete process.env.SAN_PROFILE;
+		} else {
+			process.env.SAN_PROFILE = originalSanProfileEnv;
 		}
 		if (originalOmpProfileEnv === undefined) {
 			delete process.env.OMP_PROFILE;
@@ -148,16 +175,16 @@ describe("profile directories", () => {
 		process.env.XDG_CACHE_HOME = path.join(tempRoot, "cache");
 		// Named profiles only adopt XDG when their *own* XDG path already exists,
 		// so the profile location stays stable across activations.
-		await fs.mkdir(path.join(process.env.XDG_DATA_HOME, "omp", "profiles", "work"), { recursive: true });
-		await fs.mkdir(path.join(process.env.XDG_STATE_HOME, "omp", "profiles", "work"), { recursive: true });
-		await fs.mkdir(path.join(process.env.XDG_CACHE_HOME, "omp", "profiles", "work"), { recursive: true });
+		await fs.mkdir(path.join(process.env.XDG_DATA_HOME, "san", "profiles", "work"), { recursive: true });
+		await fs.mkdir(path.join(process.env.XDG_STATE_HOME, "san", "profiles", "work"), { recursive: true });
+		await fs.mkdir(path.join(process.env.XDG_CACHE_HOME, "san", "profiles", "work"), { recursive: true });
 
 		setProfile("work");
 
-		expect(getAgentDbPath()).toBe(path.join(process.env.XDG_DATA_HOME, "omp", "profiles", "work", "agent.db"));
-		expect(getSessionsDir()).toBe(path.join(process.env.XDG_DATA_HOME, "omp", "profiles", "work", "sessions"));
+		expect(getAgentDbPath()).toBe(path.join(process.env.XDG_DATA_HOME, "san", "profiles", "work", "agent.db"));
+		expect(getSessionsDir()).toBe(path.join(process.env.XDG_DATA_HOME, "san", "profiles", "work", "sessions"));
 		expect(getPythonGatewayDir()).toBe(
-			path.join(process.env.XDG_STATE_HOME, "omp", "profiles", "work", "python-gateway"),
+			path.join(process.env.XDG_STATE_HOME, "san", "profiles", "work", "python-gateway"),
 		);
 	});
 
@@ -168,19 +195,19 @@ describe("profile directories", () => {
 		process.env.XDG_STATE_HOME = path.join(tempRoot, "state");
 		process.env.XDG_CACHE_HOME = path.join(tempRoot, "cache");
 
-		// Fresh install: XDG vars are set (typical Linux) but no $XDG/omp exists yet.
+		// Fresh install: XDG vars are set (typical Linux) but no $XDG/san exists yet.
 		// First activation must land in ~/<config-dir>/profiles/work because
 		// the profile-specific XDG path does not exist.
 		setProfile("work");
 		const firstAgentDir = getAgentDir();
 		expect(firstAgentDir).toBe(path.join(os.homedir(), configDir, "profiles", "work", "agent"));
 
-		// Later, the base XDG app dir materializes (e.g. via `omp config init-xdg`
+		// Later, the base XDG app dir materializes (e.g. via `san config init-xdg`
 		// migrating only the default-profile data). The named profile must stay
 		// in its original location until the user explicitly migrates it.
-		await fs.mkdir(path.join(process.env.XDG_DATA_HOME, "omp"), { recursive: true });
-		await fs.mkdir(path.join(process.env.XDG_STATE_HOME, "omp"), { recursive: true });
-		await fs.mkdir(path.join(process.env.XDG_CACHE_HOME, "omp"), { recursive: true });
+		await fs.mkdir(path.join(process.env.XDG_DATA_HOME, "san"), { recursive: true });
+		await fs.mkdir(path.join(process.env.XDG_STATE_HOME, "san"), { recursive: true });
+		await fs.mkdir(path.join(process.env.XDG_CACHE_HOME, "san"), { recursive: true });
 
 		setProfile(undefined);
 		setProfile("work");
@@ -188,8 +215,8 @@ describe("profile directories", () => {
 	});
 
 	it("rejects path-like profile names", () => {
-		expect(() => setProfile("../work")).toThrow("Invalid OMP profile");
-		expect(() => setProfile("work/team")).toThrow("Invalid OMP profile");
+		expect(() => setProfile("../work")).toThrow("Invalid San profile");
+		expect(() => setProfile("work/team")).toThrow("Invalid San profile");
 	});
 
 	it("rejects trailing-dot profile names to avoid Windows path collisions", () => {
@@ -253,24 +280,22 @@ describe("profile directories", () => {
 });
 
 describe("profile env + name validation", () => {
-	it("honors OMP_PROFILE precedence and treats empty/default as the default profile", () => {
-		// OMP_PROFILE is canonical and wins over the legacy PI_PROFILE fallback.
-		expect(resolveProfileEnv("work", "other")).toBe("work");
-		// PI_PROFILE is consulted only when OMP_PROFILE is undefined.
-		expect(resolveProfileEnv(undefined, "work")).toBe("work");
-		// An explicitly-empty OMP_PROFILE selects the default profile; it must NOT
-		// fall through to the lower-precedence PI_PROFILE.
-		expect(resolveProfileEnv("", "work")).toBeUndefined();
-		expect(resolveProfileEnv("   ", "work")).toBeUndefined();
-		expect(resolveProfileEnv("default", "work")).toBeUndefined();
-		expect(resolveProfileEnv(undefined, undefined)).toBeUndefined();
+	it("honors SAN_PROFILE precedence and treats empty/default as the default profile", () => {
+		expect(resolveProfileEnv("work", "other", "third")).toBe("work");
+		expect(resolveProfileEnv(undefined, "work", "other")).toBe("work");
+		expect(resolveProfileEnv(undefined, undefined, "work")).toBe("work");
+		expect(resolveProfileEnv("", "work", "other")).toBeUndefined();
+		expect(resolveProfileEnv("   ", "work", "other")).toBeUndefined();
+		expect(resolveProfileEnv("default", "work", "other")).toBeUndefined();
+		expect(resolveProfileEnv(undefined, "", "work")).toBeUndefined();
+		expect(resolveProfileEnv(undefined, undefined, undefined)).toBeUndefined();
 	});
 
 	it("rejects uppercase profile names so isolation is filesystem-independent", () => {
 		// `work` and `WORK` would collide on case-insensitive macOS/Windows but
 		// differ on Linux; reject uppercase to keep profile identity stable.
-		expect(() => normalizeProfileName("WORK")).toThrow("Invalid OMP profile");
-		expect(() => normalizeProfileName("Work")).toThrow("Invalid OMP profile");
+		expect(() => normalizeProfileName("WORK")).toThrow("Invalid San profile");
+		expect(() => normalizeProfileName("Work")).toThrow("Invalid San profile");
 		expect(normalizeProfileName("work")).toBe("work");
 		expect(normalizeProfileName("work-2.0_a")).toBe("work-2.0_a");
 	});
@@ -420,7 +445,7 @@ describe("dirs module import behavior", () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-utils-profile-env-xdg-"));
 		const homeDir = path.join(root, "home");
 		const xdgStateRoot = path.join(root, "xdg-state");
-		const profileConfigDir = `.omp-env-xdg-${Snowflake.next()}`;
+		const profileConfigDir = `.san-env-xdg-${Snowflake.next()}`;
 		try {
 			const envUrl = url.pathToFileURL(path.join(import.meta.dir, "..", "src", "env.ts")).href;
 			const dirsUrl = url.pathToFileURL(path.join(import.meta.dir, "..", "src", "dirs.ts")).href;
@@ -431,7 +456,7 @@ describe("dirs module import behavior", () => {
 			// import time — the exact ordering refreshDirsFromEnv() guards.
 			await Bun.write(path.join(agentDir, ".env"), `XDG_STATE_HOME=${xdgStateRoot}\n`);
 			// Named profiles only adopt XDG when their own XDG path already exists.
-			const xdgProfileRoot = path.join(xdgStateRoot, "omp", "profiles", "work");
+			const xdgProfileRoot = path.join(xdgStateRoot, "san", "profiles", "work");
 			await fs.mkdir(xdgProfileRoot, { recursive: true });
 
 			const probePath = path.join(root, "probe.ts");

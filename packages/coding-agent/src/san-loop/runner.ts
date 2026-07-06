@@ -163,7 +163,7 @@ function budgetBlockedTransition(run: SanLoopRunSnapshot): SanLoopTransition {
 }
 
 export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoopResult> {
-	const mode = options.mode ?? "smart";
+	const mode = options.mode ?? "team";
 	const policy = defaultSanLoopModePolicy(mode);
 	const maxWorkers = Math.max(1, Math.floor(options.maxWorkers ?? policy.maxWorkers));
 	let remainingTurns = positiveInteger(options.maxTurns, policy.remainingTurns);

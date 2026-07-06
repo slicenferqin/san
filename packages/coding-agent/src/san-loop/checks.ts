@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { findAllNearestProjectConfigDirs, getConfigDirs } from "../config";
 import builtinProjectTypescriptContracts from "../prompts/san-loop/checks/project-typescript-contracts.md" with {
 	type: "text",
@@ -48,6 +48,7 @@ interface CheckFrontmatter {
 
 const CHECK_EXTENSIONS = new Set([".md", ".markdown"]);
 const ALL_ROLES: SanLoopRole[] = ["commander", "worker", "supervisor", "oracle"];
+const DEFAULT_SAN_CHECKS_PROJECT_DIR = `${CONFIG_DIR_NAME}/checks`;
 const BUILTIN_CHECKS: Array<{ path: string; content: string }> = [
 	{ path: "embedded:san-loop/checks/project-typescript-contracts.md", content: builtinProjectTypescriptContracts },
 	{ path: "embedded:san-loop/checks/supervisor-gate.md", content: builtinSupervisorGate },
@@ -152,15 +153,15 @@ function builtinChecks(): SanLoopCheck[] {
 }
 
 export async function discoverSanLoopChecks(options: DiscoverSanLoopChecksOptions): Promise<SanLoopCheck[]> {
-	const projectSubdir = options.projectDir ?? ".omp/checks";
+	const projectSubdir = options.projectDir ?? DEFAULT_SAN_CHECKS_PROJECT_DIR;
 	const projectDirs =
-		projectSubdir === ".omp/checks"
+		projectSubdir === DEFAULT_SAN_CHECKS_PROJECT_DIR
 			? findAllNearestProjectConfigDirs("checks", options.cwd)
-					.filter(entry => entry.source === ".omp")
+					.filter(entry => entry.source === CONFIG_DIR_NAME)
 					.map(entry => entry.path)
 			: [path.resolve(options.cwd, projectSubdir)];
 	const userDirs = getConfigDirs("checks", { user: true, project: false, existingOnly: true })
-		.filter(entry => entry.source === ".omp")
+		.filter(entry => entry.source === CONFIG_DIR_NAME)
 		.map(entry => entry.path);
 
 	const projectChecks = (await Promise.all(projectDirs.map(dir => readCheckDir(dir, "project")))).flat();

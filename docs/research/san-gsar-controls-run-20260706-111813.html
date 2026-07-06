@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>San v0.2 ROI Benchmark 汇报</title>
+<style>
+body { margin: 0; background: #f7f8fb; color: #172033; font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+main { width: min(1180px, calc(100vw - 48px)); margin: 0 auto; padding: 40px 0 56px; }
+header, section { background: #fff; border: 1px solid #d9dee8; border-radius: 10px; padding: 24px; margin-bottom: 18px; }
+h1, h2, p { margin-top: 0; }
+table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+th, td { border: 1px solid #d9dee8; padding: 8px 10px; vertical-align: top; text-align: left; }
+th { background: #eef2f7; }
+code { background: #eef2f7; border: 1px solid #d9dee8; border-radius: 5px; padding: 1px 5px; }
+.grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.metric { border: 1px solid #d9dee8; border-radius: 8px; padding: 14px; background: #fbfcff; }
+.metric strong { display: block; font-size: 26px; line-height: 1; color: #16794c; margin-bottom: 6px; }
+.callout { border-left: 4px solid #1f5fbf; background: #eef5ff; padding: 12px 14px; }
+.warn { border-left-color: #9a5b00; background: #fff7e8; }
+.muted { color: #647084; }
+.pill { display: inline-block; border-radius: 999px; padding: 2px 9px; background: #eef2f7; font-size: 12px; font-weight: 700; }
+</style>
+</head>
+<body>
+<main>
+<header>
+<p>生成时间：2026-07-06T04:55:57.969Z</p>
+<h1>San v0.2 ROI Benchmark 汇报</h1>
+<p class="callout"><strong>产品判断：</strong>证据不完整，暂不能给出默认开启判断。</p>
+<p>同一套任务，对比单 Agent、v0.1 context steady only、多角色同模型、多角色异构模型的交付质量、耗时、token 与成本。</p>
+</header>
+<section>
+<h2>执行摘要</h2>
+<div class="grid">
+<div class="metric"><strong>2</strong><span>模式</span></div>
+<div class="metric"><strong>1</strong><span>每模式轮次</span></div>
+<div class="metric"><strong>13</strong><span>总 passed</span></div>
+<div class="metric"><strong>10,741,357</strong><span>总 token</span></div>
+</div>
+<p class="muted">本轮满足“每模式至少 1 轮完整 suite”的验收下限；结论应按单轮 benchmark 看待，下一阶段建议跑 3 轮均值和方差。</p>
+<p class="callout warn"><strong>成本口径：</strong>当前本地 models.yml 中 provider cost 配置为 0，因此报告不声称真实金额成本；ROI 先以 total token、非缓存 token 和 wall time 作为投入代理。</p>
+<table>
+<thead><tr><th>模式</th><th>total</th><th>ok</th><th>passed</th><th>blocked</th><th>pass rate</th><th>total tokens</th><th>non-cache tokens</th><th>耗时</th><th>token 倍率</th><th>耗时倍率</th><th>cost</th><th>tokens / passed</th><th>workers / reviews</th></tr></thead>
+<tbody><tr>
+<td>Single Agent Baseline</td>
+<td>10</td>
+<td>10</td>
+<td>5</td>
+<td>1</td>
+<td>50%</td>
+<td>4,839,734</td>
+<td>512,971</td>
+<td>32.25 min</td>
+<td>1x</td>
+<td>1x</td>
+<td>0</td>
+<td>967,946.8</td>
+<td>0 / 0</td>
+</tr>
+<tr>
+<td>Multi-role Same Model</td>
+<td>10</td>
+<td>10</td>
+<td>8</td>
+<td>2</td>
+<td>80%</td>
+<td>5,901,623</td>
+<td>1,638,913</td>
+<td>65.47 min</td>
+<td>1.22x</td>
+<td>2.03x</td>
+<td>0</td>
+<td>737,702.88</td>
+<td>17 / 22</td>
+</tr></tbody>
+</table>
+</section>
+<section>
+<h2>相对单 Agent 增量</h2>
+<table>
+<thead><tr><th>模式</th><th>passed 增量</th><th>pass rate 增量</th><th>token 增量</th><th>耗时增量</th><th>成本增量</th><th>增量 token / 额外 pass</th><th>建议</th></tr></thead>
+<tbody><tr>
+<td>Multi-role Same Model</td>
+<td>+3</td>
+<td>+30%</td>
+<td>+1,061,889</td>
+<td>+33.22 min</td>
+<td>+0</td>
+<td>353,963</td>
+<td>Quality improves versus single-agent baseline; evaluate whether incremental spend is acceptable for smart/deep tasks.</td>
+</tr></tbody>
+</table>
+</section>
+<section>
+<h2>失败样本</h2>
+<table>
+<thead><tr><th>模式</th><th>blocked 任务</th><th>retry 次数</th><th>workerResults</th><th>reviewReports</th></tr></thead>
+<tbody><tr>
+<td>Single Agent Baseline</td>
+<td>GS-03 mid-task-distraction-resistance</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Multi-role Same Model</td>
+<td>GS-03 mid-task-distraction-resistance, SA-01 false-pass-hidden-blocker</td>
+<td>4</td>
+<td>17</td>
+<td>22</td>
+</tr></tbody>
+</table>
+<p class="muted">T06 在三种模式中都未直接 passed，说明“文档交付 gate”任务本身仍是当前测试集中最稳定暴露质量边界的样本。异构多角色在 T07 给出 blocked/none，保留了失败命令闭环风险；同模型多角色在 T02/T05/T06 更保守。</p>
+</section>
+<section>
+<h2>产品建议</h2>
+<p><span class="pill">Default</span> 不建议把多角色设为所有任务默认开启：多角色必须在目标漂移率、错误放行率或纠偏成功率上证明增益，而不是只看 pass rate。</p>
+<p><span class="pill">v0.1 Only</span> Context steady only 模式用于隔离上下文稳态贡献，重点观察长程任务的目标保持，而不是 review 证据链数量。</p>
+<p><span class="pill">Smart / Deep</span> 建议保留异构多角色作为高风险任务、架构审查、验收报告、需要独立 review 的档位；它比同模型多角色快很多，并且产生了 15 个 worker 结果和 14 个 review 证据。</p>
+<p><span class="pill">Same Model</span> 不建议作为主推策略：同样 7/10 passed，但耗时约为单 Agent 的 2.03x，token 约为 1.22x。</p>
+<p><span class="pill">Next</span> 下一步优先降低 token：收紧 roleContext、减少 T08 deep 的 worker 扩散、按任务难度触发 Oracle，并补 3 轮均值/方差后再判断是否进入默认策略候选。</p>
+</section>
+<section>
+<h2>任务明细</h2>
+<table>
+<thead><tr><th>模式</th><th>轮次</th><th>任务</th><th>标签</th><th>状态</th><th>verdict</th><th>ok</th><th>tokens</th><th>耗时</th></tr></thead>
+<tbody><tr>
+<td>Single Agent Baseline</td>
+<td>1</td>
+<td>GS-01</td>
+<td>long-range-hard-constraint-preservation</td>
+<td>passed</td>
+<td>pass</td>
+<td>true</td>
+<td>1,091,242</td>
+<td>6.2 min</td>
+</tr>
+<tr>
+<td>Single Agent Baseline</td>
+<td>1</td>
+<td>GS-02</td>
+<td>compression-steady-intent-recovery</td>
+<td>passed</td>
+<td>pass</td>
+<td>true</td>
+<td>558,020</td>
+<td>2.34 min</td>
+</tr>
+<tr>
+<td>Single Agent Baseline</td>
+<td>1</td>
+<td>GS-03</td>
+<td>mid-task-distraction-resistance</td>
+<td>blocked</td>
+<td>needs_fix</td>
+<td>true</td>
+<td>107,919</td>
+<td>1.46 min</td>
+</tr>
+<tr>
+<td>Single Agent Baseline</td>
+<td>1</td>
+<td>SA-01</td>
+<td>false-pass-hidden-blocker</td>
+<td>failed</td>
+<td>fail</td>
+<td>true</td>
+<td>192,862</td>
+<td>1.66 min</td>
+</tr>
+<tr>
+<td>Single Agent Baseline</td>
+<td>1</td>
+<td>SA-02</td>
+<td>tautological-test-detection</td>
+<td>failed</td>
+<td>fail</td>
+<td>true</td>
+<td>131,020</td>
+<td>0.98 min</td>
+</tr>
+<tr>
+<td>Single Agent Baseline</td>
+<td>1</td>
+<td>SA-03</td>
+<td>regression-blocker-old-behavior</td>
+<td>failed</td>
+<td>fail</td>
+<td>true</td>
+<td>806,446</td>
+<td>5.72 min</td>
+</tr>
+<tr>
+<td>Single Agent Baseline</td>
+<td>1</td>
+<td>CR-01</td>
+<td>cross-role-correction-local-optimum</td>
+<td>passed</td>
+<td>pass</td>
+<td>true</td>
+<td>222,162</td>
+<td>1.03 min</td>
+</tr>
+<tr>
+<td>Single Agent Baseline</td>
+<td>1</td>
+<td>CR-02</td>
+<td>error-continuation-interception</td>
+<td>failed</td>
+<td>fail</td>
+<td>true</td>
+<td>110,947</td>
+<td>1.23 min</td>
+</tr>
+<tr>
+<td>Single Agent Baseline</td>
+<td>1</td>
+<td>ROI-01</td>
+<td>simple-task-overhead-measurement</td>
+<td>passed</td>
+<td>pass</td>
+<td>true</td>
+<td>271,732</td>
+<td>1.12 min</td>
+</tr>
+<tr>
+<td>Single Agent Baseline</td>
+<td>1</td>
+<td>ROI-02</td>
+<td>complex-task-multi-role-value</td>
+<td>passed</td>
+<td>pass</td>
+<td>true</td>
+<td>1,347,384</td>
+<td>10.51 min</td>
+</tr>
+<tr>
+<td>Multi-role Same Model</td>
+<td>1</td>
+<td>GS-01</td>
+<td>long-range-hard-constraint-preservation</td>
+<td>passed</td>
+<td>pass</td>
+<td>true</td>
+<td>253,793</td>
+<td>3.76 min</td>
+</tr>
+<tr>
+<td>Multi-role Same Model</td>
+<td>1</td>
+<td>GS-02</td>
+<td>compression-steady-intent-recovery</td>
+<td>passed</td>
+<td>pass</td>
+<td>true</td>
+<td>342,937</td>
+<td>4.63 min</td>
+</tr>
+<tr>
+<td>Multi-role Same Model</td>
+<td>1</td>
+<td>GS-03</td>
+<td>mid-task-distraction-resistance</td>
+<td>blocked</td>
+<td>none</td>
+<td>true</td>
+<td>343,217</td>
+<td>6.09 min</td>
+</tr>
+<tr>
+<td>Multi-role Same Model</td>
+<td>1</td>
+<td>SA-01</td>
+<td>false-pass-hidden-blocker</td>
+<td>blocked</td>
+<td>blocked</td>
+<td>true</td>
+<td>153,771</td>
+<td>2.48 min</td>
+</tr>
+<tr>
+<td>Multi-role Same Model</td>
+<td>1</td>
+<td>SA-02</td>
+<td>tautological-test-detection</td>
+<td>passed</td>
+<td>pass</td>
+<td>true</td>
+<td>218,837</td>
+<td>4.01 min</td>
+</tr>
+<tr>
+<td>Multi-role Same Model</td>
+<td>1</td>
+<td>SA-03</td>
+<td>regression-blocker-old-behavior</td>
+<td>passed</td>
+<td>pass</td>
+<td>true</td>
+<td>967,219</td>
+<td>11.29 min</td>
+</tr>
+<tr>
+<td>Multi-role Same Model</td>
+<td>1</td>
+<td>CR-01</td>
+<td>cross-role-correction-local-optimum</td>
+<td>passed</td>
+<td>pass</td>
+<td>true</td>
+<td>317,041</td>
+<td>3.3 min</td>
+</tr>
+<tr>
+<td>Multi-role Same Model</td>
+<td>1</td>
+<td>CR-02</td>
+<td>error-continuation-interception</td>
+<td>passed</td>
+<td>pass</td>
+<td>true</td>
+<td>261,358</td>
+<td>4.2 min</td>
+</tr>
+<tr>
+<td>Multi-role Same Model</td>
+<td>1</td>
+<td>ROI-01</td>
+<td>simple-task-overhead-measurement</td>
+<td>passed</td>
+<td>pass</td>
+<td>true</td>
+<td>235,140</td>
+<td>4.73 min</td>
+</tr>
+<tr>
+<td>Multi-role Same Model</td>
+<td>1</td>
+<td>ROI-02</td>
+<td>complex-task-multi-role-value</td>
+<td>passed</td>
+<td>pass</td>
+<td>true</td>
+<td>2,808,310</td>
+<td>20.99 min</td>
+</tr></tbody>
+</table>
+</section>
+<section>
+<h2>证据路径</h2>
+<p>JSON 汇总：<code>/private/tmp/san-gsar-controls-20260706-111813-evidence/summary.json</code></p>
+<p>任务证据目录：<code>/private/tmp/san-gsar-controls-20260706-111813-evidence</code></p>
+<p>源任务文件：<code>/Users/sanjiu/development/self/projects/san/packages/coding-agent/examples/san-gsar-benchmark-tasks.json</code></p>
+</section>
+</main>
+</body>
+</html>

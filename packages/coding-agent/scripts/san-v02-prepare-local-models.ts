@@ -229,7 +229,7 @@ const result: PrepareResult = {
 	modelsPath,
 	providers,
 	command:
-		`PI_CODING_AGENT_DIR=${agentDir} ` +
+		`SAN_CODING_AGENT_DIR=${agentDir} ` +
 		"bun packages/coding-agent/scripts/san-v02-acceptance-runner.ts " +
 		"--config packages/coding-agent/examples/config/san-execution-loop-heterogeneous.yml " +
 		"--objective '<task objective>'",

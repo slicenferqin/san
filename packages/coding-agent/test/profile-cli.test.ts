@@ -41,26 +41,38 @@ describe("global --profile flag", () => {
 	let configDir = "";
 	let originalProfile: string | undefined;
 	let originalAgentDir = "";
+	let originalSanAgentDirEnv: string | undefined;
 	let originalAgentDirEnv: string | undefined;
+	let originalSanProfileEnv: string | undefined;
 	let originalOmpProfileEnv: string | undefined;
 	let originalPiProfileEnv: string | undefined;
+	let originalSanConfigDir: string | undefined;
 	let originalConfigDir: string | undefined;
 
 	beforeEach(() => {
 		originalProfile = getActiveProfile();
 		originalAgentDir = getAgentDir();
+		originalSanAgentDirEnv = process.env.SAN_CODING_AGENT_DIR;
 		originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+		originalSanProfileEnv = process.env.SAN_PROFILE;
 		originalOmpProfileEnv = process.env.OMP_PROFILE;
 		originalPiProfileEnv = process.env.PI_PROFILE;
+		originalSanConfigDir = process.env.SAN_CONFIG_DIR;
 		originalConfigDir = process.env.PI_CONFIG_DIR;
-		configDir = `.omp-profile-cli-test-${Snowflake.next()}`;
-		process.env.PI_CONFIG_DIR = configDir;
+		configDir = `.san-profile-cli-test-${Snowflake.next()}`;
+		process.env.SAN_CONFIG_DIR = configDir;
+		delete process.env.PI_CONFIG_DIR;
 		process.exitCode = 0;
 	});
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
 		setProfile(undefined);
+		if (originalSanConfigDir === undefined) {
+			delete process.env.SAN_CONFIG_DIR;
+		} else {
+			process.env.SAN_CONFIG_DIR = originalSanConfigDir;
+		}
 		if (originalConfigDir === undefined) {
 			delete process.env.PI_CONFIG_DIR;
 		} else {
@@ -73,6 +85,11 @@ describe("global --profile flag", () => {
 		} else {
 			setProfile(undefined);
 		}
+		if (originalSanProfileEnv === undefined) {
+			delete process.env.SAN_PROFILE;
+		} else {
+			process.env.SAN_PROFILE = originalSanProfileEnv;
+		}
 		if (originalOmpProfileEnv === undefined) {
 			delete process.env.OMP_PROFILE;
 		} else {
@@ -82,6 +99,11 @@ describe("global --profile flag", () => {
 			delete process.env.PI_PROFILE;
 		} else {
 			process.env.PI_PROFILE = originalPiProfileEnv;
+		}
+		if (originalSanAgentDirEnv === undefined) {
+			delete process.env.SAN_CODING_AGENT_DIR;
+		} else {
+			process.env.SAN_CODING_AGENT_DIR = originalSanAgentDirEnv;
 		}
 		if (originalAgentDirEnv === undefined) {
 			delete process.env.PI_CODING_AGENT_DIR;
@@ -104,10 +126,11 @@ describe("global --profile flag", () => {
 		expect(getAgentDir()).toBe(path.join(os.homedir(), configDir, "profiles", "work", "agent"));
 	});
 
-	it("activates a profile inherited from OMP_PROFILE at run time", async () => {
+	it("activates a profile inherited from SAN_PROFILE at run time", async () => {
 		const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		setProfile(undefined);
-		process.env.OMP_PROFILE = "work";
+		process.env.SAN_PROFILE = "work";
+		delete process.env.OMP_PROFILE;
 		delete process.env.PI_PROFILE;
 
 		await runCli(["--version"]);
@@ -219,16 +242,16 @@ describe("global --profile flag", () => {
 	});
 
 	it("loads profile agent .env before command modules import pi-utils env", async () => {
-		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-profile-cli-env-"));
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "san-profile-cli-env-"));
 		try {
 			const home = path.join(root, "home");
-			const configDir = ".omp-profile-cli-env";
+			const configDir = ".san-profile-cli-env";
 			const defaultAgentDir = path.join(home, configDir, "agent");
 			const profileAgentDir = path.join(home, configDir, "profiles", "work", "agent");
 			await fs.mkdir(defaultAgentDir, { recursive: true });
 			await fs.mkdir(profileAgentDir, { recursive: true });
-			await Bun.write(path.join(defaultAgentDir, ".env"), "OMP_PROFILE_BOOTSTRAP_SENTINEL=default\n");
-			await Bun.write(path.join(profileAgentDir, ".env"), "OMP_PROFILE_BOOTSTRAP_SENTINEL=work\n");
+			await Bun.write(path.join(defaultAgentDir, ".env"), "SAN_PROFILE_BOOTSTRAP_SENTINEL=default\n");
+			await Bun.write(path.join(profileAgentDir, ".env"), "SAN_PROFILE_BOOTSTRAP_SENTINEL=work\n");
 
 			const probePath = path.join(root, "probe.ts");
 			await Bun.write(
@@ -236,21 +259,24 @@ describe("global --profile flag", () => {
 				[
 					`import { runCli } from ${JSON.stringify(url.pathToFileURL(cliEntry).href)};`,
 					'await runCli(["--profile", "work", "--help"]);',
-					'process.stdout.write("\\nSENTINEL=" + (Bun.env.OMP_PROFILE_BOOTSTRAP_SENTINEL ?? ""));',
+					'process.stdout.write("\\nSENTINEL=" + (Bun.env.SAN_PROFILE_BOOTSTRAP_SENTINEL ?? ""));',
 				].join("\n"),
 			);
 
 			const childEnv: Record<string, string | undefined> = {
 				...process.env,
 				HOME: home,
-				PI_CONFIG_DIR: configDir,
+				SAN_CONFIG_DIR: configDir,
 				PI_NO_TITLE: "1",
 				NO_COLOR: "1",
 			};
+			delete childEnv.PI_CONFIG_DIR;
+			delete childEnv.SAN_PROFILE;
 			delete childEnv.OMP_PROFILE;
 			delete childEnv.PI_PROFILE;
+			delete childEnv.SAN_CODING_AGENT_DIR;
 			delete childEnv.PI_CODING_AGENT_DIR;
-			delete childEnv.OMP_PROFILE_BOOTSTRAP_SENTINEL;
+			delete childEnv.SAN_PROFILE_BOOTSTRAP_SENTINEL;
 
 			const proc = Bun.spawn([process.execPath, probePath], {
 				cwd: repoRoot,
@@ -272,8 +298,8 @@ describe("global --profile flag", () => {
 		}
 	});
 
-	it("surfaces an invalid OMP_PROFILE env as a clean error, not an import crash", async () => {
-		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-profile-cli-env-bad-"));
+	it("surfaces an invalid SAN_PROFILE env as a clean error, not an import crash", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "san-profile-cli-env-bad-"));
 		try {
 			const home = path.join(root, "home");
 			await fs.mkdir(home, { recursive: true });
@@ -294,11 +320,13 @@ describe("global --profile flag", () => {
 			const childEnv: Record<string, string | undefined> = {
 				...process.env,
 				HOME: home,
-				PI_CONFIG_DIR: ".omp-profile-cli-env-bad",
-				OMP_PROFILE: "..",
+				SAN_CONFIG_DIR: ".san-profile-cli-env-bad",
+				SAN_PROFILE: "..",
 				NO_COLOR: "1",
 			};
+			delete childEnv.OMP_PROFILE;
 			delete childEnv.PI_PROFILE;
+			delete childEnv.SAN_CODING_AGENT_DIR;
 			delete childEnv.PI_CODING_AGENT_DIR;
 
 			const proc = Bun.spawn([process.execPath, probePath], {
@@ -314,7 +342,7 @@ describe("global --profile flag", () => {
 			]);
 
 			expect(stdout, stderr).toContain("HANDLED");
-			expect(stderr).toContain("Invalid OMP profile");
+			expect(stderr).toContain("Invalid San profile");
 			expect(exitCode).toBe(1);
 		} finally {
 			await removeWithRetries(root);

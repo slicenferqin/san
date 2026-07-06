@@ -373,7 +373,7 @@ describe("profile alias installer", () => {
 					files.set(filePath, content);
 				},
 			}),
-		).rejects.toThrow("Invalid OMP profile");
+		).rejects.toThrow("Invalid San profile");
 		expect(files.size).toBe(0);
 	});
 

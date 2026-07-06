@@ -124,7 +124,8 @@ v0.1 的对外 claim 可以概括为三点：
 - append-only loop ledger entries
 - San Checks 发现与渲染
 - `/san-loop run`、`/san-loop stop`、`/san-loop status`
-- rush / smart / deep 模式
+- solo / team / council 模式
+- 默认使用 `~/.san` 和项目 `.san` 配置目录，优先读取 `SAN_*` 环境变量并兼容旧变量
 - deterministic dogfood verifier
 
 推荐 v0.2 dogfood 配置：

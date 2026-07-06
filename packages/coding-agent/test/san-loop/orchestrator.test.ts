@@ -24,25 +24,26 @@ function taskNode(id: string): SanLoopTaskNode {
 
 describe("San loop orchestrator", () => {
 	test("defines mode policies for mature loop execution depth", () => {
-		expect(defaultSanLoopModePolicy("rush")).toEqual({
-			mode: "rush",
+		expect(defaultSanLoopModePolicy("solo")).toEqual({
+			mode: "solo",
 			maxRetries: 1,
 			maxWorkers: 2,
 			remainingTurns: 4,
 			requireOracle: false,
 		});
-		expect(defaultSanLoopModePolicy("deep")).toMatchObject({
+		expect(defaultSanLoopModePolicy("council")).toMatchObject({
 			maxRetries: 3,
 			maxWorkers: 6,
 			requireOracle: true,
 		});
+		expect(defaultSanLoopModePolicy("rush").mode).toBe("solo");
 	});
 
 	test("moves a run from planning through worker review readiness", () => {
 		const run = createSanLoopRunSnapshot({
 			sessionId: "session-1",
 			objective: "Deliver v0.2 loop",
-			mode: "smart",
+			mode: "team",
 			runId: "loop_orchestrator",
 			createdAt: CREATED_AT,
 		});
@@ -118,7 +119,7 @@ describe("San loop orchestrator", () => {
 		const run = createSanLoopRunSnapshot({
 			sessionId: "session-1",
 			objective: "Deliver v0.2 loop",
-			mode: "rush",
+			mode: "solo",
 			runId: "loop_retry",
 			createdAt: CREATED_AT,
 			maxRetries: 1,

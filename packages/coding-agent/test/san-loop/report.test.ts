@@ -49,7 +49,7 @@ describe("San loop report", () => {
 		const run = createSanLoopRunSnapshot({
 			sessionId: "session-1",
 			objective: "Deliver mature execution loop",
-			mode: "smart",
+			mode: "team",
 			runId: "loop_report",
 			createdAt: "2026-07-01T00:00:00.000Z",
 		});
@@ -71,7 +71,7 @@ describe("San loop report", () => {
 		expect(text).toContain("## San Loop loop_report");
 		expect(text).toContain("Status: retrying");
 		expect(text).toContain("Active: yes");
-		expect(text).toContain("Mode: smart");
+		expect(text).toContain("Mode: team");
 		expect(text).toContain("Objective: Deliver mature execution loop");
 		expect(text).toContain("Retries: 1/2");
 		expect(text).toContain("Review reports: 1");
@@ -110,9 +110,14 @@ describe("San loop report", () => {
 		expect(parseSanLoopReportCount("0")).toEqual({ error: sanLoopUsageText() });
 		expect(parseSanLoopReportCount("21")).toEqual({ error: sanLoopUsageText() });
 		expect(parseSanLoopReportCount("abc")).toEqual({ error: sanLoopUsageText() });
+		expect(parseSanLoopArgs("run --mode council ship mature loop")).toEqual({
+			action: "run",
+			mode: "council",
+			objective: "ship mature loop",
+		});
 		expect(parseSanLoopArgs("run --mode deep ship mature loop")).toEqual({
 			action: "run",
-			mode: "deep",
+			mode: "council",
 			objective: "ship mature loop",
 		});
 		expect(parseSanLoopArgs("run ship mature loop")).toEqual({

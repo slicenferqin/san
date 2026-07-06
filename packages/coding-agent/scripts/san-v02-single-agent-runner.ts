@@ -62,7 +62,7 @@ function usage(): string {
 		"  bun packages/coding-agent/scripts/san-v02-single-agent-runner.ts [options] --objective <text>",
 		"",
 		"Options:",
-		"  --agent-dir <path>     Agent dir with models.yml (default: PI_CODING_AGENT_DIR or ~/.omp/agent)",
+		"  --agent-dir <path>     Agent dir with models.yml (default: SAN_CODING_AGENT_DIR or ~/.san/agent)",
 		"  --config <path>        Config overlay for context steady/model catalog",
 		"  --cwd <path>           Workspace cwd for the run (default: current cwd)",
 		"  --expect <terminal|passed>  Exit success condition (default: terminal)",
@@ -114,7 +114,8 @@ function parseArgs(): SingleAgentRunnerArgs {
 	}
 
 	const cwd = resolvePath(argValue(args, "--cwd") ?? process.cwd());
-	const agentDir = argValue(args, "--agent-dir") ?? process.env.PI_CODING_AGENT_DIR;
+	const agentDir =
+		argValue(args, "--agent-dir") ?? process.env.SAN_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR;
 	const config = argValue(args, "--config");
 	const out = argValue(args, "--out");
 

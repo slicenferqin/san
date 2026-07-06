@@ -30,7 +30,7 @@ san:
       maxQueryChars: 2000
   executionLoop:
     enabled: true
-    defaultMode: deep
+    defaultMode: council
     maxRetries: 2
     maxWorkers: 3
     ledger:
@@ -39,7 +39,7 @@ san:
     checks:
       enabled: true
       includeBuiltins: true
-      projectDir: .omp/checks
+      projectDir: .san/checks
     roles:
       commander:
         modelRole: vb/gpt-5.5:xhigh
@@ -50,14 +50,14 @@ san:
       oracle:
         modelRole: vb/gpt-5.5:xhigh
         enabledInModes:
-          - smart
-          - deep
+          - team
+          - council
     roleContext:
       tokenBudget: 2000
       maxEvents: 8
       maxDecisions: 8
     budget:
-      rushMaxTurns: 3
-      smartMaxTurns: 8
-      deepMaxTurns: 16
+      soloMaxTurns: 3
+      teamMaxTurns: 8
+      councilMaxTurns: 16
       reserveRatio: 0.25

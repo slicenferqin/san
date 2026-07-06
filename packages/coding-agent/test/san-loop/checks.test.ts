@@ -28,7 +28,7 @@ describe("San loop checks", () => {
 		const cwd = await tempDir();
 		await writeCheck(
 			cwd,
-			".omp/checks/supervisor-gate.md",
+			".san/checks/supervisor-gate.md",
 			`---
 name: supervisor-gate
 severity: blocker
@@ -57,7 +57,7 @@ appliesTo: ["supervisor"]
 		const cwd = await tempDir();
 		await writeCheck(
 			cwd,
-			".omp/checks/coding-agent-only.md",
+			".san/checks/coding-agent-only.md",
 			`---
 name: coding-agent-only
 scope:

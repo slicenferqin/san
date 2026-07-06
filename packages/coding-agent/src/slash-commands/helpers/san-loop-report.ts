@@ -1,5 +1,6 @@
 import { isSanLoopTerminalStatus, rebuildSanLoopLedger } from "../../san-loop/ledger";
 import type { SanLoopEntryRef, SanLoopEvent, SanLoopReviewReport, SanLoopRunSnapshot } from "../../san-loop/types";
+import { normalizeSanLoopMode } from "../../san-loop/types";
 import type { SessionEntry } from "../../session/session-entries";
 
 const DEFAULT_LOOP_REPORT_COUNT = 1;
@@ -27,7 +28,7 @@ export function parseSanLoopReportCount(input: string): number | { error: string
 }
 
 export function sanLoopUsageText(): string {
-	return `Usage: /san-loop [status [1-${MAX_LOOP_REPORT_COUNT}]] | run [--mode rush|smart|deep] <objective> | stop [runId]`;
+	return `Usage: /san-loop [status [1-${MAX_LOOP_REPORT_COUNT}]] | run [--mode solo|team|council] <objective> | stop [runId]`;
 }
 
 export function parseSanLoopArgs(input: string): SanLoopParsedArgs {
@@ -53,15 +54,17 @@ export function parseSanLoopArgs(input: string): SanLoopParsedArgs {
 		const token = restTokens[index];
 		if (token === "--mode") {
 			const value = restTokens[index + 1];
-			if (value !== "rush" && value !== "smart" && value !== "deep") return { error: sanLoopUsageText() };
-			mode = value;
+			const normalizedMode = normalizeSanLoopMode(value);
+			if (!normalizedMode) return { error: sanLoopUsageText() };
+			mode = normalizedMode;
 			index += 1;
 			continue;
 		}
 		if (token?.startsWith("--mode=")) {
 			const value = token.slice("--mode=".length);
-			if (value !== "rush" && value !== "smart" && value !== "deep") return { error: sanLoopUsageText() };
-			mode = value;
+			const normalizedMode = normalizeSanLoopMode(value);
+			if (!normalizedMode) return { error: sanLoopUsageText() };
+			mode = normalizedMode;
 			continue;
 		}
 		if (token?.startsWith("-")) return { error: sanLoopUsageText() };

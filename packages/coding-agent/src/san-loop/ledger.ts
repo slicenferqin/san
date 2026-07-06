@@ -1,6 +1,7 @@
 import type { SessionEntry } from "../session/session-entries";
 import type { SanLoopTransition } from "./orchestrator";
 import {
+	normalizeSanLoopMode,
 	SAN_LOOP_CONTEXT_PACKET_CUSTOM_TYPE,
 	SAN_LOOP_EVENT_CUSTOM_TYPE,
 	SAN_LOOP_REVIEW_CUSTOM_TYPE,
@@ -93,7 +94,7 @@ function hasArray(value: Record<string, unknown>, key: string): boolean {
 }
 
 function isSanLoopMode(value: unknown): value is SanLoopMode {
-	return value === "rush" || value === "smart" || value === "deep";
+	return normalizeSanLoopMode(value) !== undefined;
 }
 
 function isSanLoopStatus(value: unknown): value is SanLoopStatus {
@@ -108,6 +109,11 @@ function isSanLoopStatus(value: unknown): value is SanLoopStatus {
 		value === "failed" ||
 		value === "aborted"
 	);
+}
+
+function normalizeRunSnapshotMode(run: SanLoopRunSnapshot): SanLoopRunSnapshot {
+	const mode = normalizeSanLoopMode(run.mode) ?? "team";
+	return run.mode === mode ? run : { ...run, mode };
 }
 
 export function isSanLoopRunSnapshot(value: unknown): value is SanLoopRunSnapshot {
@@ -191,7 +197,7 @@ export function createSanLoopRunSnapshot(options: CreateSanLoopRunOptions): SanL
 		createdAt,
 		updatedAt: createdAt,
 		objective: options.objective,
-		mode: options.mode ?? "smart",
+		mode: options.mode ?? "team",
 		status: "planning",
 		contextPacketRefs: options.contextPacketRefs ? [...options.contextPacketRefs] : [],
 		assignments: [],
@@ -373,7 +379,10 @@ export function rebuildSanLoopLedger(entries: readonly SessionEntry[]): SanLoopL
 		if (entry.type !== "custom") continue;
 		switch (entry.customType) {
 			case SAN_LOOP_RUN_CUSTOM_TYPE:
-				if (isSanLoopRunSnapshot(entry.data)) latestRuns.set(entry.data.runId, customEntryRef(entry, entry.data));
+				if (isSanLoopRunSnapshot(entry.data)) {
+					const run = normalizeRunSnapshotMode(entry.data);
+					latestRuns.set(run.runId, customEntryRef(entry, run));
+				}
 				break;
 			case SAN_LOOP_EVENT_CUSTOM_TYPE:
 				if (isSanLoopEvent(entry.data)) events.push(customEntryRef(entry, entry.data));

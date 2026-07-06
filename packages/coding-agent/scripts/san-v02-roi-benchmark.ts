@@ -3,6 +3,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { normalizeSanLoopMode } from "../src/san-loop";
 import type { AcceptanceRunOutput, RunnerArgs } from "./san-v02-acceptance-runner";
 import { collectSessionUsage, runAcceptanceTask } from "./san-v02-acceptance-runner";
 import type { SingleAgentRunOutput } from "./san-v02-single-agent-runner";
@@ -187,7 +188,7 @@ function assertTaskSpec(value: unknown): AcceptanceTaskSpec {
 	const record = value as Record<string, unknown>;
 	const id = typeof record.id === "string" ? record.id : "";
 	const label = typeof record.label === "string" ? record.label : "";
-	const mode = record.mode === "rush" || record.mode === "smart" || record.mode === "deep" ? record.mode : undefined;
+	const mode = normalizeSanLoopMode(record.mode);
 	const expect = record.expect === "passed" || record.expect === "terminal" ? record.expect : undefined;
 	const objective = typeof record.objective === "string" ? record.objective.trim() : "";
 	const fixture = typeof record.fixture === "string" && record.fixture.trim() ? record.fixture.trim() : undefined;
@@ -317,7 +318,7 @@ function buildComparison(modes: readonly BenchmarkModeOutput[]): RoiComparison[]
 				incrementalCostPerExtraPass: qualityDeltaPassed > 0 ? costDelta / qualityDeltaPassed : null,
 				recommendation:
 					qualityDeltaPassed > 0
-						? "Quality improves versus single-agent baseline; evaluate whether incremental spend is acceptable for smart/deep tasks."
+						? "Quality improves versus single-agent baseline; evaluate whether incremental spend is acceptable for team/council tasks."
 						: "No pass-rate lift versus single-agent baseline; keep this mode opt-in until quality improves.",
 			};
 		});
@@ -375,7 +376,7 @@ function renderProductVerdict(
 	if (!baseline || !heterogeneous) return "证据不完整，暂不能给出默认开启判断。";
 	const qualityLift = heterogeneous.summary.passed - baseline.summary.passed;
 	if (qualityLift > 0) {
-		return "多角色异构模式相对单 Agent 产生 passed 率提升，可进入 smart/deep 默认候选，但仍需多轮均值验证成本弹性。";
+		return "多角色异构模式相对单 Agent 产生 passed 率提升，可进入 team/council 默认候选，但仍需多轮均值验证成本弹性。";
 	}
 	const timeRatio = heterogeneous.summary.durationMs / baseline.summary.durationMs;
 	const tokenSpendRatio = heterogeneous.summary.totalTokens / baseline.summary.totalTokens;
@@ -386,7 +387,7 @@ function renderProductVerdict(
 	const contextText = contextOnly
 		? `v0.1 Only passed 为 ${contextOnly.summary.passed}/10，用于单独观察 context steady 对目标保持的贡献；`
 		: "";
-	return `本轮多模式对比中，异构多角色相对单 Agent 没有带来可量化 pass 率提升；${contextText}异构多角色提供 review 证据链，但 token 约为单 Agent 的 ${formatMultiplier(tokenSpendRatio)}、耗时约为 ${formatMultiplier(timeRatio)}。产品上不建议全量默认开启，应作为 smart/deep 或高风险任务档位；${sameModelText}`;
+	return `本轮多模式对比中，异构多角色相对单 Agent 没有带来可量化 pass 率提升；${contextText}异构多角色提供 review 证据链，但 token 约为单 Agent 的 ${formatMultiplier(tokenSpendRatio)}、耗时约为 ${formatMultiplier(timeRatio)}。产品上不建议全量默认开启，应作为 team/council 或高风险任务档位；${sameModelText}`;
 }
 
 function renderReport(result: RoiBenchmarkOutput): string {
@@ -525,7 +526,7 @@ ${allCostsZero ? '<p class="callout warn"><strong>成本口径：</strong>当前
 <p><span class="pill">v0.1 Only</span> Context steady only 模式用于隔离上下文稳态贡献，重点观察长程任务的目标保持，而不是 review 证据链数量。</p>
 <p><span class="pill">Smart / Deep</span> 建议保留异构多角色作为高风险任务、架构审查、验收报告、需要独立 review 的档位；它比同模型多角色快很多，并且产生了 15 个 worker 结果和 14 个 review 证据。</p>
 <p><span class="pill">Same Model</span> 不建议作为主推策略：同样 7/10 passed，但耗时约为单 Agent 的 ${durationRatio(sameModel?.summary ?? baseline?.summary ?? result.modes[0].summary, baseline?.summary)}，token 约为 ${tokenRatio(sameModel?.summary ?? baseline?.summary ?? result.modes[0].summary, baseline?.summary)}。</p>
-<p><span class="pill">Next</span> 下一步优先降低 token：收紧 roleContext、减少 T08 deep 的 worker 扩散、按任务难度触发 Oracle，并补 3 轮均值/方差后再判断是否进入默认策略候选。</p>
+<p><span class="pill">Next</span> 下一步优先降低 token：收紧 roleContext、减少 T08 council 的 worker 扩散、按任务难度触发 Oracle，并补 3 轮均值/方差后再判断是否进入默认策略候选。</p>
 </section>
 <section>
 <h2>任务明细</h2>
@@ -651,7 +652,10 @@ async function main(): Promise<void> {
 	const label = argValue("--label") ?? "san-v02-roi-benchmark";
 	const runsPerMode = Math.max(1, Number.parseInt(argValue("--runs") ?? "1", 10) || 1);
 	const agentDir = resolvePath(
-		argValue("--agent-dir") ?? process.env.PI_CODING_AGENT_DIR ?? "/private/tmp/san-v02-agent",
+		argValue("--agent-dir") ??
+			process.env.SAN_CODING_AGENT_DIR ??
+			process.env.PI_CODING_AGENT_DIR ??
+			"/private/tmp/san-v02-agent",
 	);
 	const sourceCwd = resolvePath(argValue("--source-cwd") ?? process.cwd());
 	const cwdRoot = resolvePath(argValue("--cwd-root") ?? `/private/tmp/${label}-workspaces`);

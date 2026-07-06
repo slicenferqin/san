@@ -3,7 +3,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { SanLoopMode } from "../src/san-loop";
+import { normalizeSanLoopMode, type SanLoopMode } from "../src/san-loop";
 import { type AcceptanceRunOutput, type RunnerArgs, runAcceptanceTask } from "./san-v02-acceptance-runner";
 
 interface AcceptanceTaskSpec {
@@ -96,7 +96,7 @@ function assertTaskSpec(value: unknown): AcceptanceTaskSpec {
 	const record = value as Record<string, unknown>;
 	const id = typeof record.id === "string" ? record.id : "";
 	const label = typeof record.label === "string" ? record.label : "";
-	const mode = record.mode === "rush" || record.mode === "smart" || record.mode === "deep" ? record.mode : undefined;
+	const mode = normalizeSanLoopMode(record.mode);
 	const expect = record.expect === "passed" || record.expect === "terminal" ? record.expect : undefined;
 	const objective = typeof record.objective === "string" ? record.objective.trim() : "";
 	if (!id || !label || !mode || !expect || !objective) {
@@ -169,7 +169,10 @@ async function main(): Promise<void> {
 	const startedIso = new Date(startedAt).toISOString();
 	const label = argValue("--label") ?? "san-v02-heterogeneous-suite";
 	const agentDir = resolvePath(
-		argValue("--agent-dir") ?? process.env.PI_CODING_AGENT_DIR ?? "/private/tmp/san-v02-agent",
+		argValue("--agent-dir") ??
+			process.env.SAN_CODING_AGENT_DIR ??
+			process.env.PI_CODING_AGENT_DIR ??
+			"/private/tmp/san-v02-agent",
 	);
 	const config = resolvePath(argValue("--config") ?? defaultConfigPath());
 	const sourceCwd = resolvePath(argValue("--source-cwd") ?? process.cwd());

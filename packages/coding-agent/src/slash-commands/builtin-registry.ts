@@ -122,12 +122,12 @@ function formatSanLoopRunResult(result: RunSanLoopResult): string {
 
 function sanLoopMaxTurnsForMode(settingsSource: Settings, mode: SanLoopMode): number {
 	switch (mode) {
-		case "rush":
-			return settingsSource.get("san.executionLoop.budget.rushMaxTurns");
-		case "deep":
-			return settingsSource.get("san.executionLoop.budget.deepMaxTurns");
-		case "smart":
-			return settingsSource.get("san.executionLoop.budget.smartMaxTurns");
+		case "solo":
+			return settingsSource.get("san.executionLoop.budget.soloMaxTurns");
+		case "council":
+			return settingsSource.get("san.executionLoop.budget.councilMaxTurns");
+		case "team":
+			return settingsSource.get("san.executionLoop.budget.teamMaxTurns");
 	}
 }
 
@@ -1192,11 +1192,15 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "san-loop",
 		description: "Start or inspect San execution loop runs",
 		acpDescription: "Start or inspect San execution loop runs",
-		acpInputHint: "[status [count]] | run [--mode rush|smart|deep] <objective> | stop [runId]",
+		acpInputHint: "[status [count]] | run [--mode solo|team|council] <objective> | stop [runId]",
 		allowArgs: true,
 		subcommands: [
 			{ name: "status", description: "Show San execution loop ledger", usage: "[count]" },
-			{ name: "run", description: "Create a San execution loop run", usage: "[--mode rush|smart|deep] <objective>" },
+			{
+				name: "run",
+				description: "Create a San execution loop run",
+				usage: "[--mode solo|team|council] <objective>",
+			},
 			{ name: "stop", description: "Abort an active San execution loop run", usage: "[runId]" },
 		],
 		handle: async (command, runtime) => {

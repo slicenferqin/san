@@ -1,4 +1,6 @@
 import {
+	type LegacySanLoopMode,
+	normalizeSanLoopMode,
 	SAN_LOOP_SCHEMA_VERSION,
 	type SanLoopBudgetSnapshot,
 	type SanLoopDecision,
@@ -77,22 +79,22 @@ export interface SanLoopTransition {
 }
 
 const DEFAULT_POLICIES: Record<SanLoopMode, SanLoopModePolicy> = {
-	rush: {
-		mode: "rush",
+	solo: {
+		mode: "solo",
 		maxRetries: 1,
 		maxWorkers: 2,
 		remainingTurns: 4,
 		requireOracle: false,
 	},
-	smart: {
-		mode: "smart",
+	team: {
+		mode: "team",
 		maxRetries: 2,
 		maxWorkers: 4,
 		remainingTurns: 8,
 		requireOracle: false,
 	},
-	deep: {
-		mode: "deep",
+	council: {
+		mode: "council",
 		maxRetries: 3,
 		maxWorkers: 6,
 		remainingTurns: 12,
@@ -162,8 +164,9 @@ function updateAssignmentStatus(
 	);
 }
 
-export function defaultSanLoopModePolicy(mode: SanLoopMode): SanLoopModePolicy {
-	const policy = DEFAULT_POLICIES[mode];
+export function defaultSanLoopModePolicy(mode: SanLoopMode | LegacySanLoopMode): SanLoopModePolicy {
+	const normalizedMode = normalizeSanLoopMode(mode) ?? "team";
+	const policy = DEFAULT_POLICIES[normalizedMode];
 	return { ...policy };
 }
 

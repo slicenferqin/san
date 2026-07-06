@@ -262,7 +262,7 @@ describe("ACP builtin slash commands", () => {
 				createdAt: "2026-07-01T00:00:00.000Z",
 				updatedAt: "2026-07-01T00:01:00.000Z",
 				objective: "ship v0.2",
-				mode: "smart",
+				mode: "team",
 				status: "passed",
 				contextPacketRefs: [],
 				assignments: [],
@@ -297,7 +297,7 @@ describe("ACP builtin slash commands", () => {
 		expect(runSpy).toHaveBeenCalledTimes(1);
 		expect(runSpy.mock.calls[0]?.[0]).toMatchObject({
 			objective: "ship v0.2",
-			mode: "smart",
+			mode: "team",
 			maxRetries: 2,
 			maxTurns: 8,
 		});
@@ -314,7 +314,7 @@ describe("ACP builtin slash commands", () => {
 			createdAt: "2026-07-01T00:00:00.000Z",
 			updatedAt: "2026-07-01T00:00:00.000Z",
 			objective: "stop v0.2 loop",
-			mode: "smart",
+			mode: "team",
 			status: "working",
 			contextPacketRefs: [],
 			assignments: [],
@@ -350,7 +350,7 @@ describe("ACP builtin slash commands", () => {
 			createdAt: "2026-07-01T00:00:00.000Z",
 			updatedAt: "2026-07-01T00:01:00.000Z",
 			objective: "already done",
-			mode: "smart",
+			mode: "team",
 			status: "passed",
 			contextPacketRefs: [],
 			assignments: [],

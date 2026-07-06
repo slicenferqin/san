@@ -124,7 +124,8 @@ Current v0.2 capabilities include:
 - append-only loop ledger entries
 - San Checks discovery and rendering
 - `/san-loop run`, `/san-loop stop`, and `/san-loop status`
-- rush / smart / deep modes
+- solo / team / council modes
+- native `~/.san` and project `.san` config directories, with `SAN_*` env vars preferred and legacy vars still accepted
 - deterministic dogfood verifier
 
 Recommended v0.2 dogfood config:

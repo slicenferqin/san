@@ -11,7 +11,22 @@ export const SAN_LOOP_EVENT_CUSTOM_TYPE = "san.loop_event";
 export const SAN_LOOP_REVIEW_CUSTOM_TYPE = "san.review_report";
 export const SAN_LOOP_CONTEXT_PACKET_CUSTOM_TYPE = "san.loop_context_packet";
 
-export type SanLoopMode = "rush" | "smart" | "deep";
+export const SAN_LOOP_MODES = ["solo", "team", "council"] as const;
+export type SanLoopMode = (typeof SAN_LOOP_MODES)[number];
+
+export type LegacySanLoopMode = "rush" | "smart" | "deep";
+
+export const SAN_LOOP_LEGACY_MODE_ALIASES: Record<LegacySanLoopMode, SanLoopMode> = {
+	rush: "solo",
+	smart: "team",
+	deep: "council",
+};
+
+export function normalizeSanLoopMode(value: unknown): SanLoopMode | undefined {
+	if (value === "solo" || value === "team" || value === "council") return value;
+	if (value === "rush" || value === "smart" || value === "deep") return SAN_LOOP_LEGACY_MODE_ALIASES[value];
+	return undefined;
+}
 
 export type SanLoopStatus =
 	| "planning"

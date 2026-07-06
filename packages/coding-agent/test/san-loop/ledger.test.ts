@@ -22,7 +22,7 @@ describe("San loop ledger", () => {
 		const result = recordSanLoopRunCreated(session, {
 			sessionId: session.getSessionId(),
 			objective: "Ship v0.2 execution loop",
-			mode: "deep",
+			mode: "council",
 			runId: "loop_test",
 			createdAt: "2026-07-01T00:00:00.000Z",
 			maxRetries: 3,
@@ -48,7 +48,7 @@ describe("San loop ledger", () => {
 		expect(ledger.latestRun?.data).toMatchObject({
 			runId: "loop_test",
 			objective: "Ship v0.2 execution loop",
-			mode: "deep",
+			mode: "council",
 			status: "planning",
 			maxRetries: 3,
 		});

@@ -88,9 +88,15 @@ export function parseEnvFile(filePath: string): Record<string, string> {
 		// File doesn't exist or can't be read - return empty result
 	}
 
-	// OMP_ overrides PI_
+	// SAN_ overrides OMP_ / PI_; OMP_ overrides PI_.
 	for (const k in result) {
 		if (k.startsWith("OMP_")) {
+			result[`PI_${k.slice(4)}`] = result[k];
+		}
+	}
+	for (const k in result) {
+		if (k.startsWith("SAN_")) {
+			result[`OMP_${k.slice(4)}`] = result[k];
 			result[`PI_${k.slice(4)}`] = result[k];
 		}
 	}

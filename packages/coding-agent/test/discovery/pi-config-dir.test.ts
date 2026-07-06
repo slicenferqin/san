@@ -6,13 +6,19 @@ import { getConfigDirs } from "@oh-my-pi/pi-coding-agent/config";
 import { getUserPath } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
 
-describe("PI_CONFIG_DIR", () => {
-	const original = process.env.PI_CONFIG_DIR;
+describe("SAN_CONFIG_DIR", () => {
+	const originalSan = process.env.SAN_CONFIG_DIR;
+	const originalPi = process.env.PI_CONFIG_DIR;
 	afterEach(() => {
-		if (original === undefined) {
+		if (originalSan === undefined) {
+			delete process.env.SAN_CONFIG_DIR;
+		} else {
+			process.env.SAN_CONFIG_DIR = originalSan;
+		}
+		if (originalPi === undefined) {
 			delete process.env.PI_CONFIG_DIR;
 		} else {
-			process.env.PI_CONFIG_DIR = original;
+			process.env.PI_CONFIG_DIR = originalPi;
 		}
 	});
 
@@ -24,16 +30,17 @@ describe("PI_CONFIG_DIR", () => {
 		};
 		// Native user config follows the active profile through getAgentDir(), not
 		// ctx.home, so it stays in sync with builtin.ts and getMCPConfigPath("user").
-		// The old behavior joined ctx.home + ".omp/agent" and leaked the default
+		// The old behavior joined ctx.home + ".san/agent" and leaked the default
 		// profile's config into every profile.
 		expect(getUserPath(ctx, "native", "commands")).toBe(path.join(getAgentDir(), "commands"));
 		expect(getUserPath(ctx, "native", "commands")).not.toContain(ctx.home);
 	});
 
-	test("getConfigDirs respects PI_CONFIG_DIR for user base", () => {
-		process.env.PI_CONFIG_DIR = ".config/omp";
+	test("getConfigDirs respects SAN_CONFIG_DIR for user base", () => {
+		process.env.SAN_CONFIG_DIR = ".config/san";
+		delete process.env.PI_CONFIG_DIR;
 		const result = getConfigDirs("commands", { project: false });
-		const expected = path.resolve(path.join(os.homedir(), ".config/omp", "agent", "commands"));
-		expect(result[0]).toEqual({ path: expected, source: ".omp", level: "user" });
+		const expected = path.resolve(path.join(os.homedir(), ".config/san", "agent", "commands"));
+		expect(result[0]).toEqual({ path: expected, source: ".san", level: "user" });
 	});
 });

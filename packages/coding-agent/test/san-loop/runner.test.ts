@@ -52,7 +52,7 @@ describe("San loop runner", () => {
 		const result = await runSanLoop({
 			sessionManager: session,
 			objective: "Ship runner loop",
-			mode: "smart",
+			mode: "team",
 			runId: "loop_runner_pass",
 			executor,
 		});
@@ -137,7 +137,7 @@ describe("San loop runner", () => {
 		const result = await runSanLoop({
 			sessionManager: session,
 			objective: "Retry to pass",
-			mode: "rush",
+			mode: "solo",
 			runId: "loop_runner_retry",
 			executor,
 			maxRetries: 2,
@@ -197,7 +197,7 @@ describe("San loop runner", () => {
 		const result = await runSanLoop({
 			sessionManager: session,
 			objective: "Exhaust budget",
-			mode: "rush",
+			mode: "solo",
 			runId: "loop_runner_budget",
 			executor,
 			maxTurns: 2,
@@ -216,7 +216,7 @@ describe("San loop runner", () => {
 		expect(result.transitions.at(-1)?.event.summary).toBe("San execution loop exhausted the configured turn budget.");
 	});
 
-	test("runs oracle before supervisor in deep mode", async () => {
+	test("runs oracle before supervisor in council mode", async () => {
 		const session = SessionManager.inMemory();
 		let oracleCalls = 0;
 		let supervisorSawOracle = false;
@@ -236,7 +236,7 @@ describe("San loop runner", () => {
 					resultId: "result-oracle",
 					assignmentId: invocation.assignment.assignmentId,
 					status: "completed",
-					summary: "Worker completed deep-mode task.",
+					summary: "Worker completed council-mode task.",
 					verification: ["worker evidence persisted"],
 				};
 			},
@@ -246,7 +246,7 @@ describe("San loop runner", () => {
 					reportId: "review-oracle",
 					reviewer: "oracle",
 					verdict: "pass",
-					evidence: ["oracle checked deep-mode evidence"],
+					evidence: ["oracle checked council-mode evidence"],
 					requiredNextActions: ["continue supervisor gate"],
 					confidence: "high",
 				};
@@ -265,8 +265,8 @@ describe("San loop runner", () => {
 
 		const result = await runSanLoop({
 			sessionManager: session,
-			objective: "Deep oracle gate",
-			mode: "deep",
+			objective: "Council oracle gate",
+			mode: "council",
 			runId: "loop_runner_oracle",
 			executor,
 		});

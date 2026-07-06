@@ -25,6 +25,7 @@ import type {
 	SanLoopWorkerAssignment,
 	SanLoopWorkerResult,
 } from "./types";
+import { normalizeSanLoopMode } from "./types";
 
 interface TaskExecutorSession {
 	sessionManager: SessionManager;
@@ -269,7 +270,7 @@ function sanitizeTaskId(value: string, index: number): string {
 }
 
 function parseMode(value: unknown, fallback: SanLoopMode): SanLoopMode {
-	return value === "rush" || value === "smart" || value === "deep" ? value : fallback;
+	return normalizeSanLoopMode(value) ?? fallback;
 }
 
 function structuredAssignmentText(value: unknown): string | undefined {
@@ -489,7 +490,7 @@ function buildSupervisorTask(invocation: SanLoopSupervisorInvocation): string {
 
 function buildOracleTask(invocation: SanLoopSupervisorInvocation): string {
 	return [
-		"Give a second opinion for this San v0.2 deep execution-loop gate.",
+		"Give a second opinion for this San v0.2 council execution-loop gate.",
 		`Run ID: ${invocation.run.runId}`,
 		`Mode: ${invocation.mode}`,
 		`Objective: ${invocation.run.objective}`,
