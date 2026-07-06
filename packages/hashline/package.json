@@ -3,16 +3,16 @@
   "name": "@oh-my-pi/hashline",
   "version": "16.2.2",
   "description": "Hashline: a compact, line-anchored patch language and applier. Pluggable FS/IO so it works over disk, in-memory, or any custom backend.",
-  "homepage": "https://omp.sh",
+  "homepage": "https://github.com/slicenferqin/san",
   "author": "Can Boluk",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/can1357/oh-my-pi.git",
+    "url": "git+https://github.com/slicenferqin/san.git",
     "directory": "packages/hashline"
   },
   "bugs": {
-    "url": "https://github.com/can1357/oh-my-pi/issues"
+    "url": "https://github.com/slicenferqin/san/issues"
   },
   "keywords": [
     "patch",

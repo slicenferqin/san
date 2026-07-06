@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/source--first-active-D97706?style=flat&colorA=0B1020" alt="Source first" />
 </p>
 
-San 是一个面向长期、可恢复工程任务的 coding agent。它从 `omp` fork 而来，保留成熟的工具化编码能力，并把重点推进到一个更具体的问题：当对话、代码修改、验证和恢复跨越很多轮之后，agent 仍然应该保有稳定、可审计、可压缩的上下文状态，并且能在高风险任务里按明确角色分工执行、复验和收口。
+San 是一个面向长期、可恢复工程任务的 coding agent。它源自 `omp` 的成熟工具化编码基础，现在作为独立项目推进一个更具体的问题：当对话、代码修改、验证和恢复跨越很多轮之后，agent 仍然应该保有稳定、可审计、可压缩的上下文状态，并且能在高风险任务里按明确角色分工执行、复验和收口。
 
 San 当前对外版本是 **San v0.2 Execution Loop**。v0.1 Context Steady 解决长任务上下文稳态；v0.2 在这个底座上，把“计划、执行、复验、失败收口”推进成可审计的工程执行循环。
 
@@ -239,11 +239,11 @@ Context steady dogfood verifier 当前覆盖 digest 持久化、ContextPacket �
 - `docs/research/san-gsar-qwen-opus-run-20260706-100034.html`
 - `packages/coding-agent/examples/san-gsar-benchmark-tasks.json`
 
-## 上游关系
+## 来源与致谢
 
-San fork 自 [`oh-my-pi`](https://github.com/can1357/oh-my-pi)，而 `oh-my-pi` 又源自 Mario Zechner 的 Pi 工作。San 继承了原有的工具化编码能力，包括文件工具、shell、LSP、debugger、subagents、browser、web search、collaboration 和 memory backends。
+San 现在是独立仓库：[`slicenferqin/san`](https://github.com/slicenferqin/san)。早期代码源自 [`oh-my-pi`](https://github.com/can1357/oh-my-pi)，而 `oh-my-pi` 又源自 Mario Zechner 的 Pi 工作。San 继承了原有的工具化编码能力，包括文件工具、shell、LSP、debugger、subagents、browser、web search、collaboration 和 memory backends。
 
-这个 README 聚焦 San 自身新增的方向和当前可验收能力。仓库内仍保留部分 upstream 文档与包名引用，后续会随 fork 产品化逐步清理。
+这个 README 聚焦 San 自身新增的方向和当前可验收能力。仓库内仍保留部分内部 `@oh-my-pi/*` 包名作为兼容实现细节；对外仓库、配置目录、命令和发布叙事已经切到 San。
 
 ## License
 

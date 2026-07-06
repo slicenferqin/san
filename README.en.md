@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/source--first-active-D97706?style=flat&colorA=0B1020" alt="Source first" />
 </p>
 
-San is a coding agent for long-running, resumable engineering work. It started as a fork of `omp`, keeps the mature tool-driven coding surface, and focuses on a narrower systems problem: after many turns of discussion, code changes, verification, and resume, the agent should still preserve stable, auditable, and compact context state, then execute high-risk work through explicit roles, review, and closure.
+San is a coding agent for long-running, resumable engineering work. It originated from the mature tool-driven `omp` coding-agent foundation and now moves forward as an independent project focused on a narrower systems problem: after many turns of discussion, code changes, verification, and resume, the agent should still preserve stable, auditable, and compact context state, then execute high-risk work through explicit roles, review, and closure.
 
 San's current public release is **San v0.2 Execution Loop**. v0.1 Context Steady solved long-running context stability; v0.2 builds on that foundation and turns planning, execution, verification, and failure handling into an auditable engineering loop.
 
@@ -239,11 +239,11 @@ The context steady dogfood verifier currently covers digest persistence, Context
 - `docs/research/san-gsar-qwen-opus-run-20260706-100034.html`
 - `packages/coding-agent/examples/san-gsar-benchmark-tasks.json`
 
-## Upstream Heritage
+## Origin And Credits
 
-San is forked from [`oh-my-pi`](https://github.com/can1357/oh-my-pi), which itself builds on Mario Zechner's Pi work. San inherits the original tool-rich coding-agent surface: file tools, shell execution, LSP, debugger integration, subagents, browser, web search, collaboration, and memory backends.
+San is now an independent repository: [`slicenferqin/san`](https://github.com/slicenferqin/san). The early codebase originated from [`oh-my-pi`](https://github.com/can1357/oh-my-pi), which itself builds on Mario Zechner's Pi work. San inherits the original tool-rich coding-agent surface: file tools, shell execution, LSP, debugger integration, subagents, browser, web search, collaboration, and memory backends.
 
-This README focuses on San-specific work and current acceptance-ready capabilities. Some upstream documentation and package references still exist in the repository and will be cleaned up as the fork is productized.
+This README focuses on San-specific work and current acceptance-ready capabilities. Some internal `@oh-my-pi/*` package names remain as compatibility implementation details; the public repository, config directories, command, and release narrative now point to San.
 
 ## License
 

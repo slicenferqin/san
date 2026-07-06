@@ -3,16 +3,16 @@
   "name": "@oh-my-pi/pi-wire",
   "version": "16.2.2",
   "description": "Shared wire protocol types for Oh My Pi packages",
-  "homepage": "https://omp.sh",
+  "homepage": "https://github.com/slicenferqin/san",
   "author": "Can Boluk",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/can1357/oh-my-pi.git",
+    "url": "git+https://github.com/slicenferqin/san.git",
     "directory": "packages/wire"
   },
   "bugs": {
-    "url": "https://github.com/can1357/oh-my-pi/issues"
+    "url": "https://github.com/slicenferqin/san/issues"
   },
   "keywords": [
     "wire",
