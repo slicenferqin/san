@@ -1,6 +1,6 @@
 # San coding agent
 
-Core implementation package for the `san` coding agent. San is a fork of `omp` that keeps the original tool-rich coding-agent surface and adds context steady state work for long-running, resumable engineering sessions.
+Core implementation package for the `san` coding agent. San is a fork of `omp` that keeps the original tool-rich coding-agent surface and now focuses on the San v0.2 execution loop: long-running context steady state, explicit `solo/team/council` execution modes, role-ledger evidence, San Checks, and benchmarked high-risk review paths.
 
 For installation, setup, provider configuration, model roles, slash commands, and full CLI reference, see:
 - [Monorepo README (local)](../../README.md)
@@ -12,6 +12,38 @@ Package-specific references:
 - [MCP runtime lifecycle](../../docs/mcp-runtime-lifecycle.md)
 - [MCP server/tool authoring](../../docs/mcp-server-tool-authoring.md)
 - [DEVELOPMENT](./DEVELOPMENT.md)
+
+## San v0.2 execution loop
+
+San v0.2 adds a selectable execution loop on top of the existing coding-agent runtime. The product stance is explicit: daily work should use `solo`; higher-risk work can switch to `team` or `council` when independent execution, review, and ledger evidence justify the extra overhead.
+
+Execution modes:
+
+- `solo` — single-agent daily mode for clear, low-risk tasks.
+- `team` — Commander + Worker + Supervisor mode for complex implementation and review.
+- `council` — Commander + Worker + Supervisor + Oracle mode for architecture, release gates, and ambiguous failure analysis.
+
+The GSAR benchmark currently shows:
+
+| Run shape | Pass rate | Total tokens | Wall time | Product conclusion |
+| --- | ---: | ---: | ---: | --- |
+| Single Agent Baseline | 5/10 | 4.84M | 32.25 min | right default for daily work |
+| Multi-role Same Model | 8/10 | 5.90M | 65.47 min | useful quality switch, too expensive to keep always-on |
+| Multi-role Heterogeneous | 9/10 | 4.48M | 57.96 min | strongest current high-risk review sample |
+
+Useful v0.2 artifacts:
+
+- `docs/research/san-gsar-controls-run-20260706-111813.html`
+- `docs/research/san-gsar-qwen-opus-run-20260706-100034.html`
+- `packages/coding-agent/examples/san-gsar-benchmark-tasks.json`
+- `packages/coding-agent/examples/config/san-execution-loop-recommended.yml`
+- `packages/coding-agent/test/san-loop/`
+
+Recommended v0.2 dogfood config:
+
+```sh
+san --config packages/coding-agent/examples/config/san-execution-loop-recommended.yml
+```
 
 ## San context steady v0.1
 

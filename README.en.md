@@ -3,7 +3,7 @@
 [中文](README.md) | **English**
 
 <p align="center">
-  <img src="docs/assets/readme/hero-en.svg" alt="San Context Steady v0.1" />
+  <img src="docs/assets/readme/hero-en.svg" alt="San v0.2 Execution Loop" />
 </p>
 
 <p align="center">
@@ -13,28 +13,28 @@
   <img src="https://img.shields.io/badge/source--first-active-D97706?style=flat&colorA=0B1020" alt="Source first" />
 </p>
 
-San is a coding agent for long-running, resumable engineering work. It started as a fork of `omp`, keeps the mature tool-driven coding surface, and focuses on a narrower systems problem: after many turns of discussion, code changes, verification, and resume, the agent should still preserve stable, auditable, and compact context state.
+San is a coding agent for long-running, resumable engineering work. It started as a fork of `omp`, keeps the mature tool-driven coding surface, and focuses on a narrower systems problem: after many turns of discussion, code changes, verification, and resume, the agent should still preserve stable, auditable, and compact context state, then execute high-risk work through explicit roles, review, and closure.
 
-San's first public milestone is **San Context Steady v0.1**.
+San's current public release is **San v0.2 Execution Loop**. v0.1 Context Steady solved long-running context stability; v0.2 builds on that foundation and turns planning, execution, verification, and failure handling into an auditable engineering loop.
 
-**One-line version**: San does not treat "fit more transcript into a larger window" as the answer. It turns long-running dialogue into an auditable ledger, stable checkpoints, and bounded ContextPackets so model-bound context can reach steady state.
+**One-line version**: San still defaults to low-overhead `solo` mode for daily coding work. When a task becomes architectural, release-critical, regression-prone, or easy to misjudge, switch to `team` or `council` so Commander, Worker, Supervisor, and Oracle roles can split the work and write evidence into the ledger.
 
 ## What You Can See Today
 
-| Result | v0.1 evidence | Why it matters |
+| Result | Current evidence | Why it matters |
 | --- | ---: | --- |
-| Stable input size | turn 10 at `598 tokens` | provider-bound context no longer grows linearly with raw transcript |
-| Lower long-window pressure | control turn 10 at `198,340 tokens` | San moves old context into packet/checkpoint state for the same class of work |
-| Recoverable continuity | `1,612-token ContextPacket` | later turns still carry goals, files, decisions, risks, and acceptance criteria |
-| Preserved audit trail | `1 checkpoint` covering the first 6 digests | raw session journal stays append-only for resume/debug/audit |
-
-These numbers are not meant to show that one fixed prompt was matched. They show the runtime property San is aiming for: old state becomes structured, model-bound history becomes pruneable, and the next turn can still recover the task context.
+| v0.2 execution loop can be dogfooded | `/san-loop run`, role ledger, San Checks, `solo/team/council` | San is not just a chat agent; it is an engineering execution system with roles, review, and records |
+| GSAR benchmark produced a controlled comparison | `solo` 5/10, same-model multi-role 8/10, heterogeneous multi-role 9/10 | multi-role improves complex-task pass rate, but should not be forced onto every daily task |
+| v0.1 context steady state is validated | turn 10 at `598 tokens`, control at `198,340 tokens` | provider-bound context no longer grows linearly with raw transcript |
+| Local config moved to the San namespace | default `~/.san`, project `.san`, preferred `SAN_*` env vars | local installation and use no longer depend on `.omp` paths |
 
 **Fast Acceptance Entry Points**:
 
-- **Recommended config**: `san --config packages/coding-agent/examples/config/san-context-steady-recommended.yml`
-- **Quality report**: `docs/research/context-steady-v0.1-quality-acceptance-report.html`
-- **Core contract test**: `packages/coding-agent/test/context-steady/agent-session-m2.test.ts`
+- **v0.2 recommended config**: `san --config packages/coding-agent/examples/config/san-execution-loop-recommended.yml`
+- **v0.2 benchmark control report**: `docs/research/san-gsar-controls-run-20260706-111813.html`
+- **v0.2 heterogeneous multi-role report**: `docs/research/san-gsar-qwen-opus-run-20260706-100034.html`
+- **v0.2 benchmark task set**: `packages/coding-agent/examples/san-gsar-benchmark-tasks.json`
+- **v0.1 quality report**: `docs/research/context-steady-v0.1-quality-acceptance-report.html`
 - **Local verification**: `bun check` + `HOME=/private/tmp/san-test-home bun test packages/coding-agent/test/context-steady packages/coding-agent/test/san-loop`
 
 ## Why San
@@ -116,9 +116,43 @@ The external v0.1 claim is threefold:
 
 ## San v0.2 Execution Loop
 
-The `main` branch also includes the San v0.2 execution loop foundation. v0.2 does not replace v0.1; it builds on context steady state and moves toward a more complete engineering execution loop.
+San v0.2 is the current public release target. It does not turn every task into a multi-agent process. It adds explicit execution modes to a coding agent: keep daily work in low-overhead `solo`, then switch to `team` or `council` for complex work where independent execution, review, and an append-only ledger are worth the overhead.
 
-Current v0.2 capabilities include:
+### Execution Modes
+
+| Mode | Use case | Role shape | Product stance |
+| --- | --- | --- | --- |
+| `solo` | daily fixes, small changes, clear requirements | single agent, single role | default path, lowest latency and cost |
+| `team` | medium/high-risk changes, test-suite repair, tasks needing independent review | Commander + Worker + Supervisor | recommended smart mode, clear quality upside with extra overhead |
+| `council` | architecture calls, release acceptance, cross-module tradeoffs, high-ambiguity failures | Commander + Worker + Supervisor + Oracle | recommended deep mode for a small number of high-risk decisions |
+
+The old `rush/smart/deep` names have been consolidated into `solo/team/council`. The product claim is now sharper: San v0.2 is not "more agents are always better"; it is an auditable execution loop when task risk justifies the extra work.
+
+### GSAR Benchmark Result
+
+The GSAR benchmark compares three execution shapes on the same 10-task suite, covering goal retention, distraction resistance, hidden blockers, regression detection, error-continuation interception, and ROI constraints.
+
+| Run shape | Pass rate | Total tokens | Wall time | Conclusion |
+| --- | ---: | ---: | ---: | --- |
+| Single Agent Baseline | 5/10 | 4.84M | 32.25 min | right daily default; missed hidden blockers, regressions, and error-continuation cases |
+| Multi-role Same Model | 8/10 | 5.90M | 65.47 min | passed 3 more tasks than single agent, but took about 2.03x wall time, so it should not be always-on |
+| Multi-role Heterogeneous | 9/10 | 4.48M | 57.96 min | strongest current quality sample, suitable for `team/council` high-risk modes |
+
+The product conclusion is direct:
+
+- **Daily use should default to `solo`**: low-risk tasks do not justify the extra time and token spend of multi-role execution.
+- **`team` is the quality switch**: same-model multi-role improved from 5/10 to 8/10, showing that independent Worker/Supervisor review catches real misses.
+- **`council` is the deep-judgment switch**: heterogeneous multi-role reached 9/10 in this single run and is better suited to release gates, architecture tradeoffs, and complex failure analysis.
+- **The evidence does not justify always-on multi-role yet**: this is still single-run evidence; the next benchmark step is at least 3 runs for mean and variance.
+- **Cost is reported as tokens and time for now**: provider pricing was not fully normalized, so the public report uses tokens, non-cache tokens, pass rate, and wall time as auditable metrics.
+
+Report entry points:
+
+- Control benchmark: `docs/research/san-gsar-controls-run-20260706-111813.html`
+- Heterogeneous multi-role benchmark: `docs/research/san-gsar-qwen-opus-run-20260706-100034.html`
+- Task set: `packages/coding-agent/examples/san-gsar-benchmark-tasks.json`
+
+### What v0.2 Includes
 
 - Commander / Worker / Supervisor / Oracle role infrastructure
 - append-only loop ledger entries
@@ -132,6 +166,14 @@ Recommended v0.2 dogfood config:
 
 ```sh
 san --config packages/coding-agent/examples/config/san-execution-loop-recommended.yml
+```
+
+Typical runs:
+
+```sh
+/san-loop run --mode solo "<objective>"
+/san-loop run --mode team "<objective>"
+/san-loop run --mode council "<objective>"
 ```
 
 ## Install from Source
@@ -193,6 +235,9 @@ The context steady dogfood verifier currently covers digest persistence, Context
 - `docs/research/context-steady-dogfood-runs/`
 - `docs/research/san-v0.2-technical-design.html`
 - `docs/research/san-v0.2-validation-readiness.html`
+- `docs/research/san-gsar-controls-run-20260706-111813.html`
+- `docs/research/san-gsar-qwen-opus-run-20260706-100034.html`
+- `packages/coding-agent/examples/san-gsar-benchmark-tasks.json`
 
 ## Upstream Heritage
 

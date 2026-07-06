@@ -3,7 +3,7 @@
 **中文** | [English](README.en.md)
 
 <p align="center">
-  <img src="docs/assets/readme/hero-zh.svg" alt="San Context Steady v0.1" />
+  <img src="docs/assets/readme/hero-zh.svg" alt="San v0.2 Execution Loop" />
 </p>
 
 <p align="center">
@@ -13,28 +13,28 @@
   <img src="https://img.shields.io/badge/source--first-active-D97706?style=flat&colorA=0B1020" alt="Source first" />
 </p>
 
-San 是一个面向长期、可恢复工程任务的 coding agent。它从 `omp` fork 而来，保留成熟的工具化编码能力，并把重点推进到一个更具体的问题：当对话、代码修改、验证和恢复跨越很多轮之后，agent 仍然应该保有稳定、可审计、可压缩的上下文状态。
+San 是一个面向长期、可恢复工程任务的 coding agent。它从 `omp` fork 而来，保留成熟的工具化编码能力，并把重点推进到一个更具体的问题：当对话、代码修改、验证和恢复跨越很多轮之后，agent 仍然应该保有稳定、可审计、可压缩的上下文状态，并且能在高风险任务里按明确角色分工执行、复验和收口。
 
-San 的第一个对外里程碑是 **San Context Steady v0.1**。
+San 当前对外版本是 **San v0.2 Execution Loop**。v0.1 Context Steady 解决长任务上下文稳态；v0.2 在这个底座上，把“计划、执行、复验、失败收口”推进成可审计的工程执行循环。
 
-**一句话版本**：San 不把“能塞进更长上下文”当成答案，而是把长期对话沉淀成可审计 ledger、stable checkpoint 和有预算的 ContextPacket，让模型侧上下文进入稳态。
+**一句话版本**：San 默认仍可以像普通 coding agent 一样用 `solo` 低开销完成日常任务；遇到架构变更、发布验收、复杂修复和容易误判的场景时，可以切到 `team` 或 `council`，让 Commander、Worker、Supervisor、Oracle 分工，并把证据写进 ledger。
 
 ## 现在能看到什么
 
-| 结果 | v0.1 证据 | 意义 |
+| 结果 | 当前证据 | 意义 |
 | --- | ---: | --- |
-| 输入规模稳住 | 第 10 轮 `598 tokens` | provider-bound context 不再随 raw transcript 线性膨胀 |
-| 长窗口压力下降 | 对照组第 10 轮 `198,340 tokens` | 同类任务下，San 把旧上下文转为 packet/checkpoint |
-| 连续性可恢复 | `1,612-token ContextPacket` | 后续 turn 仍保留目标、文件、决策、风险和验收口径 |
-| 审计链路保留 | `1 checkpoint` 覆盖前 6 个 digest | raw session journal 继续 append-only，用于 resume/debug/audit |
-
-这组数字不是为了证明某个固定 prompt 被“命中”，而是证明 San 的运行时开始具备通用稳态性质：旧状态结构化、模型侧历史可裁剪、下一轮仍能恢复任务上下文。
+| v0.2 执行循环已可 dogfood | `/san-loop run`、role ledger、San Checks、`solo/team/council` | San 不只是聊天代理，而是有角色、有验收、有记录的工程执行系统 |
+| GSAR benchmark 给出对照结论 | `solo` 5/10，同模型多角色 8/10，异构多角色 9/10 | 多角色能提升复杂任务通过率，但不应默认套到所有日常任务 |
+| v0.1 上下文稳态已验证 | 第 10 轮 `598 tokens`，对照组 `198,340 tokens` | provider-bound context 不再随 raw transcript 线性膨胀 |
+| 本地配置已切到 San 命名空间 | 默认 `~/.san`、项目 `.san`、优先 `SAN_*` | 本地安装和使用不再依赖 `.omp` 目录 |
 
 **快速验收入口**：
 
-- **推荐配置**：`san --config packages/coding-agent/examples/config/san-context-steady-recommended.yml`
-- **质量报告**：`docs/research/context-steady-v0.1-quality-acceptance-report.html`
-- **核心测试**：`packages/coding-agent/test/context-steady/agent-session-m2.test.ts`
+- **v0.2 推荐配置**：`san --config packages/coding-agent/examples/config/san-execution-loop-recommended.yml`
+- **v0.2 benchmark 对照报告**：`docs/research/san-gsar-controls-run-20260706-111813.html`
+- **v0.2 异构多角色报告**：`docs/research/san-gsar-qwen-opus-run-20260706-100034.html`
+- **v0.2 benchmark 任务集**：`packages/coding-agent/examples/san-gsar-benchmark-tasks.json`
+- **v0.1 质量报告**：`docs/research/context-steady-v0.1-quality-acceptance-report.html`
 - **本地校验**：`bun check` + `HOME=/private/tmp/san-test-home bun test packages/coding-agent/test/context-steady packages/coding-agent/test/san-loop`
 
 ## 为什么需要 San
@@ -116,9 +116,43 @@ v0.1 的对外 claim 可以概括为三点：
 
 ## San v0.2 执行循环
 
-`main` 分支已合入 San v0.2 execution loop 基础能力。v0.2 不是替代 v0.1，而是在 context steady 之上继续推进 agent 的工程执行闭环。
+San v0.2 是当前准备对外发布的主版本：它不是把所有任务都升级成多 agent，而是给 coding agent 加上一套可选择的执行档位。日常任务保持 `solo` 低开销；复杂任务打开 `team` 或 `council`，用角色分工、独立复验和 append-only ledger 降低误判风险。
 
-当前 v0.2 包含：
+### 执行档位
+
+| 模式 | 使用场景 | 角色形态 | 产品判断 |
+| --- | --- | --- | --- |
+| `solo` | 日常修复、小改动、明确需求 | 单 agent 单角色 | 默认路径，速度和成本最低 |
+| `team` | 中高风险改动、测试集修复、需要独立 review 的任务 | Commander + Worker + Supervisor | 推荐作为 smart 档，质量收益明确但有额外开销 |
+| `council` | 架构判断、发布验收、跨模块取舍、容易误判的任务 | Commander + Worker + Supervisor + Oracle | 推荐作为 deep 档，用于少数高风险决策 |
+
+旧的 `rush/smart/deep` 命名已经收敛为 `solo/team/council`。产品口径也随之更清楚：San v0.2 的价值不是“更多 agent 永远更好”，而是在风险足够高时提供可审计的执行循环。
+
+### GSAR benchmark 结论
+
+GSAR benchmark 用同一组 10 个任务对比三种运行形态，覆盖目标保持、干扰抵抗、隐藏 blocker、回归检测、错误继续执行拦截和 ROI 约束等场景。
+
+| 运行形态 | 通过率 | 总 token | 墙钟时间 | 结论 |
+| --- | ---: | ---: | ---: | --- |
+| Single Agent Baseline | 5/10 | 4.84M | 32.25 min | 适合日常默认；在隐藏 blocker、回归和错误继续执行场景漏检明显 |
+| Multi-role Same Model | 8/10 | 5.90M | 65.47 min | 比单 agent 多通过 3 个任务，但耗时约 2.03x，不适合作为默认常开 |
+| Multi-role Heterogeneous | 9/10 | 4.48M | 57.96 min | 当前最强质量样本，适合 `team/council` 高风险档 |
+
+这组结果给出的产品判断很直接：
+
+- **日常使用默认 `solo`**：低风险任务不值得为多角色支付额外时间和 token。
+- **`team` 是质量开关**：同模型多角色从 5/10 提升到 8/10，说明独立 Worker/Supervisor 复验能真实捕捉单 agent 漏掉的问题。
+- **`council` 是深度判断开关**：异构多角色单轮达到 9/10，更适合发布前验收、架构取舍和复杂 failure analysis。
+- **当前证据不支持默认全量开启多角色**：benchmark 仍是单轮样本，下一步需要 3 轮以上均值和方差；README 对外只声明“可选高风险档位有效”，不声明“所有任务都应该多角色”。
+- **成本口径先看 token 和时间**：当前 benchmark provider 成本没有完整计价，因此报告使用 token、non-cache token、通过率和墙钟时间作为可复查指标。
+
+报告入口：
+
+- 对照 benchmark：`docs/research/san-gsar-controls-run-20260706-111813.html`
+- 异构多角色 benchmark：`docs/research/san-gsar-qwen-opus-run-20260706-100034.html`
+- 任务集：`packages/coding-agent/examples/san-gsar-benchmark-tasks.json`
+
+### v0.2 已包含
 
 - Commander / Worker / Supervisor / Oracle 角色基础设施
 - append-only loop ledger entries
@@ -132,6 +166,14 @@ v0.1 的对外 claim 可以概括为三点：
 
 ```sh
 san --config packages/coding-agent/examples/config/san-execution-loop-recommended.yml
+```
+
+典型运行方式：
+
+```sh
+/san-loop run --mode solo "<objective>"
+/san-loop run --mode team "<objective>"
+/san-loop run --mode council "<objective>"
 ```
 
 ## 从源码安装
@@ -193,6 +235,9 @@ Context steady dogfood verifier 当前覆盖 digest 持久化、ContextPacket �
 - `docs/research/context-steady-dogfood-runs/`
 - `docs/research/san-v0.2-technical-design.html`
 - `docs/research/san-v0.2-validation-readiness.html`
+- `docs/research/san-gsar-controls-run-20260706-111813.html`
+- `docs/research/san-gsar-qwen-opus-run-20260706-100034.html`
+- `packages/coding-agent/examples/san-gsar-benchmark-tasks.json`
 
 ## 上游关系
 
