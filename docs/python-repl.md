@@ -37,7 +37,7 @@ The tool is `concurrency = "exclusive"` for a session, so calls do not overlap.
 
 ## Kernel lifecycle
 
-Each Python kernel is a single subprocess: `<resolved-python> -u <runner.py>`. The runner is bundled with the host binary (Bun text import), written to an `omp-python-runner` cache under the OS temp directory once per script hash, and reused by subsequent spawns.
+Each Python kernel is a single subprocess: `<resolved-python> -u <runner.py>`. The runner is bundled with the host binary (Bun text import), written to a `san-python-runner` cache under the OS temp directory once per script hash, and reused by subsequent spawns.
 
 Kernel startup sequence:
 
@@ -135,13 +135,13 @@ If an intermediate cell fails:
 Environment is filtered before launching the runner:
 
 - Allowlist includes core vars like `PATH`, `HOME`, locale vars, `VIRTUAL_ENV`, `PYTHONPATH`, etc.
-- Allow-prefixes: `LC_`, `XDG_`, `PI_`
+- Allow-prefixes: `LC_`, `XDG_`, `SAN_`, `PI_`
 - Denylist strips common API keys (OpenAI/Anthropic/Gemini/etc.)
 
 Runtime selection order (skipped entirely when the `python.interpreter` setting names an explicit executable):
 
 1. Active/located venv (`VIRTUAL_ENV`, then `CONDA_PREFIX`, then `<cwd>/.venv`, `<cwd>/venv`)
-2. Managed venv at `~/.omp/python-env`
+2. Managed venv at `~/.san/python-env`
 3. `python` or `python3` on PATH
 
 When a venv is selected, its bin/Scripts path is prepended to `PATH`.
@@ -150,13 +150,13 @@ The runner additionally receives `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-
 
 ## Tool availability and mode selection
 
-`eval.py` / `eval.js` (both default `true`) plus optional boolean env flags `PI_PY` / `PI_JS` control eval backend exposure:
+`eval.py` / `eval.js` (both default `true`) plus optional boolean env flags `SAN_PY` / `SAN_JS` control eval backend exposure; legacy `PI_PY` / `PI_JS` remain accepted:
 
-- Python backend only (`eval.py=true`, `eval.js=false`, or `PI_PY=1 PI_JS=0`)
-- JavaScript backend only (`eval.py=false`, `eval.js=true`, or `PI_PY=0 PI_JS=1`)
-- both backends (`eval.py=true`, `eval.js=true`, or `PI_PY=1 PI_JS=1`)
+- Python backend only (`eval.py=true`, `eval.js=false`, or `SAN_PY=1 SAN_JS=0`)
+- JavaScript backend only (`eval.py=false`, `eval.js=true`, or `SAN_PY=0 SAN_JS=1`)
+- both backends (`eval.py=true`, `eval.js=true`, or `SAN_PY=1 SAN_JS=1`)
 
-`PI_PY` and `PI_JS` use normal boolean flag parsing. Each flag, when set, overrides only its own setting; an unset flag falls back to its setting (`eval.py` / `eval.js`, both default `true`).
+`SAN_PY` and `SAN_JS` use normal boolean flag parsing. Each flag, when set, overrides only its own setting; an unset flag falls back to its legacy `PI_*` alias, then its setting (`eval.py` / `eval.js`, both default `true`).
 
 If Python preflight fails and `eval.js` is enabled, `eval` remains available for `js` cells; `py` cells fail with a Python-backend availability error.
 
@@ -230,15 +230,15 @@ Output is streamed through `OutputSink` and may be persisted to artifact storage
 
 ## Operational troubleshooting
 
-- **Python backend not available** — Check `eval.py`, `PI_PY`, and that `python`/`python3` is on PATH. If preflight fails and `eval.js` is enabled, use a `js` cell.
-- **No Python on PATH** — Install a system Python 3.8+ or place a venv at `~/.omp/python-env`. `omp setup python --check` reports the resolved interpreter.
+- **Python backend not available** — Check `eval.py`, `SAN_PY` (or legacy `PI_PY`), and that `python`/`python3` is on PATH. If preflight fails and `eval.js` is enabled, use a `js` cell.
+- **No Python on PATH** — Install a system Python 3.8+ or place a venv at `~/.san/python-env`. `san setup python --check` reports the resolved interpreter.
 - **Execution hangs then times out** — Increase tool `timeout` (max 3600s) if workload is legitimate. For stuck native code, cancellation triggers `SIGINT` first then escalates; the session restarts on the next request.
 - **stdin/input prompts in Python code** — `input()` is not supported; pass data programmatically.
 - **Working directory errors** — Tool validates `cwd` exists and is a directory before execution.
 
 ## Relevant environment variables
 
-- `PI_PY` / `PI_JS` — eval backend exposure overrides
-- `PI_PYTHON_SKIP_CHECK=1` — bypass Python preflight/warm checks
-- `PI_PYTHON_INTEGRATION=1` — enable gated integration tests that spawn a real Python
-- `PI_PYTHON_IPC_TRACE=1` — log NDJSON frames exchanged with the runner subprocess
+- `SAN_PY` / `SAN_JS` — eval backend exposure overrides; legacy `PI_PY` / `PI_JS` still work
+- `SAN_PYTHON_SKIP_CHECK=1` — bypass Python preflight/warm checks; legacy `PI_PYTHON_SKIP_CHECK` still works
+- `SAN_PYTHON_INTEGRATION=1` — enable gated integration tests that spawn a real Python; legacy `PI_PYTHON_INTEGRATION` still works
+- `SAN_PYTHON_IPC_TRACE=1` — log NDJSON frames exchanged with the runner subprocess; legacy `PI_PYTHON_IPC_TRACE` still works

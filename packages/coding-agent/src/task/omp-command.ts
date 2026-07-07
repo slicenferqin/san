@@ -8,11 +8,11 @@ interface OmpCommand {
 	shell: boolean;
 }
 
-const DEFAULT_CMD = process.platform === "win32" ? "omp.cmd" : "omp";
+const DEFAULT_CMD = process.platform === "win32" ? "san.cmd" : "san";
 const DEFAULT_SHELL = process.platform === "win32";
 
 export function resolveOmpCommand(): OmpCommand {
-	const envCmd = $env.PI_SUBPROCESS_CMD;
+	const envCmd = $env.SAN_SUBPROCESS_CMD ?? $env.PI_SUBPROCESS_CMD;
 	if (envCmd?.trim()) {
 		return { cmd: envCmd, args: [], shell: DEFAULT_SHELL };
 	}

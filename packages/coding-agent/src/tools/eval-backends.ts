@@ -19,16 +19,15 @@ export function readEvalBackendsAllowance(session: ToolSession): EvalBackendsAll
 }
 
 /**
- * Materialize the active eval backend allowance: PI_PY / PI_JS / PI_RB / PI_JL
- * env flags override the per-key settings; otherwise settings win (py/js default
- * on, rb/jl default off).
+ * Materialize the active eval backend allowance: SAN_PY / SAN_JS / SAN_RB / SAN_JL
+ * env flags override the per-key settings; legacy PI_* aliases remain accepted.
  */
 export function resolveEvalBackends(session: ToolSession): EvalBackendsAllowance {
 	const settings = readEvalBackendsAllowance(session);
 	return {
-		python: $flag("PI_PY", settings.python),
-		js: $flag("PI_JS", settings.js),
-		ruby: $flag("PI_RB", settings.ruby),
-		julia: $flag("PI_JL", settings.julia),
+		python: $flag("SAN_PY", $flag("PI_PY", settings.python)),
+		js: $flag("SAN_JS", $flag("PI_JS", settings.js)),
+		ruby: $flag("SAN_RB", $flag("PI_RB", settings.ruby)),
+		julia: $flag("SAN_JL", $flag("PI_JL", settings.julia)),
 	};
 }

@@ -34,7 +34,7 @@ export interface MapReduceInput {
 }
 
 export function shouldUseMapReduce(diff: string, settings?: MapReduceSettings): boolean {
-	if ($env.PI_COMMIT_MAP_REDUCE?.toLowerCase() === "false") return false;
+	if (($env.SAN_COMMIT_MAP_REDUCE ?? $env.PI_COMMIT_MAP_REDUCE)?.toLowerCase() === "false") return false;
 	if (settings?.enabled === false) return false;
 	const minFiles = settings?.minFiles ?? MIN_FILES_FOR_MAP_REDUCE;
 	const maxFileTokens = settings?.maxFileTokens ?? MAX_FILE_TOKENS;

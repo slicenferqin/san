@@ -33,11 +33,11 @@ describe("tiny model device selection", () => {
 	});
 
 	it("rejects unknown ONNX execution providers", () => {
-		expect(() => resolveTinyModelDevicePreference("neural-magic")).toThrow("Unsupported PI_TINY_DEVICE");
+		expect(() => resolveTinyModelDevicePreference("neural-magic")).toThrow("Unsupported SAN_TINY_DEVICE");
 	});
 });
 
-describe("tiny model device setting → PI_TINY_DEVICE mapping", () => {
+describe("tiny model device setting → SAN_TINY_DEVICE mapping", () => {
 	it("returns undefined for the default sentinel so the worker keeps its CPU default", () => {
 		expect(tinyModelDeviceSettingToEnv(TINY_MODEL_DEVICE_DEFAULT)).toBeUndefined();
 		expect(tinyModelDeviceSettingToEnv(undefined)).toBeUndefined();

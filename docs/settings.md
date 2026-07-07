@@ -110,14 +110,14 @@ Environment variables are **not** a single settings layer. Each is read by the f
 
 | Env var | Overrides setting | Notes |
 |---|---|---|
-| `PI_SMOL_MODEL` | `modelRoles.smol` | Also exposed as `--smol`. |
-| `PI_SLOW_MODEL` | `modelRoles.slow` | Also exposed as `--slow`. |
-| `PI_PLAN_MODEL` | `modelRoles.plan` | Also exposed as `--plan`. |
-| `PI_NO_PTY=1` | (disables PTY bash) | Equivalent to `--no-pty` for the process. |
-| `PI_PY` | `eval.py` | `PI_PY=0` disables the Python eval backend. |
-| `PI_JS` | `eval.js` | `PI_JS=0` disables the JavaScript eval backend. |
-| `PI_TINY_DEVICE` | `providers.tinyModelDevice` | ONNX execution provider for local tiny models. |
-| `PI_TINY_DTYPE` | `providers.tinyModelDtype` | ONNX precision for local tiny models. |
+| `SAN_SMOL_MODEL` | `modelRoles.smol` | Also exposed as `--smol`; legacy `PI_SMOL_MODEL` still works. |
+| `SAN_SLOW_MODEL` | `modelRoles.slow` | Also exposed as `--slow`; legacy `PI_SLOW_MODEL` still works. |
+| `SAN_PLAN_MODEL` | `modelRoles.plan` | Also exposed as `--plan`; legacy `PI_PLAN_MODEL` still works. |
+| `SAN_NO_PTY=1` | (disables PTY bash) | Equivalent to `--no-pty` for the process; legacy `PI_NO_PTY` still works. |
+| `SAN_PY` | `eval.py` | `SAN_PY=0` disables the Python eval backend; legacy `PI_PY` still works. |
+| `SAN_JS` | `eval.js` | `SAN_JS=0` disables the JavaScript eval backend; legacy `PI_JS` still works. |
+| `SAN_TINY_DEVICE` | `providers.tinyModelDevice` | ONNX execution provider for local tiny models; legacy `PI_TINY_DEVICE` still works. |
+| `SAN_TINY_DTYPE` | `providers.tinyModelDtype` | ONNX precision for local tiny models; legacy `PI_TINY_DTYPE` still works. |
 | `SAN_AUTH_BROKER_URL` | `auth.broker.url` | Env value takes precedence over config; legacy `OMP_AUTH_BROKER_URL` still works. |
 | `SAN_AUTH_BROKER_TOKEN` | `auth.broker.token` | Env value takes precedence over config; legacy `OMP_AUTH_BROKER_TOKEN` still works. |
 | `SAN_CODING_AGENT_DIR` | (relocates agent dir) | Moves `config.yml`, `agent.db`, and the whole agent base; legacy `PI_CODING_AGENT_DIR` still works. |
@@ -470,8 +470,8 @@ lsp:
 | `bash.stripTrailingHeadTail` | boolean | `true` | Strip trailing head/tail noise from output. |
 | `bash.autoBackground.enabled` | boolean | `false` | Auto-background long-running commands. |
 | `bash.autoBackground.thresholdMs` | number | `60000` | Threshold before auto-backgrounding. |
-| `eval.py` | boolean | `true` | Python eval backend. `PI_PY=0` disables for the process. |
-| `eval.js` | boolean | `true` | JavaScript eval backend. `PI_JS=0` disables for the process. |
+| `eval.py` | boolean | `true` | Python eval backend. `SAN_PY=0` disables for the process; legacy `PI_PY` still works. |
+| `eval.js` | boolean | `true` | JavaScript eval backend. `SAN_JS=0` disables for the process; legacy `PI_JS` still works. |
 | `python.kernelMode` | enum | `session` | `session` (persistent kernel) or `per-call`. |
 | `python.interpreter` | string | `""` | Path to a Python interpreter; empty = auto-detect. |
 | `lsp.enabled` | boolean | `true` | Language-server integration. `--no-lsp` disables for the run. |
@@ -638,8 +638,8 @@ searxng:
 | `providers.image` | enum | `auto` | `auto`, `openai`, `antigravity`, `xai`, `gemini`, `openrouter`. |
 | `providers.fetch` | enum | `auto` | `auto`, `native`, `trafilatura`, `lynx`, `parallel`, `jina`. |
 | `providers.tinyModel` | enum | `online` | `online` or a local model (`lfm2-350m`, `qwen3-0.6b`, `gemma-270m`, `qwen2.5-0.5b`, `lfm2-700m`). |
-| `providers.tinyModelDevice` | enum | `default` | ONNX execution provider for local tiny models. Overridden by `PI_TINY_DEVICE`. |
-| `providers.tinyModelDtype` | enum | `default` | ONNX precision for local tiny models. Overridden by `PI_TINY_DTYPE`. |
+| `providers.tinyModelDevice` | enum | `default` | ONNX execution provider for local tiny models. Overridden by `SAN_TINY_DEVICE`; legacy `PI_TINY_DEVICE` still works. |
+| `providers.tinyModelDtype` | enum | `default` | ONNX precision for local tiny models. Overridden by `SAN_TINY_DTYPE`; legacy `PI_TINY_DTYPE` still works. |
 | `providers.openaiWebsockets` | enum | `auto` | `auto`, `off`, `on`. |
 | `providers.openrouterVariant` | enum | `default` | `default`, `nitro`, `floor`, `online`, `exacto`. |
 | `providers.kimiApiFormat` | enum | `anthropic` | `openai`, `anthropic`. |

@@ -405,11 +405,13 @@ describe("hindsightBackend first-turn injection", () => {
 			"memory.backend": "hindsight",
 			"hindsight.apiUrl": "http://localhost:8888",
 			"hindsight.mentalModelsEnabled": true,
+			"hindsight.mentalModelAutoSeed": false,
 		});
 		const session = makeFakeSession({ sessionId: "s-ttl" });
 		// Initial start may issue its own listMentalModels (read-only by default);
 		// stub it to return nothing so the initial snippet is undefined.
 		const listSpy = vi.spyOn(HindsightApi.prototype, "listMentalModels").mockResolvedValue({ items: [] } as never);
+		vi.spyOn(HindsightApi.prototype, "createBank").mockResolvedValue({} as never);
 		await hindsightBackend.start({
 			session: session as never,
 			settings,
@@ -548,7 +550,7 @@ describe("hindsightBackend live bank routing", () => {
 	// Regression for issue #1902: changing `hindsight.bankId` during a live
 	// session used to leave the active `HindsightSessionState` pinned to the
 	// bank that was selected when the session started, so subsequent retains
-	// kept landing in the stale bank ("omp") instead of the new one
+	// kept landing in the stale bank ("san") instead of the new one
 	// ("Minigames"). The bank-routing settings must re-resolve on `set`.
 	it("rebuilds the primary state when hindsight.bankId changes mid-session", async () => {
 		vi.spyOn(HindsightApi.prototype, "createBank").mockResolvedValue({} as never);
@@ -561,7 +563,7 @@ describe("hindsightBackend live bank routing", () => {
 		// follow-up `set` writes to `#global` while `get` keeps returning the
 		// `#overrides` value — exactly the precedence the live settings UI
 		// does NOT have, since real config writes land in `#global`.
-		settings.set("hindsight.bankId", "omp");
+		settings.set("hindsight.bankId", "san");
 		const session = makeFakeSession({ sessionId: "s-rebuild", settings });
 
 		await hindsightBackend.start({
@@ -573,7 +575,7 @@ describe("hindsightBackend live bank routing", () => {
 		});
 
 		const initial = session.getHindsightSessionState();
-		expect(initial?.bankId).toBe("omp");
+		expect(initial?.bankId).toBe("san");
 
 		settings.set("hindsight.bankId", "Minigames");
 		// Hook is sync but the rebuild is async; yield once so the handler runs.
@@ -606,7 +608,7 @@ describe("hindsightBackend live bank routing", () => {
 		});
 
 		const initial = session.getHindsightSessionState();
-		expect(initial?.bankId).toBe("omp");
+		expect(initial?.bankId).toBe("san");
 		expect(initial?.retainTags).toBeUndefined();
 
 		settings.set("hindsight.scoping", "per-project");
@@ -614,7 +616,7 @@ describe("hindsightBackend live bank routing", () => {
 
 		const next = session.getHindsightSessionState();
 		expect(next).toBeDefined();
-		expect(next?.bankId).toBe("omp-proj");
+		expect(next?.bankId).toBe("san-proj");
 		expect(next).not.toBe(initial);
 	});
 
@@ -627,7 +629,7 @@ describe("hindsightBackend live bank routing", () => {
 			"memory.backend": "hindsight",
 			"hindsight.apiUrl": "http://localhost:8888",
 		});
-		settings.set("hindsight.bankId", "omp");
+		settings.set("hindsight.bankId", "san");
 		const session = makeFakeSession({ sessionId: "s-noop", settings });
 
 		await hindsightBackend.start({
@@ -639,7 +641,7 @@ describe("hindsightBackend live bank routing", () => {
 		});
 
 		const initial = session.getHindsightSessionState();
-		settings.set("hindsight.bankId", "omp"); // unchanged
+		settings.set("hindsight.bankId", "san"); // unchanged
 		await Bun.sleep(0);
 
 		expect(session.getHindsightSessionState()).toBe(initial);
@@ -680,21 +682,21 @@ describe("hindsightBackend live bank routing", () => {
 		const next = session.getHindsightSessionState();
 		expect(next).toBeDefined();
 		expect(next).not.toBe(initial);
-		// With scoping=per-project the base falls back to the default ("omp"),
+		// With scoping=per-project the base falls back to the default ("san"),
 		// so the reset bank id picks up the project suffix from cwd.
-		expect(next?.bankId).toBe("omp-_NEW_XenGameKit");
+		expect(next?.bankId).toBe("san-_NEW_XenGameKit");
 
 		next!.enqueueRetain("post-reset fact", "reset routing");
 		await next!.flushRetainQueue();
 
 		expect(retainBatchSpy).toHaveBeenCalledTimes(1);
-		expect(retainBatchSpy.mock.calls[0][0]).toBe("omp-_NEW_XenGameKit");
+		expect(retainBatchSpy.mock.calls[0][0]).toBe("san-_NEW_XenGameKit");
 	});
 
 	// Companion case: when `hindsight.scoping` is `global`, clearing the
-	// non-empty bankId should restore the bare `omp` default — the operator's
+	// non-empty bankId should restore the bare `san` default — the operator's
 	// stated expectation in the live repro from #1902.
-	it("routes future retains to the bare omp bank when bankId is cleared in global scoping", async () => {
+	it("routes future retains to the bare san bank when bankId is cleared in global scoping", async () => {
 		const retainBatchSpy = vi.spyOn(HindsightApi.prototype, "retainBatch").mockResolvedValue({} as never);
 		vi.spyOn(HindsightApi.prototype, "createBank").mockResolvedValue({} as never);
 		const settings = Settings.isolated({
@@ -718,13 +720,13 @@ describe("hindsightBackend live bank routing", () => {
 		await Bun.sleep(0);
 
 		const next = session.getHindsightSessionState();
-		expect(next?.bankId).toBe("omp");
+		expect(next?.bankId).toBe("san");
 
 		next!.enqueueRetain("post-reset global fact");
 		await next!.flushRetainQueue();
 
 		expect(retainBatchSpy).toHaveBeenCalledTimes(1);
-		expect(retainBatchSpy.mock.calls[0][0]).toBe("omp");
+		expect(retainBatchSpy.mock.calls[0][0]).toBe("san");
 	});
 
 	it("coalesces synchronous routing hooks so rebuilt states do not leak agent listeners", async () => {

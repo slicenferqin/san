@@ -81,6 +81,21 @@ describe("setup wizard scene selection", () => {
 		expect(await selectSetupScenes(0, ALL_SCENES, ctx, { isTTY: true, setupWizardEnabled: false })).toEqual([]);
 	});
 
+	it("honors the San setup skip environment variable", async () => {
+		const previousSanSkip = Bun.env.SAN_SKIP_SETUP;
+		const previousOmpSkip = Bun.env.OMP_SKIP_SETUP;
+		try {
+			Bun.env.SAN_SKIP_SETUP = "1";
+			delete Bun.env.OMP_SKIP_SETUP;
+			expect(await selectSetupScenes(0, ALL_SCENES, fakeContextWithConfiguredModel(), { isTTY: true })).toEqual([]);
+		} finally {
+			if (previousSanSkip === undefined) delete Bun.env.SAN_SKIP_SETUP;
+			else Bun.env.SAN_SKIP_SETUP = previousSanSkip;
+			if (previousOmpSkip === undefined) delete Bun.env.OMP_SKIP_SETUP;
+			else Bun.env.OMP_SKIP_SETUP = previousOmpSkip;
+		}
+	});
+
 	it("keeps the providers scene eligible even when a model is already configured", async () => {
 		const scenes = await selectSetupScenes(0, ALL_SCENES, fakeContextWithConfiguredModel(), { isTTY: true });
 		expect(scenes.some(scene => scene.id === "providers")).toBe(true);
@@ -380,7 +395,7 @@ describe("setup wizard web search tab", () => {
 	});
 });
 
-describe("omp setup onboarding trigger", () => {
+describe("san setup onboarding trigger", () => {
 	it("starts the normal interactive command with forced setup wizard", async () => {
 		let forceSetupWizard: boolean | undefined;
 		await runOnboardingSetup({

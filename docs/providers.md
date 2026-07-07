@@ -1,17 +1,17 @@
 # Providers
 
-Providers are the model backends `omp` can route requests to: Anthropic, OpenAI, Google Gemini, Groq, OpenRouter, Mistral, xAI, local engines like Ollama, hosted gateways, custom `models.yml` providers, and providers registered by extensions.
+Providers are the model backends `san` can route requests to: Anthropic, OpenAI, Google Gemini, Groq, OpenRouter, Mistral, xAI, local engines like Ollama, hosted gateways, custom `models.yml` providers, and providers registered by extensions.
 
 A **provider** is the account or backend namespace, such as `anthropic`, `openai`, `google`, or `ollama`. A **model** is a concrete model under that provider, selected as `provider/model-id`, such as `anthropic/claude-opus-4-6`. Disabling a provider removes every model under it from selection; if you only want to narrow individual models, use model settings instead.
 
 This page covers how providers become available, how credentials are resolved, the provider/environment-variable map, local engines, disabling providers, and custom providers. For endpoint-specific request, reasoning, tool, stream, usage, and retry constraints, see [Provider endpoint constraints](./provider-endpoint-constraints.md). For model selection and the full `models.yml` schema, see [Model and Provider Configuration](./models.md). For config-file locations and merge precedence, see [Settings](./settings.md). For credential storage and login flows in depth, see [Secrets and credentials](./secrets.md). For the complete environment-variable reference, see [Environment variables](./environment-variables.md). For local engine setup, see [Local models](./local-models.md). For context-file discovery providers, see [Context files](./context-files.md).
 
-## How `omp` decides a provider is available
+## How `san` decides a provider is available
 
 At startup the model registry assembles its catalog from four sources, in order:
 
 1. The bundled model catalog (every built-in provider and its known models).
-2. Custom provider and model entries from `~/.omp/agent/models.yml`.
+2. Custom provider and model entries from `~/.san/agent/models.yml`.
 3. Runtime-discovered models for providers that support discovery (local engines and discovery-enabled gateways).
 4. Providers and models registered by extensions.
 
@@ -26,7 +26,7 @@ Keyless local engines are a special case: `ollama`, `llama.cpp`, and `lm-studio`
 
 ## Credentials and precedence
 
-When a provider needs an API key, `omp` resolves it in this order (first match wins):
+When a provider needs an API key, `san` resolves it in this order (first match wins):
 
 1. **Runtime override** — a key supplied for the current process, e.g. CLI `--api-key`. Never persisted.
 2. **`models.yml` config key** — an `apiKey` pinned on a custom provider, registered as a config-sourced bearer. This deliberately beats stored OAuth, so a key supplied for a custom `baseUrl`/gateway is honored instead of forwarding an upstream OAuth token the proxy would reject.
@@ -35,7 +35,7 @@ When a provider needs an API key, `omp` resolves it in this order (first match w
 5. **Provider environment variable** — including values loaded from `.env` files (see [the env-var table](#environment-variables-and-env-files)).
 6. **`models.yml` fallback resolver** — keys for custom providers not otherwise registered.
 
-Stored credentials live in the auth store at `~/.omp/agent/agent.db` for local auth, or in the configured auth-broker snapshot when running in broker mode. (`PI_CODING_AGENT_DIR` relocates the `~/.omp/agent` base, and the auth store moves with it.)
+Stored credentials live in the auth store at `~/.san/agent/agent.db` for local auth, or in the configured auth-broker snapshot when running in broker mode. (`SAN_CODING_AGENT_DIR` relocates the `~/.san/agent` base; legacy `PI_CODING_AGENT_DIR` still works, and the auth store moves with it.)
 
 ### OAuth vs API key, and provider-scoped logins
 
@@ -46,16 +46,16 @@ Use the interactive slash commands inside a session:
 - `/login` — opens the OAuth/key selector. `/login <provider>` jumps straight to one provider (e.g. `/login anthropic`); for an OAuth flow that needs a pasted callback, run `/login <redirect-url>` to complete it.
 - `/logout` — opens the provider selector to remove stored credentials.
 
-For headless or remote setups backed by a shared auth broker, the CLI exposes `omp auth-broker login <provider>` / `omp auth-broker logout` (and `status`, `list`, `import`, `migrate`). See [Secrets and credentials](./secrets.md) for the broker model.
+For headless or remote setups backed by a shared auth broker, the CLI exposes `san auth-broker login <provider>` / `san auth-broker logout` (and `status`, `list`, `import`, `migrate`). See [Secrets and credentials](./secrets.md) for the broker model.
 
-When a model has no credentials, `omp` tells you to run `/login` or set the provider's environment variable.
+When a model has no credentials, `san` tells you to run `/login` or set the provider's environment variable.
 
 ### Pinning a key in `models.yml`
 
 A custom provider's `apiKey` is resolved as **environment-variable-name-or-literal**: if the value names an existing environment variable, that variable's value is used; otherwise the string itself is the key. Prefixing the value with `!` runs it as a shell command and uses the trimmed stdout (see [Model and Provider Configuration](./models.md) for the full value syntax).
 
 ```yaml
-# ~/.omp/agent/models.yml
+# ~/.san/agent/models.yml
 providers:
   my-gateway:
     baseUrl: https://gateway.example.com/v1
@@ -347,4 +347,4 @@ disabledProviders:
 
 **A discovery provider name had no effect on models (or vice-versa).** The ID namespace is shared. `gemini`, `codex`, `claude`, `native`, and `agents` are discovery-source IDs; the Google model backend is `google`. Make sure you are disabling the right kind of provider.
 
-**A custom `models.yml` provider does not load.** A YAML or schema error makes the registry skip the custom file. Validate the file with `omp models` (use `omp models find <substr>` to scope it to one provider), confirm each provider has a `baseUrl`, a valid `api`, and at least one model entry, and that an implicit local engine is not silently shadowing it (an explicit `ollama`/`lm-studio`/`llama.cpp` entry replaces the built-in discovery for that ID). See [Model and Provider Configuration](./models.md).
+**A custom `models.yml` provider does not load.** A YAML or schema error makes the registry skip the custom file. Validate the file with `san models` (use `san models find <substr>` to scope it to one provider), confirm each provider has a `baseUrl`, a valid `api`, and at least one model entry, and that an implicit local engine is not silently shadowing it (an explicit `ollama`/`lm-studio`/`llama.cpp` entry replaces the built-in discovery for that ID). See [Model and Provider Configuration](./models.md).

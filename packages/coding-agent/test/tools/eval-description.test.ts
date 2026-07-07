@@ -61,9 +61,9 @@ describe("eval tool description", () => {
 });
 
 describe("eval tool dynamic schema", () => {
-	// resolveEvalBackends lets PI_* env flags override settings; neutralize them per-test
-	// so the schema is driven purely by the isolated settings (and restore to avoid leaks).
-	const EVAL_ENV_FLAGS = ["PI_PY", "PI_JS", "PI_RB", "PI_JL"] as const;
+	// resolveEvalBackends lets SAN_* and legacy PI_* env flags override settings;
+	// neutralize them per-test so the schema is driven purely by the isolated settings.
+	const EVAL_ENV_FLAGS = ["SAN_PY", "SAN_JS", "SAN_RB", "SAN_JL", "PI_PY", "PI_JS", "PI_RB", "PI_JL"] as const;
 	let savedEnv: Record<string, string | undefined>;
 	beforeEach(() => {
 		savedEnv = {};

@@ -72,10 +72,10 @@ function readTinyModelSetting(path: "providers.tinyModelDevice" | "providers.tin
 }
 
 /**
- * Decide which `PI_TINY_DEVICE` / `PI_TINY_DTYPE` vars to overlay onto the worker
- * env. A present env var wins (left untouched); otherwise the mapped persisted
- * setting is used. Returns only the keys to add — never the default sentinel.
- * Pure for testability; see {@link tinyWorkerEnv} for the spawn-time glue.
+ * Decide which `SAN_TINY_DEVICE` / `SAN_TINY_DTYPE` vars to overlay onto the worker
+ * env. A present San or legacy Pi env var wins (left untouched); otherwise the
+ * mapped persisted setting is used. Returns only the keys to add — never the
+ * default sentinel.
  * @internal
  */
 export function tinyWorkerEnvOverlay(
@@ -84,13 +84,19 @@ export function tinyWorkerEnvOverlay(
 	dtypeSetting: string | undefined,
 ): Record<string, string> {
 	const overlay: Record<string, string> = {};
-	if (!env.PI_TINY_DEVICE) {
+	if (!env.SAN_TINY_DEVICE && !env.PI_TINY_DEVICE) {
 		const device = tinyModelDeviceSettingToEnv(deviceSetting);
-		if (device) overlay.PI_TINY_DEVICE = device;
+		if (device) {
+			overlay.SAN_TINY_DEVICE = device;
+			overlay.PI_TINY_DEVICE = device;
+		}
 	}
-	if (!env.PI_TINY_DTYPE) {
+	if (!env.SAN_TINY_DTYPE && !env.PI_TINY_DTYPE) {
 		const dtype = tinyModelDtypeSettingToEnv(dtypeSetting);
-		if (dtype) overlay.PI_TINY_DTYPE = dtype;
+		if (dtype) {
+			overlay.SAN_TINY_DTYPE = dtype;
+			overlay.PI_TINY_DTYPE = dtype;
+		}
 	}
 	return overlay;
 }
@@ -98,7 +104,7 @@ export function tinyWorkerEnvOverlay(
 /**
  * Env handed to the tiny-model subprocess — and reused verbatim by the STT and
  * TTS workers, which share the same device/dtype resolution. The
- * `PI_TINY_DEVICE` / `PI_TINY_DTYPE` env vars win; otherwise the persisted
+ * `SAN_TINY_DEVICE` / `SAN_TINY_DTYPE` env vars win; otherwise the persisted
  * `providers.tinyModelDevice` / `providers.tinyModelDtype` settings are mapped
  * onto those vars so the subprocess's env-based resolution picks them up.
  * Resolved once at spawn (pipelines are cached for the lifetime of the

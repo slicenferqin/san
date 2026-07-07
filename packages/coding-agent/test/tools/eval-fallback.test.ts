@@ -6,12 +6,18 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { EvalTool } from "@oh-my-pi/pi-coding-agent/tools/eval";
 import { resolveEvalBackends } from "@oh-my-pi/pi-coding-agent/tools/eval-backends";
 
+let originalSanPy: string | undefined;
+let originalSanJs: string | undefined;
+let originalSanRb: string | undefined;
+let originalSanJl: string | undefined;
 let originalPiPy: string | undefined;
 let originalPiJs: string | undefined;
 let originalPiRb: string | undefined;
 let originalPiJl: string | undefined;
 
-function restoreEnv(name: "PI_PY" | "PI_JS" | "PI_RB" | "PI_JL", value: string | undefined): void {
+type EvalEnvFlag = "SAN_PY" | "SAN_JS" | "SAN_RB" | "SAN_JL" | "PI_PY" | "PI_JS" | "PI_RB" | "PI_JL";
+
+function restoreEnv(name: EvalEnvFlag, value: string | undefined): void {
 	if (value === undefined) {
 		delete Bun.env[name];
 		return;
@@ -43,10 +49,18 @@ const mockResult = {
 
 describe("EvalTool language dispatch", () => {
 	beforeEach(() => {
+		originalSanPy = Bun.env.SAN_PY;
+		originalSanJs = Bun.env.SAN_JS;
+		originalSanRb = Bun.env.SAN_RB;
+		originalSanJl = Bun.env.SAN_JL;
 		originalPiPy = Bun.env.PI_PY;
 		originalPiJs = Bun.env.PI_JS;
 		originalPiRb = Bun.env.PI_RB;
 		originalPiJl = Bun.env.PI_JL;
+		delete Bun.env.SAN_PY;
+		delete Bun.env.SAN_JS;
+		delete Bun.env.SAN_RB;
+		delete Bun.env.SAN_JL;
 		delete Bun.env.PI_PY;
 		delete Bun.env.PI_JS;
 		delete Bun.env.PI_RB;
@@ -55,6 +69,10 @@ describe("EvalTool language dispatch", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+		restoreEnv("SAN_PY", originalSanPy);
+		restoreEnv("SAN_JS", originalSanJs);
+		restoreEnv("SAN_RB", originalSanRb);
+		restoreEnv("SAN_JL", originalSanJl);
 		restoreEnv("PI_PY", originalPiPy);
 		restoreEnv("PI_JS", originalPiJs);
 		restoreEnv("PI_RB", originalPiRb);
@@ -129,8 +147,8 @@ describe("EvalTool language dispatch", () => {
 		).rejects.toThrow(/eval\.js = false/);
 	});
 
-	it("uses settings for eval backends whose env flag is unset", () => {
-		Bun.env.PI_PY = "1";
+	it("lets SAN_PY override settings for eval backends", () => {
+		Bun.env.SAN_PY = "1";
 		const settings = Settings.isolated();
 		settings.set("eval.py", false);
 		settings.set("eval.js", false);
@@ -143,8 +161,8 @@ describe("EvalTool language dispatch", () => {
 		});
 	});
 
-	it("lets PI_JS disable js execution even when eval.js is enabled", async () => {
-		Bun.env.PI_JS = "0";
+	it("lets SAN_JS disable js execution even when eval.js is enabled", async () => {
+		Bun.env.SAN_JS = "0";
 		const settings = Settings.isolated();
 		settings.set("eval.js", true);
 		const tool = new EvalTool(makeSession(settings));
@@ -154,6 +172,6 @@ describe("EvalTool language dispatch", () => {
 				language: "js",
 				code: "const x = 1;",
 			}),
-		).rejects.toThrow(/PI_JS=0/);
+		).rejects.toThrow(/SAN_JS=0/);
 	});
 });

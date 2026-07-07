@@ -70,7 +70,7 @@ function resolveConfiguredEditMode(rawEditMode: string): EditMode | undefined {
 
 	const editMode = normalizeEditMode(rawEditMode);
 	if (!editMode) {
-		throw new Error(`Invalid PI_EDIT_VARIANT: ${rawEditMode}`);
+		throw new Error(`Invalid SAN_EDIT_VARIANT / PI_EDIT_VARIANT: ${rawEditMode}`);
 	}
 
 	return editMode;
@@ -87,7 +87,7 @@ function resolveAllowFuzzy(session: ToolSession, rawValue: string): boolean {
 		case "auto":
 			return session.settings.get("edit.fuzzyMatch");
 		default:
-			throw new Error(`Invalid PI_EDIT_FUZZY: ${rawValue}`);
+			throw new Error(`Invalid SAN_EDIT_FUZZY / PI_EDIT_FUZZY: ${rawValue}`);
 	}
 }
 
@@ -98,7 +98,7 @@ function resolveFuzzyThreshold(session: ToolSession, rawValue: string): number {
 
 	const threshold = Number.parseFloat(rawValue);
 	if (Number.isNaN(threshold) || threshold < 0 || threshold > 1) {
-		throw new Error(`Invalid PI_EDIT_FUZZY_THRESHOLD: ${rawValue}`);
+		throw new Error(`Invalid SAN_EDIT_FUZZY_THRESHOLD / PI_EDIT_FUZZY_THRESHOLD: ${rawValue}`);
 	}
 
 	return threshold;
@@ -332,11 +332,9 @@ export class EditTool implements AgentTool<TInput> {
 	readonly #editVersionByPath = new Map<string, number>();
 
 	constructor(private readonly session: ToolSession) {
-		const {
-			PI_EDIT_FUZZY: editFuzzy = "auto",
-			PI_EDIT_FUZZY_THRESHOLD: editFuzzyThreshold = "auto",
-			PI_EDIT_VARIANT: envEditVariant = "auto",
-		} = Bun.env;
+		const editFuzzy = Bun.env.SAN_EDIT_FUZZY ?? Bun.env.PI_EDIT_FUZZY ?? "auto";
+		const editFuzzyThreshold = Bun.env.SAN_EDIT_FUZZY_THRESHOLD ?? Bun.env.PI_EDIT_FUZZY_THRESHOLD ?? "auto";
+		const envEditVariant = Bun.env.SAN_EDIT_VARIANT ?? Bun.env.PI_EDIT_VARIANT ?? "auto";
 
 		this.#editMode = resolveConfiguredEditMode(envEditVariant);
 		this.#allowFuzzy = resolveAllowFuzzy(session, editFuzzy);

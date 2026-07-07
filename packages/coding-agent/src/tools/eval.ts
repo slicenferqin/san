@@ -223,7 +223,7 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 	const allowJl = backends.julia;
 
 	if (language === "python") {
-		if (!allowPy) throw new ToolError("Python backend is disabled (PI_PY=0 or eval.py = false).");
+		if (!allowPy) throw new ToolError("Python backend is disabled (SAN_PY=0, legacy PI_PY=0, or eval.py = false).");
 		if (!(await pythonBackend.isAvailable(session))) {
 			const alternatives = [allowJs ? '"js"' : null, allowRb ? '"rb"' : null, allowJl ? '"jl"' : null].filter(
 				Boolean,
@@ -237,7 +237,7 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 		return { backend: pythonBackend };
 	}
 	if (language === "ruby") {
-		if (!allowRb) throw new ToolError("Ruby backend is disabled (PI_RB=0 or eval.rb = false).");
+		if (!allowRb) throw new ToolError("Ruby backend is disabled (SAN_RB=0, legacy PI_RB=0, or eval.rb = false).");
 		if (!(await rubyBackend.isAvailable(session))) {
 			const alternatives = [allowJs ? '"js"' : null, allowPy ? '"py"' : null, allowJl ? '"jl"' : null].filter(
 				Boolean,
@@ -251,7 +251,7 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 		return { backend: rubyBackend };
 	}
 	if (language === "julia") {
-		if (!allowJl) throw new ToolError("Julia backend is disabled (PI_JL=0 or eval.jl = false).");
+		if (!allowJl) throw new ToolError("Julia backend is disabled (SAN_JL=0, legacy PI_JL=0, or eval.jl = false).");
 		if (!(await juliaBackend.isAvailable(session))) {
 			const alternatives = [allowJs ? '"js"' : null, allowPy ? '"py"' : null, allowRb ? '"rb"' : null].filter(
 				Boolean,
@@ -264,7 +264,7 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 		}
 		return { backend: juliaBackend };
 	}
-	if (!allowJs) throw new ToolError("JavaScript backend is disabled (PI_JS=0 or eval.js = false).");
+	if (!allowJs) throw new ToolError("JavaScript backend is disabled (SAN_JS=0, legacy PI_JS=0, or eval.js = false).");
 	return { backend: jsBackend };
 }
 function formatEvalInputLanguage(value: string): string {

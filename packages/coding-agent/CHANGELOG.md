@@ -6,7 +6,7 @@
 
 - Added the San v0.2 execution loop P1 ledger foundation with `san.loop_run`, `san.loop_event`, `san.review_report`, and `san.loop_context_packet` custom entry contracts plus `/san-loop status` reporting.
 - Added San v0.2 execution loop P2 scaffolding with bundled `san-commander`, `san-worker`, `san-supervisor`, and `san-oracle` task agents plus role-scoped ContextPacket debug helpers.
-- Added San v0.2 execution loop P3 San Checks discovery and rendering, including project/user `.omp/checks/*.md` support, bundled default checks, role filtering, and path-scoped check selection.
+- Added San v0.2 execution loop P3 San Checks discovery and rendering, including project/user `.san/checks/*.md` support, bundled default checks, role filtering, and path-scoped check selection.
 - Added San v0.2 execution loop P4 runner scaffolding with a code-level `runSanLoop()` state machine, pluggable Commander/Worker/Supervisor executor contract, pass/retry ledger persistence, and focused runner tests.
 - Added `/san-loop run [--mode solo|team|council] <objective>` with a real task-agent executor bridge for bundled Commander/Worker/Supervisor agents plus AgentSession injection of the latest San loop Commander role context into real user prompts when the execution loop is enabled.
 - Added `/san-loop stop`, hard turn-budget enforcement, council-mode Oracle second-opinion gating, persisted active-run recovery to blocked, and a deterministic San v0.2 dogfood verifier/report covering solo pass, team retry, council blocked, hard budget, recovery, and abort paths.
@@ -21,6 +21,11 @@
 - Added San context steady state M9 recall quality helpers: recall queries now include recent TurnDigest context, enforce `san.contextSteady.recall.maxQueryChars`, and deduplicate/trim backend recall results before adding the volatile ContextPacket layer.
 - Added San context steady state M10 lifecycle hardening coverage for ContextPacket replay and resume behavior, ensuring persisted hidden packet injections stay out of active LLM context while transcripts and debug views retain them.
 - Added optional LLM-backed San TurnDigest generation via `san.contextSteady.digest.llm.*`, preserving deterministic fallback digests when the side request is unavailable.
+
+### Changed
+
+- Changed remaining user-facing San surfaces to prefer `san`, `.san`, `~/.san`, and `SAN_*` names while keeping documented legacy aliases for compatibility.
+- Changed Hindsight's default bank/context names from `omp` to `san` for new memory configurations.
 
 ### Fixed
 

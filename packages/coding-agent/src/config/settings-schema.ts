@@ -2683,7 +2683,7 @@ export const SETTINGS_SCHEMA = {
 	},
 	"hindsight.retainEveryNTurns": { type: "number", default: 3 },
 	"hindsight.retainOverlapTurns": { type: "number", default: 2 },
-	"hindsight.retainContext": { type: "string", default: "omp" },
+	"hindsight.retainContext": { type: "string", default: "san" },
 
 	"hindsight.recallBudget": {
 		type: "enum",
@@ -3601,7 +3601,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Grep & Browser",
 			label: "cmux Browser",
 			description:
-				"Use cmux WKWebView surfaces for browser automation when a cmux socket is available. Set PI_BROWSER_CMUX=0 or PI_BROWSER_CMUX=1 to override.",
+				"Use cmux WKWebView surfaces for browser automation when a cmux socket is available. Set SAN_BROWSER_CMUX=0 or SAN_BROWSER_CMUX=1 to override; legacy PI_BROWSER_CMUX still works.",
 		},
 	},
 	"browser.screenshotDir": {
@@ -4443,7 +4443,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Tiny Model",
 			label: "Tiny Model Device",
 			description:
-				"ONNX execution provider for local tiny models (titles + memory). Default uses CPU-only inference. The PI_TINY_DEVICE env var overrides this.",
+				"ONNX execution provider for local tiny models (titles + memory). Default uses CPU-only inference. The SAN_TINY_DEVICE env var overrides this; legacy PI_TINY_DEVICE still works.",
 			options: TINY_MODEL_DEVICE_SETTING_OPTIONS,
 		},
 	},
@@ -4456,7 +4456,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Tiny Model",
 			label: "Tiny Model Precision",
 			description:
-				"ONNX quantization/precision for local tiny models. Default uses each model's shipped dtype (q4); lower precision is faster, higher is more faithful. The PI_TINY_DTYPE env var overrides this.",
+				"ONNX quantization/precision for local tiny models. Default uses each model's shipped dtype (q4); lower precision is faster, higher is more faithful. The SAN_TINY_DTYPE env var overrides this; legacy PI_TINY_DTYPE still works.",
 			options: TINY_MODEL_DTYPE_SETTING_OPTIONS,
 		},
 	},
@@ -4773,7 +4773,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			group: "Developer",
 			label: "Auto QA Push Endpoint",
-			description: "Full URL receiving Auto QA JSON reports (default https://qa.omp.sh/v1/grievances)",
+			description: "Full URL receiving Auto QA JSON reports",
 		},
 	},
 

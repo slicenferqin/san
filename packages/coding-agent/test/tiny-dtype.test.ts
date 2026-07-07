@@ -22,11 +22,11 @@ describe("tiny model dtype selection", () => {
 	});
 
 	it("rejects an unsupported precision", () => {
-		expect(() => resolveTinyModelDtypeOverride("int4")).toThrow("Unsupported PI_TINY_DTYPE");
+		expect(() => resolveTinyModelDtypeOverride("int4")).toThrow("Unsupported SAN_TINY_DTYPE");
 	});
 });
 
-describe("tiny model dtype setting → PI_TINY_DTYPE mapping", () => {
+describe("tiny model dtype setting → SAN_TINY_DTYPE mapping", () => {
 	it("returns undefined for the default sentinel so the worker keeps each model's spec dtype", () => {
 		expect(tinyModelDtypeSettingToEnv(TINY_MODEL_DTYPE_DEFAULT)).toBeUndefined();
 		expect(tinyModelDtypeSettingToEnv(undefined)).toBeUndefined();

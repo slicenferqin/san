@@ -87,7 +87,7 @@ export async function runAgenticCommit(args: CommitCommandArgs): Promise<void> {
 	} else {
 		process.stdout.write("  └─ (none found)\n");
 	}
-	const forceFallback = $env.PI_COMMIT_TEST_FALLBACK?.toLowerCase() === "true";
+	const forceFallback = ($env.SAN_COMMIT_TEST_FALLBACK ?? $env.PI_COMMIT_TEST_FALLBACK)?.toLowerCase() === "true";
 	if (forceFallback) {
 		process.stdout.write("● Forcing fallback commit generation...\n");
 		const fallbackProposal = generateFallbackProposal(numstat);
@@ -151,7 +151,7 @@ export async function runAgenticCommit(args: CommitCommandArgs): Promise<void> {
 	}
 
 	if (!usedFallback && !commitState.proposal && !commitState.splitProposal) {
-		if ($env.PI_COMMIT_NO_FALLBACK?.toLowerCase() !== "true") {
+		if (($env.SAN_COMMIT_NO_FALLBACK ?? $env.PI_COMMIT_NO_FALLBACK)?.toLowerCase() !== "true") {
 			process.stdout.write("● Agent did not provide proposal, using fallback...\n");
 			commitState.proposal = generateFallbackProposal(numstat);
 			usedFallback = true;

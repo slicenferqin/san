@@ -43,7 +43,7 @@ Push to GitHub. Users install with:
 
 ## marketplace.json schema
 
-The catalog file lives at either `.omp-plugin/marketplace.json` or `.claude-plugin/marketplace.json` in the repository root. san prefers the `.omp-plugin/` path and falls back to the Claude path; a repository may publish both to expose tool-specific catalogs from a single source tree.
+The catalog file lives at `.san-plugin/marketplace.json` in the repository root. San reads `.san-plugin/` first, then falls back to legacy `.omp-plugin/` and Claude Code-compatible `.claude-plugin/`; a repository may publish multiple catalogs to expose tool-specific views from a single source tree.
 
 ### Top-level fields
 
@@ -87,7 +87,7 @@ The catalog file lives at either `.omp-plugin/marketplace.json` or `.claude-plug
     "email": "plugins@acme.example"
   },
   "metadata": {
-    "description": "Official Acme plugins for oh-my-pi"
+    "description": "Official Acme plugins for San"
   },
   "plugins": [
     {
@@ -102,7 +102,7 @@ The catalog file lives at either `.omp-plugin/marketplace.json` or `.claude-plug
       "category": "devops",
       "source": {
         "source": "github",
-        "repo": "acme-corp/omp-deploy-plugin",
+        "repo": "acme-corp/san-deploy-plugin",
         "ref": "main"
       }
     }
@@ -183,7 +183,7 @@ Declares the plugin as an npm package. `version` is optional:
 ```json
 "source": {
   "source": "npm",
-  "package": "@acme/omp-plugin",
+  "package": "@acme/san-plugin",
   "version": "1.2.0"
 }
 ```
@@ -245,7 +245,7 @@ Invalid: `-bad-start`, `bad-end-`, `.dot-start`, `Under_score`, `HAS_CAPS`
 
 ## Publishing workflow
 
-1. Create `marketplace.json` at `.omp-plugin/marketplace.json` (omp-only) or `.claude-plugin/marketplace.json` (shared with Claude Code) in a new Git repo.
+1. Create `marketplace.json` at `.san-plugin/marketplace.json`; optionally also publish `.omp-plugin/marketplace.json` for older San/OMP-compatible builds or `.claude-plugin/marketplace.json` for Claude Code-compatible catalogs.
 2. Add plugin entries pointing to subdirectories (or external sources).
 3. Push to GitHub.
 4. Share the `owner/repo` string. Users add it with `/marketplace add owner/repo`.

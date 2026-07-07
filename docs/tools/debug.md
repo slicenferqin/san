@@ -114,7 +114,7 @@ Streaming/UI behavior:
 - The interactive selector is UI-driven instead of model-driven. It swaps TUI components, appends status lines to the chat pane, opens files in external viewers, or writes archives/temp files.
 
 Side-channel artifacts outside the model tool result:
-- `createReportBundle()` writes `omp-report-<timestamp>.tar.gz` under the reports dir and returns the filesystem path to the UI handler.
+- `createReportBundle()` writes `san-report-<timestamp>.tar.gz` under the reports dir and returns the filesystem path to the UI handler.
 - `#handleWorkReport()` writes `/tmp/work-profile-<Date.now()>.svg` before opening it.
 - `RawSseViewerComponent` and `DebugLogViewerComponent` can copy captured text to the clipboard.
 
@@ -157,7 +157,7 @@ Side-channel artifacts outside the model tool result:
   - `attach`: explicit `adapter` wins; otherwise remote `port` prefers `debugpy`, then native debuggers, then first available adapter.
 - **Custom adapter config**
   - Debug adapters can be added or overridden with `dap.json`, `.dap.json`, `dap.yaml`, `.dap.yaml`, `dap.yml`, or `.dap.yml`.
-  - Search order mirrors LSP config: project root, project config dirs (`.omp/`, `.pi/`, `.claude/`), user config dirs, plugin roots, then home-root fallback. Files are merged from lowest to highest priority.
+  - Search order mirrors LSP config: project root, project config dirs (`.san/`, `.claude/`, `.codex/`, `.gemini/`), user config dirs, plugin roots, then home-root fallback. Files are merged from lowest to highest priority.
   - Config shape may be either `{ "adapters": { ... } }` or a top-level adapter map.
   - Adapter fields:
     - `command`: executable name or path. Required.
@@ -170,7 +170,7 @@ Side-channel artifacts outside the model tool result:
     - `connectMode`: `"stdio"` (default) or `"socket"`.
     - `acceptsDirectoryProgram`: set `true` for adapters such as `dlv` that can launch a package/project directory.
 
-Example `.omp/dap.json`:
+Example `.san/dap.json`:
 
 ```json
 {
@@ -276,7 +276,7 @@ Example `.omp/dap.json`:
 - Raw SSE buffer caps in `packages/coding-agent/src/debug/raw-sse-buffer.ts`:
   - `MAX_RAW_SSE_EVENTS = 1_000`
   - `MAX_RAW_SSE_CHARS = 512_000`
-  - `MAX_RAW_SSE_EVENT_CHARS = 64_000` per event, with `: omp-debug-truncated ...` marker appended on trim
+  - `MAX_RAW_SSE_EVENT_CHARS = 64_000` per event, with `: san-debug-truncated ...` marker appended on trim
 - Log viewer window in `packages/coding-agent/src/debug/log-viewer.ts`:
   - `INITIAL_LOG_CHUNK = 50`
   - `LOAD_OLDER_CHUNK = 50`

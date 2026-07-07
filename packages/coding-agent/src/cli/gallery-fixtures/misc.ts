@@ -110,8 +110,8 @@ export const miscFixtures: Record<string, GalleryFixture> = {
 		},
 		args: {
 			host: "deploy@web-01",
-			command: "systemctl status omp-api --no-pager | head -n 12",
-			cwd: "/srv/omp",
+			command: "systemctl status san-api --no-pager | head -n 12",
+			cwd: "/srv/san",
 			timeout: 60,
 		},
 		result: {
@@ -126,7 +126,7 @@ export const miscFixtures: Record<string, GalleryFixture> = {
 						"      Tasks: 17 (limit: 4915)",
 						"     Memory: 142.6M",
 						"        CPU: 38.214s",
-						"     CGroup: /system.slice/omp-api.service",
+						"     CGroup: /system.slice/san-api.service",
 						"             └─4812 /usr/local/bin/bun run dist/server.js",
 					].join("\n"),
 				},
