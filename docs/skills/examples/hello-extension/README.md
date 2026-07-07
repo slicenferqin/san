@@ -7,15 +7,15 @@ A minimal `oh-my-pi` extension that demonstrates the two most common authoring p
 **Option A — drop into user extensions directory:**
 
 ```
-cp -r . ~/.omp/agent/extensions/hello-extension
+cp -r . ~/.san/agent/extensions/hello-extension
 ```
 
-Restart `omp`. You will see the startup notification immediately.
+Restart `san`. You will see the startup notification immediately.
 
 **Option B — point the settings `extensions` array at it:**
 
 ```yaml
-# ~/.omp/agent/config.yml
+# ~/.san/agent/config.yml
 extensions:
   - /path/to/hello-extension
 ```
@@ -23,12 +23,12 @@ extensions:
 **Option C — load once via CLI flag:**
 
 ```
-omp --extension ./hello-extension
+san --extension ./hello-extension
 ```
 
 ## Usage
 
-After loading, type `/hello` or `/hello Ada` in the omp prompt. The command sends a visible greeting custom message into the conversation and shows a "Message sent!" notification.
+After loading, type `/hello` or `/hello Ada` in the san prompt. The command sends a visible greeting custom message into the conversation and shows a "Message sent!" notification.
 
 ## What it demonstrates
 
@@ -36,4 +36,4 @@ After loading, type `/hello` or `/hello Ada` in the omp prompt. The command send
 - `pi.on("session_start", ...)` — session lifecycle hook
 - `pi.registerCommand(...)` — slash command registration
 - `ctx.ui.notify(...)` — user-facing notification
-- `package.json` with `omp.extensions` manifest field
+- `package.json` with `san.extensions` manifest field

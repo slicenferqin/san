@@ -180,6 +180,21 @@ describe("fetchMarketplace", () => {
 		await expect(fetchMarketplace(fakeSrc, tmpDir)).rejects.toThrow(/Marketplace catalog not found/);
 	});
 
+	it("loads catalog from .san-plugin/marketplace.json when present", async () => {
+		const root = path.join(tmpDir, "san-only");
+		fs.mkdirSync(path.join(root, ".san-plugin"), { recursive: true });
+		const catalog = {
+			name: "san-only-marketplace",
+			owner: { name: "Test" },
+			plugins: [{ name: "san-plugin", source: "./plugins/san-plugin", description: "x" }],
+		};
+		fs.writeFileSync(path.join(root, ".san-plugin", "marketplace.json"), JSON.stringify(catalog));
+
+		const result = await fetchMarketplace(root, tmpDir);
+		expect(result.catalog.name).toBe("san-only-marketplace");
+		expect(result.catalog.plugins[0].name).toBe("san-plugin");
+	});
+
 	it("loads catalog from .omp-plugin/marketplace.json when present", async () => {
 		const root = path.join(tmpDir, "omp-only");
 		fs.mkdirSync(path.join(root, ".omp-plugin"), { recursive: true });
@@ -195,10 +210,16 @@ describe("fetchMarketplace", () => {
 		expect(result.catalog.plugins[0].name).toBe("omp-plugin");
 	});
 
-	it("prefers .omp-plugin/marketplace.json over .claude-plugin/marketplace.json when both exist", async () => {
-		const root = path.join(tmpDir, "both-catalogs");
+	it("prefers .san-plugin over legacy .omp-plugin and .claude-plugin catalogs", async () => {
+		const root = path.join(tmpDir, "three-catalogs");
+		fs.mkdirSync(path.join(root, ".san-plugin"), { recursive: true });
 		fs.mkdirSync(path.join(root, ".omp-plugin"), { recursive: true });
 		fs.mkdirSync(path.join(root, ".claude-plugin"), { recursive: true });
+		const sanCatalog = {
+			name: "from-san-plugin",
+			owner: { name: "Test" },
+			plugins: [{ name: "p", source: "./p", description: "x" }],
+		};
 		const ompCatalog = {
 			name: "from-omp-plugin",
 			owner: { name: "Test" },
@@ -209,14 +230,15 @@ describe("fetchMarketplace", () => {
 			owner: { name: "Test" },
 			plugins: [{ name: "p", source: "./p", description: "x" }],
 		};
+		fs.writeFileSync(path.join(root, ".san-plugin", "marketplace.json"), JSON.stringify(sanCatalog));
 		fs.writeFileSync(path.join(root, ".omp-plugin", "marketplace.json"), JSON.stringify(ompCatalog));
 		fs.writeFileSync(path.join(root, ".claude-plugin", "marketplace.json"), JSON.stringify(claudeCatalog));
 
 		const result = await fetchMarketplace(root, tmpDir);
-		expect(result.catalog.name).toBe("from-omp-plugin");
+		expect(result.catalog.name).toBe("from-san-plugin");
 	});
 
-	it("falls back to .claude-plugin/marketplace.json when .omp-plugin is absent", async () => {
+	it("falls back to .claude-plugin/marketplace.json when San and OMP catalogs are absent", async () => {
 		// The shared fixture only ships .claude-plugin/marketplace.json — confirms
 		// the legacy path still loads unchanged.
 		const result = await fetchMarketplace(FIXTURE_DIR, tmpDir);
@@ -227,7 +249,7 @@ describe("fetchMarketplace", () => {
 		const empty = path.join(tmpDir, "empty-dir");
 		fs.mkdirSync(empty, { recursive: true });
 		await expect(fetchMarketplace(empty, tmpDir)).rejects.toThrow(
-			/\.omp-plugin[\\/]marketplace\.json.*\.claude-plugin[\\/]marketplace\.json/,
+			/\.san-plugin[\\/]marketplace\.json.*\.omp-plugin[\\/]marketplace\.json.*\.claude-plugin[\\/]marketplace\.json/,
 		);
 	});
 

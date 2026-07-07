@@ -12,8 +12,8 @@ A minimal `oh-my-pi` marketplace catalog that demonstrates the `marketplace.json
 Or from the CLI:
 
 ```
-omp plugin marketplace add ./docs/skills/examples/mini-marketplace
-omp plugin install my-plugin@example-marketplace
+san plugin marketplace add ./docs/skills/examples/mini-marketplace
+san plugin install my-plugin@example-marketplace
 ```
 
 ## What it demonstrates
@@ -27,12 +27,14 @@ omp plugin install my-plugin@example-marketplace
 
 ```
 mini-marketplace/
+  .san-plugin/
+    marketplace.json      ← preferred San catalog
   .claude-plugin/
-    marketplace.json      ← catalog
+    marketplace.json      ← Claude Code-compatible fallback
   README.md
   my-plugin/
-    package.json          ← omp.extensions manifest
+    package.json          ← san.extensions manifest
     index.ts              ← extension entry point
 ```
 
-Published and local marketplaces use the same catalog location. omp loads `.omp-plugin/marketplace.json` first and falls back to `.claude-plugin/marketplace.json` (the Claude Code-compatible path this example ships) inside the marketplace root. Point `/marketplace add` at this folder to load the example.
+Published and local marketplaces use the same catalog location. san loads `.san-plugin/marketplace.json` first, then `.omp-plugin/marketplace.json`, then `.claude-plugin/marketplace.json` (the Claude Code-compatible path this example ships) inside the marketplace root. Point `/marketplace add` at this folder to load the example.

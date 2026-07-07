@@ -72,6 +72,16 @@ export interface SettingsOptions {
 	configFiles?: string[];
 }
 
+function getLegacyOmpSettingsJsonPath(agentDir: string): string | undefined {
+	const parts = path.normalize(agentDir).split(path.sep);
+	const sanIndex = parts.lastIndexOf(".san");
+	if (sanIndex < 0) return undefined;
+	parts[sanIndex] = ".omp";
+	const legacyPath = path.join(parts.join(path.sep), "settings.json");
+	const currentPath = path.join(agentDir, "settings.json");
+	return path.normalize(legacyPath) === path.normalize(currentPath) ? undefined : legacyPath;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Path Utilities
 // ═══════════════════════════════════════════════════════════════════════════
@@ -808,16 +818,22 @@ export class Settings {
 
 		// 1. Migrate from settings.json
 		const settingsJsonPath = path.join(this.#agentDir, "settings.json");
-		try {
-			const parsed: unknown = JSONC.parse(await Bun.file(settingsJsonPath).text());
-			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-				settings = this.#deepMerge(settings, this.#migrateRawSettings(parsed as RawSettings));
-				migrated = true;
-				try {
-					fs.renameSync(settingsJsonPath, `${settingsJsonPath}.bak`);
-				} catch {}
-			}
-		} catch {}
+		const legacySettingsJsonPath = getLegacyOmpSettingsJsonPath(this.#agentDir);
+		const settingsJsonPaths = [legacySettingsJsonPath, settingsJsonPath].filter(
+			(value): value is string => value !== undefined,
+		);
+		for (const jsonPath of settingsJsonPaths) {
+			try {
+				const parsed: unknown = JSONC.parse(await Bun.file(jsonPath).text());
+				if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+					settings = this.#deepMerge(settings, this.#migrateRawSettings(parsed as RawSettings));
+					migrated = true;
+					try {
+						fs.renameSync(jsonPath, `${jsonPath}.bak`);
+					} catch {}
+				}
+			} catch {}
+		}
 
 		// 2. Migrate from agent.db
 		try {

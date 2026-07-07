@@ -21,7 +21,7 @@ export default class Read extends Command {
 		"san read src/foo.ts:50-100",
 		"san read src/foo.ts:raw",
 		"san read https://example.com",
-		"san read omp://",
+		"san read san://",
 		"san read issue://123",
 		"san read path/to/archive.zip:dir/file.ts",
 		"san read path/to/db.sqlite:users:42",

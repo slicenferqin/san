@@ -1,5 +1,5 @@
 /**
- * OMP extension package roots.
+ * San extension package roots.
  *
  * An "extension package root" is a directory configured via either
  * `extensions:` in user/project settings or the `--extension`/`-e` CLI flag
@@ -17,7 +17,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDir, isEnoent, logger, tryParseJson } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, getAgentDir, isEnoent, logger, tryParseJson } from "@oh-my-pi/pi-utils";
 import { readDirEntries, readFile } from "../capability/fs";
 import type { LoadContext } from "../capability/types";
 import { getEnabledPlugins } from "../extensibility/plugins/loader";
@@ -82,7 +82,7 @@ interface ScopeDirs {
 
 function scopeDirs(ctx: LoadContext): ScopeDirs {
 	return {
-		project: path.join(ctx.cwd, ".omp"),
+		project: path.join(ctx.cwd, CONFIG_DIR_NAME),
 		user: getAgentDir(),
 	};
 }
@@ -122,10 +122,10 @@ async function isDirectory(p: string): Promise<boolean> {
  * are dropped):
  *
  * 1. CLI roots injected via {@link injectOmpExtensionCliRoots}
- * 2. Project `<cwd>/.omp/settings.json#extensions`
- * 3. User `~/.omp/agent/settings.json#extensions`
+ * 2. Project `<cwd>/.san/settings.json#extensions`
+ * 3. User `~/.san/agent/settings.json#extensions`
  * 4. Enabled npm/link plugins installed under `<plugins>/node_modules/` (for
- *    `omp install <pkg>` / `omp plugin install` / `omp plugin link`). Marketplace
+ *    `san install <pkg>` / `san plugin install` / `san plugin link`). Marketplace
  *    installs are loaded by the `claude-plugins` provider and are excluded here.
  * Only entries that resolve to a directory on disk are returned; file
  * entrypoints contribute zero sub-discovery surface and are filtered out.
@@ -176,7 +176,7 @@ export async function listOmpExtensionRoots(ctx: LoadContext): Promise<OmpExtens
  * Marketplace installs also create runtime symlinks for enable-state persistence,
  * but their resources are discovered through the `claude-plugins` provider.
  * Filtering them here prevents `/status` from showing the same plugin under both
- * "Claude Code Marketplace" and "OMP Extension Packages".
+ * "Claude Code Marketplace" and "San Extension Packages".
  */
 async function realpathOrResolved(p: string): Promise<string> {
 	try {

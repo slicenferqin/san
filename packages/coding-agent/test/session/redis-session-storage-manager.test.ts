@@ -150,7 +150,7 @@ describe("SessionManager + RedisSessionStorage", () => {
 		await manager.close();
 
 		// Redis now contains the JSONL — header + one message entry.
-		const stored = redis.strings.get(`omp:sessions:file:${sessionFilePath}`);
+		const stored = redis.strings.get(`san:sessions:file:${sessionFilePath}`);
 		expect(stored).toBeDefined();
 		const lines = (stored as string).trim().split("\n");
 		expect(lines.length).toBeGreaterThanOrEqual(2);

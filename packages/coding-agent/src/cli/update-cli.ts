@@ -13,18 +13,17 @@ import { $ } from "bun";
 import chalk from "chalk";
 import { theme } from "../modes/theme/theme";
 
-const REPO = "can1357/oh-my-pi";
+const REPO = "slicenferqin/san";
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
-const HOMEBREW_FORMULA = "can1357/tap/omp";
-const MISE_TOOL = "github:can1357/oh-my-pi";
+const HOMEBREW_FORMULA = APP_NAME;
+const MISE_TOOL = "github:slicenferqin/san";
 /**
  * Official npm registry origin.
  *
- * Pinned across both the version check and the bun install step so the two
- * agree on which catalog they are talking to. A user's bun may be pointed at
- * an unofficial mirror (corporate proxy, Taobao, etc.) that lags the upstream
- * registry by minutes-to-hours, in which case `getLatestRelease` would resolve
- * a version the mirror has not yet replicated and the install would fail with
+ * Pinned for the bun install step. A user's bun may be pointed at an
+ * unofficial mirror (corporate proxy, Taobao, etc.) that lags the upstream
+ * registry by minutes-to-hours, in which case the GitHub release check can
+ * resolve a version the mirror has not yet replicated and the install fails with
  * `No version matching "X" found for specifier "<pkg>" (but package exists)`.
  * See #1686.
  */
@@ -196,24 +195,24 @@ interface UpdateMethodResolutionOptions {
 type UpdateTarget = { method: "brew" } | { method: "mise" } | { method: "bun" } | { method: "binary"; path: string };
 
 function resolveUpdateMethod(
-	ompPath: string,
+	sanPath: string,
 	bunBinDir: string | undefined,
 	options: UpdateMethodResolutionOptions = {},
 ): UpdateMethod {
 	const { homebrewPrefix, miseBinDirs = [], miseDataDir } = options;
-	if (homebrewPrefix && isPathInDirectory(ompPath, path.join(homebrewPrefix, "bin"))) return "brew";
-	if (miseBinDirs.some(dir => isPathInDirectory(ompPath, dir))) return "mise";
-	if (miseDataDir && isPathInDirectory(ompPath, path.join(miseDataDir, "shims"))) return "mise";
-	if (bunBinDir && isPathInDirectory(ompPath, bunBinDir)) return "bun";
+	if (homebrewPrefix && isPathInDirectory(sanPath, path.join(homebrewPrefix, "bin"))) return "brew";
+	if (miseBinDirs.some(dir => isPathInDirectory(sanPath, dir))) return "mise";
+	if (miseDataDir && isPathInDirectory(sanPath, path.join(miseDataDir, "shims"))) return "mise";
+	if (bunBinDir && isPathInDirectory(sanPath, bunBinDir)) return "bun";
 	return "binary";
 }
 
 export function resolveUpdateMethodForTest(
-	ompPath: string,
+	sanPath: string,
 	bunBinDir: string | undefined,
 	options: UpdateMethodResolutionOptions = {},
 ): UpdateMethod {
-	return resolveUpdateMethod(ompPath, bunBinDir, options);
+	return resolveUpdateMethod(sanPath, bunBinDir, options);
 }
 async function resolveUpdateTarget(): Promise<UpdateTarget> {
 	const bunBinDir = await getBunGlobalBinDir();
@@ -221,11 +220,11 @@ async function resolveUpdateTarget(): Promise<UpdateTarget> {
 	const miseAvailable = $which("mise") !== undefined;
 	const miseBinDirs = miseAvailable ? await getMiseBinDirs() : [];
 	const miseDataDir = miseAvailable ? getMiseDataDir() : undefined;
-	const ompPath = resolveOmpPath();
+	const sanPath = resolveSanPath();
 
-	if (ompPath) {
-		const method = resolveUpdateMethod(ompPath, bunBinDir, { homebrewPrefix, miseBinDirs, miseDataDir });
-		if (method === "binary") return { method, path: ompPath };
+	if (sanPath) {
+		const method = resolveUpdateMethod(sanPath, bunBinDir, { homebrewPrefix, miseBinDirs, miseDataDir });
+		if (method === "binary") return { method, path: sanPath };
 		return { method };
 	}
 
@@ -235,18 +234,20 @@ async function resolveUpdateTarget(): Promise<UpdateTarget> {
 }
 
 /**
- * Get the latest release info from the npm registry.
- * Uses npm instead of GitHub API to avoid unauthenticated rate limiting.
+ * Get the latest release info from the San GitHub repository.
  */
 async function getLatestRelease(): Promise<ReleaseInfo> {
-	const response = await fetch(`${NPM_REGISTRY}${PACKAGE}/latest`);
+	const response = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`);
 	if (!response.ok) {
 		throw new Error(`Failed to fetch release info: ${response.statusText}`);
 	}
 
-	const data = (await response.json()) as { version: string };
-	const version = data.version;
-	const tag = `v${version}`;
+	const data = (await response.json()) as { tag_name?: string };
+	const tag = data.tag_name?.trim();
+	if (!tag) {
+		throw new Error("Failed to fetch release info: response missing tag_name");
+	}
+	const version = tag.replace(/^v/i, "");
 
 	return {
 		tag,
@@ -315,7 +316,7 @@ function getBinaryName(): string {
 /**
  * Resolve the path that `san` maps to in the user's PATH.
  */
-function resolveOmpPath(): string | undefined {
+function resolveSanPath(): string | undefined {
 	return $which(APP_NAME) ?? undefined;
 }
 
@@ -323,18 +324,18 @@ function resolveOmpPath(): string | undefined {
  * Run the resolved san binary and check if it reports the expected version.
  */
 async function verifyInstalledVersion(expectedVersion: string): Promise<InstalledVersionVerification> {
-	const ompPath = resolveOmpPath();
-	if (!ompPath) return { ok: false };
+	const sanPath = resolveSanPath();
+	if (!sanPath) return { ok: false };
 	try {
-		const result = await $`${ompPath} --version`.quiet().nothrow();
-		if (result.exitCode !== 0) return { ok: false, path: ompPath };
+		const result = await $`${sanPath} --version`.quiet().nothrow();
+		if (result.exitCode !== 0) return { ok: false, path: sanPath };
 		const output = result.text().trim();
-		// Output format: "omp/X.Y.Z"
+		// Output format: "san/X.Y.Z"
 		const match = output.match(/\/(\d+\.\d+\.\d+)/);
 		const actual = match?.[1];
-		return { ok: actual === expectedVersion, actual, path: ompPath };
+		return { ok: actual === expectedVersion, actual, path: sanPath };
 	} catch {
-		return { ok: false, path: ompPath };
+		return { ok: false, path: sanPath };
 	}
 }
 
@@ -359,7 +360,11 @@ async function printVerification(expectedVersion: string): Promise<void> {
 		return;
 	}
 	console.log(chalk.yellow(`\nWarning: ${formatVerificationFailure(result, expectedVersion)}`));
-	console.log(chalk.yellow(`You may need to reinstall: curl -fsSL https://omp.sh/install | sh`));
+	console.log(
+		chalk.yellow(
+			`You may need to reinstall: curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh | sh`,
+		),
+	);
 }
 
 async function unlinkIfExists(filePath: string): Promise<void> {
@@ -458,18 +463,15 @@ export async function replaceBinaryForUpdate(options: BinaryReplacementOptions):
 /**
  * Build the bun argv used to globally install a specific san version.
  *
- * The version is selected by hitting {@link NPM_REGISTRY} directly in
- * {@link getLatestRelease}, so the install MUST observe the same catalog:
- *
  * - `--registry=${NPM_REGISTRY}` pins the install to the official registry
  *   regardless of the user's bunfig/`.npmrc`. A mirror (corporate proxy,
  *   Taobao, …) that hasn't yet replicated the release would otherwise reject
- *   a version the upstream registry already advertises.
+ *   a version the San GitHub release already advertises.
  * - `--no-cache` tells bun to ignore its on-disk manifest snapshot so it
  *   re-fetches metadata from that registry on every invocation.
  *
- * Together these two flags make `san update` produce exactly the registry
- * lookup the version check just performed. See #1686.
+ * Together these two flags make `san update` avoid stale registry metadata
+ * after a new release. See #1686.
  *
  * Also pins {@link NATIVES_PACKAGE} and the platform-specific
  * `@oh-my-pi/pi-natives-<tag>` leaf to `expectedVersion`. `bun install -g`

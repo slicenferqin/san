@@ -14,7 +14,7 @@
  *   against `bun:sqlite`.
  *
  * Tool artifacts and image blobs are out of scope: `ArtifactManager` /
- * `BlobStore` keep writing to `~/.omp/agent/...`. Reach for object storage
+ * `BlobStore` keep writing to `~/.san/agent/...`. Reach for object storage
  * if you need those off-host too.
  */
 
@@ -33,7 +33,7 @@ const client = new SQL(process.env.SESSIONS_DB_URL ?? "sqlite::memory:");
 // dialect) and warms the in-memory mirror with every existing row.
 const storage = await SqlSessionStorage.create({
 	client,
-	table: "omp_session_files", // optional, this is the default
+	table: "san_session_files", // optional, this is the default
 	// createTable: false,       // set if migrations are owned elsewhere
 });
 

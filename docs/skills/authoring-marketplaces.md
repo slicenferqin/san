@@ -1,17 +1,17 @@
 ---
 name: authoring-marketplaces
-description: Use when creating a new omp marketplace. Covers marketplace.json schema, source types, install commands, and publishing.
+description: Use when creating a new San marketplace. Covers marketplace.json schema, source types, install commands, and publishing.
 ---
 
 # Authoring Marketplaces
 
-A marketplace is a Git repository (or local directory) that contains a catalog file at either `.omp-plugin/marketplace.json` (preferred for omp-specific catalogs) or `.claude-plugin/marketplace.json` (Claude Code-compatible; used as the fallback). Anyone can author one. Users add it with `/marketplace add owner/repo` and then install individual plugins from it.
+A marketplace is a Git repository (or local directory) that contains a catalog file at `.san-plugin/marketplace.json` (preferred), `.omp-plugin/marketplace.json` (legacy San/OMP-compatible), or `.claude-plugin/marketplace.json` (Claude Code-compatible fallback). Anyone can author one. Users add it with `/marketplace add owner/repo` and then install individual plugins from it.
 
 ## Minimum viable marketplace
 
 ```
 my-marketplace/
-  .claude-plugin/
+  .san-plugin/
     marketplace.json
   plugins/
     my-plugin/
@@ -43,7 +43,7 @@ Push to GitHub. Users install with:
 
 ## marketplace.json schema
 
-The catalog file lives at either `.omp-plugin/marketplace.json` or `.claude-plugin/marketplace.json` in the repository root. omp prefers the `.omp-plugin/` path and falls back to the Claude path; a repository may publish both to expose tool-specific catalogs from a single source tree.
+The catalog file lives at either `.omp-plugin/marketplace.json` or `.claude-plugin/marketplace.json` in the repository root. san prefers the `.omp-plugin/` path and falls back to the Claude path; a repository may publish both to expose tool-specific catalogs from a single source tree.
 
 ### Top-level fields
 
@@ -206,7 +206,7 @@ my-plugin/
   README.md                ← recommended: description + usage
 ```
 
-> Note: extension modules declared via `package.json` `omp.extensions` are **not** loaded from marketplace installs — that mechanism only applies to npm-installed or `omp plugin link`ed plugins. Ship marketplace plugin behavior through the conventional directories above.
+> Note: extension modules declared via `package.json` `san.extensions` are **not** loaded from marketplace installs — that mechanism only applies to npm-installed or `san plugin link`ed plugins. Legacy `omp.extensions` manifests remain accepted outside marketplace installs. Ship marketplace plugin behavior through the conventional directories above.
 
 ## Install command
 
@@ -219,14 +219,14 @@ my-plugin/
 CLI equivalent:
 
 ```
-omp plugin marketplace add owner/repo
-omp plugin install name@marketplace-name
+san plugin marketplace add owner/repo
+san plugin install name@marketplace-name
 ```
 
 Scope behavior:
 
-- **user** (default) — installed in `~/.omp/plugins/installed_plugins.json`, available in all projects
-- **project** — installed in `<project>/.omp/plugins/installed_plugins.json`, available only in that project
+- **user** (default) — installed in `~/.san/plugins/installed_plugins.json`, available in all projects
+- **project** — installed in `<project>/.san/plugins/installed_plugins.json`, available only in that project
 
 Project-scoped installs shadow user-scoped installs of the same plugin name.
 

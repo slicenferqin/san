@@ -101,7 +101,7 @@ async function collectPluginsAtRoot(
 	const plugins: ScopedInstalledPlugin[] = [];
 	for (const name of names) {
 		const pluginPkgPath = path.join(nodeModulesPath, name, "package.json");
-		let pluginPkg: { version: string; omp?: PluginManifest; pi?: PluginManifest };
+		let pluginPkg: { version: string; san?: PluginManifest; omp?: PluginManifest; pi?: PluginManifest };
 		try {
 			pluginPkg = await Bun.file(pluginPkgPath).json();
 		} catch (err) {
@@ -111,9 +111,9 @@ async function collectPluginsAtRoot(
 			throw err;
 		}
 
-		const manifest: PluginManifest | undefined = pluginPkg.omp || pluginPkg.pi;
+		const manifest: PluginManifest | undefined = pluginPkg.san || pluginPkg.omp || pluginPkg.pi;
 		if (!manifest) {
-			// Not an omp plugin, skip
+			// Not a San/OMP plugin, skip
 			continue;
 		}
 		manifest.version = pluginPkg.version;
@@ -235,13 +235,17 @@ function readDeclaredManifestEntries(dir: string): DeclaredManifestEntries {
 	} catch {
 		return { declared: false, files: [] };
 	}
-	let pkg: { omp?: { extensions?: unknown }; pi?: { extensions?: unknown } };
+	let pkg: { san?: { extensions?: unknown }; omp?: { extensions?: unknown }; pi?: { extensions?: unknown } };
 	try {
-		pkg = JSON.parse(raw) as { omp?: { extensions?: unknown }; pi?: { extensions?: unknown } };
+		pkg = JSON.parse(raw) as {
+			san?: { extensions?: unknown };
+			omp?: { extensions?: unknown };
+			pi?: { extensions?: unknown };
+		};
 	} catch {
 		return { declared: false, files: [] };
 	}
-	const declared = (pkg.omp ?? pkg.pi)?.extensions;
+	const declared = (pkg.san ?? pkg.omp ?? pkg.pi)?.extensions;
 	if (!Array.isArray(declared) || declared.length === 0) {
 		return { declared: false, files: [] };
 	}

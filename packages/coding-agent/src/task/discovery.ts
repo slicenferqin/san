@@ -1,13 +1,13 @@
 /**
  * Agent discovery from filesystem.
  *
- * Discovers agent definitions from OMP-native task-agent roots:
- *   - ~/.omp/agent/agents/*.md (user-level)
- *   - .omp/agents/*.md (project-level)
+ * Discovers agent definitions from San-native task-agent roots:
+ *   - ~/.san/agent/agents/*.md (user-level)
+ *   - .san/agents/*.md (project-level)
  *
  * Claude Code marketplace plugin agents are discovered separately via the
  * claude-plugins provider. Direct cross-harness roots such as .claude/agents
- * are intentionally skipped because their frontmatter schema is not the OMP
+ * are intentionally skipped because their frontmatter schema is not the San
  * task-agent contract.
  *
  * Agent files use markdown with YAML frontmatter.
@@ -15,14 +15,14 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, logger } from "@oh-my-pi/pi-utils";
 import { isProviderEnabled } from "../capability";
 import { findAllNearestProjectConfigDirs, getConfigDirs } from "../config";
 import { listClaudePluginRoots } from "../discovery/helpers";
 import { loadBundledAgents, parseAgent } from "./agents";
 import type { AgentDefinition, AgentSource } from "./types";
 
-const TASK_AGENT_CONFIG_SOURCE = ".omp";
+const TASK_AGENT_CONFIG_SOURCE = CONFIG_DIR_NAME;
 
 /** Result of agent discovery */
 export interface DiscoveryResult {
@@ -55,7 +55,7 @@ async function loadAgentsFromDir(dir: string, source: AgentSource): Promise<Agen
 /**
  * Discover agents from filesystem and merge with bundled agents.
  *
- * Precedence (highest wins): project .omp, user .omp, Claude plugin agents, then bundled
+ * Precedence (highest wins): project .san, user .san, Claude plugin agents, then bundled
  * @param cwd - Current working directory for project agent discovery
  */
 export async function discoverAgents(cwd: string, home: string = os.homedir()): Promise<DiscoveryResult> {

@@ -1,0 +1,838 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>San 品牌迁移清扫审计</title>
+		<style>
+			:root {
+				color-scheme: light;
+				--bg: #f7f8fb;
+				--panel: #ffffff;
+				--text: #172033;
+				--muted: #667085;
+				--line: #d9dee8;
+				--accent: #2563eb;
+				--ok: #15803d;
+				--warn: #b45309;
+				--bad: #b91c1c;
+				--code: #eef2f7;
+			}
+			* {
+				box-sizing: border-box;
+			}
+			body {
+				margin: 0;
+				background: var(--bg);
+				color: var(--text);
+				font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			}
+			main {
+				max-width: 1180px;
+				margin: 0 auto;
+				padding: 40px 24px 80px;
+			}
+			header {
+				margin-bottom: 28px;
+			}
+			h1 {
+				margin: 0 0 10px;
+				font-size: 34px;
+				line-height: 1.2;
+				letter-spacing: 0;
+			}
+			h2 {
+				margin: 34px 0 14px;
+				font-size: 24px;
+				line-height: 1.3;
+				letter-spacing: 0;
+			}
+			h3 {
+				margin: 24px 0 10px;
+				font-size: 18px;
+				line-height: 1.35;
+				letter-spacing: 0;
+			}
+			p {
+				margin: 8px 0;
+			}
+			.card {
+				background: var(--panel);
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				padding: 18px 20px;
+				margin: 16px 0;
+			}
+			.grid {
+				display: grid;
+				grid-template-columns: repeat(4, minmax(0, 1fr));
+				gap: 14px;
+			}
+			.metric {
+				background: var(--panel);
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				padding: 14px 16px;
+			}
+			.metric strong {
+				display: block;
+				font-size: 28px;
+				line-height: 1.2;
+			}
+			.metric span {
+				color: var(--muted);
+				font-size: 13px;
+			}
+			table {
+				width: 100%;
+				border-collapse: collapse;
+				background: var(--panel);
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				overflow: hidden;
+				margin: 12px 0 18px;
+			}
+			th,
+			td {
+				border-bottom: 1px solid var(--line);
+				padding: 10px 12px;
+				text-align: left;
+				vertical-align: top;
+			}
+			th {
+				background: #eef3ff;
+				color: #1d2b53;
+				font-weight: 650;
+			}
+			tr:last-child td {
+				border-bottom: 0;
+			}
+			code {
+				background: var(--code);
+				border-radius: 4px;
+				padding: 1px 5px;
+				font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+				font-size: 0.92em;
+			}
+			pre {
+				background: #111827;
+				color: #e5e7eb;
+				border-radius: 8px;
+				overflow: auto;
+				padding: 14px 16px;
+				font-size: 13px;
+			}
+			.tag {
+				display: inline-block;
+				border-radius: 999px;
+				padding: 2px 8px;
+				font-size: 12px;
+				font-weight: 650;
+				white-space: nowrap;
+			}
+			.tag.ok {
+				background: #dcfce7;
+				color: var(--ok);
+			}
+			.tag.warn {
+				background: #fef3c7;
+				color: var(--warn);
+			}
+			.tag.bad {
+				background: #fee2e2;
+				color: var(--bad);
+			}
+			.tag.info {
+				background: #dbeafe;
+				color: var(--accent);
+			}
+			ul {
+				margin: 8px 0 8px 22px;
+				padding: 0;
+			}
+			li {
+				margin: 4px 0;
+			}
+			.note {
+				color: var(--muted);
+				font-size: 13px;
+			}
+			@media (max-width: 900px) {
+				.grid {
+					grid-template-columns: repeat(2, minmax(0, 1fr));
+				}
+			}
+			@media (max-width: 560px) {
+				main {
+					padding: 28px 14px 60px;
+				}
+				.grid {
+					grid-template-columns: 1fr;
+				}
+				table {
+					display: block;
+					overflow-x: auto;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<header>
+				<h1>San 品牌迁移清扫审计</h1>
+				<p class="note">
+					日期：2026-07-06。口径：基于当前 working tree，排除
+					<code>node_modules</code>、<code>.git</code>、<code>crates/vendor</code>、coding-agent
+					大型 session fixture、<code>packages/coding-agent/CHANGELOG.md</code> 和
+					<code>bun.lock</code>。本报告只做梳理，不直接修改代码。
+				</p>
+			</header>
+
+			<section class="card">
+				<h2>结论</h2>
+				<p>
+					现在应继续清扫，但不能做全仓机械替换。仓库里旧命名同时承担四种含义：用户可见产品文案、历史兼容接口、发布链路标识、内部包生态标识。正确路径是按这四类分别收口。
+				</p>
+				<p>
+					最高优先级不是内部包名，而是发布面和产品面：当前 <code>san update</code> 和安装脚本已经转向
+					San release，但 CI release 仍在构建和上传 <code>omp-*</code> 二进制，Homebrew tap 仍指向
+					<code>Formula/omp.rb</code>。这会直接导致新安装或更新失败。
+				</p>
+			</section>
+
+			<section>
+				<h2>统计概览</h2>
+				<div class="grid">
+					<div class="metric">
+						<strong>228</strong>
+						<span>仍含 <code>.omp</code> 的活跃文件</span>
+					</div>
+					<div class="metric">
+						<strong>777</strong>
+						<span><code>.omp</code> 匹配次数</span>
+					</div>
+					<div class="metric">
+						<strong>770</strong>
+						<span>含 OMP/omp/omp-* 等旧产品词的活跃文件</span>
+					</div>
+					<div class="metric">
+						<strong>3,620</strong>
+						<span>旧产品词匹配次数</span>
+					</div>
+				</div>
+				<div class="grid">
+					<div class="metric">
+						<strong>2,531</strong>
+						<span>含 <code>@oh-my-pi</code> / <code>oh-my-pi</code> / 旧仓库 URL 的活跃文件</span>
+					</div>
+					<div class="metric">
+						<strong>11,296</strong>
+						<span>内部包名与旧仓库标识匹配次数</span>
+					</div>
+					<div class="metric">
+						<strong>263</strong>
+						<span>含 <code>San</code> / <code>san</code> / <code>.san</code> 的活跃文件</span>
+					</div>
+					<div class="metric">
+						<strong>2,682</strong>
+						<span>San 新命名匹配次数</span>
+					</div>
+				</div>
+				<p class="note">
+					这些数字不是“都要改”的数量。尤其 <code>@oh-my-pi/*</code> 大多是 TypeScript workspace import
+					和包名，属于内部包名类；<code>.omp</code> 中也有一部分必须作为 legacy migration 保留。
+				</p>
+
+				<h3>按目录聚合</h3>
+				<table>
+					<thead>
+						<tr>
+							<th>模式</th>
+							<th>主要分布</th>
+							<th>判断</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td><code>.omp</code></td>
+							<td>
+								<code>packages/coding-agent</code> 105 文件 / 314 次，<code>docs</code> 48 文件 / 240 次，<code>python/robomp</code>
+								10 文件 / 75 次，<code>scripts</code> 20 文件 / 36 次。
+							</td>
+							<td>
+								产品面和文档面仍有大量旧路径；兼容面需要保留读旧路径和迁移逻辑，但应避免继续写旧路径。
+							</td>
+						</tr>
+						<tr>
+							<td><code>omp</code> / <code>OMP</code> / <code>omp-*</code></td>
+							<td>
+								<code>packages/coding-agent</code> 427 文件 / 1,420 次，<code>python/robomp</code>
+								66 文件 / 859 次，<code>docs</code> 67 文件 / 553 次，<code>scripts</code> 33 文件 / 124 次。
+							</td>
+							<td>
+								产品面、发布面、Python 服务名、CI runner 名混在一起。需要先分层，不应一次性替换。
+							</td>
+						</tr>
+						<tr>
+							<td><code>@oh-my-pi</code> / 旧仓库 URL</td>
+							<td>
+								<code>packages/coding-agent</code> 1,699 文件 / 8,610 次，<code>packages/ai</code>
+								335 文件 / 1,172 次，<code>packages/tui</code> 90 文件 / 247 次，<code>package.json</code>
+								15 次。
+							</td>
+							<td>
+								这是内部包生态迁移，不是品牌文案清扫。需要单独设计 scope 迁移和兼容发布策略。
+							</td>
+						</tr>
+					</tbody>
+				</table>
+
+				<h3>高频旧标识文件</h3>
+				<table>
+					<thead>
+						<tr>
+							<th>文件</th>
+							<th>旧标识密度</th>
+							<th>初步分类</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td><code>docs/mcp-config.md</code></td>
+							<td><code>OMP</code> / <code>.omp</code> / 旧 schema URL 密集</td>
+							<td>产品面，应该改为 San 原生文档，单独说明 legacy <code>.omp</code> 兼容。</td>
+						</tr>
+						<tr>
+							<td><code>docs/settings.md</code></td>
+							<td><code>.omp</code> 28 次，旧产品词 70 次</td>
+							<td>产品面，优先改。</td>
+						</tr>
+						<tr>
+							<td><code>docs/keybindings.md</code>、<code>docs/session.md</code>、<code>docs/secrets.md</code></td>
+							<td>CLI 命令和配置路径仍为 <code>omp</code> / <code>~/.omp</code></td>
+							<td>产品面，优先改。</td>
+						</tr>
+						<tr>
+							<td><code>scripts/ci-release-build-binaries.ts</code></td>
+							<td>release 二进制仍输出 <code>omp-*</code></td>
+							<td>发布面，最高优先级。</td>
+						</tr>
+						<tr>
+							<td><code>.github/workflows/ci.yml</code></td>
+							<td>release matrix、artifact、GitHub release、Homebrew tap 均仍用 <code>omp-*</code></td>
+							<td>发布面，最高优先级。</td>
+						</tr>
+						<tr>
+							<td><code>packages/coding-agent/src/extensibility/plugins/legacy-pi-*.ts</code></td>
+							<td>大量 <code>omp-legacy-pi-bundled</code> / <code>@oh-my-pi</code></td>
+							<td>兼容面 + 内部包名，不能机械替换。</td>
+						</tr>
+						<tr>
+							<td><code>packages/coding-agent/src/extensibility/plugins/legacy-pi-bundled-registry.ts</code></td>
+							<td>约 1,993 次内部包名匹配</td>
+							<td>生成/兼容面，短期不改；未来随包 namespace 迁移再重建。</td>
+						</tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>一、产品面</h2>
+				<p>
+					产品面是用户直接看到或复制使用的内容。这里应该尽早清扫，因为发布后再改会让用户文档、命令、配置路径和错误提示混乱。
+				</p>
+				<table>
+					<thead>
+						<tr>
+							<th>范围</th>
+							<th>发现</th>
+							<th>建议动作</th>
+							<th>优先级</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td>CLI / TUI 文案</td>
+							<td>
+								<code>packages/coding-agent/src/modes/components/tips.txt</code> 仍出现
+								<code>omp stats</code>、<code>omp -c</code>、<code>omp auth-broker</code>、<code>omp auth-gateway</code>；
+								<code>modes/utils/ui-helpers.ts</code> 仍提示 <code>omp update</code>；
+								<code>stt/recorder.ts</code> 仍提示 <code>omp setup speech</code>。
+							</td>
+							<td>改成 <code>san</code> 命令。对应测试应断言用户可见字符串。</td>
+							<td><span class="tag bad">P0</span></td>
+						</tr>
+						<tr>
+							<td>配置路径文案</td>
+							<td>
+								<code>ssh-command-controller.ts</code> 仍展示 <code>~/.omp/agent/ssh.json</code> 和
+								<code>.omp/ssh.json</code>；<code>omfg-controller.ts</code> 仍展示
+								<code>.omp/rules</code>、<code>~/.omp/agent/rules</code>。
+							</td>
+							<td>
+								展示路径改为 <code>~/.san/agent</code> / <code>.san</code>。如继续读取旧路径，文案中用“legacy”单独说明。
+							</td>
+							<td><span class="tag bad">P0</span></td>
+						</tr>
+						<tr>
+							<td>用户文档</td>
+							<td>
+								<code>docs/settings.md</code>、<code>docs/mcp-config.md</code>、<code>docs/keybindings.md</code>、<code>docs/session.md</code>、<code>docs/secrets.md</code>、<code>docs/collab.md</code>、<code>docs/approval-mode.md</code>
+								仍以 OMP 为主。
+							</td>
+							<td>
+								优先改日常使用文档。所有示例命令用 <code>san</code>，所有原生配置路径用
+								<code>.san</code>。保留一个“从 OMP 迁移”小节，避免把兼容说明散落在全文。
+							</td>
+							<td><span class="tag bad">P0</span></td>
+						</tr>
+						<tr>
+							<td>SDK / 示例</td>
+							<td>
+								<code>packages/coding-agent/examples/README.md</code>、<code>examples/hooks/README.md</code>、<code>examples/custom-tools/README.md</code>、<code>examples/sdk/*.ts</code>、<code>examples/extensions/*.ts</code>
+								仍使用 <code>omp</code> 命令和 <code>~/.omp/agent</code>。
+							</td>
+							<td>示例是产品入口，应该改为 San；兼容路径只在 migration 示例里出现。</td>
+							<td><span class="tag bad">P0</span></td>
+						</tr>
+						<tr>
+							<td>Prompt / agent 可见说明</td>
+							<td>
+								<code>prompts/system/autolearn-guidance.md</code>、<code>prompts/tools/manage-skill.md</code>、<code>prompts/tools/learn.md</code>
+								仍告诉 agent 写到 <code>~/.omp/agent/managed-skills</code>。
+							</td>
+							<td>
+								这是实际行为引导，必须改成 <code>~/.san/agent/managed-skills</code>，否则 agent 会继续建议/使用旧路径。
+							</td>
+							<td><span class="tag bad">P0</span></td>
+						</tr>
+						<tr>
+							<td>调试 / 报告 / telemetry 文案</td>
+							<td>
+								<code>debug/system-info.ts</code> 输出 <code>App: omp</code>；
+								<code>tools/report-tool-issue.ts</code> 使用 <code>agent: { name: "omp" }</code> 和
+								<code>omp grievances</code> 文案。
+							</td>
+							<td>用户可见输出改为 San；如果服务端仍期待旧 agent name，应加映射字段，不应继续在 UI 暴露旧名。</td>
+							<td><span class="tag warn">P1</span></td>
+						</tr>
+						<tr>
+							<td>内部 URL 协议</td>
+							<td>
+								<code>omp://</code> 是用户可见协议，出现在 system prompt、read/grep 工具、internal URL router 和 docs。
+							</td>
+							<td>
+								新增 <code>san://</code> 作为首选协议，<code>omp://</code> 保留为兼容 alias。文档和 prompt 改用
+								<code>san://</code>。
+							</td>
+							<td><span class="tag warn">P1</span></td>
+						</tr>
+						<tr>
+							<td>Collab / Share 域名</td>
+							<td>
+								<code>docs/collab.md</code>、<code>session-operations-export-share-fork-resume.md</code>、collab web 相关代码仍使用
+								<code>my.omp.sh</code>、<code>https://my.omp.sh/s</code>。
+							</td>
+							<td>
+								需要先确定 San relay/share 域名。没有新域名前，应在文档中明确“暂沿用 legacy relay”，不要伪装成 San 原生。
+							</td>
+							<td><span class="tag warn">P1</span></td>
+						</tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>二、兼容面</h2>
+				<p>
+					兼容面是旧用户、旧插件、旧配置和旧 session 仍能工作的承诺。这里不能按品牌直觉删除，应转成“San 优先，legacy 可读，尽量不再写 legacy”的策略。
+				</p>
+				<table>
+					<thead>
+						<tr>
+							<th>兼容对象</th>
+							<th>当前状态</th>
+							<th>保留原因</th>
+							<th>迁移建议</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td>旧配置目录 <code>~/.omp</code> / 项目 <code>.omp</code></td>
+							<td>
+								已有部分迁移：settings 从 sibling legacy <code>.omp/agent/settings.json</code> 迁移；
+								扩展 roots、secrets、WATCHDOG、task agents 已开始改到 <code>.san</code>。
+							</td>
+							<td>老用户升级不能丢设置、secrets、extensions、commands、skills。</td>
+							<td>
+								增加集中 migration 表：每个 surface 明确 old path、new path、读写策略、一次性迁移时机。原则是 San 写
+								<code>.san</code>，只在缺失新配置时读取 <code>.omp</code>。
+							</td>
+						</tr>
+						<tr>
+							<td>环境变量</td>
+							<td>
+								<code>SAN_PROFILE</code> 优先，<code>OMP_PROFILE</code>/<code>PI_PROFILE</code> 兼容；
+								<code>SAN_CONFIG_DIR</code> 优先，<code>PI_CONFIG_DIR</code> 兼容。<code>OMP_BIN</code> 仍出现在 benchmark scripts。
+							</td>
+							<td>CI、脚本、用户 shell 配置可能仍用旧变量。</td>
+							<td>
+								文档只写 <code>SAN_*</code>。旧变量保留读取并标注 deprecate。benchmark 脚本可支持
+								<code>SAN_BIN</code> 优先、<code>OMP_BIN</code> fallback。
+							</td>
+						</tr>
+						<tr>
+							<td>插件 manifest <code>package.json#omp</code></td>
+							<td>
+								插件 loader、manager、installer、examples 仍以 <code>omp</code>/<code>pi</code> manifest 为核心。
+							</td>
+							<td>第三方插件已经按 <code>omp</code> 字段发布，直接改会断生态。</td>
+							<td>
+								新增 <code>san</code> manifest 字段，解析优先级 <code>san</code> -> <code>omp</code> -> <code>pi</code>。
+								新文档和模板写 <code>san</code>；旧字段继续支持。
+							</td>
+						</tr>
+						<tr>
+							<td><code>omp-plugins.lock.json</code> 和 <code>.omp-plugin/marketplace.json</code></td>
+							<td>仍是插件安装、marketplace 和兼容测试的核心文件名。</td>
+							<td>这是持久化格式，重命名需要迁移和 fallback。</td>
+							<td>
+								短期保留旧文件名作为兼容格式；新增 <code>san-plugins.lock.json</code> 前先写 migration test。
+								<code>.omp-plugin/marketplace.json</code> 可先作为 marketplace 兼容路径，新增 <code>.san-plugin/marketplace.json</code>。
+							</td>
+						</tr>
+						<tr>
+							<td><code>omp://</code> internal URL</td>
+							<td>工具、router、prompt、docs 中仍作为 harness docs 协议。</td>
+							<td>旧 session、用户习惯、测试可能引用。</td>
+							<td>新增 <code>san://</code>，保留 <code>omp://</code> alias。禁止新文档继续推荐 <code>omp://</code>。</td>
+						</tr>
+						<tr>
+							<td>历史 changelog、fixtures、session jsonl</td>
+							<td>大量旧字符串来自历史记录和 test fixture。</td>
+							<td>它们是历史证据或回归输入，改掉会降低测试真实性。</td>
+							<td>不做品牌清扫；仅当 fixture 的预期行为变更时更新。</td>
+						</tr>
+						<tr>
+							<td>旧 <code>@oh-my-pi/*</code> import</td>
+							<td>全仓 11,296 次相关匹配，主要是 workspace package import。</td>
+							<td>这是包名和模块解析契约，不只是文案。</td>
+							<td>归入内部包名迁移阶段；产品面不要直接暴露这些名字，代码 import 可暂保留。</td>
+						</tr>
+					</tbody>
+				</table>
+
+				<h3>仓库内真实 legacy 配置目录</h3>
+				<p>
+					当前仓库仍跟踪了 <code>.omp/commands/*.md</code> 和 <code>.omp/skills/**</code>。这不是用户 HOME
+					状态，而是项目自身的 agent 配置。由于项目原生目录已经切到 <code>.san</code>，这批文件应迁移到
+					<code>.san</code>，并保留一轮 discovery 测试证明旧 <code>.omp</code> 只作为 fallback。
+				</p>
+			</section>
+
+			<section>
+				<h2>三、发布面</h2>
+				<p>
+					发布面是当前最大风险。前面已经把启动更新检测和 <code>san update</code> 的 GitHub release 查询改向
+					<code>slicenferqin/san</code>，安装脚本也改为下载 <code>san-*</code>。但 release pipeline 仍在生产和上传
+					<code>omp-*</code>，这会造成“代码找 San 资产，CI 发 OMP 资产”的断链。
+				</p>
+
+				<table>
+					<thead>
+						<tr>
+							<th>发布环节</th>
+							<th>当前发现</th>
+							<th>风险</th>
+							<th>建议动作</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td>本地 binary build</td>
+							<td>
+								<code>packages/coding-agent/scripts/build-binary.ts</code> 输出 <code>dist/omp</code> 或
+								<code>dist/omp-&lt;target&gt;</code>。
+							</td>
+							<td><span class="tag bad">高</span> 本地构建出的二进制名仍是 OMP。</td>
+							<td>改为 <code>dist/san</code> / <code>dist/san-&lt;target&gt;</code>，同步 smoke test。</td>
+						</tr>
+						<tr>
+							<td>CI release binaries</td>
+							<td>
+								<code>scripts/ci-release-build-binaries.ts</code> targets 仍输出
+								<code>packages/coding-agent/binaries/omp-darwin-arm64</code> 等。
+							</td>
+							<td><span class="tag bad">高</span> GitHub release asset 名与安装/更新脚本不匹配。</td>
+							<td>目标文件改为 <code>san-darwin-arm64</code>、<code>san-linux-x64</code>、<code>san-windows-x64.exe</code>。</td>
+						</tr>
+						<tr>
+							<td>GitHub Actions release matrix</td>
+							<td>
+								<code>.github/workflows/ci.yml</code> release matrix、artifact name、download pattern、release files、macOS verify
+								仍用 <code>omp-binary-*</code> 和 <code>omp-*</code>。
+							</td>
+							<td><span class="tag bad">高</span> 即使 build script 改了，workflow 仍会找旧路径。</td>
+							<td>
+								同步改 <code>binary_path</code>、artifact <code>name</code>、download <code>pattern</code>、release
+								<code>files</code>、verify download URL。
+							</td>
+						</tr>
+						<tr>
+							<td>Homebrew</td>
+							<td>
+								<code>scripts/ci-update-brew-formula.ts</code> 仍渲染 <code>class Omp</code>、<code>omp-*</code>
+								URL、<code>bin/"omp"</code>；workflow 仍 checkout <code>can1357/homebrew-tap</code> 并写
+								<code>Formula/omp.rb</code>。
+							</td>
+							<td>
+								<span class="tag bad">高</span> <code>san update</code> 已改为 <code>brew upgrade san</code>，但 tap/formula
+								并不存在或未更新。
+							</td>
+							<td>
+								决定是否开 <code>slicenferqin/homebrew-tap</code> 和 <code>Formula/san.rb</code>。未就绪前，
+								<code>san update</code> 不应优先走 brew，或应给出明确不可用错误。
+							</td>
+						</tr>
+						<tr>
+							<td>mise</td>
+							<td>
+								<code>san update</code> 已改为 <code>github:slicenferqin/san</code>，但 CI / docs 里仍有旧
+								<code>github:can1357/oh-my-pi</code> 片段。
+							</td>
+							<td><span class="tag warn">中</span> 更新检测路径和安装方法可能不一致。</td>
+							<td>补 mise 安装/更新 smoke：<code>mise install github:slicenferqin/san@vX.Y.Z</code>。</td>
+						</tr>
+						<tr>
+							<td>NPM 分发</td>
+							<td>
+								<code>scripts/install.sh</code> / <code>install.ps1</code> 仍通过
+								<code>@oh-my-pi/pi-coding-agent</code> source install。<code>packages/coding-agent/package.json</code>
+								bin 已是 <code>san</code>。
+							</td>
+							<td>
+								<span class="tag warn">中</span> 如果 San 不继续发布旧 npm 包，source install 会失败；如果继续发布，品牌仍不独立。
+							</td>
+							<td>
+								短期可保留旧 npm 包名，但 release 文档要明确；中期发布新包名并让旧包依赖/转发新包。
+							</td>
+						</tr>
+						<tr>
+							<td>macOS signing / notarization</td>
+							<td>
+								<code>docs/macos-signing-notarization.md</code>、workflow signing step 仍引用
+								<code>omp-darwin-arm64</code>。
+							</td>
+							<td><span class="tag warn">中</span> 签名和验证路径跟二进制名耦合。</td>
+							<td>随 release binary rename 一并改，避免签旧文件名。</td>
+						</tr>
+						<tr>
+							<td>安全 / repo metadata</td>
+							<td>
+								<code>.github/SECURITY.md</code> 仍指向 <code>can1357/oh-my-pi</code> private advisory。
+							</td>
+							<td><span class="tag warn">中</span> 用户报告安全问题会走错仓库。</td>
+							<td>改到 <code>slicenferqin/san</code> 的安全通道。</td>
+						</tr>
+					</tbody>
+				</table>
+
+				<h3>发布面必须形成的闭环</h3>
+				<ul>
+					<li>GitHub release 能产出 <code>san-linux-x64</code>、<code>san-linux-arm64</code>、<code>san-darwin-x64</code>、<code>san-darwin-arm64</code>、<code>san-windows-x64.exe</code>。</li>
+					<li><code>scripts/install.sh --binary</code> 和 <code>scripts/install.ps1 -Binary</code> 能下载这些 asset。</li>
+					<li><code>san update --check</code> 查 San release，<code>san update</code> 选择的安装器能实际安装同一版本。</li>
+					<li>release verify job 下载并 smoke 测试 San asset，而不是 OMP asset。</li>
+					<li>Homebrew 公式在未准备好时不应该被 <code>san update</code> 当成可用路径。</li>
+				</ul>
+			</section>
+
+			<section>
+				<h2>四、内部包名</h2>
+				<p>
+					内部包名是最大但最低优先级的迁移面。当前 monorepo 的 TypeScript import、workspace catalog、测试、生成 registry
+					都建立在 <code>@oh-my-pi/*</code> 上。这里可以晚于产品面和发布面处理，但必须提前决策路线。
+				</p>
+
+				<table>
+					<thead>
+						<tr>
+							<th>包 / 模块</th>
+							<th>当前名称</th>
+							<th>建议</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td>coding agent</td>
+							<td><code>@oh-my-pi/pi-coding-agent</code>，bin 为 <code>san</code></td>
+							<td>
+								短期可保留包名以降低发布风险；中期确定新包名，例如 <code>@slicenferqin/san</code> 或
+								<code>@san/coding-agent</code>，再做 dual-publish / redirect。
+							</td>
+						</tr>
+						<tr>
+							<td>核心 TS 包</td>
+							<td>
+								<code>@oh-my-pi/pi-ai</code>、<code>@oh-my-pi/pi-utils</code>、<code>@oh-my-pi/pi-tui</code>、<code>@oh-my-pi/pi-agent-core</code>、<code>@oh-my-pi/pi-catalog</code>、<code>@oh-my-pi/pi-wire</code>
+							</td>
+							<td>
+								不在第一轮改。先让产品面不暴露这些包名；包 scope 迁移需要 workspace、exports、release、npm ownership
+								一起改。
+							</td>
+						</tr>
+						<tr>
+							<td>stats</td>
+							<td><code>@oh-my-pi/omp-stats</code></td>
+							<td>
+								比其他内部包更用户可见，因为 CLI 有 <code>san stats</code>。建议优先在内部 API 保持旧包名，产品文案和命令改 San；后续包名可迁到 <code>san-stats</code>。
+							</td>
+						</tr>
+						<tr>
+							<td>native packages</td>
+							<td><code>@oh-my-pi/pi-natives</code>、<code>@oh-my-pi/pi-natives-&lt;tag&gt;</code></td>
+							<td>
+								与 npm optional dependency 和 release sentinel 绑定，迁移风险高。等 binary release 闭环稳定后再做。
+							</td>
+						</tr>
+						<tr>
+							<td>Python packages</td>
+							<td><code>python/robomp</code>、<code>python/omp-rpc</code>、<code>omp_local.py</code></td>
+							<td>
+								如果它们属于 San 产品，应改名；如果是内部 CI/机器人遗留，可暂列为内部包名/工具名，不阻断 CLI 发布。
+							</td>
+						</tr>
+						<tr>
+							<td>Infra runner</td>
+							<td><code>omp-kata</code>、<code>arc-omp-values.yaml</code>、<code>omp-kata-runner</code></td>
+							<td>
+								这是 CI 内部 label 和 runner image 名，非用户产品面。可以后置，但文档若公开应标注为 legacy infra name。
+							</td>
+						</tr>
+						<tr>
+							<td>生成兼容 registry</td>
+							<td><code>legacy-pi-bundled-registry.ts</code> 静态引用大量 <code>@oh-my-pi/*</code></td>
+							<td>
+								短期不改。包 scope 迁移时重跑 generator，并保留旧 specifier remap 以支持旧插件。
+							</td>
+						</tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>建议执行顺序</h2>
+				<table>
+					<thead>
+						<tr>
+							<th>阶段</th>
+							<th>目标</th>
+							<th>具体任务</th>
+							<th>完成判据</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td>Phase 1</td>
+							<td>产品面清扫</td>
+							<td>
+								改 CLI/TUI 文案、prompt、examples、日常 docs、<code>.omp</code> 项目配置迁移到
+								<code>.san</code>。
+							</td>
+							<td>
+								用户文档默认只出现 <code>san</code> / <code>.san</code>；<code>.omp</code> 只出现在 migration/legacy
+								段落。
+							</td>
+						</tr>
+						<tr>
+							<td>Phase 2</td>
+							<td>发布面闭环</td>
+							<td>
+								改 binary build、CI release asset、GitHub release verify、install scripts、Homebrew/mise 策略。
+							</td>
+							<td>
+								一次 tag release 能产出 <code>san-*</code> asset；<code>scripts/install.sh --binary</code> 和
+								<code>san update --check</code> 都能指向同一 release。
+							</td>
+						</tr>
+						<tr>
+							<td>Phase 3</td>
+							<td>兼容 alias 标准化</td>
+							<td>
+								引入 <code>san://</code>、<code>package.json#san</code>、<code>.san-plugin</code> 等 San 原生入口，同时保留旧入口。
+							</td>
+							<td>新文档只推荐 San 入口；旧 OMP 入口有回归测试覆盖。</td>
+						</tr>
+						<tr>
+							<td>Phase 4</td>
+							<td>内部包名迁移决策</td>
+							<td>决定新 npm scope、dual publish、旧包转发、workspace import 改名策略。</td>
+							<td>有明确 npm 发布计划和回滚策略；不和产品面清扫混在一个 PR。</td>
+						</tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>建议增加的检查</h2>
+				<ul>
+					<li>
+						新增一个“产品面旧名检查”脚本，只扫描 docs、prompts、examples 和用户可见 CLI 组件。允许
+						<code>legacy</code>、<code>migration</code>、<code>compat</code> 文件白名单。
+					</li>
+					<li>
+						新增 release asset smoke：构建完成后断言 <code>packages/coding-agent/binaries/san-*</code> 存在，且不存在待上传的
+						<code>omp-*</code>。
+					</li>
+					<li>
+						新增 config migration matrix 测试：<code>.san</code> 优先，<code>.omp</code> fallback，只写
+						<code>.san</code>。
+					</li>
+					<li>
+						新增 internal URL alias 测试：<code>san://</code> 和 <code>omp://</code> 读取同一 docs index，但 help/prompt
+						只展示 <code>san://</code>。
+					</li>
+					<li>
+						新增 plugin manifest alias 测试：<code>san</code> manifest 优先于 <code>omp</code>，<code>omp</code> 仍可加载。
+					</li>
+				</ul>
+			</section>
+
+			<section>
+				<h2>下一步建议</h2>
+				<p>
+					下一步应先做 Phase 2 的 release asset 闭环，因为它会影响安装和自动更新是否能工作。并行做 Phase 1
+					中最直接的产品面文案清扫：prompts、examples、用户文档和 TUI tips。内部包名迁移先不动，只建立决策文档和白名单。
+				</p>
+				<p>
+					可直接落地的第一批任务：
+				</p>
+				<ul>
+					<li>把 <code>scripts/ci-release-build-binaries.ts</code> 和 <code>.github/workflows/ci.yml</code> 的 release binary 路径改成 <code>san-*</code>。</li>
+					<li>把 <code>scripts/ci-update-brew-formula.ts</code> 改成可渲染 <code>Formula/san.rb</code>，或暂时禁用 brew update path。</li>
+					<li>把 <code>packages/coding-agent/src/modes/components/tips.txt</code>、prompt、examples 里的 <code>omp</code> 命令改成 <code>san</code>。</li>
+					<li>把 <code>docs/mcp-config.md</code>、<code>docs/settings.md</code>、<code>docs/secrets.md</code> 改成 San 原生路径，并集中说明 legacy <code>.omp</code>。</li>
+					<li>迁移仓库跟踪的 <code>.omp/commands</code> 和 <code>.omp/skills</code> 到 <code>.san</code>。</li>
+				</ul>
+			</section>
+
+			<section>
+				<h2>审计命令</h2>
+				<pre><code>rg --count-matches '\.omp' . \
+  -g '!node_modules/**' -g '!.git/**' -g '!crates/vendor/**' \
+  -g '!packages/coding-agent/test/fixtures/**' \
+  -g '!packages/coding-agent/CHANGELOG.md' -g '!bun.lock'
+
+rg --count-matches '\bomp\b|\bOMP\b|omp-|omp\.|\.omp|omp://' . \
+  -g '!node_modules/**' -g '!.git/**' -g '!crates/vendor/**' \
+  -g '!packages/coding-agent/test/fixtures/**' \
+  -g '!packages/coding-agent/CHANGELOG.md' -g '!bun.lock'
+
+rg --count-matches '@oh-my-pi|oh-my-pi|can1357/oh-my-pi|can1357/tap/omp|github:can1357/oh-my-pi|omp\.sh|my\.omp\.sh' . \
+  -g '!node_modules/**' -g '!.git/**' -g '!crates/vendor/**' \
+  -g '!packages/coding-agent/test/fixtures/**' \
+  -g '!packages/coding-agent/CHANGELOG.md' -g '!bun.lock'</code></pre>
+			</section>
+		</main>
+	</body>
+</html>

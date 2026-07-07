@@ -283,7 +283,7 @@ describe("tool schema validation (post-sanitization)", () => {
 		expect(description).toContain("Local path");
 		expect(description).toContain("internal URI");
 		expect(description).toContain("URL");
-		expect(description).toContain("omp://");
+		expect(description).toContain("san://");
 		expect(description).toContain("issue://123");
 		expect(description).toContain("pr://123");
 	});

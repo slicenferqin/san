@@ -109,7 +109,7 @@ describe("extensions discovery", () => {
 		expect(result.extensions[0].path).toContain("index.ts");
 	});
 
-	it("discovers subdirectory with package.json pi field", async () => {
+	it("discovers subdirectory with package.json san field", async () => {
 		const subdir = path.join(extensionsDir, "my-package");
 		const srcDir = path.join(subdir, "src");
 		fs.mkdirSync(subdir);
@@ -119,7 +119,7 @@ describe("extensions discovery", () => {
 			path.join(subdir, "package.json"),
 			JSON.stringify({
 				name: "my-package",
-				pi: {
+				san: {
 					extensions: ["./src/main.ts"],
 				},
 			}),
@@ -182,7 +182,7 @@ describe("extensions discovery", () => {
 		expect(result.extensions[0].path).toContain(path.join("linked-index-js", "index.js"));
 	});
 
-	it("package.json can declare multiple extensions", async () => {
+	it("package.json can declare multiple san extensions", async () => {
 		const subdir = path.join(extensionsDir, "my-package");
 		fs.mkdirSync(subdir);
 		fs.writeFileSync(path.join(subdir, "ext1.ts"), extensionCode);
@@ -191,7 +191,7 @@ describe("extensions discovery", () => {
 			path.join(subdir, "package.json"),
 			JSON.stringify({
 				name: "my-package",
-				pi: {
+				san: {
 					extensions: ["./ext1.ts", "./ext2.ts"],
 				},
 			}),

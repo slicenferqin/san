@@ -101,14 +101,15 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 		return;
 	}
 	try {
-		const response = await fetch("https://registry.npmjs.org/@oh-my-pi/pi-coding-agent/latest");
+		const response = await fetch("https://api.github.com/repos/slicenferqin/san/releases/latest");
 		if (!response.ok) return undefined;
 
-		const data = (await response.json()) as { version?: string };
-		const latestVersion = data.version;
+		const data = (await response.json()) as { tag_name?: string; name?: string };
+		const latestTag = data.tag_name?.trim();
+		const latestVersion = latestTag?.replace(/^v/i, "");
 
 		if (latestVersion && Bun.semver.order(latestVersion, currentVersion) > 0) {
-			return latestVersion;
+			return latestTag ?? latestVersion;
 		}
 
 		return undefined;

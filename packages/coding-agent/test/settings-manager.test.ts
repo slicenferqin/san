@@ -630,6 +630,21 @@ describe("Settings", () => {
 			expect(fs.existsSync(jsonPath)).toBe(false);
 			expect(fs.existsSync(`${jsonPath}.bak`)).toBe(true);
 		});
+
+		it("migrates from legacy .omp sibling settings.json when San config is missing", async () => {
+			const sanAgentDir = path.join(tempDir.toString(), ".san", "agent");
+			const legacyJsonPath = path.join(tempDir.toString(), ".omp", "agent", "settings.json");
+			await fs.promises.mkdir(path.dirname(legacyJsonPath), { recursive: true });
+			await fs.promises.writeFile(legacyJsonPath, JSON.stringify({ display: { showTokenUsage: true } }));
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir: sanAgentDir });
+
+			expect(settings.get("display.showTokenUsage")).toBe(true);
+			expect(fs.existsSync(legacyJsonPath)).toBe(false);
+			expect(fs.existsSync(`${legacyJsonPath}.bak`)).toBe(true);
+			expect(fs.existsSync(path.join(sanAgentDir, "config.yml"))).toBe(true);
+		});
+
 		it("migrates legacy power booleans with system=true to system level", async () => {
 			await writeSettings({
 				power: {

@@ -5,7 +5,7 @@
  */
 import * as path from "node:path";
 import * as url from "node:url";
-import { getProjectDir, logger, withTimeout } from "@oh-my-pi/pi-utils";
+import { APP_NAME, getProjectDir, logger, VERSION, withTimeout } from "@oh-my-pi/pi-utils";
 import { describeMCPTimeout, isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "./timeout";
 import { createHttpTransport } from "./transports/http";
 import { createStdioTransport } from "./transports/stdio";
@@ -42,8 +42,8 @@ const PROTOCOL_VERSION = "2025-03-26";
 
 /** Client info sent during initialization */
 const CLIENT_INFO = {
-	name: "omp-coding-agent",
-	version: "1.0.0",
+	name: APP_NAME,
+	version: VERSION,
 };
 
 /**

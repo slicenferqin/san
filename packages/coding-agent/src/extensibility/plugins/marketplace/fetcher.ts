@@ -193,10 +193,11 @@ export function parseMarketplaceCatalog(content: string, filePath: string): Mark
 // ── fetchMarketplace ──────────────────────────────────────────────────
 
 /**
- * Catalog paths tried in priority order: omp-namespaced override first, then
- * the Claude Code-compatible fallback so existing marketplaces keep loading.
+ * Catalog paths tried in priority order: San-native path first, then legacy OMP
+ * and Claude Code-compatible fallbacks so existing marketplaces keep loading.
  */
 const CATALOG_RELATIVE_PATHS: readonly string[] = [
+	path.join(".san-plugin", "marketplace.json"),
 	path.join(".omp-plugin", "marketplace.json"),
 	path.join(".claude-plugin", "marketplace.json"),
 ];

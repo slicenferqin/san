@@ -21,16 +21,16 @@ function makePlugin(pluginPath: string, manifest: PluginManifest): InstalledPlug
 }
 
 describe("plugin manifest path resolution", () => {
-	it("resolves a directory tools entry to its index, not the omp.extensions modules", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-manifest-paths-"));
+	it("resolves a directory tools entry to its index, not the san.extensions modules", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "san-manifest-paths-"));
 		try {
 			// The package declares both extensions and a directory-based tool entry.
-			// `omp.extensions` and the sub-extension scan are extensions-specific and
+			// `san.extensions` and the sub-extension scan are extensions-specific and
 			// must not hijack the `tools: "."` directory entry (regression: the shared
 			// directory resolver returned the extension module for every key).
 			fs.writeFileSync(
 				path.join(dir, "package.json"),
-				JSON.stringify({ name: "fixture-plugin", version: "1.0.0", omp: { extensions: ["./ext.ts"], tools: "." } }),
+				JSON.stringify({ name: "fixture-plugin", version: "1.0.0", san: { extensions: ["./ext.ts"], tools: "." } }),
 			);
 			fs.writeFileSync(path.join(dir, "index.ts"), "export default {};");
 			fs.writeFileSync(path.join(dir, "ext.ts"), "export default function () {};");

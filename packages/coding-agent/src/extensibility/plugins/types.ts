@@ -106,7 +106,7 @@ export interface InstalledPlugin {
 	version: string;
 	/** Absolute path to package directory */
 	path: string;
-	/** Parsed omp/pi manifest */
+	/** Parsed san/omp/pi manifest */
 	manifest: PluginManifest;
 	/**
 	 * Enabled features:
