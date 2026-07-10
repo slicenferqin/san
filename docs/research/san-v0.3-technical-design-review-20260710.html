@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San v0.3 Brain / Experience System 技术设计评审</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #20242a;
+      --muted: #637083;
+      --line: #d9e0ea;
+      --paper: #fbfcfd;
+      --panel: #ffffff;
+      --band: #f2f6f8;
+      --green: #0f766e;
+      --blue: #2457a6;
+      --amber: #a16207;
+      --red: #9f1239;
+      --code: #edf2f7;
+      --soft-green: #ecfdf5;
+      --soft-amber: #fffbeb;
+      --soft-red: #fff1f2;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.64;
+    }
+    header { background: #fff; border-bottom: 1px solid var(--line); }
+    .wrap { width: min(1160px, calc(100% - 40px)); margin: 0 auto; }
+    .hero { padding: 52px 0 36px; }
+    .eyebrow { margin: 0 0 10px; color: var(--green); font-size: 13px; font-weight: 700; text-transform: uppercase; }
+    h1 { max-width: 1040px; margin: 0; font-size: clamp(32px, 5vw, 54px); line-height: 1.08; }
+    .subtitle { max-width: 960px; margin: 18px 0 0; color: var(--muted); font-size: 18px; }
+    main { padding: 30px 0 64px; }
+    section { padding: 30px 0; border-bottom: 1px solid var(--line); }
+    section:last-child { border-bottom: 0; }
+    h2 { margin: 0 0 14px; font-size: 24px; }
+    h3 { margin: 24px 0 8px; font-size: 18px; }
+    p { margin: 10px 0; }
+    ul, ol { margin: 10px 0 0; padding-left: 22px; }
+    li { margin: 8px 0; }
+    code { padding: 2px 5px; border-radius: 5px; background: var(--code); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; background: #fff; border: 1px solid var(--line); }
+    th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: var(--band); font-size: 13px; color: #394150; }
+    tr:last-child td { border-bottom: 0; }
+    .callout { margin: 16px 0 0; padding: 16px 18px; border-left: 4px solid var(--green); background: #fff; box-shadow: inset 0 0 0 1px var(--line); }
+    .warning { border-left-color: var(--amber); background: var(--soft-amber); }
+    .risk { border-left-color: var(--red); background: var(--soft-red); }
+    .good { background: var(--soft-green); }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .card { padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+    .card strong { display: block; margin-bottom: 6px; }
+    .verdict { display: grid; grid-template-columns: 190px 1fr; gap: 14px; margin-top: 16px; }
+    .verdict .label { padding: 16px; color: #fff; background: var(--amber); border-radius: 8px; font-weight: 700; }
+    .verdict .body { padding: 16px; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+    .score { font-weight: 700; color: var(--green); }
+    .score.mid { color: var(--amber); }
+    .score.bad { color: var(--red); }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+    .done { color: #166534; background: #dcfce7; }
+    .partial { color: #92400e; background: #fef3c7; }
+    .missing { color: #9f1239; background: #ffe4e6; }
+    .severity-blocker { color: #fff; background: #9f1239; }
+    .severity-high { color: #9f1239; background: #ffe4e6; }
+    .severity-medium { color: #92400e; background: #fef3c7; }
+    .flow { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
+    .step { padding: 14px; background: #fff; border: 1px solid var(--line); border-radius: 8px; min-height: 148px; }
+    .step span { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--green); color: #fff; font-weight: 700; }
+    .step strong { display: block; margin: 8px 0 4px; }
+    .sources a { color: var(--blue); }
+    .small { color: var(--muted); font-size: 13px; }
+    @media (max-width: 920px) {
+      .grid, .grid.two, .verdict, .flow { grid-template-columns: 1fr; }
+      th, td { padding: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap hero">
+      <p class="eyebrow">San v0.3 Technical Design Review · 2026-07-10</p>
+      <h1>顶层方向正确，但当前技术实现文档还不能直接拆 issue：先冻结时序、状态合同和可逆投影协议</h1>
+      <p class="subtitle">
+        本评审对照三份 v0.3 设计文档、当前 <code>packages/coding-agent</code> 实现、San v0.1/v0.2 基础设施和 12 组定向测试，判断设计是否与现状匹配、哪些能力已经具备、哪些合同必须在开工前补齐。
+      </p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h2>直接结论</h2>
+      <div class="verdict">
+        <div class="label">Conditional Approval</div>
+        <div class="body">
+          <strong>通过顶层设计，不通过当前“可直接实施”状态。</strong>
+          Brain / Experience System 的核心判断是对的：Memory 保存材料，Brain 形成判断，Skill / Workflow 固化行为；现有 TurnDigest、ContextPacket、memory backend、managed skills、San Loop ledger 也确实能复用。但技术实现文档仍缺少几项决定正确性的基础合同：稳定触发时序、唯一状态源、跨存储幂等/撤销、typed activation、scope identity、冲突模型和 legacy auto-retain 迁移。
+        </div>
+      </div>
+      <div class="grid">
+        <div class="card"><strong>顶层模型</strong><span class="score">8.5 / 10</span><p>Brain、Memory、Skill、Risk、Profile 分层清楚，目标面向行为改变而非文本堆积。</p></div>
+        <div class="card"><strong>复用现状</strong><span class="score">8 / 10</span><p>关键 primitives 均存在，文档大部分基线判断准确。</p></div>
+        <div class="card"><strong>实施就绪度</strong><span class="score mid">5 / 10</span><p>主体模块尚未落地，关键不变量和失败恢复协议未冻结。</p></div>
+      </div>
+      <div class="callout warning">
+        <strong>建议决策：</strong>先补一个短周期 P0 Design Freeze，再开始 M1。若直接按当前 M1-M7 拆分，最可能返工的是 store、activation、undo 和 lifecycle 四个区域。
+      </div>
+    </section>
+
+    <section>
+      <h2>评审范围与证据</h2>
+      <ul>
+        <li>顶层设计：<code>docs/research/san-v0.3-brain-experience-system-20260707.html</code></li>
+        <li>路由需求草案：<code>docs/research/san-v0.3-experience-routing-requirements-20260707.html</code></li>
+        <li>技术实现方案：<code>docs/research/san-v0.3-brain-technical-implementation-20260708.html</code></li>
+        <li>现有实现：<code>context-steady</code>、<code>memory-backend</code>、<code>autolearn/managed-skills</code>、<code>san-loop</code>、<code>session/agent-session.ts</code></li>
+        <li>定向验证：12 个测试文件，<strong>134 pass / 0 fail</strong>，覆盖 TurnDigest、ContextPacket recall、San Loop、managed skills、memory backend。</li>
+      </ul>
+      <p class="small">本报告中的百分比和评分属于评审估算；文件、接口、默认值和调用顺序均来自当前仓库代码。</p>
+    </section>
+
+    <section>
+      <h2>当前落地状态</h2>
+      <table>
+        <thead><tr><th>能力</th><th>当前状态</th><th>代码证据</th><th>对 v0.3 的意义</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Session append-only ledger</td>
+            <td><span class="badge done">已具备</span></td>
+            <td><code>appendCustomEntry()</code>；San Loop run/event/review 均以 CustomEntry 持久化。</td>
+            <td>可作为候选、决策、激活和错误记录的审计源。</td>
+          </tr>
+          <tr>
+            <td>TurnDigest</td>
+            <td><span class="badge partial">基础可用</span></td>
+            <td><code>context-steady/types.ts:40-95</code>；<code>agent-session.ts:3432-3568</code></td>
+            <td>已有结构化 turn span、文件、工具、事实、风险和 memoryCandidates；但 memoryCandidates 当前无人消费，fallback 也不产候选。</td>
+          </tr>
+          <tr>
+            <td>ContextPacket recall</td>
+            <td><span class="badge partial">文本层可用</span></td>
+            <td><code>context-steady/recall.ts:43-112</code>；<code>agent-session.ts:6943-6972</code></td>
+            <td>已经是 volatile layer，并受 item/token 限制；尚无 type、scope、role、task-aware policy。</td>
+          </tr>
+          <tr>
+            <td>Memory backend abstraction</td>
+            <td><span class="badge partial">存搜可用</span></td>
+            <td><code>memory-backend/types.ts:79-166</code></td>
+            <td>统一了 off/local/hindsight/mnemopi 的 search/save/status；没有通用 update/delete/undo。</td>
+          </tr>
+          <tr>
+            <td>Managed skills</td>
+            <td><span class="badge partial">激活写入可用</span></td>
+            <td><code>autolearn/managed-skills.ts:152-255</code></td>
+            <td>create/update/delete、安全路径和 authored skill 隔离已存在；没有 draft、revision、compare-and-swap 或 decision ownership。</td>
+          </tr>
+          <tr>
+            <td>San Loop evidence</td>
+            <td><span class="badge partial">结构化可用</span></td>
+            <td><code>san-loop/types.ts:62-177</code>；<code>san-loop/ledger.ts</code></td>
+            <td>review defects、retry、checks、worker results 可作为经验来源；需要补 attempt/batch 归属和最终接受状态。</td>
+          </tr>
+          <tr>
+            <td>Brain Runtime</td>
+            <td><span class="badge missing">未实现</span></td>
+            <td><code>src/brain/</code>、<code>test/brain/</code> 当前不存在；无 <code>san.brain.*</code> 设置和 <code>/brain</code> 命令。</td>
+            <td>v0.3 主体仍是设计阶段，不能按“局部补功能”估算。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>设计中做对的部分</h2>
+      <div class="grid two">
+        <div class="card"><strong>行为优先</strong><p>把“经历改变下一次行动”设为北极星，比新增一个文本记忆库更符合现有架构。</p></div>
+        <div class="card"><strong>复用而非替换</strong><p>Brain 位于 TurnDigest、memory backend、managed skills、San Loop 之上，避免重写已有存搜和技能系统。</p></div>
+        <div class="card"><strong>证据、scope、undo 前置</strong><p>长期状态必须可追溯、可撤销、可缩小作用域，这些原则应保留为实现门禁。</p></div>
+        <div class="card"><strong>Prelude 而非 base prompt 膨胀</strong><p>用 hidden CustomMessage 注入 active state，与 ContextPacket 的现有模式一致。</p></div>
+        <div class="card"><strong>LLM 默认关闭</strong><p>deterministic capture + optional classifier 的 rollout 顺序合理，便于做可重复 dogfood。</p></div>
+        <div class="card"><strong>外部系统分层基本正确</strong><p>GBrain 可作为 MCP knowledge layer；Hermes Agent / OpenClaw 属完整 agent runtime。措辞应强调“San 的接入方式”，而非断言 GBrain 只能是轻量插件。</p></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>P0 必须修正</h2>
+      <table>
+        <thead><tr><th>级别</th><th>问题</th><th>现状证据</th><th>必须冻结的合同</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="badge severity-blocker">Blocker</span></td>
+            <td><strong>Digest → Capture 时序写错</strong></td>
+            <td>文档引用不存在的 <code>#maybeGenerateContextSteadyDigest()</code>（技术方案 237-239）；真实方法为 <code>#generateTurnDigest()</code>，通过 <code>#trackPostPromptTask()</code> 异步调度（<code>agent-session.ts:3308-3313, 3404, 3432-3568</code>）。</td>
+            <td>Capture 必须链接到 digest 持久化完成后的同一 Promise；同时定义下一 prompt 是否等待 capture、超时后跳过还是使用 message-span fallback。</td>
+          </tr>
+          <tr>
+            <td><span class="badge severity-blocker">Blocker</span></td>
+            <td><strong>跨四个状态面的原子性和 undo 未定义</strong></td>
+            <td>设计同时写 session JSONL、<code>brain.sqlite</code>、memory backend、managed skill 文件；memory backend 只有 search/save，无通用 delete/update（<code>memory-backend/types.ts:79-134</code>）。</td>
+            <td>JSONL decision ledger 为权威源；SQLite 为 materialized state；外部 backend/skill/check 全部通过 idempotent outbox projection；每个 projection 记录 pending/applied/failed/compensated。</td>
+          </tr>
+          <tr>
+            <td><span class="badge severity-blocker">Blocker</span></td>
+            <td><strong>自动生效早于解释/撤销面</strong></td>
+            <td>技术方案 M4 先做 activation，M5 写 skill draft，M6 才提供 <code>/brain explain/undo</code>（技术方案 636-651）。</td>
+            <td>任何 auto-apply 前必须已有 explain + undo + audit。M1-M3 应先 review-only；最小命令面提前到 activation 之前。</td>
+          </tr>
+          <tr>
+            <td><span class="badge severity-high">High</span></td>
+            <td><strong>名称与 schema 有多个 source of truth</strong></td>
+            <td><code>san.brain.profile_note</code> 与存储章节的 <code>san.brain.profile_candidate</code> 冲突（技术方案 165 与 387）；旧文档使用 <code>san.experienceRouter.*</code>、<code>/experience</code>、<code>/memory inbox</code>，新文档使用 <code>san.brain.*</code>、<code>/brain</code>。</td>
+            <td>冻结唯一命名；旧 Experience Routing 文档顶部标记 superseded，仅保留历史和需求来源，不允许继续作为 issue 拆分依据。</td>
+          </tr>
+          <tr>
+            <td><span class="badge severity-high">High</span></td>
+            <td><strong>数据合同引用了不存在的字段</strong></td>
+            <td>相关性筛选使用 <code>taskTags</code>，dedupe 升级使用 <code>repeatCount</code>，但 <code>SanProfileNote</code>/<code>SanExperienceCandidate</code> 均无这些字段（技术方案 180-222, 277-280, 465-471）。</td>
+            <td>在编码前补齐 task tags、repeat/evidence count、expiry、conflict/supersede、scope key、sensitivity、revision 和 projection 状态。</td>
+          </tr>
+          <tr>
+            <td><span class="badge severity-high">High</span></td>
+            <td><strong>Scope 只有枚举，没有身份</strong></td>
+            <td>合同只有 <code>user/project/repo/session</code>，无 userId/projectId/repo identity；M1 又只实现用户级 store，却要求 M4 注入 project/repo state。</td>
+            <td>定义 <code>scopeKind + scopeKey</code>，repo 建议使用规范化 remote/worktree identity，而不是 cwd basename；定义移动目录、worktree、fork、symlink 的迁移语义。</td>
+          </tr>
+          <tr>
+            <td><span class="badge severity-high">High</span></td>
+            <td><strong><code>state_patch</code> 与 activationRule 是自由文本</strong></td>
+            <td><code>SanStatePatch.content</code>、<code>activationRule</code> 均为 string（技术方案 197-203），随后直接进入 hidden prompt。</td>
+            <td>改为 typed selector + typed action；模型只能提议，不得生成可执行规则字符串。注入文本必须按“不可信历史数据”转义，明确不能覆盖当前用户指令、项目规则和工具结果。</td>
+          </tr>
+          <tr>
+            <td><span class="badge severity-high">High</span></td>
+            <td><strong>Legacy auto-retain 会绕过 Brain 决策</strong></td>
+            <td><code>memory.backend</code> 默认 off，但一旦选择 Mnemopi/Hindsight，<code>autoRetain</code> 默认 true（<code>settings-schema.ts:2220-2239, 2349-2369, 2652-2655</code>），按 N 轮直接 retain transcript。</td>
+            <td>Brain dogfood overlay 必须显式关闭 legacy autoRetain；长期写入只能由 Brain projection 发起。定义已有用户配置的迁移和兼容模式。</td>
+          </tr>
+          <tr>
+            <td><span class="badge severity-high">High</span></td>
+            <td><strong>Managed skill 没有 draft 和安全回滚协议</strong></td>
+            <td><code>writeManagedSkill()</code> 写入 active managed-skills 目录；<code>deleteManagedSkill()</code> 只能删除当前目录，没有 revision/owner/CAS（<code>managed-skills.ts:152-255</code>）。</td>
+            <td>草案必须存 Brain store 或独立 draft root；批准后带 decisionId/revision 写 active skill。Undo 只能回滚自己创建的 revision，不能覆盖后续人工或其他进程更新。</td>
+          </tr>
+          <tr>
+            <td><span class="badge severity-high">High</span></td>
+            <td><strong>Durable schema 迁移无法按文档执行</strong></td>
+            <td>接口有 <code>schemaVersion</code>，SQL 表草案没有 <code>schema_version</code> 列（技术方案 180-221, 396-401），却要求逐 row normalize/migrate 和 future-version unsupported。</td>
+            <td>选择并写清：库级 <code>PRAGMA user_version</code> 原子迁移，或 row-level schema_version。不要同时承诺两种语义。</td>
+          </tr>
+          <tr>
+            <td><span class="badge severity-medium">Medium</span></td>
+            <td><strong>Profile dedupe 与冲突被混在一个 key</strong></td>
+            <td>Profile key 使用 type + scope + subject + predicate；碰撞语义直接合并证据和提高/降低 confidence（技术方案 271-284）。</td>
+            <td>拆分 <code>claimKey</code>（同一命题槽位）与 <code>dedupeKey</code>（同一值）；“默认 HTML”改成“默认 Markdown”必须形成 conflict/supersede，不得合并为同一事实。</td>
+          </tr>
+          <tr>
+            <td><span class="badge severity-medium">Medium</span></td>
+            <td><strong>全局上下文预算缺失</strong></td>
+            <td>Brain、ContextPacket、San Loop role context 分别声明 token cap；当前 <code>buildSanLoopRoleContext()</code> 只设置 <code>trimmed: 1</code>，并未真正裁剪 content（<code>san-loop/context.ts:100-154</code>）。</td>
+            <td>建立统一 injection planner，按 authority 和 cache priority 分配总预算；任何 layer 不得仅打标不裁剪。</td>
+          </tr>
+          <tr>
+            <td><span class="badge severity-medium">Medium</span></td>
+            <td><strong>San Loop evidence 缺 attempt/batch 语义</strong></td>
+            <td>retry 会持续追加 assignments/results；Supervisor 接收 <code>run.workerResults</code> 全集而非当前 batch（<code>runner.ts:218-285</code>），result schema 无 attempt。</td>
+            <td>经验 collector 只能消费最终 accepted attempt，并用 runId + assignmentId + attemptId + reviewId 做 provenance；否则旧失败与新成功会重复固化。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>推荐的状态合同</h2>
+      <table>
+        <thead><tr><th>对象</th><th>当前草案</th><th>建议补充</th></tr></thead>
+        <tbody>
+          <tr><td>Profile Note</td><td>type、scope、content、dedupeKey、confidence、importance、evidence、status</td><td><code>scopeKey</code>、subject/predicate/value、claimKey、revision、supersedesId、expiresAt、sensitivity、independentEvidenceCount</td></tr>
+          <tr><td>Experience Candidate</td><td>type、output、trigger、behaviorChange、statePatch、impact、confidence</td><td>typed trigger selector、typed action、repeatCount、taskTags、attempt refs、expiry、projectionState、decisionId、conflictKey</td></tr>
+          <tr><td>Decision</td><td>文档只列 SQL action/status/reason</td><td>previousRevision、nextRevision、requestedBy、policyVersion、idempotencyKey、projectionRefs、compensation status</td></tr>
+          <tr><td>Activation</td><td>ownerId、turnId、customEntryId</td><td>scope match reason、selected rule IDs、trim reason、role、token allocation、policy version、prompt-safe rendered hash</td></tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <strong>状态原则：</strong>Candidate 是建议；Decision 是不可变审计；Active State 是 materialized view；Memory/Skill/Check 是可失败、可重放、可补偿的 projection。不要让任一外部投影反过来成为 Brain 的 source of truth。
+      </div>
+    </section>
+
+    <section>
+      <h2>推荐架构</h2>
+      <div class="flow">
+        <div class="step"><span>1</span><strong>Evidence</strong><p>TurnDigest、用户纠偏、San Loop accepted review、工具/文件 refs。</p></div>
+        <div class="step"><span>2</span><strong>Candidate Ledger</strong><p>append-only；只记录建议和证据，不产生行为变化。</p></div>
+        <div class="step"><span>3</span><strong>Consolidation</strong><p>typed policy 计算 scope、claim、confidence、impact、conflict。</p></div>
+        <div class="step"><span>4</span><strong>Decision + Active Store</strong><p>事务内写 decision、revision、active materialized state、outbox。</p></div>
+        <div class="step"><span>5</span><strong>Activation Planner</strong><p>按 role/task/scope/authority/预算选择 state，并渲染安全 prelude。</p></div>
+        <div class="step"><span>6</span><strong>Projections</strong><p>Memory、managed skill、check suggestion；幂等执行、失败可重试、undo 可补偿。</p></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>建议实施顺序</h2>
+      <table>
+        <thead><tr><th>阶段</th><th>内容</th><th>退出条件</th></tr></thead>
+        <tbody>
+          <tr><td>P0</td><td>冻结命名、scope identity、typed activation、source-of-truth、outbox/undo、legacy autoRetain 迁移、prompt precedence。</td><td>三份文档无冲突；数据合同能表达所有后续章节引用字段；失败矩阵有确定结果。</td></tr>
+          <tr><td>M1</td><td>Candidate/Decision ledger + SQLite materialized store；只读命令 <code>/brain inbox/profile/explain</code>。</td><td>append/list/resume/migrate/idempotency/concurrency 通过；不改变 agent 行为。</td></tr>
+          <tr><td>M2</td><td>Digest 完成后 deterministic capture；接入 accepted San Loop review；仍为 review-only。</td><td>固定 fixtures 输出稳定；同一 evidence 不重复；旧 retry attempt 不进入 active candidate。</td></tr>
+          <tr><td>M3</td><td>Consolidation、conflict/supersede、approve/discard/undo；先不自动激活。</td><td>所有状态转换幂等；crash 后可 reconcile；undo 不破坏后续 revision。</td></tr>
+          <tr><td>M4</td><td>Brain prelude activation + 全局预算 + role-specific filtering；低风险 allowlist 小流量 auto-apply。</td><td>next-turn 时序确定；prompt injection、scope isolation、token cap 测试通过。</td></tr>
+          <tr><td>M5</td><td>Memory projection、managed skill draft/approval、check suggestion；legacy autoRetain 迁移。</td><td>外部写入失败不影响主 turn；重试不重复；补偿和人工修改冲突有明确处理。</td></tr>
+          <tr><td>M6</td><td>Policy-aware recall、10+ turn dogfood、真实会话报告、默认策略评估。</td><td>候选数受控；不相关任务无污染；误固化可解释、可撤销；四种 backend 均有降级证明。</td></tr>
+        </tbody>
+      </table>
+      <div class="callout good">
+        <strong>最关键的顺序调整：</strong>把 explain/undo 提前，把 auto-apply 和 skill 激活后移。系统先拥有控制面，再拥有自动改变长期行为的能力。
+      </div>
+    </section>
+
+    <section>
+      <h2>验收门禁</h2>
+      <ul>
+        <li><strong>时序：</strong>同一 turn 的 digest/capture 是否能保证在下一次 activation 前完成；超时行为可重复。</li>
+        <li><strong>Crash matrix：</strong>decision 已写、SQLite 未写；SQLite 已写、backend 未写；skill 已写、activation 未写等每个断点均可恢复。</li>
+        <li><strong>并发：</strong>两个进程同时 consolidate 同一 claim，不产生重复 active state 或覆盖人工 skill。</li>
+        <li><strong>Scope：</strong>同名 repo、worktree、fork、移动目录、symlink 不串状态。</li>
+        <li><strong>冲突：</strong>新偏好覆盖旧偏好时形成 supersede，不通过 evidence merge 增强两个相反结论。</li>
+        <li><strong>安全：</strong>历史文本中的命令、XML 标签、工具指令不能升级为当前指令；Brain state authority 永远低于当前用户、项目规则和真实工具结果。</li>
+        <li><strong>预算：</strong>Brain + ContextPacket + San Loop 总注入量受一个真实执行的 cap 控制。</li>
+        <li><strong>可控性：</strong>任一 auto-applied 行为在同版本内均可 explain、undo、降权、缩 scope。</li>
+        <li><strong>兼容：</strong>Brain dogfood 开启时 legacy Mnemopi/Hindsight autoRetain 不得旁路写入。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>文档修订建议</h2>
+      <ol>
+        <li>将顶层设计保留为主文档；技术实现方案升级为唯一 implementation spec。</li>
+        <li>在 Experience Routing 需求文档开头增加 <strong>Superseded by Brain Technical Implementation</strong>，删除可被误用的配置、命令和 custom-type 规范。</li>
+        <li>修正 <code>#maybeGenerateContextSteadyDigest()</code> 为真实 lifecycle，并画出 Promise/turn ordering。</li>
+        <li>新增“状态权威与投影协议”“Prompt authority”“Scope identity”“Crash/undo matrix”四个章节。</li>
+        <li>统一 <code>profile_candidate</code>/<code>profile_note</code>、<code>/brain</code>/<code>/experience</code>、<code>san.brain</code>/<code>san.experienceRouter</code>。</li>
+        <li>把 M6 命令面拆分：read/explain/undo 提前，skill/hook/check 管理命令留在后期。</li>
+        <li>外部系统措辞改为“San 将 GBrain 作为 MCP knowledge plugin 使用”；明确 Hermes 指 <code>NousResearch/hermes-agent</code>，避免与 Hermes 模型家族混淆。</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>最终判断</h2>
+      <div class="callout">
+        <strong>可以开始 P0，暂不建议开始 M1 编码。</strong>
+        这不是方向问题，而是控制面问题。现有代码已经给 v0.3 提供了足够好的地基；当前最大的风险不是“做不出来”，而是同时接入 JSONL、SQLite、memory backend、skills 和多角色上下文后，行为已改变但无法证明哪条状态生效、无法安全撤销、也无法在崩溃后恢复。P0 收敛后，M1-M4 可以沿现有结构增量落地，不需要重写 v0.1/v0.2。
+      </div>
+    </section>
+
+    <section class="sources">
+      <h2>外部来源核验</h2>
+      <ul>
+        <li><a href="https://github.com/garrytan/gbrain">garrytan/gbrain</a>：官方 README 同时支持 autonomous agent 和 MCP retrieval layer；San 可选择后者作为接入边界。</li>
+        <li><a href="https://github.com/NousResearch/hermes-agent">NousResearch/hermes-agent</a>：self-improving agent runtime，含 learning loop、gateway、subagents。</li>
+        <li><a href="https://github.com/openclaw/openclaw">openclaw/openclaw</a>：local-first personal AI assistant / Gateway runtime。</li>
+      </ul>
+      <p class="small">检索日期：2026-07-10。外部分类只用于验证文档抽象层，不影响本报告对仓库内部实现的主要结论。</p>
+    </section>
+  </main>
+</body>
+</html>

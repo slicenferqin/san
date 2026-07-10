@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>San v0.3 P0 Design Freeze</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f1e8;
+      --panel: #fffdf8;
+      --ink: #17202a;
+      --muted: #667085;
+      --line: #d8d1c3;
+      --accent: #0b6b57;
+      --accent2: #4338ca;
+      --warn: #b45309;
+      --bad: #b42318;
+      --good: #027a48;
+      --code: #efe8d9;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: radial-gradient(circle at top left, #dcefe7 0, transparent 34rem), var(--bg);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.62;
+    }
+    header, main { width: min(1180px, calc(100vw - 40px)); margin: 0 auto; }
+    header { padding: 50px 0 26px; }
+    h1 { margin: 0 0 14px; font-size: clamp(34px, 5vw, 60px); line-height: 1.04; letter-spacing: -.045em; }
+    h2 { margin: 0 0 14px; font-size: 26px; letter-spacing: -.02em; }
+    h3 { margin: 22px 0 8px; font-size: 18px; }
+    p { margin: 0 0 12px; }
+    .eyebrow { color: var(--accent); font-weight: 800; letter-spacing: .12em; text-transform: uppercase; font-size: 12px; }
+    .subtitle { max-width: 960px; color: #344054; font-size: 18px; }
+    section {
+      margin: 18px 0;
+      padding: 26px 28px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: rgba(255, 253, 248, .95);
+      box-shadow: 0 16px 44px rgba(23, 32, 42, .07);
+    }
+    .callout { margin: 14px 0; padding: 15px 17px; border: 1px solid #b7d9cc; border-radius: 16px; background: #edf8f3; }
+    .warning { border-color: #f0c36d; background: #fff7e6; }
+    .risk { border-color: #f4a6a0; background: #fff0ee; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .card { padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: white; }
+    .card strong { display: block; margin-bottom: 6px; color: var(--accent); }
+    table { width: 100%; margin-top: 12px; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--accent); background: #f2ede2; font-weight: 800; }
+    code { padding: 1px 5px; border: 1px solid #ded5c5; border-radius: 6px; background: var(--code); font-family: "SF Mono", "JetBrains Mono", ui-monospace, monospace; font-size: .92em; }
+    pre { overflow: auto; margin: 12px 0; padding: 16px; border-radius: 16px; background: #1f2937; color: #e5e7eb; font-size: 13px; line-height: 1.55; }
+    pre code { padding: 0; border: 0; background: transparent; color: inherit; }
+    ul, ol { margin: 10px 0 0 20px; padding: 0; }
+    li { margin: 6px 0; }
+    .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 800; }
+    .frozen { color: var(--good); border: 1px solid #abefc6; background: #ecfdf3; }
+    .review { color: var(--warn); border: 1px solid #fedf89; background: #fffaeb; }
+    .never { color: var(--bad); border: 1px solid #fecdca; background: #fef3f2; }
+    .muted { color: var(--muted); }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } section { padding: 22px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <p class="eyebrow">San v0.3 · P0 Design Freeze · 2026-07-10</p>
+    <h1>先冻结控制面，再允许经历改变行为</h1>
+    <p class="subtitle">
+      本文是 San v0.3 Brain Runtime 的规范性实现合同。它冻结命名、scope identity、生命周期、状态权威、投影、撤销、Prompt authority 和实施顺序；M1 及后续 issue 必须以本文为准。
+    </p>
+  </header>
+
+  <main>
+    <section>
+      <h2>冻结结论</h2>
+      <div class="callout">
+        <strong>P0 采用 review-first 架构。</strong>
+        M1-M3 只建立可审计候选、决策、materialized state、解释与撤销能力，不改变 agent 行为。M4 才允许受限 activation；M5 才允许向 memory、managed skill、check 等外部系统投影。
+      </div>
+      <div class="grid">
+        <div class="card"><strong>权威源</strong>Session JSONL 中不可变 Candidate / Decision entries 是审计权威；SQLite 是可重建 materialized view。</div>
+        <div class="card"><strong>行为变化</strong>Candidate 永远只是建议。只有 Decision 可改变 active state；外部 projection 不能反向成为事实源。</div>
+        <div class="card"><strong>控制面先行</strong>Explain、audit、approve/discard、undo 必须早于 auto-apply、skill 写入和长期 memory 写入。</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>文档权威顺序</h2>
+      <table>
+        <thead><tr><th>优先级</th><th>文档</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><code>san-v0.3-p0-design-freeze-20260710.html</code></td><td>规范性工程合同；冲突时覆盖其他 v0.3 文档。</td></tr>
+          <tr><td>2</td><td><code>san-v0.3-brain-experience-system-20260707.html</code></td><td>产品目标、脑模型、顶层验收。</td></tr>
+          <tr><td>3</td><td><code>san-v0.3-brain-technical-implementation-20260708.html</code></td><td>模块设计和实现说明；必须服从本文冻结项。</td></tr>
+          <tr><td>4</td><td><code>san-v0.3-experience-routing-requirements-20260707.html</code></td><td>已废弃的历史需求来源；不得直接拆 issue。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>唯一命名</h2>
+      <table>
+        <thead><tr><th>对象</th><th>冻结名称</th><th>禁止别名</th></tr></thead>
+        <tbody>
+          <tr><td>命令 namespace</td><td><code>/brain</code></td><td><code>/experience</code>、<code>/memory inbox</code></td></tr>
+          <tr><td>Profile 候选 entry</td><td><code>san.brain.profile_candidate</code></td><td><code>san.brain.profile_note</code> 作为 custom type</td></tr>
+          <tr><td>Experience 候选 entry</td><td><code>san.brain.experience_candidate</code></td><td><code>san.experienceRouter.*</code></td></tr>
+          <tr><td>不可变决策 entry</td><td><code>san.brain.decision</code></td><td>直接修改旧 decision</td></tr>
+          <tr><td>投影状态 entry</td><td><code>san.brain.projection</code></td><td>仅靠日志表达投影结果</td></tr>
+          <tr><td>激活审计 entry</td><td><code>san.brain.activation</code></td><td>无审计的 hidden prompt 注入</td></tr>
+          <tr><td>错误审计 entry</td><td><code>san.brain.error</code></td><td>静默吞掉 Brain 失败</td></tr>
+        </tbody>
+      </table>
+      <p class="muted">“Profile Note”保留为产品概念和 SQLite active state 名称；进入 JSONL 时统一称 Profile Candidate。</p>
+    </section>
+
+    <section>
+      <h2>冻结数据合同</h2>
+      <pre><code>type SanBrainScopeKind = "user" | "repo" | "project" | "session";
+
+type SanBrainScope = {
+  kind: SanBrainScopeKind;
+  key: string;
+  resolverVersion: 1;
+};
+
+type SanBrainEvidenceRef = {
+  sessionId: string;
+  entryIds: string[];
+  digestEntryIds: string[];
+  loopRefs: Array&lt;{
+    runId: string;
+    assignmentId: string;
+    attemptId: string;
+    reviewId?: string;
+    accepted: boolean;
+  }&gt;;
+  fileRefs: Array&lt;{ path: string; range?: string; contentHash?: string }&gt;;
+  toolCallIds: string[];
+  summary: string;
+};
+
+type SanBrainProfileCandidate = {
+  schemaVersion: 1;
+  candidateId: string;
+  scope: SanBrainScope;
+  type: "user_preference" | "user_profile_fact" | "standing_decision" |
+        "project_fact" | "project_decision" | "other";
+  subject: string;
+  predicate: string;
+  value: string;
+  claimKey: string;
+  dedupeKey: string;
+  taskTags: string[];
+  confidence: number;
+  importance: number;
+  independentEvidenceCount: number;
+  sensitivity: "normal" | "sensitive" | "secret";
+  expiresAt?: string;
+  evidence: SanBrainEvidenceRef[];
+  createdAt: string;
+};
+
+type SanBrainTriggerSelector = {
+  taskFamilies?: string[];
+  commands?: string[];
+  fileGlobs?: string[];
+  languages?: string[];
+  roles?: Array&lt;"primary" | "commander" | "worker" | "supervisor" | "oracle"&gt;;
+  riskClasses?: string[];
+};
+
+type SanBrainAction =
+  | { kind: "prelude_fact"; subject: string; predicate: string; value: string }
+  | { kind: "risk_rule"; riskClass: string; requiredCheck: string }
+  | { kind: "workflow_suggestion"; workflowId: string }
+  | { kind: "skill_reference"; skillName: string }
+  | { kind: "check_suggestion"; checkId: string }
+  | { kind: "recall_policy"; queryTemplateId: string };
+
+type SanBrainExperienceCandidate = {
+  schemaVersion: 1;
+  candidateId: string;
+  scope: SanBrainScope;
+  type: "workflow_pattern" | "failure_posture" | "skill_candidate" |
+        "check_candidate" | "recall" | "do_not_retain" | "other";
+  selector: SanBrainTriggerSelector;
+  action: SanBrainAction;
+  taskTags: string[];
+  claimKey: string;
+  dedupeKey: string;
+  conflictKey: string;
+  repeatCount: number;
+  confidence: number;
+  impact: "low" | "medium" | "high";
+  sensitivity: "normal" | "sensitive" | "secret";
+  expiresAt?: string;
+  evidence: SanBrainEvidenceRef[];
+  createdAt: string;
+};
+
+type SanBrainDecision = {
+  schemaVersion: 1;
+  decisionId: string;
+  ownerType: "profile_candidate" | "experience_candidate";
+  ownerId: string;
+  action: "approve" | "discard" | "supersede" | "undo" | "reduce_scope" | "reduce_confidence";
+  previousRevision?: number;
+  nextRevision: number;
+  requestedBy: "user" | "policy" | "migration";
+  reason: string;
+  policyVersion: string;
+  idempotencyKey: string;
+  projectionIds: string[];
+  createdAt: string;
+};</code></pre>
+      <div class="callout warning">
+        <strong>禁止自由文本执行合同。</strong>
+        不再使用 <code>activationRule: string</code> 或可直接执行的 <code>statePatch.content</code>。模型只能提出 typed selector/action；deterministic validator 和 policy 决定是否进入 Decision。
+      </div>
+    </section>
+
+    <section>
+      <h2>Scope Identity</h2>
+      <table>
+        <thead><tr><th>Kind</th><th>scopeKey</th><th>迁移与隔离语义</th></tr></thead>
+        <tbody>
+          <tr><td><code>user</code></td><td><code>user:local</code>，由当前 agentDir 隔离。</td><td>不写用户名、home 路径或邮箱；不同 agentDir 不共享。</td></tr>
+          <tr><td><code>repo</code></td><td>规范化 primary remote + git common-dir identity 的稳定 hash。</td><td>fork 因 remote 不同而隔离；没有 remote 时使用持久化生成的 repo UUID。</td></tr>
+          <tr><td><code>project</code></td><td>repoKey + worktree identity；非 Git 项目使用持久化 project UUID。</td><td>不同 worktree 隔离；symlink 先 realpath；目录移动通过 identity alias 迁移，不按 basename 猜测。</td></tr>
+          <tr><td><code>session</code></td><td>session ID。</td><td>永不跨 session 激活；resume 保持同一 key。</td></tr>
+        </tbody>
+      </table>
+      <ul>
+        <li>Scope resolver 必须返回 <code>kind + key + resolverVersion</code>。</li>
+        <li>未知、歧义或迁移失败时降级到更窄 scope，禁止扩大。</li>
+        <li>同名目录、fork、worktree、symlink 必须有定向测试。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Digest → Capture 生命周期</h2>
+      <div class="callout">
+        <strong>Capture 必须链接到真实 <code>#generateTurnDigest()</code> Promise。</strong>
+        不新增独立、竞态的 <code>agent_end</code> listener；由同一个 <code>#trackPostPromptTask()</code> 跟踪 digest 持久化和 deterministic capture。
+      </div>
+      <pre><code>const digestAndCaptureTask = this.#generateTurnDigest(turn)
+  .then(digestResult =&gt; brain.captureTurn({ turn, digestResult }))
+  .catch(error =&gt; brain.recordCaptureError(turn, error));
+
+this.#trackPostPromptTask(digestAndCaptureTask);</code></pre>
+      <table>
+        <thead><tr><th>场景</th><th>冻结行为</th></tr></thead>
+        <tbody>
+          <tr><td>Digest 已持久化</td><td>Capture 使用 digest entry ref；同一 evidence 由 idempotency key 去重。</td></tr>
+          <tr><td>Digest 跳过</td><td>Capture 可使用当前 turn message-span deterministic fallback，并记录 source mode。</td></tr>
+          <tr><td>Digest 失败</td><td>记录 <code>san.brain.error</code>；fallback capture 仍可运行，不阻断 turn。</td></tr>
+          <tr><td>下一真实用户 prompt 很快到达</td><td>M2 起最多等待 pending capture 150ms；超时则本轮跳过新 state，下一轮再生效。禁止无限等待。</td></tr>
+          <tr><td>synthetic continuation</td><td>不等待、不激活新 Brain state，避免维护轮次改变用户可见行为。</td></tr>
+          <tr><td>session stop / dispose</td><td>有限等待 tracked task；未完成项保持 ledger 可重放，启动时 reconcile。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>状态权威与投影协议</h2>
+      <ol>
+        <li><strong>Evidence：</strong>原始 session entries、TurnDigest、accepted San Loop attempt、工具/文件 refs。</li>
+        <li><strong>Candidate Ledger：</strong>append-only 建议；不改变行为。</li>
+        <li><strong>Decision Ledger：</strong>append-only、不可变、幂等；是行为变化的审计权威。</li>
+        <li><strong>SQLite Active Store：</strong>由 Decision 重放得到的 materialized view；允许删除重建。</li>
+        <li><strong>Outbox：</strong>与 active state 同一 SQLite 事务写入 projection intent。</li>
+        <li><strong>External Projection：</strong>memory、managed skill、check suggestion；失败可重试、可补偿。</li>
+      </ol>
+      <table>
+        <thead><tr><th>Projection 状态</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td><code>pending</code></td><td>Decision 已生效，外部写入尚未开始。</td></tr>
+          <tr><td><code>applying</code></td><td>有 lease 的执行者正在写入；超时可被 reconcile。</td></tr>
+          <tr><td><code>applied</code></td><td>外部 revision/hash 已记录。</td></tr>
+          <tr><td><code>failed</code></td><td>记录具体错误和有限重试次数；active state 不回滚。</td></tr>
+          <tr><td><code>compensating</code></td><td>Undo 正在回滚该 Decision 拥有的 revision。</td></tr>
+          <tr><td><code>compensated</code></td><td>该投影已安全撤销。</td></tr>
+          <tr><td><code>blocked</code></td><td>检测到人工修改、CAS 冲突或能力缺失，需要人工处理。</td></tr>
+        </tbody>
+      </table>
+      <div class="callout warning">
+        <strong>Undo 是新 Decision，不是删除历史。</strong>
+        只补偿目标 decision 创建且 revision/hash 仍匹配的投影。后续人工或其他进程已修改时标记 <code>blocked</code>，禁止覆盖。
+      </div>
+    </section>
+
+    <section>
+      <h2>SQLite 与迁移</h2>
+      <ul>
+        <li>数据库：<code>~/.san/agent/brain/brain.sqlite</code>。</li>
+        <li>启用 WAL、<code>busy_timeout</code>、foreign keys。</li>
+        <li>数据库结构只使用 <code>PRAGMA user_version</code> 做原子迁移。</li>
+        <li>JSONL payload 保留 <code>schemaVersion</code>；future version 只展示，不投影、不激活。</li>
+        <li>Decision apply、active revision、outbox insert 必须在同一 SQLite 事务。</li>
+        <li>启动时按 Decision idempotency key reconcile；不得扫描全文生成新判断。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Prompt Authority 与安全渲染</h2>
+      <table>
+        <thead><tr><th>Authority</th><th>来源</th><th>Brain 可否覆盖</th></tr></thead>
+        <tbody>
+          <tr><td>最高</td><td>System/developer 合同、项目规则、工具安全合同</td><td><span class="badge never">永不</span></td></tr>
+          <tr><td>高</td><td>当前真实用户指令</td><td><span class="badge never">永不</span></td></tr>
+          <tr><td>高</td><td>当前 workspace 和真实工具结果</td><td><span class="badge never">永不</span></td></tr>
+          <tr><td>中</td><td>当前任务状态、San Loop 决策和 accepted review</td><td>只能补充，不能改写证据。</td></tr>
+          <tr><td>低</td><td>Brain active state</td><td>仅建议默认行为；冲突时跳过并写 activation trim reason。</td></tr>
+          <tr><td>最低</td><td>ContextPacket、memory recall、历史文本</td><td>作为不可信历史数据。</td></tr>
+        </tbody>
+      </table>
+      <ul>
+        <li>Brain renderer 只渲染 typed fields；禁止拼接候选原文为指令。</li>
+        <li>所有文本 JSON-escape；移除控制字符；限制单项和总长度。</li>
+        <li>历史中的 XML、Markdown fence、命令和工具语法不得升级 authority。</li>
+        <li>M4 建立统一 injection planner，真实裁剪 Brain + ContextPacket + San Loop 总预算。</li>
+        <li>Activation audit 记录选中规则、scope match、role、token allocation、trim reason 和 rendered hash。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Legacy Memory 迁移</h2>
+      <table>
+        <thead><tr><th>模式</th><th>行为</th></tr></thead>
+        <tbody>
+          <tr><td>Brain disabled</td><td>保持现有 memory backend 与 autoRetain 行为，避免破坏已有用户配置。</td></tr>
+          <tr><td>Brain review-only</td><td>dogfood overlay 必须显式关闭 Mnemopi/Hindsight legacy autoRetain；显式 <code>/memory save</code> 仍可用。</td></tr>
+          <tr><td>Brain projection enabled</td><td>长期自动写入只能来自 <code>san.brain.projection</code> outbox。</td></tr>
+          <tr><td>发现 legacy autoRetain=true</td><td>启动时显示具体迁移告警；默认进入 compatibility mode，不静默修改用户文件。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Managed Skill Draft 与回滚</h2>
+      <ul>
+        <li>候选和草案先存 Brain store；不得直接写 active managed-skills。</li>
+        <li>批准后写入 active skill，并记录 <code>decisionId</code>、revision、before/after hash。</li>
+        <li>Create 必须确认 owner；Update 必须 CAS 匹配上一 revision/hash。</li>
+        <li>Undo 只删除或恢复自己创建的 revision。</li>
+        <li>文件已被人工或其他进程修改时 projection 标记 <code>blocked</code>。</li>
+        <li>v0.3 不自动创建 hook 或改变工具权限。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Conflict 与 Supersede</h2>
+      <table>
+        <thead><tr><th>Key</th><th>语义</th></tr></thead>
+        <tbody>
+          <tr><td><code>claimKey</code></td><td>同一命题槽位：scope + type + subject + predicate。</td></tr>
+          <tr><td><code>dedupeKey</code></td><td>同一值：claimKey + normalized value。</td></tr>
+          <tr><td><code>conflictKey</code></td><td>会产生互斥行为的候选集合。</td></tr>
+        </tbody>
+      </table>
+      <p>相同 dedupeKey 合并独立证据；相同 claimKey、不同 value 形成 conflict。批准新值必须生成 supersede Decision，旧值不通过“增加证据”继续增强。</p>
+    </section>
+
+    <section>
+      <h2>Crash / Failure Matrix</h2>
+      <table>
+        <thead><tr><th>断点</th><th>恢复规则</th><th>用户可见结果</th></tr></thead>
+        <tbody>
+          <tr><td>Candidate append 成功，SQLite 未索引</td><td>启动 reconcile 按 candidateId 补投影。</td><td>候选稍后出现在 inbox；不重复。</td></tr>
+          <tr><td>Decision append 成功，SQLite transaction 未完成</td><td>按 idempotencyKey 重放 Decision。</td><td>状态最终一致；不丢审计。</td></tr>
+          <tr><td>SQLite active state 成功，outbox 未执行</td><td>pending outbox 后台/显式命令重试。</td><td>Brain state可解释；外部能力暂未落地。</td></tr>
+          <tr><td>Memory save 成功，回执丢失</td><td>使用 projection idempotency key 查询或安全重试；backend 无幂等能力时标记 blocked。</td><td>禁止盲目重复写。</td></tr>
+          <tr><td>Skill 写入成功，activation audit 未写</td><td>通过 decisionId/revision/hash reconcile 并补 audit。</td><td>技能不重复创建。</td></tr>
+          <tr><td>Undo 时 skill 已人工修改</td><td>CAS 失败，projection blocked。</td><td>保留人工修改并报告冲突。</td></tr>
+          <tr><td>两个进程同时 approve</td><td>唯一 idempotencyKey + revision CAS；一个成功，一个读取已应用状态。</td><td>一个 active revision。</td></tr>
+          <tr><td>Capture 超时</td><td>不阻断下一 prompt；候选延迟到下一轮可见。</td><td>当前任务继续。</td></tr>
+          <tr><td>Future schemaVersion</td><td>只读展示 unsupported；不迁移、不激活。</td><td>安全降级。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>冻结实施顺序</h2>
+      <table>
+        <thead><tr><th>阶段</th><th>内容</th><th>行为变化</th></tr></thead>
+        <tbody>
+          <tr><td>P0</td><td>本文合同、文档收敛、失败矩阵。</td><td>无。</td></tr>
+          <tr><td>M1</td><td>Candidate/Decision ledger、SQLite materialized store、migration、只读 <code>/brain inbox|profile|explain</code>。</td><td>无。</td></tr>
+          <tr><td>M2</td><td>Digest 后 deterministic capture；accepted San Loop attempt provenance。</td><td>无，review-only。</td></tr>
+          <tr><td>M3</td><td>Consolidation、conflict/supersede、approve/discard/undo、projection inspection。</td><td>只改变 Brain active state，不注入 prompt。</td></tr>
+          <tr><td>M4</td><td>统一 injection planner、Brain prelude、role/scope filtering、低风险 allowlist。</td><td>首次改变下一轮默认行为。</td></tr>
+          <tr><td>M5</td><td>Memory projection、managed skill draft/approval、check suggestion、legacy autoRetain migration。</td><td>受审计的外部写入。</td></tr>
+          <tr><td>M6</td><td>Policy-aware recall、10+ turn dogfood、真实会话报告、默认策略评估。</td><td>决定是否扩大 rollout。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>P0 退出门禁</h2>
+      <ul>
+        <li><span class="badge frozen">冻结</span> 唯一命名和文档权威顺序。</li>
+        <li><span class="badge frozen">冻结</span> <code>scopeKind + scopeKey</code> identity。</li>
+        <li><span class="badge frozen">冻结</span> typed selector/action；禁止自由文本 activation rule。</li>
+        <li><span class="badge frozen">冻结</span> JSONL authority、SQLite materialized view、outbox projection。</li>
+        <li><span class="badge frozen">冻结</span> immutable undo decision 与 revision/CAS。</li>
+        <li><span class="badge frozen">冻结</span> Digest/Capture Promise ordering 和 150ms next-turn deadline。</li>
+        <li><span class="badge frozen">冻结</span> Prompt authority、安全渲染、统一注入预算。</li>
+        <li><span class="badge frozen">冻结</span> legacy autoRetain compatibility mode。</li>
+        <li><span class="badge frozen">冻结</span> <code>PRAGMA user_version</code> migration。</li>
+        <li><span class="badge frozen">冻结</span> P0 → M6 新实施顺序。</li>
+      </ul>
+      <div class="callout warning">
+        <strong>M1 编码准入：</strong>
+        旧 Experience Routing 文档已标记 superseded，技术实现文档已同步本文命名、生命周期和阶段顺序后，才允许开始 M1。
+      </div>
+    </section>
+
+    <section>
+      <h2>依据</h2>
+      <ul>
+        <li><code>san-v0.3-brain-experience-system-20260707.html</code></li>
+        <li><code>san-v0.3-brain-technical-implementation-20260708.html</code></li>
+        <li><code>san-v0.3-experience-routing-requirements-20260707.html</code></li>
+        <li><code>san-v0.3-technical-design-review-20260710.html</code></li>
+        <li>当前 <code>AgentSession.prompt()</code>、ContextPacket prelude、memory backend、managed skills 实现。</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,775 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>San v0.3 Experience Routing 需求规划（已废弃）</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f4ec;
+      --panel: #fffdf7;
+      --ink: #17202a;
+      --muted: #667085;
+      --line: #d8d1c3;
+      --accent: #0b6b57;
+      --accent-2: #8247e5;
+      --warn: #b45309;
+      --bad: #b42318;
+      --ok: #027a48;
+      --code: #f1eadc;
+      --shadow: 0 18px 45px rgba(23, 32, 42, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top left, #e7f5ef 0, transparent 34rem), var(--bg);
+      color: var(--ink);
+      line-height: 1.62;
+    }
+    main { width: min(1180px, calc(100vw - 40px)); margin: 0 auto; padding: 36px 0 72px; }
+    header {
+      background: linear-gradient(135deg, #0b6b57, #1d3557 72%);
+      color: white;
+      border-radius: 28px;
+      padding: 40px 44px;
+      box-shadow: var(--shadow);
+      margin-bottom: 26px;
+    }
+    h1 { margin: 0 0 14px; font-size: clamp(32px, 5vw, 58px); line-height: 1.05; letter-spacing: -0.04em; }
+    h2 { margin: 0 0 14px; font-size: 25px; letter-spacing: -0.02em; }
+    h3 { margin: 0 0 10px; font-size: 18px; }
+    p { margin: 0 0 12px; }
+    .eyebrow { text-transform: uppercase; letter-spacing: 0.16em; font-size: 12px; opacity: 0.82; margin-bottom: 10px; }
+    .subtitle { max-width: 900px; font-size: 18px; opacity: 0.92; }
+    section {
+      background: rgba(255, 253, 247, 0.92);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 26px 28px;
+      margin: 18px 0;
+      box-shadow: var(--shadow);
+    }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .card {
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px;
+    }
+    .card strong { display: block; margin-bottom: 6px; color: var(--accent); }
+    .callout {
+      border: 1px solid #b7d9cc;
+      background: #edf8f3;
+      border-radius: 16px;
+      padding: 15px 17px;
+      margin: 14px 0;
+    }
+    .callout.warn { border-color: #f0c36d; background: #fff7e6; }
+    .callout.risk { border-color: #f4a6a0; background: #fff0ee; }
+    code {
+      font-family: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+      background: var(--code);
+      border: 1px solid #ded5c5;
+      border-radius: 6px;
+      padding: 1px 5px;
+      font-size: 0.92em;
+    }
+    pre {
+      margin: 12px 0 0;
+      background: #1f2937;
+      color: #e5e7eb;
+      border-radius: 16px;
+      padding: 16px;
+      overflow: auto;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    pre code { background: transparent; border: 0; padding: 0; color: inherit; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14px; }
+    th, td { text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); padding: 10px 12px; }
+    th { color: var(--accent); background: #f4efe4; font-weight: 800; }
+    ul, ol { margin: 10px 0 0 20px; padding: 0; }
+    li { margin: 6px 0; }
+    .badge { display: inline-block; border-radius: 999px; padding: 2px 9px; font-size: 12px; font-weight: 800; }
+    .ok { color: var(--ok); background: #ecfdf3; border: 1px solid #abefc6; }
+    .warn-badge { color: var(--warn); background: #fffaeb; border: 1px solid #fedf89; }
+    .bad { color: var(--bad); background: #fef3f2; border: 1px solid #fecdca; }
+    .muted { color: var(--muted); }
+    .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+    .step { border: 1px solid var(--line); background: #fff; border-radius: 14px; padding: 12px; min-height: 132px; }
+    .step span { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: white; font-weight: 800; margin-bottom: 8px; }
+    @media (max-width: 860px) { .grid, .grid.two, .flow { grid-template-columns: 1fr; } header { padding: 28px; } main { width: min(100vw - 24px, 1180px); } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">San v0.3 · Requirements · 2026-07-07</p>
+      <h1>Experience Routing：让 San 把经历固化成状态、Workflow 和 Skill</h1>
+      <p class="subtitle">
+        v0.3 要回答的不是“San 要不要保存更多文本”，而是“San 如何把过去的经历变成下一次立刻进入正确工作态的能力”。
+        本文结论：先做 Experience Routing。也就是把 TurnDigest、ContextPacket、San Loop ledger、skills、hooks、subagents 连接起来，让记忆能触发状态、workflow、skill，而不只是被检索成几段文字。
+      </p>
+    </header>
+
+    <section>
+      <h2>文档状态：Superseded</h2>
+      <div class="callout risk">
+        <strong>本文已被 Brain P0 Design Freeze 取代，不再作为实现或 issue 拆分依据。</strong>
+        本文只保留历史需求来源。唯一命名、数据合同、生命周期、命令面、配置和阶段顺序以
+        <code>san-v0.3-p0-design-freeze-20260710.html</code> 与
+        <code>san-v0.3-brain-technical-implementation-20260708.html</code> 的 P0 修订为准。
+      </div>
+    </section>
+
+
+    <section>
+      <h2>结论</h2>
+      <div class="callout">
+        <strong>San v0.3 = Experience Routing，而不是文本记忆库。</strong>
+        核心交付不是“记住一些对话内容”，而是让 San 能从经历中固化出可执行的工作状态：遇到类似任务时自动加载合适 skill、进入正确 workflow、提高特定风险权重、选择合适验证门禁。
+        长期记忆后端只负责存和搜；San 的脑子应该负责把经历编译成行为。
+      </div>
+      <div class="grid">
+        <div class="card">
+          <strong>现在已经有</strong>
+          <code>memory.backend</code>、Mnemopi/Hindsight、ContextPacket recall layer、TurnDigest memoryCandidates、file-backed Skills、Extensions/Hooks、Subagents、San Loop ledger。
+        </div>
+        <div class="card">
+          <strong>当前缺口</strong>
+          缺少把经历升级成行为的编译层：什么时候只做 recall，什么时候生成/更新 skill，什么时候固化 workflow，什么时候只设置一次性风险状态。
+        </div>
+        <div class="card">
+          <strong>v0.3 先分层</strong>
+          v0.3 不把 GBrain、Hermes、OpenClaw 混成同一类东西：GBrain 是 knowledge brain / MCP 记忆插件；Hermes 和 OpenClaw 是完整 agent 系统。San 先定义自己的判断层，再决定如何接入或借鉴这些系统。
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>给评审者看的版本</h2>
+      <div class="grid two">
+        <div class="card">
+          <strong>一句话</strong>
+          v0.3 先让 San 学会“经验固化”：不是记住一段话，而是在相似情境下快速进入正确工作态。
+        </div>
+        <div class="card">
+          <strong>为什么不是文本召回</strong>
+          文本召回只能告诉 San “过去发生过什么”；Experience Routing 要决定“现在应该怎样行动”。
+        </div>
+        <div class="card">
+          <strong>对用户的价值</strong>
+          用户不需要读专业记忆报告。San 应该在背后把反复有效的做法沉淀成 workflow，把反复踩坑的地方沉淀成防御姿态，把明确可复用的步骤沉淀成 skill。
+        </div>
+        <div class="card">
+          <strong>对 Skills / 插件的价值</strong>
+          Skills 是 file-backed workflow/capability pack；插件和 hooks 是运行时行为层。v0.3 应先判断哪些经验值得升级到这些层，而不是把所有东西都塞进 memory backend。
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>为什么不把 GBrain / Hermes / OpenClaw 直接当答案</h2>
+      <p>
+        GBrain 是 Garry Tan 的 agent brain / retrieval layer，可通过 MCP 给 Claude Code、Codex 等 coding agents 提供 brain/memory；Hermes 是 NousResearch 的自我改进 agent，有技能生成、persistent memory、多平台入口；OpenClaw 是 local-first personal AI assistant/gateway，覆盖渠道、canvas、skills 和本地运行体验。
+        它们不是同一层抽象：GBrain 可作为 San 的外部知识/记忆插件，Hermes/OpenClaw 更像完整 agent 产品和运行时参考；v0.3 的问题是 San 自己如何判断何时使用这些能力。
+      </p>
+      <table>
+        <thead>
+          <tr><th>评审问题</th><th>直接依赖外部系统的问题</th><th>Experience Routing 先解决什么</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>记什么？</td>
+            <td>容易把一次性任务状态、失败尝试、内部审查噪声都保存下来。</td>
+            <td>先做候选分类：用户偏好、项目事实、项目决策、workflow、failure mode、不要记。</td>
+          </tr>
+          <tr>
+            <td>谁来决定？</td>
+            <td>如果把所有决定都交给人审，普通用户会被迫判断自己也看不懂的专业分类。</td>
+            <td>San 默认判断低风险项；只有高风险、低置信度、跨项目影响或敏感内容才询问用户。</td>
+          </tr>
+          <tr>
+            <td>查到后怎么用？</td>
+            <td>召回结果可能被模型当成当前指令，污染本轮判断。</td>
+            <td>继续放在 ContextPacket 的 volatile layer，明确“背景知识，不是指令”。</td>
+          </tr>
+          <tr>
+            <td>错了怎么撤？</td>
+            <td>外部组件越强，错误记忆越难追踪到来源。</td>
+            <td>每条候选都带 source refs、route reason、status，能 explain / discard / retry。</td>
+          </tr>
+          <tr>
+            <td>什么时候接外脑？</td>
+            <td>现在接会把 San v0.3 从“记忆治理”扩大成“知识库平台”。</td>
+            <td>v0.3 先定清楚 San 与外脑的接口；v0.4 再把外脑作为后端接入。</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout warn">
+        <strong>取舍：</strong>
+        这些系统不是不看、不接，而是先分层。GBrain 可以作为 MCP knowledge plugin 接入；Hermes/OpenClaw 可以作为 agent 架构参考。v0.3 先做 San 的 brain state / experience consolidation，避免把外部工具误当成 San 自己的判断力。
+      </div>
+    </section>
+
+    <section>
+      <h2>黑盒可以，黑箱不行</h2>
+      <p>
+        用户的判断力不一定比 San 强，尤其是记忆分类、scope、dedupe、召回时机这种专业问题。
+        所以 v0.3 不应该把“让用户审批每条记忆”当成核心价值。真正的价值是：San 可以黑盒自动判断，但不能黑箱悄悄影响未来。
+      </p>
+      <table>
+        <thead>
+          <tr><th>形态</th><th>体验</th><th>判断</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>纯黑箱自动记忆</td>
+            <td>用户不知道 San 记了什么，也不知道为什么以后突然改变行为。</td>
+            <td>不可接受。</td>
+          </tr>
+          <tr>
+            <td>逐条人工审批</td>
+            <td>用户被迫读专业报告和 schema，最后大概率随便点通过或关闭功能。</td>
+            <td>不适合作默认体验。</td>
+          </tr>
+          <tr>
+            <td>可控黑盒</td>
+            <td>San 自动处理普通记忆，用人话通知“我记住了 X”；用户能撤销、查看理由，高风险才询问。</td>
+            <td>v0.3 推荐方向。</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <strong>审批的价值不是让人做分类器。</strong>
+        审批只应该出现在 San 不确定、影响范围大、涉及隐私、或者会改变长期行为的时候。默认体验应该是“San 自动记，用户可追溯和撤销”。
+      </div>
+    </section>
+
+    <section>
+      <h2>从 Skills / Workflows 重新理解记忆</h2>
+      <p>
+        Claude Code 的 Skills 不是普通笔记：它们是带描述、可按上下文自动加载、也可由用户显式调用的能力包；复杂 skill 还可以带支持文件、脚本、工具限制、模型/effort、subagent fork 和动态上下文。
+        San 自己也已有类似能力：<code>SKILL.md</code> discovery、<code>skill://</code>、<code>/skill:name</code>、managed skills、extensions、hooks、subagents 和 San Loop。
+      </p>
+      <div class="callout">
+        <strong>因此，v0.3 的记忆目标应该上移一层：</strong>
+        记忆不是为了让模型“回忆一段文本”，而是为了让系统知道什么时候该加载哪个 skill、触发哪个 workflow、开启哪个风险检查、调用哪个 subagent、避免哪条错误路径。
+      </div>
+      <table>
+        <thead>
+          <tr><th>经验形态</th><th>应该固化成什么</th><th>例子</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>一次性事实</td>
+            <td>普通 memory / ContextPacket recall</td>
+            <td>“这个模型 id 今天返回 400，不要再选它。”</td>
+          </tr>
+          <tr>
+            <td>重复出现的用户偏好</td>
+            <td>用户级 preference state</td>
+            <td>“研究、规划、架构文档默认写 HTML。”</td>
+          </tr>
+          <tr>
+            <td>稳定项目流程</td>
+            <td>项目级 workflow / skill</td>
+            <td>“品牌迁移先分用户面、兼容层、内部包名，再跑 package-local tests。”</td>
+          </tr>
+          <tr>
+            <td>反复踩坑</td>
+            <td>风险 posture / hook / check</td>
+            <td>“模型声明但上游 400 会让 scout 空失败；先做模型可用性验证。”</td>
+          </tr>
+          <tr>
+            <td>可自动执行的固定步骤</td>
+            <td>Skill + optional hook / extension command</td>
+            <td>“生成 release 前跑 smoke、检查 changelog、看 diff stat。”</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>版本链路</h2>
+      <table>
+        <thead>
+          <tr><th>版本</th><th>主题</th><th>已形成的合同</th><th>给 v0.3 的输入</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>v0.1</td>
+            <td>Context Steady State</td>
+            <td>每轮生成 <code>san.turn_digest</code>；下一轮注入 <code>san.context_packet.injected</code>；checkpoint 和 budget 控制上下文平台期。</td>
+            <td>可审计的 turn ledger、<code>TurnDigestMemoryCandidate</code>、digest-aware recall query。</td>
+          </tr>
+          <tr>
+            <td>v0.2</td>
+            <td>Mature Execution Loop</td>
+            <td><code>san.loop_run</code>、<code>san.loop_event</code>、<code>san.review_report</code>、角色 ContextPacket、San Checks、retry/budget/oracle。</td>
+            <td>哪些失败模式、checks、role decisions 值得固化为 workflow、skill、risk posture 或 project memory。</td>
+          </tr>
+          <tr>
+            <td>v0.3</td>
+            <td>Experience Routing</td>
+            <td>本需求文档定义。</td>
+            <td>候选提取、经验分类、状态编译、workflow/skill 固化、可控自动应用、撤销面、dogfood 证明。</td>
+          </tr>
+          <tr>
+            <td>v0.4+</td>
+            <td>Brain Adapter</td>
+            <td>GBrain MCP adapter、knowledge brain、compiled truth、dream cycle；Hermes/OpenClaw 只提供 agent/runtime 参考，不归入 brain adapter。</td>
+            <td>v0.3 定义边界和接口，不阻止接入 GBrain，但不让外部系统替代 San 的判断层。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>当前实现基线</h2>
+      <table>
+        <thead>
+          <tr><th>区域</th><th>现状</th><th>v0.3 判断</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>context-steady/types.ts</code></td>
+            <td><code>TurnDigestMemoryCandidate</code> 已定义：content、type、importance；<code>ContextPacketRecallLayer</code> 已定义 query/items/budget。</td>
+            <td>可直接作为候选和 recall 的初始数据合同，但需要更丰富的 scope、confidence、source refs。</td>
+          </tr>
+          <tr>
+            <td><code>context-steady/recall.ts</code></td>
+            <td>已能用当前 prompt + 最近 TurnDigest 构造 recall query，并对结果去重、限数、清空白。</td>
+            <td>v0.3 应升级为 policy-aware recall：按记忆类型、scope、任务模式和 role 调整 query 与候选集合。</td>
+          </tr>
+          <tr>
+            <td><code>memory-backend/types.ts</code></td>
+            <td>统一接口已有 <code>search()</code>、<code>save()</code>、<code>status()</code>、<code>beforeAgentStartPrompt()</code>。</td>
+            <td>Memory router 不应绑定某个后端；应通过该接口调 Mnemopi/Hindsight/local。</td>
+          </tr>
+          <tr>
+            <td><code>mnemopi/*</code></td>
+            <td>已有 local SQLite recall/retain、per-project/per-project-tagged/global scope、embedding worker、autoRecall/autoRetain。</td>
+            <td>v0.3 应把 autoRetain 从“后端自己决定”提升为 San router 策略；Mnemopi 作为默认本地 operational memory 候选。</td>
+          </tr>
+          <tr>
+            <td><code>hindsight/*</code></td>
+            <td>已有 remote memory、bank/tag scoping、mental models、retain queue、recall/reflect。</td>
+            <td>适合做远端/团队 memory 后端，但 v0.3 默认不要求可用；策略必须能在 backend inert 时降级。</td>
+          </tr>
+          <tr>
+            <td><code>san-loop/*</code></td>
+            <td>已有 run ledger、checks、role context、dogfood verifier。</td>
+            <td>v0.3 应把 failed checks、review findings、retry outcomes 变成 workflow/failure-mode 候选，不直接自动 retain。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>问题定义</h2>
+      <div class="grid two">
+        <div class="card">
+          <strong>写入风险</strong>
+          当前长期记忆要么关闭，要么由后端 autoRetain 按会话转录写入。缺少 San 层判断：这是用户偏好、项目事实、一次性任务状态、还是不该记的噪声。
+        </div>
+        <div class="card">
+          <strong>召回风险</strong>
+          recall 已可作为 volatile layer 注入，但还不知道“当前任务应该查用户偏好、项目决策、失败模式还是外部 brain”。错误召回会污染 ContextPacket。
+        </div>
+        <div class="card">
+          <strong>多角色风险</strong>
+          v0.2 的 Worker/Supervisor/Oracle 会产生大量内部推理和审查信息。把这些原样 retain 会污染用户记忆；完全丢弃又浪费复盘价值。
+        </div>
+        <div class="card">
+          <strong>信任风险</strong>
+          长期记忆一旦静默写错，后续会持续影响回答。v0.3 必须先建立可查看、可撤销、可解释的记忆入口。
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>目标</h2>
+      <ol>
+        <li>把每轮的 <code>TurnDigest.memoryCandidates</code>、San Loop review findings、测试失败和用户纠偏转为可审计经验候选。</li>
+        <li>定义 experience taxonomy：普通记忆、用户偏好、项目事实、项目决策、workflow pattern、failure posture、skill candidate、hook/check candidate、do-not-retain。</li>
+        <li>建立 ExperienceRouter：给每个候选计算输出形态、scope、confidence、reason、dedupe key、evidence refs。</li>
+        <li>默认策略：San 自动应用高置信、低风险经验；高风险/低置信度/敏感/跨项目行为才进入 ask 或 review。</li>
+        <li>提供可 dogfood 的 <code>/memory inbox</code> / undo / approve / discard / explain surface，并能显示“这条经验会影响什么行为”。</li>
+        <li>让 ContextPacket recall 从文本层升级为 state-aware selection，同时保留 retrieved context 为 volatile low-cache layer。</li>
+        <li>证明 v0.3 能把经验固化成 workflow/skill/posture，且不破坏 v0.1 上下文稳态和 v0.2 执行闭环。</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>非目标</h2>
+      <table>
+        <thead>
+          <tr><th>不做</th><th>原因</th><th>后续版本</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>把 GBrain / Hermes / OpenClaw 当成同一个记忆组件</td>
+            <td>分类错误：GBrain 是 MCP/knowledge memory plugin；Hermes/OpenClaw 是 agent systems。v0.3 不把它们直接接成主脑，先定义 San 自身 brain state 和 experience lifecycle。</td>
+            <td>GBrain 可早期接入为插件；Hermes/OpenClaw 作为架构对标。</td>
+          </tr>
+          <tr>
+            <td>dream cycle / daemon</td>
+            <td>后台自动整理需要更强的撤销、审计、冲突解决和调度系统。</td>
+            <td>v0.4+</td>
+          </tr>
+          <tr>
+            <td>默认静默自动 retain</td>
+            <td>用户信任优先；v0.3 先做可解释自动判断、通知、撤销和高风险询问。</td>
+            <td>v0.3 dogfood 后再评估</td>
+          </tr>
+          <tr>
+            <td>替换 Mnemopi / Hindsight</td>
+            <td>现有后端已经提供 search/save/status；router 应是上层策略，不是新数据库。</td>
+            <td>不做</td>
+          </tr>
+          <tr>
+            <td>把 session 全量转长期记忆</td>
+            <td>会复制临时上下文、工具噪声和错误中间态；应只存精炼、带证据的 durable facts。</td>
+            <td>不做</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>核心数据合同</h2>
+      <pre><code>interface SanExperienceCandidate {
+  schemaVersion: 1;
+  candidateId: string;
+  sessionId: string;
+  turnId?: string;
+  loopRunId?: string;
+  createdAt: string;
+
+  content: string;
+  type: "memory" | "user_preference" | "project_fact" | "project_decision" |
+        "workflow_pattern" | "failure_posture" | "skill_candidate" |
+        "hook_candidate" | "check_candidate" | "do_not_retain" | "other";
+  output: "recall" | "state_patch" | "workflow" | "skill" | "hook" | "check" | "none";
+  scope: "user" | "project" | "repo" | "session";
+  importance: number;      // 0..1
+  confidence: number;      // 0..1
+
+  source: {
+    digestEntryRefs: string[];
+    loopEntryRefs: string[];
+    fileRefs: Array&lt;{ path: string; range?: string }&gt;;
+    toolRefs: string[];
+  };
+
+  route: {
+    backend: "mnemopi" | "hindsight" | "local" | "skills" | "hooks" | "checks" | "none";
+    retainBank?: string;
+    skillName?: string;
+    tags: string[];
+    dedupeKey: string;
+    reason: string;
+  };
+
+  status: "pending" | "auto_applied" | "approved" | "discarded" | "stored" | "failed";
+}</code></pre>
+      <div class="callout warn">
+        <strong>设计约束：</strong>
+        candidate 是 San 自己的 experience ledger，不等于 memory backend row。它可以落到 memory、state patch、workflow、skill、hook 或 check。落地成功后写 <code>san.experience_decision</code>，便于 resume/debug/撤销。
+      </div>
+    </section>
+
+    <section>
+      <h2>Memory Taxonomy</h2>
+      <table>
+        <thead>
+          <tr><th>类型</th><th>写入条件</th><th>默认 scope</th><th>示例</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>user_preference</code></td>
+            <td>用户明确表达偏好，且跨项目可复用。</td>
+            <td>user</td>
+            <td>“研究/规划默认输出 HTML 文档。”</td>
+          </tr>
+          <tr>
+            <td><code>project_fact</code></td>
+            <td>仓库约定、目录结构、运行命令、不可变事实。</td>
+            <td>project</td>
+            <td>“coding-agent 是主包；验证用 bun check。”</td>
+          </tr>
+          <tr>
+            <td><code>project_decision</code></td>
+            <td>用户或实现过程做出的长期有效项目决策。</td>
+            <td>project</td>
+            <td>“v0.3 先定义 San 自己的 brain state；GBrain 作为 MCP knowledge plugin 接入时不替代该判断层。”</td>
+          </tr>
+          <tr>
+            <td><code>workflow_pattern</code></td>
+            <td>反复有效的执行方式、测试策略、审计流程。</td>
+            <td>repo</td>
+            <td>“品牌迁移先分类兼容层/内部包名/用户可见面。”</td>
+          </tr>
+          <tr>
+            <td><code>failure_mode</code></td>
+            <td>真实失败被修复并有复现/修复证据。</td>
+            <td>project</td>
+            <td>“模型声明但上游 400 时，task/scout 会空失败。”</td>
+          </tr>
+          <tr>
+            <td><code>tool_fact</code></td>
+            <td>工具使用约束或 papercut，且会影响后续执行。</td>
+            <td>repo</td>
+            <td>“edit 需要完整路径 tag，basename 会 File not found。”</td>
+          </tr>
+          <tr>
+            <td><code>other</code></td>
+            <td>暂不确定，但可供 review。</td>
+            <td>session</td>
+            <td>低风险不提示，高风险 pending。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>路由策略</h2>
+      <div class="flow">
+        <div class="step"><span>1</span><strong>Collect</strong><p>从 TurnDigest、San Loop ledger、review report、测试失败和用户纠偏收集候选。</p></div>
+        <div class="step"><span>2</span><strong>Classify</strong><p>判断它是普通记忆、workflow、skill、hook/check，还是一次性噪声。</p></div>
+        <div class="step"><span>3</span><strong>Compile</strong><p>把经验编译成 recall text、state patch、workflow steps 或 SKILL.md 草案。</p></div>
+        <div class="step"><span>4</span><strong>Decide</strong><p>低风险自动应用；高风险 pending；所有决定可撤销、可解释。</p></div>
+        <div class="step"><span>5</span><strong>Activate</strong><p>写 memory/backend，或生成 managed skill / workflow / hook/check candidate。</p></div>
+      </div>
+      <div class="callout">
+        v0.3 的关键不是“多存一些东西”，而是把经验变成 San 下次能自动使用的工作状态。
+      </div>
+    </section>
+
+    <section>
+      <h2>设置建议</h2>
+      <pre><code>san:
+  experienceRouter:
+    enabled: false              # v0.3 初期默认关闭，dogfood overlay 打开
+    mode: notify                # off | notify | ask | review-only
+    maxCandidatesPerTurn: 5
+    minConfidence: 0.72
+    defaultBackend: mnemopi
+    autoApplyOutputs: [recall, state_patch]
+    requireReviewOutputs: [skill, hook, check]
+    includeLoopFindings: true
+    includeDigestCandidates: true
+    compile:
+      allowManagedSkillDrafts: true
+      allowProjectSkillSuggestions: true
+      requireEvidenceRefs: true
+      dedupeWindowDays: 90
+    recall:
+      policyAware: true
+      maxItems: 3
+      maxTokens: 1000
+      includeTypes: [user_preference, project_decision, project_fact, workflow_pattern]
+      excludeTypes: [failure_posture]
+</code></pre>
+      <p class="muted">
+        现有 <code>memory.backend</code> 继续决定文本记忆后端；<code>san.experienceRouter.*</code> 决定经验是否变成 recall、state patch、workflow、skill、hook 或 check。
+      </p>
+    </section>
+
+    <section>
+      <h2>用户界面 / 命令面</h2>
+      <table>
+        <thead>
+          <tr><th>入口</th><th>行为</th><th>验收</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>/experience inbox</code></td>
+            <td>列出 San 自动应用或等待确认的经验候选，显示它会影响 recall、state、workflow、skill、hook 还是 check。</td>
+            <td>用户不用读 JSONL，也能知道 San 为什么下次会换一种做法。</td>
+          </tr>
+          <tr>
+            <td><code>/experience undo &lt;id&gt;</code></td>
+            <td>撤销 auto-applied 经验；若已写入后端或 managed skill，则生成对应回滚动作。</td>
+            <td>可控黑盒必须可撤销。</td>
+          </tr>
+          <tr>
+            <td><code>/experience approve &lt;id&gt;</code></td>
+            <td>批准高影响候选，例如生成 managed skill、项目 skill 建议、hook/check candidate。</td>
+            <td>人只审高影响行为，不做普通分类器。</td>
+          </tr>
+          <tr>
+            <td><code>/experience discard &lt;id&gt;</code></td>
+            <td>候选标为 discarded，保留审计记录。</td>
+            <td>后续同 dedupe key 不再反复提示，除非内容变化。</td>
+          </tr>
+          <tr>
+            <td><code>/context packet</code></td>
+            <td>继续显示 retrieved_context；增加 memory type/scope refs。</td>
+            <td>用户能看出 recall 注入来自哪些记忆。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Phase 拆分</h2>
+      <table>
+        <thead>
+          <tr><th>Phase</th><th>主题</th><th>交付</th><th>验收</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>P0</td>
+            <td>需求冻结</td>
+            <td>本需求文档、schema 草案、设置草案、dogfood 场景。</td>
+            <td>能从文档直接拆 M1-M6 issue。</td>
+          </tr>
+          <tr>
+            <td>P1</td>
+            <td>Experience Ledger</td>
+            <td><code>san.experience_candidate</code> / <code>san.experience_decision</code> custom entries；candidate schema；list helpers。</td>
+            <td>TurnDigest 和 San Loop findings 能被持久化为 pending/auto-applied candidates；resume 后可读。</td>
+          </tr>
+          <tr>
+            <td>P2</td>
+            <td>Router Policy</td>
+            <td>规则分类器、output/scope/backend/dedupe/confidence/reason；LLM 分类 prompt 可选。</td>
+            <td>给定固定 digest/loop entries，能稳定判断该变成 recall、state patch、workflow、skill 还是 check。</td>
+          </tr>
+          <tr>
+            <td>P3</td>
+            <td>State + Recall Runtime</td>
+            <td>把高置信经验编译进当前 turn 的 state patch；ContextPacket recall 读取 policy。</td>
+            <td>San 在相似任务中能自动改变执行姿态，但 debug view 能解释原因。</td>
+          </tr>
+          <tr>
+            <td>P4</td>
+            <td>Skill / Workflow Solidification</td>
+            <td>把稳定 workflow 产生成 managed skill 草案或项目 skill 建议；支持 <code>/memory inbox</code> 审阅和撤销。</td>
+            <td>反复出现的流程不再只是 memory，而能变成可调用 skill/workflow。</td>
+          </tr>
+          <tr>
+            <td>P5</td>
+            <td>Hooks / Checks Candidates</td>
+            <td>把 failure posture 升级成 hook/check 建议，不默认安装高影响 hook。</td>
+            <td>被蛇咬后的经验能变成防御姿态，但不会误把所有井绳当蛇。</td>
+          </tr>
+          <tr>
+            <td>P6</td>
+            <td>Dogfood & 默认策略</td>
+            <td>deterministic verifier、真实会话报告、推荐 config overlay。</td>
+            <td>覆盖用户偏好、项目决策、workflow 固化、skill 草案、误触发、撤销、多角色噪声。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>验收标准</h2>
+      <ul>
+        <li>默认配置下不会静默写入长期 memory。</li>
+        <li>每个 candidate 必须有 source refs、type、scope、confidence、route reason。</li>
+        <li>候选 ledger 可 resume，可导出，可 debug。</li>
+        <li>auto-store/undo/approve/discard 幂等；backend 写入失败不影响主 agent turn。</li>
+        <li>ContextPacket retrieved_context 包含 memory refs，且仍受 token budget 和 trim decision 约束。</li>
+        <li>Subagent/Worker 内部临时状态默认不进入 user memory；Supervisor findings 可进入 failure/workflow candidates。</li>
+        <li>Dogfood 证明 10+ 轮后 memory candidate 数量受控，recall 不污染不相关任务。</li>
+        <li>Hindsight/Mnemopi/local/off 四种 backend 都有降级测试。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>风险与防线</h2>
+      <table>
+        <thead>
+          <tr><th>风险</th><th>防线</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>把一次性任务状态写成长期事实</td>
+            <td>默认 suggest；scope=session 的候选不自动写后端；project_fact 需 evidence refs。</td>
+          </tr>
+          <tr>
+            <td>Subagent 噪声污染用户记忆</td>
+            <td>taskDepth > 0 默认只产候选不 retain；parent session 汇总后再评估。</td>
+          </tr>
+          <tr>
+            <td>Recall 结果影响当前指令服从</td>
+            <td>retrieved_context 明确标记为 background knowledge；当前 user/tool output 优先。</td>
+          </tr>
+          <tr>
+            <td>候选过多打扰用户</td>
+            <td>每轮限数、dedupe key、低 confidence 自动丢弃或只进入 debug。</td>
+          </tr>
+          <tr>
+            <td>Backend 不可用</td>
+            <td>candidate ledger 保留；approval 给出 backend inert 状态；主流程不失败。</td>
+          </tr>
+          <tr>
+            <td>GBrain scope 膨胀</td>
+            <td>v0.3 可接 GBrain 作为 MCP knowledge plugin，但必须限制 scope/permission；Hermes/OpenClaw 只作为 agent 对标，不当作 memory backend。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>测试矩阵</h2>
+      <table>
+        <thead>
+          <tr><th>测试组</th><th>覆盖</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>experience-router/candidate.test.ts</code></td>
+            <td>candidate schema、source refs、importance/confidence clamp、dedupe key。</td>
+          </tr>
+          <tr>
+            <td><code>experience-router/policy.test.ts</code></td>
+            <td>taxonomy、output routing、do-not-retain、subagent exclusion。</td>
+          </tr>
+          <tr>
+            <td><code>experience-router/ledger.test.ts</code></td>
+            <td>custom entry append/list/resume/idempotency。</td>
+          </tr>
+          <tr>
+            <td><code>experience-router/slash-command.test.ts</code></td>
+            <td>inbox/undo/approve/discard/explain UX contracts。</td>
+          </tr>
+          <tr>
+            <td><code>context-steady/experience-router-recall.test.ts</code></td>
+            <td>policy-aware recall query、state patch、volatile layer budget。</td>
+          </tr>
+          <tr>
+            <td><code>san-loop/experience-candidates.test.ts</code></td>
+            <td>Supervisor findings、failed checks、retry outcomes 变为 workflow/skill/posture candidates。</td>
+          </tr>
+          <tr>
+            <td><code>experience-router/dogfood.test.ts</code></td>
+            <td>10+ 轮 deterministic dogfood：候选、自动判断、状态触发、skill 草案、通知、撤销、降级。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>发布口径</h2>
+      <div class="callout">
+        San v0.3 发布时不要宣传“让用户审批长期记忆”，也不要宣传“文本记忆库”。更准确的口径是：
+        <strong>San 会把反复有效的经历固化成工作状态：低风险自动应用，高影响行为用人话询问，任何经验都能查看和撤销。</strong>
+        这承认 San 的判断力通常强于普通用户，同时保留用户对长期行为的最终控制权。
+      </div>
+      <ul>
+        <li>默认：低风险自动记，通知 + 可撤销；高风险/低置信度才询问。</li>
+        <li>Dogfood overlay：开启 <code>mode: notify</code>，Mnemopi 为默认 backend。</li>
+        <li>后续：根据真实使用数据决定哪些类型可进入更激进的自动模式。</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

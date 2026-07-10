@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang='zh-CN'>
+<head>
+  <meta charset='utf-8' />
+  <meta name='viewport' content='width=device-width, initial-scale=1' />
+  <title>San v0.3 Brain / Experience System 顶层设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f1e8;
+      --panel: #fffdf8;
+      --ink: #17202a;
+      --muted: #667085;
+      --line: #d8d1c3;
+      --accent: #0b6b57;
+      --accent-2: #7c3aed;
+      --warn: #b45309;
+      --code: #efe7d8;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: radial-gradient(circle at top left, #ede0c8 0, transparent 34rem), var(--bg);
+      color: var(--ink);
+      line-height: 1.65;
+    }
+
+    main, header {
+      width: min(1120px, calc(100vw - 44px));
+      margin: 0 auto;
+    }
+
+    header {
+      padding: 54px 0 28px;
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--accent);
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      font-size: 13px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(36px, 6vw, 68px);
+      line-height: 1.04;
+      letter-spacing: -0.05em;
+      max-width: 980px;
+    }
+
+    .subtitle {
+      max-width: 900px;
+      margin: 22px 0 0;
+      font-size: 19px;
+      color: #344054;
+    }
+
+    section {
+      background: color-mix(in srgb, var(--panel), white 18%);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 28px;
+      margin: 18px 0;
+      box-shadow: 0 18px 45px rgba(23, 32, 42, .06);
+    }
+
+    h2 {
+      margin: 0 0 16px;
+      font-size: 24px;
+      letter-spacing: -0.02em;
+    }
+
+    h3 {
+      margin: 20px 0 8px;
+      font-size: 18px;
+    }
+
+    p { margin: 10px 0; }
+
+    .callout {
+      border-left: 5px solid var(--accent);
+      background: #eef7f2;
+      padding: 16px 18px;
+      border-radius: 14px;
+      margin: 16px 0;
+    }
+
+    .warning {
+      border-left-color: var(--warn);
+      background: #fff7ed;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .grid.two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      background: #fffaf0;
+      border-radius: 16px;
+      padding: 16px;
+    }
+
+    .card strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--accent);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      overflow: hidden;
+      border-radius: 14px;
+    }
+
+    th, td {
+      border: 1px solid var(--line);
+      padding: 12px 14px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #ece4d5;
+      font-weight: 800;
+    }
+
+    code {
+      font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+      background: var(--code);
+      border: 1px solid #dfd4bf;
+      border-radius: 6px;
+      padding: 1px 5px;
+      font-size: .94em;
+    }
+
+    ol, ul { padding-left: 22px; }
+    li { margin: 8px 0; }
+
+    .muted { color: var(--muted); }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .step {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+      background: #fffaf0;
+      min-height: 170px;
+    }
+
+    .step span {
+      display: inline-grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 999px;
+      background: var(--accent);
+      color: white;
+      font-weight: 800;
+      margin-bottom: 10px;
+    }
+
+    .step strong { display: block; }
+
+    @media (max-width: 900px) {
+      .grid, .grid.two, .flow { grid-template-columns: 1fr; }
+      section { padding: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <p class='eyebrow'>San v0.3 · Top-level Design · 2026-07-07</p>
+    <h1>San Brain / Experience System：让经历改变下一次行动</h1>
+    <p class='subtitle'>
+      这不是一份 memory feature 需求，也不是先拆 issue 的工程计划。它先回答顶层问题：San 的“脑子”应该如何从经历中形成稳定判断、工作习惯、技能、风险姿态和协作方式。
+    </p>
+  </header>
+
+  <main>
+    <section>
+      <h2>实施合同</h2>
+      <div class='callout warning'>
+        <strong>工程实现以 <code>san-v0.3-p0-design-freeze-20260710.html</code> 为规范性合同。</strong>
+        本文继续定义产品目标和脑模型；命名、scope identity、状态权威、投影、撤销、Prompt authority 与阶段顺序由 P0 Design Freeze 冻结。
+      </div>
+    </section>
+
+    <section>
+      <h2>一句话结论</h2>
+      <div class='callout'>
+        <strong>San v0.3 的主题不是“记得更多”，而是“经历会改变行为”。</strong>
+        一个成熟 agent 的脑子不应该只是检索过去文本，而应该能把过去的成功、失败、纠偏、偏好和项目约定，转化为下一次更正确的默认状态。
+      </div>
+      <div class='grid'>
+        <div class='card'>
+          <strong>Memory 是材料</strong>
+          记忆保存事实、偏好、决策、证据和上下文片段。它回答“过去发生过什么”。
+        </div>
+        <div class='card'>
+          <strong>Brain 是判断</strong>
+          脑子决定这些经历是否可信、是否稳定、作用范围多大、下一次应该改变什么行为。
+        </div>
+        <div class='card'>
+          <strong>Skill / Workflow 是固化结果</strong>
+          反复有效的做法不该永远停在文本 recall；它们应该变成可触发的工作方式。
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>问题重定义</h2>
+      <p>
+        当前讨论里最容易走偏的一点，是把“San 的脑子”过早翻译成 <code>memory backend</code>、schema、inbox、approve/discard 或某个 router。
+        这些都可能需要，但它们是较低层实现。顶层问题应该是：
+      </p>
+      <div class='callout warning'>
+        San 如何从每次协作中形成“下一次默认就会做对”的能力，而不是每次都靠用户重新提醒、靠上下文重新塞满、靠工具重新搜索、靠模型临场发挥？
+      </div>
+      <p>
+        因此，v0.3 应该先设计“经验如何进入脑状态”，再决定哪些部分落到 memory、skill、workflow、hook、subagent policy 或外部 brain。
+      </p>
+    </section>
+
+    <section>
+      <h2>San 的脑子是什么</h2>
+      <p>
+        San Brain 不是一个单独数据库，也不是一个万能知识库。它是运行时的一组分层状态和固化机制：
+      </p>
+      <table>
+        <thead>
+          <tr><th>层</th><th>保存什么</th><th>改变什么行为</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Working State</td>
+            <td>当前任务、计划、约束、风险、已读证据、当前用户意图。</td>
+            <td>影响本轮怎么做；任务结束后大多丢弃。</td>
+          </tr>
+          <tr>
+            <td>Partnership / User Profile State</td>
+            <td>用户稳定偏好、画像事实、合作决策、沟通方式、默认交付物形态、容忍的自动化程度。</td>
+            <td>影响“我默认怎么理解这个用户、如何和这个用户合作”。</td>
+          </tr>
+          <tr>
+            <td>Project Operating State</td>
+            <td>项目约定、测试门禁、常见坑、架构边界、命名习惯、发布纪律。</td>
+            <td>影响“我在这个 repo 里默认怎么工作”。</td>
+          </tr>
+          <tr>
+            <td>Workflow / Skill Library</td>
+            <td>稳定、可复用、有触发条件的做事方法。</td>
+            <td>影响“遇到某类任务时自动进入哪套流程”。</td>
+          </tr>
+          <tr>
+            <td>Risk Reflexes</td>
+            <td>反复失败、容易误判、需要提前防御的模式。</td>
+            <td>影响“我什么时候必须停下来验证”。</td>
+          </tr>
+          <tr>
+            <td>Knowledge / Brain Plugins</td>
+            <td>本地或远程知识脑、资料库、MCP 记忆插件；GBrain 属于这一类。</td>
+            <td>影响“我该查哪里、信什么、如何综合”，但不替代 San 自己的工作态判断。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>笔记仍然有价值</h2>
+      <p>
+        “记忆不是记笔记”不等于“不要笔记”。区别在于：笔记不是终点，而是 San 体验层的原材料。有些内容本身不会立刻变成 workflow 或 skill，但会让 San 更像长期合作伙伴。
+      </p>
+      <div class='grid two'>
+        <div class='card'>
+          <strong>可以直接提升体验的笔记</strong>
+          用户偏好、身份画像、长期目标、项目背景、已做过的决策、常用表达、重要事实、反复出现的上下文。
+        </div>
+        <div class='card'>
+          <strong>不应固化的笔记</strong>
+          临时情绪、一次性任务细节、未验证推断、过期状态、跨项目会污染判断的局部约束。
+        </div>
+      </div>
+      <p>
+        所以 v0.3 需要同时处理两类记忆：一类是会改变执行行为的 experience；另一类是会提升合作质感的 profile notes。前者驱动行动，后者改善理解。
+      </p>
+    </section>
+
+    <section>
+      <h2>Profile Notes 与 Experience 怎么形成</h2>
+      <p>
+        两者都可以来自 San 的 JSONL 会话账本，但不应该直接把 JSONL 当长期记忆。正确路径是：先用 TurnDigest / custom entries 做结构化摘要，再清洗、合并、去重、标注 scope 和证据，最后分别落到 profile 或 experience。
+      </p>
+      <table>
+        <thead>
+          <tr><th>产物</th><th>主要来源</th><th>形成方式</th><th>触发节奏</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Profile Notes</td>
+            <td>用户明确表达、反复偏好、长期决策、项目背景、历史 TurnDigest。</td>
+            <td>从 session JSONL / TurnDigest 中抽取候选，汇总成用户画像、偏好、事实和 standing decisions；合并同义项，保留证据和更新时间。</td>
+            <td>轻量候选可在会话中生成；清洗和合并更适合 session stop、resume 前或显式维护命令触发。</td>
+          </tr>
+          <tr>
+            <td>Experience</td>
+            <td>用户纠偏、工具失败、测试失败、成功路径、review 结论、反复出现的执行模式。</td>
+            <td>解释“这件事下次应该改变什么行为”：状态、风险权重、workflow、skill、hook/check、GBrain 查询策略或普通 recall。</td>
+            <td>高置信低风险经验可在 turn end 后影响下一轮；复杂经验在 session stop 后 consolidate；后台定时整理应先只做建议，不静默改变高影响行为。</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class='callout'>
+        同一条证据可以同时产生 profile note 和 experience。例如用户说“遇到陌生现代项目先查 primary source”：profile note 是用户偏好更重视来源校验；experience 是下次遇到类似实体时必须先搜索/读取 primary source 再分类。
+      </div>
+      <p>
+        因此 v0.3 的推荐节奏是三层：会话中做候选捕获，停顿/结束时做清洗合并，未来再考虑 dream cycle 式后台整理。后台可以整理和提出建议，但不应在没有证据和撤销面的情况下静默升级高影响行为。
+      </p>
+    </section>
+
+    <section>
+      <h2>经验的五步生命线</h2>
+      <div class='flow'>
+        <div class='step'>
+          <span>1</span>
+          <strong>Observe</strong>
+          <p>记录发生了什么：用户纠偏、工具失败、测试结果、评审意见、成功路径、反复出现的偏好。</p>
+        </div>
+        <div class='step'>
+          <span>2</span>
+          <strong>Interpret</strong>
+          <p>判断它是什么：事实、偏好、项目规则、流程、技能、风险、一次性噪声，还是错误中间态。</p>
+        </div>
+        <div class='step'>
+          <span>3</span>
+          <strong>Consolidate</strong>
+          <p>决定是否固化、作用范围、置信度、证据、冲突关系和撤销方式。</p>
+        </div>
+        <div class='step'>
+          <span>4</span>
+          <strong>Activate</strong>
+          <p>下一次相似情境中，把经验编译成状态、workflow、skill、hook/check、subagent 选择或 recall。</p>
+        </div>
+        <div class='step'>
+          <span>5</span>
+          <strong>Reflect</strong>
+          <p>解释为什么这样行动；如果判断错了，允许撤销、降权、缩小 scope 或变回临时经验。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>核心设计原则</h2>
+      <ol>
+        <li><strong>体验优先。</strong> 进入 San Brain 的内容要么改变未来行为，要么提升长期合作体验；纯文本存档不是目标。</li>
+        <li><strong>Scope 优先于存储。</strong> 先判断这是用户级、项目级、repo 级、session 级，后判断放哪个 backend。</li>
+        <li><strong>Evidence before belief。</strong> 稳定经验必须能追溯到 digest、工具结果、文件、测试或用户明确纠偏。</li>
+        <li><strong>低风险自动，高影响可控。</strong> 用户不应该审批每条专业分类，但能控制会长期改变 San 行为的内容。</li>
+        <li><strong>先变状态，再变技能。</strong> 一次经验先影响姿态；反复稳定后才升级为 workflow、skill 或 hook。</li>
+        <li><strong>可解释、可撤销、可降权。</strong> 黑盒判断可以存在；黑箱长期行为不可以存在。</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>经验形态</h2>
+      <table>
+        <thead>
+          <tr><th>经验</th><th>例子</th><th>理想落点</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>事实</td>
+            <td>某个模型今天 400；某个 API 参数真实名字；某个文件是生成物。</td>
+            <td>memory / project fact / ContextPacket recall</td>
+          </tr>
+          <tr>
+            <td>偏好</td>
+            <td>研究和架构方案默认写 HTML；回答不要可选项式收尾。</td>
+            <td>partnership state / user preference</td>
+          </tr>
+          <tr>
+            <td>用户画像</td>
+            <td>用户在意顶层设计、讨厌未验证的自信判断、愿意让 agent 自主推进低风险改动。</td>
+            <td>partnership profile / user facts</td>
+          </tr>
+          <tr>
+            <td>合作决策</td>
+            <td>“遇到陌生现代项目必须先查 primary source”；“安全风险由用户自己评估，不要反复强调”。</td>
+            <td>partnership state / standing decisions</td>
+          </tr>
+          <tr>
+            <td>项目判断</td>
+            <td>这个包是 primary focus；某种 import convention 不能破坏。</td>
+            <td>project operating state</td>
+          </tr>
+          <tr>
+            <td>流程</td>
+            <td>品牌迁移必须分用户面、兼容层、内部包名、测试门禁。</td>
+            <td>workflow / managed skill draft</td>
+          </tr>
+          <tr>
+            <td>风险姿态</td>
+            <td>模型声明不等于可用；setup wizard 改动要同时验证 source-link 和 tarball。</td>
+            <td>risk reflex / check candidate</td>
+          </tr>
+          <tr>
+            <td>技能</td>
+            <td>一套稳定的 release audit、migration audit、prompt audit 方法。</td>
+            <td>SKILL.md / tool-aware workflow pack</td>
+          </tr>
+          <tr>
+            <td>外部知识</td>
+            <td>资料库、会议纪要、公司/人物/项目长期知识。</td>
+            <td>knowledge brain / MCP memory plugin，如 GBrain；San 负责何时查、如何用、如何把结果编译进工作态</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>自上而下架构</h2>
+      <p>
+        v0.3 不应从“我们要几个表、几个命令、几个配置项”开始，而应从一条运行时链路开始：
+      </p>
+      <ol>
+        <li><strong>Brain State Builder：</strong> 每轮开始前，组合用户画像、项目状态、当前任务、风险和已知 workflow，形成 San 当前工作态。</li>
+        <li><strong>Profile Synthesizer：</strong> 从 JSONL / TurnDigest / 明确用户表达中提取 profile notes，清洗成偏好、事实、画像和合作决策。</li>
+        <li><strong>Experience Interpreter：</strong> 每轮结束后，解释哪些经历应该改变未来行为，哪些只是日志或普通 profile note。</li>
+        <li><strong>Consolidation Policy：</strong> 决定 profile / experience 的 scope、置信度、证据、冲突、寿命、是否自动应用。</li>
+        <li><strong>Activation Layer：</strong> 在未来任务中把经验变成实际行为：加载 skill、选择 workflow、提高风险权重、触发 check、召回文本或查询 GBrain。</li>
+        <li><strong>Reflection Surface：</strong> 让用户看到 San 为什么变聪明、哪里变了、如何撤销。</li>
+      </ol>
+      <p class='muted'>
+        这条链路之下才是具体实现：memory backend、skills 文件、hooks、subagents、commands、custom entries、ContextPacket 注入。
+      </p>
+    </section>
+
+    <section>
+      <h2>v0.3 应该证明什么</h2>
+      <p>
+        顶层验收不是“写入了多少 memory”，而是 San 是否真的更像一个会长期协作的 agent：
+      </p>
+      <ul>
+        <li>用户纠正一次明确偏好、画像事实或合作决策后，San 后续默认遵守，不需要反复提醒。</li>
+        <li>项目踩过的坑会提高下一次同类任务的风险权重，而不是只存在历史记录里。</li>
+        <li>稳定流程会逐步从一次性状态升级为 workflow/skill 草案。</li>
+        <li>San 能解释“为什么这次我先做 A，再做 B”，并指向历史依据。</li>
+        <li>错误固化可以撤销、降权、缩小 scope，而不是污染所有项目。</li>
+        <li>GBrain 等知识脑作为 memory/knowledge plugin 接入；Hermes/OpenClaw 等 agent 是对标和架构参考，不和 GBrain 放在同一抽象层。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>当前 Experience Routing 文档的位置</h2>
+      <div class='callout warning'>
+        <strong>现有 Experience Routing 文档应降级为实现草案，不再作为顶层设计主文档。</strong>
+        它已经接近 schema、命令面和 phase 拆分，适合作为后续实现时参考；但在达成脑模型共识前，不应继续往里面补更多实现细节。
+      </div>
+      <p>
+        更准确的推进顺序是：先冻结本文件里的脑模型，再从中抽出 v0.3 最小闭环，最后才回到 router、ledger、命令、测试和配置。
+      </p>
+    </section>
+  </main>
+</body>
+</html>
