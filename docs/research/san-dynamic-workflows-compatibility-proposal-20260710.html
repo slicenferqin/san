@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>San Dynamic Workflows 兼容方案（搁置提案）</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f1e8;
+      --panel: #fffdf8;
+      --ink: #17202a;
+      --muted: #667085;
+      --line: #d8d1c3;
+      --navy: #1d3557;
+      --green: #0b6b57;
+      --purple: #6941c6;
+      --amber: #b45309;
+      --red: #b42318;
+      --code: #efe7d8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top left, #e5efe8 0, transparent 34rem), var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.65;
+    }
+    header, main { width: min(1180px, calc(100vw - 44px)); margin: 0 auto; }
+    header { padding: 52px 0 28px; }
+    h1 { margin: 8px 0 12px; font-size: clamp(34px, 5vw, 58px); line-height: 1.08; }
+    h2 { margin: 0 0 18px; font-size: 26px; }
+    h3 { margin: 0 0 10px; font-size: 18px; }
+    p { margin: 8px 0; }
+    code { background: var(--code); padding: 2px 6px; border-radius: 6px; font-size: .92em; }
+    a { color: var(--green); }
+    .eyebrow { color: var(--green); font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .subtitle { max-width: 900px; color: var(--muted); font-size: 18px; }
+    .status {
+      display: inline-flex;
+      gap: 10px;
+      align-items: center;
+      margin-top: 20px;
+      padding: 10px 14px;
+      border: 1px solid #f0c36d;
+      border-radius: 999px;
+      background: #fff7e6;
+      color: #7a4100;
+      font-weight: 800;
+    }
+    .status::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--amber); }
+    main { padding-bottom: 72px; }
+    section {
+      margin: 18px 0;
+      padding: 26px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--panel);
+      box-shadow: 0 14px 34px rgba(23, 32, 42, .055);
+    }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .card { padding: 18px; border: 1px solid var(--line); border-radius: 16px; background: #fffaf0; }
+    .good { border-left: 5px solid var(--green); }
+    .warn { border-left: 5px solid var(--amber); }
+    .bad { border-left: 5px solid var(--red); }
+    .decision { border-left: 6px solid var(--purple); background: #f7f3ff; }
+    ul, ol { margin: 10px 0 0; padding-left: 22px; }
+    li { margin: 6px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+    th { background: #eef1f5; font-weight: 800; }
+    .flow { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+    .step { min-height: 150px; padding: 14px; border: 1px solid var(--line); border-radius: 15px; background: #fffaf0; }
+    .step b { display: grid; place-items: center; width: 28px; height: 28px; margin-bottom: 9px; border-radius: 50%; background: var(--navy); color: white; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; white-space: pre-wrap; background: #18212f; color: #eaf2f8; padding: 18px; border-radius: 16px; overflow: auto; }
+    .muted { color: var(--muted); }
+    .tag { display: inline-block; margin: 2px 5px 2px 0; padding: 3px 8px; border-radius: 999px; background: #e7f4ef; color: #075846; font-size: 12px; font-weight: 800; }
+    @media (max-width: 980px) { .grid, .grid.two, .flow { grid-template-columns: 1fr; } section { padding: 20px; } }
+  </style>
+</head>
+<body>
+<header>
+  <p class="eyebrow">San · Deferred Design · 2026-07-10</p>
+  <h1>Dynamic Workflows 兼容方案</h1>
+  <p class="subtitle">记录 Claude Code Dynamic Workflows 与 San 的兼容边界、目标架构和后续实施路径。本提案只冻结方向，不进入 San v0.3 当前开发范围。</p>
+  <div class="status">状态：已记录，搁置到 v0.3 核心完成之后</div>
+</header>
+<main>
+  <section class="decision">
+    <h2>结论</h2>
+    <ul>
+      <li><strong>当前不兼容原生 Workflow：</strong>San 不发现或执行 <code>.claude/workflows/*.js</code>。</li>
+      <li><strong>现有 JS/TS Extensions 不能冒充 Workflow：</strong>扩展与主进程同域、无沙箱，生命周期和持久化语义也不同。</li>
+      <li><strong>已有可复用底座：</strong><code>task</code>、<code>job</code>、子代理、结构化输出、取消和后台交付可作为调度后端。</li>
+      <li><strong>正确路线：</strong>新增独立 Workflow Runtime，以受限 JS 编排层调用 San 原生调度器；禁止直接把 Workflow 文件作为普通 Extension 导入。</li>
+      <li><strong>排期：</strong>先完成 v0.3 Brain / Experience System，再单独立项。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>事实基线</h2>
+    <div class="grid">
+      <article class="card good">
+        <h3>Claude Dynamic Workflows</h3>
+        <ul>
+          <li>普通 JavaScript，支持顶层 <code>await</code>。</li>
+          <li>脚本持有循环、分支和中间结果。</li>
+          <li>核心原语包含 <code>agent()</code>、<code>parallel()</code>、<code>pipeline()</code>。</li>
+          <li>后台运行、可观察、可暂停/恢复/停止。</li>
+          <li>脚本自身无直接文件系统或 Shell 权限。</li>
+          <li>项目与用户脚本位于 <code>.claude/workflows/</code>。</li>
+        </ul>
+      </article>
+      <article class="card warn">
+        <h3>San 当前扩展系统</h3>
+        <ul>
+          <li>支持加载 TS/JS Extension Factory。</li>
+          <li>支持工具、命令、事件、消息和会话操作。</li>
+          <li>扩展在主进程中执行，当前不沙箱化。</li>
+          <li>Claude 兼容发现覆盖 skills、commands、hooks、extensions 等。</li>
+          <li>发现目录是 <code>.claude/extensions</code>，不是 workflows。</li>
+        </ul>
+      </article>
+      <article class="card bad">
+        <h3>关键缺口</h3>
+        <ul>
+          <li>没有 Workflow 文件发现与版本化契约。</li>
+          <li>没有隔离 JS 编排运行时。</li>
+          <li>没有 run/phase/agent 持久化状态机。</li>
+          <li>没有脚本级断点、恢复和确定性重放。</li>
+          <li>没有 Workflow 专属审批与权限模型。</li>
+          <li>Brain 的 <code>workflow_pattern</code> 只是经验候选，不可执行。</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <h2>兼容目标</h2>
+    <table>
+      <thead><tr><th>层级</th><th>目标</th><th>本提案决定</th></tr></thead>
+      <tbody>
+        <tr><td>L0 发现兼容</td><td>识别用户与项目 <code>.claude/workflows/*.js</code></td><td>应支持，项目路径遵循最近目录优先。</td></tr>
+        <tr><td>L1 语法兼容</td><td>接受 <code>meta</code>、顶层 <code>await</code>、全局 <code>args</code>、核心 helper</td><td>首版支持官方公开子集，不追逐内部未文档化 API。</td></tr>
+        <tr><td>L2 行为兼容</td><td>后台执行、结构化结果、并发、取消、失败传播</td><td>必须由 San 调度器提供，不由 JS 自建线程池。</td></tr>
+        <tr><td>L3 运行状态兼容</td><td>暂停、恢复、重启单代理、会话内结果交付</td><td>分阶段实现；恢复必须基于持久化事件，不依赖闭包快照。</td></tr>
+        <tr><td>L4 UX 兼容</td><td><code>/workflows</code>、保存为命令、进度视图</td><td>可借鉴交互，不要求逐像素或命令完全一致。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>建议架构</h2>
+    <div class="flow">
+      <div class="step"><b>1</b><strong>Discovery</strong><p>发现 San 与 Claude 路径，解析优先级和来源。</p></div>
+      <div class="step"><b>2</b><strong>Validator</strong><p>验证 <code>meta</code>、参数和允许的运行时 API。</p></div>
+      <div class="step"><b>3</b><strong>Isolate</strong><p>在独立 Worker/进程执行受限 JS。</p></div>
+      <div class="step"><b>4</b><strong>Bridge</strong><p>把 <code>agent/parallel/pipeline</code> 映射到 San 调度器。</p></div>
+      <div class="step"><b>5</b><strong>Ledger</strong><p>持久化 run、phase、agent、artifact 和 transition。</p></div>
+      <div class="step"><b>6</b><strong>Delivery</strong><p>后台状态进入任务面板，最终结果注入原会话。</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>运行时契约</h2>
+    <div class="grid two">
+      <article class="card">
+        <h3>首版公开 API</h3>
+        <div class="mono">export const meta = {
+  name: "audit-routes",
+  description: "Audit routes",
+};
+
+const files = await agent("List route files", { schema });
+const findings = await pipeline(files, file =&gt;
+  agent(`Audit ${file}`, { label: file })
+);
+return findings;</div>
+        <p class="muted">候选 helper：<code>agent</code>、<code>parallel</code>、<code>pipeline</code>、<code>output</code>、<code>log</code>、<code>phase</code>。参数使用结构化 <code>args</code>，禁止 JSON 字符串二次编码。</p>
+      </article>
+      <article class="card">
+        <h3>明确禁止</h3>
+        <ul>
+          <li>Workflow 脚本直接访问 <code>Bun</code>、<code>process</code>、<code>fs</code>、网络或子进程。</li>
+          <li>复用普通 Extension Loader 执行不可信脚本。</li>
+          <li>脚本直接持有 AgentSession、SessionManager 或工具注册表。</li>
+          <li>通过不可序列化闭包实现暂停/恢复。</li>
+          <li>Brain 自动生成后直接激活可执行脚本。</li>
+          <li>把 Claude 私有、未文档化 runtime 行为设为兼容承诺。</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <h2>安全与可靠性</h2>
+    <div class="grid two">
+      <article class="card good">
+        <h3>能力隔离</h3>
+        <ul>
+          <li>Workflow Runtime 只暴露白名单桥接函数。</li>
+          <li>代理继承显式工具 allowlist，脚本不拥有工具权限。</li>
+          <li>每次运行绑定 session、cwd、source 和审批记录。</li>
+          <li>全局并发、单 run 并发、代理总量和 token 预算均硬限制。</li>
+        </ul>
+      </article>
+      <article class="card warn">
+        <h3>恢复语义</h3>
+        <ul>
+          <li>所有调度决定写入 append-only Workflow Ledger。</li>
+          <li>完成节点通过幂等键复用，禁止重复副作用。</li>
+          <li>暂停只阻止新节点；在途代理进入可观察结算。</li>
+          <li>恢复从已提交节点继续，而非重新执行整个脚本。</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <h2>与 Brain / Experience 的关系</h2>
+    <ol>
+      <li>Brain 可从成功执行轨迹提取 <code>workflow_pattern</code> Experience Candidate。</li>
+      <li>Candidate 只描述可复用编排模式，不包含可直接执行代码。</li>
+      <li>Consolidation 可生成 Managed Workflow Draft，保留来源、置信度和适用 scope。</li>
+      <li>用户必须审阅脚本、权限和预算后显式批准。</li>
+      <li>激活后形成版本化 Workflow；后续修改重新审批。</li>
+      <li>执行反馈回流 Experience，但失败记录不得自动扩大权限或 scope。</li>
+    </ol>
+    <p><span class="tag">Experience suggests</span><span class="tag">Human approves</span><span class="tag">Runtime executes</span><span class="tag">Ledger proves</span></p>
+  </section>
+
+  <section>
+    <h2>实施阶段（v0.3 后）</h2>
+    <table>
+      <thead><tr><th>阶段</th><th>范围</th><th>完成标准</th></tr></thead>
+      <tbody>
+        <tr><td>W0 契约冻结</td><td>Workflow 文件格式、API 子集、状态机、权限和兼容等级</td><td>黄金脚本与失败语义测试先于实现。</td></tr>
+        <tr><td>W1 最小 Runtime</td><td>隔离 JS、<code>agent</code>、<code>parallel</code>、<code>pipeline</code>、结构化返回</td><td>脚本无直接系统权限；取消和预算有效。</td></tr>
+        <tr><td>W2 Claude Loader</td><td><code>.claude/workflows</code> 发现、<code>meta</code>、<code>args</code>、命令映射</td><td>官方公开示例可少量修改或无需修改运行。</td></tr>
+        <tr><td>W3 Ledger + UX</td><td>后台进度、列表、暂停、恢复、重启节点、结果交付</td><td>进程恢复后不重复已提交节点。</td></tr>
+        <tr><td>W4 Brain Integration</td><td>pattern → draft → approve → activate → feedback</td><td>任何自动生成 Workflow 都必须经过显式审批。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>为什么现在搁置</h2>
+    <ul>
+      <li>v0.3 正在建立 Brain 的 Capture、Consolidation、Activation 和 provenance 基础。</li>
+      <li>Workflow Runtime 依赖稳定的事件账本、幂等语义、scope、审批和恢复机制。</li>
+      <li>现在实现会同时改变调度、执行沙箱、UI、权限和 Experience promotion，扩大 v0.3 风险面。</li>
+      <li>先让 Brain 产出可信 Experience，再让 Experience 生成可执行 Workflow，依赖顺序更合理。</li>
+    </ul>
+    <p><strong>重新启动条件：</strong>v0.3 M1–M5 完成；Brain provenance 与 activation/undo 稳定；San Loop 的 run/worker 事件可复用；单独建立 Workflow 安全模型和兼容测试矩阵。</p>
+  </section>
+
+  <section>
+    <h2>参考依据</h2>
+    <ul>
+      <li><a href="https://code.claude.com/docs/en/workflows.md">Claude Code：Orchestrate subagents at scale with dynamic workflows</a>（访问于 2026-07-10）</li>
+      <li><a href="../../docs/extensions.md">San Extensions Runtime</a>：JS/TS 扩展能力与同进程执行模型。</li>
+      <li><a href="../../docs/extension-loading.md">San Extension Loading</a>：发现路径、加载顺序和非沙箱边界。</li>
+      <li><a href="../../packages/coding-agent/src/discovery/claude.ts">Claude Code Provider</a>：当前兼容发现范围。</li>
+      <li><a href="./san-v0.3-brain-technical-implementation-20260708.html">San v0.3 Brain / Experience System 技术实现</a>。</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

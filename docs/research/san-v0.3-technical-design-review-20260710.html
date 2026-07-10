@@ -311,12 +311,18 @@
           <tr><td>P0</td><td>冻结命名、scope identity、typed activation、source-of-truth、outbox/undo、legacy autoRetain 迁移、prompt precedence。</td><td>三份文档无冲突；数据合同能表达所有后续章节引用字段；失败矩阵有确定结果。</td></tr>
           <tr><td>M1</td><td>Candidate/Decision ledger + SQLite materialized store；只读命令 <code>/brain inbox/profile/explain</code>。</td><td>append/list/resume/migrate/idempotency/concurrency 通过；不改变 agent 行为。</td></tr>
           <tr><td>M2</td><td>Digest 完成后 deterministic capture；接入 accepted San Loop review；仍为 review-only。</td><td>固定 fixtures 输出稳定；同一 evidence 不重复；旧 retry attempt 不进入 active candidate。</td></tr>
-          <tr><td>M3</td><td>Consolidation、conflict/supersede、approve/discard/undo；先不自动激活。</td><td>所有状态转换幂等；crash 后可 reconcile；undo 不破坏后续 revision。</td></tr>
-          <tr><td>M4</td><td>Brain prelude activation + 全局预算 + role-specific filtering；低风险 allowlist 小流量 auto-apply。</td><td>next-turn 时序确定；prompt injection、scope isolation、token cap 测试通过。</td></tr>
+          <tr><td>M3</td><td><strong>已完成（2026-07-10）</strong>：Consolidation、conflict/supersede、approve/discard/undo；仍不注入 prompt。</td><td>状态转换幂等；JSONL Decision 可重放到 SQLite；undo 后可继续递增 revision；Brain 定向测试与 <code>bun check</code> 通过。</td></tr>
+          <tr><td>M4</td><td><strong>已完成（2026-07-10）</strong>：Brain prelude activation、scope/role/relevance filtering、安全 typed rendering、Brain + ContextPacket + San Loop 全局预算和 activation audit；保持显式批准，不实现 auto-apply。</td><td>只在真实用户下一轮注入；当前用户冲突时跳过；prompt injection、scope/role isolation、单项预算和总 token cap 测试通过。</td></tr>
           <tr><td>M5</td><td>Memory projection、managed skill draft/approval、check suggestion；legacy autoRetain 迁移。</td><td>外部写入失败不影响主 turn；重试不重复；补偿和人工修改冲突有明确处理。</td></tr>
           <tr><td>M6</td><td>Policy-aware recall、10+ turn dogfood、真实会话报告、默认策略评估。</td><td>候选数受控；不相关任务无污染；误固化可解释、可撤销；四种 backend 均有降级证明。</td></tr>
         </tbody>
       </table>
+      <div class="callout good">
+        <strong>M3 开发记录：</strong><code>brain/consolidate.ts</code> 负责 duplicate/conflict 分组和 active payload 证据合并；<code>brain/commands.ts</code> 生成不可变 approve/discard/supersede/undo Decision；<code>/brain consolidate</code> 只报告、不静默批准。验证覆盖冲突替换、重复命令幂等、undo 后续 revision、session ledger 重建和 slash command 闭环。
+      </div>
+      <div class="callout good">
+        <strong>M4 开发记录：</strong><code>brain/activation.ts</code> 对已批准 active state 执行精确 scope、role、task、command、file glob、language 和 risk selector；只渲染 typed action，并对历史字段做控制字符清理、长度限制和 JSON/XML 安全编码。<code>AgentSession</code> 仅在真实用户下一轮注入 hidden Brain prelude，按 San Loop &gt; Brain &gt; ContextPacket 权限顺序执行共享 token cap，并写入不可变 <code>san.brain.activation</code> 审计。验证覆盖当前用户覆盖、跨 scope/role 隔离、恶意标签与工具语法、整项裁剪、总预算和 synthetic turn 不注入。
+      </div>
       <div class="callout good">
         <strong>最关键的顺序调整：</strong>把 explain/undo 提前，把 auto-apply 和 skill 激活后移。系统先拥有控制面，再拥有自动改变长期行为的能力。
       </div>

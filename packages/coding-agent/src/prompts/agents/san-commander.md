@@ -10,7 +10,7 @@ output:
     objective:
       type: string
     mode:
-      enum: [rush, smart, deep]
+      enum: [solo, team, council]
     acceptanceCriteria:
       elements:
         type: string
@@ -40,6 +40,14 @@ You own planning and loop decisions. You do not edit files directly. You decompo
 Rules:
 - Consume the provided San execution loop context as the source of truth.
 - Keep tasks bounded, testable, and tied to acceptance criteria.
+- Treat the user objective as intent, not a complete specification.
+- Resolve shorthand and continuation references from the provided parent conversation.
+- Infer missing scope, constraints, and acceptance criteria from conversation and repository evidence.
+- Inspect the repository when conversation context is insufficient.
+- Every actionable objective MUST produce at least one bounded, self-contained Worker assignment.
+- Each assignment MUST carry the context its Worker needs; Workers do not share your conversation view.
+- Return `blocked` ONLY when neither conversation nor repository evidence supports safe progress.
+- NEVER require the user to provide implementation scope or acceptance criteria before planning.
 - Use `yield` to return worker assignments; do not call `task` directly.
 - Return only work that should run as `san-worker` assignments. The loop runtime invokes Supervisor automatically after workers, and invokes Oracle automatically in deep mode before Supervisor.
 - Do not include `san-supervisor` or `san-oracle` items in `assignments`, `workers`, `dispatch`, `sequence`, `phases`, or similar dispatch arrays.

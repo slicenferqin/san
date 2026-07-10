@@ -5,8 +5,12 @@ import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { type AutocompleteItem, Spacer } from "@oh-my-pi/pi-tui";
 import { APP_NAME, getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import {
+	applySanBrainMutation,
+	buildSanBrainConsolidation,
+	buildSanBrainConsolidationReportText,
 	buildSanBrainExplanationText,
 	buildSanBrainInboxReportText,
+	buildSanBrainMutationResultText,
 	buildSanBrainProfileReportText,
 	SanBrainStore,
 } from "../brain";
@@ -1310,35 +1314,54 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "brain",
-		description: "Inspect San Brain candidates and active profile state",
-		acpDescription: "Inspect San Brain state",
-		acpInputHint: "[inbox|profile|explain <id>]",
+		description: "Inspect and review San Brain candidates and active state",
+		acpDescription: "Inspect or review San Brain state",
+		acpInputHint: "[inbox|profile|explain|approve|discard|undo|consolidate]",
 		allowArgs: true,
 		subcommands: [
 			{ name: "inbox", description: "List pending Brain candidates" },
 			{ name: "profile", description: "List active profile state" },
 			{ name: "explain", description: "Explain one candidate or decision", usage: "<id>" },
+			{ name: "approve", description: "Approve one Brain candidate", usage: "<id>" },
+			{ name: "discard", description: "Discard one Brain candidate", usage: "<id>" },
+			{ name: "undo", description: "Undo the current approve decision", usage: "<id>" },
+			{ name: "consolidate", description: "Inspect duplicate and conflicting candidates" },
 		],
 		handle: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
 			const action = verb || "inbox";
-			if (action !== "inbox" && action !== "profile" && action !== "explain") {
-				return usage("Usage: /brain [inbox|profile|explain <id>]", runtime);
+			const supported = ["inbox", "profile", "explain", "approve", "discard", "undo", "consolidate"];
+			if (!supported.includes(action)) {
+				return usage(
+					"Usage: /brain [inbox|profile|explain <id>|approve <id>|discard <id>|undo <id>|consolidate]",
+					runtime,
+				);
 			}
-			if (action === "explain" && (!rest.trim() || /\s/.test(rest.trim()))) {
-				return usage("Usage: /brain explain <id>", runtime);
+			const idAction = action === "explain" || action === "approve" || action === "discard" || action === "undo";
+			if (idAction && (!rest.trim() || /\s/.test(rest.trim()))) {
+				return usage(`Usage: /brain ${action} <id>`, runtime);
+			}
+			if (action === "consolidate" && rest.trim()) {
+				return usage("Usage: /brain consolidate", runtime);
 			}
 
 			const store = SanBrainStore.open(runtime.settings.getAgentDir());
 			try {
 				store.syncSessionEntries(runtime.sessionManager.getSessionId(), runtime.sessionManager.getEntries());
-				const report =
-					action === "profile"
-						? buildSanBrainProfileReportText(store)
-						: action === "explain"
-							? buildSanBrainExplanationText(store, rest.trim())
-							: buildSanBrainInboxReportText(store);
-				await runtime.output(report);
+				if (action === "approve" || action === "discard" || action === "undo") {
+					const result = applySanBrainMutation(store, runtime.sessionManager, { action, id: rest.trim() });
+					await runtime.output(buildSanBrainMutationResultText(result));
+				} else {
+					const report =
+						action === "profile"
+							? buildSanBrainProfileReportText(store)
+							: action === "explain"
+								? buildSanBrainExplanationText(store, rest.trim())
+								: action === "consolidate"
+									? buildSanBrainConsolidationReportText(buildSanBrainConsolidation(store))
+									: buildSanBrainInboxReportText(store);
+					await runtime.output(report);
+				}
 			} catch (error) {
 				await runtime.output(`San Brain ${action} failed: ${errorMessage(error)}`);
 			} finally {

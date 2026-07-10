@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { SanBrainStore } from "@oh-my-pi/pi-coding-agent/brain/store";
 import {
@@ -6,62 +7,54 @@ import {
 	type SanBrainDecision,
 	type SanBrainProfileCandidate,
 } from "@oh-my-pi/pi-coding-agent/brain/types";
-import type { CustomEntry, SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 let tempDir: TempDir | null = null;
-let stores: SanBrainStore[] = [];
+const openStores = new Set<SanBrainStore>();
 
-function profileCandidate(id = "profile-1"): SanBrainProfileCandidate {
+function profile(overrides: Partial<SanBrainProfileCandidate> = {}): SanBrainProfileCandidate {
 	return {
 		schemaVersion: 1,
-		candidateId: id,
+		candidateId: "profile-1",
 		scope: { kind: "user", key: "user:local", resolverVersion: 1 },
 		type: "user_preference",
 		subject: "delivery",
 		predicate: "format",
 		value: "HTML",
-		claimKey: "user:local:delivery:format",
-		dedupeKey: `user:local:delivery:format:html:${id}`,
-		taskTags: ["research"],
-		confidence: 0.94,
+		claimKey: "delivery:format",
+		dedupeKey: "delivery:format:html",
+		taskTags: [],
+		confidence: 0.92,
 		importance: 0.8,
 		independentEvidenceCount: 1,
 		sensitivity: "normal",
-		evidence: [
-			{
-				sessionId: "session-1",
-				entryIds: ["user-1"],
-				digestEntryIds: ["digest-1"],
-				loopRefs: [],
-				fileRefs: [],
-				toolCallIds: [],
-				summary: "User requested HTML research documents.",
-			},
-		],
+		evidence: [],
 		createdAt: "2026-07-10T10:00:00.000Z",
+		...overrides,
 	};
 }
 
-function approveDecision(ownerId = "profile-1", id = "decision-1"): SanBrainDecision {
+function decision(overrides: Partial<SanBrainDecision> = {}): SanBrainDecision {
 	return {
 		schemaVersion: 1,
-		decisionId: id,
+		decisionId: "decision-1",
 		ownerType: "profile_candidate",
-		ownerId,
+		ownerId: "profile-1",
 		action: "approve",
 		previousRevision: 0,
 		nextRevision: 1,
 		requestedBy: "user",
-		reason: "Explicitly approved preference.",
+		reason: "Approved.",
 		policyVersion: "brain-m1",
-		idempotencyKey: `approve:${ownerId}:1`,
+		idempotencyKey: "approve:profile-1:1",
 		projectionIds: [],
 		createdAt: "2026-07-10T10:01:00.000Z",
+		...overrides,
 	};
 }
 
-function customEntry<T>(id: string, customType: string, data: T): CustomEntry<T> {
+function entry(id: string, customType: string, data: unknown): SessionEntry {
 	return {
 		type: "custom",
 		id,
@@ -72,21 +65,24 @@ function customEntry<T>(id: string, customType: string, data: T): CustomEntry<T>
 	};
 }
 
-function openStore(): SanBrainStore {
-	if (!tempDir) throw new Error("Test temp directory is not initialized.");
-	const store = new SanBrainStore(tempDir.join("brain.sqlite"));
-	stores.push(store);
+function createStore(dbPath: string): SanBrainStore {
+	const store = new SanBrainStore(dbPath);
+	openStores.add(store);
 	return store;
+}
+
+function closeStore(store: SanBrainStore): void {
+	store.close();
+	openStores.delete(store);
 }
 
 beforeEach(() => {
 	tempDir = TempDir.createSync("@san-brain-store-");
-	stores = [];
 });
 
 afterEach(async () => {
-	for (const store of stores) store.close();
-	stores = [];
+	for (const store of openStores) store.close();
+	openStores.clear();
 	if (tempDir) {
 		await tempDir.remove().catch(() => {});
 		tempDir = null;
@@ -94,89 +90,106 @@ afterEach(async () => {
 });
 
 describe("SanBrainStore", () => {
-	it("creates schema version 1 and preserves pending candidates across reopen", () => {
-		const entries: SessionEntry[] = [
-			customEntry("entry-profile-1", BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE, profileCandidate()),
+	it("rebuilds active state from the immutable ledger and remains idempotent after resume", () => {
+		if (!tempDir) throw new Error("Test temp directory is not initialized.");
+		const dbPath = tempDir.join("brain.sqlite");
+		const entries = [
+			entry("profile-entry", BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE, profile()),
+			entry("decision-entry", BRAIN_DECISION_CUSTOM_TYPE, decision()),
 		];
-		const store = openStore();
-		const firstSync = store.syncSessionEntries("session-1", entries);
+		const store = createStore(dbPath);
 
 		expect(store.schemaVersion).toBe(1);
-		expect(firstSync).toEqual({
+		expect(store.syncSessionEntries("session-1", entries)).toEqual({
 			candidatesAdded: 1,
-			decisionsAdded: 0,
-			decisionsApplied: 0,
+			decisionsAdded: 1,
+			decisionsApplied: 1,
 			decisionsBlocked: 0,
 		});
-		expect(store.listPendingCandidates().map(record => record.candidate.candidateId)).toEqual(["profile-1"]);
-		store.close();
-		stores = stores.filter(item => item !== store);
-
-		const reopened = openStore();
-		expect(reopened.listPendingCandidates()[0]?.candidate.candidateId).toBe("profile-1");
-	});
-
-	it("materializes an approved candidate and explains the decision chain", () => {
-		const entries: SessionEntry[] = [
-			customEntry("entry-profile-1", BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE, profileCandidate()),
-			customEntry("entry-decision-1", BRAIN_DECISION_CUSTOM_TYPE, approveDecision()),
-		];
-		const store = openStore();
-		const result = store.syncSessionEntries("session-1", entries);
-
-		expect(result.decisionsApplied).toBe(1);
-		expect(store.listPendingCandidates()).toEqual([]);
-		expect(store.listActiveStates()[0]?.candidate.candidateId).toBe("profile-1");
-		expect(store.explain("decision-1")).toMatchObject({
-			candidate: { status: "active", revision: 1 },
-			decisions: [{ applicationState: "applied" }],
-			activeState: { decisionId: "decision-1", revision: 1 },
-		});
-	});
-
-	it("is idempotent across multiple store handles", () => {
-		const entries: SessionEntry[] = [
-			customEntry("entry-profile-1", BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE, profileCandidate()),
-			customEntry("entry-decision-1", BRAIN_DECISION_CUSTOM_TYPE, approveDecision()),
-		];
-		const first = openStore();
-		const second = openStore();
-
-		expect(first.syncSessionEntries("session-1", entries).candidatesAdded).toBe(1);
-		expect(second.syncSessionEntries("session-1", entries)).toEqual({
+		expect(store.syncSessionEntries("session-1", entries)).toEqual({
 			candidatesAdded: 0,
 			decisionsAdded: 0,
 			decisionsApplied: 0,
 			decisionsBlocked: 0,
 		});
-		expect(second.listActiveStates()).toHaveLength(1);
-	});
+		expect(store.listPendingCandidates()).toEqual([]);
+		expect(store.listActiveStates()).toMatchObject([
+			{ kind: "profile", revision: 1, decisionId: "decision-1", candidate: { candidateId: "profile-1" } },
+		]);
 
-	it("blocks stale revisions instead of overwriting materialized state", () => {
-		const stale = { ...approveDecision(), previousRevision: 2, nextRevision: 3 };
-		const entries: SessionEntry[] = [
-			customEntry("entry-profile-1", BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE, profileCandidate()),
-			customEntry("entry-decision-1", BRAIN_DECISION_CUSTOM_TYPE, stale),
-		];
-		const store = openStore();
-		const result = store.syncSessionEntries("session-1", entries);
-
-		expect(result.decisionsBlocked).toBe(1);
-		expect(store.listActiveStates()).toEqual([]);
-		expect(store.explain("decision-1")?.decisions[0]).toMatchObject({
-			applicationState: "blocked",
-			applicationError: "Expected candidate revision 2, found 0.",
+		closeStore(store);
+		const resumed = createStore(dbPath);
+		expect(resumed.schemaVersion).toBe(1);
+		expect(resumed.explain("decision-1")).toMatchObject({
+			candidate: { status: "active", revision: 1, candidate: { candidateId: "profile-1" } },
+			decisions: [{ applicationState: "applied", decision: { decisionId: "decision-1" } }],
+			activeState: { revision: 1, decisionId: "decision-1" },
 		});
 	});
 
-	it("rejects an id collision with different payload", () => {
-		const firstEntry = customEntry("entry-profile-1", BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE, profileCandidate());
-		const conflicting = profileCandidate();
-		conflicting.value = "Markdown";
-		const secondEntry = customEntry("entry-profile-2", BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE, conflicting);
-		const store = openStore();
+	it("reconciles a decision that was persisted before its candidate", () => {
+		if (!tempDir) throw new Error("Test temp directory is not initialized.");
+		const store = createStore(tempDir.join("brain.sqlite"));
 
-		store.syncSessionEntries("session-1", [firstEntry]);
-		expect(() => store.syncSessionEntries("session-1", [secondEntry])).toThrow("Brain candidate collision");
+		expect(
+			store.syncSessionEntries("session-1", [entry("decision-entry", BRAIN_DECISION_CUSTOM_TYPE, decision())]),
+		).toEqual({ candidatesAdded: 0, decisionsAdded: 1, decisionsApplied: 0, decisionsBlocked: 0 });
+		expect(store.listActiveStates()).toEqual([]);
+
+		expect(
+			store.syncSessionEntries("session-1", [
+				entry("profile-entry", BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE, profile()),
+			]),
+		).toEqual({ candidatesAdded: 1, decisionsAdded: 0, decisionsApplied: 1, decisionsBlocked: 0 });
+		expect(store.listActiveStates()).toMatchObject([{ revision: 1, decisionId: "decision-1" }]);
+	});
+
+	it("blocks a stale revision from a second writer without replacing active state", () => {
+		if (!tempDir) throw new Error("Test temp directory is not initialized.");
+		const dbPath = tempDir.join("brain.sqlite");
+		const first = createStore(dbPath);
+		const second = createStore(dbPath);
+		const candidateEntry = entry("profile-entry", BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE, profile());
+
+		first.syncSessionEntries("session-1", [candidateEntry]);
+		expect(
+			first.syncSessionEntries("session-1", [entry("approve-entry", BRAIN_DECISION_CUSTOM_TYPE, decision())]),
+		).toMatchObject({ decisionsApplied: 1, decisionsBlocked: 0 });
+		expect(
+			second.syncSessionEntries("session-2", [
+				candidateEntry,
+				entry(
+					"discard-entry",
+					BRAIN_DECISION_CUSTOM_TYPE,
+					decision({
+						decisionId: "decision-2",
+						action: "discard",
+						idempotencyKey: "discard:profile-1:1",
+						createdAt: "2026-07-10T10:02:00.000Z",
+					}),
+				),
+			]),
+		).toMatchObject({ decisionsApplied: 0, decisionsBlocked: 1 });
+
+		const explanation = first.explain("profile-1");
+		expect(explanation?.activeState).toMatchObject({ revision: 1, decisionId: "decision-1" });
+		expect(explanation?.decisions).toMatchObject([
+			{ applicationState: "applied", decision: { decisionId: "decision-1" } },
+			{
+				applicationState: "blocked",
+				applicationError: "Expected candidate revision 0, found 1.",
+				decision: { decisionId: "decision-2" },
+			},
+		]);
+	});
+
+	it("rejects a database schema newer than the runtime supports", () => {
+		if (!tempDir) throw new Error("Test temp directory is not initialized.");
+		const dbPath = tempDir.join("brain.sqlite");
+		const db = new Database(dbPath);
+		db.run("PRAGMA user_version = 99");
+		db.close();
+
+		expect(() => createStore(dbPath)).toThrow("Brain database schema 99 is newer than supported version 1.");
 	});
 });

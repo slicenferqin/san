@@ -62,10 +62,17 @@ function createRuntime(entries: SessionEntry[]) {
 	if (!tempDir) throw new Error("Test temp directory is not initialized.");
 	const showStatus = vi.fn();
 	const setText = vi.fn();
+	let sequence = 0;
+	const appendCustomEntry = vi.fn((customType: string, data?: unknown) => {
+		const entryId = `appended-${++sequence}`;
+		entries.push(entry(entryId, customType, data));
+		return entryId;
+	});
 	const sessionManager = {
 		getSessionId: () => "session-1",
 		getEntries: () => [...entries],
 		getCwd: () => "/repo",
+		appendCustomEntry,
 	};
 	const agentDir = tempDir.join("agent");
 	const settings = { getAgentDir: () => agentDir };
@@ -77,7 +84,7 @@ function createRuntime(entries: SessionEntry[]) {
 		session: { sessionManager },
 		refreshSlashCommandState: vi.fn(async () => {}),
 	} as unknown as InteractiveModeContext;
-	return { runtime: { ctx }, showStatus, setText };
+	return { runtime: { ctx }, showStatus, setText, entries, appendCustomEntry };
 }
 
 beforeEach(() => {
@@ -115,6 +122,52 @@ describe("/brain slash command", () => {
 		expect(await executeBuiltinSlashCommand("/brain explain decision-1", harness.runtime)).toBe(true);
 		expect(harness.showStatus).toHaveBeenCalledWith(expect.stringContaining("San Brain explanation: profile-1"));
 		expect(harness.showStatus).toHaveBeenCalledWith(expect.stringContaining("Status: active"));
+	});
+
+	it("approves and undoes a candidate through immutable decisions", async () => {
+		const harness = createRuntime([entry("profile-entry", BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE, profile)]);
+
+		expect(await executeBuiltinSlashCommand("/brain approve profile-1", harness.runtime)).toBe(true);
+		expect(harness.showStatus).toHaveBeenCalledWith(
+			expect.stringContaining("San Brain approve: applied 1 decision(s)."),
+		);
+		const approveEntry = harness.entries.find(
+			item => item.type === "custom" && item.customType === BRAIN_DECISION_CUSTOM_TYPE,
+		);
+		if (approveEntry?.type !== "custom") throw new Error("Approve decision entry was not appended.");
+		const approveDecision = approveEntry.data as SanBrainDecision;
+
+		harness.showStatus.mockClear();
+		expect(await executeBuiltinSlashCommand(`/brain undo ${approveDecision.decisionId}`, harness.runtime)).toBe(true);
+		expect(harness.showStatus).toHaveBeenCalledWith(
+			expect.stringContaining("San Brain undo: applied 1 decision(s)."),
+		);
+		expect(harness.appendCustomEntry).toHaveBeenCalledTimes(2);
+
+		harness.showStatus.mockClear();
+		expect(await executeBuiltinSlashCommand("/brain profile", harness.runtime)).toBe(true);
+		expect(harness.showStatus).toHaveBeenCalledWith("San Brain profile has no active state.");
+	});
+
+	it("reports duplicates and conflicts without approving them", async () => {
+		const duplicate = { ...profile, candidateId: "profile-2" } satisfies SanBrainProfileCandidate;
+		const conflicting = {
+			...profile,
+			candidateId: "profile-3",
+			value: "Markdown",
+			dedupeKey: "delivery:format:markdown",
+		} satisfies SanBrainProfileCandidate;
+		const harness = createRuntime([
+			entry("profile-entry-1", BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE, profile),
+			entry("profile-entry-2", BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE, duplicate),
+			entry("profile-entry-3", BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE, conflicting),
+		]);
+
+		expect(await executeBuiltinSlashCommand("/brain consolidate", harness.runtime)).toBe(true);
+		expect(harness.showStatus).toHaveBeenCalledWith(
+			expect.stringContaining("San Brain consolidation: duplicates=1 conflicts=1"),
+		);
+		expect(harness.appendCustomEntry).not.toHaveBeenCalled();
 	});
 
 	it("rejects explain without an id", async () => {

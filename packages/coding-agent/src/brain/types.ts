@@ -34,8 +34,11 @@ export interface SanBrainLoopEvidenceRef {
 	accepted: boolean;
 }
 
+export type SanBrainEvidenceSourceMode = "turn_digest" | "turn_digest_unpersisted" | "message_span_fallback";
+
 export interface SanBrainEvidenceRef {
 	sessionId: string;
+	sourceMode: SanBrainEvidenceSourceMode;
 	entryIds: string[];
 	digestEntryIds: string[];
 	loopRefs: SanBrainLoopEvidenceRef[];
@@ -141,6 +144,65 @@ export interface SanBrainDecision {
 	policyVersion: string;
 	idempotencyKey: string;
 	projectionIds: string[];
+	createdAt: string;
+}
+
+export type SanBrainActivationRole = "primary" | "commander" | "worker" | "supervisor" | "oracle";
+export type SanBrainActivationSkipReason =
+	| "scope_mismatch"
+	| "role_mismatch"
+	| "selector_mismatch"
+	| "current_user_conflict"
+	| "blocked_claim"
+	| "expired"
+	| "below_confidence"
+	| "sensitive"
+	| "item_limit"
+	| "token_budget"
+	| "global_token_budget";
+export type SanBrainInjectionSource = "san_loop" | "brain" | "context_packet";
+
+export interface SanBrainActivationSelectedRule {
+	ownerId: string;
+	decisionId: string;
+	revision: number;
+	kind: SanBrainCandidateKind;
+	scope: SanBrainScope;
+	actionKind: SanBrainAction["kind"];
+	priority: number;
+	relevance: number;
+	tokenEstimate: number;
+}
+
+export interface SanBrainActivationSkippedRule {
+	ownerId: string;
+	reason: SanBrainActivationSkipReason;
+}
+
+export interface SanBrainActivationSourceBudget {
+	source: SanBrainInjectionSource;
+	tokenEstimate: number;
+	included: boolean;
+	reason?: "global_token_budget";
+}
+
+export interface SanBrainActivation {
+	schemaVersion: typeof BRAIN_SCHEMA_VERSION;
+	activationId: string;
+	sessionId: string;
+	turnId: string;
+	role: SanBrainActivationRole;
+	scopeKeys: string[];
+	selectedRules: SanBrainActivationSelectedRule[];
+	skippedRules: SanBrainActivationSkippedRule[];
+	tokenEstimate: number;
+	tokenBudget: number;
+	globalTokenEstimate: number;
+	globalTokenBudget: number;
+	sourceBudgets: SanBrainActivationSourceBudget[];
+	trimReason?: "item_limit" | "token_budget" | "global_token_budget";
+	policyVersion: string;
+	renderedHash: string;
 	createdAt: string;
 }
 
@@ -348,6 +410,92 @@ export function isSanBrainDecision(value: unknown): value is SanBrainDecision {
 		isNonEmptyString(value.policyVersion) &&
 		isNonEmptyString(value.idempotencyKey) &&
 		isStringArray(value.projectionIds) &&
+		isNonEmptyString(value.createdAt)
+	);
+}
+
+function isActivationRole(value: unknown): value is SanBrainActivationRole {
+	return (
+		value === "primary" || value === "commander" || value === "worker" || value === "supervisor" || value === "oracle"
+	);
+}
+
+function isActivationSkipReason(value: unknown): value is SanBrainActivationSkipReason {
+	return (
+		value === "scope_mismatch" ||
+		value === "role_mismatch" ||
+		value === "selector_mismatch" ||
+		value === "current_user_conflict" ||
+		value === "blocked_claim" ||
+		value === "expired" ||
+		value === "below_confidence" ||
+		value === "sensitive" ||
+		value === "item_limit" ||
+		value === "token_budget" ||
+		value === "global_token_budget"
+	);
+}
+
+function isActivationSelectedRule(value: unknown): value is SanBrainActivationSelectedRule {
+	if (!isRecord(value)) return false;
+	return (
+		isNonEmptyString(value.ownerId) &&
+		isNonEmptyString(value.decisionId) &&
+		Number.isInteger(value.revision) &&
+		(value.kind === "profile" || value.kind === "experience") &&
+		isSanBrainScope(value.scope) &&
+		isNonEmptyString(value.actionKind) &&
+		isFiniteNumber(value.priority) &&
+		isFiniteNumber(value.relevance) &&
+		Number.isInteger(value.tokenEstimate) &&
+		(value.tokenEstimate as number) >= 0
+	);
+}
+
+function isActivationSkippedRule(value: unknown): value is SanBrainActivationSkippedRule {
+	return isRecord(value) && isNonEmptyString(value.ownerId) && isActivationSkipReason(value.reason);
+}
+
+function isActivationSourceBudget(value: unknown): value is SanBrainActivationSourceBudget {
+	if (!isRecord(value)) return false;
+	return (
+		(value.source === "san_loop" || value.source === "brain" || value.source === "context_packet") &&
+		Number.isInteger(value.tokenEstimate) &&
+		(value.tokenEstimate as number) >= 0 &&
+		typeof value.included === "boolean" &&
+		(value.reason === undefined || value.reason === "global_token_budget")
+	);
+}
+
+export function isSanBrainActivation(value: unknown): value is SanBrainActivation {
+	if (!isRecord(value)) return false;
+	return (
+		value.schemaVersion === BRAIN_SCHEMA_VERSION &&
+		isNonEmptyString(value.activationId) &&
+		isNonEmptyString(value.sessionId) &&
+		isNonEmptyString(value.turnId) &&
+		isActivationRole(value.role) &&
+		isStringArray(value.scopeKeys) &&
+		Array.isArray(value.selectedRules) &&
+		value.selectedRules.every(isActivationSelectedRule) &&
+		Array.isArray(value.skippedRules) &&
+		value.skippedRules.every(isActivationSkippedRule) &&
+		Number.isInteger(value.tokenEstimate) &&
+		(value.tokenEstimate as number) >= 0 &&
+		Number.isInteger(value.tokenBudget) &&
+		(value.tokenBudget as number) >= 0 &&
+		Number.isInteger(value.globalTokenEstimate) &&
+		(value.globalTokenEstimate as number) >= 0 &&
+		Number.isInteger(value.globalTokenBudget) &&
+		(value.globalTokenBudget as number) >= 0 &&
+		Array.isArray(value.sourceBudgets) &&
+		value.sourceBudgets.every(isActivationSourceBudget) &&
+		(value.trimReason === undefined ||
+			value.trimReason === "item_limit" ||
+			value.trimReason === "token_budget" ||
+			value.trimReason === "global_token_budget") &&
+		isNonEmptyString(value.policyVersion) &&
+		isNonEmptyString(value.renderedHash) &&
 		isNonEmptyString(value.createdAt)
 	);
 }

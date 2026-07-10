@@ -161,7 +161,20 @@ import {
 } from "../advisor";
 import { type AsyncJob, type AsyncJobDeliveryState, AsyncJobManager } from "../async";
 import { classifyDifficulty } from "../auto-thinking/classifier";
+import {
+	appendSanBrainActivation,
+	BRAIN_STATE_MESSAGE_TYPE,
+	buildSanBrainStatePrelude,
+	captureSanBrainTurn,
+	finalizeSanBrainActivation,
+	planSanBrainGlobalInjection,
+	recordSanBrainActivationError,
+	recordSanBrainCaptureError,
+	type SanBrainActivation,
+	SanBrainStore,
+} from "../brain";
 import { reset as resetCapabilities } from "../capability";
+import { findRepoRoot } from "../capability/fs";
 import type { Rule } from "../capability/rule";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { ModelRegistry } from "../config/model-registry";
@@ -190,6 +203,7 @@ import {
 } from "../config/settings";
 import { appendContextCheckpoint, buildContextCheckpoint } from "../context-steady/checkpoint";
 import { generateDigest as generateContextSteadyDigest } from "../context-steady/digest";
+import { generateFallbackDigest } from "../context-steady/fallback";
 import { appendContextPacketDebugEntry, buildContextPacket } from "../context-steady/packet";
 import { buildContextSteadyPrunedMessages, estimateContextSteadyPrunedTokens } from "../context-steady/prune";
 import { buildContextSteadyRecallQuery, normalizeContextSteadyRecallItems } from "../context-steady/recall";
@@ -4229,12 +4243,6 @@ export class AgentSession {
 		options?: { allowAbortInProgress?: boolean; boundaryOverride?: string | null },
 	): Promise<void> {
 		const settings = this.settings;
-
-		// Capture the original boundary BEFORE any cleanup, so the source
-		// span computation uses the stable snapshot.
-		// When boundaryOverride is provided (e.g. abort path after reset),
-		// it takes precedence even when its value is null. Null is a valid
-		// boundary for a first-turn continuation and means "start at branch root".
 		const hasBoundaryOverride = options && "boundaryOverride" in options;
 		const originalBoundary = hasBoundaryOverride
 			? (options.boundaryOverride ?? null)
@@ -4242,8 +4250,6 @@ export class AgentSession {
 				? this.#contextSteadyOriginalPreTurnLeafId
 				: this.#contextSteadyPreTurnLeafId;
 
-		// Whether we write a digest or not, continuation boundary state must
-		// be cleaned up so the next turn starts fresh.
 		const scheduleCleanup = () => {
 			this.#contextSteadyOriginalPreTurnLeafId = null;
 			this.#contextSteadyOriginalPreTurnLeafCaptured = false;
@@ -4251,28 +4257,19 @@ export class AgentSession {
 
 		return (async () => {
 			try {
-				const enabled = settings.get("san.contextSteady.enabled") as boolean;
-				if (!enabled) return;
-
+				const contextSteadyEnabled = settings.get("san.contextSteady.enabled") as boolean;
 				const digestEnabled = settings.get("san.contextSteady.digest.enabled") as boolean;
 				const persistFallback = settings.get("san.contextSteady.digest.persistFallback") as boolean;
+				const brainCaptureEnabled =
+					(settings.get("san.brain.enabled") as boolean) && (settings.get("san.brain.capture.enabled") as boolean);
+				if (!contextSteadyEnabled && !brainCaptureEnabled) return;
+				if (!digestEnabled && !brainCaptureEnabled) return;
 
-				if (!digestEnabled) return;
-
-				// A deliberate abort is itself a settled turn and should still write
-				// its digest. Other abort/dispose races render the turn invalid.
-				if ((this.#abortInProgress && options?.allowAbortInProgress !== true) || this.#isDisposed) {
-					return;
-				}
+				if ((this.#abortInProgress && options?.allowAbortInProgress !== true) || this.#isDisposed) return;
 
 				const sessionManager = this.sessionManager;
 				const preTurnLeafId = originalBoundary;
-				// Use the caller-captured leaf when provided (captured before
-				// agent_end notification which may advance the leaf via hook side
-				// effects). Fall back to getLeafId() for callers that don't capture.
 				const currentLeafId = settledLeafId ?? sessionManager.getLeafId();
-
-				// Compute source range using shared pure helper
 				const branch = sessionManager.getBranch();
 				if (preTurnLeafId && !branch.some(entry => entry.id === preTurnLeafId)) {
 					logger.debug("preTurnLeafId not found in branch while generating TurnDigest", {
@@ -4294,11 +4291,6 @@ export class AgentSession {
 				}
 				const toEntryId = span.toEntryId;
 				const fromEntryId = skipContextPacketPreludeInDigestSource(branch, span.fromEntryId, toEntryId);
-
-				// Extract messages from the branch within the source span.
-				// Both regular messages and custom_message entries are included so that
-				// agent-initiated prompts (hidden next-turn, session-stop continuation)
-				// are captured in the digest's input.
 				const spanMessages = extractSpanMessages(branch, fromEntryId, toEntryId);
 				if (spanMessages.length === 0) {
 					logger.debug("Skipping TurnDigest because source span has no digestible messages", {
@@ -4318,9 +4310,8 @@ export class AgentSession {
 					toEntryId,
 					promptGeneration: this.#promptGeneration,
 				};
-
 				const steadySettings = {
-					enabled,
+					enabled: contextSteadyEnabled,
 					digest: {
 						enabled: digestEnabled,
 						persistFallback,
@@ -4343,15 +4334,65 @@ export class AgentSession {
 						}
 					: undefined;
 
-				await generateContextSteadyDigest(
-					spanMessages,
-					source,
-					sessionManager,
-					settings,
-					steadySettings,
-					digestModel,
-				);
-				this.#maybeAppendContextSteadyCheckpoint();
+				const digestResult =
+					contextSteadyEnabled && digestEnabled
+						? await generateContextSteadyDigest(
+								spanMessages,
+								source,
+								sessionManager,
+								settings,
+								steadySettings,
+								digestModel,
+							)
+						: undefined;
+
+				if (brainCaptureEnabled) {
+					const digest =
+						digestResult?.digest ??
+						generateFallbackDigest(
+							spanMessages as Parameters<typeof generateFallbackDigest>[0],
+							source,
+							`brain_fallback_${Bun.hash(`${source.sessionId}\0${fromEntryId}\0${toEntryId}`).toString(36)}`,
+							this.sessionId,
+						);
+					try {
+						const capture = captureSanBrainTurn(sessionManager, {
+							digest,
+							...(digestResult?.entryId ? { digestEntryId: digestResult.entryId } : {}),
+							sourceMode: digestResult
+								? digestResult.persisted
+									? "turn_digest"
+									: "turn_digest_unpersisted"
+								: "message_span_fallback",
+							maxCandidates: settings.get("san.brain.capture.maxCandidatesPerTurn") as number,
+							minConfidence: settings.get("san.brain.capture.minConfidence") as number,
+							fallbackScope: { kind: "session", key: this.sessionId, resolverVersion: 1 },
+						});
+						logger.debug("San Brain capture persisted", {
+							sessionId: this.sessionId,
+							turnId: digest.turnId,
+							profileCandidates: capture.profileCandidates,
+							experienceCandidates: capture.experienceCandidates,
+						});
+					} catch (error) {
+						const message = error instanceof Error ? error.message : String(error);
+						logger.warn("Failed to capture San Brain candidates", { error: message, sessionId: this.sessionId });
+						try {
+							recordSanBrainCaptureError(sessionManager, {
+								sessionId: this.sessionId,
+								turnId: digest.turnId,
+								message,
+							});
+						} catch (recordError) {
+							logger.warn("Failed to persist San Brain capture error", {
+								error: recordError instanceof Error ? recordError.message : String(recordError),
+								sessionId: this.sessionId,
+							});
+						}
+					}
+				}
+
+				if (digestResult?.persisted && !digestResult.reused) this.#maybeAppendContextSteadyCheckpoint();
 			} catch (error) {
 				logger.warn("Failed to generate TurnDigest", {
 					error: error instanceof Error ? error.message : String(error),
@@ -4399,6 +4440,16 @@ export class AgentSession {
 			messages.filter(
 				message => !(message.role === "custom" && message.customType === SAN_LOOP_CONTEXT_PACKET_CUSTOM_TYPE),
 			),
+		);
+	}
+
+	#dropSanBrainStateMessagesFromActiveContext(): void {
+		const messages = this.agent.state.messages;
+		if (!messages.some(message => message.role === "custom" && message.customType === BRAIN_STATE_MESSAGE_TYPE)) {
+			return;
+		}
+		this.agent.replaceMessages(
+			messages.filter(message => !(message.role === "custom" && message.customType === BRAIN_STATE_MESSAGE_TYPE)),
 		);
 	}
 
@@ -7857,12 +7908,66 @@ export class AgentSession {
 		const contextPacketPrelude = options?.synthetic
 			? undefined
 			: await this.#buildContextSteadyPacketPrelude(expandedText);
-		if (contextPacketPrelude) {
-			preludeMessages.push(contextPacketPrelude);
-		}
 		const sanLoopPrelude = options?.synthetic ? undefined : this.#buildSanLoopCommanderPrelude();
-		if (sanLoopPrelude) {
-			preludeMessages.push(sanLoopPrelude);
+		const brainMode = this.settings.get("san.brain.mode");
+		const brainActivationEnabled =
+			!options?.synthetic &&
+			this.settings.get("san.brain.enabled") === true &&
+			(brainMode === "activation" || brainMode === "projection");
+		const brainPrelude = brainActivationEnabled ? await this.#buildBrainStatePrelude(expandedText) : undefined;
+		if (brainActivationEnabled) {
+			const brainStateMessage: CustomMessage | undefined = brainPrelude?.content
+				? {
+						role: "custom",
+						customType: BRAIN_STATE_MESSAGE_TYPE,
+						content: brainPrelude.content,
+						display: false,
+						details: {
+							activationId: brainPrelude.activation.activationId,
+							selectedRuleIds: brainPrelude.activation.selectedRules.map(rule => rule.ownerId),
+							renderedHash: brainPrelude.activation.renderedHash,
+						},
+						attribution: "agent",
+						timestamp: Date.now(),
+					}
+				: undefined;
+			const injectionCandidates: Array<{
+				source: "san_loop" | "brain" | "context_packet";
+				content: string;
+			}> = [];
+			if (sanLoopPrelude && typeof sanLoopPrelude.content === "string") {
+				injectionCandidates.push({ source: "san_loop", content: sanLoopPrelude.content });
+			}
+			if (brainStateMessage && typeof brainStateMessage.content === "string") {
+				injectionCandidates.push({ source: "brain", content: brainStateMessage.content });
+			}
+			if (contextPacketPrelude && typeof contextPacketPrelude.content === "string") {
+				injectionCandidates.push({ source: "context_packet", content: contextPacketPrelude.content });
+			}
+			const injectionPlan = planSanBrainGlobalInjection(
+				injectionCandidates,
+				this.settings.get("san.brain.activation.globalMaxTokens") as number,
+			);
+			for (const source of injectionPlan.includedSources) {
+				if (source === "san_loop" && sanLoopPrelude) preludeMessages.push(sanLoopPrelude);
+				if (source === "brain" && brainStateMessage) preludeMessages.push(brainStateMessage);
+				if (source === "context_packet" && contextPacketPrelude) preludeMessages.push(contextPacketPrelude);
+			}
+			if (brainPrelude) {
+				const activation = finalizeSanBrainActivation(brainPrelude.activation, injectionPlan);
+				try {
+					appendSanBrainActivation(this.sessionManager, activation);
+				} catch (error) {
+					logger.warn("Failed to persist San Brain activation audit", {
+						error: error instanceof Error ? error.message : String(error),
+						sessionId: this.sessionId,
+						activationId: activation.activationId,
+					});
+				}
+			}
+		} else {
+			if (contextPacketPrelude) preludeMessages.push(contextPacketPrelude);
+			if (sanLoopPrelude) preludeMessages.push(sanLoopPrelude);
 		}
 
 		try {
@@ -7950,6 +8055,52 @@ export class AgentSession {
 			attribution: "agent",
 			timestamp: Date.now(),
 		};
+	}
+
+	async #buildBrainStatePrelude(
+		expandedText: string,
+	): Promise<{ content?: string; activation: SanBrainActivation } | undefined> {
+		this.#dropSanBrainStateMessagesFromActiveContext();
+		const turnId = `brain_prompt_${this.#promptGeneration + 1}`;
+		const cwd = path.resolve(this.settings.getCwd());
+		try {
+			const repoRoot = await findRepoRoot(cwd);
+			const scopes = [
+				{ kind: "user" as const, key: "user:local", resolverVersion: 1 as const },
+				{ kind: "session" as const, key: this.sessionId, resolverVersion: 1 as const },
+				{ kind: "project" as const, key: cwd, resolverVersion: 1 as const },
+				...(repoRoot ? [{ kind: "repo" as const, key: path.resolve(repoRoot), resolverVersion: 1 as const }] : []),
+			];
+			const store = SanBrainStore.open(this.settings.getAgentDir());
+			try {
+				store.syncSessionEntries(this.sessionId, this.sessionManager.getEntries());
+				return buildSanBrainStatePrelude(store.listActiveStates(1000), {
+					sessionId: this.sessionId,
+					turnId,
+					role: "primary",
+					scopes,
+					promptText: expandedText,
+					maxItems: this.settings.get("san.brain.activation.maxItems") as number,
+					maxTokens: this.settings.get("san.brain.activation.maxTokens") as number,
+					minConfidence: this.settings.get("san.brain.activation.minConfidence") as number,
+				});
+			} finally {
+				store.close();
+			}
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			logger.warn("Failed to build San Brain activation", { error: message, sessionId: this.sessionId, turnId });
+			try {
+				recordSanBrainActivationError(this.sessionManager, { sessionId: this.sessionId, turnId, message });
+			} catch (recordError) {
+				logger.warn("Failed to persist San Brain activation error", {
+					error: recordError instanceof Error ? recordError.message : String(recordError),
+					sessionId: this.sessionId,
+					turnId,
+				});
+			}
+			return undefined;
+		}
 	}
 
 	#recoverPersistedSanLoopRun(): void {

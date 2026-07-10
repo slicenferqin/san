@@ -5,6 +5,9 @@
 ### Added
 
 - Added San Brain M1 with append-only profile/experience candidate and decision contracts, a WAL-backed SQLite materialized store with idempotent reconciliation and revision checks, plus read-only `/brain inbox`, `/brain profile`, and `/brain explain <id>` commands.
+- Added San Brain M2 deterministic settled-turn capture with structured source provenance, accepted San Loop attempt evidence, bounded confidence filtering, idempotent candidate persistence, and default-off `san.brain.*` settings.
+- Added San Brain M3 review controls with explicit `/brain approve`, `/brain discard`, `/brain undo`, and `/brain consolidate` commands, deterministic duplicate consolidation, conflict supersede decisions, revision-safe undo, and crash-replayable materialized state.
+- Added San Brain M4 approved-state activation on real user turns with exact scope and role gates, typed prompt-safe rendering, shared San Loop/Brain/ContextPacket token budgeting, immutable activation audits, and default-off activation settings.
 - Added the San v0.2 execution loop P1 ledger foundation with `san.loop_run`, `san.loop_event`, `san.review_report`, and `san.loop_context_packet` custom entry contracts plus `/san-loop status` reporting.
 - Added San v0.2 execution loop P2 scaffolding with bundled `san-commander`, `san-worker`, `san-supervisor`, and `san-oracle` task agents plus role-scoped ContextPacket debug helpers.
 - Added San v0.2 execution loop P3 San Checks discovery and rendering, including project/user `.san/checks/*.md` support, bundled default checks, role filtering, and path-scoped check selection.
@@ -32,6 +35,7 @@
 ### Fixed
 
 - Fixed San context steady state quality issues: ContextPacket now enforces a total injected packet budget, fallback digests retain source entry IDs and collect decisions from every assistant message in the turn, memory candidate importance normalizes to a 0-1 score, and skipped digest spans emit debug logs.
+- Fixed `/team`, `/solo`, and `/council` treating shorthand objectives as context-free tasks: Commander now receives a bounded view of the current conversation, resolves continuation references such as milestone names, and infers worker scope and acceptance criteria from conversation and repository evidence.
 ## [16.3.15] - 2026-07-09
 
 ### Changed

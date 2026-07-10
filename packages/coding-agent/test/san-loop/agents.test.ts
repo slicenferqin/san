@@ -145,6 +145,59 @@ describe("San loop bundled agents", () => {
 		expect(byName.get("san-oracle")?.tools ?? []).not.toContain("bash");
 	});
 
+	test("passes recent conversation context to commander for shorthand objectives", async () => {
+		const settings = Settings.isolated({ "san.executionLoop.roleContext.tokenBudget": 2000 });
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendMessage({
+			role: "user",
+			content: "M4 means making /team inherit the current conversation and infer scope automatically.",
+			timestamp: Date.now() - 2,
+		});
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "For M4, the user should only need to provide a goal." }],
+			timestamp: Date.now() - 1,
+		} as Parameters<SessionManager["appendMessage"]>[0]);
+		let commanderTask = "";
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			commanderTask = options.task;
+			return makeResult(options.id, {
+				objective: "同意，进入M4",
+				mode: "team",
+				acceptanceCriteria: ["shorthand objective is resolved from parent conversation"],
+				assignments: [
+					{
+						agent: "san-worker",
+						objective: "Implement M4 conversation inheritance",
+						instructions: "Use the parent conversation to implement the established M4 goal.",
+						acceptanceCriteria: ["shorthand objective is resolved from parent conversation"],
+					},
+				],
+				decision: "dispatch",
+				rationale: "The parent conversation defines M4.",
+			});
+		});
+
+		const executor = createSanLoopTaskAgentExecutor({
+			cwd: "/tmp",
+			session: {
+				sessionManager,
+				settings,
+				modelRegistry: { authStorage: {} } as never,
+			},
+		});
+		const result = await executor.commander({
+			run: { ...runSnapshot(), objective: "同意，进入M4", mode: "team" },
+			mode: "team",
+		});
+
+		expect(commanderTask).toContain("M4 means making /team inherit the current conversation");
+		expect(commanderTask).toContain("For M4, the user should only need to provide a goal.");
+		expect(commanderTask).toContain("Current objective:\n同意，进入M4");
+		expect(commanderTask).toContain("Infer missing scope, constraints, and acceptance criteria");
+		expect(result.assignments).toHaveLength(1);
+	});
+
 	test("routes configured execution-loop model roles into each San subagent", async () => {
 		const settings = Settings.isolated({
 			"san.executionLoop.roles.commander.modelRole": "plan",

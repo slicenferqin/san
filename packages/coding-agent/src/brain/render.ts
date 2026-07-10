@@ -1,3 +1,5 @@
+import type { SanBrainMutationResult } from "./commands";
+import type { SanBrainConsolidationReport } from "./consolidate";
 import type { SanBrainStore } from "./store";
 import { summarizeSanBrainCandidate } from "./types";
 
@@ -54,5 +56,31 @@ export function buildSanBrainExplanationText(store: SanBrainStore, id: string): 
 	}
 	lines.push(`Active: ${explanation.activeState ? `yes, decision=${explanation.activeState.decisionId}` : "no"}`);
 	lines.push(`Projections: ${explanation.projections.length}`);
+	return lines.join("\n");
+}
+
+export function buildSanBrainMutationResultText(result: SanBrainMutationResult): string {
+	if (!result.changed) return `San Brain ${result.action}: no change for ${result.targetId}.`;
+	const lines = [`San Brain ${result.action}: applied ${result.decisions.length} decision(s).`];
+	for (const decision of result.decisions) {
+		lines.push(
+			`- ${decision.action} ${decision.ownerId} revision=${decision.nextRevision} decision=${decision.decisionId}`,
+		);
+	}
+	return lines.join("\n");
+}
+
+export function buildSanBrainConsolidationReportText(report: SanBrainConsolidationReport): string {
+	const lines = [
+		`San Brain consolidation: duplicates=${report.duplicateGroups.length} conflicts=${report.conflictGroups.length}`,
+	];
+	for (const group of report.duplicateGroups) {
+		lines.push(`- duplicate ${group.key}: ${group.candidateIds.join(", ")}`);
+	}
+	for (const group of report.conflictGroups) {
+		lines.push(
+			`- conflict ${group.key}: ${group.candidateIds.join(", ")} active=${group.activeCandidateIds.join(", ") || "none"}`,
+		);
+	}
 	return lines.join("\n");
 }

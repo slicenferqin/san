@@ -4,8 +4,8 @@
 # 环境变量或未跟踪的 agent dir 中。
 modelRoles:
   default: asxs/gpt-5.5
-  smol: claude-code/claude-fable-5
-  slow: claude-code/claude-fable-5
+  smol: claude-code/claude-opus-4-8
+  slow: claude-code/claude-opus-4-8
   plan: asxs/gpt-5.5:xhigh
   advisor: claude-code/claude-opus-4-8
   task: deepseek/deepseek-v4-pro
@@ -26,7 +26,7 @@ san:
       timeoutMs: 30000
       llm:
         enabled: true
-        modelRole: claude-code/claude-fable-5
+        modelRole: claude-code/claude-opus-4-8
     qualityWindowTokens: 24000
     reserveRatio: 0.25
     contextPacket:
@@ -57,7 +57,7 @@ san:
       projectDir: .san/checks
     roles:
       commander:
-        modelRole: claude-code/claude-fable-5
+        modelRole: claude-code/claude-opus-4-8
       worker:
         modelRole: deepseek/deepseek-v4-pro
       supervisor:

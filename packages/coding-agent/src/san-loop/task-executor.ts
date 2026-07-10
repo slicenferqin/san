@@ -1,5 +1,9 @@
 import * as fs from "node:fs/promises";
 
+import { prompt } from "@oh-my-pi/pi-utils";
+import { extractMessages } from "../hindsight/transcript";
+import commanderTaskTemplate from "../prompts/san-loop/commander-task.md" with { type: "text" };
+
 import type { AgentSession } from "../session/agent-session";
 import type { SessionManager } from "../session/session-manager";
 import { getBundledAgent } from "../task/agents";
@@ -436,7 +440,44 @@ function parseSeverity(value: unknown): SanLoopDefect["severity"] {
 		: "medium";
 }
 
-function buildCommanderTask(invocation: SanLoopCommanderInvocation): string {
+const DEFAULT_COMMANDER_CONTEXT_TOKEN_BUDGET = 2000;
+const COMMANDER_CONTEXT_CHARS_PER_TOKEN = 4;
+const MIN_COMMANDER_CONTEXT_CHARS = 512;
+
+function renderCommanderConversationContext(sessionManager: SessionManager, tokenBudget: number): string {
+	const messages = extractMessages({ getEntries: () => sessionManager.getBranch() });
+	if (messages.length === 0) return "none";
+
+	const normalizedTokenBudget = Number.isFinite(tokenBudget)
+		? Math.max(1, Math.floor(tokenBudget))
+		: DEFAULT_COMMANDER_CONTEXT_TOKEN_BUDGET;
+	let remainingChars = Math.max(
+		MIN_COMMANDER_CONTEXT_CHARS,
+		normalizedTokenBudget * COMMANDER_CONTEXT_CHARS_PER_TOKEN,
+	);
+	const selected: string[] = [];
+	for (let index = messages.length - 1; index >= 0 && remainingChars > 0; index -= 1) {
+		const message = messages[index]!;
+		const prefix = `${message.role === "user" ? "User" : "Assistant"}:\n`;
+		const content = message.content.trim();
+		const separatorLength = selected.length > 0 ? 2 : 0;
+		const full = `${prefix}${content}`;
+		if (full.length + separatorLength <= remainingChars) {
+			selected.unshift(full);
+			remainingChars -= full.length + separatorLength;
+			continue;
+		}
+
+		const availableContentChars = remainingChars - prefix.length - separatorLength - 1;
+		if (availableContentChars > 0) {
+			selected.unshift(`${prefix}…${content.slice(-availableContentChars)}`);
+		}
+		break;
+	}
+	return selected.join("\n\n") || "none";
+}
+
+function buildCommanderTask(invocation: SanLoopCommanderInvocation, conversationContext: string): string {
 	const latestReview = invocation.latestReview
 		? JSON.stringify(
 				{
@@ -448,16 +489,15 @@ function buildCommanderTask(invocation: SanLoopCommanderInvocation): string {
 				2,
 			)
 		: "none";
-	return [
-		"Create the next San v0.2 execution plan for this run.",
-		`Run ID: ${invocation.run.runId}`,
-		`Mode: ${invocation.mode}`,
-		`Objective: ${invocation.run.objective}`,
-		`Current status: ${invocation.run.status}`,
-		`Retry count: ${invocation.run.retryCount}/${invocation.run.maxRetries}`,
-		`Latest review: ${latestReview}`,
-		"Return bounded worker assignments. Do not implement directly.",
-	].join("\n");
+	return prompt.render(commanderTaskTemplate, {
+		run_id: invocation.run.runId,
+		mode: invocation.mode,
+		current_status: invocation.run.status,
+		retry_count: `${invocation.run.retryCount}/${invocation.run.maxRetries}`,
+		latest_review: latestReview,
+		conversation_context: conversationContext,
+		objective: invocation.run.objective,
+	});
 }
 
 function buildWorkerTask(invocation: SanLoopWorkerInvocation): string {
@@ -835,6 +875,9 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 	};
 	const modelOverrideForRole = (role: SanLoopRoleName): string | undefined =>
 		normalizeRoleModelOverride(options.session.settings.get(`san.executionLoop.roles.${role}.modelRole`));
+	const commanderContextTokenBudget = options.session.settings.get("san.executionLoop.roleContext.tokenBudget");
+	const commanderConversationContext = (): string =>
+		renderCommanderConversationContext(options.session.sessionManager, commanderContextTokenBudget);
 	const runAgent = async (
 		agentName: string,
 		role: SanLoopRoleName,
@@ -879,7 +922,7 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 			const result = await runAgent(
 				"san-commander",
 				"commander",
-				buildCommanderTask(invocation),
+				buildCommanderTask(invocation, commanderConversationContext()),
 				0,
 				`${invocation.run.runId}_commander`,
 			);

@@ -13,7 +13,7 @@ import type { ReadonlySessionManager } from "../session/session-manager";
 import { generateFallbackDigest, generateTurnId } from "./fallback";
 import { normalizeDigest } from "./normalize";
 import turnDigestPrompt from "./prompts/turn-digest.md" with { type: "text" };
-import { appendTurnDigest, hasExistingDigest } from "./session";
+import { appendTurnDigest, findExistingDigest } from "./session";
 import { isVolatileContextSteadyMemory, polishContextSteadyText } from "./text";
 import type {
 	ContextSteadySettings,
@@ -121,6 +121,13 @@ interface MessageLike {
 	details?: unknown;
 }
 
+export interface TurnDigestGenerationResult {
+	digest: TurnDigest;
+	entryId?: string;
+	persisted: boolean;
+	reused: boolean;
+}
+
 /**
  * Generate and persist a TurnDigest for a settled turn.
  *
@@ -134,16 +141,22 @@ export async function generateDigest(
 	_settings: Settings,
 	steadySettings: ContextSteadySettings,
 	digestModel?: ContextSteadyDigestModel,
-): Promise<void> {
-	if (!steadySettings.enabled || !steadySettings.digest.enabled) return;
+): Promise<TurnDigestGenerationResult | undefined> {
+	if (!steadySettings.enabled || !steadySettings.digest.enabled) return undefined;
 
-	// Dedupe: skip if this source range already has a digest
 	const entries = sessionManager.getEntries();
-	if (hasExistingDigest(entries, source)) return;
+	const existing = findExistingDigest(entries, source);
+	if (existing?.type === "custom") {
+		return {
+			digest: existing.data as TurnDigest,
+			entryId: existing.id,
+			persisted: true,
+			reused: true,
+		};
+	}
 
 	const turnId = generateTurnId();
 	const sessionId = source.sessionId;
-
 	const fallbackDigest = generateFallbackDigest(
 		messages as Parameters<typeof generateFallbackDigest>[0],
 		source,
@@ -151,11 +164,10 @@ export async function generateDigest(
 		sessionId,
 	);
 	const digest = await buildDigest(messages, fallbackDigest, steadySettings, digestModel);
-
-	if (!digest) return;
+	if (!digest) return undefined;
 
 	try {
-		appendTurnDigest(sessionManager, digest);
+		const entryId = appendTurnDigest(sessionManager, digest);
 		logger.debug("TurnDigest persisted", {
 			turnId: digest.turnId,
 			fallback: digest.fallback,
@@ -163,8 +175,10 @@ export async function generateDigest(
 			fromEntryId: source.fromEntryId,
 			toEntryId: source.toEntryId,
 		});
+		return { digest, entryId, persisted: true, reused: false };
 	} catch (err) {
 		logger.warn("Failed to persist TurnDigest", { error: String(err), sessionId: digest.sessionId });
+		return { digest, persisted: false, reused: false };
 	}
 }
 

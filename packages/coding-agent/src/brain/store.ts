@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { SessionEntry } from "../session/session-entries";
+import { mergeSanBrainCandidateRecords } from "./consolidate";
 import { listSanBrainLedgerEntries } from "./ledger";
 import {
 	isSanBrainDecision,
@@ -409,6 +410,22 @@ export class SanBrainStore {
 		);
 	}
 
+	#consolidatedCandidate(candidateRow: CandidateDbRow): SanBrainCandidate {
+		const candidate = parseCandidate(candidateRow.kind, candidateRow.payload_json);
+		const rows = this.#db
+			.query(
+				`SELECT candidate_id, kind, source_session_id, source_entry_id, status, revision, updated_at, payload_json
+				 FROM candidates
+				 WHERE kind = ? AND scope_kind = ? AND scope_key = ? AND dedupe_key = ?
+				   AND status IN ('pending', 'active')
+				 ORDER BY created_at, candidate_id`,
+			)
+			.all(candidateRow.kind, candidate.scope.kind, candidate.scope.key, candidate.dedupeKey) as CandidateDbRow[];
+		const records = rows.map(candidateRecord);
+		const canonical = records.find(record => record.candidate.candidateId === candidate.candidateId);
+		return mergeSanBrainCandidateRecords(canonical ?? candidateRecord(candidateRow), records);
+	}
+
 	#applyDecision(decisionId: string): DecisionApplicationState {
 		const decisionRow = this.#db
 			.query(
@@ -450,6 +467,7 @@ export class SanBrainStore {
 		let status: CandidateStatus;
 		if (decision.action === "approve") {
 			status = "active";
+			const consolidatedCandidate = this.#consolidatedCandidate(candidateRow);
 			this.#db
 				.prepare(
 					`INSERT INTO active_states (
@@ -467,12 +485,12 @@ export class SanBrainStore {
 				.run(
 					candidateRow.candidate_id,
 					candidateRow.kind,
-					parseCandidate(candidateRow.kind, candidateRow.payload_json).scope.kind,
-					parseCandidate(candidateRow.kind, candidateRow.payload_json).scope.key,
+					consolidatedCandidate.scope.kind,
+					consolidatedCandidate.scope.key,
 					decision.nextRevision,
 					decision.decisionId,
 					updatedAt,
-					candidateRow.payload_json,
+					JSON.stringify(consolidatedCandidate),
 				);
 		} else {
 			status =
@@ -494,6 +512,16 @@ export class SanBrainStore {
 			.prepare("UPDATE decisions SET application_state = 'blocked', application_error = ? WHERE decision_id = ?")
 			.run(error, decisionId);
 		return "blocked";
+	}
+
+	listCandidates(limit = DEFAULT_LIST_LIMIT): SanBrainCandidateRecord[] {
+		const rows = this.#db
+			.query(
+				`SELECT candidate_id, kind, source_session_id, source_entry_id, status, revision, updated_at, payload_json
+				 FROM candidates ORDER BY created_at DESC, candidate_id LIMIT ?`,
+			)
+			.all(Math.max(1, Math.trunc(limit))) as CandidateDbRow[];
+		return rows.map(candidateRecord);
 	}
 
 	listPendingCandidates(limit = DEFAULT_LIST_LIMIT): SanBrainCandidateRecord[] {
@@ -524,6 +552,15 @@ export class SanBrainStore {
 			)
 			.get(candidateId) as CandidateDbRow | null;
 		return row ? candidateRecord(row) : undefined;
+	}
+
+	getDecision(decisionId: string): SanBrainDecisionRecord | undefined {
+		const row = this.#db
+			.query(
+				"SELECT decision_id, owner_id, application_state, application_error, payload_json FROM decisions WHERE decision_id = ?",
+			)
+			.get(decisionId) as DecisionDbRow | null;
+		return row ? decisionRecord(row) : undefined;
 	}
 
 	explain(id: string): SanBrainExplanation | undefined {

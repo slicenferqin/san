@@ -2684,6 +2684,30 @@ export const SETTINGS_SCHEMA = {
 	"san.contextSteady.recall.maxTokens": { type: "number", default: 1000 },
 	"san.contextSteady.recall.maxQueryChars": { type: "number", default: 2000 },
 
+	// San v0.3 Brain
+	"san.brain.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "context",
+			group: "Experimental",
+			label: "San Brain",
+			description: "Capture reviewable Brain candidates and optionally inject approved low-authority state.",
+		},
+	},
+	"san.brain.mode": {
+		type: "enum",
+		values: ["review-only", "activation", "projection"] as const,
+		default: "review-only",
+	},
+	"san.brain.capture.enabled": { type: "boolean", default: true },
+	"san.brain.capture.maxCandidatesPerTurn": { type: "number", default: 5 },
+	"san.brain.capture.minConfidence": { type: "number", default: 0.72 },
+	"san.brain.activation.maxItems": { type: "number", default: 8 },
+	"san.brain.activation.maxTokens": { type: "number", default: 1200 },
+	"san.brain.activation.minConfidence": { type: "number", default: 0.75 },
+	"san.brain.activation.globalMaxTokens": { type: "number", default: 6000 },
+
 	// San v0.2 Execution Loop
 	"san.executionLoop.enabled": {
 		type: "boolean",

@@ -1,12 +1,15 @@
 import type { CustomEntry, SessionEntry } from "../session/session-entries";
 import type { ReadonlySessionManager } from "../session/session-manager";
 import {
+	BRAIN_ACTIVATION_CUSTOM_TYPE,
 	BRAIN_DECISION_CUSTOM_TYPE,
 	BRAIN_EXPERIENCE_CANDIDATE_CUSTOM_TYPE,
 	BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE,
+	isSanBrainActivation,
 	isSanBrainDecision,
 	isSanBrainExperienceCandidate,
 	isSanBrainProfileCandidate,
+	type SanBrainActivation,
 	type SanBrainDecision,
 	type SanBrainExperienceCandidate,
 	type SanBrainProfileCandidate,
@@ -23,6 +26,7 @@ export interface SanBrainLedgerSnapshot {
 	profileCandidates: Array<SanBrainLedgerEntry<SanBrainProfileCandidate>>;
 	experienceCandidates: Array<SanBrainLedgerEntry<SanBrainExperienceCandidate>>;
 	decisions: Array<SanBrainLedgerEntry<SanBrainDecision>>;
+	activations: Array<SanBrainLedgerEntry<SanBrainActivation>>;
 }
 
 export function appendSanBrainProfileCandidate(
@@ -43,6 +47,13 @@ export function appendSanBrainDecision(sessionManager: ReadonlySessionManager, d
 	return sessionManager.appendCustomEntry(BRAIN_DECISION_CUSTOM_TYPE, decision);
 }
 
+export function appendSanBrainActivation(
+	sessionManager: ReadonlySessionManager,
+	activation: SanBrainActivation,
+): string {
+	return sessionManager.appendCustomEntry(BRAIN_ACTIVATION_CUSTOM_TYPE, activation);
+}
+
 function ledgerEntry<T>(entry: CustomEntry, data: T): SanBrainLedgerEntry<T> {
 	return {
 		entryId: entry.id,
@@ -57,6 +68,7 @@ export function listSanBrainLedgerEntries(entries: readonly SessionEntry[]): San
 		profileCandidates: [],
 		experienceCandidates: [],
 		decisions: [],
+		activations: [],
 	};
 
 	for (const entry of entries) {
@@ -75,6 +87,11 @@ export function listSanBrainLedgerEntries(entries: readonly SessionEntry[]): San
 			case BRAIN_DECISION_CUSTOM_TYPE:
 				if (isSanBrainDecision(entry.data)) {
 					snapshot.decisions.push(ledgerEntry(entry, entry.data));
+				}
+				break;
+			case BRAIN_ACTIVATION_CUSTOM_TYPE:
+				if (isSanBrainActivation(entry.data)) {
+					snapshot.activations.push(ledgerEntry(entry, entry.data));
 				}
 				break;
 		}
