@@ -4,6 +4,12 @@ import * as path from "node:path";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { type AutocompleteItem, Spacer } from "@oh-my-pi/pi-tui";
 import { APP_NAME, getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
+import {
+	buildSanBrainExplanationText,
+	buildSanBrainInboxReportText,
+	buildSanBrainProfileReportText,
+	SanBrainStore,
+} from "../brain";
 import { COLLAB_GUEST_ALLOWED_COMMANDS, CollabGuestLink } from "../collab/guest";
 import { CollabHost } from "../collab/host";
 import { applyProviderGlobalsFromSettings } from "../config/provider-globals";
@@ -1300,6 +1306,45 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			}
 			runtime.ctx.handleContextCommand();
 			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "brain",
+		description: "Inspect San Brain candidates and active profile state",
+		acpDescription: "Inspect San Brain state",
+		acpInputHint: "[inbox|profile|explain <id>]",
+		allowArgs: true,
+		subcommands: [
+			{ name: "inbox", description: "List pending Brain candidates" },
+			{ name: "profile", description: "List active profile state" },
+			{ name: "explain", description: "Explain one candidate or decision", usage: "<id>" },
+		],
+		handle: async (command, runtime) => {
+			const { verb, rest } = parseSubcommand(command.args);
+			const action = verb || "inbox";
+			if (action !== "inbox" && action !== "profile" && action !== "explain") {
+				return usage("Usage: /brain [inbox|profile|explain <id>]", runtime);
+			}
+			if (action === "explain" && (!rest.trim() || /\s/.test(rest.trim()))) {
+				return usage("Usage: /brain explain <id>", runtime);
+			}
+
+			const store = SanBrainStore.open(runtime.settings.getAgentDir());
+			try {
+				store.syncSessionEntries(runtime.sessionManager.getSessionId(), runtime.sessionManager.getEntries());
+				const report =
+					action === "profile"
+						? buildSanBrainProfileReportText(store)
+						: action === "explain"
+							? buildSanBrainExplanationText(store, rest.trim())
+							: buildSanBrainInboxReportText(store);
+				await runtime.output(report);
+			} catch (error) {
+				await runtime.output(`San Brain ${action} failed: ${errorMessage(error)}`);
+			} finally {
+				store.close();
+			}
+			return commandConsumed();
 		},
 	},
 	createSanLoopModeShortcut("solo"),

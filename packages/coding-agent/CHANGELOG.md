@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added San Brain M1 with append-only profile/experience candidate and decision contracts, a WAL-backed SQLite materialized store with idempotent reconciliation and revision checks, plus read-only `/brain inbox`, `/brain profile`, and `/brain explain <id>` commands.
 - Added the San v0.2 execution loop P1 ledger foundation with `san.loop_run`, `san.loop_event`, `san.review_report`, and `san.loop_context_packet` custom entry contracts plus `/san-loop status` reporting.
 - Added San v0.2 execution loop P2 scaffolding with bundled `san-commander`, `san-worker`, `san-supervisor`, and `san-oracle` task agents plus role-scoped ContextPacket debug helpers.
 - Added San v0.2 execution loop P3 San Checks discovery and rendering, including project/user `.san/checks/*.md` support, bundled default checks, role filtering, and path-scoped check selection.
