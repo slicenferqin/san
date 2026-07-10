@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
+import { postmortem, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
 import type { HTMLElement } from "linkedom";
 import type {
 	Browser,
@@ -36,6 +36,7 @@ import {
 	loadPuppeteerInWorker,
 } from "./launch";
 import { extractReadableFromHtml, type ReadableFormat } from "./readable";
+import { markHandled, waitForBrowserRun } from "./run-cancellation";
 import type {
 	Observation,
 	ObservationEntry,
@@ -481,13 +482,13 @@ async function clickQueryHandlerText(
 			const target = await resolveActionableQueryHandlerClickTarget(handles);
 			if (!target) {
 				lastReason = handles.length ? "no-visible-candidate" : "no-matches";
-				await Bun.sleep(100);
+				await untilAborted(clickSignal, () => Bun.sleep(100));
 				continue;
 			}
 			const actionability = await isClickActionable(target);
 			if (!actionability.ok) {
 				lastReason = actionability.reason;
-				await Bun.sleep(100);
+				await untilAborted(clickSignal, () => Bun.sleep(100));
 				continue;
 			}
 			try {
@@ -495,7 +496,7 @@ async function clickQueryHandlerText(
 				return;
 			} catch (err) {
 				lastReason = err instanceof Error ? err.message : String(err);
-				await Bun.sleep(100);
+				await untilAborted(clickSignal, () => Bun.sleep(100));
 			}
 		} finally {
 			await Promise.all(handles.map(async handle => handle.dispose().catch(() => undefined)));
@@ -515,6 +516,7 @@ export interface InflightOp {
 interface ActiveRun {
 	id: string;
 	ac: AbortController;
+	signal: AbortSignal;
 	displays: RunResultOk["displays"];
 	screenshots: ScreenshotResult[];
 	pendingTools: Map<string, { resolve(value: unknown): void; reject(error: Error): void }>;
@@ -591,7 +593,12 @@ export class WorkerCore {
 				await this.#run(msg);
 				return;
 			case "abort":
-				if (this.#active?.id === msg.id) this.#active.ac.abort(new ToolAbortError());
+				if (this.#active?.id === msg.id) {
+					const reason = msg.expectedCleanup
+						? postmortem.markExpectedCleanupError(new ToolAbortError())
+						: new ToolAbortError();
+					this.#active.ac.abort(reason);
+				}
 				return;
 			case "tool-reply":
 				this.#deliverToolReply(msg.id, msg.reply);
@@ -697,12 +704,14 @@ export class WorkerCore {
 		}
 		const timeoutSignal = AbortSignal.timeout(msg.timeoutMs);
 		const ac = new AbortController();
-		const signal = AbortSignal.any([timeoutSignal, ac.signal]);
+		const runAc = new AbortController();
+		const signal = AbortSignal.any([timeoutSignal, ac.signal, runAc.signal]);
 		const displays: RunResultOk["displays"] = [];
 		const screenshots: ScreenshotResult[] = [];
 		const active: ActiveRun = {
 			id: msg.id,
 			ac,
+			signal,
 			displays,
 			screenshots,
 			pendingTools: new Map(),
@@ -724,10 +733,14 @@ export class WorkerCore {
 				assert: (cond: unknown, text?: string): void => {
 					if (!cond) throw new ToolError(text ?? "Assertion failed");
 				},
-				wait: (ms: number): Promise<void> => Bun.sleep(ms),
+				wait: (ms: number): Promise<void> => waitForBrowserRun(ms, signal),
 			});
 			const { promise: cancelRejection, reject: rejectCancel } = Promise.withResolvers<never>();
 			const onCancel = (): void => {
+				const abortError =
+					signal.reason instanceof ToolAbortError
+						? signal.reason
+						: new ToolAbortError(undefined, { cause: signal.reason });
 				if (timeoutSignal.aborted) {
 					const stalled = describeInflight(active.inflight);
 					rejectCancel(
@@ -736,11 +749,14 @@ export class WorkerCore {
 						),
 					);
 				} else {
-					rejectCancel(new ToolAbortError());
+					rejectCancel(abortError);
 				}
 				// Cancel in-flight tool calls so user code's awaited proxies reject promptly.
+				const toolAbort = timeoutSignal.aborted
+					? postmortem.markExpectedCleanupError(new ToolAbortError(undefined, { cause: timeoutSignal.reason }))
+					: abortError;
 				for (const pending of active.pendingTools.values()) {
-					pending.reject(new ToolAbortError());
+					pending.reject(toolAbort);
 				}
 				active.pendingTools.clear();
 			};
@@ -767,6 +783,7 @@ export class WorkerCore {
 			this.#transport.send({ type: "result", id: msg.id, ok: false, error: errorPayload(error) });
 		} finally {
 			if (this.#active?.id === msg.id) this.#active = null;
+			runAc.abort(postmortem.markExpectedCleanupError(new ToolAbortError("Browser run ended")));
 		}
 	}
 
@@ -783,11 +800,18 @@ export class WorkerCore {
 		const active = this.#active;
 		if (!active) return null;
 		return {
-			// console.* output stays on the supervisor log channel — matches pre-runtime behavior
-			// where browser cells didn't surface `console.log` to the model.
-			onText: chunk => this.#log("debug", chunk.replace(/\n$/, "")),
-			onDisplay: output => this.#pushDisplay(active.displays, output),
-			callTool: (name, args) => this.#callTool(active, name, args),
+			onText: chunk => {
+				throwIfAborted(active.signal);
+				this.#log("debug", chunk.replace(/\n$/, ""));
+			},
+			onDisplay: output => {
+				throwIfAborted(active.signal);
+				this.#pushDisplay(active.displays, output);
+			},
+			callTool: (name, args) => {
+				throwIfAborted(active.signal);
+				return this.#callTool(active, name, args);
+			},
 		};
 	}
 
@@ -877,7 +901,7 @@ export class WorkerCore {
 		const waitMs = (explicit?: number): number => resolveWaitTimeout(timeoutMs, explicit);
 		const INF = Number.POSITIVE_INFINITY;
 		const op = <T>(label: string, perOpMs: number, fn: (sig: AbortSignal) => Promise<T>): Promise<T> =>
-			this.#runOp(active, label, signal, perOpMs, fn);
+			markHandled(this.#runOp(active, label, signal, perOpMs, fn));
 		return {
 			name,
 			page,

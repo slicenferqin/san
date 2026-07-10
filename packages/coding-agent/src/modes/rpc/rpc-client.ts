@@ -17,6 +17,7 @@ import type {
 	RpcAvailableSlashCommand,
 	RpcCommand,
 	RpcExtensionUIRequest,
+	RpcExtensionUIResponse,
 	RpcHandoffResult,
 	RpcHostToolCallRequest,
 	RpcHostToolCancelRequest,
@@ -225,11 +226,20 @@ export class RpcClient {
 
 	/**
 	 * Start the RPC agent process.
+	 *
+	 * Safe to call again after {@link stop} on the same instance: a fresh
+	 * {@link AbortController} is minted for each start, and any failure after
+	 * the child spawn kills the child and clears internal state so callers may
+	 * retry without leaking processes.
 	 */
 	async start(): Promise<void> {
 		if (this.#process) {
 			throw new Error("Client already started");
 		}
+
+		// Mint a fresh controller so a previous stop()'s abort does not
+		// short-circuit the new stdout reader (issue #4079).
+		this.#abortController = new AbortController();
 
 		const cliPath = this.options.cliPath ?? "dist/cli.js";
 		const args = ["--mode", "rpc"];
@@ -247,18 +257,19 @@ export class RpcClient {
 			args.push(...this.options.args);
 		}
 
-		this.#process = ptree.spawn(["bun", cliPath, ...args], {
+		const child = ptree.spawn(["bun", cliPath, ...args], {
 			cwd: this.options.cwd,
 			env: { ...Bun.env, ...this.options.env },
 			stdin: "pipe",
 		});
+		this.#process = child;
 
 		// Wait for the "ready" signal or process exit
 		const { promise: readyPromise, resolve: readyResolve, reject: readyReject } = Promise.withResolvers<void>();
 		let readySettled = false;
 
 		// Process lines in background, intercepting the ready signal
-		const lines = readJsonl(this.#process.stdout, this.#abortController.signal);
+		const lines = readJsonl(child.stdout, this.#abortController.signal);
 		void (async () => {
 			for await (const line of lines) {
 				if (!readySettled && isRecord(line) && line.type === "ready") {
@@ -268,10 +279,16 @@ export class RpcClient {
 				}
 				this.#handleLine(line);
 			}
-			// Stream ended without ready signal — process exited
+			// Stream ended without the ready signal — the child exited or is
+			// exiting. Defer to the exit handler below: ptree resolves
+			// `exited` only after stderr is fully drained (nonzero exits), so
+			// rejecting here would snapshot a partial stderr tail and lose
+			// the actual startup error.
+			if (readySettled) return;
+			await child.exited.catch(() => {});
 			if (!readySettled) {
 				readySettled = true;
-				readyReject(new Error(`Agent process exited before ready. Stderr: ${this.#process?.peekStderr() ?? ""}`));
+				readyReject(new Error(`Agent process exited before ready. Stderr: ${child.peekStderr()}`));
 			}
 		})().catch((err: Error) => {
 			if (!readySettled) {
@@ -281,22 +298,26 @@ export class RpcClient {
 		});
 
 		// Also race against process exit (in case stdout closes before we read it)
-		void this.#process.exited.then((exitCode: number) => {
-			if (!readySettled) {
+		void child.exited.then(
+			(exitCode: number) => {
+				if (readySettled) return;
 				readySettled = true;
-				readyReject(
-					new Error(`Agent process exited with code ${exitCode}. Stderr: ${this.#process?.peekStderr() ?? ""}`),
-				);
-			}
-		});
+				readyReject(new Error(`Agent process exited with code ${exitCode}. Stderr: ${child.peekStderr()}`));
+			},
+			(err: Error) => {
+				// Killed or reaped without an exit code (e.g. stop() during
+				// startup); surface it instead of leaking an unhandled rejection.
+				if (readySettled) return;
+				readySettled = true;
+				readyReject(new Error(`Agent process exited before ready. Stderr: ${child.peekStderr()}`, { cause: err }));
+			},
+		);
 
 		// Timeout to prevent hanging forever
 		const readyTimeout = this.#startTimeout(30000, () => {
 			if (readySettled) return;
 			readySettled = true;
-			readyReject(
-				new Error(`Timeout waiting for agent to become ready. Stderr: ${this.#process?.peekStderr() ?? ""}`),
-			);
+			readyReject(new Error(`Timeout waiting for agent to become ready. Stderr: ${child.peekStderr()}`));
 		});
 
 		try {
@@ -304,6 +325,20 @@ export class RpcClient {
 			if (this.#customTools.length > 0) {
 				await this.setCustomTools(this.#customTools);
 			}
+		} catch (err) {
+			// Startup failed after we spawned the child. Kill it and clear
+			// state so the caller (or a retry via start() again) does not
+			// leak the abandoned process (issue #4079).
+			try {
+				child.kill();
+			} catch {
+				// best-effort cleanup
+			}
+			this.#abortController.abort();
+			if (this.#process === child) {
+				this.#process = null;
+			}
+			throw err;
 		} finally {
 			clearTimeout(readyTimeout);
 		}
@@ -688,21 +723,50 @@ export class RpcClient {
 	/**
 	 * Trigger OAuth login for the given provider.
 	 * The server will emit an `open_url` extension_ui_request for the auth URL.
+	 * Providers that require pasted-code completion may then emit an `input`
+	 * extension_ui_request; pass `onManualCodeInput` to satisfy it.
 	 * Resolves when login completes or rejects on failure.
 	 *
-	 * @param onOpenUrl Called when the server emits the auth URL. The host must open
-	 *   it in a browser for the callback-server OAuth flow to complete.
+	 * @param onOpenUrl Called when the server emits the auth URL. The host must
+	 *   open `url` in a browser. When the flow's callback server hosts a
+	 *   `/launch` redirect, `launchUrl` is a short loopback URL that 302s to
+	 *   `url` — hosts SHOULD surface it as the truncation-safe copy target so
+	 *   terminal viewport clipping cannot corrupt trailing OAuth query
+	 *   parameters (e.g. `code_challenge_method=S256`).
 	 */
 	async login(
 		providerId: string,
-		options?: { onOpenUrl?: (url: string, instructions?: string) => void },
+		options?: {
+			onOpenUrl?: (url: string, instructions?: string, launchUrl?: string) => void;
+			onManualCodeInput?: (prompt: { title: string; placeholder?: string }) => string | Promise<string>;
+		},
 	): Promise<{ providerId: string }> {
-		const { onOpenUrl } = options ?? {};
-		const listener = onOpenUrl
-			? (req: RpcExtensionUIRequest) => {
-					if (req.method === "open_url") onOpenUrl(req.url, req.instructions);
-				}
-			: undefined;
+		const { onManualCodeInput, onOpenUrl } = options ?? {};
+		const listener =
+			onOpenUrl || onManualCodeInput
+				? (req: RpcExtensionUIRequest) => {
+						if (req.method === "open_url") {
+							onOpenUrl?.(req.url, req.instructions, req.launchUrl);
+							return;
+						}
+						if (req.method !== "input" || !onManualCodeInput) return;
+						void Promise.resolve(onManualCodeInput({ title: req.title, placeholder: req.placeholder }))
+							.then(value => {
+								this.#writeFrame({
+									type: "extension_ui_response",
+									id: req.id,
+									value,
+								});
+							})
+							.catch(() => {
+								this.#writeFrame({
+									type: "extension_ui_response",
+									id: req.id,
+									cancelled: true,
+								});
+							});
+					}
+				: undefined;
 		if (listener) this.#extensionUiListeners.add(listener);
 		try {
 			const response = await this.#send({ type: "login", providerId }, 600_000);
@@ -968,7 +1032,10 @@ export class RpcClient {
 		}
 	}
 
-	#writeFrame(frame: RpcCommand | RpcHostToolResult | RpcHostToolUpdate, onError?: (error: Error) => void): void {
+	#writeFrame(
+		frame: RpcCommand | RpcExtensionUIResponse | RpcHostToolResult | RpcHostToolUpdate,
+		onError?: (error: Error) => void,
+	): void {
 		if (!this.#process?.stdin) {
 			throw new Error("Client not started");
 		}

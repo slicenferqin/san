@@ -167,7 +167,7 @@ describe("ACP lazy startup", () => {
 		};
 
 		const runAcpStartup = async (settings: Settings): Promise<ObservedBackgroundSettings> => {
-			using tempDir = TempDir.createSync("@omp-acp-background-settings-");
+			using tempDir = TempDir.createSync("@san-acp-background-settings-");
 			const cwd = tempDir.path();
 			const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
 			let observed: ObservedBackgroundSettings | undefined;
@@ -280,7 +280,7 @@ describe("ACP lazy startup", () => {
 		type ObservedSettings = Record<string, unknown>;
 
 		const runProtocolStartup = async (mode: "rpc" | "rpc-ui" | "acp"): Promise<ObservedSettings> => {
-			using tempDir = TempDir.createSync("@omp-protocol-host-defaulted-");
+			using tempDir = TempDir.createSync("@san-protocol-host-defaulted-");
 			const cwd = tempDir.path();
 			const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
 			const settings = Settings.isolated({ ...explicit, ...rpcOnlyExplicit });
@@ -346,7 +346,7 @@ describe("ACP lazy startup", () => {
 		};
 
 		const runProtocolStartup = async (mode: "rpc" | "rpc-ui" | "acp"): Promise<ObservedTodoSettings> => {
-			using tempDir = TempDir.createSync("@omp-protocol-todo-settings-");
+			using tempDir = TempDir.createSync("@san-protocol-todo-settings-");
 			const cwd = tempDir.path();
 			const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
 			const settings = Settings.isolated({
@@ -442,7 +442,7 @@ describe("ACP lazy startup", () => {
 			expect(initializeResponse).toEqual(
 				expect.objectContaining({
 					protocolVersion: 1,
-					agentInfo: expect.objectContaining({ name: "oh-my-pi" }),
+					agentInfo: expect.objectContaining({ name: "san" }),
 				}),
 			);
 			expect(createCalls).toBe(0);
@@ -462,7 +462,7 @@ describe("ACP lazy startup", () => {
 	});
 
 	it("applies CLI runtime API keys after ACP lazy session creation resolves extension models", async () => {
-		using tempDir = TempDir.createSync("@omp-acp-lazy-api-key-");
+		using tempDir = TempDir.createSync("@san-acp-lazy-api-key-");
 		const cwd = tempDir.path();
 
 		await Bun.write(

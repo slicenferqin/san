@@ -24,26 +24,11 @@ function createCodexToken(accountId: string): string {
 	return `${header}.${payload}.signature`;
 }
 
-/**
- * Returns the bundled `gpt-5-mini` model with `compat.requiresJuiceZeroHack`
- * cleared so it doesn't trigger the GPT-5 "Juice: 0" developer-message hack
- * injected by `applyResponsesReasoningParams`. The hack is exercised by its
- * own targeted tests; these history-replay tests assert raw payload shape and
- * should stay independent of it.
- */
 function getOpenAIReasoningModel(
 	provider: Parameters<typeof getBundledModel>[0],
 	id: string,
 ): Model<"openai-responses"> {
-	const base = getBundledModel(provider, id) as Model<"openai-responses">;
-	// Override both views: `compat` for direct use, `compatConfig` so tests
-	// that rebuild via `buildModel({ ..., compat: model.compatConfig })` keep
-	// the override through re-resolution.
-	return {
-		...base,
-		compat: { ...base.compat, requiresJuiceZeroHack: false },
-		compatConfig: { ...base.compatConfig, requiresJuiceZeroHack: false },
-	};
+	return getBundledModel(provider, id) as Model<"openai-responses">;
 }
 
 const preservedHistoryItems = [
@@ -537,7 +522,6 @@ describe("OpenAI responses history payload", () => {
 				role: "assistant",
 				content: [{ type: "output_text", text: "generic assistant that should be preserved", annotations: [] }],
 				status: "completed",
-				id: "msg_1",
 			},
 			{ role: "user", content: [{ type: "input_text", text: "follow-up user" }] },
 		]);
@@ -591,6 +575,120 @@ describe("OpenAI responses history payload", () => {
 		expect(containsAssistantOutputText(payload.input, "generic assistant that should be rebuilt")).toBe(true);
 	});
 
+	it("does not replay GitHub Copilot hidden-empty assistant native or fallback history into the next request", async () => {
+		const hiddenEmptyNativeItems = [
+			{ type: "reasoning", encrypted_content: "enc_hidden_empty" },
+			{
+				type: "message",
+				role: "assistant",
+				status: "completed",
+				content: [{ type: "output_text", text: "", annotations: [] }],
+			},
+		];
+		const followUp = "continue after hidden empty assistant turn";
+		const context: Context = {
+			messages: [
+				{
+					...makeAssistantMessage(hiddenEmptyNativeItems, false, "github-copilot", "gpt-5.4"),
+					content: [
+						{ type: "text", text: "" },
+						{
+							type: "thinking",
+							thinking: "",
+							thinkingSignature: JSON.stringify({
+								type: "reasoning",
+								id: "rs_hidden_empty_fallback",
+								encrypted_content: "enc_hidden_empty_fallback",
+							}),
+						},
+					],
+				},
+				{ role: "user", content: followUp, timestamp: Date.now() },
+			],
+		};
+		const model = getBundledModel("github-copilot", "gpt-5.4") as Model<"openai-responses">;
+		const payload = (await captureResponsesPayload(model, context)) as { input?: unknown[] };
+
+		expect(containsUserInputText(payload.input, followUp)).toBe(true);
+		expect(findResponsesInputItem(payload.input, "reasoning")).toBeUndefined();
+		expect(containsAssistantOutputText(payload.input, "")).toBe(false);
+	});
+
+	it("does not replay GitHub Copilot hidden-empty assistant fallback on cold provider session state", async () => {
+		const hiddenEmptyNativeItems = [
+			{ type: "reasoning", encrypted_content: "enc_hidden_empty_cold" },
+			{
+				type: "message",
+				role: "assistant",
+				status: "completed",
+				content: [{ type: "output_text", text: "", annotations: [] }],
+			},
+		];
+		const followUp = "continue after hidden empty assistant turn (cold)";
+		const context: Context = {
+			messages: [
+				{
+					...makeAssistantMessage(hiddenEmptyNativeItems, false, "github-copilot", "gpt-5.4"),
+					content: [
+						{ type: "text", text: "" },
+						{
+							type: "thinking",
+							thinking: "",
+							thinkingSignature: JSON.stringify({
+								type: "reasoning",
+								id: "rs_hidden_empty_cold_fallback",
+								encrypted_content: "enc_hidden_empty_cold_fallback",
+							}),
+						},
+					],
+				},
+				{ role: "user", content: followUp, timestamp: Date.now() },
+			],
+		};
+		const model = getBundledModel("github-copilot", "gpt-5.4") as Model<"openai-responses">;
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const payload = (await captureResponsesPayload(model, context, providerSessionState)) as {
+			input?: unknown[];
+		};
+
+		expect(containsUserInputText(payload.input, followUp)).toBe(true);
+		expect(findResponsesInputItem(payload.input, "reasoning")).toBeUndefined();
+		expect(containsAssistantOutputText(payload.input, "")).toBe(false);
+	});
+
+	it("preserves native-only assistant response items without visible assistant text", async () => {
+		const followUp = "continue after native-only assistant turn";
+		const context: Context = {
+			messages: [
+				makeAssistantMessage(
+					[
+						{
+							type: "web_search_call",
+							id: "ws_native_only",
+							status: "completed",
+						},
+					],
+					false,
+					"github-copilot",
+					"gpt-5.4",
+				),
+				{ role: "user", content: followUp, timestamp: Date.now() },
+			],
+		};
+		const model = getBundledModel("github-copilot", "gpt-5.4") as Model<"openai-responses">;
+		const payload = await captureResponsesPayload(model, context);
+		const input =
+			payload && typeof payload === "object" && "input" in payload && Array.isArray(payload.input)
+				? payload.input
+				: undefined;
+		const webSearchItem = findResponsesInputItem(input, "web_search_call");
+
+		expect(webSearchItem).toMatchObject({ type: "web_search_call", status: "completed" });
+		expect(webSearchItem?.id).toBeUndefined();
+		expect(containsAssistantOutputText(input, "ignored")).toBe(false);
+		expect(containsUserInputText(input, followUp)).toBe(true);
+	});
+
 	it("builds up history incrementally from multiple assistant messages", async () => {
 		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const payload = (await captureResponsesPayload(model, incrementalContext)) as { input?: unknown[] };
@@ -642,14 +740,13 @@ describe("OpenAI responses history payload", () => {
 				role: "assistant",
 				content: [{ type: "output_text", text: "Commentary answer", annotations: [] }],
 				status: "completed",
-				id: "msg_commentary",
 				phase: "commentary",
 			},
 			{ role: "user", content: [{ type: "input_text", text: "follow-up" }] },
 		]);
 	});
 
-	it("keeps legacy plain-string text signatures when rebuilding fallback replay history", async () => {
+	it("omits legacy plain-string text signature IDs when rebuilding fallback replay history without reasoning", async () => {
 		const context: Context = {
 			messages: [
 				{ role: "user", content: "first user", timestamp: Date.now() },
@@ -682,7 +779,97 @@ describe("OpenAI responses history payload", () => {
 				role: "assistant",
 				content: [{ type: "output_text", text: "Legacy answer", annotations: [] }],
 				status: "completed",
-				id: "msg_legacy",
+			},
+			{ role: "user", content: [{ type: "input_text", text: "follow-up" }] },
+		]);
+	});
+
+	it("omits long non-msg legacy signature IDs when rebuilding fallback replay history without reasoning", async () => {
+		const legacySignature = `item_${"copilot/legacy+opaque=".repeat(8)}`;
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "first user", timestamp: Date.now() },
+				{
+					role: "assistant",
+					content: [{ type: "text", text: "Legacy answer", textSignature: legacySignature }],
+					api: "openai-responses",
+					provider: "openai",
+					model: "gpt-5-mini",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "stop",
+					timestamp: Date.now(),
+				},
+				{ role: "user", content: "follow-up", timestamp: Date.now() },
+			],
+		};
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
+		const payload = (await captureResponsesPayload(model, context)) as { input?: unknown[] };
+		expect(payload.input).toEqual([
+			{ role: "user", content: [{ type: "input_text", text: "first user" }] },
+			{
+				type: "message",
+				role: "assistant",
+				content: [{ type: "output_text", text: "Legacy answer", annotations: [] }],
+				status: "completed",
+			},
+			{ role: "user", content: [{ type: "input_text", text: "follow-up" }] },
+		]);
+	});
+
+	it("keeps hashed long legacy signature IDs when the replayed turn carries its reasoning item", async () => {
+		const legacySignature = `item_${"copilot/legacy+opaque=".repeat(8)}`;
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "first user", timestamp: Date.now() },
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "thinking",
+							thinking: "",
+							thinkingSignature: JSON.stringify({
+								type: "reasoning",
+								id: "rs_keep",
+								encrypted_content: "enc_keep",
+							}),
+						},
+						{ type: "text", text: "Signed answer", textSignature: legacySignature },
+					],
+					api: "openai-responses",
+					provider: "openai",
+					model: "gpt-5-mini",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "stop",
+					timestamp: Date.now(),
+				},
+				{ role: "user", content: "follow-up", timestamp: Date.now() },
+			],
+		};
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
+		const payload = (await captureResponsesPayload(model, context)) as { input?: unknown[] };
+		expect(payload.input).toEqual([
+			{ role: "user", content: [{ type: "input_text", text: "first user" }] },
+			{ type: "reasoning", id: "rs_keep", encrypted_content: "enc_keep" },
+			{
+				type: "message",
+				role: "assistant",
+				content: [{ type: "output_text", text: "Signed answer", annotations: [] }],
+				status: "completed",
+				id: `msg_${Bun.hash(legacySignature).toString(36)}`,
 			},
 			{ role: "user", content: [{ type: "input_text", text: "follow-up" }] },
 		]);

@@ -1,7 +1,25 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent, MessageAttribution, ServiceTier, TextContent } from "@oh-my-pi/pi-ai";
+import type { ImageContent, MessageAttribution, ServiceTierByFamily, TextContent } from "@oh-my-pi/pi-ai";
 
 export const CURRENT_SESSION_VERSION = 3;
+
+export const SESSION_TITLE_SLOT_BYTES = 256;
+
+export const SESSION_TITLE_SLOT_ENTRY_TYPE = "title";
+
+export const TITLE_CHANGE_ENTRY_TYPE = "title_change";
+
+export type SessionTitleSource = "auto" | "user";
+
+/** Fixed-width first-line slot carrying the mutable current session title. */
+export interface SessionTitleSlotEntry {
+	type: typeof SESSION_TITLE_SLOT_ENTRY_TYPE;
+	v: 1;
+	title: string;
+	source?: SessionTitleSource;
+	updatedAt: string;
+	pad: string;
+}
 
 export const EPHEMERAL_MODEL_CHANGE_ROLE = "fallback";
 
@@ -10,7 +28,7 @@ export interface SessionHeader {
 	version?: number; // v1 sessions don't have this
 	id: string;
 	title?: string; // Auto-generated title from first message
-	titleSource?: "auto" | "user";
+	titleSource?: SessionTitleSource;
 	timestamp: string;
 	cwd: string;
 	parentSession?: string;
@@ -55,7 +73,7 @@ export interface ModelChangeEntry extends SessionEntryBase {
 
 export interface ServiceTierChangeEntry extends SessionEntryBase {
 	type: "service_tier_change";
-	serviceTier: ServiceTier | null;
+	serviceTier: ServiceTierByFamily | null;
 }
 
 export interface CompactionEntry<T = unknown> extends SessionEntryBase {
@@ -103,6 +121,21 @@ export interface LabelEntry extends SessionEntryBase {
 	type: "label";
 	targetId: string;
 	label: string | undefined;
+}
+
+/** Append-only audit entry recording a session title change. */
+export interface TitleChangeEntry extends SessionEntryBase {
+	type: typeof TITLE_CHANGE_ENTRY_TYPE;
+	title: string;
+	previousTitle?: string;
+	source: SessionTitleSource;
+	trigger?: string;
+}
+
+declare module "@oh-my-pi/pi-agent-core/compaction/entries" {
+	interface CustomCompactionSessionEntries {
+		titleChange: TitleChangeEntry;
+	}
 }
 
 /** TTSR injection entry - tracks which time-traveling rules have been injected this session. */
@@ -178,13 +211,17 @@ export type SessionEntry =
 	| CustomEntry
 	| CustomMessageEntry
 	| LabelEntry
+	| TitleChangeEntry
 	| TtsrInjectionEntry
 	| MCPToolSelectionEntry
 	| SessionInitEntry
 	| ModeChangeEntry;
 
-/** Raw file entry (includes header) */
+/** Raw logical file entry after loaders strip any fixed-width title slot. */
 export type FileEntry = SessionHeader | SessionEntry;
+
+/** Physical JSONL entry before slot-aware loaders fold the title slot. */
+export type RawFileEntry = SessionTitleSlotEntry | FileEntry;
 
 /** Tree node for getTree() - defensive copy of session structure */
 export interface SessionTreeNode {
@@ -199,6 +236,10 @@ export interface UsageStatistics {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
+	totalTokens: number;
+	orchestrationInput: number;
+	orchestrationOutput: number;
+	orchestrationCacheRead: number;
 	premiumRequests: number;
 	cost: number;
 }

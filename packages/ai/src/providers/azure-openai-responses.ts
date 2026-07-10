@@ -34,7 +34,7 @@ import {
 	applyResponsesReasoningParams,
 	buildResponsesInput,
 	createInitialResponsesAssistantMessage,
-	getOpenAIResponsesPromptCacheKey,
+	getOpenAIPromptCacheKey,
 	isOpenAIResponsesProgressEvent,
 	parseAzureDeploymentNameMap,
 	processResponsesStream,
@@ -170,8 +170,9 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 						body: params,
 						signal: requestSignal,
 						fetch: options?.fetch,
-						// Watchdog armed → no retries, so they cannot silently extend the deadline.
-						maxAttempts: requestTimeoutMs !== undefined ? 1 : undefined,
+						// Transient 408/429/5xx get Retry-After-aware transport retries;
+						// the first-event watchdog aborts `requestSignal`, so retries
+						// cannot extend the caller's deadline.
 						onSseEvent: rawSseObserver,
 					});
 					openaiStream = handle.events;
@@ -340,13 +341,14 @@ function buildParams(
 		systemRole,
 		includeThinkingSignatures: true,
 		developerStringContent: true,
+		preserveAssistantMessageIds: true,
 	});
 
 	const params: AzureOpenAIResponsesSamplingParams = {
 		model: deploymentName,
 		input: messages,
 		stream: true,
-		prompt_cache_key: getOpenAIResponsesPromptCacheKey(options),
+		prompt_cache_key: getOpenAIPromptCacheKey(options),
 		// Encrypted reasoning replay (applyResponsesReasoningParams) requires
 		// stateless responses, matching the openai provider.
 		store: false,
@@ -375,7 +377,7 @@ function buildParams(
 		}
 	}
 
-	applyResponsesReasoningParams(params, model, options, messages);
+	applyResponsesReasoningParams(params, model, options);
 
 	return params;
 }

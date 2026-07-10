@@ -17,7 +17,7 @@ import {
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { removeWithRetries, setProjectDir } from "@oh-my-pi/pi-utils";
 import * as sanLoopModule from "../src/san-loop";
 
 interface FakeAcpBuiltinSession {
@@ -31,7 +31,7 @@ interface FakeAcpBuiltinSession {
 	_switchedTo: string | undefined;
 	_movedFromEmptySessionFile: string | undefined;
 	toggleFastMode(): boolean;
-	setFastMode(enabled: boolean): void;
+	setFastMode(enabled: boolean): boolean;
 	isFastModeEnabled(): boolean;
 	setForcedToolChoice(toolName: string): void;
 	fetchUsageReports?: () => Promise<unknown>;
@@ -103,6 +103,7 @@ function createRuntime() {
 		},
 		setFastMode(enabled: boolean) {
 			this.fastMode = enabled;
+			return true;
 		},
 		isFastModeEnabled() {
 			return this.fastMode;
@@ -303,6 +304,56 @@ describe("ACP builtin slash commands", () => {
 		});
 		expect(output[0]).toContain("San execution loop loop-acp finished with status passed.");
 		expect(output[0]).toContain("Final verdict: pass");
+	});
+
+	it("runs solo, team, and council shortcuts with their fixed modes", async () => {
+		const { runtime } = createRuntime();
+		const runSpy = spyOn(sanLoopModule, "runSanLoop").mockImplementation(async options => {
+			const mode = options.mode ?? "team";
+			const now = "2026-07-01T00:00:00.000Z";
+			const run: sanLoopModule.SanLoopRunSnapshot = {
+				schemaVersion: sanLoopModule.SAN_LOOP_SCHEMA_VERSION,
+				runId: `loop-${mode}`,
+				sessionId: "fake-session-id",
+				createdAt: now,
+				updatedAt: now,
+				objective: options.objective,
+				mode,
+				status: "passed",
+				contextPacketRefs: [],
+				assignments: [],
+				workerResults: [],
+				reviewReports: [],
+				decisions: [],
+				budget: [],
+				retryCount: 0,
+				maxRetries: 2,
+				finalVerdict: "pass",
+			};
+			return {
+				run,
+				runCreated: {
+					run,
+					runEntryId: `run-${mode}`,
+					event: {} as sanLoopModule.SanLoopEvent,
+					eventEntryId: `event-${mode}`,
+				},
+				transitions: [],
+				reviewEntryIds: [],
+			};
+		});
+		runSpy.mockClear();
+
+		for (const mode of ["solo", "team", "council"] as const) {
+			const result = await executeAcpBuiltinSlashCommand(`/${mode} deliver ${mode} objective`, runtime);
+			expect(result).toEqual({ consumed: true });
+		}
+
+		expect(runSpy.mock.calls.map(([options]) => ({ mode: options.mode, objective: options.objective }))).toEqual([
+			{ mode: "solo", objective: "deliver solo objective" },
+			{ mode: "team", objective: "deliver team objective" },
+			{ mode: "council", objective: "deliver council objective" },
+		]);
 	});
 
 	it("stops the latest active San execution loop run", async () => {
@@ -875,6 +926,33 @@ describe("wave 3 commands", () => {
 		const result = await executeAcpBuiltinSlashCommand("/move /no/such/path/xyz", runtime);
 		expect(result).toEqual({ consumed: true });
 		expect(output[0]).toContain("does not exist");
+	});
+
+	it("/move: relocates the current session instead of switching to an empty target session", async () => {
+		const { output, runtime, session, fakeSessionManager } = createRuntime();
+		const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-move-target-"));
+		const originalProjectDir = process.cwd();
+		const reloadForCwd = spyOn(runtime.settings, "reloadForCwd");
+		let configNotified = 0;
+		runtime.notifyConfigChanged = () => {
+			configNotified++;
+		};
+
+		try {
+			const result = await executeAcpBuiltinSlashCommand(`/move ${targetDir}`, runtime);
+
+			expect(result).toEqual({ consumed: true });
+			expect(fakeSessionManager._movedTo).toBe(targetDir);
+			expect(fakeSessionManager.getCwd()).toBe(targetDir);
+			expect(session._switchedTo).toBeUndefined();
+			expect(session._movedFromEmptySessionFile).toBeUndefined();
+			expect(reloadForCwd).toHaveBeenCalledWith(targetDir);
+			expect(configNotified).toBe(1);
+			expect(output[0]).toContain(`Moved to ${targetDir}.`);
+		} finally {
+			setProjectDir(originalProjectDir);
+			await fs.rm(targetDir, { recursive: true, force: true });
+		}
 	});
 
 	// /memory

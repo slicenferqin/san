@@ -36,6 +36,7 @@ import {
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { type ArchiveReader, type ExtractedArchiveFile, openArchive, parseArchivePathCandidates } from "../utils/zip";
 import type { ToolSession } from ".";
+import { materializeReadUrlToFile, parseReadUrlTarget } from "./fetch";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
 import { classifyGroupedLines, formatGroupedFiles, groupLineIndicesByBlank } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
@@ -47,12 +48,15 @@ import {
 	type LineRange,
 	parseLineRanges,
 	pathTargetsSsh,
+	probeLiteralPathExists,
 	type ResolvedSearchTarget,
 	resolveReadPath,
 	resolveToolSearchScope,
 	selectorLineRanges,
 	splitInternalUrlSel,
 	splitPathAndSel,
+	splitPathAndSelPreferringLiteral,
+	toPathList,
 } from "./path-utils";
 import {
 	createCachedComponent,
@@ -68,15 +72,16 @@ import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const searchPathEntry = type("string").describe(
-	'file, directory, glob, internal URL, or "<file>:<lines>" selector (e.g. "src/foo.ts:50-100", "src/foo.ts:50+10", "src/foo.ts:50-100,200-300")',
+	'file, directory, glob, internal URL, or "<file>:<lines>" selector to search (e.g. "src/foo.ts:50-100", "src/foo.ts:50+10", "src/foo.ts:50-100,200-300")',
 );
 const searchSchema = type({
 	pattern: type("string").describe("regex pattern"),
-	"paths?": searchPathEntry
-		.or(searchPathEntry.array())
-		.describe(
-			'file, directory, glob, internal URL, or array of those to search; append `:<lines>` to scope a file to specific line ranges. Omitted or empty -> searches the workspace root (".")',
-		),
+	"path?": searchPathEntry.describe(
+		'file, directory, glob, internal URL, or "<file>:<lines>" selector to search; pass several as a semicolon-delimited list ("src; tests"). Omitted -> searches the workspace root (".")',
+	),
+	"selector?": type("string").describe(
+		'line selector applied to every searched file (e.g. "50-100", "50+10", "50-100,200-300"); never a path like "/"',
+	),
 	"case?": type("boolean").describe("case-sensitive search"),
 	"gitignore?": type("boolean").describe("respect gitignore"),
 	"skip?": type("number")
@@ -85,9 +90,6 @@ const searchSchema = type({
 });
 
 export type GrepToolInput = typeof searchSchema.infer;
-export function toPathList(input: string | string[] | undefined): string[] {
-	return typeof input === "string" ? [input] : (input ?? []);
-}
 
 /** Maximum number of distinct files surfaced in a single response. The
  * agent paginates further pages via `skip`. */
@@ -104,8 +106,10 @@ export const SINGLE_FILE_MATCHES = 200;
  * pagination headroom so the caller can see total file count. */
 const INTERNAL_TOTAL_CAP = 2000;
 /** Mirrors `MAX_FILE_BYTES` in `crates/pi-natives/src/grep.rs`. Native grep
- * silently returns no matches for files larger than this; surface a warning
- * when the caller explicitly targeted such a file so they know to chunk it. */
+ * searches only the first `MAX_FILE_BYTES` of a larger file (a leading mmap
+ * window) and drops the rest; matches beyond the window are not returned. We
+ * surface a partial-coverage note when the caller explicitly targeted such a
+ * file so they know matches past the window are not shown. */
 const NATIVE_GREP_MAX_FILE_BYTES = 4 * 1024 * 1024;
 /** Wall-clock budget for a single native grep invocation. Without it, an
  * aborted or runaway search (huge tree, network mount) keeps burning CPU on
@@ -120,7 +124,9 @@ const SEARCH_GREP_TIMEOUT_MS = 30_000;
 interface GrepPathSpec {
 	original: string;
 	clean: string;
+	literalFilesystemMatch?: boolean;
 	ranges?: [LineRange, ...LineRange[]];
+	rangeSource?: "explicit" | "path";
 }
 
 /**
@@ -148,9 +154,39 @@ function isReadSelectorGrammar(sel: string): boolean {
 	return lower === "raw" || lower === "conflicts" || parseLineRanges(sel) !== null;
 }
 
-function parsePathSpecs(rawEntries: readonly string[]): GrepPathSpec[] {
+async function parsePathSpecs(
+	rawEntries: readonly string[],
+	cwd: string,
+	explicitSelector?: string,
+): Promise<GrepPathSpec[]> {
+	const normalizedSelector = explicitSelector?.trim() || undefined;
+	const explicitRanges = normalizedSelector === undefined ? undefined : parseLineRanges(normalizedSelector);
+	if (normalizedSelector !== undefined && !explicitRanges) {
+		throw new ToolError(
+			`selector "${normalizedSelector}" is invalid — use line ranges like "50-100", "50+10", or "50-100,200-300" without a leading colon`,
+		);
+	}
 	const specs: GrepPathSpec[] = [];
 	for (const entry of rawEntries) {
+		if (explicitRanges) {
+			// Separate selector parameter makes `path` deterministic: first try the
+			// exact local filesystem path (with read-path normalization), then let
+			// archive/internal/URL resolution handle non-literal structured paths.
+			const rawPathHasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(entry);
+			const probe = rawPathHasScheme ? "missing" : await probeLiteralPathExists(entry, cwd);
+			// `"unknown"` covers EACCES/IO where we cannot confirm existence — treat
+			// it as a literal so a real file such as `test:1-2` under an unreadable
+			// parent is never silently reinterpreted as `test` + selector.
+			const literalMatch = probe !== "missing";
+			specs.push({
+				original: entry,
+				clean: literalMatch && !rawPathHasScheme ? resolveReadPath(entry, cwd) : entry,
+				literalFilesystemMatch: literalMatch,
+				ranges: explicitRanges,
+				rangeSource: "explicit",
+			});
+			continue;
+		}
 		// Internal URLs (`artifact://`, `skill://`, …) use the URL-aware splitter,
 		// which peels selector-shaped tails only for selector-capable schemes and
 		// leaves opaque ones (`mcp://`) intact. Unlike filesystem paths, their
@@ -163,20 +199,25 @@ function parsePathSpecs(rawEntries: readonly string[]): GrepPathSpec[] {
 			// `:conflicts:1-1`) instead of silently widening the search or dropping a chunk.
 			if (!isReadSelectorGrammar(internalSplit.sel)) {
 				throw new ToolError(
-					`paths entry "${entry}" has an invalid selector ":${internalSplit.sel}" — use ":N-M" line ranges, ":raw"/":conflicts", a range plus ":raw", or percent-encode a literal ":" as %3A`,
+					`path entry "${entry}" has an invalid selector ":${internalSplit.sel}" — use ":N-M" line ranges, ":raw"/":conflicts", a range plus ":raw", or percent-encode a literal ":" as %3A`,
 				);
 			}
 			specs.push({ original: entry, clean: internalSplit.path, ranges: selectorLineRanges(internalSplit.sel) });
 			continue;
 		}
-		const split = splitPathAndSel(entry);
-		let clean = entry;
+		// Prefer a literal filesystem match when one exists — a real file named
+		// `test:1-2` outranks the `:1-2` selector interpretation (issue #4618).
+		const strictSplit = splitPathAndSel(entry);
+		const split = await splitPathAndSelPreferringLiteral(entry, cwd);
+		const literalFilesystemMatch = strictSplit.sel !== undefined && split.sel === undefined;
+		let clean = literalFilesystemMatch ? resolveReadPath(entry, cwd) : entry;
 		let ranges: [LineRange, ...LineRange[]] | undefined;
-		if (split.sel) {
+		let rangeSource: "path" | undefined;
+		if (!literalFilesystemMatch && split.sel) {
 			const parsed = parseLineRanges(split.sel);
 			if (!parsed) {
 				throw new ToolError(
-					`paths entry "${entry}" — only line-range selectors like ":50-100" are supported (no ":raw"/":conflicts")`,
+					`path entry "${entry}" — only line-range selectors like ":50-100" are supported (no ":raw"/":conflicts")`,
 				);
 			}
 			if (hasGlobPathChars(split.path)) {
@@ -184,8 +225,15 @@ function parsePathSpecs(rawEntries: readonly string[]): GrepPathSpec[] {
 			}
 			clean = split.path;
 			ranges = parsed;
+			rangeSource = "path";
 		}
-		specs.push({ original: entry, clean, ranges });
+		specs.push({
+			original: entry,
+			clean,
+			literalFilesystemMatch,
+			ranges,
+			rangeSource: ranges ? rangeSource : undefined,
+		});
 	}
 	return specs;
 }
@@ -221,7 +269,7 @@ function matchAbsolutePath(matchPath: string, searchPath: string): string {
  * cleanup hook the caller MUST invoke in a `finally`.
  */
 async function resolveArchiveSearchPaths(
-	paths: string[],
+	pathSpecs: readonly GrepPathSpec[],
 	cwd: string,
 ): Promise<{
 	resolvedPaths: string[];
@@ -230,17 +278,18 @@ async function resolveArchiveSearchPaths(
 	unreadable: string[];
 	cleanup: () => Promise<void>;
 }> {
-	const resolvedPaths = paths.slice();
+	const resolvedPaths = pathSpecs.map(spec => spec.clean);
 	const displayMap = new Map<string, string>();
 	const displaySet = new Set<string>();
 	const unreadable: string[] = [];
 	let tempDir: string | undefined;
 	const archiveCache = new Map<string, ArchiveReader>();
 
-	for (let idx = 0; idx < paths.length; idx++) {
-		const entry = paths[idx];
+	for (let idx = 0; idx < pathSpecs.length; idx++) {
+		const spec = pathSpecs[idx];
+		if (!spec || spec.literalFilesystemMatch) continue;
+		const entry = spec.clean;
 		const candidates = parseArchivePathCandidates(entry);
-		// Longest archive prefix first; we want the one whose member portion is non-empty.
 		const member = candidates.find(c => c.subPath !== "" && c.archivePath !== entry);
 		if (!member) continue;
 
@@ -361,6 +410,27 @@ function lineAllowed(lineNumber: number, ranges: readonly LineRange[] | undefine
 	return !ranges || isLineInRanges(lineNumber, ranges);
 }
 
+/**
+ * Per-file native fetch budget that guarantees the JS range filter can still
+ * surface `perFileKeep` in-range hits. Matches arrive one entry per matched
+ * line in line order, so a bounded range's hits all sit within the first
+ * `endLine` entries, and an open-ended range starting at S is preceded by at
+ * most S-1 out-of-range entries — S-1+perFileKeep entries cover the kept
+ * window or exhaust the file. Clamped to the native file-size ceiling (a
+ * ≤4 MiB file cannot have more matched lines than bytes), which also keeps
+ * the scaled global budget inside the native layer's u32 bounds.
+ */
+function lineRangeFetchCap(pathSpecs: readonly GrepPathSpec[], perFileKeep: number): number {
+	let cap = 0;
+	for (const spec of pathSpecs) {
+		if (!spec.ranges) continue;
+		for (const range of spec.ranges) {
+			cap = Math.max(cap, range.endLine ?? range.startLine - 1 + perFileKeep);
+		}
+	}
+	return Math.min(cap, NATIVE_GREP_MAX_FILE_BYTES);
+}
+
 /** Binary search for the index of the line containing byte `offset`. */
 function findLineIndex(starts: readonly number[], offset: number): number {
 	if (starts.length === 0) return -1;
@@ -375,6 +445,36 @@ function findLineIndex(starts: readonly number[], offset: number): number {
 		}
 	}
 	return Math.max(0, high);
+}
+
+function unsupportedNativeRegexMessage(pattern: string): string | undefined {
+	let inCharacterClass = false;
+	for (let i = 0; i < pattern.length; i++) {
+		const char = pattern[i];
+		if (char === "\\") {
+			const escaped = pattern[++i];
+			if (escaped === undefined) break;
+			if ((escaped >= "1" && escaped <= "9") || (escaped === "k" && pattern[i + 1] === "<")) {
+				return "backreferences are not supported";
+			}
+			continue;
+		}
+		if (char === "[" && !inCharacterClass) {
+			inCharacterClass = true;
+			continue;
+		}
+		if (char === "]" && inCharacterClass) {
+			inCharacterClass = false;
+			continue;
+		}
+		if (inCharacterClass || char !== "(" || pattern[i + 1] !== "?") continue;
+		const marker = pattern[i + 2];
+		if (marker === "=" || marker === "!") return "look-around is not supported";
+		if (marker === "<" && (pattern[i + 3] === "=" || pattern[i + 3] === "!")) {
+			return "look-around is not supported";
+		}
+	}
+	return undefined;
 }
 
 /**
@@ -602,6 +702,8 @@ async function searchVirtualResources(
 	if (resources.length === 0) {
 		return { matches: [], totalMatches: 0, filesWithMatches: 0, filesSearched: 0, limitReached: false };
 	}
+	const unsupportedRegexMessage = unsupportedNativeRegexMessage(pattern);
+	if (unsupportedRegexMessage) throw new ToolError(`Invalid regex: ${unsupportedRegexMessage}`);
 	const matches: GrepMatch[] = [];
 	const filesWithMatches = new Set<string>();
 	let totalMatches = 0;
@@ -752,6 +854,11 @@ async function resolveInternalSearchInputs(opts: {
 		localProtocolOptions: opts.localProtocolOptions,
 		skills: opts.skills,
 		skipDirectoryListing: true,
+		// Try path-only first so large artifacts (and any other handler that
+		// separates path from content) resolve without materializing bytes.
+		// Handlers that ignore the flag still return content, and virtual
+		// resources without a sourcePath fall through to a second resolve.
+		pathOnly: true,
 	};
 
 	for (let idx = 0; idx < paths.length; idx++) {
@@ -766,7 +873,7 @@ async function resolveInternalSearchInputs(opts: {
 		if (hasGlobPathChars(globTarget)) {
 			throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPath}`);
 		}
-		const resource = await internalRouter.resolve(rawPath, context);
+		let resource = await internalRouter.resolve(rawPath, context);
 		// A directory listing with no backing local path (e.g. a remote ssh:// dir)
 		// has no real contents to grep — searching its listing text would be
 		// misleading. Local/skill/vault dir resources set `sourcePath` and skip this.
@@ -783,8 +890,20 @@ async function resolveInternalSearchInputs(opts: {
 			continue;
 		}
 
+		// No sourcePath: this handler needs its content materialized so the
+		// virtual expansion can search it. Re-resolve without pathOnly.
+		if (context.pathOnly) {
+			resource = await internalRouter.resolve(rawPath, { ...context, pathOnly: false });
+		}
+
 		const ranges = opts.pathSpecs[idx]?.ranges;
-		const expanded = await expandVirtualInternalResource(rawPath, resource, internalRouter, context, ranges);
+		const expanded = await expandVirtualInternalResource(
+			rawPath,
+			resource,
+			internalRouter,
+			{ ...context, pathOnly: false },
+			ranges,
+		);
 		virtualInputIndexes.add(idx);
 		for (const virtual of expanded) {
 			virtualResources.push(virtual);
@@ -838,8 +957,10 @@ type SearchParams = typeof searchSchema.infer;
 
 export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails> {
 	readonly name = "grep";
-	readonly approval = (args: unknown): ToolTier =>
-		toPathList((args as { paths?: string | string[] }).paths).some(pathTargetsSsh) ? "exec" : "read";
+	readonly approval = (args: unknown): ToolTier => {
+		const a = args as { path?: string | string[]; paths?: string | string[] };
+		return toPathList(a.path ?? a.paths).some(pathTargetsSsh) ? "exec" : "read";
+	};
 	readonly label = "Grep";
 	readonly loadMode = "discoverable";
 	readonly summary = "Grep file contents using ripgrep (fast regex search)";
@@ -862,7 +983,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 		_onUpdate?: AgentToolUpdateCallback<GrepToolDetails>,
 		_toolContext?: AgentToolContext,
 	): Promise<AgentToolResult<GrepToolDetails>> {
-		const { pattern, paths: rawPaths, case: caseSensitive, gitignore, skip } = params;
+		const { pattern, path: rawPath, selector, case: caseSensitive, gitignore, skip } = params;
 
 		return untilAborted(signal, async () => {
 			// Preserve the pattern verbatim — leading/trailing whitespace is
@@ -877,18 +998,29 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 			if (normalizedSkip < 0 || !Number.isFinite(normalizedSkip)) {
 				throw new ToolError("Skip must be a non-negative number");
 			}
-			const scopedPaths = toPathList(rawPaths);
+			const scopedPaths = toPathList(rawPath);
 			const effectivePaths = scopedPaths.length > 0 ? scopedPaths : ["."];
 			const rawEntries = await expandDelimitedPathEntries(effectivePaths, this.session.cwd);
-			const pathSpecs = parsePathSpecs(rawEntries);
-			const paths = pathSpecs.map(spec => spec.clean);
+			const pathSpecs = await parsePathSpecs(rawEntries, this.session.cwd, selector);
+			const materializedExternalPaths = new Map<string, string>();
+			const materializeExternalUrlForSearch = async (rawPath: string) => {
+				const target = parseReadUrlTarget(rawPath);
+				if (!target) return undefined;
+				const materialized = await materializeReadUrlToFile(
+					this.session,
+					{ path: target.path, raw: target.raw },
+					signal,
+				);
+				materializedExternalPaths.set(rawPath, materialized.path);
+				return { sourcePath: materialized.path, immutable: true };
+			};
 			const {
 				resolvedPaths,
 				displayMap: archiveDisplayMap,
 				displaySet: archiveDisplaySet,
 				unreadable: archiveUnreadable,
 				cleanup: cleanupArchiveScratch,
-			} = await resolveArchiveSearchPaths(paths, this.session.cwd);
+			} = await resolveArchiveSearchPaths(pathSpecs, this.session.cwd);
 			try {
 				const internalResolution = await resolveInternalSearchInputs({
 					pathSpecs,
@@ -902,34 +1034,8 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				});
 				const searchablePaths = internalResolution.paths;
 				const { virtualResources, virtualPathSet, virtualInputIndexes } = internalResolution;
-				// Build the per-file line-range filter (keyed by absolute path) now that
-				// archive entries have been materialized to scratch files. Plain entries
-				// resolve through `resolveReadPath`; archive entries are keyed by the
-				// scratch path that grep will actually report against.
 				const rangesByAbsPath = new Map<string, LineRange[]>();
-				for (let idx = 0; idx < pathSpecs.length; idx++) {
-					const spec = pathSpecs[idx];
-					if (!spec.ranges) continue;
-					if (virtualInputIndexes.has(idx)) continue;
-					const resolved = internalResolution.resolvedPathsByInput[idx];
-					if (!resolved) continue;
-					if (resolved === spec.clean && !archiveDisplayMap.has(resolved)) {
-						// Non-archive entry; ensure the cleaned path resolves to a regular file.
-						const absKey = path.resolve(resolveReadPath(resolved, this.session.cwd));
-						const stats = await stat(absKey).catch(() => null);
-						if (!stats) {
-							throw new ToolError(`Path not found for line-range selector: ${spec.original}`);
-						}
-						if (!stats.isFile()) {
-							throw new ToolError(`Line-range selector requires a single file: ${spec.original} is a directory`);
-						}
-						mergeRangesInto(rangesByAbsPath, absKey, spec.ranges);
-					} else {
-						// Archive entry — `resolveArchiveSearchPaths` substituted a scratch path.
-						const absKey = path.resolve(resolved);
-						mergeRangesInto(rangesByAbsPath, absKey, spec.ranges);
-					}
-				}
+				const globalRanges = pathSpecs.find(spec => spec.rangeSource === "explicit")?.ranges;
 
 				if (
 					archiveUnreadable.length > 0 &&
@@ -967,11 +1073,12 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						trackImmutableSources: true,
 						surfaceExactFilePaths: true,
 						fanOutFileTargets: true,
-						multipathStatHint: " (`paths` entries must each exist relative to cwd)",
+						multipathStatHint: " (`path` list entries must each exist relative to cwd)",
 						settings: this.session.settings,
 						signal,
 						localProtocolOptions: this.session.localProtocolOptions,
 						skills: this.session.skills,
+						resolveExternalUrl: materializeExternalUrlForSearch,
 					});
 					searchPath = scope.searchPath;
 					isDirectory = scope.isDirectory;
@@ -981,6 +1088,38 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					globFilter = scope.globFilter;
 					for (const immutablePath of scope.immutableSourcePaths) {
 						immutableSourcePaths.add(immutablePath);
+					}
+					// Build the per-file line-range filter after URL materialization has run:
+					// archive entries are keyed by scratch path, URL entries by read-cache
+					// content path, and ordinary files by their resolved filesystem path.
+					for (let idx = 0; idx < pathSpecs.length; idx++) {
+						const spec = pathSpecs[idx];
+						if (!spec.ranges) continue;
+						if (spec.rangeSource === "explicit") continue;
+						if (virtualInputIndexes.has(idx)) continue;
+						const resolved = internalResolution.resolvedPathsByInput[idx];
+						if (!resolved) continue;
+						const materializedExternalPath = materializedExternalPaths.get(spec.clean);
+						if (materializedExternalPath) {
+							mergeRangesInto(rangesByAbsPath, path.resolve(materializedExternalPath), spec.ranges);
+							continue;
+						}
+						if (resolved === spec.clean && !archiveDisplayMap.has(resolved)) {
+							// Non-archive entry; ensure the cleaned path resolves to a regular file.
+							const absKey = path.resolve(resolveReadPath(resolved, this.session.cwd));
+							const stats = await stat(absKey).catch(() => null);
+							if (!stats) {
+								throw new ToolError(`Path not found for line-range selector: ${spec.original}`);
+							}
+							if (!stats.isFile()) {
+								throw new ToolError(
+									`Line-range selector requires a single file: ${spec.original} is a directory`,
+								);
+							}
+							mergeRangesInto(rangesByAbsPath, absKey, spec.ranges);
+						} else {
+							mergeRangesInto(rangesByAbsPath, path.resolve(resolved), spec.ranges);
+						}
 					}
 					// When the only input was an archive selector, surface that selector instead
 					// of the temp scratch path the resolver substituted in.
@@ -1010,7 +1149,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 							? ` (archive members were not searchable: ${archiveUnreadable.join(", ")})`
 							: "";
 					throw new ToolError(
-						`Path not found: ${missingPaths.join(", ")}; pass each path as its own array element${archiveHint}`,
+						`Path not found: ${missingPaths.join(", ")}; list each target in the semicolon-delimited \`path\`${archiveHint}`,
 					);
 				}
 				const baseDisplayMode = resolveFileDisplayMode(this.session);
@@ -1022,6 +1161,18 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					Boolean(multiTargets) ||
 					(virtualResources.length > 0 && (virtualResources.length > 1 || searchablePaths.length > 0));
 				const perFileMatchCap = isMultiScope ? MULTI_FILE_PER_FILE_MATCHES : SINGLE_FILE_MATCHES;
+				// Range filtering happens in JS after the native fetch, so out-of-range
+				// matches consume fetch budget. Widen the per-file budget just enough
+				// that filtering can still yield `perFileMatchCap` in-range hits, and
+				// scale the global safety ceiling by the same amplification so ranged
+				// searches keep the baseline file coverage while staying finite.
+				const hasLineRangeFilters = pathSpecs.some(spec => spec.ranges);
+				const nativeMaxCountPerFile = hasLineRangeFilters
+					? Math.max(perFileMatchCap + 1, lineRangeFetchCap(pathSpecs, perFileMatchCap + 1))
+					: perFileMatchCap + 1;
+				const nativeMaxCount = hasLineRangeFilters
+					? Math.ceil(INTERNAL_TOTAL_CAP / (perFileMatchCap + 1)) * nativeMaxCountPerFile
+					: INTERNAL_TOTAL_CAP;
 
 				// Run grep
 				let result: GrepResult = {
@@ -1056,12 +1207,12 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 										multiline: effectiveMultiline,
 										hidden: true,
 										gitignore: useGitignore,
-										maxCount: INTERNAL_TOTAL_CAP,
+										maxCount: nativeMaxCount,
 										contextBefore: normalizedContextBefore,
 										contextAfter: normalizedContextAfter,
 										maxColumns: DEFAULT_MAX_COLUMN,
 										mode: effectiveOutputMode,
-										maxCountPerFile: perFileMatchCap + 1,
+										maxCountPerFile: nativeMaxCountPerFile,
 										signal,
 										timeoutMs: SEARCH_GREP_TIMEOUT_MS,
 									},
@@ -1103,12 +1254,12 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 									multiline: effectiveMultiline,
 									hidden: true,
 									gitignore: useGitignore,
-									maxCount: INTERNAL_TOTAL_CAP,
+									maxCount: nativeMaxCount,
 									contextBefore: normalizedContextBefore,
 									contextAfter: normalizedContextAfter,
 									maxColumns: DEFAULT_MAX_COLUMN,
 									mode: effectiveOutputMode,
-									maxCountPerFile: perFileMatchCap + 1,
+									maxCountPerFile: nativeMaxCountPerFile,
 									signal,
 									timeoutMs: SEARCH_GREP_TIMEOUT_MS,
 								},
@@ -1149,12 +1300,12 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					}
 					throw err;
 				}
-				result = mergeGrepResults(result, virtualResult, INTERNAL_TOTAL_CAP);
-				if (rangesByAbsPath.size > 0) {
+				result = mergeGrepResults(result, virtualResult, nativeMaxCount);
+				if (rangesByAbsPath.size > 0 || globalRanges) {
 					const filteredMatches: GrepMatch[] = [];
 					for (const match of result.matches) {
 						const abs = matchAbsolutePath(match.path, searchPath);
-						const ranges = rangesByAbsPath.get(abs);
+						const ranges = rangesByAbsPath.get(abs) ?? globalRanges;
 						if (!ranges) {
 							// Path has no line-range constraint (e.g. a peer entry without `:N-M`).
 							filteredMatches.push(match);
@@ -1243,8 +1394,9 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				const { record: recordFile, list: fileList } = createFileRecorder();
 				const fileMatchCounts = new Map<string, number>();
 				// Detect explicit file targets that exceed the native grep size cap.
-				// Native silently returns no matches above the cap; without this note the
-				// caller sees "no matches" for a literal pattern that visibly exists.
+				// Native searches only their first NATIVE_GREP_MAX_FILE_BYTES; without
+				// this note the caller might miss that matches beyond the window
+				// (or "no matches") reflect partial coverage, not the whole file.
 				const oversizedNote = await (async (): Promise<string | undefined> => {
 					const explicitFileTargets: string[] = [];
 					if (exactFilePaths) {
@@ -1268,13 +1420,13 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					);
 					if (oversized.length === 0) return undefined;
 					const limitMb = Math.floor(NATIVE_GREP_MAX_FILE_BYTES / (1024 * 1024));
-					return `Skipped oversized files (>${limitMb}MB grep limit; split the file or narrow with \`read\`): ${oversized.join(", ")}`;
+					return `Searched only the first ${limitMb}MB of large files (matches past the ${limitMb}MB window are not shown; use \`read\` for the rest): ${oversized.join(", ")}`;
 				})();
-				// Directory/multi-target scopes: native grep counts oversized skips but
-				// cannot name them; explicit-file scopes are covered (with names) above.
+				// Directory/multi-target scopes: native counts files it could not map
+				// even a prefix of (rare mmap failures), but cannot name them.
 				const oversizedScanNote =
 					!oversizedNote && skippedOversizedCount > 0
-						? `Skipped ${skippedOversizedCount} oversized file(s) (>${Math.floor(NATIVE_GREP_MAX_FILE_BYTES / (1024 * 1024))}MB grep limit); target them directly with \`read\``
+						? `Skipped ${skippedOversizedCount} unreadable large file(s); target them directly with \`read\``
 						: undefined;
 				const archiveNote =
 					archiveUnreadable.length > 0
@@ -1353,6 +1505,17 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					}, 0);
 					let lastEmittedLine: number | undefined;
 					const gutterPad = " ".repeat(lineNumberWidth + 1);
+					// Track match/context lines whose displayed text was
+					// column-truncated by the native (see `crates/pi-natives/src/grep.rs`
+					// `truncate_line`, marker `...` at max_columns). Excluded from
+					// seenLines so a follow-up edit anchored at that line still
+					// requires a full-width re-read — the model saw only the
+					// prefix. The native currently propagates `truncated` only on
+					// the match line; context lines fall back to a length check
+					// against `DEFAULT_MAX_COLUMN` as a conservative heuristic.
+					const clippedLines = new Set<number>();
+					const isNativeTruncated = (line: string): boolean =>
+						line.length >= DEFAULT_MAX_COLUMN && line.endsWith("...");
 					for (const match of fileMatches) {
 						const pushLine = (lineNumber: number, line: string, isMatch: boolean) => {
 							if (lastEmittedLine !== undefined && lineNumber > lastEmittedLine + 1) {
@@ -1366,22 +1529,31 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						if (match.contextBefore) {
 							for (const ctx of match.contextBefore) {
 								pushLine(ctx.lineNumber, ctx.line, false);
+								if (isNativeTruncated(ctx.line)) clippedLines.add(ctx.lineNumber);
 							}
 						}
 						pushLine(match.lineNumber, match.line, true);
 						if (match.truncated) {
 							linesTruncated = true;
+							clippedLines.add(match.lineNumber);
 						}
 						if (match.contextAfter) {
 							for (const ctx of match.contextAfter) {
 								pushLine(ctx.lineNumber, ctx.line, false);
+								if (isNativeTruncated(ctx.line)) clippedLines.add(ctx.lineNumber);
 							}
 						}
 						fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
 					}
 					if (hashContext?.tag) {
 						const absoluteFilePath = path.resolve(this.session.cwd, relativePath);
-						recordSeenLinesFromBody(this.session, absoluteFilePath, hashContext.tag, modelOut.join("\n"));
+						recordSeenLinesFromBody(
+							this.session,
+							absoluteFilePath,
+							hashContext.tag,
+							modelOut.join("\n"),
+							clippedLines,
+						);
 					}
 					return { model: modelOut, display: displayOut };
 				};
@@ -1467,6 +1639,8 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 
 interface GrepRenderArgs {
 	pattern: string;
+	path?: string | string[];
+	/** Legacy pre-`path` argument name; kept so historical transcripts still render a scope. */
 	paths?: string | string[];
 	case?: boolean;
 	gitignore?: boolean;
@@ -1636,7 +1810,7 @@ function grepStatusIcon(uiTheme: Theme): string {
 export const grepToolRenderer = {
 	inline: true,
 	renderCall(args: GrepRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const paths = toPathList(args.paths);
+		const paths = toPathList(args.path ?? args.paths);
 		const meta: string[] = [];
 		if (paths.length) meta.push(`in ${paths.join(", ")}`);
 		if (args.case === false) meta.push("case:insensitive");

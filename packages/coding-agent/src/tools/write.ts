@@ -52,6 +52,7 @@ import { enforcePlanModeWrite, resolvePlanPath, unwrapHashlineHeaderPath } from 
 import {
 	cachedRenderedString,
 	createRenderedStringCache,
+	Ellipsis,
 	formatDiagnostics,
 	formatErrorDetail,
 	formatExpandHint,
@@ -61,6 +62,8 @@ import {
 	type RenderedStringCache,
 	replaceTabs,
 	shortenPath,
+	TRUNCATE_LENGTHS,
+	truncateToWidth,
 } from "./render-utils";
 import {
 	deleteRowByKey,
@@ -163,6 +166,18 @@ function appendNoteToResult(result: AgentToolResult<WriteToolDetails>, note: str
 	} else {
 		result.content.push({ type: "text", text: note });
 	}
+}
+
+function emitWriteProgress(
+	onUpdate: AgentToolUpdateCallback<WriteToolDetails> | undefined,
+	content: string,
+	displayPath: string,
+	resolvedPath?: string,
+): void {
+	onUpdate?.({
+		content: [{ type: "text", text: `Writing ${content.length} bytes to ${shortenPath(displayPath)}...` }],
+		details: resolvedPath ? { resolvedPath } : {},
+	});
 }
 
 /**
@@ -781,7 +796,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		_toolCallId: string,
 		{ path: rawPath, content }: WriteParams,
 		signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback<WriteToolDetails>,
+		onUpdate?: AgentToolUpdateCallback<WriteToolDetails>,
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<WriteToolDetails>> {
 		// Strip a hashline `[path#TAG]` wrapper up front so every downstream
@@ -807,6 +822,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					// Handler-owned writes (vault:// notes, host URIs) mutate user
 					// data outside the local sandbox — plan mode must reject them.
 					enforcePlanModeWrite(this.session, path, { op: "update" });
+					emitWriteProgress(onUpdate, cleanContent, path);
 					await handler.write(parsed, cleanContent, { cwd: this.session.cwd, signal });
 					let resultText = `Successfully wrote ${cleanContent.length} bytes to ${path}`;
 					if (stripped) {
@@ -826,6 +842,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 						`Conflict URI scope '/${conflictUri.scope}' is read-only — read \`conflict://${conflictUri.id}/${conflictUri.scope}\` to inspect that side. To write, drop the scope (\`conflict://${conflictUri.id}\`) and put the chosen content (or shorthand like \`@${conflictUri.scope}\`) in \`content\`.`,
 					);
 				}
+				emitWriteProgress(onUpdate, cleanContent, path);
 				const result =
 					conflictUri.id === "*"
 						? await this.#resolveAllConflicts(cleanContent, stripped, signal)
@@ -844,6 +861,14 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					op: resolvedArchivePath.exists ? "update" : "create",
 				});
 
+				emitWriteProgress(
+					onUpdate,
+					cleanContent,
+					`${formatPathRelativeToCwd(resolvedArchivePath.absolutePath, this.session.cwd)}:${
+						resolvedArchivePath.archiveSubPath
+					}`,
+					resolvedArchivePath.absolutePath,
+				);
 				const archiveResult = await this.#writeArchiveEntry(cleanContent, resolvedArchivePath);
 				if (stripped) {
 					const firstText = archiveResult.content.find(
@@ -861,6 +886,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			if (resolvedSqlitePath) {
 				enforcePlanModeWrite(this.session, resolvedSqlitePath.sqlitePath, { op: "update" });
 
+				emitWriteProgress(onUpdate, cleanContent, path, resolvedSqlitePath.absolutePath);
 				const sqliteResult = await this.#writeSqliteRow(path, cleanContent, resolvedSqlitePath);
 				if (stripped) {
 					const firstText = sqliteResult.content.find(
@@ -883,11 +909,13 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				await assertEditableFile(absolutePath, path);
 			}
 
+			const displayPath = formatPathRelativeToCwd(absolutePath, this.session.cwd);
+			emitWriteProgress(onUpdate, cleanContent, displayPath, absolutePath);
+
 			// Try ACP bridge first for editor-visible filesystem paths. Internal
 			// artifacts such as local:// plans are owned by OMP, not the editor.
-			if (await routeWriteThroughBridge(this.session, path, absolutePath, cleanContent)) {
+			if (await routeWriteThroughBridge(this.session, path, absolutePath, cleanContent, signal)) {
 				const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, cleanContent);
-				const displayPath = formatPathRelativeToCwd(absolutePath, this.session.cwd);
 				const header = maybeWriteSnapshotHeader(this.session, absolutePath, cleanContent);
 				const writeLine = `Successfully wrote ${cleanContent.length} bytes to ${displayPath}`;
 				let resultText = header ? `${header}\n${writeLine}` : writeLine;
@@ -908,7 +936,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			this.session.bumpFileMutationVersion?.(absolutePath);
 			const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, cleanContent);
 
-			const displayPath = formatPathRelativeToCwd(absolutePath, this.session.cwd);
 			const header = maybeWriteSnapshotHeader(this.session, absolutePath, cleanContent);
 			const writeLine = `Successfully wrote ${cleanContent.length} bytes to ${displayPath}`;
 			let resultText = header ? `${header}\n${writeLine}` : writeLine;
@@ -945,9 +972,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 // =============================================================================
 
 interface WriteRenderArgs {
-	path?: string;
-	file_path?: string;
-	content?: string;
+	path?: unknown;
+	file_path?: unknown;
+	content?: unknown;
 }
 
 const WRITE_PREVIEW_LINES = 6;
@@ -958,13 +985,37 @@ function countLines(text: string): number {
 	return text.split("\n").length;
 }
 
+/** Bounded newline scan: whether `text` spans more than `maxLines` lines.
+ *  Runs on every live compose (the repaint predicate below), so it must not
+ *  materialize the split the way `countLines` does. */
+function exceedsLineCount(text: string, maxLines: number): boolean {
+	if (!text) return false;
+	let lines = 1;
+	for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
+		if (++lines > maxLines) return true;
+	}
+	return false;
+}
+
+function writeContentOf(args: unknown): string {
+	if (args == null || typeof args !== "object" || !("content" in args)) return "";
+	const content = args.content;
+	return typeof content === "string" ? content : "";
+}
+
 function formatLineCountSuffix(lineCount: number, uiTheme: Theme): string {
 	if (lineCount <= 0) return "";
 	return uiTheme.fg("dim", ` · ${lineCount} line${lineCount === 1 ? "" : "s"}`);
 }
 
-function normalizeDisplayText(text: string): string {
-	return text.replace(/\r/g, "");
+function normalizeDisplayText(text: unknown): string {
+	let displayText = "";
+	if (typeof text === "string") {
+		displayText = text;
+	} else if (text !== undefined && text !== null) {
+		displayText = String(text);
+	}
+	return displayText.replace(/\r/g, "");
 }
 
 /**
@@ -1055,9 +1106,10 @@ function renderContentPreview(
 
 export const writeToolRenderer = {
 	renderCall(args: WriteRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
-		const rawPath = args.file_path || args.path || "";
+		const rawPath =
+			typeof args.file_path === "string" ? args.file_path : typeof args.path === "string" ? args.path : "";
 		const filePath = shortenPath(rawPath);
-		const lang = getLanguageFromPath(rawPath) ?? "text";
+		const lang = rawPath ? (getLanguageFromPath(rawPath) ?? "text") : "text";
 		const langIcon = uiTheme.fg("muted", uiTheme.getLangIcon(lang));
 		const pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
 		// No status icon on the head row: it's the head of the framed block, and
@@ -1071,11 +1123,12 @@ export const writeToolRenderer = {
 			},
 			uiTheme,
 		);
+		const content = normalizeDisplayText(args.content);
 		const streamingCache = createRenderedStringCache();
 		return framedBlock(uiTheme, width => {
-			const body = args.content
+			const body = content
 				? formatStreamingContent(
-						args.content,
+						content,
 						Boolean(options?.expanded),
 						lang,
 						uiTheme,
@@ -1101,10 +1154,11 @@ export const writeToolRenderer = {
 		uiTheme: Theme,
 		args?: WriteRenderArgs,
 	): Component {
-		const rawPath = args?.file_path || args?.path || "";
+		const rawPath =
+			typeof args?.file_path === "string" ? args.file_path : typeof args?.path === "string" ? args.path : "";
 		const filePath = shortenPath(rawPath);
-		const fileContent = args?.content || "";
-		const lang = getLanguageFromPath(rawPath);
+		const fileContent = normalizeDisplayText(args?.content);
+		const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
 		const langIcon = uiTheme.fg("muted", uiTheme.getLangIcon(lang));
 		// The header shows the cwd-relative path but links to the absolute path the
 		// write resolved to (args.path may be relative, which would yield a broken
@@ -1128,14 +1182,19 @@ export const writeToolRenderer = {
 			}));
 		}
 
+		const isPartial = options.isPartial === true;
+		const progressText = result.content?.find(c => c.type === "text")?.text ?? "";
 		const lineCount = countLines(fileContent);
 		const lineSuffix = formatLineCountSuffix(lineCount, uiTheme);
-		const execSuffix = result.details?.madeExecutable
-			? `${uiTheme.fg("dim", " · ")}${uiTheme.fg("success", "made executable!")}`
-			: "";
+		const execSuffix =
+			!isPartial && result.details?.madeExecutable
+				? `${uiTheme.fg("dim", " · ")}${uiTheme.fg("success", "made executable!")}`
+				: "";
 		const header = renderStatusLine(
 			{
-				iconOverride: uiTheme.styledSymbol("tool.write", "accent"),
+				icon: isPartial ? "running" : undefined,
+				iconOverride: isPartial ? undefined : uiTheme.styledSymbol("tool.write", "accent"),
+				spinnerFrame: options.spinnerFrame,
 				title: "Write",
 				description: `${langIcon} ${pathDisplay}${lineSuffix}${execSuffix}`,
 			},
@@ -1147,7 +1206,15 @@ export const writeToolRenderer = {
 		return framedBlock(uiTheme, width => {
 			const { expanded } = options;
 			let body = renderContentPreview(fileContent, expanded, lang, uiTheme, previewCache);
-			if (diagnostics) {
+			if (isPartial && progressText) {
+				const safeProgressText = truncateToWidth(
+					replaceTabs(progressText),
+					TRUNCATE_LENGTHS.LINE,
+					Ellipsis.Unicode,
+				);
+				body = `${uiTheme.fg("muted", safeProgressText)}${body ? `\n${body}` : ""}`;
+			}
+			if (!isPartial && diagnostics) {
 				const diagText = formatDiagnostics(diagnostics, expanded, uiTheme, fp =>
 					uiTheme.getLangIcon(getLanguageFromPath(fp)),
 				);
@@ -1162,11 +1229,19 @@ export const writeToolRenderer = {
 			return {
 				header,
 				sections: bodyLines.length > 0 ? [{ lines: bodyLines }] : [],
-				state: "success",
+				state: isPartial ? "pending" : "success",
 				borderColor: "borderMuted",
 				width,
 			};
 		});
 	},
 	mergeCallAndResult: true,
+	// The collapsed pending preview follows the streaming edge with a tail
+	// window once the content outgrows it (`… (N earlier lines)` + last rows);
+	// the first partial result re-anchors the frame to the top of the file, so
+	// tail rows already committed to viewport/native scrollback would survive
+	// as stale content above the new frame without a full replay. Expanded and
+	// short previews stay top-anchored and skip the (scrollback-wiping) reset.
+	forceFirstResultViewportRepaint: (args: unknown, options: RenderResultOptions) =>
+		!options.expanded && exceedsLineCount(writeContentOf(args), WRITE_STREAMING_PREVIEW_LINES),
 };

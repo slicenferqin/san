@@ -42,7 +42,6 @@ import type { AsyncJobSnapshotItem } from "../../session/agent-session";
 import type { AuthStorage, OAuthAccountIdentity } from "../../session/auth-storage";
 import type { CompactMode } from "../../session/compact-modes";
 import type { NewSessionOptions } from "../../session/session-entries";
-import { SessionManager } from "../../session/session-manager";
 import { formatShakeSummary, type ShakeMode, type ShakeResult } from "../../session/shake-types";
 import { limitMatchesActiveAccount } from "../../slash-commands/helpers/active-oauth-account";
 import { outputMeta } from "../../tools/output-meta";
@@ -358,6 +357,27 @@ export class CommandController {
 					0,
 				),
 			]);
+			return;
+		}
+		if (stats.advisors.length > 1) {
+			let info = `${theme.bold("Advisor Status")} (${stats.advisors.length} advisors)\n`;
+			for (const a of stats.advisors) {
+				const ctx =
+					a.contextWindow > 0
+						? `${a.contextTokens.toLocaleString()} / ${a.contextWindow.toLocaleString()} (${Math.round((a.contextTokens / a.contextWindow) * 100)}%)`
+						: `${a.contextTokens.toLocaleString()}`;
+				info += `\n${theme.bold(a.name)}\n`;
+				info += `${theme.fg("dim", "Model:")} ${a.model.provider}/${a.model.id}\n`;
+				info += `${theme.fg("dim", "Context:")} ${ctx}\n`;
+				info += `${theme.fg("dim", "Messages:")} ${a.messages.total.toLocaleString()}\n`;
+				info += `${theme.fg("dim", "Spend:")} ${a.tokens.input.toLocaleString()} in / ${a.tokens.output.toLocaleString()} out`;
+				if (a.cost > 0) info += `, $${a.cost.toFixed(4)}`;
+				info += "\n";
+			}
+			info += `\n${theme.bold("Totals")}\n`;
+			info += `${theme.fg("dim", "Tokens:")} ${stats.tokens.total.toLocaleString()}\n`;
+			if (stats.cost > 0) info += `${theme.fg("dim", "Cost:")} $${stats.cost.toFixed(4)}\n`;
+			this.ctx.present([new Spacer(1), new Text(info, 1, 0)]);
 			return;
 		}
 		const model = stats.model!;
@@ -829,11 +849,7 @@ export class CommandController {
 	}
 
 	async #runNewSessionFlow(options?: NewSessionOptions, label: string = "New session started"): Promise<void> {
-		if (this.ctx.loadingAnimation) {
-			this.ctx.loadingAnimation.stop();
-			this.ctx.loadingAnimation = undefined;
-		}
-		this.ctx.statusContainer.clear();
+		this.ctx.clearTransientSessionUi();
 
 		if (this.ctx.session.isCompacting) {
 			this.ctx.session.abortCompaction();
@@ -846,15 +862,10 @@ export class CommandController {
 		setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
 
 		this.ctx.statusLine.invalidate();
-		this.ctx.statusLine.setSessionStartTime(Date.now());
-		this.ctx.updateEditorTopBorder();
+		this.ctx.statusLine.resetActiveTime();
 		this.ctx.updateEditorBorderColor();
-		this.ctx.chatContainer.clear();
-		this.ctx.pendingMessagesContainer.clear();
-		this.ctx.compactionQueuedMessages = [];
-		this.ctx.streamingComponent = undefined;
-		this.ctx.streamingMessage = undefined;
-		this.ctx.pendingTools.clear();
+		this.ctx.clearTransientSessionUi();
+		this.ctx.resetTranscript();
 
 		this.ctx.present([new Spacer(1), new Text(`${theme.fg("accent", `${theme.status.success} ${label}`)}`, 1, 1)]);
 		await this.ctx.reloadTodos();
@@ -873,7 +884,7 @@ export class CommandController {
 		}
 		const stateLabel = result.closedProviderSessions === 1 ? "provider state" : "provider states";
 		this.ctx.statusLine.invalidate();
-		this.ctx.updateEditorTopBorder();
+		this.ctx.ui.requestRender();
 		this.ctx.showStatus(`Fresh provider session started (${result.closedProviderSessions} ${stateLabel} pruned).`);
 	}
 
@@ -894,7 +905,7 @@ export class CommandController {
 			this.ctx.loadingAnimation.stop();
 			this.ctx.loadingAnimation = undefined;
 		}
-		this.ctx.statusContainer.clear();
+		this.ctx.statusContainer.disposeChildren();
 
 		const success = await this.ctx.session.fork();
 		if (!success) {
@@ -903,7 +914,7 @@ export class CommandController {
 		}
 
 		this.ctx.statusLine.invalidate();
-		this.ctx.updateEditorTopBorder();
+		this.ctx.ui.requestRender();
 
 		const sessionFile = this.ctx.session.sessionFile;
 		const shortPath = sessionFile ? sessionFile.split("/").pop() : "new session";
@@ -914,13 +925,13 @@ export class CommandController {
 	}
 
 	/**
-	 * `/move` — switch to a fresh empty session in a different directory.
+	 * `/move` — relocate the current session to a different directory.
 	 *
 	 * With no `targetPath` (TUI only), opens an autocomplete overlay so the user
 	 * can pick or type a directory. With a `targetPath`, resolves it directly.
 	 * If the target directory does not exist, the user is asked whether to create
-	 * it. A brand-new empty session is then started in the target directory and
-	 * the current session is left behind (resumable via `/resume`).
+	 * it. The active session file and artifacts are moved into the target
+	 * directory's session bucket so `/resume` from that directory can find it.
 	 */
 	async handleMoveCommand(targetPath?: string): Promise<void> {
 		if (this.ctx.session.isStreaming) {
@@ -982,47 +993,18 @@ export class CommandController {
 			}
 		}
 
-		let newSessionFile: string | undefined;
 		try {
-			// Create a fresh empty session file in the target directory's session
-			// folder, then switch to it. The current session is left behind and
-			// remains resumable via /resume.
-			newSessionFile = SessionManager.createEmptySessionFile(resolvedPath);
-			const switched = await this.ctx.session.switchSession(newSessionFile);
-			if (!switched) {
-				await this.ctx.sessionManager.dropSession(newSessionFile);
-				return;
-			}
+			await this.ctx.sessionManager.moveTo(resolvedPath);
 		} catch (err) {
-			if (newSessionFile) {
-				try {
-					await this.ctx.sessionManager.dropSession(newSessionFile);
-				} catch (dropErr) {
-					this.ctx.showError(
-						`Move failed: ${err instanceof Error ? err.message : String(err)}; failed to remove empty session: ${dropErr instanceof Error ? dropErr.message : String(dropErr)}`,
-					);
-					return;
-				}
-			}
 			this.ctx.showError(`Move failed: ${err instanceof Error ? err.message : String(err)}`);
 			return;
 		}
 
-		this.ctx.session.markMovedFromEmptySessionFile(newSessionFile!);
 		await this.ctx.applyCwdChange(resolvedPath);
 
-		this.ctx.chatContainer.clear();
-		this.ctx.pendingMessagesContainer.clear();
-		this.ctx.compactionQueuedMessages = [];
-		this.ctx.streamingComponent = undefined;
-		this.ctx.streamingMessage = undefined;
-		this.ctx.pendingTools.clear();
-		this.ctx.statusLine.invalidate();
-		this.ctx.statusLine.setSessionStartTime(Date.now());
-		this.ctx.updateEditorTopBorder();
 		this.ctx.updateEditorBorderColor();
 		await this.ctx.reloadTodos();
-		this.ctx.ui.requestRender(true, { clearScrollback: true });
+		this.ctx.ui.requestRender();
 
 		this.ctx.present([
 			new Spacer(1),
@@ -1038,9 +1020,6 @@ export class CommandController {
 				return;
 			}
 			const name = this.ctx.sessionManager.getSessionName()!;
-			setSessionTerminalTitle(name, this.ctx.sessionManager.getCwd());
-			this.ctx.statusLine.invalidate();
-			this.ctx.updateEditorBorderColor();
 			this.ctx.showStatus(`Session renamed to "${name}".`);
 		} catch (err) {
 			this.ctx.showError(`Rename failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1133,6 +1112,7 @@ export class CommandController {
 		customInstructions?: string,
 		mode?: CompactMode,
 		beforeFlush?: (outcome: CompactionOutcome) => void | Promise<void>,
+		internalGuidance?: string,
 	): Promise<CompactionOutcome> {
 		const entries = this.ctx.sessionManager.getEntries();
 		const messageCount = entries.filter(e => e.type === "message").length;
@@ -1142,6 +1122,15 @@ export class CommandController {
 			return "ok";
 		}
 
+		// `internalGuidance` is a private summarizer directive (plan-mode
+		// "Approve and compact context") that MUST stay off the public
+		// `customInstructions` channel of the `session_before_compact` extension
+		// hook — extensions treat that field as user focus and would otherwise
+		// bias the summary toward the plan boilerplate (issue #4359). Ride it
+		// through as a CompactOptions field instead.
+		if (internalGuidance) {
+			return this.executeCompaction({ internalGuidance, ...(mode ? { mode } : {}) }, false, beforeFlush, mode);
+		}
 		return this.executeCompaction(customInstructions, false, beforeFlush, mode);
 	}
 
@@ -1165,23 +1154,8 @@ export class CommandController {
 		}
 		this.ctx.rebuildChatFromMessages();
 		this.ctx.statusLine.invalidate();
-		this.ctx.updateEditorTopBorder();
+		this.ctx.ui.requestRender();
 		this.ctx.showStatus(formatShakeSummary(result));
-	}
-
-	async handleSkillCommand(skillPath: string, args: string): Promise<void> {
-		try {
-			const content = await Bun.file(skillPath).text();
-			const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
-			const metaLines = [`Skill: ${skillPath}`];
-			if (args) {
-				metaLines.push(`User: ${args}`);
-			}
-			const message = `${body}\n\n---\n\n${metaLines.join("\n")}`;
-			await this.ctx.session.prompt(message);
-		} catch (err) {
-			this.ctx.showError(`Failed to load skill: ${err instanceof Error ? err.message : String(err)}`);
-		}
 	}
 
 	async executeCompaction(
@@ -1194,7 +1168,7 @@ export class CommandController {
 			this.ctx.loadingAnimation.stop();
 			this.ctx.loadingAnimation = undefined;
 		}
-		this.ctx.statusContainer.clear();
+		this.ctx.statusContainer.disposeChildren();
 
 		const label = isAuto ? "Auto-compacting context... (esc to cancel)" : "Compacting context... (esc to cancel)";
 		const compactingLoader = new Loader(
@@ -1224,11 +1198,11 @@ export class CommandController {
 			await this.ctx.session.compact(instructions, options);
 
 			compactingLoader.stop();
-			this.ctx.statusContainer.clear();
+			this.ctx.statusContainer.disposeChildren();
 			this.ctx.rebuildChatFromMessages();
 
 			this.ctx.statusLine.invalidate();
-			this.ctx.updateEditorTopBorder();
+			this.ctx.ui.requestRender();
 		} catch (error) {
 			if (error instanceof CompactionCancelledError) {
 				outcome = "cancelled";
@@ -1240,7 +1214,7 @@ export class CommandController {
 			}
 		} finally {
 			compactingLoader.stop();
-			this.ctx.statusContainer.clear();
+			this.ctx.statusContainer.disposeChildren();
 		}
 		// Run the caller's pre-flush hook (e.g. the plan-approval model transition)
 		// before queued user input is dispatched, so any turn queued during
@@ -1269,7 +1243,7 @@ export class CommandController {
 			this.ctx.loadingAnimation.stop();
 			this.ctx.loadingAnimation = undefined;
 		}
-		this.ctx.statusContainer.clear();
+		this.ctx.statusContainer.disposeChildren();
 
 		const handoffLoader = new Loader(
 			this.ctx.ui,
@@ -1290,11 +1264,10 @@ export class CommandController {
 				return;
 			}
 
-			// Rebuild chat from the new session (which now contains the handoff document)
-			this.ctx.rebuildChatFromMessages();
-
+			// Rebuild chat from the new session (which now contains the handoff document).
+			this.ctx.clearTransientSessionUi();
+			this.ctx.renderInitialMessages();
 			this.ctx.statusLine.invalidate();
-			this.ctx.updateEditorTopBorder();
 			this.ctx.updateEditorBorderColor();
 			await this.ctx.reloadTodos();
 
@@ -1314,9 +1287,9 @@ export class CommandController {
 			}
 		} finally {
 			handoffLoader.stop();
-			this.ctx.statusContainer.clear();
+			this.ctx.statusContainer.disposeChildren();
 		}
-		this.ctx.ui.requestRender();
+		this.ctx.ui.requestRender(true, { clearScrollback: true });
 	}
 }
 

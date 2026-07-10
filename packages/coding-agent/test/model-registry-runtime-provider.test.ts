@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -38,6 +38,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	afterEach(() => {
+		vi.useRealTimers();
 		clearCustomApis();
 		for (const sourceId of sourceIds) {
 			unregisterOAuthProviders(sourceId);
@@ -87,6 +88,14 @@ describe("ModelRegistry runtime provider registration", () => {
 		expectProviderHeader(registry, providerName, headerName, expectedValue);
 		await registry.refreshProvider(providerName, "offline");
 		expectProviderHeader(registry, providerName, headerName, expectedValue);
+	}
+
+	async function drainMicrotasksUntil(predicate: () => boolean, errorMessage: string): Promise<void> {
+		for (let i = 0; i < 1000; i++) {
+			if (predicate()) return;
+			await Promise.resolve();
+		}
+		throw new Error(errorMessage);
 	}
 
 	async function expectModelTransportAcrossRefresh(
@@ -139,6 +148,36 @@ describe("ModelRegistry runtime provider registration", () => {
 
 		registry.clearSourceRegistrations("ext://runtime");
 		expectProviderHeader(registry, providerName, runtimeHeader, undefined);
+	});
+
+	test("registerProvider keeps runtime header objects live for request-time reads", () => {
+		const providerHeaders: Record<string, string> = { "X-Request-ID": "request-1" };
+		const modelHeaders: Record<string, string> = { "X-Message-ID": "message-1" };
+
+		registry.registerProvider(
+			"runtime-provider",
+			{
+				baseUrl: "https://runtime.example.com/v1",
+				apiKey: "RUNTIME_KEY",
+				api: "openai-completions",
+				headers: providerHeaders,
+				models: [{ ...baseModel, headers: modelHeaders }],
+			},
+			"ext://runtime",
+		);
+
+		providerHeaders["X-Request-ID"] = "request-2";
+		providerHeaders["X-Turn-ID"] = "turn-2";
+		modelHeaders["X-Message-ID"] = "message-2";
+		modelHeaders["X-Model-Turn-ID"] = "model-turn-2";
+
+		const model = registry.find("runtime-provider", "runtime-model");
+		expect({ ...(model?.headers ?? {}) }).toEqual({
+			"X-Request-ID": "request-2",
+			"X-Turn-ID": "turn-2",
+			"X-Message-ID": "message-2",
+			"X-Model-Turn-ID": "model-turn-2",
+		});
 	});
 
 	test("registerProvider applies authHeader overrides to existing provider models across refresh", async () => {
@@ -220,6 +259,92 @@ describe("ModelRegistry runtime provider registration", () => {
 			endpoint: modelEndpoint,
 			model: "model-compact",
 		});
+	});
+
+	test("configured discovery suppresses extension fetchDynamicModels for the same provider", async () => {
+		const providerName = "runtime-configured-provider";
+		fs.writeFileSync(
+			modelsJsonPath,
+			JSON.stringify({
+				providers: {
+					[providerName]: {
+						baseUrl: "http://127.0.0.1:4893",
+						api: "openai-completions",
+						auth: "none",
+						discovery: { type: "openai-models-list" },
+					},
+				},
+			}),
+		);
+		const configuredFetch: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:4893/v1/models") {
+				return Response.json({
+					data: [{ id: "shared-runtime-model", context_length: 32_768 }],
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const configuredRegistry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: configuredFetch });
+		let runtimeFetchCalls = 0;
+		configuredRegistry.registerProvider(
+			providerName,
+			{
+				baseUrl: "https://runtime.example.com/v1",
+				apiKey: "RUNTIME_KEY",
+				api: "openai-completions",
+				fetchDynamicModels: async () => {
+					runtimeFetchCalls++;
+					return [{ ...baseModel, id: "shared-runtime-model", contextWindow: 999_999 }];
+				},
+			},
+			"ext://runtime",
+		);
+
+		await configuredRegistry.refreshProvider(providerName, "online");
+
+		expect(runtimeFetchCalls).toBe(0);
+		expect(configuredRegistry.find(providerName, "shared-runtime-model")?.contextWindow).toBe(32_768);
+	});
+
+	test("refreshRuntimeProviders times out extension fetchDynamicModels that never resolves", async () => {
+		vi.useFakeTimers();
+		const hangingFetch = Promise.withResolvers<readonly NonNullable<ProviderConfigInput["models"]>[number][]>();
+		registry.registerProvider(
+			"hanging-runtime-provider",
+			{
+				baseUrl: "https://runtime.example.com/v1",
+				apiKey: "RUNTIME_KEY",
+				api: "openai-completions",
+				fetchDynamicModels: () => hangingFetch.promise,
+			},
+			"ext://runtime",
+		);
+
+		const baselineTimers = vi.getTimerCount();
+		let outcome: "resolved" | "rejected" | undefined;
+		const refresh = registry.refreshRuntimeProviders("online").then(
+			() => {
+				outcome = "resolved";
+			},
+			error => {
+				outcome = "rejected";
+				throw error;
+			},
+		);
+
+		await drainMicrotasksUntil(
+			() => vi.getTimerCount() > baselineTimers,
+			"dynamic fetch timeout timer was not armed",
+		);
+		expect(outcome).toBeUndefined();
+		vi.advanceTimersByTime(14_999);
+		await Promise.resolve();
+		expect(outcome).toBeUndefined();
+		vi.advanceTimersByTime(1);
+		await refresh;
+		expect(outcome).toBe("resolved");
+		expect(registry.find("hanging-runtime-provider", "any-model")).toBeUndefined();
 	});
 
 	test("registerProvider preserves explicit thinking and backfills wire facts", () => {

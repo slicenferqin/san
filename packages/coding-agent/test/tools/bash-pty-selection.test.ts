@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { canUseInteractiveBashPty } from "@oh-my-pi/pi-coding-agent/tools/bash-pty-selection";
 
 const originalPlatform = process.platform;
-const originalNoPty = Bun.env.PI_NO_PTY;
+const originalSanNoPty = Bun.env.SAN_NO_PTY;
+const originalLegacyNoPty = Bun.env.PI_NO_PTY;
 
 function setPlatform(platform: NodeJS.Platform): void {
 	Object.defineProperty(process, "platform", {
@@ -22,6 +23,14 @@ function restorePlatform(): void {
 
 function setNoPty(value: string | undefined): void {
 	if (value === undefined) {
+		delete Bun.env.SAN_NO_PTY;
+		return;
+	}
+	Bun.env.SAN_NO_PTY = value;
+}
+
+function setLegacyNoPty(value: string | undefined): void {
+	if (value === undefined) {
 		delete Bun.env.PI_NO_PTY;
 		return;
 	}
@@ -35,12 +44,14 @@ function interactiveContext() {
 describe("bash PTY selection", () => {
 	afterEach(() => {
 		restorePlatform();
-		setNoPty(originalNoPty);
+		setNoPty(originalSanNoPty);
+		setLegacyNoPty(originalLegacyNoPty);
 	});
 
 	it("allows interactive PTY on Windows when requested with UI", () => {
 		setPlatform("win32");
 		setNoPty(undefined);
+		setLegacyNoPty(undefined);
 
 		expect(canUseInteractiveBashPty(true, interactiveContext())).toBe(true);
 	});
@@ -48,12 +59,17 @@ describe("bash PTY selection", () => {
 	it("allows interactive PTY on non-Windows when requested with UI and not disabled", () => {
 		setPlatform("linux");
 		setNoPty(undefined);
+		setLegacyNoPty(undefined);
 
 		expect(canUseInteractiveBashPty(true, interactiveContext())).toBe(true);
 		expect(canUseInteractiveBashPty(false, interactiveContext())).toBe(false);
 		expect(canUseInteractiveBashPty(true, undefined)).toBe(false);
 
 		setNoPty("1");
+		expect(canUseInteractiveBashPty(true, interactiveContext())).toBe(false);
+
+		setNoPty(undefined);
+		setLegacyNoPty("1");
 		expect(canUseInteractiveBashPty(true, interactiveContext())).toBe(false);
 	});
 

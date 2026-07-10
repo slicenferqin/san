@@ -14,13 +14,14 @@ import {
 	parseKnownModel,
 	semverEqual,
 } from "../src/identity/classify";
-import { buildCanonicalModelIndex, buildCanonicalReferenceData } from "../src/identity/equivalence";
 import { isMimoModelIdOrName } from "../src/identity/family";
 import { getLongestModelLikeIdSegment } from "../src/identity/id";
 import { buildModelReferenceIndex, resolveModelReference } from "../src/identity/reference";
 import { resolveModelThinking } from "../src/model-thinking";
+import { resolveWaferServerlessThinkingFormat } from "../src/provider-models/openai-compat";
 import type { Api, Model, ModelSpec } from "../src/types";
 import { isVariantCollapsedSpec } from "../src/variant-collapse";
+import { buildCanonicalModelIndex, buildCanonicalReferenceData } from "./equivalence";
 
 const CLOUDFLARE_AI_GATEWAY_BASE_URL = "https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic";
 
@@ -246,6 +247,17 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 		};
 		delete model.compat.thinkingFormat;
 	}
+	if (model.api === "openai-completions" && model.provider === "wafer-serverless" && model.reasoning) {
+		const thinkingFormat = resolveWaferServerlessThinkingFormat(model.id, undefined);
+		if (thinkingFormat === "zai") {
+			model.compat = {
+				...(model.compat ?? {}),
+				thinkingFormat,
+				reasoningContentField: "reasoning_content",
+				supportsDeveloperRole: false,
+			};
+		}
+	}
 	if (model.api === "openai-completions" && model.provider === "opencode-go" && isMimoModelIdOrName(model.id)) {
 		model.compat = {
 			...(model.compat ?? {}),
@@ -266,6 +278,7 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 		model.compat = {
 			...(model.compat ?? {}),
 			supportsToolChoice: false,
+			maxTokensField: "max_tokens",
 			reasoningContentField: "reasoning_content",
 			requiresReasoningContentForToolCalls: true,
 		};

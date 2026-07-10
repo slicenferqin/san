@@ -201,6 +201,21 @@ export function hasRootMarkers(cwd: string, markers: string[]): boolean {
 	return false;
 }
 
+/**
+ * Check whether any ancestor directory of a file is an LSP project root.
+ */
+export function hasRootMarkerAncestor(filePath: string, markers: string[]): boolean {
+	if (markers.length === 0) return false;
+
+	let dir = path.dirname(path.resolve(filePath));
+	while (true) {
+		if (hasRootMarkers(dir, markers)) return true;
+		const parent = path.dirname(dir);
+		if (parent === dir) return false;
+		dir = parent;
+	}
+}
+
 // =============================================================================
 // Local Binary Resolution
 // =============================================================================
@@ -209,13 +224,27 @@ export function hasRootMarkers(cwd: string, markers: string[]): boolean {
  * Local bin directories to check before $PATH, ordered by priority.
  * Each entry maps a root marker to the bin directory to check.
  */
+const PYTHON_ROOT_MARKERS = [
+	"pyproject.toml",
+	"requirements.txt",
+	"setup.py",
+	"setup.cfg",
+	"Pipfile",
+	"pyrightconfig.json",
+	"ruff.toml",
+	".ruff.toml",
+];
+
 const LOCAL_BIN_PATHS: Array<{ markers: string[]; binDir: string }> = [
 	// Node.js - check node_modules/.bin/
 	{ markers: ["package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml"], binDir: "node_modules/.bin" },
 	// Python - check virtual environment bin directories
-	{ markers: ["pyproject.toml", "requirements.txt", "setup.py", "Pipfile"], binDir: ".venv/bin" },
-	{ markers: ["pyproject.toml", "requirements.txt", "setup.py", "Pipfile"], binDir: "venv/bin" },
-	{ markers: ["pyproject.toml", "requirements.txt", "setup.py", "Pipfile"], binDir: ".env/bin" },
+	{ markers: PYTHON_ROOT_MARKERS, binDir: ".venv/bin" },
+	{ markers: PYTHON_ROOT_MARKERS, binDir: ".venv/Scripts" },
+	{ markers: PYTHON_ROOT_MARKERS, binDir: "venv/bin" },
+	{ markers: PYTHON_ROOT_MARKERS, binDir: "venv/Scripts" },
+	{ markers: PYTHON_ROOT_MARKERS, binDir: ".env/bin" },
+	{ markers: PYTHON_ROOT_MARKERS, binDir: ".env/Scripts" },
 	// Ruby - check vendor bundle and binstubs
 	{ markers: ["Gemfile", "Gemfile.lock"], binDir: "vendor/bundle/bin" },
 	{ markers: ["Gemfile", "Gemfile.lock"], binDir: "bin" },

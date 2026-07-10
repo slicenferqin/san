@@ -4,6 +4,8 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext, SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { vocalizer } from "@oh-my-pi/pi-coding-agent/tts/vocalizer";
+import * as logger from "@oh-my-pi/pi-utils/logger";
 
 type Spy = Mock<(...args: unknown[]) => unknown>;
 type StartPendingSubmissionSpy = Mock<InteractiveModeContext["startPendingSubmission"]>;
@@ -252,6 +254,31 @@ function createContext(): {
 		sessionListeners,
 	};
 }
+
+type AbortViewSession = {
+	isCompacting: boolean;
+	isGeneratingHandoff: boolean;
+	isRetrying: boolean;
+	abortCompaction: Spy;
+	abortHandoff: Spy;
+	abortRetry: Spy;
+};
+
+function abortViewSession(ctx: InteractiveModeContext): AbortViewSession {
+	// Test harness installs a mutable fake AgentSession; keep the unchecked cast named
+	// so property access is explicit.
+	return ctx.viewSession as unknown as AbortViewSession;
+}
+
+type MutableSessionState = InteractiveModeContext["session"] & {
+	isStreaming: boolean;
+};
+
+function mutableSessionState(ctx: InteractiveModeContext): MutableSessionState {
+	// Test harness installs a mutable fake AgentSession; keep the unchecked cast named
+	// so state mutations are explicit.
+	return ctx.session as MutableSessionState;
+}
 beforeEach(async () => {
 	await Settings.init({ inMemory: true });
 });
@@ -421,111 +448,37 @@ describe("InputController escape behavior", () => {
 		expect(spies.abort).not.toHaveBeenCalled();
 	});
 
-	it("requires a second Esc within two seconds to abort streaming", () => {
-		const now = vi.spyOn(Date, "now");
-		now.mockReturnValue(1_000);
+	it("aborts an active streaming turn on the first Esc without asking for confirmation", () => {
 		const { ctx, editor, spies } = createContext();
-		(ctx.session as { isStreaming: boolean }).isStreaming = true;
+		mutableSessionState(ctx).isStreaming = true;
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
+		editor.onEscape?.();
+
+		expect(spies.abort).toHaveBeenCalledTimes(1);
+		expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
+		expect(spies.showStatus).not.toHaveBeenCalledWith("Press Esc again within 2s to cancel streaming.");
+	});
+
+	it("aborts the submitted turn on the first Esc once the main session starts streaming", async () => {
+		const { ctx, editor, spies } = createContext();
+		const submission = createSubmission({ text: "fix issue #4921" });
+		spies.startPendingSubmission.mockReturnValue(submission);
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		controller.setupEditorSubmitHandler();
+		await editor.onSubmit?.("fix issue #4921");
+		mutableSessionState(ctx).isStreaming = true;
+		ctx.loadingAnimation = undefined;
+
 		editor.onEscape?.();
 
 		expect(spies.cancelPendingSubmission).not.toHaveBeenCalled();
-		expect(spies.clearQueue).not.toHaveBeenCalled();
-		expect(spies.abort).not.toHaveBeenCalled();
-		expect(spies.showStatus).toHaveBeenCalledWith("Press Esc again within 2s to cancel streaming.");
-
-		now.mockReturnValue(2_500);
-		editor.onEscape?.();
-
 		expect(spies.abort).toHaveBeenCalledTimes(1);
 		expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
-	});
-
-	it("expires the streaming Esc arm instead of aborting on a late second press", () => {
-		const now = vi.spyOn(Date, "now");
-		now.mockReturnValue(1_000);
-		const { ctx, editor, spies } = createContext();
-		(ctx.session as { isStreaming: boolean }).isStreaming = true;
-		const controller = new InputController(ctx);
-
-		controller.setupKeyHandlers();
-		editor.onEscape?.();
-		now.mockReturnValue(3_001);
-		editor.onEscape?.();
-
-		expect(spies.abort).not.toHaveBeenCalled();
-		expect(spies.showStatus).toHaveBeenCalledTimes(2);
-	});
-
-	it("preserves the streaming Esc arm when streamingComponent appears between presses", () => {
-		// Pre-`message_start`: first Esc arms on the per-turn sentinel. `message_start`
-		// then publishes `ctx.streamingComponent`; the second Esc must still abort the
-		// same live turn instead of re-arming on the new component reference.
-		const now = vi.spyOn(Date, "now");
-		now.mockReturnValue(1_000);
-		const { ctx, editor, spies } = createContext();
-		(ctx.session as { isStreaming: boolean }).isStreaming = true;
-		const controller = new InputController(ctx);
-
-		controller.setupKeyHandlers();
-		editor.onEscape?.();
-		(ctx as unknown as { streamingComponent: object }).streamingComponent = {};
-		now.mockReturnValue(1_500);
-		editor.onEscape?.();
-
-		expect(spies.abort).toHaveBeenCalledTimes(1);
-		expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
-	});
-
-	it("aborts on the second Esc even when ctx.streamingMessage was replaced by a delta in between", () => {
-		// `EventController` replaces `ctx.streamingMessage` with a fresh immutable
-		// snapshot on every `message_update`; the per-turn sentinel is unaffected so
-		// swapping the message must not invalidate the armed token.
-		const now = vi.spyOn(Date, "now");
-		now.mockReturnValue(1_000);
-		const { ctx, editor, spies } = createContext();
-		(ctx.session as { isStreaming: boolean }).isStreaming = true;
-		(ctx as unknown as { streamingComponent: object }).streamingComponent = {};
-		(ctx as unknown as { streamingMessage: object }).streamingMessage = { content: [] };
-		const controller = new InputController(ctx);
-
-		controller.setupKeyHandlers();
-		editor.onEscape?.();
-		(ctx as unknown as { streamingMessage: object }).streamingMessage = { content: ["delta"] };
-		now.mockReturnValue(1_500);
-		editor.onEscape?.();
-
-		expect(spies.abort).toHaveBeenCalledTimes(1);
-		expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
-	});
-
-	it("clears the streaming Esc arm when the current turn ends", () => {
-		const now = vi.spyOn(Date, "now");
-		now.mockReturnValue(1_000);
-		const { ctx, editor, spies, sessionListeners } = createContext();
-		(ctx.session as { isStreaming: boolean }).isStreaming = true;
-		const controller = new InputController(ctx);
-
-		controller.setupKeyHandlers();
-		// Fallback arm (no streamingMessage/streamingComponent yet — pre-message_start).
-		editor.onEscape?.();
-		expect(sessionListeners).toHaveLength(1);
-
-		// Turn 1 ends; a new turn starts. session.subscribe receives both transitions,
-		// either of which must invalidate the still-armed fallback token so it cannot
-		// fast-abort the new turn's first Esc.
-		for (const listener of sessionListeners) {
-			listener({ type: "agent_end" });
-			listener({ type: "agent_start" });
-		}
-
-		now.mockReturnValue(1_500);
-		editor.onEscape?.();
-
-		expect(spies.abort).not.toHaveBeenCalled();
-		expect(spies.showStatus).toHaveBeenCalledTimes(2);
+		expect(spies.showStatus).not.toHaveBeenCalledWith("Press Esc again within 2s to cancel streaming.");
 	});
 
 	it("returns focused subagent view to main on Esc instead of aborting", () => {
@@ -581,6 +534,36 @@ describe("InputController escape behavior", () => {
 		expect(ctx.viewSession.abortRetry as unknown as Spy).toHaveBeenCalledTimes(1);
 	});
 
+	it("logs abort failures while treating maintenance Esc as handled", () => {
+		const debugSpy = vi.spyOn(logger, "debug").mockImplementation(() => {});
+		const { ctx, editor, spies } = createContext();
+		const viewSession = abortViewSession(ctx);
+		viewSession.isCompacting = true;
+		viewSession.isGeneratingHandoff = true;
+		viewSession.isRetrying = true;
+		viewSession.abortCompaction = vi.fn(() => {
+			throw new Error("compaction boom");
+		});
+		viewSession.abortHandoff = vi.fn(() => {
+			throw new Error("handoff boom");
+		});
+		viewSession.abortRetry = vi.fn(() => {
+			throw new Error("retry boom");
+		});
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onEscape?.();
+
+		expect(viewSession.abortCompaction).toHaveBeenCalledTimes(1);
+		expect(viewSession.abortHandoff).toHaveBeenCalledTimes(1);
+		expect(viewSession.abortRetry).toHaveBeenCalledTimes(1);
+		expect(debugSpy).toHaveBeenCalledWith("Failed to abort compaction", { error: "compaction boom" });
+		expect(debugSpy).toHaveBeenCalledWith("Failed to abort handoff", { error: "handoff boom" });
+		expect(debugSpy).toHaveBeenCalledWith("Failed to abort retry", { error: "retry boom" });
+		expect(spies.abort).not.toHaveBeenCalled();
+	});
+
 	it("routes a focused double-← through the global input listener like Esc", () => {
 		const now = vi.spyOn(Date, "now");
 		const { ctx, inputListeners } = createContext();
@@ -626,7 +609,7 @@ describe("InputController escape behavior", () => {
 		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
 		expect(spies.resetDisplay).toHaveBeenCalledTimes(1);
 	});
-	it("clears typed editor text on Esc without opening selectors or aborting", () => {
+	it("preserves typed editor text on Esc without opening selectors or aborting", () => {
 		const { ctx, editor, spies } = createContext();
 		const controller = new InputController(ctx);
 
@@ -634,25 +617,48 @@ describe("InputController escape behavior", () => {
 		editor.setText("draft message");
 		editor.onEscape?.();
 
-		expect(editor.getText()).toBe("");
-		expect(spies.requestRender).toHaveBeenCalledTimes(1);
+		expect(editor.getText()).toBe("draft message");
+		expect(spies.requestRender).not.toHaveBeenCalled();
 		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
 		expect(ctx.showUserMessageSelector).not.toHaveBeenCalled();
 		expect(spies.resetDisplay).not.toHaveBeenCalled();
 		expect(spies.abort).not.toHaveBeenCalled();
 	});
 
-	it("does not treat the Esc after a text-clearing Esc as a double-Esc", () => {
+	it("does not treat the Esc after a text-preserving Esc as a double-Esc", () => {
 		const { ctx, editor } = createContext();
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
 		editor.onEscape?.(); // empty editor: arms double-Esc timer
 		editor.setText("draft");
-		editor.onEscape?.(); // clears text, must also reset the timer
+		editor.onEscape?.(); // preserves text, must also reset the timer
+		editor.setText("");
 		editor.onEscape?.(); // empty again: should only re-arm, not trigger
 
+		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
 		expect(ctx.showUserMessageSelector).not.toHaveBeenCalled();
+	});
+
+	it("silences a still-audible vocalizer on Esc instead of opening the tree selector (#4521)", () => {
+		const clear = vi.spyOn(vocalizer, "clear").mockImplementation(() => {});
+		const isSpeaking = vi.spyOn(vocalizer, "isSpeaking").mockReturnValue(true);
+		const { ctx, editor, spies } = createContext();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onEscape?.();
+
+		expect(clear).toHaveBeenCalledTimes(1);
+		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
+		expect(ctx.showUserMessageSelector).not.toHaveBeenCalled();
+		expect(spies.resetDisplay).not.toHaveBeenCalled();
+
+		// A second Esc after silence must NOT immediately fire the double-Esc
+		// gesture — the first press consumed the arm.
+		isSpeaking.mockReturnValue(false);
+		editor.onEscape?.();
+		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
 	});
 });
 

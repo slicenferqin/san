@@ -37,6 +37,7 @@ import {
 	getRepoRoot,
 	type IsolationHandle,
 	mergeTaskBranches,
+	type NestedRepoPatch,
 	type WorktreeBaseline,
 } from "./worktree";
 
@@ -100,7 +101,7 @@ export interface IsolatedRunOptions {
 	agentId: string;
 	/** Merge mode driving how changes are captured ("branch" commits, "patch" diffs). */
 	mergeMode: "patch" | "branch";
-	/** Output dir for `${agentId}.patch` artifacts (patch mode). */
+	/** Output dir for `${agentId}.patch` artifacts (patch mode and branch-mode commit failures). */
 	artifactsDir: string;
 	/** Human description carried onto the branch commit (branch mode). */
 	description?: string;
@@ -114,12 +115,25 @@ export interface IsolatedRunOptions {
 	buildFailureResult: (err: unknown) => SingleResult;
 }
 
+async function writeIsolationPatch(
+	isolationDir: string,
+	baseline: WorktreeBaseline,
+	artifactsDir: string,
+	agentId: string,
+): Promise<{ patchPath: string; nestedPatches: NestedRepoPatch[] }> {
+	const delta = await captureDeltaPatch(isolationDir, baseline);
+	const patchPath = path.join(artifactsDir, `${agentId}.patch`);
+	await Bun.write(patchPath, delta.rootPatch);
+	return { patchPath, nestedPatches: delta.nestedPatches };
+}
+
 /**
  * Run a subagent inside an isolation worktree and capture its changes.
  *
  * Branch mode: on success, commits the diff onto `omp/task/${agentId}` and
  * returns `branchName` + `nestedPatches`. On commit failure the branch is
- * deleted and `result.error` carries the merge-failure message.
+ * deleted, the still-live isolation diff is written to `${artifactsDir}/${agentId}.patch`,
+ * and `result.error` carries the merge-failure message.
  *
  * Patch mode: on success, writes `${artifactsDir}/${agentId}.patch` and
  * returns `patchPath` + `nestedPatches`.
@@ -154,6 +168,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				return {
 					...result,
 					branchName: commitResult?.branchName,
+					branchBaseSha: commitResult?.baseSha,
 					nestedPatches: commitResult?.nestedPatches,
 				};
 			} catch (mergeErr) {
@@ -161,18 +176,32 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				const branchName = `omp/task/${opts.agentId}`;
 				await git.branch.tryDelete(opts.context.repoRoot, branchName);
 				const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
-				return { ...result, error: `Merge failed: ${msg}` };
+				try {
+					const patchResult = await writeIsolationPatch(
+						isolationDir,
+						taskBaseline,
+						opts.artifactsDir,
+						opts.agentId,
+					);
+					return {
+						...result,
+						patchPath: patchResult.patchPath,
+						nestedPatches: patchResult.nestedPatches,
+						error: `Merge failed: ${msg}`,
+					};
+				} catch (patchErr) {
+					const patchMsg = patchErr instanceof Error ? patchErr.message : String(patchErr);
+					return { ...result, error: `Merge failed: ${msg}; patch capture failed: ${patchMsg}` };
+				}
 			}
 		}
 		if (result.exitCode === 0) {
 			try {
-				const delta = await captureDeltaPatch(isolationDir, taskBaseline);
-				const patchPath = path.join(opts.artifactsDir, `${opts.agentId}.patch`);
-				await Bun.write(patchPath, delta.rootPatch);
+				const patchResult = await writeIsolationPatch(isolationDir, taskBaseline, opts.artifactsDir, opts.agentId);
 				return {
 					...result,
-					patchPath,
-					nestedPatches: delta.nestedPatches,
+					patchPath: patchResult.patchPath,
+					nestedPatches: patchResult.nestedPatches,
 				};
 			} catch (patchErr) {
 				const msg = patchErr instanceof Error ? patchErr.message : String(patchErr);
@@ -222,6 +251,15 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
 	const { result, repoRoot, mergeMode } = opts;
 	try {
 		if (mergeMode === "branch") {
+			if (!result.branchName && result.exitCode === 0 && !result.aborted && result.error) {
+				const patchList = result.patchPath ? `\nPatch artifact:\n- ${result.patchPath}` : "";
+				return {
+					summary: `\n\n<system-notification>Branch merge failed before a task branch could be created: ${result.error}\nTask outputs are preserved but changes were not applied.${patchList}</system-notification>`,
+					changesApplied: false,
+					hadAnyChanges: false,
+					mergedBranchForNestedPatches: false,
+				};
+			}
 			const canApplyNestedOnly =
 				!result.branchName && result.exitCode === 0 && !result.aborted && (result.nestedPatches?.length ?? 0) > 0;
 			if (!result.branchName || result.exitCode !== 0 || result.aborted) {
@@ -235,7 +273,12 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
 				};
 			}
 			const mergeResult = await mergeTaskBranches(repoRoot, [
-				{ branchName: result.branchName, taskId: result.id, description: result.description },
+				{
+					branchName: result.branchName,
+					taskId: result.id,
+					description: result.description,
+					baseSha: result.branchBaseSha,
+				},
 			]);
 			const mergedBranchForNestedPatches = mergeResult.merged.includes(result.branchName);
 			const changesApplied = mergeResult.failed.length === 0;
@@ -277,15 +320,31 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
 				hadAnyChanges = false;
 			} else {
 				const normalized = patchText.endsWith("\n") ? patchText : `${patchText}\n`;
-				changesApplied = await git.patch.canApplyText(repoRoot, normalized);
+				// Idempotence: declare a no-op only when the reverse patch applies AND
+				// the forward patch does not. `--reverse --check` alone can theoretically
+				// succeed if the file happens to carry the postimage at another location
+				// via git-apply's fuzz factor; requiring the forward check to fail
+				// removes that ambiguity while still catching true already-applied
+				// runs. Reads only — neither call touches the worktree, unlike
+				// `--3way --check`, which exits 0 even when the real apply would
+				// leave conflict markers and unmerged index entries.
+				const [alreadyApplied, forwardApplies] = await Promise.all([
+					git.patch.canApplyText(repoRoot, normalized, { reverse: true }),
+					git.patch.canApplyText(repoRoot, normalized),
+				]);
 				hadAnyChanges = false;
-				if (changesApplied) {
+				if (alreadyApplied && !forwardApplies) {
+					changesApplied = true;
+				} else if (forwardApplies) {
+					changesApplied = true;
 					try {
 						await git.patch.applyText(repoRoot, normalized);
 						hadAnyChanges = true;
 					} catch {
 						changesApplied = false;
 					}
+				} else {
+					changesApplied = false;
 				}
 			}
 		}

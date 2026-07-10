@@ -12,6 +12,7 @@ import { $which, APP_NAME, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import chalk from "chalk";
 import { theme } from "../modes/theme/theme";
+import { isTimeoutError, withTimeoutSignal } from "../utils/fetch-timeout";
 
 const REPO = "slicenferqin/san";
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
@@ -20,14 +21,15 @@ const MISE_TOOL = "github:slicenferqin/san";
 /**
  * Official npm registry origin.
  *
- * Pinned for the bun install step. A user's bun may be pointed at an
- * unofficial mirror (corporate proxy, Taobao, etc.) that lags the upstream
- * registry by minutes-to-hours, in which case the GitHub release check can
- * resolve a version the mirror has not yet replicated and the install fails with
- * `No version matching "X" found for specifier "<pkg>" (but package exists)`.
+ * Pinned across both the release metadata check and the bun install step so
+ * they resolve the same published package version. A user's bun may point at
+ * an unofficial mirror (corporate proxy, Taobao, etc.) that lags the official
+ * registry, otherwise the install can reject the version the check selected.
  * See #1686.
  */
 const NPM_REGISTRY = "https://registry.npmjs.org/";
+const RELEASE_METADATA_TIMEOUT_MS = 30_000;
+const BINARY_DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 
 /**
  * Core native addon package. Bumped in lock-step with {@link PACKAGE} so the
@@ -81,7 +83,7 @@ export interface BinaryReplacementOptions {
  * Parse update subcommand arguments.
  * Returns undefined if not an update command.
  */
-export function parseUpdateArgs(args: string[]): { force: boolean; check: boolean } | undefined {
+export function parseUpdateArgs(args: string[]): { force: boolean; check: boolean; plugins: boolean } | undefined {
 	if (args.length === 0 || args[0] !== "update") {
 		return undefined;
 	}
@@ -89,6 +91,7 @@ export function parseUpdateArgs(args: string[]): { force: boolean; check: boolea
 	return {
 		force: args.includes("--force") || args.includes("-f"),
 		check: args.includes("--check") || args.includes("-c"),
+		plugins: args.includes("--plugins") || args.includes("-l"),
 	};
 }
 
@@ -234,20 +237,31 @@ async function resolveUpdateTarget(): Promise<UpdateTarget> {
 }
 
 /**
- * Get the latest release info from the San GitHub repository.
+ * Get the latest published package version from the npm registry.
+ * The San repository remains the source for binary release downloads.
  */
 async function getLatestRelease(): Promise<ReleaseInfo> {
-	const response = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`);
+	let response: Response;
+	try {
+		response = await fetch(`${NPM_REGISTRY}${PACKAGE}/latest`, {
+			signal: withTimeoutSignal(RELEASE_METADATA_TIMEOUT_MS),
+		});
+	} catch (err) {
+		if (isTimeoutError(err)) {
+			throw new Error("Timed out fetching release info after 30s", { cause: err });
+		}
+		throw err;
+	}
 	if (!response.ok) {
 		throw new Error(`Failed to fetch release info: ${response.statusText}`);
 	}
 
-	const data = (await response.json()) as { tag_name?: string };
-	const tag = data.tag_name?.trim();
-	if (!tag) {
-		throw new Error("Failed to fetch release info: response missing tag_name");
+	const data = (await response.json()) as { version?: string };
+	const version = data.version?.trim();
+	if (!version) {
+		throw new Error("Failed to fetch release info: response missing version");
 	}
-	const version = tag.replace(/^v/i, "");
+	const tag = `v${version}`;
 
 	return {
 		tag,
@@ -271,6 +285,253 @@ function compareVersions(a: string, b: string): number {
 		if (na !== nb) return na - nb;
 	}
 	return 0;
+}
+
+interface BunInstallCachePruneResult {
+	scannedPackages: number;
+	removedEntries: number;
+}
+
+interface BunCachePackageGroup {
+	actualDirs: Map<string, string[]>;
+	markerDir?: string;
+	markerEntries: Map<string, string[]>;
+}
+
+function stripBunCacheVersionSuffix(name: string): string {
+	const metadataIndex = name.indexOf("@@");
+	return metadataIndex === -1 ? name : name.slice(0, metadataIndex);
+}
+
+function compareSemverIdentifier(a: string, b: string): number {
+	const aNumber = /^\d+$/.test(a);
+	const bNumber = /^\d+$/.test(b);
+	if (aNumber && bNumber) return Number(a) - Number(b);
+	if (aNumber) return -1;
+	if (bNumber) return 1;
+	return a.localeCompare(b);
+}
+
+function compareSemverLikeVersions(a: string, b: string): number {
+	const [aCoreWithPrerelease] = a.split("+", 1);
+	const [bCoreWithPrerelease] = b.split("+", 1);
+	const [aCore, aPrerelease] = aCoreWithPrerelease.split("-", 2);
+	const [bCore, bPrerelease] = bCoreWithPrerelease.split("-", 2);
+	const aParts = aCore.split(".");
+	const bParts = bCore.split(".");
+	for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
+		const diff = Number(aParts[i] ?? 0) - Number(bParts[i] ?? 0);
+		if (diff !== 0 && Number.isFinite(diff)) return diff;
+	}
+	if (!aPrerelease && !bPrerelease) return 0;
+	if (!aPrerelease) return 1;
+	if (!bPrerelease) return -1;
+	const aPrereleaseParts = aPrerelease.split(".");
+	const bPrereleaseParts = bPrerelease.split(".");
+	for (let i = 0; i < Math.max(aPrereleaseParts.length, bPrereleaseParts.length); i++) {
+		const aPart = aPrereleaseParts[i];
+		const bPart = bPrereleaseParts[i];
+		if (aPart === undefined) return -1;
+		if (bPart === undefined) return 1;
+		const diff = compareSemverIdentifier(aPart, bPart);
+		if (diff !== 0) return diff;
+	}
+	return 0;
+}
+
+async function readdirIfExists(dir: string): Promise<fs.Dirent[]> {
+	try {
+		return await fs.promises.readdir(dir, { withFileTypes: true });
+	} catch (err) {
+		if (isEnoent(err)) return [];
+		throw err;
+	}
+}
+
+function getBunCacheGroup(groups: Map<string, BunCachePackageGroup>, packageName: string): BunCachePackageGroup {
+	let group = groups.get(packageName);
+	if (!group) {
+		group = { actualDirs: new Map(), markerEntries: new Map() };
+		groups.set(packageName, group);
+	}
+	return group;
+}
+
+function addVersionPath(entries: Map<string, string[]>, version: string, entryPath: string): void {
+	const paths = entries.get(version);
+	if (paths) {
+		paths.push(entryPath);
+		return;
+	}
+	entries.set(version, [entryPath]);
+}
+
+async function addBunCacheActualDir(
+	groups: Map<string, BunCachePackageGroup>,
+	dirPath: string,
+	packageNames: Set<string> | undefined,
+): Promise<void> {
+	try {
+		const manifest = (await Bun.file(path.join(dirPath, "package.json")).json()) as Partial<
+			Record<"name" | "version", unknown>
+		>;
+		if (typeof manifest.name !== "string" || typeof manifest.version !== "string") return;
+		if (packageNames && !packageNames.has(manifest.name)) return;
+		const group = getBunCacheGroup(groups, manifest.name);
+		addVersionPath(group.actualDirs, manifest.version, dirPath);
+	} catch (err) {
+		if (isEnoent(err)) return;
+		throw err;
+	}
+}
+
+async function addBunCacheMarkerDir(
+	groups: Map<string, BunCachePackageGroup>,
+	packageName: string,
+	markerDir: string,
+	packageNames: Set<string> | undefined,
+): Promise<void> {
+	if (packageNames && !packageNames.has(packageName)) return;
+	const markerEntries = await readdirIfExists(markerDir);
+	const group = getBunCacheGroup(groups, packageName);
+	group.markerDir = markerDir;
+	for (const entry of markerEntries) {
+		const cacheVersion = stripBunCacheVersionSuffix(entry.name);
+		addVersionPath(group.markerEntries, cacheVersion, path.join(markerDir, entry.name));
+	}
+}
+
+async function collectBunCacheGroups(
+	cacheDir: string,
+	packageNames: Set<string> | undefined,
+): Promise<Map<string, BunCachePackageGroup>> {
+	const groups = new Map<string, BunCachePackageGroup>();
+	for (const entry of await readdirIfExists(cacheDir)) {
+		if (!entry.isDirectory()) continue;
+		const entryPath = path.join(cacheDir, entry.name);
+		if (entry.name.startsWith("@")) {
+			for (const scopedEntry of await readdirIfExists(entryPath)) {
+				if (!scopedEntry.isDirectory()) continue;
+				const scopedEntryPath = path.join(entryPath, scopedEntry.name);
+				const versionSeparator = scopedEntry.name.lastIndexOf("@");
+				if (versionSeparator === -1) {
+					await addBunCacheMarkerDir(groups, `${entry.name}/${scopedEntry.name}`, scopedEntryPath, packageNames);
+				} else {
+					await addBunCacheActualDir(groups, scopedEntryPath, packageNames);
+				}
+			}
+			continue;
+		}
+		const versionSeparator = entry.name.lastIndexOf("@");
+		if (versionSeparator === -1) {
+			await addBunCacheMarkerDir(groups, entry.name, entryPath, packageNames);
+		} else {
+			await addBunCacheActualDir(groups, entryPath, packageNames);
+		}
+	}
+	return groups;
+}
+
+async function removeCacheEntries(paths: string[]): Promise<number> {
+	for (const entryPath of paths) {
+		await fs.promises.rm(entryPath, { recursive: true, force: true });
+	}
+	return paths.length;
+}
+
+/**
+ * Prune Bun's package cache so each package keeps only its newest cached version.
+ *
+ * Bun stores package cache entries as both a package marker directory
+ * (`react/19.2.6@@@1`) and a materialized package directory
+ * (`react@19.2.6@@@1`). Global San updates can leave one full copy per
+ * release. The marker and materialized entries are removed together so the
+ * cache stays internally consistent.
+ */
+export async function pruneBunInstallCache(
+	cacheDir: string,
+	packageNames?: Set<string>,
+): Promise<BunInstallCachePruneResult> {
+	const groups = await collectBunCacheGroups(cacheDir, packageNames);
+	let scannedPackages = 0;
+	let removedEntries = 0;
+	for (const group of groups.values()) {
+		if (group.actualDirs.size === 0) continue;
+		scannedPackages++;
+		let latestVersion: string | undefined;
+		for (const version of group.actualDirs.keys()) {
+			if (!latestVersion || compareSemverLikeVersions(version, latestVersion) > 0) latestVersion = version;
+		}
+		if (!latestVersion) continue;
+		for (const [version, paths] of group.actualDirs) {
+			if (version !== latestVersion) removedEntries += await removeCacheEntries(paths);
+		}
+		for (const [version, paths] of group.markerEntries) {
+			if (version !== latestVersion) removedEntries += await removeCacheEntries(paths);
+		}
+	}
+	return { scannedPackages, removedEntries };
+}
+
+async function resolveBunInstallCacheDir(): Promise<string | undefined> {
+	try {
+		const result = await $`bun pm cache`.quiet().nothrow();
+		if (result.exitCode !== 0) return undefined;
+		const output = result.text().trim();
+		return output.length > 0 ? output : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+export function resolveBunGlobalNodeModulesDirFromLocations(
+	globalBinDir: string | undefined,
+	cacheDir: string | undefined,
+): string | undefined {
+	if (globalBinDir && globalBinDir.length > 0) {
+		return path.join(path.dirname(globalBinDir), "install", "global", "node_modules");
+	}
+	if (cacheDir && cacheDir.length > 0) {
+		return path.join(path.dirname(cacheDir), "global", "node_modules");
+	}
+	return undefined;
+}
+
+async function resolveBunGlobalNodeModulesDir(cacheDir: string): Promise<string | undefined> {
+	try {
+		const result = await $`bun pm bin -g`.quiet().nothrow();
+		const globalBinDir = result.exitCode === 0 ? result.text().trim() : undefined;
+		return resolveBunGlobalNodeModulesDirFromLocations(globalBinDir, cacheDir);
+	} catch {
+		return resolveBunGlobalNodeModulesDirFromLocations(undefined, cacheDir);
+	}
+}
+
+async function collectInstalledPackageNames(nodeModulesDir: string): Promise<Set<string>> {
+	const packageNames = new Set<string>();
+	for (const entry of await readdirIfExists(nodeModulesDir)) {
+		if (!entry.isDirectory() || entry.name === ".bin") continue;
+		if (entry.name.startsWith("@")) {
+			for (const scopedEntry of await readdirIfExists(path.join(nodeModulesDir, entry.name))) {
+				if (scopedEntry.isDirectory()) packageNames.add(`${entry.name}/${scopedEntry.name}`);
+			}
+			continue;
+		}
+		packageNames.add(entry.name);
+	}
+	return packageNames;
+}
+
+async function pruneBunCacheAfterGlobalInstall(): Promise<BunInstallCachePruneResult | undefined> {
+	const cacheDir = await resolveBunInstallCacheDir();
+	if (!cacheDir) return undefined;
+	const globalNodeModulesDir = await resolveBunGlobalNodeModulesDir(cacheDir);
+	const packageNames = globalNodeModulesDir
+		? await collectInstalledPackageNames(globalNodeModulesDir)
+		: new Set<string>();
+	const cacheName = path.basename(cacheDir).toLowerCase();
+	if (packageNames.size === 0 && !cacheName.includes("san") && !cacheName.includes("omp")) return undefined;
+	return await pruneBunInstallCache(cacheDir, packageNames.size === 0 ? undefined : packageNames);
 }
 
 /**
@@ -526,6 +787,14 @@ async function updateViaBun(expectedVersion: string): Promise<void> {
 	}
 
 	await printVerification(expectedVersion);
+	try {
+		const pruneResult = await pruneBunCacheAfterGlobalInstall();
+		if (pruneResult && pruneResult.removedEntries > 0) {
+			console.log(chalk.dim(`Pruned ${pruneResult.removedEntries} stale Bun cache entries`));
+		}
+	} catch (err) {
+		console.log(chalk.yellow(`Warning: could not prune stale Bun cache entries: ${err}`));
+	}
 }
 
 async function updateViaHomebrew(expectedVersion: string, force: boolean): Promise<void> {
@@ -580,7 +849,18 @@ async function updateViaBinaryAt(targetPath: string, expectedVersion: string): P
 	const backupPath = `${targetPath}.${Date.now()}.${process.pid}.bak`;
 	console.log(chalk.dim(`Downloading ${binaryName}…`));
 
-	const response = await fetch(url, { redirect: "follow" });
+	let response: Response;
+	try {
+		response = await fetch(url, {
+			redirect: "follow",
+			signal: withTimeoutSignal(BINARY_DOWNLOAD_TIMEOUT_MS),
+		});
+	} catch (err) {
+		if (isTimeoutError(err)) {
+			throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
+		}
+		throw err;
+	}
 	if (!response.ok || !response.body) {
 		throw new Error(`Download failed: ${response.statusText}`);
 	}
@@ -662,12 +942,14 @@ ${chalk.bold("Usage:")}
   ${APP_NAME} update [options]
 
 ${chalk.bold("Options:")}
-  -c, --check   Check for updates without installing
-  -f, --force   Force reinstall even if up to date
+  -c, --check     Check for updates without installing
+  -f, --force     Force reinstall even if up to date
+  -l, --plugins   Update installed plugins
 
 ${chalk.bold("Examples:")}
-  ${APP_NAME} update           Update to latest version
-  ${APP_NAME} update --check   Check if updates are available
-  ${APP_NAME} update --force   Force reinstall
+  ${APP_NAME} update              Update to latest version
+  ${APP_NAME} update --check      Check if updates are available
+  ${APP_NAME} update --force      Force reinstall
+  ${APP_NAME} update -l           Update installed plugins
 `);
 }

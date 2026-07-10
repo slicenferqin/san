@@ -489,6 +489,8 @@ function formatCellOutputLines(
 }
 
 export const evalToolRenderer = {
+	animatedPendingPreview: true,
+	animatedPartialResult: true,
 	renderCall(args: EvalRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		const cells = getRenderCells(args);
 
@@ -502,7 +504,7 @@ export const evalToolRenderer = {
 
 		return markFramedBlockComponent({
 			render: (width: number): readonly string[] => {
-				const key = `${options.expanded ? 1 : 0}|${previewWindowRows()}|${cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|")}`;
+				const key = `${options.expanded ? 1 : 0}|${options.spinnerFrame ?? "-"}|${previewWindowRows()}|${cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|")}`;
 				if (cached && cached.key === key && cached.width === width) {
 					return cached.result;
 				}
@@ -518,7 +520,8 @@ export const evalToolRenderer = {
 							index: i,
 							total: cells.length,
 							title: cell.title,
-							status: "pending",
+							status: options.spinnerFrame !== undefined ? "running" : "pending",
+							spinnerFrame: options.spinnerFrame,
 							width,
 							// Viewport-sized tail window following the newest streamed code
 							// line; renderResult keeps the same cap so the cell never snaps
@@ -770,9 +773,4 @@ export const evalToolRenderer = {
 
 	mergeCallAndResult: true,
 	inline: true,
-	// Collapsed pending preview shows tail-window code cells; the result render
-	// interleaves each cell's output under its code, re-laying-out every row
-	// below the first cell. Expanded output is top-anchored enough for the
-	// transcript to commit its settled prefix.
-	provisionalPendingPreview: "collapsed",
 };

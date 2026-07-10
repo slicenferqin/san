@@ -5,6 +5,7 @@ import {
 	transformRequestBody,
 } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
 import {
+	buildTransformedCodexRequestBody,
 	convertCodexResponsesMessages,
 	streamOpenAICodexResponses,
 } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
@@ -83,21 +84,21 @@ function createCodexFetchMock(sse: string, onRequest: (captured: CapturedCodexRe
 }
 
 describe("openai-codex reasoning.context", () => {
-	it("forwards an explicit reasoning.context and defaults to all_turns", async () => {
-		const model = createCodexModel("gpt-5.1-codex");
+	it("defaults to all_turns on gpt-5.4+ models and forwards explicit overrides", async () => {
+		const model = createCodexModel("gpt-5.4");
+
+		const defaulted = await transformRequestBody({ model: model.id }, model, { reasoningEffort: "medium" });
+		expect(defaulted.reasoning?.context).toBe("all_turns");
 
 		const explicit = await transformRequestBody({ model: model.id }, model, {
 			reasoningEffort: "medium",
 			reasoningContext: "current_turn",
 		});
 		expect(explicit.reasoning?.context).toBe("current_turn");
-
-		const defaulted = await transformRequestBody({ model: model.id }, model, { reasoningEffort: "medium" });
-		expect(defaulted.reasoning?.context).toBe("all_turns");
 	});
 
-	it("defaults reasoning.context to all_turns under Responses Lite unless overridden", async () => {
-		const model = createCodexModel("gpt-5.1-codex");
+	it("keeps the all_turns default for the lite transport on supported models", async () => {
+		const model = createCodexModel("gpt-5.5");
 
 		const lite = await transformRequestBody({ model: model.id }, model, {
 			reasoningEffort: "medium",
@@ -111,6 +112,81 @@ describe("openai-codex reasoning.context", () => {
 			reasoningContext: "auto",
 		});
 		expect(overridden.reasoning?.context).toBe("auto");
+	});
+
+	// gpt-5.1-codex / gpt-5.3-codex / gpt-5.3-codex-spark reject `all_turns`
+	// ("Unsupported value: 'all_turns' is not supported with this model").
+	it.each([
+		"gpt-5.1-codex",
+		"gpt-5.3-codex",
+		"gpt-5.3-codex-spark",
+	])("omits the all_turns default for pre-5.4 model %s", async modelId => {
+		const model = createCodexModel(modelId);
+
+		const defaulted = await transformRequestBody({ model: model.id }, model, { reasoningEffort: "medium" });
+		expect(defaulted.reasoning).toBeDefined();
+		expect(defaulted.reasoning?.context).toBeUndefined();
+		expect("context" in (defaulted.reasoning ?? {})).toBe(false);
+
+		// A supported override (current_turn/auto) is still honored.
+		const overridden = await transformRequestBody({ model: model.id }, model, {
+			reasoningEffort: "medium",
+			reasoningContext: "current_turn",
+		});
+		expect(overridden.reasoning?.context).toBe("current_turn");
+	});
+
+	it("suppresses an explicit all_turns override on a pre-5.4 model", async () => {
+		const model = createCodexModel("gpt-5.3-codex-spark");
+
+		const forced = await transformRequestBody({ model: model.id }, model, {
+			reasoningEffort: "medium",
+			reasoningContext: "all_turns",
+		});
+		expect(forced.reasoning).toBeDefined();
+		expect(forced.reasoning?.context).toBeUndefined();
+	});
+});
+
+describe("openai-codex reasoning.summary", () => {
+	it("sends summary on gpt-5.4+ models and honors explicit levels", async () => {
+		const model = createCodexModel("gpt-5.4");
+
+		const defaulted = await transformRequestBody({ model: model.id }, model, { reasoningEffort: "medium" });
+		expect(defaulted.reasoning?.summary).toBe("detailed");
+
+		const explicit = await transformRequestBody({ model: model.id }, model, {
+			reasoningEffort: "medium",
+			reasoningSummary: "concise",
+		});
+		expect(explicit.reasoning?.summary).toBe("concise");
+
+		const suppressed = await transformRequestBody({ model: model.id }, model, {
+			reasoningEffort: "medium",
+			reasoningSummary: null,
+		});
+		expect("summary" in (suppressed.reasoning ?? {})).toBe(false);
+	});
+
+	// gpt-5.1-codex / gpt-5.3-codex / gpt-5.3-codex-spark reject `reasoning.summary`
+	// ("Unsupported parameter: 'reasoning.summary' is not supported with this model").
+	it.each([
+		"gpt-5.1-codex",
+		"gpt-5.3-codex",
+		"gpt-5.3-codex-spark",
+	])("omits reasoning.summary for pre-5.4 model %s", async modelId => {
+		const model = createCodexModel(modelId);
+
+		const defaulted = await transformRequestBody({ model: model.id }, model, { reasoningEffort: "medium" });
+		expect(defaulted.reasoning).toBeDefined();
+		expect("summary" in (defaulted.reasoning ?? {})).toBe(false);
+
+		// Even an explicit summary level is suppressed on unsupported ids.
+		const forced = await transformRequestBody({ model: model.id }, model, {
+			reasoningEffort: "medium",
+			reasoningSummary: "detailed",
+		});
+		expect("summary" in (forced.reasoning ?? {})).toBe(false);
 	});
 });
 
@@ -191,6 +267,58 @@ describe("openai-codex Responses Lite input shaping", () => {
 
 		const noTools = await transformRequestBody({ model: model.id }, model, { responsesLite: true });
 		expect(noTools.parallel_tool_calls).toBeUndefined();
+	});
+});
+
+describe("openai-codex fresh execution input shaping", () => {
+	it("adds a user continuation when only instructions would be sent", async () => {
+		const model = createCodexModel("gpt-5.1-codex");
+		const body = await buildTransformedCodexRequestBody(
+			model,
+			{
+				systemPrompt: ["You are a helpful assistant.", "Read local://approved-plan.md and execute it."],
+				messages: [],
+			},
+			undefined,
+		);
+
+		expect(body.instructions).toBe("You are a helpful assistant.");
+		expect(body.input).toEqual([
+			{
+				type: "message",
+				role: "developer",
+				content: [{ type: "input_text", text: "Read local://approved-plan.md and execute it." }],
+			},
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "Read local://approved-plan.md and execute it." }],
+			},
+		]);
+	});
+
+	it("does not add a continuation when user input is present", async () => {
+		const model = createCodexModel("gpt-5.1-codex");
+		const body = await buildTransformedCodexRequestBody(
+			model,
+			{
+				systemPrompt: ["You are a helpful assistant.", "Read local://approved-plan.md and execute it."],
+				messages: [{ role: "user", content: "Start execution", timestamp: Date.now() }],
+			},
+			undefined,
+		);
+
+		expect(body.input).toEqual([
+			{
+				type: "message",
+				role: "developer",
+				content: [{ type: "input_text", text: "Read local://approved-plan.md and execute it." }],
+			},
+			{
+				role: "user",
+				content: [{ type: "input_text", text: "Start execution" }],
+			},
+		]);
 	});
 });
 

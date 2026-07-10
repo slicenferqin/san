@@ -30,7 +30,7 @@ import type {
 	TSchema,
 } from "@oh-my-pi/pi-ai";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
-import type { AutocompleteItem, Component, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
+import type { AutocompleteItem, AutocompleteProvider, Component, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
 import type { logger as PiLogger } from "@oh-my-pi/pi-utils";
 import type { Type as arktype } from "arktype";
 import type * as zod from "zod/v4";
@@ -45,7 +45,7 @@ import type { MemoryRuntimeContext } from "../../memory-backend";
 import type { CustomEditor } from "../../modes/components/custom-editor";
 import type { Theme } from "../../modes/theme/theme";
 import type { CompactMode } from "../../session/compact-modes";
-import type { CustomMessage } from "../../session/messages";
+import type { CustomMessage, CustomMessagePayload } from "../../session/messages";
 import type { ReadonlySessionManager, SessionManager } from "../../session/session-manager";
 import type {
 	BashToolDetails,
@@ -163,6 +163,9 @@ export type ExtensionUiComponent = Component & { dispose?(): void };
 export type ExtensionUiComponentFactory = (tui: TUI, theme: Theme) => ExtensionUiComponent;
 export type ExtensionWidgetContent = string[] | ExtensionUiComponentFactory | undefined;
 
+/** Wrap the current autocomplete provider with additional behavior (pi-compatible). */
+export type AutocompleteProviderFactory = (current: AutocompleteProvider) => AutocompleteProvider;
+
 /**
  * UI context for extensions to request interactive UI.
  * Each mode (interactive, RPC, print) provides its own implementation.
@@ -244,6 +247,14 @@ export interface ExtensionUIContext {
 	): Promise<string | undefined>;
 
 	/**
+	 * Stack additional autocomplete behavior on top of the built-in provider
+	 * (pi-compatible). Interactive mode rebuilds the editor's provider through
+	 * every registered factory, in registration order; headless modes (print,
+	 * RPC, ACP, subagents) accept and ignore the factory.
+	 */
+	addAutocompleteProvider(factory: AutocompleteProviderFactory): void;
+
+	/**
 	 * Set a custom editor component via factory function, or `undefined` to restore the default editor.
 	 *
 	 * The factory must return a {@link CustomEditor} subclass. Plain `EditorComponent`/`Editor`
@@ -294,6 +305,18 @@ export interface CompactOptions {
 	 * subcommands: `soft` | `remote` | `snapcompact`). Omitted = configured behavior.
 	 */
 	mode?: CompactMode;
+	/**
+	 * Internal summarizer guidance — piped only to native summarization, never
+	 * exposed as `customInstructions` on the `session_before_compact` extension
+	 * hook. Used by plan-mode "Approve and compact context" so extensions that
+	 * treat `customInstructions` as user focus don't mistake plan-mode
+	 * boilerplate for the operator's intent (issue #4359).
+	 *
+	 * When both `customInstructions` and `internalGuidance` are set, the
+	 * summarizer uses `internalGuidance`; the hook still sees only the public
+	 * `customInstructions`.
+	 */
+	internalGuidance?: string;
 }
 
 /**
@@ -881,7 +904,7 @@ export interface UserPythonEventResult {
 export type { ToolResultEventResult } from "../shared-events";
 
 export interface BeforeAgentStartEventResult {
-	message?: Pick<CustomMessage, "customType" | "content" | "display" | "details" | "attribution">;
+	message?: CustomMessagePayload;
 	/** Replace the system prompt for this turn. If multiple extensions return this, they are chained. */
 	systemPrompt?: string[];
 }
@@ -1091,11 +1114,11 @@ export interface ExtensionAPI {
 	 * an internal continuation that consumes the message on the next turn.
 	 */
 	sendMessage<T = unknown>(
-		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
+		message: CustomMessagePayload<T>,
 		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
 	): void;
 
-	/** Send a user message to the agent, or queue it when deliverAs is set. */
+	/** Send a user prompt: idle starts a turn; streaming queues as steer unless deliverAs is set. */
 	sendUserMessage(
 		content: string | (TextContent | ImageContent)[],
 		options?: { deliverAs?: "steer" | "followUp" },
@@ -1277,7 +1300,7 @@ export interface ExtensionShortcut {
 type HandlerFn = (...args: unknown[]) => Promise<unknown>;
 
 export type SendMessageHandler = <T = unknown>(
-	message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
+	message: CustomMessagePayload<T>,
 	/**
 	 * `deliverAs: "nextTurn"` queues hidden custom context for the next turn.
 	 * When paired with `triggerTurn: true` during prompt teardown, the session schedules

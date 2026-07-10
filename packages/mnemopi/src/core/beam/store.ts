@@ -5,9 +5,9 @@ import { toUtcIso } from "../../util/datetime";
 import { generateId } from "../../util/ids";
 import { currentEmbeddingModel, embeddingsDisabled } from "../embeddings";
 import { EpisodicGraph } from "../episodic-graph";
-import { extractFactsSafe } from "../extraction";
+import { countExtractedFactCategories, extractFactCategoriesSafe } from "../extraction";
 import { getMnemopiRuntimeOptions, withMnemopiRuntimeOptions } from "../runtime-options";
-import { storeFactStrings } from "./consolidate";
+import { storeExtractedFactCategories } from "./consolidate";
 import { type EmbedItem, scheduleEmbedding, vecAvailable, vecInsert } from "./helpers";
 import type {
 	BeamEvent,
@@ -37,6 +37,7 @@ type StoreRememberOptions = RememberOptions & {
 	extractEntities?: boolean;
 	extract_entities?: boolean;
 	extract_text?: string;
+	embed_text?: string;
 	channelId?: string | null;
 	channel_id?: string | null;
 };
@@ -87,6 +88,14 @@ function isSqlBinding(value: unknown): value is SQLQueryBindings {
 
 function sqlBinding(value: unknown, fallback: SQLQueryBindings): SQLQueryBindings {
 	return isSqlBinding(value) ? value : fallback;
+}
+
+function embeddingText(content: string, options: { embedText?: string; embed_text?: string }): string {
+	return options.embedText ?? options.embed_text ?? content;
+}
+
+function storedEmbeddingText(content: string, embedText: string): string | null {
+	return embedText === content ? null : embedText;
 }
 
 function clampVeracity(value: unknown): Veracity {
@@ -223,9 +232,9 @@ function proactiveLinkIfEnabled(
  */
 async function runFactExtraction(beam: BeamMemoryState, memoryId: string, content: string): Promise<void> {
 	try {
-		const facts = await extractFactsSafe(content);
-		if (facts.length === 0) return;
-		storeFactStrings(beam, facts, 0, memoryId);
+		const extracted = await extractFactCategoriesSafe(content);
+		if (countExtractedFactCategories(extracted) === 0) return;
+		storeExtractedFactCategories(beam, extracted, 0, memoryId);
 		invalidateCaches(beam);
 	} catch {
 		// Background fact extraction is best-effort and never surfaces to the caller.
@@ -301,7 +310,7 @@ export function reconcileEmbeddingModel(beam: BeamMemoryState): void {
 			.all(active) as { model: string | null }[];
 		const live = beam.db
 			.query(`
-				SELECT id AS memoryId, content FROM working_memory WHERE superseded_by IS NULL
+				SELECT id AS memoryId, COALESCE(embed_text, content) AS content FROM working_memory WHERE superseded_by IS NULL
 				UNION ALL
 				SELECT id AS memoryId, content FROM episodic_memory WHERE superseded_by IS NULL
 			`)
@@ -334,7 +343,7 @@ export function reconcileEmbeddingModel(beam: BeamMemoryState): void {
 	// row still missing an active-model embedding.
 	const missing = beam.db
 		.query(`
-			SELECT id AS memoryId, content FROM working_memory
+			SELECT id AS memoryId, COALESCE(embed_text, content) AS content FROM working_memory
 			WHERE superseded_by IS NULL AND id NOT IN (SELECT memory_id FROM memory_embeddings WHERE model = ?)
 			UNION ALL
 			SELECT id AS memoryId, content FROM episodic_memory
@@ -359,6 +368,7 @@ export function remember(beam: BeamMemoryState, content: string, options: StoreR
 	const authorType = options.authorType ?? options.author_type ?? beam.authorType;
 	const channelId = options.channelId ?? options.channel_id ?? beam.channelId;
 	const metadata = options.metadata ?? null;
+	const embedText = embeddingText(content, options);
 
 	const existingId = findDuplicate(beam, content);
 	if (existingId !== null) {
@@ -374,6 +384,7 @@ export function remember(beam: BeamMemoryState, content: string, options: StoreR
 					memory_type = COALESCE(?, memory_type),
 					veracity = CASE WHEN ? != 'unknown' THEN ? ELSE veracity END,
 					trust_tier = COALESCE(?, trust_tier),
+					embed_text = COALESCE(?, embed_text),
 					consolidated_at = NULL
 				WHERE id = ? AND session_id = ?
 			`)
@@ -390,6 +401,7 @@ export function remember(beam: BeamMemoryState, content: string, options: StoreR
 				veracity,
 				veracity,
 				trustTier,
+				storedEmbeddingText(content, embedText),
 				existingId,
 				beam.sessionId,
 			);
@@ -400,6 +412,7 @@ export function remember(beam: BeamMemoryState, content: string, options: StoreR
 			importance,
 			metadata: metadata ?? undefined,
 		});
+		if (embedText !== content) scheduleEmbedding(beam, [{ memoryId: existingId, content: embedText }]);
 		invalidateCaches(beam);
 		return existingId;
 	}
@@ -408,13 +421,14 @@ export function remember(beam: BeamMemoryState, content: string, options: StoreR
 	beam.db
 		.prepare(`
 			INSERT INTO working_memory
-			(id, content, source, timestamp, session_id, importance, metadata_json, valid_until, scope,
+			(id, content, embed_text, source, timestamp, session_id, importance, metadata_json, valid_until, scope,
 			 author_id, author_type, channel_id, veracity, memory_type, trust_tier)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`)
 		.run(
 			memoryId,
 			content,
+			storedEmbeddingText(content, embedText),
 			source,
 			timestamp,
 			beam.sessionId,
@@ -448,7 +462,7 @@ export function remember(beam: BeamMemoryState, content: string, options: StoreR
 		importance,
 		metadata: metadata ?? undefined,
 	});
-	scheduleEmbedding(beam, [{ memoryId, content }]);
+	scheduleEmbedding(beam, [{ memoryId, content: embedText }]);
 	if (options.extract === true) scheduleFactExtraction(beam, memoryId, extractionSource);
 	invalidateCaches(beam);
 	return memoryId;
@@ -469,9 +483,9 @@ export function rememberBatch(
 	transaction(beam.db, () => {
 		const statement = beam.db.prepare(`
 			INSERT INTO working_memory
-			(id, content, source, timestamp, session_id, importance, metadata_json,
+			(id, content, embed_text, source, timestamp, session_id, importance, metadata_json,
 			 author_id, author_type, channel_id, memory_type, veracity, trust_tier, scope)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`);
 		for (const item of items) {
 			const itemTimestamp = item.timestamp ?? timestamp;
@@ -479,6 +493,7 @@ export function rememberBatch(
 			ids.push(memoryId);
 			const source = item.source ?? "conversation";
 			const storeItem = item as StoreRememberOptions;
+			const embedText = embeddingText(item.content, storeItem);
 			const itemVeracity = forceVeracity
 				? defaultVeracity
 				: item.veracity !== undefined
@@ -487,6 +502,7 @@ export function rememberBatch(
 			statement.run(
 				memoryId,
 				item.content,
+				storedEmbeddingText(item.content, embedText),
 				source,
 				itemTimestamp,
 				beam.sessionId,
@@ -516,7 +532,7 @@ export function rememberBatch(
 	items.forEach((item, index) => {
 		const id = ids[index];
 		if (id === undefined) return;
-		embeddingItems.push({ memoryId: id, content: item.content });
+		embeddingItems.push({ memoryId: id, content: embeddingText(item.content, item as StoreRememberOptions) });
 	});
 	scheduleEmbedding(beam, embeddingItems);
 	items.forEach((item, index) => {
@@ -611,7 +627,7 @@ export function updateWorking(
 	const assignments: string[] = [];
 	const params: SQLQueryBindings[] = [];
 	if (content !== null) {
-		assignments.push("content = ?");
+		assignments.push("content = ?", "embed_text = NULL");
 		params.push(content);
 	}
 	if (importance !== null) {
@@ -649,7 +665,46 @@ export function get(beam: BeamMemoryState, memoryId: string): Row | null {
 			WHERE id = ? AND (session_id = ? OR scope = 'global')
 		`)
 		.get(memoryId, beam.sessionId) as Row | null | undefined;
-	return episodic == null ? null : { ...episodic, metadata: episodic.metadata_json, memory_store: "episodic" };
+	if (episodic != null) return { ...episodic, metadata: episodic.metadata_json, memory_store: "episodic" };
+
+	return getFact(beam, memoryId);
+}
+
+/**
+ * Read-only resolution for ids minted from the `facts` table. `recall`
+ * surfaces `facts.fact_id` as a result id (`factRecall`), so `get` must
+ * resolve those ids too — otherwise every surfaced fact id is a dead end
+ * for the read path (issue #4725). Visibility mirrors `factRecall`:
+ * same-session facts plus explicitly global ones (`scope` is an optional
+ * column on `facts`; `SELECT *` tolerates banks without it, in which case
+ * only same-session facts resolve). The row is shaped like the
+ * working/episodic hits with the full triple as content;
+ * `memory_store: "fact"` marks it read-only — no update/forget/invalidate
+ * path mutates `facts`.
+ */
+function getFact(beam: BeamMemoryState, memoryId: string): Row | null {
+	const fact = beam.db.prepare("SELECT * FROM facts WHERE fact_id = ?").get(memoryId) as Row | null | undefined;
+	if (fact == null) return null;
+	if (fact.session_id !== beam.sessionId && fact.scope !== "global") return null;
+	const subject = typeof fact.subject === "string" ? fact.subject : "";
+	const predicate = typeof fact.predicate === "string" ? fact.predicate : "";
+	const object = typeof fact.object === "string" ? fact.object : "";
+	return {
+		id: fact.fact_id,
+		content: [subject, predicate, object].filter(part => part.length > 0).join(" "),
+		source: "facts",
+		timestamp: fact.timestamp ?? null,
+		session_id: fact.session_id ?? null,
+		importance: fact.confidence ?? null,
+		metadata: JSON.stringify({
+			subject,
+			predicate,
+			object,
+			source_msg_id: fact.source_msg_id ?? null,
+		}),
+		created_at: fact.created_at ?? null,
+		memory_store: "fact",
+	};
 }
 
 export function forgetWorking(beam: BeamMemoryState, memoryId: string): boolean {
@@ -710,6 +765,7 @@ export function exportToDict(beam: BeamMemoryState): Record<string, unknown> {
 		working_memory: db
 			.prepare(`
 				SELECT id, content, source, timestamp, session_id, importance,
+					   embed_text,
 					   metadata_json, valid_until, superseded_by, scope,
 					   recall_count, last_recalled, created_at, veracity, consolidated_at,
 					   memory_type, author_id, author_type, channel_id, trust_tier,
@@ -777,9 +833,9 @@ export function importFromDict(beam: BeamMemoryState, data: Record<string, unkno
 				INSERT INTO working_memory
 				(id, content, source, timestamp, session_id, importance, metadata_json,
 				 valid_until, superseded_by, scope, recall_count, last_recalled, created_at,
-				 veracity, consolidated_at, memory_type, author_id, author_type, channel_id,
+				 veracity, consolidated_at, memory_type, embed_text, author_id, author_type, channel_id,
 				 trust_tier, event_date, event_date_precision, temporal_tags)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			`).run(
 				id,
 				sqlBinding(item.content, ""),
@@ -797,6 +853,7 @@ export function importFromDict(beam: BeamMemoryState, data: Record<string, unkno
 				clampVeracity(item.veracity),
 				sqlBinding(item.consolidated_at, null),
 				sqlBinding(item.memory_type, "unknown"),
+				sqlBinding(item.embed_text, null),
 				sqlBinding(item.author_id, null),
 				sqlBinding(item.author_type, null),
 				sqlBinding(item.channel_id, null),

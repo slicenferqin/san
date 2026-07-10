@@ -1,34 +1,13 @@
 import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { syncAllSessions } from "@oh-my-pi/omp-stats/aggregator";
 import { closeDb, getBehaviorOverall, getFileOffset, initDb } from "@oh-my-pi/omp-stats/db";
-import { getAgentDir, getStatsDbPath, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { getAgentDir, getStatsDbPath } from "@oh-my-pi/pi-utils";
+import { installStatsTestIsolation } from "./helpers/temp-agent";
 
-const originalConfigDir = process.env.PI_CONFIG_DIR;
-const originalAgentDir = getAgentDir();
-let tempDir: TempDir | null = null;
-
-beforeEach(() => {
-	tempDir = TempDir.createSync("@pi-stats-behavior-backfill-");
-	const configDir = path.relative(os.homedir(), tempDir.join("config"));
-	process.env.PI_CONFIG_DIR = configDir;
-	setAgentDir(path.join(os.homedir(), configDir, "agent"));
-});
-
-afterEach(() => {
-	closeDb();
-	if (originalConfigDir === undefined) {
-		delete process.env.PI_CONFIG_DIR;
-	} else {
-		process.env.PI_CONFIG_DIR = originalConfigDir;
-	}
-	setAgentDir(originalAgentDir);
-	tempDir?.removeSync();
-	tempDir = null;
-});
+installStatsTestIsolation("@pi-stats-behavior-backfill-");
 
 async function writeSessionFile(): Promise<string> {
 	const sessionDir = path.join(getAgentDir(), "sessions", "--tmp--behavior-backfill");
@@ -81,7 +60,7 @@ describe("behavior backfill", () => {
 		const database = new Database(getStatsDbPath());
 		database
 			.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
-			.run("user_messages_v6", "1778589361860");
+			.run("user_messages_v8", "1778589361860");
 		database
 			.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
 			.run("user_message_links_v1", "1778589361862");
@@ -106,7 +85,7 @@ describe("behavior backfill", () => {
 		closeDb();
 
 		const database = new Database(getStatsDbPath());
-		database.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run("user_messages_v6", "pending");
+		database.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run("user_messages_v8", "pending");
 		database
 			.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
 			.run("user_message_links_v1", "pending");

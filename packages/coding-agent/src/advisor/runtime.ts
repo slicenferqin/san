@@ -48,6 +48,17 @@ export interface AdvisorRuntimeHost {
 	 * one that routes `advise()` results back to the primary.
 	 */
 	beginAdvisorUpdate?(): void;
+	/**
+	 * Called with the error of every failed advisor turn, before the retry sleep
+	 * or the dropped-after-3 path. Lets the host apply credential-level remedies
+	 * the advisor loop lacks: the in-stream a/b/c auth retry rotates through
+	 * sibling credentials within one request but never blocks the LAST failing
+	 * one — the primary agent's retry pipeline does that via
+	 * `markUsageLimitReached`, so without this hook the advisor re-picks the
+	 * same usage-limited account on every retry. Errors thrown here are logged
+	 * and swallowed.
+	 */
+	onTurnError?(error: unknown): Promise<void> | void;
 	/** Surface a non-recovering advisor failure to the host UI without adding model-visible context. */
 	notifyFailure?(error: unknown): void;
 }
@@ -209,6 +220,7 @@ export class AdvisorRuntime {
 			includeToolIntent: true,
 			watchedRoles: true,
 			expandPrimaryContext: true,
+			expandEditDiffs: true,
 		});
 		if (!md.trim()) return null;
 		return `### Session update\n\n${md}`;
@@ -351,6 +363,14 @@ export class AdvisorRuntime {
 					if (this.#epoch !== epoch) continue;
 					this.#rollbackFailedTurn(messageSnapshot);
 					logger.debug("advisor turn failed", { err: String(err) });
+					try {
+						await this.host.onTurnError?.(err);
+					} catch (hookErr) {
+						logger.debug("advisor onTurnError hook failed", { err: String(hookErr) });
+					}
+					// The hook awaits; a reset during it invalidates this batch like the
+					// prompt await above — drop it instead of requeueing stale content.
+					if (this.#epoch !== epoch) continue;
 					this.#consecutiveFailures++;
 					if (this.#consecutiveFailures >= 3) {
 						logger.warn("advisor failed consecutively 3 times; dropping backlog to prevent stall");
@@ -434,10 +454,19 @@ function obfuscateDetails(
 function obfuscateAdvisorMessage(obfuscator: SecretObfuscator, message: AgentMessage): AgentMessage {
 	switch (message.role) {
 		case "user":
-		case "developer":
-		case "toolResult": {
+		case "developer": {
 			const content = obfuscateTextualContent(obfuscator, message.content as TextualContent);
 			return content === message.content ? message : ({ ...(message as object), content } as AgentMessage);
+		}
+		case "toolResult": {
+			const msg = message as AgentMessage & {
+				content: TextualContent;
+				details?: Record<string, unknown>;
+			};
+			const content = obfuscateTextualContent(obfuscator, msg.content);
+			const details = obfuscateDetails(obfuscator, msg.details);
+			if (content === msg.content && details === msg.details) return message;
+			return { ...(message as object), content, details } as AgentMessage;
 		}
 		case "assistant":
 			return obfuscateAssistantMessage(obfuscator, message as AssistantMessage) as AgentMessage;

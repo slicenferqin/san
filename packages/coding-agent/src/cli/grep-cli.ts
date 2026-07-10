@@ -18,6 +18,11 @@ export interface GrepCommandArgs {
 	gitignore: boolean;
 }
 
+function applyWorkerEnvCompatibility(): void {
+	const workers = process.env.SAN_GREP_WORKERS ?? process.env.PI_WALK_WORKERS ?? process.env.PI_GREP_WORKERS;
+	if (workers !== undefined) process.env.PI_WALK_WORKERS = workers;
+}
+
 /**
  * Parse grep subcommand arguments.
  * Returns undefined if not a grep command.
@@ -83,6 +88,7 @@ export async function runGrepCommand(cmd: GrepCommandArgs): Promise<void> {
 	console.log("");
 
 	try {
+		applyWorkerEnvCompatibility();
 		const result = await grep({
 			pattern: cmd.pattern,
 			path: searchPath,
@@ -150,7 +156,8 @@ ${chalk.bold("Options:")}
   --no-gitignore        Include files excluded by .gitignore
 
 ${chalk.bold("Environment:")}
-  SAN_GREP_WORKERS=N   Set filesystem walker workers (default 4, 0 = auto; legacy: PI_GREP_WORKERS)
+  SAN_GREP_WORKERS=N   Set filesystem walker workers (default 4, 0 = auto)
+  PI_WALK_WORKERS=N    Legacy OMP name (older alias: PI_GREP_WORKERS)
 
 ${chalk.bold("Examples:")}
   ${APP_NAME} grep "import" src/

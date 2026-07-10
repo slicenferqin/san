@@ -4,7 +4,7 @@ import { scheduler } from "node:timers/promises";
 import * as tls from "node:tls";
 import { isOfficialAnthropicApiUrl } from "@oh-my-pi/pi-catalog/compat/anthropic";
 import { mapEffortToAnthropicAdaptiveEffort } from "@oh-my-pi/pi-catalog/model-thinking";
-import { calculateCost } from "@oh-my-pi/pi-catalog/models";
+import { calculateCost, getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { isAnthropicOAuthToken } from "@oh-my-pi/pi-catalog/utils";
 import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
 import {
@@ -20,6 +20,7 @@ import { renderDemotedThinking } from "../dialect/demotion";
 import * as AIError from "../error";
 import { getEnvApiKey, OUTPUT_FALLBACK_BUFFER } from "../stream";
 import type {
+	AnthropicFallbackContent,
 	Api,
 	AssistantMessage,
 	CacheRetention,
@@ -43,7 +44,6 @@ import type {
 	ToolResultMessage,
 	Usage,
 } from "../types";
-import { resolveServiceTier } from "../types";
 import { isRecord, normalizeSystemPrompts, normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import {
@@ -74,7 +74,9 @@ import {
 import type {
 	ToolInputSchema as AnthropicToolInputSchema,
 	Tool as AnthropicWireTool,
+	Usage as AnthropicWireUsage,
 	ContentBlockParam,
+	FallbackParam,
 	MessageCreateParamsStreaming,
 	MessageParam,
 	RawMessageStreamEvent,
@@ -125,12 +127,13 @@ export function buildBetaHeader(baseBetas: readonly string[], extraBetas: readon
 
 const midConversationSystemBeta = "mid-conversation-system-2026-04-07";
 const contextManagementBeta = "context-management-2025-06-27";
+const structuredOutputsBeta = "structured-outputs-2025-12-15";
 const claudeCodeUtilityBetaDefaults = [
 	"oauth-2025-04-20",
 	"interleaved-thinking-2025-05-14",
 	contextManagementBeta,
 	"prompt-caching-scope-2026-01-05",
-	"structured-outputs-2025-12-15",
+	structuredOutputsBeta,
 ] as const;
 const claudeCodeAgentBetaDefaults = [
 	"claude-code-20250219",
@@ -151,15 +154,18 @@ const redactThinkingBeta = "redact-thinking-2026-02-12";
 const fastModeBeta = "fast-mode-2026-02-01";
 const taskBudgetBeta = "task-budgets-2026-03-13";
 const effortBeta = "effort-2025-11-24";
+const serverSideFallbackBeta = "server-side-fallback-2026-06-01";
 
 function buildClaudeCodeBetas(
 	agentRequest: boolean,
 	thinkingRequest: boolean,
 	redactThinking: boolean,
+	disableStrictTools = false,
 ): readonly string[] {
-	if (!agentRequest && !redactThinking) return claudeCodeUtilityBetaDefaults;
+	if (!agentRequest && !redactThinking && !disableStrictTools) return claudeCodeUtilityBetaDefaults;
 	const betas: string[] = [];
 	for (const beta of agentRequest ? claudeCodeAgentBetaDefaults : claudeCodeUtilityBetaDefaults) {
+		if (disableStrictTools && beta === structuredOutputsBeta) continue;
 		betas.push(beta);
 		// Match CC's header order: redact-thinking immediately follows interleaved-thinking.
 		if (redactThinking && beta === interleavedThinkingBeta) betas.push(redactThinkingBeta);
@@ -326,15 +332,26 @@ const ANTHROPIC_PROVIDER_SESSION_STATE_KEY = "anthropic-messages";
 type AnthropicProviderSessionState = ProviderSessionState & {
 	strictToolsDisabled: boolean;
 	fastModeDisabled: boolean;
+	/**
+	 * Runtime-learned: this endpoint returned `400 Invalid signature in
+	 * thinking block` for a replayed unsigned thinking block, so it must be
+	 * treated as a signing proxy from now on. All subsequent requests demote
+	 * unsigned thinking to text for this (baseUrl, modelId), same behavior as
+	 * an explicit `compat.replayUnsignedThinking: false`. Cleared on session
+	 * close.
+	 */
+	replayUnsignedThinkingDisabled: boolean;
 };
 
 function createAnthropicProviderSessionState(): AnthropicProviderSessionState {
 	const state: AnthropicProviderSessionState = {
 		strictToolsDisabled: false,
 		fastModeDisabled: false,
+		replayUnsignedThinkingDisabled: false,
 		close: () => {
 			state.strictToolsDisabled = false;
 			state.fastModeDisabled = false;
+			state.replayUnsignedThinkingDisabled = false;
 		},
 	};
 	return state;
@@ -1061,6 +1078,15 @@ export interface AnthropicOptions extends StreamOptions {
 	 * including SDK clients such as `AnthropicVertex`.
 	 */
 	client?: AnthropicMessagesClientLike;
+	/**
+	 * Server-side fallback beta chain (`server-side-fallback-2026-06-01`).
+	 * When set, `fallbacks` is forwarded on the request body and the beta
+	 * header is auto-attached; the response parser then honors mid-stream
+	 * `fallback` content blocks and `usage.iterations` for served-model
+	 * promotion and per-attempt pricing. Opt-in ONLY — leaving this
+	 * undefined preserves the pre-fallback behavior on every code path.
+	 */
+	fallbacks?: FallbackParam[];
 }
 
 export type AnthropicClientOptionsArgs = {
@@ -1075,6 +1101,7 @@ export type AnthropicClientOptionsArgs = {
 	hasTools?: boolean;
 	thinkingEnabled?: boolean;
 	thinkingDisplay?: AnthropicThinkingDisplay;
+	disableStrictTools?: boolean;
 	fetch?: FetchImpl;
 	claudeCodeSessionId?: string;
 };
@@ -1436,6 +1463,16 @@ async function* observeDecodedAnthropicSdkEvents(
 const PROVIDER_MAX_RETRIES = 10;
 
 /**
+ * How long `ping` keepalives may keep extending the idle deadline without any
+ * semantic stream progress, as a multiple of the idle timeout. Anthropic pings
+ * across legitimate generation gaps, so pings count as liveness — but a wedged
+ * upstream that pings forever while producing no events must eventually trip
+ * the idle watchdog instead of hanging an active tool-call stream without a
+ * recovery path (#4900).
+ */
+const PING_PROGRESS_MAX_IDLE_MULTIPLIER = 3;
+
+/**
  * Log a malformed-stream-envelope anomaly without aborting the turn. The strict
  * parser would `throw new AnthropicStreamEnvelopeError(...)` here; we instead
  * surface a warning and let the caller skip the offending event (or finalize what
@@ -1530,6 +1567,134 @@ export function applyAnthropicUsageExtras(usage: Usage, source: AnthropicUsageLi
 	}
 }
 
+function parseAnthropicFallbackWireBlock(value: unknown): AnthropicFallbackContent | undefined {
+	if (!isRecord(value) || value.type !== "fallback") return undefined;
+	const from = isRecord(value.from) && typeof value.from.model === "string" ? value.from.model : undefined;
+	const to = isRecord(value.to) && typeof value.to.model === "string" ? value.to.model : undefined;
+	if (!from?.trim() || !to?.trim()) return undefined;
+	return { type: "fallback", from: { model: from }, to: { model: to } };
+}
+
+/**
+ * The definitive "served by fallback" signal per Anthropic's fallback
+ * billing cookbook (§4): a `fallback_message` iteration in `usage.iterations`.
+ * Any other iteration type is per-attempt bookkeeping for the requested model
+ * (including its dated snapshot alias) and MUST NOT retag the assistant turn.
+ */
+function fallbackServedModelFromUsage(source: AnthropicWireUsage): string | undefined {
+	const iterations = source.iterations ?? [];
+	for (let index = iterations.length - 1; index >= 0; index -= 1) {
+		const iteration = iterations[index];
+		if (iteration?.type === "fallback_message" && iteration.model?.trim()) return iteration.model;
+	}
+	return undefined;
+}
+
+/**
+ * Price a fallback turn per the fallback billing cookbook §4:
+ *   • A pre-served attempt with zero output/cache-creation is not billed
+ *     (waived classifier block); its iteration is skipped.
+ *   • Mid-stream refusals bill their attempting model's input+output at
+ *     that model's normal rates.
+ *   • The `fallback_message` attempt's input tokens are rebilled at the
+ *     served model's cache-read rate (fallback credit — 10% of base input).
+ *
+ * Top-level `usage.input/output/cacheRead/cacheWrite` stay Anthropic's raw
+ * served-attempt counts; `usage.cost` reflects the per-iteration attributed
+ * total. Non-fallback turns skip this path entirely and use the requested
+ * model at the normal `calculateCost` call.
+ */
+/**
+ * Resolve a served/iteration model id to its bundled catalog entry when
+ * possible so the per-iteration cost uses the served model's pricing
+ * (e.g. Opus 4.8 rates for a Fable→Opus fallback). Falls back to
+ * `requestModel` when the id is empty, matches the request, or the
+ * catalog has no entry under it — the caller keeps the requested-model
+ * pricing as the safe default and logs at the source.
+ */
+function resolveIterationModel(
+	requestModel: Model<"anthropic-messages">,
+	iterationModelId: string | null | undefined,
+): Model<Api> {
+	const id = iterationModelId?.trim();
+	if (!id || id === requestModel.id) return requestModel;
+	// Bundled catalog lookup: only Anthropic provider entries are safe to
+	// reference (dated snapshots resolve to their alias entry when present).
+	if (requestModel.provider === "anthropic") {
+		const bundled = getBundledModel("anthropic", id);
+		if (bundled?.api === "anthropic-messages") return bundled;
+	}
+	return requestModel;
+}
+
+function calculateFallbackTurnCost(
+	requestModel: Model<"anthropic-messages">,
+	usage: Usage,
+	source: AnthropicWireUsage,
+): boolean {
+	const iterations = source.iterations ?? [];
+	if (iterations.length === 0) return false;
+	const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+	const hasFallbackMessage = iterations.some(iter => iter.type === "fallback_message");
+	let applied = false;
+	for (const iteration of iterations) {
+		const inputTokens = iteration.input_tokens ?? 0;
+		const outputTokens = iteration.output_tokens ?? 0;
+		const cacheReadTokens = iteration.cache_read_input_tokens ?? 0;
+		const cacheWriteTokens = iteration.cache_creation_input_tokens ?? 0;
+		const isFallback = iteration.type === "fallback_message";
+		if (hasFallbackMessage && !isFallback && outputTokens === 0 && cacheWriteTokens === 0) continue;
+		const iterationUsage = createEmptyUsage();
+		if (isFallback) {
+			iterationUsage.input = 0;
+			iterationUsage.cacheRead = cacheReadTokens + inputTokens;
+		} else {
+			iterationUsage.input = inputTokens;
+			iterationUsage.cacheRead = cacheReadTokens;
+		}
+		iterationUsage.output = outputTokens;
+		iterationUsage.cacheWrite = cacheWriteTokens;
+		iterationUsage.totalTokens =
+			iterationUsage.input + iterationUsage.output + iterationUsage.cacheRead + iterationUsage.cacheWrite;
+		calculateCost(resolveIterationModel(requestModel, iteration.model), iterationUsage);
+		cost.input += iterationUsage.cost.input;
+		cost.output += iterationUsage.cost.output;
+		cost.cacheRead += iterationUsage.cost.cacheRead;
+		cost.cacheWrite += iterationUsage.cost.cacheWrite;
+		cost.total += iterationUsage.cost.total;
+		applied = true;
+	}
+	if (!applied) return false;
+	usage.cost = cost;
+	return true;
+}
+
+/**
+ * Detects the Anthropic `400 Invalid `signature` in `thinking` block` failure
+ * a signing proxy returns when a stripped/unsigned prior thinking block is
+ * replayed as `signature: ""`. Exported for the compat tests.
+ */
+const INVALID_THINKING_SIGNATURE_PATTERN = /invalid\s+`?signature`?\s+in\s+`?thinking`?(?:\s+block)?/i;
+export function isInvalidThinkingSignatureError(message: string): boolean {
+	return INVALID_THINKING_SIGNATURE_PATTERN.test(message);
+}
+
+/**
+ * Prepend a pointed remediation to Anthropic's `Invalid signature in thinking
+ * block` 400 when the model looks like an unmarked custom signing proxy
+ * (opaque baseUrl, `spec.reasoning: true`, no explicit
+ * `compat.replayUnsignedThinking` override). The default is native replay for
+ * the 3p reasoning majority (#2005); this hint turns the misconfigured-proxy
+ * case into a one-line fix instead of a silent retry loop (#4297).
+ */
+export function maybeAddReplayUnsignedThinkingHint(model: Model<"anthropic-messages">, message: string): string {
+	if (!isInvalidThinkingSignatureError(message)) return message;
+	if (model.compat.officialEndpoint) return message;
+	if (model.compatConfig?.replayUnsignedThinking !== undefined) return message;
+	const hint = `Provider "${model.provider}" looks like an Anthropic-compatible signing proxy: it rejected a replayed unsigned thinking block. Set \`compat.replayUnsignedThinking: false\` under \`providers.${model.provider}\` in your models.yml and retry. See https://github.com/can1357/oh-my-pi/issues/4297.`;
+	return `${hint}\n\n${message}`;
+}
+
 const streamAnthropicOnce = (
 	model: Model<"anthropic-messages">,
 	context: Context,
@@ -1584,6 +1749,7 @@ const streamAnthropicOnce = (
 			let disableStrictTools =
 				(providerSessionState?.strictToolsDisabled ?? false) || (model.compat?.disableStrictTools ?? false);
 			let dropFastMode = providerSessionState?.fastModeDisabled ?? false;
+			let forceDemoteUnsignedThinking = providerSessionState?.replayUnsignedThinkingDisabled ?? false;
 			const mergedCallerHeaders = mergeHeaders(model.headers, options?.headers);
 			const umansGatewayWebSearchHeader = getUmansWebSearchHeader(model, mergedCallerHeaders);
 
@@ -1595,7 +1761,7 @@ const streamAnthropicOnce = (
 				isOAuthToken = false;
 			} else {
 				const extraBetas = normalizeExtraBetas(options?.betas);
-				const wantsAnthropicPriority = resolveServiceTier(options?.serviceTier, model.provider) === "priority";
+				const wantsAnthropicPriority = model.provider === "anthropic" && options?.serviceTier === "priority";
 				// Skip the fast-mode beta when this session already learned the
 				// endpoint+model rejects fast mode; `speed` is dropped from the params
 				// too (dropFastMode), so the request stays a faithful non-fast request.
@@ -1645,6 +1811,27 @@ const streamAnthropicOnce = (
 				) {
 					extraBetas.push(contextManagementBeta);
 				}
+				// Server-side fallback beta chain: opt-in via `options.fallbacks`.
+				// Nested overrides (`speed`, `output_config.effort`,
+				// `output_config.task_budget`) reuse the same top-level betas
+				// Anthropic requires for the primary request, so scan the chain
+				// and add every companion beta the fallback entries touch.
+				if (options?.fallbacks?.length) {
+					if (!extraBetas.includes(serverSideFallbackBeta)) {
+						extraBetas.push(serverSideFallbackBeta);
+					}
+					for (const entry of options.fallbacks) {
+						if (entry.speed === "fast" && !extraBetas.includes(fastModeBeta)) {
+							extraBetas.push(fastModeBeta);
+						}
+						if (entry.output_config?.effort && !extraBetas.includes(effortBeta)) {
+							extraBetas.push(effortBeta);
+						}
+						if (entry.output_config?.task_budget && !extraBetas.includes(taskBudgetBeta)) {
+							extraBetas.push(taskBudgetBeta);
+						}
+					}
+				}
 
 				const created = createClient(model, {
 					model,
@@ -1660,6 +1847,7 @@ const streamAnthropicOnce = (
 					thinkingDisplay: options?.thinkingDisplay,
 					fetch: options?.fetch,
 					claudeCodeSessionId: options?.sessionId ?? extractClaudeMetadataSessionId(options?.metadata?.user_id),
+					disableStrictTools,
 				});
 				client = created.client;
 				isOAuthToken = created.isOAuthToken;
@@ -1673,6 +1861,7 @@ const streamAnthropicOnce = (
 					options,
 					disableStrictTools,
 					umansGatewayWebSearchHeader !== undefined,
+					forceDemoteUnsignedThinking,
 				);
 				if (disableStrictTools) {
 					dropAnthropicStrictTools(nextParams);
@@ -1697,10 +1886,16 @@ const streamAnthropicOnce = (
 			};
 			let params = await prepareParams();
 
+			// Opt-in flag: the response parser only honors `fallback` content
+			// blocks and `usage.iterations` when the current request opted into
+			// the server-side-fallback beta chain. Leaving `options.fallbacks`
+			// unset preserves the pre-fallback stream shape on every event.
+			const serverSideFallback = !!options?.fallbacks?.length;
 			type Block = (
 				| ThinkingContent
 				| RedactedThinkingContent
 				| TextContent
+				| AnthropicFallbackContent
 				| (ToolCall & { [kStreamingPartialJson]: string; [kStreamingLastParseLen]?: number })
 			) & { [kStreamingBlockIndex]: number };
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getStreamIdleTimeoutMs();
@@ -1816,14 +2011,26 @@ const streamAnthropicOnce = (
 					const closedBlockIndexes = new Set<number>();
 					const openBlocks = new Map<
 						number,
-						{ contentIndex: number; kind: "text" | "thinking" | "redactedThinking" | "toolCall" | "ignored" }
+						{
+							contentIndex: number;
+							kind: "text" | "thinking" | "redactedThinking" | "fallback" | "toolCall" | "ignored";
+						}
 					>();
 
-					// Pings keep the idle deadline alive once content is flowing, but a
-					// ping before message_start must not consume the first-event watchdog:
-					// it would flip the (retryable) pre-content stall classification into
-					// a terminal mid-stream idle timeout.
+					// Pings keep the idle deadline alive once content is flowing (Anthropic
+					// bridges legitimate generation gaps with keepalives), but only within a
+					// bounded window: a wedged upstream that pings forever while the model
+					// produces nothing must still trip the idle watchdog, otherwise an
+					// active tool-call stream hangs unrecoverably with no retry (#4900).
+					// A ping before message_start must not consume the first-event watchdog
+					// either: it would flip the (retryable) pre-content stall classification
+					// into a terminal mid-stream idle timeout.
 					let sawNonPingEvent = false;
+					let lastNonPingProgressAtMs = 0;
+					const pingProgressCapMs =
+						idleTimeoutMs !== undefined && idleTimeoutMs > 0
+							? idleTimeoutMs * PING_PROGRESS_MAX_IDLE_MULTIPLIER
+							: undefined;
 					const timedAnthropicStream = iterateWithIdleTimeout(anthropicStream, {
 						idleTimeoutMs,
 						firstItemTimeoutMs: firstEventTimeoutMs,
@@ -1833,8 +2040,13 @@ const streamAnthropicOnce = (
 						onFirstItemTimeout: () => activeAbortTracker.abortLocally(firstEventTimeoutAbortError),
 						abortSignal: options?.signal,
 						isProgressItem: item => {
-							if ((item as AnthropicStreamEvent).type === "ping") return sawNonPingEvent;
+							if ((item as AnthropicStreamEvent).type === "ping") {
+								if (!sawNonPingEvent) return false;
+								if (pingProgressCapMs === undefined) return true;
+								return Date.now() - lastNonPingProgressAtMs < pingProgressCapMs;
+							}
 							sawNonPingEvent = true;
+							lastNonPingProgressAtMs = Date.now();
 							return true;
 						},
 					});
@@ -1867,7 +2079,15 @@ const streamAnthropicOnce = (
 								output.usage.cacheWrite = startUsage.cache_creation_input_tokens || 0;
 								output.usage.totalTokens =
 									output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
-								calculateCost(model, output.usage);
+								if (serverSideFallback) {
+									const served = fallbackServedModelFromUsage(startUsage);
+									if (served) output.model = served;
+									if (!calculateFallbackTurnCost(model, output.usage, startUsage)) {
+										calculateCost(model, output.usage);
+									}
+								} else {
+									calculateCost(model, output.usage);
+								}
 							} else {
 								reportAnthropicEnvelopeAnomaly("message_start missing usage");
 							}
@@ -1905,6 +2125,33 @@ const streamAnthropicOnce = (
 								continue;
 							}
 							if (!firstTokenTime) firstTokenTime = performance.now();
+							if (event.content_block.type === "fallback") {
+								// Fallback boundary is only meaningful when the request
+								// opted into the beta chain — silently drop otherwise so
+								// unopted-in sessions never see the block persisted or
+								// influence downstream converters.
+								const fallback = parseAnthropicFallbackWireBlock(event.content_block);
+								if (!serverSideFallback || !fallback) {
+									if (!fallback) {
+										reportAnthropicEnvelopeAnomaly("fallback content_block missing model refs");
+									}
+									openBlocks.set(event.index, { contentIndex: -1, kind: "ignored" });
+									continue;
+								}
+								const block: Block = { ...fallback, [kStreamingBlockIndex]: event.index };
+								output.content.push(block);
+								openBlocks.set(event.index, {
+									contentIndex: output.content.length - 1,
+									kind: "fallback",
+								});
+								// A fallback content block is the mid-stream signal that a
+								// classifier block on the primary was retried on the
+								// fallback model. Adopt the served id immediately so
+								// pricing decisions downstream (final usage.iterations may
+								// arrive before/after) see the right model.
+								output.model = fallback.to.model;
+								continue;
+							}
 							if (event.content_block.type === "text") {
 								streamedReplayUnsafeContent = true;
 								const block: Block = {
@@ -2120,7 +2367,15 @@ const streamAnthropicOnce = (
 								applyAnthropicUsageExtras(output.usage, deltaUsage);
 								output.usage.totalTokens =
 									output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
-								calculateCost(model, output.usage);
+								if (serverSideFallback) {
+									const served = fallbackServedModelFromUsage(deltaUsage);
+									if (served) output.model = served;
+									if (!calculateFallbackTurnCost(model, output.usage, deltaUsage)) {
+										calculateCost(model, output.usage);
+									}
+								} else {
+									calculateCost(model, output.usage);
+								}
 							}
 						} else if (event.type === "message_stop") {
 							sawTerminalEnvelope = true;
@@ -2170,7 +2425,7 @@ const streamAnthropicOnce = (
 					) {
 						// Log-only: the retried turn must not carry an errorMessage on
 						// success (consumers treat its presence as failure).
-						logger.warn("anthropic: strict tool grammar rejected, retrying without strict tools", {
+						logger.warn("anthropic: strict tools rejected, retrying without strict tools", {
 							model: model.id,
 							error: await finalizeErrorMessage(streamFailure, rawRequestDump),
 						});
@@ -2181,6 +2436,40 @@ const streamAnthropicOnce = (
 						params = await prepareParams();
 						providerRetryAttempt = 0;
 						output.content.length = 0;
+						output.model = model.id;
+						output.responseId = undefined;
+						output.errorMessage = undefined;
+						output.providerPayload = undefined;
+						output.usage = createEmptyUsage(copilotDynamicHeaders?.premiumRequests);
+						output.stopReason = "stop";
+						firstTokenTime = undefined;
+						continue;
+					}
+					if (
+						!forceDemoteUnsignedThinking &&
+						firstTokenTime === undefined &&
+						!streamedReplayUnsafeContent &&
+						isInvalidThinkingSignatureError(
+							streamFailure instanceof Error ? streamFailure.message : String(streamFailure),
+						)
+					) {
+						logger.warn(
+							"anthropic: signing proxy detected (Invalid signature in thinking block), demoting unsigned thinking and retrying",
+							{
+								provider: model.provider,
+								model: model.id,
+								baseUrl,
+								error: streamFailure instanceof Error ? streamFailure.message : String(streamFailure),
+							},
+						);
+						if (providerSessionState) {
+							providerSessionState.replayUnsignedThinkingDisabled = true;
+						}
+						forceDemoteUnsignedThinking = true;
+						params = await prepareParams();
+						providerRetryAttempt = 0;
+						output.content.length = 0;
+						output.model = model.id;
 						output.responseId = undefined;
 						output.errorMessage = undefined;
 						output.providerPayload = undefined;
@@ -2191,7 +2480,8 @@ const streamAnthropicOnce = (
 					}
 					if (
 						!dropFastMode &&
-						resolveServiceTier(options?.serviceTier, model.provider) === "priority" &&
+						model.provider === "anthropic" &&
+						options?.serviceTier === "priority" &&
 						firstTokenTime === undefined &&
 						AIError.isFastModeUnsupported(streamFailure)
 					) {
@@ -2206,6 +2496,7 @@ const streamAnthropicOnce = (
 						params = await prepareParams();
 						providerRetryAttempt = 0;
 						output.content.length = 0;
+						output.model = model.id;
 						output.responseId = undefined;
 						output.errorMessage = undefined;
 						output.providerPayload = undefined;
@@ -2248,6 +2539,7 @@ const streamAnthropicOnce = (
 						await scheduler.wait(delayMs, { signal: options?.signal });
 					}
 					output.content.length = 0;
+					output.model = model.id;
 					output.responseId = undefined;
 					output.errorMessage = undefined;
 					output.stopDetails = undefined;
@@ -2259,8 +2551,11 @@ const streamAnthropicOnce = (
 			}
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
-			if (dropFastMode && resolveServiceTier(options?.serviceTier, model.provider) === "priority") {
+			if (dropFastMode && model.provider === "anthropic" && options?.serviceTier === "priority") {
 				output.disabledFeatures = [...(output.disabledFeatures ?? []), "priority"];
+			}
+			if (forceDemoteUnsignedThinking && model.compat.replayUnsignedThinking) {
+				output.disabledFeatures = [...(output.disabledFeatures ?? []), "unsigned-thinking-replay"];
 			}
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
@@ -2277,7 +2572,7 @@ const streamAnthropicOnce = (
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;
 			output.errorId = result.id;
-			output.errorMessage = result.message;
+			output.errorMessage = maybeAddReplayUnsignedThinkingHint(model, result.message);
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -2382,8 +2677,10 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		thinkingDisplay,
 		isOAuth,
 		claudeCodeSessionId,
+		disableStrictTools: disableStrictToolsOverride,
 	} = args;
 	const compat = model.compat;
+	const disableStrictTools = disableStrictToolsOverride ?? compat.disableStrictTools;
 	const needsInterleavedBeta = interleavedThinking && !model.thinking?.supportsDisplay;
 	const needsFineGrainedToolStreamingBeta = hasTools && !compat.supportsEagerToolInputStreaming;
 	const oauthToken = isOAuth ?? isAnthropicOAuthToken(apiKey);
@@ -2456,7 +2753,12 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		isCloudflareAiGateway: model.provider === "cloudflare-ai-gateway",
 		claudeCodeSessionId,
 		claudeCodeBetas: oauthToken
-			? buildClaudeCodeBetas(hasTools || thinkingEnabled, thinkingEnabled, thinkingDisplay === "omitted")
+			? buildClaudeCodeBetas(
+					hasTools || thinkingEnabled,
+					thinkingEnabled,
+					thinkingDisplay === "omitted",
+					disableStrictTools,
+				)
 			: [],
 	});
 
@@ -2834,7 +3136,16 @@ function buildParams(
 	options?: AnthropicOptions,
 	disableStrictTools = false,
 	useUmansGatewayWebSearch = false,
+	forceDemoteUnsignedThinking = false,
 ): MessageCreateParamsStreaming {
+	// A session-scoped auto-demote (learned from a live signing 400) clones the
+	// resolved compat with `replayUnsignedThinking: false` so every subsequent
+	// downstream read (convertAnthropicMessages, transformMessages) sees the
+	// demoted default without mutating the shared `model` reference.
+	const effectiveModel =
+		forceDemoteUnsignedThinking && model.compat.replayUnsignedThinking
+			? { ...model, compat: { ...model.compat, replayUnsignedThinking: false } }
+			: model;
 	const { cacheControl } = getCacheControl(model, options?.cacheRetention, isOAuthToken);
 
 	// Pre-compute system blocks so they occupy the right slot in the serialized body.
@@ -2876,9 +3187,10 @@ function buildParams(
 	let thinking: MessageCreateParamsStreaming["thinking"] | undefined;
 	let outputConfigEffort: AnthropicOutputEffort | undefined;
 	if (model.reasoning) {
-		if (options?.thinkingEnabled) {
+		if (options?.thinkingEnabled || model.compat.requiresThinkingEnabled) {
+			const thinkingOptions = options ?? {};
 			const mode = model.thinking?.mode;
-			const effort = resolveAnthropicAdaptiveEffort(model, options);
+			const effort = resolveAnthropicAdaptiveEffort(model, thinkingOptions);
 			const compat = model.compat;
 			if (mode === "anthropic-adaptive" && !compat.disableAdaptiveThinking) {
 				const adaptive: { type: "adaptive"; display?: AnthropicThinkingDisplay } = { type: "adaptive" };
@@ -2889,15 +3201,15 @@ function buildParams(
 				// support: Opus 4.6 / Sonnet 4.6+ reject it with a 400, so an explicit
 				// `thinkingDisplay` MUST NOT force it onto a model that can't accept it.
 				if (model.thinking?.supportsDisplay) {
-					adaptive.display = options.thinkingDisplay ?? "summarized";
+					adaptive.display = thinkingOptions.thinkingDisplay ?? "summarized";
 				}
 				thinking = adaptive;
 				if (effort && effort !== "adaptive") outputConfigEffort = effort;
 			} else {
 				thinking = {
 					type: "enabled",
-					budget_tokens: options.thinkingBudgetTokens || 1024,
-					display: options.thinkingDisplay ?? "summarized",
+					budget_tokens: thinkingOptions.thinkingBudgetTokens || 1024,
+					display: thinkingOptions.thinkingDisplay ?? "summarized",
 				};
 				if (mode === "anthropic-budget-effort" && effort && effort !== "adaptive") outputConfigEffort = effort;
 			}
@@ -2959,7 +3271,9 @@ function buildParams(
 	// metadata → max_tokens → thinking → context_management → output_config → stream.
 	const params: MessageCreateParamsStreaming = {
 		model: options?.requestModelId ?? model.requestModelId ?? model.id,
-		messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
+		messages: convertAnthropicMessages(context.messages, effectiveModel, isOAuthToken, {
+			serverSideFallbackEnabled: !!options?.fallbacks?.length,
+		}),
 		...(systemBlocks && { system: systemBlocks }),
 		...(tools !== undefined && { tools }),
 		...(metadata && { metadata }),
@@ -2967,6 +3281,7 @@ function buildParams(
 		...(thinking && { thinking }),
 		...(contextManagement && { context_management: contextManagement }),
 		...(outputConfig && { output_config: outputConfig }),
+		...(options?.fallbacks?.length ? { fallbacks: options.fallbacks } : {}),
 		stream: true,
 	};
 
@@ -2996,7 +3311,7 @@ function buildParams(
 			seqs.length > ANTHROPIC_STOP_SEQUENCES_MAX ? seqs.slice(0, ANTHROPIC_STOP_SEQUENCES_MAX) : seqs;
 	}
 
-	if (resolveServiceTier(options?.serviceTier, model.provider) === "priority") {
+	if (model.provider === "anthropic" && options?.serviceTier === "priority") {
 		params.speed = "fast";
 	}
 
@@ -3120,10 +3435,20 @@ function toWellFormedDeep(value: unknown): unknown {
 	return value;
 }
 
+/**
+ * Serialize omp {@link Message}s to Anthropic wire messages.
+ *
+ * `opts.serverSideFallbackEnabled` — when the CURRENT request itself
+ * opts into the server-side-fallback beta chain. Only then may a persisted
+ * `fallback` content block from a prior turn be replayed on the wire;
+ * otherwise the block is dropped to avoid a 400 on non-fallback requests
+ * that don't send the beta.
+ */
 export function convertAnthropicMessages(
 	messages: Message[],
 	model: Model<"anthropic-messages">,
 	isOAuthToken: boolean,
+	opts?: { serverSideFallbackEnabled?: boolean },
 ): AnthropicMessageParam[] {
 	// Indices of params emitted from `developer` messages. After the main pass,
 	// the ones whose placement satisfies Anthropic's mid-conversation rules are
@@ -3213,6 +3538,19 @@ export function convertAnthropicMessages(
 						type: "redacted_thinking",
 						data: block.data,
 					});
+				} else if (block.type === "fallback") {
+					// Replay ONLY when both sides are aligned: the current
+					// request opted into the beta chain, and the target is
+					// official Anthropic (the only endpoint that accepts the
+					// block on the wire). `transformMessages` already drops
+					// the block for cross-provider / non-official replays, so
+					// this is defense-in-depth for direct convert calls.
+					if (!opts?.serverSideFallbackEnabled || !model.compat.officialEndpoint) continue;
+					blocks.push({
+						type: "fallback",
+						from: block.from,
+						to: block.to,
+					});
 				} else if (block.type === "toolCall") {
 					blocks.push({
 						type: "tool_use",
@@ -3226,6 +3564,40 @@ export function convertAnthropicMessages(
 						input: toWellFormedDeep(block.arguments ?? {}),
 					});
 				}
+			}
+			// Anthropic's replay validator rejects any non-`tool_use` block that
+			// appears after a `tool_use` inside an assistant turn (400:
+			// "tool_use ids were found without tool_result blocks immediately
+			// after: <id>"). A persisted turn can violate this when a mid-turn
+			// server-side fallback handoff lands after the primary model already
+			// emitted a tool_use — the replayed content is then e.g.
+			// [thinking, text, tool_use, fallback, text, tool_use] — and also for
+			// the older cross-provider [text, tool_use, text] shape (issue #544).
+			// Stable-partition into [...non-tool_use, ...tool_use], preserving each
+			// side's relative order: the non-tool_use chain (thinking → text →
+			// fallback → text) carries thinking signatures and the fallback
+			// boundary marker whose order Anthropic verifies, while tool_use blocks
+			// are unsigned and safe to defer to the tail. Fast-path untouched when
+			// already in order so prompt-cache prefixes stay byte-identical.
+			let sawToolUse = false;
+			let needsPartition = false;
+			for (const block of blocks) {
+				if (block.type === "tool_use") {
+					sawToolUse = true;
+				} else if (sawToolUse) {
+					needsPartition = true;
+					break;
+				}
+			}
+			if (needsPartition) {
+				const nonToolUse: ContentBlockParam[] = [];
+				const toolUse: ContentBlockParam[] = [];
+				for (const block of blocks) {
+					if (block.type === "tool_use") toolUse.push(block);
+					else nonToolUse.push(block);
+				}
+				blocks.length = 0;
+				blocks.push(...nonToolUse, ...toolUse);
 			}
 			if (blocks.length === 0) continue;
 			params.push({

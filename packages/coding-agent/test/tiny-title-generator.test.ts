@@ -84,16 +84,7 @@ function createTinyWorkerSpawnMock(calls: TinyWorkerSpawnCall[]) {
 function mockOnlineTitle(title: string | null) {
 	return vi.spyOn(ai, "completeSimple").mockResolvedValue({
 		stopReason: "stop",
-		content: title
-			? [
-					{
-						type: "toolCall",
-						id: "call-title",
-						name: "set_title",
-						arguments: { title },
-					},
-				]
-			: [{ type: "text", text: "" }],
+		content: title ? [{ type: "text", text: `<title>${title}</title>` }] : [{ type: "text", text: "" }],
 	} as never);
 }
 
@@ -217,7 +208,8 @@ describe("tiny title subprocess", () => {
 
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.options.stdout).toBe("ignore");
-		expect(calls[0]?.options.stderr).toBe("ignore");
+		expect(calls[0]?.options.stderr).not.toBe("inherit");
+		expect(calls[0]?.options.stderr).not.toBe("pipe");
 		await worker.proc.exited;
 	});
 });

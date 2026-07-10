@@ -17,7 +17,7 @@ function createContext() {
 	const ctx = {
 		isInitialized: true,
 		settings: { get: () => false },
-		statusLine: { invalidate: vi.fn() },
+		statusLine: { invalidate: vi.fn(), markActivityStart: vi.fn(), markActivityEnd: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
 		pendingTools: new Map<string, unknown>(),
 		hideThinkingBlock: false,
@@ -27,7 +27,7 @@ function createContext() {
 		retryLoader: undefined,
 		streamingComponent: undefined,
 		streamingMessage: undefined,
-		statusContainer: { clear: vi.fn() },
+		statusContainer: { clear: vi.fn(), disposeChildren: vi.fn() },
 		chatContainer: { removeChild: vi.fn() },
 		flushPendingModelSwitch: vi.fn(async () => {}),
 		editor: { getText: () => "" },

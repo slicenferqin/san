@@ -1,20 +1,37 @@
-import type { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { supportsAllTurnsReasoningContext, supportsCodexReasoningSummary } from "@oh-my-pi/pi-catalog/identity";
 import { requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
-import type { Api, Model } from "../../types";
+import type { Model } from "../../types";
+import { mapOpenAIReasoningEffort } from "../openai-shared";
 
 /** Reasoning replay scope for the Codex Responses API (`reasoning.context`). */
 export type CodexReasoningContext = "auto" | "current_turn" | "all_turns";
 
+/** User-facing effort levels accepted by Codex request options. */
+type CodexCallerEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+
+/** Caller literal → catalog `Effort` bridge (the enum is nominal). */
+const EFFORT_BY_NAME: Record<CodexCallerEffort, Effort> = {
+	minimal: Effort.Minimal,
+	low: Effort.Low,
+	medium: Effort.Medium,
+	high: Effort.High,
+	xhigh: Effort.XHigh,
+};
+
 export interface ReasoningConfig {
-	effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	summary?: "auto" | "concise" | "detailed";
 	context?: CodexReasoningContext;
+	/** Pro reasoning serving mode (gpt-5.6+ catalog pro aliases). */
+	mode?: "pro";
 }
 
 export interface CodexRequestOptions {
-	reasoningEffort?: ReasoningConfig["effort"];
+	/** User-facing effort; the wire-only `max` tier is reached via the model's effort map. */
+	reasoningEffort?: CodexCallerEffort | "none";
 	reasoningSummary?: ReasoningConfig["summary"] | null;
-	/** Explicit `reasoning.context` override; defaults to `all_turns` for every Codex request when unset. */
+	/** Explicit `reasoning.context` override; defaults to `all_turns` when unset. The `all_turns` value is gated to gpt-5.4+ Codex models — older ids reject it, so it is suppressed and `context` omitted. */
 	reasoningContext?: CodexReasoningContext;
 	textVerbosity?: "low" | "medium" | "high";
 	include?: string[];
@@ -79,12 +96,47 @@ export function shouldUseCodexResponsesLite(body: RequestBody, requested: boolea
 	return requested === true && !containsInputImage(body.input);
 }
 
-function getReasoningConfig(model: Model<Api>, options: CodexRequestOptions): ReasoningConfig {
+/**
+ * Clamp a user-facing effort to the model's ladder, then remap to the wire
+ * tier (e.g. GPT-5.6's shifted five-tier scale sends `max` for user `xhigh`).
+ * A mapped value outside the Codex wire vocabulary is a broken compat/model
+ * effort map — fail loudly rather than silently sending a different tier.
+ */
+function mapCodexWireEffort(
+	model: Model<"openai-codex-responses">,
+	effort: CodexCallerEffort,
+): ReasoningConfig["effort"] {
+	const mapped = mapOpenAIReasoningEffort(model, model.compat, requireSupportedEffort(model, EFFORT_BY_NAME[effort]));
+	switch (mapped) {
+		case "none":
+		case "minimal":
+		case "low":
+		case "medium":
+		case "high":
+		case "xhigh":
+		case "max":
+			return mapped;
+		default:
+			throw new Error(
+				`Effort map for ${model.provider}/${model.id} produced invalid Codex reasoning effort "${mapped}"`,
+			);
+	}
+}
+
+function getReasoningConfig(
+	model: Model<"openai-codex-responses">,
+	effort: NonNullable<CodexRequestOptions["reasoningEffort"]>,
+	options: CodexRequestOptions,
+): ReasoningConfig {
 	const config: ReasoningConfig = {
-		effort:
-			options.reasoningEffort === "none" ? "none" : requireSupportedEffort(model, options.reasoningEffort as Effort),
+		effort: effort === "none" ? "none" : mapCodexWireEffort(model, effort),
 	};
-	if (options.reasoningSummary !== null) {
+	// `reasoning.summary` is accepted only from gpt-5.4 onward; earlier Codex ids
+	// (gpt-5.1-codex, gpt-5.3-codex, gpt-5.3-codex-spark) reject it with
+	// "Unsupported parameter: 'reasoning.summary' is not supported with this model".
+	// Mirrors the all_turns gate: an explicit summary is suppressed on unsupported
+	// ids, letting the server skip the human-readable summary stream.
+	if (options.reasoningSummary !== null && supportsCodexReasoningSummary(model.id)) {
 		config.summary = options.reasoningSummary ?? "detailed";
 	}
 	return config;
@@ -210,7 +262,7 @@ function stripImageDetails(input: InputItem[]): void {
 
 export async function transformRequestBody(
 	body: RequestBody,
-	model: Model<Api>,
+	model: Model<"openai-codex-responses">,
 	options: CodexRequestOptions = {},
 	prompt?: { developerMessages: string[] },
 ): Promise<RequestBody> {
@@ -224,16 +276,61 @@ export async function transformRequestBody(
 		}
 	}
 
-	if (prompt?.developerMessages && prompt.developerMessages.length > 0 && Array.isArray(body.input)) {
-		const developerMessages = prompt.developerMessages.map(
-			text =>
-				({
+	if (prompt?.developerMessages && prompt.developerMessages.length > 0) {
+		const developerMessages: InputItem[] = prompt.developerMessages.map(text => ({
+			type: "message",
+			role: "developer",
+			content: [{ type: "input_text", text }],
+		}));
+		const input = Array.isArray(body.input) ? body.input : [];
+		body.input = [...developerMessages, ...input];
+	}
+
+	let finalInstruction = prompt?.developerMessages.findLast(text => text.trim().length > 0);
+	if (finalInstruction === undefined && Array.isArray(body.input)) {
+		for (let itemIndex = body.input.length - 1; itemIndex >= 0; itemIndex -= 1) {
+			const item = body.input[itemIndex];
+			if (item.role !== "developer" || !Array.isArray(item.content)) continue;
+			for (let partIndex = item.content.length - 1; partIndex >= 0; partIndex -= 1) {
+				const part = item.content[partIndex];
+				if (
+					part &&
+					typeof part === "object" &&
+					"type" in part &&
+					part.type === "input_text" &&
+					"text" in part &&
+					typeof part.text === "string" &&
+					part.text.trim().length > 0
+				) {
+					finalInstruction = part.text;
+					break;
+				}
+			}
+			if (finalInstruction !== undefined) break;
+		}
+	}
+	if (finalInstruction === undefined && typeof body.instructions === "string" && body.instructions.trim().length > 0) {
+		finalInstruction = body.instructions;
+	}
+	if (finalInstruction !== undefined) {
+		const input = Array.isArray(body.input) ? body.input : [];
+		let hasVisibleInput = false;
+		for (const item of input) {
+			if (item.role !== "developer") {
+				hasVisibleInput = true;
+				break;
+			}
+		}
+		if (!hasVisibleInput) {
+			body.input = [
+				...input,
+				{
 					type: "message",
-					role: "developer",
-					content: [{ type: "input_text", text }],
-				}) as InputItem,
-		);
-		body.input = [...developerMessages, ...body.input];
+					role: "user",
+					content: [{ type: "input_text", text: finalInstruction }],
+				},
+			];
+		}
 	}
 
 	const responsesLite = shouldUseCodexResponsesLite(body, options.responsesLite);
@@ -249,16 +346,34 @@ export async function transformRequestBody(
 	}
 
 	if (options.reasoningEffort !== undefined) {
-		const reasoningConfig = getReasoningConfig(model, options);
+		const reasoningConfig = getReasoningConfig(model, options.reasoningEffort, options);
 		body.reasoning = {
 			...body.reasoning,
 			...reasoningConfig,
 		};
-		// Default reasoning replay to `all_turns` for every Codex request,
-		// mirroring codex-rs; an explicit `reasoningContext` overrides it.
-		body.reasoning.context = options.reasoningContext ?? "all_turns";
+		// Default reasoning replay to `all_turns`, mirroring codex-rs; an
+		// explicit `reasoningContext` overrides the default. The `all_turns`
+		// value is only accepted from gpt-5.4 onward — earlier Codex ids
+		// (gpt-5.1-codex, gpt-5.3-codex, gpt-5.3-codex-spark) reject it with
+		// "Unsupported value: 'all_turns' is not supported with this model".
+		// For those, drop `context` so the server applies its `current_turn`
+		// default. The version gate is authoritative: even an explicit
+		// `all_turns` override is suppressed on unsupported models, while
+		// `current_turn`/`auto` (universally supported) always pass through.
+		const context = options.reasoningContext ?? "all_turns";
+		if (context === "all_turns" && !supportsAllTurnsReasoningContext(model.id)) {
+			delete body.reasoning.context;
+		} else {
+			body.reasoning.context = context;
+		}
 	} else {
 		delete body.reasoning;
+	}
+	// Catalog pro aliases (`gpt-5.6-*-pro`): applied after the effort branch so
+	// the mode is sent even when no effort is set (the branch above deletes
+	// `body.reasoning` in that case) — mode and effort are independent fields.
+	if (model.reasoningMode) {
+		body.reasoning = { ...body.reasoning, mode: model.reasoningMode };
 	}
 
 	body.text = {

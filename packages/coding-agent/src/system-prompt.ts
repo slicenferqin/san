@@ -7,7 +7,6 @@ import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { ToolExample, TSchema } from "@oh-my-pi/pi-ai";
 import { renderToolInventory } from "@oh-my-pi/pi-ai/dialect";
 import { $env, getGpuCachePath, getProjectDir, hasFsCode, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
 import { findConfigFile } from "./config";
@@ -25,6 +24,7 @@ import projectPromptTemplate from "./prompts/system/project-prompt.md" with { ty
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
 import { shortenPath } from "./tools/render-utils";
 import { type ActiveRepoContext, resolveActiveRepoContext } from "./utils/active-repo-context";
+import { formatLocalCalendarDate } from "./utils/local-date";
 import { normalizePromptPath } from "./utils/prompt-path";
 import { AGENTS_MD_LIMIT, buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
@@ -112,21 +112,60 @@ function parseWmicTable(output: string, header: string): string | null {
 }
 
 const SYSTEM_PROMPT_PREP_TIMEOUT_MS = 5000;
+/** Kept below prep timeout so timed-out probes can still write the null cache before fallback. */
+const GPU_PROBE_TIMEOUT_MS = SYSTEM_PROMPT_PREP_TIMEOUT_MS - 500;
+/** Drop stdout from a probe descendant that inherited the pipe after the probe exited. */
+const GPU_PROBE_STDOUT_DRAIN_MS = 250;
+
+async function runGpuProbe(cmd: string[]): Promise<string | null> {
+	try {
+		const proc = Bun.spawn({
+			cmd,
+			stdout: "pipe",
+			stderr: "ignore",
+			stdin: "ignore",
+			timeout: GPU_PROBE_TIMEOUT_MS,
+			// SIGKILL so a probe ignoring SIGTERM (PATH wrapper, wedged WMI) still
+			// dies at the deadline and lets getCachedGpu reach the null-cache write.
+			killSignal: "SIGKILL",
+		});
+		const stdoutReader = proc.stdout.getReader();
+		let stdout = "";
+		const decoder = new TextDecoder();
+		const stdoutDone = (async () => {
+			while (true) {
+				const chunk = await stdoutReader.read();
+				if (chunk.done) break;
+				stdout += decoder.decode(chunk.value, { stream: true });
+			}
+			stdout += decoder.decode();
+		})();
+		const exitCode = await proc.exited;
+		// Even on exit 0, a probe wrapper can leave a descendant holding stdout open.
+		// Bound the EOF wait so getCachedGpu cannot outlive the probe in either path;
+		// keep whatever bytes the reader already captured before cancelling.
+		const drained = await Promise.race([
+			stdoutDone.then(() => "ok" as const).catch(() => "err" as const),
+			Bun.sleep(GPU_PROBE_STDOUT_DRAIN_MS).then(() => "timeout" as const),
+		]);
+		if (drained !== "ok") {
+			await stdoutReader.cancel().catch(() => undefined);
+			await stdoutDone.catch(() => undefined);
+		}
+		return exitCode === 0 ? stdout : null;
+	} catch {
+		return null;
+	}
+}
 
 async function getGpuModel(): Promise<string | null> {
 	switch (process.platform) {
 		case "win32": {
-			const output = await $`wmic path win32_VideoController get name`
-				.quiet()
-				.text()
-				.catch(() => null);
+			const output = await runGpuProbe(["wmic", "path", "win32_VideoController", "get", "name"]);
 			return output ? parseWmicTable(output, "Name") : null;
 		}
 		case "linux": {
-			const output = await $`lspci`
-				.quiet()
-				.text()
-				.catch(() => null);
+			const output = await runGpuProbe(["lspci"]);
 			if (!output) return null;
 			const gpus: Array<{ name: string; priority: number }> = [];
 			for (const line of output.split("\n")) {
@@ -176,20 +215,20 @@ function getTerminalName(): string | undefined {
 	return term ?? undefined;
 }
 
-/** Cached system info structure */
+/** Cached GPU probe result. */
 interface GpuCache {
-	gpu: string;
-}
-
-function getSystemInfoCachePath(): string {
-	return getGpuCachePath();
+	gpu: string | null;
 }
 
 async function loadGpuCache(): Promise<GpuCache | null> {
 	try {
-		const cachePath = getSystemInfoCachePath();
+		const cachePath = getGpuCachePath();
 		const content = await Bun.file(cachePath).json();
-		return content as GpuCache;
+		if (content && typeof content === "object" && "gpu" in content) {
+			const gpu = content.gpu;
+			return { gpu: typeof gpu === "string" ? gpu : null };
+		}
+		return null;
 	} catch {
 		return null;
 	}
@@ -197,7 +236,7 @@ async function loadGpuCache(): Promise<GpuCache | null> {
 
 async function saveGpuCache(info: GpuCache): Promise<void> {
 	try {
-		const cachePath = getSystemInfoCachePath();
+		const cachePath = getGpuCachePath();
 		await Bun.write(cachePath, JSON.stringify(info, null, "\t"));
 	} catch {
 		// Silently ignore cache write failures
@@ -206,25 +245,48 @@ async function saveGpuCache(info: GpuCache): Promise<void> {
 
 async function getCachedGpu(): Promise<string | undefined> {
 	const cached = await logger.time("getCachedGpu:loadGpuCache", loadGpuCache);
-	if (cached) return cached.gpu;
+	if (cached) return cached.gpu ?? undefined;
 	const gpu = await logger.time("getCachedGpu:getGpuModel", getGpuModel);
-	if (gpu) {
-		await logger.time("getCachedGpu:saveGpuCache", saveGpuCache, { gpu });
-	}
+	await logger.time("getCachedGpu:saveGpuCache", saveGpuCache, { gpu });
 	return gpu ?? undefined;
 }
-async function getEnvironmentInfo(): Promise<Array<{ label: string; value: string }>> {
-	const gpu = await getCachedGpu();
-	let cpuModel: string | undefined;
+
+async function getCpuModel(): Promise<string | undefined> {
+	if (process.platform !== "linux") return undefined;
 	try {
-		cpuModel = os.cpus()[0]?.model;
-	} catch {
-		cpuModel = undefined;
+		const cpuInfo = await Bun.file("/proc/cpuinfo").text();
+		const match = /^model name\s*:\s*(.+)$/m.exec(cpuInfo);
+		return match?.[1]?.trim() || undefined;
+	} catch (error) {
+		if (!isEnoent(error)) {
+			logger.debug("Could not read Linux CPU model", { error: String(error) });
+		}
+		return undefined;
 	}
+}
+
+/**
+ * Kernel identity for the workstation block. Prefers the uname build string
+ * from `os.version()`, but Bun on macOS 15+ (Darwin 24/25) returns the literal
+ * `"unknown"` when `uv_os_uname()`'s `version` field is empty — which surfaces
+ * `Kernel: unknown` in the system prompt and makes the model misidentify the
+ * host as Windows (#4141). Fall back to `<type> <release>` (uname -s + -r) so
+ * macOS is always tagged as `Darwin <release>` and Linux keeps its build info.
+ */
+function getKernelIdentity(): string {
+	const version = os.version()?.trim();
+	if (version && version.toLowerCase() !== "unknown") return version;
+	return `${os.type()} ${os.release()}`.trim();
+}
+
+function getEnvironmentInfo(
+	cpuModel: string | undefined,
+	gpu: string | undefined,
+): Array<{ label: string; value: string }> {
 	const entries: Array<{ label: string; value: string | undefined }> = [
 		{ label: "OS", value: `${os.platform()} ${os.release()}` },
 		{ label: "Distro", value: os.type() },
-		{ label: "Kernel", value: os.version() },
+		{ label: "Kernel", value: getKernelIdentity() },
 		{ label: "Arch", value: os.arch() },
 		{ label: "CPU", value: cpuModel },
 		{ label: "GPU", value: gpu },
@@ -339,7 +401,7 @@ export async function loadSystemPromptFiles(options: LoadContextFilesOptions = {
 	return userLevel?.content ?? null;
 }
 
-export const DEFAULT_SYSTEM_PROMPT_TOOL_NAMES = ["read", "bash", "eval", "edit", "write"] as const;
+export const DEFAULT_SYSTEM_PROMPT_TOOL_NAMES = ["read", "bash", "edit", "write"] as const;
 
 export interface SystemPromptToolMetadata {
 	label: string;
@@ -500,9 +562,14 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			agentsMdFiles: [],
 		} satisfies WorkspaceTree,
 		activeRepoContext: null as ActiveRepoContext | null,
+		cpuModel: undefined as string | undefined,
+		gpu: undefined as string | undefined,
 	};
 
-	const deadline = Bun.sleep(SYSTEM_PROMPT_PREP_TIMEOUT_MS).then(() => "__timeout__" as const);
+	const { promise: deadline, resolve: fireDeadline } = Promise.withResolvers<"__timeout__">();
+	const deadlineTimer = setTimeout(() => fireDeadline("__timeout__"), SYSTEM_PROMPT_PREP_TIMEOUT_MS);
+	// Unref so a fast prep does not hold a one-shot CLI alive waiting for this timer.
+	deadlineTimer.unref();
 	const timedOut: string[] = [];
 	const failed: Array<{ name: string; error: unknown }> = [];
 
@@ -566,6 +633,8 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		providedActiveRepoContext !== undefined
 			? Promise.resolve(providedActiveRepoContext)
 			: logger.time("resolveActiveRepoContext", () => resolveActiveRepoContext(resolvedCwd));
+	const cpuModelPromise = logger.time("getCpuModel", getCpuModel);
+	const gpuPromise = logger.time("getCachedGpu", getCachedGpu);
 
 	const [
 		resolvedCustomPrompt,
@@ -575,6 +644,8 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		skills,
 		workspaceTree,
 		activeRepoContext,
+		cpuModel,
+		gpu,
 	] = await Promise.all([
 		withDeadline(
 			"customPrompt",
@@ -597,7 +668,10 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		withDeadline("loadSkills", skillsPromise, prepDefaults.skills),
 		withDeadline("buildWorkspaceTree", workspaceTreePromise, prepDefaults.workspaceTree),
 		withDeadline("resolveActiveRepoContext", activeRepoContextPromise, prepDefaults.activeRepoContext),
+		withDeadline("getCpuModel", cpuModelPromise, prepDefaults.cpuModel),
+		withDeadline("getCachedGpu", gpuPromise, prepDefaults.gpu),
 	]);
+	clearTimeout(deadlineTimer);
 	const agentsMdFiles = Array.from(new Set(workspaceTree.agentsMdFiles)).sort().slice(0, AGENTS_MD_LIMIT);
 
 	if (timedOut.length > 0) {
@@ -620,7 +694,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		}
 	}
 
-	const date = new Date().toISOString().slice(0, 10);
+	const date = formatLocalCalendarDate();
 	const dateTime = date;
 	const promptCwd = shortenPath(normalizePromptPath(resolvedCwd));
 	const activeRepoContextPrompt = renderActiveRepoContextPrompt(activeRepoContext);
@@ -675,7 +749,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	];
 	const injectedAlwaysApplyRules = dedupeAlwaysApplyRules(alwaysApplyRules, promptSources);
 
-	const environment = await logger.time("getEnvironmentInfo", getEnvironmentInfo);
+	const environment = getEnvironmentInfo(cpuModel, gpu);
 	const data = {
 		systemPromptCustomization: effectiveSystemPromptCustomization,
 		customPrompt: resolvedCustomPrompt,

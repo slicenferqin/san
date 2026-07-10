@@ -37,6 +37,114 @@ export const SKILL_PROMPT_MESSAGE_TYPE = "skill-prompt";
 export const LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE = "lsp-late-diagnostic";
 export const BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE = "background-tan-dispatch";
 
+/** Fallback type for extension-injected messages that omit a custom type. */
+export const DEFAULT_CUSTOM_MESSAGE_TYPE = "custom-message";
+
+/** Content shape accepted for extension-injected messages. */
+export type CustomMessageContent = string | (TextContent | ImageContent)[];
+
+/** Public input accepted by `pi.sendMessage` and `AgentSession.sendCustomMessage`. */
+export type CustomMessagePayload<T = unknown> =
+	| string
+	| Partial<Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">>;
+
+/** Custom message payload after applying runtime defaults. */
+export type NormalizedCustomMessagePayload<T = unknown> = Pick<
+	CustomMessage<T>,
+	"customType" | "content" | "display" | "details" | "attribution"
+>;
+
+/** Custom message type for hidden interrupted-thinking continuity context. */
+export const INTERRUPTED_THINKING_MESSAGE_TYPE = "interrupted-thinking";
+
+/** Metadata persisted with a hidden interrupted-thinking continuity message. */
+export interface InterruptedThinkingDetails {
+	interruptedAt: number;
+	provider: AssistantMessage["provider"];
+	model: string;
+	blockCount: number;
+}
+
+/** Pure helper result for persisting interrupted thinking outside the assistant turn. */
+export interface DemotedInterruptedThinking {
+	reasoning: string;
+	strippedContent: AssistantMessage["content"];
+	blockCount: number;
+}
+
+/**
+ * Demote a trailing run of *incomplete* interrupted-thinking from an assistant
+ * message — reasoning that was still streaming when the user aborted.
+ *
+ * A block joins the run only when it is a non-empty `thinking` block with no
+ * `thinkingSignature`. A signed/complete thinking block (Anthropic signature,
+ * OpenAI reasoning item id) is safely replayable, so it ends the run and stays
+ * in place — as do `redactedThinking` encrypted blobs, text, tool calls,
+ * empty-thinking blocks, and trailing empty text placeholders.
+ */
+export function demoteInterruptedThinking(
+	message: Pick<AssistantMessage, "content">,
+): DemotedInterruptedThinking | undefined {
+	const content = message.content;
+	let scanEnd = content.length;
+	while (scanEnd > 0) {
+		const block = content[scanEnd - 1]!;
+		if (block.type !== "text" || block.text.trim().length > 0) {
+			break;
+		}
+		scanEnd--;
+	}
+
+	let runStart = scanEnd;
+	while (runStart > 0) {
+		const block = content[runStart - 1]!;
+		if (block.type !== "thinking" || block.thinking.trim().length === 0 || block.thinkingSignature) {
+			break;
+		}
+		runStart--;
+	}
+
+	const blockCount = scanEnd - runStart;
+	if (blockCount === 0) {
+		return undefined;
+	}
+
+	const reasoningBlocks: string[] = [];
+	for (let index = runStart; index < scanEnd; index++) {
+		const block = content[index]!;
+		if (block.type === "thinking") {
+			reasoningBlocks.push(block.thinking.trim());
+		}
+	}
+
+	return {
+		reasoning: reasoningBlocks.join("\n\n"),
+		strippedContent: content.slice(0, runStart),
+		blockCount,
+	};
+}
+
+/**
+ * True when the assistant turn at `messages[index]` is immediately followed by
+ * its hidden `interrupted-thinking` continuity message — the marker that a
+ * trailing thinking run was demoted on user interrupt. The run stays on the
+ * persisted/displayed assistant message; this flag tells the LLM path to drop it.
+ */
+function followedByInterruptedThinking(messages: AgentMessage[], index: number): boolean {
+	const next = messages[index + 1];
+	return next !== undefined && next.role === "custom" && next.customType === INTERRUPTED_THINKING_MESSAGE_TYPE;
+}
+
+/**
+ * Drop the demoted trailing thinking run from an assistant message for the LLM
+ * view only. The run is incomplete and unsigned, so providers reject it; the
+ * continuity message that follows carries the reasoning instead.
+ */
+function stripDemotedThinkingForLlm(message: AssistantMessage): AssistantMessage {
+	const demoted = demoteInterruptedThinking(message);
+	return demoted ? { ...message, content: demoted.strippedContent } : message;
+}
+
 /** Details persisted on a `/tan` background-dispatch breadcrumb. */
 export interface BackgroundTanDispatchDetails {
 	jobId: string;
@@ -90,6 +198,33 @@ export function isUserInterruptAbort(message: Pick<AssistantMessage, "errorId" |
 
 export function shouldRenderAbortReason(message: Pick<AssistantMessage, "errorId" | "errorMessage">): boolean {
 	return !isSilentAbort(message) && !isUserInterruptAbort(message);
+}
+
+/** A provider-rejection turn carrying nothing but the error flag: stopReason
+ *  "error" with no text, thinking, or tool calls — e.g. a request the provider
+ *  rejected before any output (an oversized 413 payload). Persisting it writes an
+ *  empty assistant turn that replays on reload and re-sends the rejected context;
+ *  the error is surfaced live (pinned) instead. A turn that streamed partial text,
+ *  reasoning, or tool calls is NOT empty and stays in history. */
+export function isEmptyErrorTurn(message: Pick<AssistantMessage, "stopReason" | "content">): boolean {
+	if (message.stopReason !== "error") return false;
+	return !message.content.some(block => {
+		switch (block.type) {
+			case "text":
+				return block.text.trim().length > 0;
+			case "thinking":
+				return block.thinking.trim().length > 0 || (block.thinkingSignature?.trim().length ?? 0) > 0;
+			case "redactedThinking":
+				return block.data.trim().length > 0;
+			case "toolCall":
+				return true;
+			case "fallback":
+				return false;
+			// Unknown/new block kinds count as content: never silently discard a turn.
+			default:
+				return true;
+		}
+	});
 }
 
 /** Sentinel `errorMessage` the agent stamps on any abort that carried no custom
@@ -155,6 +290,59 @@ export function stripInternalDetailsFields<T>(details: T | undefined): T | undef
 		delete cleaned[key];
 	}
 	return cleaned as T;
+}
+
+/** True when a persisted or extension-supplied value can be sent as custom-message content. */
+export function isCustomMessageContent(content: unknown): content is CustomMessageContent {
+	return typeof content === "string" || Array.isArray(content);
+}
+
+function normalizeCustomMessageContent(content: unknown): CustomMessageContent {
+	return isCustomMessageContent(content) ? content : "";
+}
+
+function normalizeCustomMessageType(customType: unknown): string {
+	return typeof customType === "string" && customType.length > 0 ? customType : DEFAULT_CUSTOM_MESSAGE_TYPE;
+}
+
+function normalizeCustomMessageAttribution(attribution: unknown): MessageAttribution {
+	return attribution === "user" ? "user" : "agent";
+}
+
+function isCustomMessagePayloadObject<T>(
+	payload: unknown,
+): payload is Partial<Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">> {
+	return payload !== null && typeof payload === "object" && !Array.isArray(payload);
+}
+
+/** Normalizes extension-provided custom message input before it reaches session state or disk. */
+export function normalizeCustomMessagePayload<T = unknown>(
+	payload: CustomMessagePayload<T> | unknown,
+): NormalizedCustomMessagePayload<T> {
+	if (typeof payload === "string") {
+		return {
+			customType: DEFAULT_CUSTOM_MESSAGE_TYPE,
+			content: payload,
+			display: true,
+			attribution: "agent",
+		};
+	}
+	if (!isCustomMessagePayloadObject<T>(payload)) {
+		const content = payload === undefined || payload === null ? "" : String(payload);
+		return {
+			customType: DEFAULT_CUSTOM_MESSAGE_TYPE,
+			content,
+			display: content.length > 0,
+			attribution: "agent",
+		};
+	}
+	return {
+		customType: normalizeCustomMessageType(payload.customType),
+		content: normalizeCustomMessageContent(payload.content),
+		display: typeof payload.display === "boolean" ? payload.display : false,
+		details: payload.details,
+		attribution: normalizeCustomMessageAttribution(payload.attribution),
+	};
 }
 
 function isSteeringUserMessage(message: AgentMessage | undefined): message is UserMessage & { steering: true } {
@@ -363,7 +551,7 @@ export interface PythonExecutionMessage {
 export interface CustomMessage<T = unknown> {
 	role: "custom";
 	customType: string;
-	content: string | (TextContent | ImageContent)[];
+	content: CustomMessageContent;
 	display: boolean;
 	details?: T;
 	/** Who initiated this message for billing/attribution semantics. */
@@ -377,7 +565,7 @@ export interface CustomMessage<T = unknown> {
 export interface HookMessage<T = unknown> {
 	role: "hookMessage";
 	customType: string;
-	content: string | (TextContent | ImageContent)[];
+	content: CustomMessageContent;
 	display: boolean;
 	details?: T;
 	/** Who initiated this message for billing/attribution semantics. */
@@ -397,7 +585,7 @@ export interface FileMentionMessage {
 		/** File size in bytes, if known. */
 		byteSize?: number;
 		/** Why the file contents were omitted from auto-read. */
-		skippedReason?: "tooLarge";
+		skippedReason?: "tooLarge" | "binary";
 		image?: ImageContent;
 	}>;
 	timestamp: number;
@@ -459,26 +647,70 @@ export function sanitizeRehydratedOpenAIResponsesAssistantMessage(message: Assis
 	if (message.providerPayload?.type !== "openaiResponsesHistory") {
 		return message;
 	}
+	// Only GitHub Copilot rejects replayed assistant-side native history on a
+	// warmed (resumed) session with HTTP 401 — that is the sole reason this strip
+	// exists. For every other Responses-family provider (OpenAI, OpenAI-Codex,
+	// Azure) the encrypted reasoning and native response items are self-contained
+	// and MUST survive rehydration: remote compaction replays them to rebuild
+	// faithful native history (user + assistant turns + encrypted reasoning), and
+	// same-model live turns reuse them for prompt-cache continuity. Stripping them
+	// for all providers is what left resumed sessions compacting tool-call-only
+	// history with no reasoning and no assistant prose.
+	if (message.provider !== "github-copilot") {
+		return message;
+	}
 
 	let didSanitizeContent = false;
 	const sanitizedContent = message.content.map(block => {
 		if (block.type !== "thinking" || block.thinkingSignature === undefined) {
 			return block;
 		}
-
 		didSanitizeContent = true;
 		return { ...block, thinkingSignature: undefined };
 	});
 
-	// Strip the assistant-side native replay payload entirely.
-	// After rehydration it belongs to a previous live provider connection and
-	// replaying it on a warmed session causes 401 rejections from GitHub Copilot.
-	// User/developer payloads are preserved separately by the caller.
+	// Strip the assistant-side native replay payload entirely. After rehydration
+	// it belongs to a previous live Copilot connection and replaying it on a
+	// warmed session causes 401 rejections. User/developer payloads are preserved
+	// separately by the caller.
 	return {
 		...message,
 		...(didSanitizeContent ? { content: sanitizedContent } : {}),
 		providerPayload: undefined,
 	};
+}
+
+function customMessageContentToLlmContent(content: CustomMessage["content"]): (TextContent | ImageContent)[] {
+	return typeof content === "string" ? [{ type: "text", text: content }] : content;
+}
+
+function isUserInvokedSkillPrompt(message: CustomMessage): boolean {
+	return message.customType === SKILL_PROMPT_MESSAGE_TYPE && message.attribution === "user";
+}
+
+function convertImageBearingCustomMessage(message: CustomMessage | HookMessage): Message[] | undefined {
+	if (!isCustomMessageContent(message.content)) return undefined;
+	if (typeof message.content === "string") return undefined;
+	const textBlocks = message.content.filter((content): content is TextContent => content.type === "text");
+	const imageBlocks = message.content.filter((content): content is ImageContent => content.type === "image");
+	if (imageBlocks.length === 0) return undefined;
+
+	const converted: Message[] = [];
+	if (textBlocks.length > 0) {
+		converted.push({
+			role: "developer",
+			content: textBlocks,
+			attribution: message.attribution,
+			timestamp: message.timestamp,
+		});
+	}
+	converted.push({
+		role: "user",
+		content: [{ type: "text", text: `Images attached to ${message.customType}.` }, ...imageBlocks],
+		attribution: message.attribution,
+		timestamp: message.timestamp,
+	});
+	return converted;
 }
 
 /**
@@ -490,7 +722,7 @@ export function sanitizeRehydratedOpenAIResponsesAssistantMessage(message: Assis
  * - Custom extensions and tools
  */
 export function convertToLlm(messages: AgentMessage[]): Message[] {
-	return messages.flatMap((m): Message[] => {
+	return messages.flatMap((m, index): Message[] => {
 		switch (m.role) {
 			case "bashExecution":
 				if (m.excludeFromContext) {
@@ -555,13 +787,44 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 				}
 				return out;
 			}
-			case "custom":
-			case "hookMessage":
+			case "custom": {
+				if (!isCustomMessageContent(m.content)) return [];
+				if (isUserInvokedSkillPrompt(m)) {
+					return [
+						{
+							role: "user",
+							content: customMessageContentToLlmContent(m.content),
+							attribution: "user",
+							timestamp: m.timestamp,
+						},
+					];
+				}
+				const split = convertImageBearingCustomMessage(m);
+				if (split) return split;
+				const converted = convertMessageToLlm(m);
+				return converted ? [converted] : [];
+			}
+			case "hookMessage": {
+				if (!isCustomMessageContent(m.content)) return [];
+				const split = convertImageBearingCustomMessage(m);
+				if (split) return split;
+				const converted = convertMessageToLlm(m);
+				return converted ? [converted] : [];
+			}
+			case "assistant": {
+				// A user-interrupted turn keeps its trailing thinking run on the
+				// persisted/displayed message so reload and Ctrl+L rebuilds still
+				// show it. That run is incomplete/unsigned and gets rejected on
+				// resend, so strip it here — LLM path only — when the hidden
+				// interrupted-thinking continuity message follows.
+				const source = followedByInterruptedThinking(messages, index) ? stripDemotedThinkingForLlm(m) : m;
+				const converted = convertMessageToLlm(source);
+				return converted ? [converted] : [];
+			}
 			case "branchSummary":
 			case "compactionSummary":
 			case "user":
 			case "developer":
-			case "assistant":
 			case "toolResult": {
 				// Core roles share one transformer with agent-core —
 				// duplicating them here is how snapcompact frames once

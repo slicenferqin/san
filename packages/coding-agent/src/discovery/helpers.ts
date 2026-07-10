@@ -312,6 +312,15 @@ export interface ScanSkillsFromDirOptions {
 	providerId: string;
 	level: "user" | "project";
 	requireDescription?: boolean;
+	/**
+	 * When true, treat a `SKILL.md` sitting directly under `dir` as a single skill in addition to
+	 * scanning `<dir>/<name>/SKILL.md` children. Matches the Claude plugin manifest convention
+	 * that lets a skill path point at a directory containing `SKILL.md` directly (e.g.
+	 * `"skills": ["./"]`), where the frontmatter `name` determines the invocation name and the
+	 * directory basename is the fallback. Default `false` preserves the strict child-scan
+	 * semantic every non-Claude provider relies on.
+	 */
+	includeSelf?: boolean;
 }
 
 // Stable ordering used for skill lists in prompts: name (case-insensitive), then name, then path.
@@ -368,7 +377,13 @@ export async function scanSkillsFromDir(
 		}
 	};
 
-	const work = [];
+	const work: Promise<void>[] = [];
+	if (options.includeSelf) {
+		const selfSkillPath = path.join(dir, "SKILL.md");
+		if (fs.existsSync(selfSkillPath)) {
+			work.push(loadSkill(selfSkillPath));
+		}
+	}
 	for (const entry of entries) {
 		if (entry.name.startsWith(".")) continue;
 		if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
@@ -834,6 +849,13 @@ export async function resolveOrDefaultProjectRegistryPath(cwd: string): Promise<
 
 const pluginRootsCache = new Map<string, { roots: ClaudePluginRoot[]; warnings: string[] }>();
 
+const pluginCacheInvalidators = new Set<() => void>();
+
+/** Register a process-global plugin cache invalidator called whenever plugin roots are cleared. */
+export function registerPluginCacheInvalidator(invalidator: () => void): void {
+	pluginCacheInvalidators.add(invalidator);
+}
+
 /**
  * List all installed Claude Code plugin roots from the plugin cache.
  * Reads ~/.claude/plugins/installed_plugins.json and ~/.omp/plugins/installed_plugins.json,
@@ -1013,6 +1035,7 @@ export async function listClaudePluginRoots(
  */
 export function clearClaudePluginRootsCache(): void {
 	pluginRootsCache.clear();
+	for (const invalidate of pluginCacheInvalidators) invalidate();
 	preloadedPluginRoots = [...injectedPluginDirRoots];
 	// Re-warm preloaded roots asynchronously so sync LSP config reads stay valid
 	if (lastPreloadHome) {

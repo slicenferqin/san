@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+## [16.3.9] - 2026-07-06
+
+### Changed
+
+- Refined behavior metrics to significantly reduce false positives in profanity, yelling, and anguish detection by excluding technical terms (e.g., "dummy", "trash", "garbage"), neutral punctuation (e.g., dot runs), and single-word capitalization (e.g., filenames or environment variables).
+- Re-categorized frustration interjections (such as "ugh", "argh", and "grr") from profanity to anguish.
+- Improved negation and blame detection to exclude determiners (e.g., "no auto start") and compounds (e.g., "no-op") while adding support for phrases like "why did you" and "makes no sense".
+- Added sad emoticons as a signal for anguish while excluding code-like patterns.
+- Triggered a one-time automatic re-ingestion of sessions on the next database sync to apply the updated metrics.
+
+## [16.3.7] - 2026-07-05
+
+### Changed
+
+- Optimized session-entry lookup and file reading performance by caching file metadata to avoid repeated full-file scans.
+
+## [16.3.1] - 2026-07-02
+
+### Added
+
+- Added a Tools tab to the `omp stats` dashboard (`/#/tools`): per-tool call counts, error rates, result/argument payload sizes, per-model breakdown, and a stacked calls-over-time chart. Token and cost columns attribute each invoking turn's real provider usage evenly across that turn's tool calls. Existing databases re-parse sessions once on the next sync to backfill historical tool calls.
+
+## [16.2.7] - 2026-06-30
+
+### Fixed
+
+- Improved premium request calculation accuracy by correctly accounting for specific model families.
+
+## [16.2.6] - 2026-06-29
+
+### Fixed
+
+- Fixed application crashes and Bun aborts on macOS and when parsing large stats session files, including during `omp --smoke-test` runs, by utilizing a more resilient serial parser and lenient line scanner.
+
+## [16.2.3] - 2026-06-28
+
+### Added
+
+- Support for parsing named advisor transcripts using the `__advisor.<slug>.jsonl` naming convention.
+
 ## [16.2.0] - 2026-06-27
 
 ### Added

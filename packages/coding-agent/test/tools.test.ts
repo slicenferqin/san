@@ -330,6 +330,34 @@ describe("Coding Agent Tools", () => {
 			expect(result.details?.truncation).toBeUndefined();
 		});
 
+		it("treats empty optional selector as omitted for read", async () => {
+			const testFile = path.join(testDir, "read-empty-selector.txt");
+			const content = "alpha\nselector target\nomega";
+			fs.writeFileSync(testFile, content);
+
+			const omitted = getTextOutput(await readTool.execute("test-read-empty-selector-omitted", { path: testFile }));
+			expect(omitted).toContain("alpha");
+			expect(omitted).toContain("selector target");
+			expect(omitted).toContain("omega");
+
+			for (const { name, selector } of [
+				{ name: "empty", selector: "" },
+				{ name: "whitespace", selector: " \t\n " },
+			]) {
+				const withOptionalSelector = getTextOutput(
+					await readTool.execute(`test-read-empty-selector-${name}`, {
+						path: testFile,
+						selector,
+					}),
+				);
+				expect(withOptionalSelector).toBe(omitted);
+			}
+
+			await expect(
+				readTool.execute("test-read-empty-selector-malformed", { path: testFile, selector: "-100" }),
+			).rejects.toThrow(/Invalid selector/);
+		});
+
 		it("truncates lines wider than the read column cap, leaving narrow lines untouched", async () => {
 			const wideLine = "x".repeat(1500);
 			const testFile = path.join(testDir, "wide.txt");
@@ -578,15 +606,27 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("Use :1 to read from the start, or :3 to read the last line.");
 		});
 
-		it("should emit a binary notice instead of mojibake for files with NUL bytes", async () => {
-			const testFile = path.join(testDir, "blob.bin");
-			fs.writeFileSync(testFile, Buffer.from([0x61, 0x62, 0x63, 0x00, 0xff, 0xfe, 0x64, 0x65]));
+		it("should refuse binary files (NUL or invalid UTF-8) instead of emitting mojibake", async () => {
+			const nulFile = path.join(testDir, "blob.bin");
+			fs.writeFileSync(nulFile, Buffer.from([0x61, 0x62, 0x63, 0x00, 0xff, 0xfe, 0x64, 0x65]));
+			// A header with no NUL but invalid UTF-8 (lone 0xFF/0xC0) must also refuse.
+			const invalidUtf8File = path.join(testDir, "font.ttfish");
+			fs.writeFileSync(invalidUtf8File, Buffer.from([0x4d, 0x5a, 0xff, 0xfe, 0xc0, 0xc0, 0x90, 0x91]));
 
-			const result = await readTool.execute("test-call-binary-nul", { path: testFile });
-			const output = getTextOutput(result);
+			for (const file of [nulFile, invalidUtf8File]) {
+				const output = getTextOutput(await readTool.execute("test-call-binary", { path: file }));
+				expect(output).toContain("Cannot read binary file");
+				expect(output).not.toContain("\u0000");
+				expect(output).not.toContain("\uFFFD");
+			}
+		});
 
-			expect(output).toContain("Cannot read binary file");
-			expect(output).toContain("NUL bytes");
+		it("reads a binary file verbatim when :raw is requested", async () => {
+			const testFile = path.join(testDir, "raw-blob.bin");
+			fs.writeFileSync(testFile, Buffer.from([0x61, 0x62, 0x63, 0x00, 0x64, 0x65]));
+
+			const output = getTextOutput(await readTool.execute("test-call-binary-raw", { path: `${testFile}:raw` }));
+			expect(output).not.toContain("Cannot read binary file");
 		});
 
 		it("should reject malformed internal-URL selectors instead of dumping the whole resource", async () => {
@@ -1480,6 +1520,21 @@ function b() {
 			expect(result.details?.requestedTimeoutSeconds).toBe(7200);
 		});
 
+		it("should disable the command deadline when timeout is zero", async () => {
+			vi.spyOn(toolTimeouts, "clampTimeout").mockReturnValue(0.05);
+
+			const result = await bashTool.execute("test-call-timeout-disabled", {
+				command: "printf 'start\\n'; sleep 0.1; printf 'done\\n'",
+				timeout: 0,
+			});
+
+			const output = getTextOutput(result);
+			expect(output).toContain("start");
+			expect(output).toContain("done");
+			expect(result.details?.timeoutDisabled).toBe(true);
+			expect(result.details?.timeoutSeconds).toBeUndefined();
+		});
+
 		it("should respect timeout", async () => {
 			// Reduce the effective timeout through the production clamp seam; the
 			// real subprocess kill-on-timeout path is still exercised, just faster.
@@ -1613,7 +1668,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-11", {
 				pattern: "match",
-				paths: [testFile],
+				path: testFile,
 			});
 
 			const output = getTextOutput(result);
@@ -1622,12 +1677,48 @@ function b() {
 			expect(output).toMatch(/\*2\|match line/);
 		});
 
+		it("treats empty optional selector as omitted for search", async () => {
+			const testFile = path.join(testDir, "grep-empty-selector.txt");
+			fs.writeFileSync(testFile, "before\nneedle empty selector\nbetween\nneedle whitespace selector\nafter");
+
+			const omitted = getTextOutput(
+				await searchTool.execute("test-search-empty-selector-omitted", {
+					pattern: "needle",
+					path: testFile,
+				}),
+			);
+			expect(omitted).toMatch(/\*2\|needle empty selector/);
+			expect(omitted).toMatch(/\*4\|needle whitespace selector/);
+
+			for (const { name, selector } of [
+				{ name: "empty", selector: "" },
+				{ name: "whitespace", selector: " \t\n " },
+			]) {
+				const withOptionalSelector = getTextOutput(
+					await searchTool.execute(`test-search-empty-selector-${name}`, {
+						pattern: "needle",
+						path: testFile,
+						selector,
+					}),
+				);
+				expect(withOptionalSelector).toBe(omitted);
+			}
+
+			await expect(
+				searchTool.execute("test-search-empty-selector-malformed", {
+					pattern: "needle",
+					path: testFile,
+					selector: "not-a-range",
+				}),
+			).rejects.toThrow(/selector "not-a-range" is invalid/);
+		});
+
 		it("flags a zero-match search as contextually useless", async () => {
 			fs.writeFileSync(path.join(testDir, "plain.txt"), "nothing interesting here\n");
 
 			const result = await searchTool.execute("test-call-useless-search", {
 				pattern: "ZZZ_NO_SUCH_TOKEN_999",
-				paths: [testDir],
+				path: testDir,
 			});
 
 			expect(getTextOutput(result)).toContain("No matches found");
@@ -1639,7 +1730,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-useless-search-warn", {
 				pattern: "ZZZ_NO_SUCH_TOKEN_999",
-				paths: [testDir, path.join(testDir, "missing-file.txt")],
+				path: `${testDir}; ${path.join(testDir, "missing-file.txt")}`,
 			});
 
 			expect(getTextOutput(result)).toContain("Skipped missing paths");
@@ -1653,7 +1744,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-11-path-glob", {
 				pattern: "review target",
-				paths: [`${testDir}/schema-review-*.test.ts`],
+				path: `${testDir}/schema-review-*.test.ts`,
 			});
 
 			const output = getTextOutput(result);
@@ -1674,7 +1765,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-11-path-and-glob", {
 				pattern: "providerOptions",
-				paths: [`${packageDir}/ai@6.0.119+*/node_modules/ai/**/*.{d.ts,ts}`],
+				path: `${packageDir}/ai@6.0.119+*/node_modules/ai/**/*.{d.ts,ts}`,
 				gitignore: false,
 			});
 
@@ -1697,7 +1788,7 @@ function b() {
 			);
 			const result = await contextSearchTool.execute("test-call-12", {
 				pattern: "match",
-				paths: [testFile],
+				path: testFile,
 			});
 
 			const output = getTextOutput(result);
@@ -1719,7 +1810,7 @@ function b() {
 			);
 			const result = await noContextSearchTool.execute("test-call-12-gap", {
 				pattern: "match",
-				paths: [testFile],
+				path: testFile,
 			});
 
 			const output = getTextOutput(result);
@@ -1735,13 +1826,13 @@ function b() {
 
 			const first = await searchTool.execute("test-call-12-skip-first", {
 				pattern: "needle",
-				paths: [skipDir],
+				path: skipDir,
 			});
 			expect(first.details?.fileCount).toBe(4);
 
 			const second = await searchTool.execute("test-call-12-skip-page", {
 				pattern: "needle",
-				paths: [skipDir],
+				path: skipDir,
 				skip: 2,
 			});
 			const secondOutput = getTextOutput(second);
@@ -1759,14 +1850,14 @@ function b() {
 			// 1. By default, search is case-sensitive (only matches the lowercase pattern "hello")
 			const defaultResult = await searchTool.execute("test-case-default", {
 				pattern: "hello",
-				paths: [caseFile],
+				path: caseFile,
 			});
 			expect(defaultResult.details?.matchCount).toBe(1);
 
 			// 2. With case: true, search is case-sensitive (only matches "hello")
 			const sensitiveResult = await searchTool.execute("test-case-sensitive", {
 				pattern: "hello",
-				paths: [caseFile],
+				path: caseFile,
 				case: true,
 			});
 			expect(sensitiveResult.details?.matchCount).toBe(1);
@@ -1774,7 +1865,7 @@ function b() {
 			// 3. With case: false, search is case-insensitive (matches both "Hello World" and "hello world")
 			const insensitiveResult = await searchTool.execute("test-case-insensitive", {
 				pattern: "hello",
-				paths: [caseFile],
+				path: caseFile,
 				case: false,
 			});
 			expect(insensitiveResult.details?.matchCount).toBe(2);
@@ -1788,7 +1879,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-13-round-robin", {
 				pattern: "needle",
-				paths: [testDir],
+				path: testDir,
 			});
 
 			const output = getTextOutput(result);
@@ -1808,7 +1899,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-14-grouped-headings", {
 				pattern: "needle",
-				paths: [testDir],
+				path: testDir,
 			});
 
 			const output = getTextOutput(result);
@@ -1832,7 +1923,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-15-directory-headings", {
 				pattern: "Claude Opus",
-				paths: [testDir],
+				path: testDir,
 			});
 
 			const output = getTextOutput(result);
@@ -1851,7 +1942,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-15-gitignore-default", {
 				pattern: "needle",
-				paths: [scenarioDir],
+				path: scenarioDir,
 			});
 
 			const output = getTextOutput(result);
@@ -1869,7 +1960,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-16-gitignore-off", {
 				pattern: "needle",
-				paths: [scenarioDir],
+				path: scenarioDir,
 				gitignore: false,
 			});
 
@@ -1891,7 +1982,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-16-fifo-dir", {
 				pattern: "needle",
-				paths: [scenarioDir],
+				path: scenarioDir,
 				gitignore: false,
 			});
 
@@ -1913,7 +2004,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-14-file-limit", {
 				pattern: "needle",
-				paths: [limitDir],
+				path: limitDir,
 			});
 
 			const output = getTextOutput(result);
@@ -1936,7 +2027,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-14-per-file-cap", {
 				pattern: "needle",
-				paths: [concDir],
+				path: concDir,
 			});
 
 			const hotCount = result.details?.fileMatches?.find(entry => entry.path.endsWith("hot.txt"))?.count ?? 0;
@@ -1951,7 +2042,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-14-single-file-cap", {
 				pattern: "needle",
-				paths: [single],
+				path: single,
 			});
 
 			expect(result.details?.matchCount).toBe(count);
@@ -1966,7 +2057,7 @@ function b() {
 			fs.writeFileSync(testFile, "single");
 
 			const result = await findTool.execute("test-call-13a", {
-				paths: [testFile],
+				path: testFile,
 			});
 
 			const outputLines = getTextOutput(result)
@@ -1984,7 +2075,7 @@ function b() {
 			fs.writeFileSync(path.join(testDir, "visible.txt"), "visible");
 
 			const result = await findTool.execute("test-call-13", {
-				paths: [`${testDir}/**/*.txt`],
+				path: `${testDir}/**/*.txt`,
 				hidden: true,
 			});
 
@@ -2000,7 +2091,7 @@ function b() {
 			fs.writeFileSync(path.join(testDir, "kept.txt"), "kept");
 
 			const result = await findTool.execute("test-call-14", {
-				paths: [`${testDir}/**/*.txt`],
+				path: `${testDir}/**/*.txt`,
 			});
 
 			const output = getTextOutput(result);
@@ -2025,7 +2116,7 @@ function b() {
 			fs.utimesSync(newerFile, newerTime, newerTime);
 
 			const result = await findTool.execute("test-call-14b", {
-				paths: [`${testDir}/**/auth-actions.spec.ts`],
+				path: `${testDir}/**/auth-actions.spec.ts`,
 			});
 
 			expect(result.details?.files).toEqual(["z/auth-actions.spec.ts", "a/auth-actions.spec.ts"]);
@@ -2037,7 +2128,7 @@ function b() {
 			fs.writeFileSync(path.join(nestedDir, "daemon-telemetry.ts"), "telemetry\n");
 
 			const result = await findTool.execute("test-call-14c", {
-				paths: ["apps/daemon/src/**/daemon-telemetry.ts"],
+				path: "apps/daemon/src/**/daemon-telemetry.ts",
 			});
 
 			expect(result.details?.files).toEqual(["apps/daemon/src/telemetry/daemon-telemetry.ts"]);
@@ -2052,7 +2143,7 @@ function b() {
 			fs.writeFileSync(path.join(clientDir, "client.ts"), "client\n");
 
 			const result = await findTool.execute("test-call-14e", {
-				paths: ["apps/daemon/src/**/*.ts", "apps/client/src/**/*.ts"],
+				path: JSON.stringify(["apps/daemon/src/**/*.ts", "apps/client/src/**/*.ts"]),
 			});
 
 			const files = (result.details?.files ?? []).slice().sort();
@@ -2068,7 +2159,7 @@ function b() {
 
 			const startedAt = performance.now();
 			const result = await findTool.execute("test-call-14d", {
-				paths: ["**/.env*"],
+				path: "**/.env*",
 			});
 			const elapsedMs = performance.now() - startedAt;
 
@@ -2086,7 +2177,7 @@ function b() {
 			fs.writeFileSync(path.join(testDir, "pkg", "nested", "deep.txt"), "d");
 
 			const result = await findTool.execute("test-call-14f", {
-				paths: [`${testDir}/pkg/**/*`],
+				path: `${testDir}/pkg/**/*`,
 			});
 
 			const files = (result.details?.files ?? []).slice().sort();
@@ -2099,7 +2190,7 @@ function b() {
 			fs.writeFileSync(path.join(testDir, "alpha", "tests", "a.ts"), "a");
 
 			const result = await findTool.execute("test-call-14g", {
-				paths: [`${testDir}/**/tests`],
+				path: `${testDir}/**/tests`,
 			});
 
 			const files = (result.details?.files ?? []).slice().sort();
@@ -2114,7 +2205,7 @@ function b() {
 			fs.writeFileSync(path.join(sub, "nested.tsx"), "n");
 
 			const result = await findTool.execute("test-call-14h", {
-				paths: [`${dir}/*.tsx`],
+				path: `${dir}/*.tsx`,
 			});
 
 			const files = (result.details?.files ?? []).slice().sort();

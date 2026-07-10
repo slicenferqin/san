@@ -1,6 +1,6 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as fs from "node:fs";
-import { $env, isBunTestRuntime, isTerminalHeadless, logger } from "@oh-my-pi/pi-utils";
+import { $env, isBunTestRuntime, isTerminalHeadless, logger, postmortem } from "@oh-my-pi/pi-utils";
 import { setKittyProtocolActive } from "./keys";
 import { StdinBuffer } from "./stdin-buffer";
 import {
@@ -33,6 +33,11 @@ export function resolveHangulCompatibilityJamoWidthFromTerminalIdentity(
 		return 2;
 	}
 	return "platform";
+}
+
+function shouldEnableModifyOtherKeysFallback(env: NodeJS.ProcessEnv = Bun.env): boolean {
+	if (!env.SSH_CONNECTION && !env.SSH_TTY && !env.SSH_CLIENT) return true;
+	return TERMINAL.id !== "base" && TERMINAL.id !== "trueColor";
 }
 
 /**
@@ -156,6 +161,15 @@ let terminalEverStarted = false;
 // jumps to the viewport home, dropping the parent shell prompt on top of the
 // dead frame after exit.
 let altScreenActive = false;
+let terminalRestoreRegistered = false;
+
+function registerPostmortemTerminalRestore(): void {
+	if (terminalRestoreRegistered) return;
+	terminalRestoreRegistered = true;
+	postmortem.register("terminal-restore", () => {
+		emergencyTerminalRestore();
+	});
+}
 
 /** Record alternate-screen state (called by the TUI on `?1049h`/`?1049l` writes). */
 export function setAltScreenActive(active: boolean): void {
@@ -336,6 +350,16 @@ export interface Terminal {
 	// so the TUI re-pushes this after entering the alternate screen.
 	get kittyEnableSequence(): string | null;
 
+	// The active modified-key reporting sequence to reassert on alternate-screen
+	// entry, or null when no enhanced keyboard mode is active. Optional so custom
+	// Terminals built against older pi-tui versions keep working.
+	readonly keyboardEnhancementEnterSequence?: string | null;
+
+	// The sequence that cleanly disables the active enhanced keyboard mode on
+	// alternate-screen exit, or null when no exit handshake is required. Optional
+	// so custom Terminals built against older pi-tui versions keep working.
+	readonly keyboardEnhancementExitSequence?: string | null;
+
 	// Cursor positioning (relative to current position)
 	moveBy(lines: number): void; // Move cursor up (negative) or down (positive) by N lines
 
@@ -358,6 +382,8 @@ export interface Terminal {
 	 * Register a callback for terminal appearance (dark/light) changes.
 	 * Detection uses OSC 11 background color query with Mode 2031 as a change trigger.
 	 * Fires when the detected appearance changes, including the initial detection.
+	 * Subscribers registered after detection are invoked immediately with the
+	 * already-detected appearance so late subscribers never miss it.
 	 */
 	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void;
 	/** The last detected terminal appearance, or undefined if not yet known. */
@@ -472,12 +498,37 @@ export class ProcessTerminal implements Terminal {
 		return this.#kittyProtocolActive ? this.#kittyEnableSeq : null;
 	}
 
+	get keyboardEnhancementEnterSequence(): string | null {
+		if (this.#kittyProtocolActive) return this.#kittyEnableSeq;
+		return this.#modifyOtherKeysActive ? "\x1b[>4;2m" : null;
+	}
+
+	get keyboardEnhancementExitSequence(): string | null {
+		// kitty is a stack push (per-screen), so the matching pop balances alt-screen
+		// entry. xterm modifyOtherKeys is a single global flag with no per-screen
+		// stack — emitting `>4;0m` here would clear it on the normal screen too,
+		// breaking the composer between overlays. terminal.stop() still disables it
+		// globally on graceful exit; the emergency-restore path mirrors that.
+		return this.#kittyProtocolActive ? "\x1b[<u" : null;
+	}
+
 	get appearance(): TerminalAppearance | undefined {
 		return this.#appearance;
 	}
 
 	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void {
 		this.#appearanceCallbacks.push(callback);
+		// Replay an already-detected appearance: the startup OSC 11 response can
+		// arrive before consumers (e.g. the theme bridge) subscribe, and the
+		// dedup in #handleOsc11Response would otherwise suppress the value for
+		// them forever (#4731).
+		if (this.#appearance) {
+			try {
+				callback(this.#appearance);
+			} catch {
+				/* ignore callback errors */
+			}
+		}
 	}
 
 	onPrivateModeReport(callback: (mode: number, supported: boolean) => void): void {
@@ -494,6 +545,7 @@ export class ProcessTerminal implements Terminal {
 		// escapes never reach the developer's terminal during `bun test`.
 		this.#headless = isTerminalHeadless();
 		if (this.#headless) return;
+		registerPostmortemTerminalRestore();
 
 		// Register for emergency cleanup
 		activeTerminal = this;
@@ -665,10 +717,33 @@ export class ProcessTerminal implements Terminal {
 		const decrpmResponsePattern = /^\x1b\[\?(\d+);(\d+)\$y$/;
 
 		// In-band resize report (DEC mode 2048): \x1b[48;rows;cols;yPixels;xPixels t
-		const inBandResizePattern = /^\x1b\[48;(\d+);(\d+);(\d+);(\d+)t$/;
+		// Any field may carry `:`-separated subparameters, which clients MUST
+		// ignore per spec (#4748): capture the leading digits of each field and
+		// skip the subparameter tail instead of dropping the whole report.
+		const inBandResizePattern = /^\x1b\[48;(\d+)(?::[\d:]*)?;(\d+)(?::[\d:]*)?;(\d+)(?::[\d:]*)?;(\d+)(?::[\d:]*)?t$/;
 
-		// Forward individual sequences to the input handler
 		this.#stdinBuffer.on("data", (sequence: string) => {
+			// Fast path for plain-text bytes: every escape-probe regex below
+			// anchors on `^\x1b…`, so a byte that is not ESC can never match. A
+			// non-bracketed paste of N printable chars arrives as N per-scalar
+			// `data` events; running the full probe suite per event turns a
+			// 100 KB paste into ~600K regex executions and blocks the event
+			// loop. Skip straight to the input handler when no reassembly
+			// buffer is holding state that a non-ESC continuation could feed
+			// (issue #4073 case C).
+			if (
+				(sequence.length === 0 || sequence.charCodeAt(0) !== 0x1b) &&
+				this.#privateCsiResponseBuffer.length === 0 &&
+				this.#inBandResizeBuffer.length === 0 &&
+				this.#osc11ResponseBuffer.length === 0 &&
+				this.#osc99ResponseBuffer.length === 0
+			) {
+				if (this.#inputHandler) {
+					this.#inputHandler(sequence);
+				}
+				return;
+			}
+
 			// Reassemble split private CSI responses (DA1, kitty keyboard, Mode 2031).
 			// When the terminal writes the response slowly enough that the StdinBuffer's
 			// flush timeout elapses mid-sequence, the prefix `\x1b[?<digits>` arrives as
@@ -717,7 +792,7 @@ export class ProcessTerminal implements Terminal {
 			// reassembled sequence that turns out not to be a resize report (e.g. a
 			// split kitty `\x1b[48;…u` for a digit key) is forwarded to the input
 			// handler rather than dropped.
-			const inBandResizePartialPattern = /^\x1b\[4[\d;]*$/;
+			const inBandResizePartialPattern = /^\x1b\[4[\d;:]*$/;
 			const isInBandResizePartial = this.#inBandResizeActive && inBandResizePartialPattern.test(sequence);
 			if (this.#inBandResizeBuffer && sequence.startsWith("\x1b")) {
 				// A new escape interrupted the partial; the stale partial is
@@ -796,13 +871,13 @@ export class ProcessTerminal implements Terminal {
 						break;
 					}
 					case "keyboard": {
-						// Keyboard probe sentinel: kitty reply never arrived → fall back to modifyOtherKeys.
-						if (!this.#kittyProtocolActive && !this.#modifyOtherKeysActive && this.#modifyOtherKeysTimeout) {
+						// Keyboard probe sentinel: kitty reply never arrived → fall back to modifyOtherKeys
+						// only where the resolved terminal is known enough to tolerate it.
+						if (this.#modifyOtherKeysTimeout) {
 							clearTimeout(this.#modifyOtherKeysTimeout);
 							this.#modifyOtherKeysTimeout = undefined;
-							this.#safeWrite("\x1b[>4;2m");
-							this.#modifyOtherKeysActive = true;
 						}
+						this.#enableModifyOtherKeysFallback();
 						break;
 					}
 					case "osc99Probe": {
@@ -1010,6 +1085,13 @@ export class ProcessTerminal implements Terminal {
 		}
 	}
 
+	#enableModifyOtherKeysFallback(): void {
+		if (this.#kittyProtocolActive || this.#modifyOtherKeysActive) return;
+		if (!shouldEnableModifyOtherKeysFallback()) return;
+		this.#safeWrite("\x1b[>4;2m");
+		this.#modifyOtherKeysActive = true;
+	}
+
 	/**
 	 * Query terminal for Kitty keyboard protocol support and enable if available.
 	 *
@@ -1029,11 +1111,7 @@ export class ProcessTerminal implements Terminal {
 		this.#safeWrite("\x1b[?u\x1b[c");
 		this.#modifyOtherKeysTimeout = setTimeout(() => {
 			this.#modifyOtherKeysTimeout = undefined;
-			if (this.#kittyProtocolActive || this.#modifyOtherKeysActive) {
-				return;
-			}
-			this.#safeWrite("\x1b[>4;2m");
-			this.#modifyOtherKeysActive = true;
+			this.#enableModifyOtherKeysFallback();
 		}, 150);
 	}
 
@@ -1123,9 +1201,9 @@ export class ProcessTerminal implements Terminal {
 	 * `rows` before the `resize` event fires, so they are authoritative for the
 	 * new cell geometry. A cached DEC 2048 report can be stale: the matching
 	 * post-resize report may be dropped (split across stdin reads past the flush
-	 * window) or carry `:`-subparameters the parser skips, leaving the getters
-	 * pinned to the old size — which freezes the rendered width because the
-	 * renderer reflows against {@link columns}/{@link rows}, not the live OS
+	 * window, or interrupted by another escape mid-reassembly), leaving the
+	 * getters pinned to the old size — which freezes the rendered width because
+	 * the renderer reflows against {@link columns}/{@link rows}, not the live OS
 	 * value. Drop a cached dimension that disagrees with the live OS value; the
 	 * terminal's next valid in-band report re-seeds pixel sizing.
 	 */

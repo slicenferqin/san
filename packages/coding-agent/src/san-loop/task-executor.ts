@@ -32,7 +32,7 @@ interface TaskExecutorSession {
 	settings: AgentSession["settings"];
 	modelRegistry: AgentSession["modelRegistry"];
 	sessionFile?: string;
-	serviceTier?: AgentSession["serviceTier"];
+	serviceTierByFamily?: AgentSession["serviceTierByFamily"];
 	getEvalSessionId?: AgentSession["getEvalSessionId"];
 	getAgentId?: AgentSession["getAgentId"];
 	getHindsightSessionState?: AgentSession["getHindsightSessionState"];
@@ -861,7 +861,7 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 				parentToolCallId: options.parentToolCallId,
 				modelOverride: modelOverrideForRole(role),
 				parentActiveModelPattern: undefined,
-				parentServiceTier: options.session.serviceTier ?? null,
+				parentServiceTier: options.session.serviceTierByFamily ?? null,
 				parentHindsightSessionState: options.session.getHindsightSessionState?.(),
 				parentMnemopiSessionState: options.session.getMnemopiSessionState?.(),
 				parentEvalSessionId: options.session.getEvalSessionId?.() ?? undefined,

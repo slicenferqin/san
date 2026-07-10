@@ -34,6 +34,7 @@ import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TranscriptBlock } from "../../modes/components/transcript-container";
 import { createUsageRowBlock } from "../../modes/components/usage-row";
 import { UserMessageComponent } from "../../modes/components/user-message";
+import { decodeStreamedToolArgs, streamingStringKeysForTool } from "../../modes/controllers/tool-args-reveal";
 import { materializeImageReferenceLinksSync } from "../../modes/image-references";
 import { theme } from "../../modes/theme/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "../../modes/types";
@@ -45,14 +46,16 @@ import {
 	type SkillPromptDetails,
 } from "../../session/messages";
 import type { SessionContext } from "../../session/session-context";
+import { buildSkillCommandPrompt, invokeSkillCommandFromText, isKnownSkillCommand } from "../skill-command";
 import { createAssistantMessageComponent } from "./interactive-context-helpers";
 import {
 	assistantHasVisibleContent,
+	assistantUsageIsBilled,
 	buildAsyncResultBlock,
 	buildFileMentionBlock,
 	buildIrcMessageCard,
 	normalizeToolArgs,
-	resolveAssistantErrorMessage,
+	resolveAssistantErrorPresentation,
 } from "./transcript-render-helpers";
 
 type TextBlock = { type: "text"; text: string };
@@ -295,12 +298,16 @@ export class UiHelpers {
 		// read run so the row sits under it. Mirrors the live path, where the read
 		// group is created during streaming and the row is appended below it.
 		let pendingUsage: Usage | undefined;
+		let pendingUsageDuration: number | undefined;
+		let pendingUsageTtft: number | undefined;
 		const flushPendingUsage = () => {
 			if (!pendingUsage) return;
 			readGroup?.seal();
 			readGroup = null;
-			this.ctx.chatContainer.addChild(createUsageRowBlock(pendingUsage));
+			this.ctx.chatContainer.addChild(createUsageRowBlock(pendingUsage, pendingUsageDuration, pendingUsageTtft));
 			pendingUsage = undefined;
+			pendingUsageDuration = undefined;
+			pendingUsageTtft = undefined;
 		};
 		// Rebuild-time mirror of the event controller's displaceable-poll
 		// bookkeeping: a `job` poll that found every watched job still running is
@@ -311,7 +318,11 @@ export class UiHelpers {
 			const previous = waitingPoll;
 			if (!previous) return;
 			waitingPoll = null;
-			if (nextToolName === "job" && previous.isDisplaceableBlock()) {
+			if (
+				nextToolName === "job" &&
+				previous.isDisplaceableBlock() &&
+				this.ctx.chatContainer.isBlockUncommitted(previous)
+			) {
 				this.ctx.chatContainer.removeChild(previous);
 			}
 			// Sealing freezes the block and stops the waiting-poll spinner that
@@ -328,7 +339,9 @@ export class UiHelpers {
 			}
 			if (previous.canBeDisplacedBy(nextToolName)) {
 				todoSnapshot = null;
-				this.ctx.chatContainer.removeChild(previous);
+				if (this.ctx.chatContainer.isBlockUncommitted(previous)) {
+					this.ctx.chatContainer.removeChild(previous);
+				}
 				previous.seal();
 				return;
 			}
@@ -366,10 +379,9 @@ export class UiHelpers {
 					readGroup?.seal();
 					readGroup = null;
 				}
-				const { hasErrorStop, errorMessage } = resolveAssistantErrorMessage(
-					message,
-					this.ctx.viewSession.retryAttempt,
-				);
+				const errorPresentation = resolveAssistantErrorPresentation(message, this.ctx.viewSession.retryAttempt);
+				const hasErrorStop = errorPresentation.kind === "full";
+				const errorMessage = hasErrorStop ? errorPresentation.text : null;
 
 				// Render tool call components
 				for (const content of message.content) {
@@ -411,8 +423,18 @@ export class UiHelpers {
 					readGroup = null;
 					const tool = this.ctx.viewSession.getToolByName(content.name);
 					const partialJson = getStreamingPartialJson(content);
+					// Mid-stream rebuild (theme change, settings, focus replay): decode
+					// display args from the raw stream exactly like the live reveal path.
+					// The provider-parsed `arguments` lag the stream by up to a throttled
+					// parse window, so spreading them alone would freeze a long write/edit
+					// preview at its last full parse.
+					const rawInput = content.customWireName !== undefined;
 					const renderArgs = partialJson
-						? { ...content.arguments, __partialJson: partialJson }
+						? decodeStreamedToolArgs(partialJson, {
+								rawInput,
+								fullArgs: content.arguments,
+								streamingStringKeys: streamingStringKeysForTool(content.name, rawInput),
+							})
 						: content.arguments;
 					const component = new ToolExecutionComponent(
 						content.name,
@@ -442,7 +464,12 @@ export class UiHelpers {
 						this.ctx.pendingTools.set(content.id, component);
 					}
 				}
-				pendingUsage = this.ctx.settings.get("display.showTokenUsage") ? message.usage : undefined;
+				pendingUsage =
+					this.ctx.settings.get("display.showTokenUsage") && assistantUsageIsBilled(message.usage)
+						? message.usage
+						: undefined;
+				pendingUsageDuration = message.duration;
+				pendingUsageTtft = message.ttft;
 			} else if (message.role === "toolResult") {
 				const pendingReadComponent = this.ctx.pendingTools.get(message.toolCallId);
 				const isReadGroupResult =
@@ -554,7 +581,7 @@ export class UiHelpers {
 		} else {
 			this.ctx.resetTranscript();
 		}
-		this.ctx.pendingMessagesContainer.clear();
+		this.ctx.pendingMessagesContainer.disposeChildren();
 		this.ctx.pendingBashComponents = [];
 		this.ctx.pendingPythonComponents = [];
 
@@ -620,7 +647,7 @@ export class UiHelpers {
 	}
 
 	updatePendingMessagesDisplay(): void {
-		this.ctx.pendingMessagesContainer.clear();
+		this.ctx.pendingMessagesContainer.disposeChildren();
 		const queuedMessages = this.ctx.viewSession.getQueuedMessages() as QueuedMessages;
 
 		const steeringMessages: Array<{ message: string; label: string }> = [];
@@ -667,6 +694,15 @@ export class UiHelpers {
 	}
 
 	async #deliverQueuedMessage(message: CompactionQueuedMessage): Promise<void> {
+		if (
+			await invokeSkillCommandFromText(this.ctx, message.text, message.mode, {
+				propagateErrors: true,
+				queueOnly: true,
+				images: message.images,
+			})
+		) {
+			return;
+		}
 		if (this.ctx.isKnownSlashCommand(message.text)) {
 			await this.ctx.session.prompt(message.text);
 			return;
@@ -754,29 +790,37 @@ export class UiHelpers {
 				await this.#deliverQueuedMessage(message);
 			}
 
-			// Pass streamingBehavior so that if the session is still streaming when
-			// compaction-end fires (race window between isStreaming flipping false and
-			// the event landing here), prompt() routes the message into the steer/
-			// follow-up queue instead of throwing AgentBusyError. When the session is
-			// genuinely idle, streamingBehavior is ignored and a fresh prompt runs as
-			// before. This keeps the steer preview honest: if delivery has to be
-			// deferred, the message lands in the same queue every other consumer
-			// (Alt+Up dequeue, post-stream drain) already drains, instead of being
-			// stranded in compactionQueuedMessages with no drainer.
-			//
-			// firstPrompt is fire-and-forget — its rejection is funneled through
-			// `restoreQueue` rather than rethrown, so we use the primitive
-			// recordLocalSubmission and dispose manually in the catch.
-			const disposeFirstPrompt = this.ctx.recordLocalSubmission(firstPrompt.text, firstPrompt.images?.length ?? 0);
-			const promptPromise = this.ctx.session
-				.prompt(firstPrompt.text, {
-					streamingBehavior: firstPrompt.mode === "followUp" ? "followUp" : "steer",
-					images: firstPrompt.images,
-				})
-				.catch((error: unknown) => {
-					disposeFirstPrompt();
-					restoreQueue(error);
-				});
+			// First prompt is fire-and-forget — its rejection is funneled through
+			// `restoreQueue` rather than rethrown. Plain prompts use primitive
+			// recordLocalSubmission and dispose manually in the catch. Skill prompts
+			// are rebuilt as user-attributed custom messages so queued `/skill:` text
+			// is not sent as a literal prompt after compaction.
+			let promptPromise: Promise<unknown>;
+			if (isKnownSkillCommand(this.ctx, firstPrompt.text)) {
+				const built = await buildSkillCommandPrompt(
+					this.ctx,
+					firstPrompt.text,
+					firstPrompt.mode,
+					firstPrompt.images,
+				);
+				promptPromise = built
+					? this.ctx.session.promptCustomMessage(built.message, built.options).catch(restoreQueue)
+					: Promise.resolve();
+			} else {
+				const disposeFirstPrompt = this.ctx.recordLocalSubmission(
+					firstPrompt.text,
+					firstPrompt.images?.length ?? 0,
+				);
+				promptPromise = this.ctx.session
+					.prompt(firstPrompt.text, {
+						streamingBehavior: firstPrompt.mode === "followUp" ? "followUp" : "steer",
+						images: firstPrompt.images,
+					})
+					.catch((error: unknown) => {
+						disposeFirstPrompt();
+						restoreQueue(error);
+					});
+			}
 
 			for (const message of rest) {
 				await this.#deliverQueuedMessage(message);

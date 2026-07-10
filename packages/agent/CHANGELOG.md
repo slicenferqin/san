@@ -2,6 +2,73 @@
 
 ## [Unreleased]
 
+## [16.3.12] - 2026-07-08
+
+### Added
+
+- Added per-tool abort metadata so stream-wide aborts can label matching tool-call placeholders separately from unaffected sibling calls ([#2783](https://github.com/can1357/oh-my-pi/issues/2783)).
+
+### Fixed
+
+- Fixed handoff generation retrying with `toolChoice: "auto"` when custom OpenAI-compatible providers reject `toolChoice: "none"` with an auto-only 400. ([#4715](https://github.com/can1357/oh-my-pi/issues/4715))
+- Fixed generic remote compaction against OpenAI-compatible `/chat/completions` endpoints (for example llama.cpp `openai-completions`) by sending chat messages instead of the custom `{ systemPrompt, prompt }` summarizer payload. ([#4630](https://github.com/can1357/oh-my-pi/issues/4630))
+
+## [16.3.7] - 2026-07-05
+
+### Fixed
+
+- Fixed an issue where provider orchestration tokens were incorrectly included in context token calculations, which could trigger premature context auto-compaction and promotion.
+
+## [16.3.3] - 2026-07-02
+
+### Changed
+
+- Enabled dynamic model resolution to support seamless mid-run model switching.
+
+### Fixed
+
+- Fixed an issue in the Cursor agent where assistant messages containing native tool calls could duplicate text blocks on replay.
+- Fixed a bug where Cursor agent exec-channel tools (such as bash, write, and delete) were executed a second time after server-side execution.
+- Improved error handling for tool calls interrupted by upstream provider stream errors, distinguishing transport/provider failures from local tool execution failures in the CLI, events, and messages.
+
+## [16.3.0] - 2026-07-02
+
+### Added
+
+- Added support for Anthropic fallback content blocks in agent-loop assistant messages, ensuring they are preserved across session persistence and event fanout.
+
+### Fixed
+
+- Fixed an issue where legacy steering messages were prematurely consumed and dropped during in-flight tool execution polls.
+- Fixed an issue where skipped tool results in queued messages were incorrectly treated as completed, preventing necessary retries.
+- Improved branch summaries to preserve informative tool results from abandoned branches while filtering out redundant output.
+- Fixed interruptible tool waits to properly abort on host-provided IRC interrupts in addition to user steering.
+- Fixed schema validation errors for closed union tools by correctly injecting intent tracing into each variant.
+- Fixed token compaction reserve-budget logic to honor explicit reserveTokens values equal to the built-in default, and clamped the fallback reserve to at least one token for very small context windows.
+
+## [16.2.4] - 2026-06-28
+
+### Changed
+
+- Improved the reliability of remote compaction by introducing transient error retries, configurable timeouts, and immediate termination upon user-initiated aborts.
+
+### Fixed
+
+- Fixed an issue where assistant responses and encrypted reasoning could be lost during local history trimming prior to remote compaction.
+- Fixed type compatibility for hosts with title audit entries by adding support for `title_change` session metadata.
+- Fixed an issue where transient stream read failures after a completed tool call were treated as terminal errors, allowing the agent to successfully execute the tool and continue the turn.
+
+## [16.2.3] - 2026-06-28
+
+### Changed
+
+- Enabled V2 streaming remote compaction by default for compatible AI and OpenAI-compatible models, which forwards full conversation history to the provider and supports session routing, prompt caching, provider-native tool history replay, transient error retries, and configurable timeouts.
+
+### Fixed
+
+- Fixed an issue where assistant responses and encrypted reasoning could be lost during local history trimming.
+- Added `title_change` session metadata to the compaction entry type union to maintain type compatibility for hosts with title audit entries.
+
 ## [16.2.2] - 2026-06-27
 
 ### Added

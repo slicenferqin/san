@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Effort } from "@oh-my-pi/pi-ai";
+import { Effort, type FetchImpl } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { ModelRegistry, type ProviderConfigInput } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession, type ExtensionFactory } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -21,6 +23,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	});
 
 	afterEach(() => {
+		vi.restoreAllMocks();
 		for (const authStorage of authStoragesToClose) {
 			authStorage.close();
 		}
@@ -58,7 +61,28 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		});
 	};
 
-	async function buildSessionOptions(modelPattern: string) {
+	const dynamicOnlyProviderConfig: ProviderConfigInput = {
+		baseUrl: "https://runtime.example.com/v1",
+		apiKey: "RUNTIME_KEY",
+		api: "openai-completions",
+		fetchDynamicModels: async () => [
+			{
+				id: "cached-runtime-model",
+				name: "Cached Runtime Model",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 128000,
+				maxTokens: 8192,
+			},
+		],
+	};
+
+	const dynamicOnlyProviderExtension: ExtensionFactory = pi => {
+		pi.registerProvider("runtime-provider", dynamicOnlyProviderConfig);
+	};
+
+	async function buildSessionOptions(modelPattern: string | string[]) {
 		// Pass an explicit ModelRegistry so createAgentSession skips its implicit
 		// ModelRegistry.refreshInBackground() — a network model-discovery pass
 		// (~250ms/session) that contributes nothing here: the model resolves from
@@ -96,6 +120,42 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		expect(modelFallbackMessage).toBeUndefined();
 	});
 
+	test("resolves explicit dynamic-only modelPattern from fresh runtime cache", async () => {
+		const authStorage = await AuthStorage.create(path.join(tempDir, "dynamic-auth.db"));
+		authStoragesToClose.push(authStorage);
+		const modelsPath = path.join(tempDir, "models.yml");
+		const primerRegistry = new ModelRegistry(authStorage, modelsPath);
+		primerRegistry.registerProvider("runtime-provider", dynamicOnlyProviderConfig, "ext://runtime");
+		await primerRegistry.refreshRuntimeProviders("online");
+		const modelRegistry = new ModelRegistry(authStorage, modelsPath);
+
+		const { session, modelFallbackMessage } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			authStorage,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			disableExtensionDiscovery: true,
+			extensions: [dynamicOnlyProviderExtension],
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+			modelPattern: "runtime-provider/cached-runtime-model",
+		});
+
+		try {
+			expect(session.model?.provider).toBe("runtime-provider");
+			expect(session.model?.id).toBe("cached-runtime-model");
+			expect(modelFallbackMessage).toBeUndefined();
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	test("does not silently fallback when explicit modelPattern is unresolved", async () => {
 		const { session, modelFallbackMessage } = await createAgentSession(
 			await buildSessionOptions("missing-provider/missing-model"),
@@ -103,6 +163,103 @@ describe("createAgentSession deferred model pattern resolution", () => {
 
 		expect(session.model).toBeUndefined();
 		expect(modelFallbackMessage).toBe('Model "missing-provider/missing-model" not found');
+	});
+
+	test("uses auth fallback when deferred subagent modelPattern resolves without working credentials", async () => {
+		const parentModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!parentModel) {
+			throw new Error("Expected bundled anthropic parent model");
+		}
+		const authStorage = await AuthStorage.create(path.join(tempDir, "fallback-auth.db"));
+		authStoragesToClose.push(authStorage);
+		authStorage.setRuntimeApiKey(parentModel.provider, "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "fallback-models.yml"));
+		const getApiKeySpy = vi.spyOn(modelRegistry, "getApiKey").mockImplementation(async requested => {
+			if (requested.provider === "runtime-provider") return undefined;
+			if (requested.provider === parentModel.provider) return "test-key";
+			return undefined;
+		});
+		const { session, modelFallbackMessage } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			authStorage,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			disableExtensionDiscovery: true,
+			extensions: [providerExtension],
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+			modelPattern: "runtime-provider/runtime-model",
+			modelPatternAuthFallback: `${parentModel.provider}/${parentModel.id}`,
+		});
+
+		try {
+			expect(session.model?.provider).toBe(parentModel.provider);
+			expect(session.model?.id).toBe(parentModel.id);
+			expect(modelFallbackMessage).toBeUndefined();
+		} finally {
+			await session.dispose();
+			getApiKeySpy.mockRestore();
+		}
+	});
+
+	test("resolves deferred role-alias modelPattern after extension providers register", async () => {
+		const settings = Settings.isolated();
+		settings.setModelRole("smol", "runtime-provider/runtime-model");
+
+		const { session, modelFallbackMessage } = await createAgentSession({
+			...(await buildSessionOptions("pi/smol")),
+			settings,
+		});
+
+		try {
+			expect(session.model?.provider).toBe("runtime-provider");
+			expect(session.model?.id).toBe("runtime-model");
+			expect(modelFallbackMessage).toBeUndefined();
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("installs fallback chain for remaining deferred subagent modelPattern candidates", async () => {
+		const { session } = await createAgentSession({
+			...(await buildSessionOptions(["runtime-provider/runtime-model", "runtime-provider/runtime-reasoning-model"])),
+			modelPatternFallbackRole: "subagent:deferred",
+		});
+
+		try {
+			expect(session.model?.provider).toBe("runtime-provider");
+			expect(session.model?.id).toBe("runtime-model");
+			expect(session.settings.getModelRole("subagent:deferred")).toBe("runtime-provider/runtime-model");
+			expect(session.settings.get("retry.fallbackChains")["subagent:deferred"]).toEqual([
+				"runtime-provider/runtime-reasoning-model",
+			]);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("splits deferred comma-delimited modelPattern and installs fallback chain", async () => {
+		const { session } = await createAgentSession({
+			...(await buildSessionOptions("runtime-provider/runtime-model,runtime-provider/runtime-reasoning-model")),
+			modelPatternFallbackRole: "subagent:deferred",
+		});
+
+		try {
+			expect(session.model?.provider).toBe("runtime-provider");
+			expect(session.model?.id).toBe("runtime-model");
+			expect(session.settings.getModelRole("subagent:deferred")).toBe("runtime-provider/runtime-model");
+			expect(session.settings.get("retry.fallbackChains")["subagent:deferred"]).toEqual([
+				"runtime-provider/runtime-reasoning-model",
+			]);
+		} finally {
+			await session.dispose();
+		}
 	});
 
 	test("does not apply default role thinking override when modelPattern is explicit", async () => {
@@ -176,6 +333,77 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		} finally {
 			getApiKeySpy.mockRestore();
 			authStorage.close();
+		}
+	});
+
+	test("refreshes cached llama.cpp vision metadata for the startup default model", async () => {
+		const authStorage = await AuthStorage.create(path.join(tempDir, "llama-vision-auth.db"));
+		authStoragesToClose.push(authStorage);
+		const modelsPath = path.join(tempDir, "llama-vision-models.yml");
+		const cacheDbPath = path.join(tempDir, "models.db");
+		const cachedModel = buildModel({
+			id: "vision-model",
+			name: "vision-model",
+			provider: "llama.cpp",
+			api: "openai-responses",
+			baseUrl: "http://127.0.0.1:8080",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 32768,
+		});
+		writeModelCache("llama.cpp", Date.now(), [cachedModel], true, "", cacheDbPath);
+
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:8080/models") {
+				return new Response(
+					JSON.stringify({ data: [{ id: "vision-model", object: "model", meta: { n_ctx: 239104 } }] }),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url === "http://127.0.0.1:8080/props") {
+				return new Response(
+					JSON.stringify({
+						default_generation_settings: {
+							n_ctx: 239104,
+							params: { max_tokens: -1, n_predict: -1 },
+						},
+						modalities: { vision: true },
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const modelRegistry = new ModelRegistry(authStorage, modelsPath, { fetch: fetchMock });
+		const settings = Settings.isolated();
+		settings.setModelRole("default", "llama.cpp/vision-model");
+
+		expect(modelRegistry.find("llama.cpp", "vision-model")?.input).toEqual(["text"]);
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			authStorage,
+			modelRegistry,
+			settings,
+			sessionManager: SessionManager.inMemory(),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+		});
+
+		try {
+			expect(session.model?.input).toEqual(["text", "image"]);
+			expect(modelRegistry.find("llama.cpp", "vision-model")?.input).toEqual(["text", "image"]);
+		} finally {
+			await session.dispose();
 		}
 	});
 

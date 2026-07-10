@@ -4,8 +4,15 @@ import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
 import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
 import { Input, Loader, Spacer, setTuiTight, Text } from "@oh-my-pi/pi-tui";
-import { getAgentDbPath, getProjectDir, normalizePathForComparison } from "@oh-my-pi/pi-utils";
-import { formatModelSelectorValue } from "../../config/model-resolver";
+import { getAgentDbPath, getAgentDir, getProjectDir, normalizePathForComparison } from "@oh-my-pi/pi-utils";
+import {
+	type AdvisorConfigScope,
+	discoverAdvisorConfigs,
+	loadWatchdogConfigFile,
+	resolveAdvisorConfigEditPath,
+	saveWatchdogConfigFile,
+} from "../../advisor";
+import { formatModelSelectorValue, resolveAdvisorRoleSelection } from "../../config/model-resolver";
 import { getRoleInfo } from "../../config/model-roles";
 import { settings } from "../../config/settings";
 import { disableProvider, enableProvider } from "../../discovery";
@@ -49,7 +56,9 @@ import {
 } from "../../tools";
 import { shortenPath } from "../../tools/render-utils";
 import { copyToClipboard } from "../../utils/clipboard";
+import { repo } from "../../utils/git";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
+import { type AdvisorConfigDeps, AdvisorConfigOverlayComponent } from "../components/advisor-config";
 import { AgentDashboard } from "../components/agent-dashboard";
 import { AgentHubOverlayComponent } from "../components/agent-hub";
 import { AssistantMessageComponent } from "../components/assistant-message";
@@ -148,7 +157,6 @@ export class SelectorController {
 						const result = await previewTheme(themeName);
 						if (result.success) {
 							this.ctx.statusLine.invalidate();
-							this.ctx.updateEditorTopBorder();
 							this.ctx.ui.invalidate();
 							this.ctx.ui.requestRender();
 						}
@@ -163,9 +171,9 @@ export class SelectorController {
 							showHookStatus: settings.get("statusLine.showHookStatus"),
 							sessionAccent: settings.get("statusLine.sessionAccent"),
 							transparent: settings.get("statusLine.transparent"),
+							compactThinkingLevel: settings.get("statusLine.compactThinkingLevel"),
 							...previewSettings,
 						});
-						this.ctx.updateEditorTopBorder();
 						this.ctx.ui.requestRender();
 					},
 					getStatusLinePreview: () => {
@@ -191,8 +199,8 @@ export class SelectorController {
 							showHookStatus: settings.get("statusLine.showHookStatus"),
 							sessionAccent: settings.get("statusLine.sessionAccent"),
 							transparent: settings.get("statusLine.transparent"),
+							compactThinkingLevel: settings.get("statusLine.compactThinkingLevel"),
 						});
-						this.ctx.updateEditorTopBorder();
 						this.ctx.ui.requestRender();
 					},
 				},
@@ -207,6 +215,77 @@ export class SelectorController {
 			this.ctx.ui.setFocus(selector);
 			this.ctx.ui.requestRender();
 		});
+	}
+
+	showAdvisorConfigure(): void {
+		const cwd = this.ctx.sessionManager.getCwd();
+		const agentDir = getAgentDir() ?? getProjectDir();
+		const initialScope: AdvisorConfigScope = "project";
+		void (async () => {
+			// "Project" scope edits the repo-root WATCHDOG.yml (the project-level file
+			// discovery walks), not the launch subdir — `getProjectDir()` is only cwd.
+			let projectDir = cwd;
+			try {
+				projectDir = (await repo.root(cwd)) ?? cwd;
+			} catch {
+				projectDir = cwd;
+			}
+			const dirs = { projectDir, agentDir };
+			const initialDoc = await loadWatchdogConfigFile(await resolveAdvisorConfigEditPath(initialScope, dirs));
+			// Fullscreen editor on the alternate screen (the /settings idiom): the
+			// overlay holds the alt buffer + mouse tracking; the transcript stays put.
+			let overlayHandle: OverlayHandle | undefined;
+			const done = () => {
+				overlayHandle?.hide();
+				this.focusActiveEditorArea();
+				this.ctx.ui.requestRender();
+			};
+			// Label the seeded implicit-default row with the actual advisor-role model
+			// (NOT the first live advisor, which may be a named advisor from another scope).
+			const advisorRoleSel = resolveAdvisorRoleSelection(
+				this.ctx.settings,
+				this.ctx.session.modelRegistry.getAvailable(),
+			);
+			const defaultAdvisorModel = advisorRoleSel?.model;
+			const deps: AdvisorConfigDeps = {
+				modelRegistry: this.ctx.session.modelRegistry,
+				settings: this.ctx.settings,
+				scopedModels: this.ctx.session.scopedModels,
+				availableToolNames: this.ctx.session.getAdvisorAvailableToolNames(),
+				defaultModelLabel: defaultAdvisorModel
+					? `${defaultAdvisorModel.provider}/${defaultAdvisorModel.id}`
+					: undefined,
+			};
+			const overlay = new AdvisorConfigOverlayComponent(this.ctx.ui, deps, initialScope, initialDoc, {
+				loadDoc: async scope => loadWatchdogConfigFile(await resolveAdvisorConfigEditPath(scope, dirs)),
+				save: async (scope, doc) => {
+					await saveWatchdogConfigFile(await resolveAdvisorConfigEditPath(scope, dirs), doc);
+					// Re-discover the merged roster (project + user) so the live advisors
+					// reflect cross-level precedence, not just the edited file.
+					const discovered = await discoverAdvisorConfigs(cwd, agentDir);
+					const count = this.ctx.session.applyAdvisorConfigs(discovered.advisors, discovered.sharedInstructions);
+					this.ctx.statusLine.invalidate();
+					this.ctx.showStatus(
+						count > 0
+							? `Saved ${scope} WATCHDOG.yml — ${count} advisor${count === 1 ? "" : "s"} active.`
+							: `Saved ${scope} WATCHDOG.yml. Run /advisor on to activate the configured advisors.`,
+					);
+					this.ctx.ui.requestRender();
+				},
+				close: done,
+				requestRender: () => this.ctx.ui.requestRender(),
+				notify: message => this.ctx.showStatus(message),
+			});
+			overlayHandle = this.ctx.ui.showOverlay(overlay, {
+				anchor: "bottom-center",
+				width: "100%",
+				maxHeight: "100%",
+				margin: 0,
+				fullscreen: true,
+			});
+			this.ctx.ui.setFocus(overlay);
+			this.ctx.ui.requestRender();
+		})();
 	}
 
 	showHistorySearch(): void {
@@ -374,7 +453,6 @@ export class SelectorController {
 			case "tui.tight":
 				setTuiTight(value as boolean);
 				this.ctx.ui.invalidate();
-				this.ctx.updateEditorTopBorder();
 				this.ctx.ui.requestRender();
 				break;
 
@@ -390,7 +468,7 @@ export class SelectorController {
 			case "theme": {
 				setTheme(value as string, true).then(result => {
 					this.ctx.statusLine.invalidate();
-					this.ctx.updateEditorTopBorder();
+					this.ctx.ui.requestRender();
 					this.ctx.ui.invalidate();
 					if (!result.success) {
 						this.ctx.showError(`Failed to load theme "${value}": ${result.error}\nFell back to dark theme.`);
@@ -401,7 +479,7 @@ export class SelectorController {
 			case "symbolPreset": {
 				setSymbolPreset(value as "unicode" | "nerd" | "ascii").then(() => {
 					this.ctx.statusLine.invalidate();
-					this.ctx.updateEditorTopBorder();
+					this.ctx.ui.requestRender();
 					this.ctx.ui.invalidate();
 				});
 				break;
@@ -451,6 +529,7 @@ export class SelectorController {
 			case "statusLine.showHookStatus":
 			case "statusLine.sessionAccent":
 			case "statusLine.transparent":
+			case "statusLine.compactThinkingLevel":
 			case "statusLineSegments":
 			case "statusLineModelThinking":
 			case "statusLinePathAbbreviate":
@@ -471,9 +550,9 @@ export class SelectorController {
 					sessionAccent: settings.get("statusLine.sessionAccent"),
 					transparent: settings.get("statusLine.transparent"),
 					segmentOptions: settings.get("statusLine.segmentOptions"),
+					compactThinkingLevel: settings.get("statusLine.compactThinkingLevel"),
 				};
 				this.ctx.statusLine.updateSettings(statusLineSettings);
-				this.ctx.updateEditorTopBorder();
 				this.ctx.ui.requestRender();
 				break;
 			}
@@ -514,13 +593,27 @@ export class SelectorController {
 				this.ctx.settings,
 				this.ctx.session.modelRegistry,
 				this.ctx.session.scopedModels,
-				async (model, role, thinkingLevel, selector) => {
+				async (model, role, thinkingLevel, selector, action) => {
 					// `auto` is session-global: never baked into a per-role model value
 					// (it can't round-trip through `model:<level>`). Apply it to the session
 					// separately and persist via `defaultThinkingLevel`.
 					const isAuto = thinkingLevel === AUTO_THINKING;
 					const concreteThinking = isAuto ? undefined : thinkingLevel;
+					const selectorValue = selector ?? `${model.provider}/${model.id}`;
 					try {
+						if (action === "retryFallback" && role !== null) {
+							const fallbackSelector = formatModelSelectorValue(selectorValue, concreteThinking);
+							const fallbackChains = this.ctx.settings.get("retry.fallbackChains");
+							const chain = Array.isArray(fallbackChains[role]) ? fallbackChains[role] : [];
+							this.ctx.settings.set("retry.fallbackChains", {
+								...fallbackChains,
+								[role]: [fallbackSelector, ...chain.filter(existing => existing !== fallbackSelector)],
+							});
+							const roleInfo = getRoleInfo(role, settings);
+							const roleLabel = roleInfo?.name ?? role;
+							this.ctx.showStatus(`${roleLabel} fallback model: ${fallbackSelector}`);
+							return;
+						}
 						if (role === null) {
 							// Temporary: update agent state but don't persist the model to settings
 							await this.ctx.session.setModelTemporary(model);
@@ -536,19 +629,25 @@ export class SelectorController {
 							done();
 							this.ctx.ui.requestRender();
 						} else if (role === "default") {
-							// Default: update agent state and persist
-							await this.ctx.session.setModel(model, role, {
+							const { switched } = await this.ctx.session.setModel(model, role, {
 								selector,
 								thinkingLevel: concreteThinking,
 								persist: true,
+								currentContextTokens,
 							});
 							if (isAuto) {
-								this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
-							} else if (concreteThinking && concreteThinking !== ThinkingLevel.Inherit) {
+								if (switched) {
+									this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
+								} else {
+									this.ctx.settings.set("defaultThinkingLevel", AUTO_THINKING);
+								}
+							} else if (switched && concreteThinking && concreteThinking !== ThinkingLevel.Inherit) {
 								this.ctx.session.setThinkingLevel(concreteThinking);
 							}
-							this.ctx.statusLine.invalidate();
-							this.ctx.updateEditorBorderColor();
+							if (switched) {
+								this.ctx.statusLine.invalidate();
+								this.ctx.updateEditorBorderColor();
+							}
 							this.ctx.showStatus(`Default model: ${selector ?? model.id}`);
 							// Don't call done() - selector stays open for role assignment
 						} else {
@@ -686,7 +785,6 @@ export class SelectorController {
 						return;
 					}
 
-					this.ctx.chatContainer.clear();
 					this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 					this.ctx.editor.setText(result.selectedText);
 					done();
@@ -830,7 +928,6 @@ export class SelectorController {
 
 						// Update UI — rebuild the display transcript for the new leaf (the
 						// context from navigateTree is the LLM context, not the transcript).
-						this.ctx.chatContainer.clear();
 						this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 						await this.ctx.reloadTodos();
 						if (result.editorText && !this.ctx.editor.getText().trim()) {
@@ -842,7 +939,7 @@ export class SelectorController {
 					} finally {
 						if (summaryLoader) {
 							summaryLoader.stop();
-							this.ctx.statusContainer.clear();
+							this.ctx.statusContainer.disposeChildren();
 						}
 						this.ctx.editor.onEscape = originalOnEscape;
 					}
@@ -871,43 +968,65 @@ export class SelectorController {
 		// every project's history when the cwd has nothing to resume. See #3099.
 		const historyStorage = this.ctx.historyStorage;
 		const historyMatcher = historyStorage ? (query: string) => historyStorage.matchingSessionIds(query) : undefined;
-		this.showSelector(done => {
-			const selector = new SessionSelectorComponent(
-				sessions,
-				async (session: SessionInfo) => {
-					done();
-					await this.handleResumeSession(session.path);
+		// Fullscreen session picker on the alternate screen (the /settings idiom):
+		// the overlay borrows the alt buffer and enables mouse tracking (wheel
+		// scroll + click-to-resume) for its lifetime, leaving the transcript
+		// untouched underneath. Anchored top-left at full size so a mouse row maps
+		// directly to a rendered line (the overlay paints from screen row 0), and
+		// `fillHeight` pads the body so the footer pins to the screen bottom.
+		let overlayHandle: OverlayHandle | undefined;
+		const done = () => {
+			overlayHandle?.hide();
+			this.focusActiveEditorArea();
+			this.ctx.ui.requestRender();
+		};
+		const selector = new SessionSelectorComponent(
+			sessions,
+			async (session: SessionInfo) => {
+				done();
+				await this.handleResumeSession(session.path);
+			},
+			() => {
+				done();
+			},
+			() => {
+				// Release the alt buffer before teardown: shutdown() awaits flush/save/
+				// dispose/drain before stop() leaves the alt screen, so without this the
+				// fullscreen picker would freeze on screen for that window on Ctrl+C.
+				done();
+				void this.ctx.shutdown();
+			},
+			{
+				onDelete: async (session: SessionInfo) => {
+					if (!(await this.#detachActiveSessionBeforeDeletion(session.path))) {
+						return false;
+					}
+					const storage = new FileSessionStorage();
+					try {
+						await storage.deleteSessionWithArtifacts(session.path);
+						return true;
+					} catch (err) {
+						throw new Error(`Failed to delete session: ${err instanceof Error ? err.message : String(err)}`, {
+							cause: err,
+						});
+					}
 				},
-				() => {
-					done();
-					this.ctx.ui.requestRender();
-				},
-				() => {
-					void this.ctx.shutdown();
-				},
-				{
-					onDelete: async (session: SessionInfo) => {
-						if (!(await this.#detachActiveSessionBeforeDeletion(session.path))) {
-							return false;
-						}
-						const storage = new FileSessionStorage();
-						try {
-							await storage.deleteSessionWithArtifacts(session.path);
-							return true;
-						} catch (err) {
-							throw new Error(`Failed to delete session: ${err instanceof Error ? err.message : String(err)}`, {
-								cause: err,
-							});
-						}
-					},
-					historyMatcher,
-					loadAllSessions: () => SessionManager.listAll(),
-					getTerminalRows: () => this.ctx.ui.terminal.rows,
-				},
-			);
-			selector.setOnRequestRender(() => this.ctx.ui.requestRender());
-			return { component: selector, focus: selector };
+				historyMatcher,
+				loadAllSessions: () => SessionManager.listAll(),
+				getTerminalRows: () => this.ctx.ui.terminal.rows,
+				fillHeight: true,
+			},
+		);
+		selector.setOnRequestRender(() => this.ctx.ui.requestRender());
+		overlayHandle = this.ctx.ui.showOverlay(selector, {
+			anchor: "top-left",
+			width: "100%",
+			maxHeight: "100%",
+			margin: 0,
+			fullscreen: true,
 		});
+		this.ctx.ui.setFocus(selector);
+		this.ctx.ui.requestRender();
 	}
 
 	#refreshSessionTerminalTitle(): void {
@@ -933,8 +1052,8 @@ export class SelectorController {
 
 		this.ctx.clearTransientSessionUi();
 		this.ctx.statusLine.invalidate();
-		this.ctx.statusLine.setSessionStartTime(Date.now());
-		this.ctx.updateEditorTopBorder();
+		this.ctx.statusLine.resetActiveTime();
+		this.ctx.ui.requestRender();
 		this.ctx.updateEditorBorderColor();
 		this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 		await this.ctx.reloadTodos();
@@ -960,7 +1079,6 @@ export class SelectorController {
 		this.ctx.updateEditorBorderColor();
 
 		// Clear and re-render the chat
-		this.ctx.chatContainer.clear();
 		this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 		await this.ctx.reloadTodos();
 		this.ctx.showStatus(movedProject ? `Resumed session in ${shortenPath(newCwd)}` : "Resumed session");
@@ -1010,11 +1128,19 @@ export class SelectorController {
 		const useManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(providerId);
 		try {
 			await this.ctx.session.modelRegistry.authStorage.login(providerId as OAuthProvider, {
-				onAuth: (info: { url: string; instructions?: string }) => {
+				onAuth: (info: { url: string; launchUrl?: string; instructions?: string }) => {
 					const block = new TranscriptBlock();
+					// Full URL first: works from any machine, including SSH boxes
+					// where the OMP-hosted `launchUrl` would resolve against the
+					// user's local browser and fail.
 					block.addChild(new Text(theme.fg("dim", info.url), 1, 0));
 					const hyperlink = `\x1b]8;;${info.url}\x07Click here to login\x1b]8;;\x07`;
 					block.addChild(new Text(theme.fg("accent", hyperlink), 1, 0));
+					if (info.launchUrl && info.launchUrl !== info.url) {
+						block.addChild(
+							new Text(theme.fg("dim", `Local shortcut (this machine only): ${info.launchUrl}`), 1, 0),
+						);
+					}
 					if (info.instructions) {
 						block.addChild(new Spacer(1));
 						block.addChild(new Text(theme.fg("warning", info.instructions), 1, 0));
@@ -1311,18 +1437,27 @@ export class SelectorController {
 			sessionFile: this.ctx.sessionManager.getSessionFile() ?? null,
 		});
 
-		// The double-← gesture passes requireContent so it stays inert when there
-		// are no subagents to show; the explicit hub/observe keys still open the
-		// empty roster. The freshly built hub already ran the persisted-subagent
-		// scan, so its row count is the authoritative "is there anything to show".
+		const showReadyHub = () => {
+			// The double-← gesture passes requireContent so it stays inert when
+			// neither live nor persisted subagents are available. Persisted rows now
+			// load asynchronously, so defer the gate until that scan has refreshed the
+			// hub instead of treating the initial empty table as authoritative.
+			if (options?.requireContent && hub.isEmpty) {
+				hub.dispose();
+				return;
+			}
+
+			this.ctx.editorContainer.clear();
+			this.ctx.editorContainer.addChild(hub);
+			this.ctx.ui.setFocus(hub);
+			this.ctx.ui.requestRender();
+		};
+
 		if (options?.requireContent && hub.isEmpty) {
-			hub.dispose();
+			void hub.persistedSubagentsReady.then(showReadyHub);
 			return;
 		}
 
-		this.ctx.editorContainer.clear();
-		this.ctx.editorContainer.addChild(hub);
-		this.ctx.ui.setFocus(hub);
-		this.ctx.ui.requestRender();
+		showReadyHub();
 	}
 }

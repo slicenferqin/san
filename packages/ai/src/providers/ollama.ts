@@ -16,6 +16,7 @@ import type {
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { clearStreamingPartialJson, kStreamingPartialJson } from "../utils/block-symbols";
+import { withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import type { CapturedHttpErrorResponse, RawHttpRequestDump } from "../utils/http-inspector";
 import {
@@ -23,7 +24,7 @@ import {
 	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
 } from "../utils/idle-iterator";
-import { toolWireSchema } from "../utils/schema/wire";
+import { sanitizeSchemaForOllama, toolWireSchema } from "../utils/schema";
 import {
 	getStreamMarkupHealingPattern,
 	type HealedToolCall,
@@ -280,7 +281,7 @@ function convertTools(tools: Tool[] | undefined): OllamaFunctionTool[] | undefin
 		function: {
 			name: tool.name,
 			description: tool.description,
-			parameters: toolWireSchema(tool),
+			parameters: sanitizeSchemaForOllama(toolWireSchema(tool)),
 		},
 	}));
 }
@@ -321,6 +322,10 @@ function createChatBody(model: Model<"ollama-chat">, context: Context, options: 
 			: {}),
 		stream: true,
 	};
+}
+
+function shouldRetryOllamaResponse(response: Response, bodyText: string): boolean {
+	return response.status < 500 || !AIError.LLAMA_CPP_TOOL_CALL_PARSE_PATTERN.test(bodyText);
 }
 
 async function captureHttpErrorResponse(response: Response): Promise<CapturedHttpErrorResponse> {
@@ -445,10 +450,10 @@ function hasVisibleAssistantContent(output: AssistantMessage): boolean {
 
 const OLLAMA_RETRY_DELAYS_MS = [2_000, 5_000, 10_000];
 
-export const streamOllama: StreamFunction<"ollama-chat"> = (
+const streamOllamaOnce = (
 	model: Model<"ollama-chat">,
 	context: Context,
-	options: OllamaChatOptions,
+	options: OllamaChatOptions = {},
 ): AssistantMessageEventStream => {
 	const stream = new AssistantMessageEventStream();
 	void (async () => {
@@ -465,6 +470,10 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 			? new StreamMarkupHealing({ pattern: streamMarkupHealingPattern })
 			: undefined;
 		let healedToolCallEmitted = false;
+		// Once the provider streams native reasoning (`message.thinking`), drop any
+		// thinking the text-channel healer also recovers so a model that emits both
+		// does not double-count its reasoning.
+		let suppressHealedThinking = false;
 		const endActiveTextBlock = (): void => {
 			if (activeTextIndex === undefined) return;
 			endTextBlock(stream, output, activeTextIndex);
@@ -542,7 +551,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 			if (event.type === "text") {
 				appendVisibleText(event.text);
 			} else if (event.type === "thinking") {
-				appendVisibleThinking(event.thinking);
+				if (!suppressHealedThinking) appendVisibleThinking(event.thinking);
 			} else {
 				emitHealedToolCall(event.call);
 			}
@@ -594,6 +603,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 					body: JSON.stringify(body),
 					signal: watchdog.signal,
 					defaultDelayMs: OLLAMA_RETRY_DELAYS_MS,
+					shouldRetryResponse: shouldRetryOllamaResponse,
 					fetch: options.fetch,
 					timeout: false,
 				});
@@ -614,6 +624,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 			stream.push({ type: "start", partial: output });
 			for await (const chunk of iterateNdjson(response.body)) {
 				if (chunk.message?.thinking) {
+					suppressHealedThinking = true;
 					endActiveTextBlock();
 					if (activeThinkingIndex === undefined) {
 						output.content.push({ type: "thinking", thinking: "" });
@@ -742,6 +753,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 			}
 			const result = await AIError.finalize(error, {
 				api: model.api,
+				provider: model.provider,
 				signal: options.signal,
 				rawRequestDump,
 				capturedErrorResponse,
@@ -760,3 +772,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 	})();
 	return stream;
 };
+
+/** Retry EOS-only Ollama completions before the agent loop sees an empty stop. */
+export const streamOllama: StreamFunction<"ollama-chat"> = (model, context, options) =>
+	withEmptyCompletionRetry(model, context, options, streamOllamaOnce);

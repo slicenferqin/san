@@ -100,7 +100,12 @@ function renderUsageReports(
 			for (let index = 0; index < report.limits.length; index++) {
 				const limit = report.limits[index]!;
 				const window = limit.window?.label ?? limit.scope.windowId;
-				const tier = limit.scope.tier ? ` (${limit.scope.tier})` : "";
+				// Skip the tier suffix when the label already names it (e.g. Anthropic's
+				// "Claude 7 Day (Fable)" with scope.tier "fable") — mirrors limitTitle in usage-cli.
+				const tier =
+					limit.scope.tier && !limit.label.toLowerCase().includes(limit.scope.tier.toLowerCase())
+						? ` (${limit.scope.tier})`
+						: "";
 				lines.push(`- ${limit.label}${tier}${window ? ` — ${window}` : ""}`);
 				lines.push(
 					`  ${formatUsageReportAccount(report, limit, index)}: ${formatUsageAmount(limit)}${inUse ? "  ← in use by this session" : ""}`,
@@ -145,12 +150,15 @@ export async function buildUsageReportText(runtime: SlashCommandRuntime): Promis
 	}
 
 	const stats = runtime.session.sessionManager.getUsageStatistics();
+	const orchestrationTokens = stats.orchestrationInput + stats.orchestrationOutput + stats.orchestrationCacheRead;
 	return [
 		"Usage",
 		`Input tokens: ${stats.input}`,
 		`Output tokens: ${stats.output}`,
 		`Cache read tokens: ${stats.cacheRead}`,
 		`Cache write tokens: ${stats.cacheWrite}`,
+		`Total tokens: ${stats.totalTokens}`,
+		...(orchestrationTokens > 0 ? [`Orchestration tokens: ${orchestrationTokens}`] : []),
 		`Premium requests: ${stats.premiumRequests}`,
 		`Cost: $${stats.cost.toFixed(6)}`,
 	].join("\n");

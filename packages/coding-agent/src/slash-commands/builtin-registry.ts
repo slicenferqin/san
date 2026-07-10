@@ -6,6 +6,7 @@ import { type AutocompleteItem, Spacer } from "@oh-my-pi/pi-tui";
 import { APP_NAME, getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import { COLLAB_GUEST_ALLOWED_COMMANDS, CollabGuestLink } from "../collab/guest";
 import { CollabHost } from "../collab/host";
+import { applyProviderGlobalsFromSettings } from "../config/provider-globals";
 import type { SettingPath, Settings, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";
 import {
@@ -26,6 +27,7 @@ import { resolveMemoryBackend } from "../memory-backend";
 import { describeLoopLimitRuntime } from "../modes/loop-limit";
 import { theme } from "../modes/theme/theme";
 import type { InteractiveModeContext } from "../modes/types";
+import { extractLastCodeBlock, extractLastCommand } from "../modes/utils/copy-targets";
 import {
 	abortSanLoopRun,
 	createSanLoopTaskAgentExecutor,
@@ -39,11 +41,12 @@ import type { AgentSession, FreshSessionResult } from "../session/agent-session"
 import { COMPACT_MODES, parseCompactArgs } from "../session/compact-modes";
 import type { SessionEntry } from "../session/session-entries";
 import { resolveResumableSession } from "../session/session-listing";
-import { SessionManager } from "../session/session-manager";
+import type { SessionManager } from "../session/session-manager";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
 import { expandTilde, resolveToCwd } from "../tools/path-utils";
 import { urlHyperlinkAlways } from "../tui";
 import { getChangelogPath, parseChangelog } from "../utils/changelog";
+import { copyToClipboard } from "../utils/clipboard";
 import { CollabQrCodeComponent } from "./helpers/collab-qrcode";
 import { buildContextPacketReportText, parseContextPacketReportCount } from "./helpers/context-packet-report";
 import { buildContextReportText } from "./helpers/context-report";
@@ -81,21 +84,12 @@ export interface TuiBuiltinSlashCommand extends BuiltinSlashCommand {
 
 function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
-	ctx.updateEditorTopBorder();
 	ctx.ui.requestRender();
 }
 
-/** `/fast status` label: "off", "on", or scope-qualified "on (… only)". */
+/** `/fast status` label for the active model: "on" when its family is priority, else "off". */
 function formatFastModeStatus(session: AgentSession): string {
-	if (!session.isFastModeEnabled()) return "off";
-	switch (session.serviceTier) {
-		case "openai-only":
-			return "on (OpenAI only)";
-		case "claude-only":
-			return "on (Claude only)";
-		default:
-			return "on";
-	}
+	return session.isFastModeEnabled() ? "on" : "off";
 }
 
 const AUTOCOMPLETE_DETAIL_LIMIT = 48;
@@ -129,6 +123,80 @@ function sanLoopMaxTurnsForMode(settingsSource: Settings, mode: SanLoopMode): nu
 		case "team":
 			return settingsSource.get("san.executionLoop.budget.teamMaxTurns");
 	}
+}
+
+async function runConfiguredSanLoop(options: {
+	mode: SanLoopMode;
+	objective: string;
+	settings: Settings;
+	session: AgentSession;
+	sessionManager: SessionManager;
+	cwd: string;
+}): Promise<RunSanLoopResult> {
+	return runSanLoop({
+		sessionManager: options.sessionManager,
+		objective: options.objective,
+		mode: options.mode,
+		maxRetries: options.settings.get("san.executionLoop.maxRetries"),
+		maxWorkers: options.settings.get("san.executionLoop.maxWorkers"),
+		maxTurns: sanLoopMaxTurnsForMode(options.settings, options.mode),
+		executor: createSanLoopTaskAgentExecutor({
+			session: options.session,
+			cwd: options.cwd,
+		}),
+	});
+}
+
+function createSanLoopModeShortcut(mode: SanLoopMode): SlashCommandSpec {
+	const usageText = `Usage: /${mode} <objective>`;
+	return {
+		name: mode,
+		description: `Run San execution loop in ${mode} mode`,
+		acpDescription: `Run San execution loop in ${mode} mode`,
+		acpInputHint: "<objective>",
+		inlineHint: "<objective>",
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const objective = command.args.trim();
+			if (!objective) {
+				await runtime.output(usageText);
+				return commandConsumed();
+			}
+			const result = await runConfiguredSanLoop({
+				mode,
+				objective,
+				settings: runtime.settings,
+				session: runtime.session,
+				sessionManager: runtime.sessionManager,
+				cwd: runtime.cwd,
+			});
+			await runtime.output(formatSanLoopRunResult(result));
+			return commandConsumed();
+		},
+		handleTui: async (command, runtime) => {
+			const objective = command.args.trim();
+			if (!objective) {
+				runtime.ctx.showStatus(usageText);
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			runtime.ctx.showStatus(`Running San ${mode} execution loop...`, { dim: false });
+			try {
+				const result = await runConfiguredSanLoop({
+					mode,
+					objective,
+					settings: runtime.ctx.settings,
+					session: runtime.ctx.session,
+					sessionManager: runtime.ctx.session.sessionManager,
+					cwd: runtime.ctx.sessionManager.getCwd(),
+				});
+				runtime.ctx.showStatus(formatSanLoopRunResult(result), { dim: false });
+			} catch (error) {
+				runtime.ctx.showStatus(`San ${mode} execution loop failed: ${errorMessage(error)}`, { dim: false });
+			}
+			runtime.ctx.editor.setText("");
+		},
+	};
 }
 
 function stopSanLoop(
@@ -435,8 +503,8 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return commandConsumed();
 			}
 			if (arg === "on") {
-				runtime.session.setFastMode(true);
-				await runtime.output("Fast mode enabled.");
+				const supported = runtime.session.setFastMode(true);
+				await runtime.output(supported ? "Fast mode enabled." : "Fast mode is unavailable for the current model.");
 				return commandConsumed();
 			}
 			if (arg === "off") {
@@ -460,9 +528,11 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 			if (arg === "on") {
-				runtime.ctx.session.setFastMode(true);
+				const supported = runtime.ctx.session.setFastMode(true);
 				refreshStatusLine(runtime.ctx);
-				runtime.ctx.showStatus("Fast mode enabled.");
+				runtime.ctx.showStatus(
+					supported ? "Fast mode enabled." : "Fast mode is unavailable for the current model.",
+				);
 				runtime.ctx.editor.setText("");
 				return;
 			}
@@ -486,16 +556,18 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "advisor",
 		description: "Toggle the advisor (a second model that reviews each turn and injects notes)",
 		acpDescription: "Toggle advisor",
-		acpInputHint: "[on|off|status|dump [raw]]",
+		acpInputHint: "[on|off|status|dump [raw]|configure]",
 		subcommands: [
 			{ name: "on", description: "Enable the advisor" },
 			{ name: "off", description: "Disable the advisor" },
 			{ name: "status", description: "Show advisor status" },
 			{ name: "dump", description: "Copy the advisor's transcript to clipboard", usage: "[raw]" },
+			{ name: "configure", description: "Open the advisor configuration editor (TUI)" },
 		],
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			const stats = runtime.ctx.session.getAdvisorStats();
+			if (stats.active && stats.advisors.length > 1) return `Advisor: on (${stats.advisors.length} advisors)`;
 			if (stats.active && stats.model) return `Advisor: on (${stats.model.provider}/${stats.model.id})`;
 			if (stats.configured) return "Advisor: configured, no model";
 			return "Advisor: off";
@@ -536,7 +608,13 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				await runtime.output(text ?? "Advisor is not active for this session.");
 				return commandConsumed();
 			}
-			return usage("Usage: /advisor [on|off|status|dump [raw]]", runtime);
+			if (verb === "configure") {
+				await runtime.output(
+					"/advisor configure opens an interactive editor and is only available in the interactive TUI.",
+				);
+				return commandConsumed();
+			}
+			return usage("Usage: /advisor [on|off|status|dump [raw]|configure]", runtime);
 		},
 		handleTui: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
@@ -581,7 +659,12 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				runtime.ctx.editor.setText("");
 				return;
 			}
-			runtime.ctx.showStatus("Usage: /advisor [on|off|status|dump [raw]]");
+			if (verb === "configure") {
+				runtime.ctx.showAdvisorConfigure();
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			runtime.ctx.showStatus("Usage: /advisor [on|off|status|dump [raw]|configure]");
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -884,8 +967,39 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "copy",
 		description: "Pick text or code from the conversation to copy",
-		handleTui: (_command, runtime) => {
-			runtime.ctx.showCopySelector();
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			const arg = command.args.trim().toLowerCase();
+			if (!arg) {
+				runtime.ctx.showCopySelector();
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			if (arg === "code") {
+				const block = extractLastCodeBlock(runtime.ctx.session.messages);
+				if (!block) {
+					runtime.ctx.showStatus("No code block to copy.");
+					runtime.ctx.editor.setText("");
+					return;
+				}
+				await copyToClipboard(block.code);
+				runtime.ctx.showStatus("Copied code block to clipboard");
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			if (arg === "cmd" || arg === "command") {
+				const lastCommand = extractLastCommand(runtime.ctx.session.messages);
+				if (!lastCommand) {
+					runtime.ctx.showStatus("No command to copy.");
+					runtime.ctx.editor.setText("");
+					return;
+				}
+				await copyToClipboard(lastCommand.code);
+				runtime.ctx.showStatus(`Copied ${lastCommand.kind === "bash" ? "bash command" : "eval code"} to clipboard`);
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			runtime.ctx.showStatus("Usage: /copy [code|cmd]");
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -1188,6 +1302,9 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			runtime.ctx.editor.setText("");
 		},
 	},
+	createSanLoopModeShortcut("solo"),
+	createSanLoopModeShortcut("team"),
+	createSanLoopModeShortcut("council"),
 	{
 		name: "san-loop",
 		description: "Start or inspect San execution loop runs",
@@ -1208,17 +1325,13 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			if ("error" in parsed) return usage(parsed.error, runtime);
 			if (parsed.action === "run") {
 				const mode = parsed.mode ?? runtime.settings.get("san.executionLoop.defaultMode");
-				const result = await runSanLoop({
-					sessionManager: runtime.sessionManager,
-					objective: parsed.objective,
+				const result = await runConfiguredSanLoop({
 					mode,
-					maxRetries: runtime.settings.get("san.executionLoop.maxRetries"),
-					maxWorkers: runtime.settings.get("san.executionLoop.maxWorkers"),
-					maxTurns: sanLoopMaxTurnsForMode(runtime.settings, mode),
-					executor: createSanLoopTaskAgentExecutor({
-						session: runtime.session,
-						cwd: runtime.cwd,
-					}),
+					objective: parsed.objective,
+					settings: runtime.settings,
+					session: runtime.session,
+					sessionManager: runtime.sessionManager,
+					cwd: runtime.cwd,
 				});
 				await runtime.output(formatSanLoopRunResult(result));
 				return commandConsumed();
@@ -1243,17 +1356,13 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				runtime.ctx.showStatus("Running San execution loop...", { dim: false });
 				try {
 					const mode = parsed.mode ?? runtime.ctx.settings.get("san.executionLoop.defaultMode");
-					const result = await runSanLoop({
-						sessionManager: runtime.ctx.session.sessionManager,
-						objective: parsed.objective,
+					const result = await runConfiguredSanLoop({
 						mode,
-						maxRetries: runtime.ctx.settings.get("san.executionLoop.maxRetries"),
-						maxWorkers: runtime.ctx.settings.get("san.executionLoop.maxWorkers"),
-						maxTurns: sanLoopMaxTurnsForMode(runtime.ctx.settings, mode),
-						executor: createSanLoopTaskAgentExecutor({
-							session: runtime.ctx.session,
-							cwd: runtime.ctx.sessionManager.getCwd(),
-						}),
+						objective: parsed.objective,
+						settings: runtime.ctx.settings,
+						session: runtime.ctx.session,
+						sessionManager: runtime.ctx.session.sessionManager,
+						cwd: runtime.ctx.sessionManager.getCwd(),
 					});
 					runtime.ctx.showStatus(formatSanLoopRunResult(result), { dim: false });
 				} catch (error) {
@@ -1762,8 +1871,8 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "move",
-		description: "Switch to a fresh session in a different directory",
-		acpDescription: "Start a fresh session in a different directory",
+		description: "Move the current session to a different directory",
+		acpDescription: "Move the current session to a different directory",
 		inlineHint: "[<path>]",
 		allowArgs: true,
 		handle: async (command, runtime) => {
@@ -1778,32 +1887,18 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			} catch {
 				return usage(`Directory does not exist: ${resolvedPath}`, runtime);
 			}
-			let newSessionFile: string | undefined;
 			try {
-				newSessionFile = SessionManager.createEmptySessionFile(resolvedPath);
-				const switched = await runtime.session.switchSession(newSessionFile);
-				if (!switched) {
-					await runtime.sessionManager.dropSession(newSessionFile);
-					return usage("Move cancelled.", runtime);
-				}
+				await runtime.sessionManager.moveTo(resolvedPath);
 			} catch (err) {
-				if (newSessionFile) {
-					try {
-						await runtime.sessionManager.dropSession(newSessionFile);
-					} catch (dropErr) {
-						return usage(
-							`Move failed: ${errorMessage(err)}; failed to remove empty session: ${errorMessage(dropErr)}`,
-							runtime,
-						);
-					}
-				}
 				return usage(`Move failed: ${errorMessage(err)}`, runtime);
 			}
-			runtime.session.markMovedFromEmptySessionFile(newSessionFile!);
 			setProjectDir(resolvedPath);
+			await runtime.settings.reloadForCwd(resolvedPath);
+			applyProviderGlobalsFromSettings(runtime.settings);
 			// Reload plugin/capability caches so the next prompt sees commands and
 			// capabilities scoped to the new cwd.
 			await runtime.reloadPlugins();
+			await runtime.notifyConfigChanged?.();
 			await runtime.notifyTitleChanged?.();
 			await runtime.output(`Moved to ${runtime.sessionManager.getCwd()}.`);
 			return commandConsumed();
@@ -2583,6 +2678,7 @@ export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BU
 	command => ({
 		name: command.name,
 		aliases: command.aliases,
+		allowArgs: command.allowArgs === true,
 		description: command.description,
 		subcommands: command.subcommands,
 		inlineHint: command.inlineHint,

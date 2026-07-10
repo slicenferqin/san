@@ -40,6 +40,12 @@ export interface HistoryFormatOptions {
 	 * still collapse to a one-liner.
 	 */
 	expandPrimaryContext?: boolean;
+	/**
+	 * Append the full unified diff (from a tool result's `details.diff`) below
+	 * edit/apply_patch tool lines, instead of just the path. The advisor sets
+	 * this so it sees what changed without re-reading the file.
+	 */
+	expandEditDiffs?: boolean;
 }
 
 /** Max length of the primary-arg summary inside `→ tool(...)` lines. */
@@ -107,14 +113,18 @@ function primaryArg(name: string, args: Record<string, unknown> | undefined): st
 	}
 	if (name === "grep") {
 		const pattern = primaryArgValue(args.pattern);
-		const paths = primaryArgValue(args.paths);
+		const paths = primaryArgValue(args.path) || primaryArgValue(args.paths);
 		if (pattern && paths) return oneLine(`${pattern} @ ${paths}`);
 		if (pattern) return oneLine(pattern);
 		if (paths) return oneLine(paths);
 	}
 	if (name === "glob") {
-		const paths = primaryArgValue(args.paths);
+		const paths = primaryArgValue(args.path) || primaryArgValue(args.paths);
 		if (paths) return oneLine(paths);
+	}
+	if (name === "ast_grep") {
+		const pattern = primaryArgValue(args.pat);
+		if (pattern) return oneLine(pattern);
 	}
 	for (const key of PRIMARY_ARG_KEYS) {
 		const value = args[key];
@@ -139,12 +149,24 @@ function primaryArg(name: string, args: Record<string, unknown> | undefined): st
 	}
 }
 
+/**
+ * Wrap a diff body in a backtick fence sized to outlast the longest backtick
+ * run inside it, so a diff that touches markdown (triple backticks) can't break
+ * out of the fence. Info string `diff` for syntax highlighting.
+ */
+function fenceDiff(diff: string): string {
+	const longest = diff.match(/`+/g)?.reduce((m, run) => Math.max(m, run.length), 0) ?? 0;
+	const fence = "`".repeat(Math.max(3, longest + 1));
+	return `${fence}diff\n${diff}\n${fence}`;
+}
+
 /** One line per tool call: `→ read(src/foo.ts:50-80) ⇒ ok · 31 lines`. */
 function toolCallLine(
 	name: string,
 	args: Record<string, unknown> | undefined,
 	result: ToolResultMessage | undefined,
 	includeToolIntent?: boolean,
+	expandEditDiffs?: boolean,
 ): string {
 	const head = `→ ${name}(${primaryArg(name, args)})`;
 	let base: string;
@@ -159,6 +181,13 @@ function toolCallLine(
 			base = firstLine ? `${head} ⇒ error · ${count} — ${firstLine}` : `${head} ⇒ error · ${count}`;
 		} else {
 			base = `${head} ⇒ ok · ${count}`;
+		}
+	}
+
+	if (expandEditDiffs) {
+		const diff = (result?.details as { diff?: unknown } | undefined)?.diff;
+		if (typeof diff === "string" && diff.trim()) {
+			base = `${base}\n${fenceDiff(diff)}`;
 		}
 	}
 
@@ -199,6 +228,11 @@ function executionLine(
  * targets.
  */
 export const PRIMARY_CONTEXT_CUSTOM_TYPES: ReadonlySet<string> = new Set(["plan-mode-context", "plan-mode-reference"]);
+
+/** Hidden non-primary custom messages whose content is needed to understand visible transcript entries. */
+const CONTEXTUAL_NON_PRIMARY_HIDDEN_CUSTOM_TYPES: Record<string, true> = {
+	"image-attachment-description": true,
+};
 
 /** One-liner for custom/hook messages: `[irc] A → B: body…`. */
 function customOneLiner(msg: CustomMessage | HookMessage): string {
@@ -280,7 +314,9 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 					} else if (block.type === "toolCall") {
 						const result = resultsByCallId.get(block.id);
 						if (result) consumed.add(block.id);
-						body.push(toolCallLine(block.name, block.arguments, result, opts?.includeToolIntent));
+						body.push(
+							toolCallLine(block.name, block.arguments, result, opts?.includeToolIntent, opts?.expandEditDiffs),
+						);
 					} else if (opts?.includeThinking && block.type === "thinking" && block.thinking.trim()) {
 						body.push(`_thinking:_ ${block.thinking}`);
 					}
@@ -303,7 +339,7 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 			case "toolResult": {
 				// Normally consumed by its toolCall; orphans (e.g. truncated history) get their own line.
 				if (consumed.has(msg.toolCallId)) break;
-				lines.push(toolCallLine(msg.toolName, undefined, msg, opts?.includeToolIntent), "");
+				lines.push(toolCallLine(msg.toolName, undefined, msg, opts?.includeToolIntent, opts?.expandEditDiffs), "");
 				lastWatchedLabel = undefined;
 				break;
 			}
@@ -324,6 +360,13 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 			case "custom":
 			case "hookMessage": {
 				const custom = msg as CustomMessage | HookMessage;
+				if (
+					custom.display === false &&
+					!PRIMARY_CONTEXT_CUSTOM_TYPES.has(custom.customType) &&
+					CONTEXTUAL_NON_PRIMARY_HIDDEN_CUSTOM_TYPES[custom.customType] !== true
+				) {
+					break;
+				}
 				if (opts?.expandPrimaryContext && PRIMARY_CONTEXT_CUSTOM_TYPES.has(custom.customType)) {
 					const text = contentToText(custom.content).trim();
 					if (text) {

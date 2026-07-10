@@ -25,6 +25,9 @@ export const CONFIG_APP_NAME: string = "san";
 /** Config directory name (e.g. ".san") */
 export const CONFIG_DIR_NAME: string = ".san";
 
+/** Ordered main settings filenames: canonical write target first, legacy-compatible YAML fallback second. */
+export const MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"] as const;
+
 /** Version (e.g. "1.0.0") */
 export const VERSION: string = version;
 

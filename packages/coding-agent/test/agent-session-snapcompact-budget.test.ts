@@ -47,14 +47,13 @@ describe("AgentSession snapcompact frame-budget sizing", () => {
 		modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected bundled claude-sonnet-4-5 model");
-		// Sanity: the contract only holds for vision models with a window
-		// genuinely smaller than the snapcompact upper bound. If the bundled
-		// catalog ever raises Sonnet's window past 1M, this test no longer
-		// covers the failure mode the fix targets.
+		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!bundled) throw new Error("Expected bundled claude-sonnet-4-5 model");
+		// Pin the window and output reservation: this contract defends the
+		// sub-1M/200k Sonnet failure mode, so catalog regeneration must not change
+		// the compaction budget math under test.
+		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
 		expect(model.input).toContain("image");
-		expect(model.contextWindow).toBeLessThan(1_000_000);
 
 		const agent = new Agent({
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
@@ -163,6 +162,7 @@ describe("AgentSession snapcompact frame-budget sizing", () => {
 		const maxFrames = opts?.maxFrames;
 		expect(maxFrames).toBeDefined();
 		expect(maxFrames).toBeLessThan(snapcompact.MAX_FRAMES_DEFAULT);
+		expect(maxFrames).toBeLessThanOrEqual(snapcompact.maxFramesForDataBudget());
 		expect(maxFrames).toBeGreaterThan(0);
 
 		// Verify the FULL projection — base (non-message + kept-recent) +
@@ -240,5 +240,42 @@ describe("AgentSession snapcompact frame-budget sizing", () => {
 		// even though one frame charge would overflow the budget — the
 		// text-only `planArchive` path makes this case recoverable.
 		expect(opts?.maxFrames).toBe(1);
+	});
+
+	it("applies the frame byte cap when the model context window is unknown", async () => {
+		const model = session.model;
+		if (!model) throw new Error("Expected model");
+		await session.dispose();
+		const unknownWindowModel = { ...model, contextWindow: 0 };
+		session = new AgentSession({
+			agent: new Agent({
+				initialState: { model: unknownWindowModel, systemPrompt: ["Test"], tools: [], messages: [] },
+			}),
+			sessionManager,
+			settings: Settings.isolated({
+				"compaction.strategy": "snapcompact",
+				"compaction.autoContinue": false,
+				"compaction.keepRecentTokens": 4000,
+			}),
+			modelRegistry,
+		});
+
+		const branchEntries = sessionManager.getBranch();
+		const lastEntry = branchEntries[branchEntries.length - 1];
+		if (!lastEntry?.id) throw new Error("Expected branch entry with id");
+		const compactSpy = vi.spyOn(snapcompact, "compact").mockResolvedValue({
+			summary: "stubbed snapcompact",
+			shortSummary: "stub",
+			firstKeptEntryId: lastEntry.id,
+			tokensBefore: 100_000,
+			details: { readFiles: [], modifiedFiles: [] },
+			preserveData: {
+				snapcompact: { frames: [], totalChars: 0, truncatedChars: 0 },
+			},
+		});
+
+		await session.compact(undefined, { mode: "snapcompact" });
+
+		expect(compactSpy.mock.calls[0]?.[1]?.maxFrames).toBe(snapcompact.maxFramesForDataBudget());
 	});
 });

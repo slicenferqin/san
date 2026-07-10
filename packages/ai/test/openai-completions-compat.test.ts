@@ -3,6 +3,7 @@ import { renderDemotedThinking } from "@oh-my-pi/pi-ai/dialect";
 import {
 	applyOpenRouterRoutingVariant,
 	convertMessages,
+	parseChunkUsage,
 	streamOpenAICompletions,
 } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type {
@@ -232,6 +233,11 @@ describe("openai-completions compatibility", () => {
 			throw new Error("assistant message missing");
 		}
 		expect(typeof assistant.content).toBe("string");
+		// Ordinary adjacent text blocks (bridge stitching, imported transcripts,
+		// streaming chunk splits) preserve their original byte sequence on
+		// flatten. The demoted-thinking separator is inserted by the flatten
+		// itself, gated on the kDemotedThinking marker, so unmarked blocks like
+		// these are never touched.
 		expect(assistant.content).toBe("hello world");
 	});
 
@@ -274,7 +280,7 @@ describe("openai-completions compatibility", () => {
 		// Regression: thinking+text replay used to call `.unshift` on the string
 		// content set above (TypeError). Both blocks must survive as one string.
 		expect(typeof assistant.content).toBe("string");
-		expect(assistant.content).toBe(`${renderDemotedThinking(model.id, "chain of thought")}final answer`);
+		expect(assistant.content).toBe(`${renderDemotedThinking(model.id, "chain of thought")} final answer`);
 	});
 
 	it("emits thinking-only assistant content as a plain string when requiresThinkingAsText is set", () => {
@@ -612,6 +618,175 @@ describe("openai-completions compatibility", () => {
 		expect(result.usage.output).toBe(3);
 		expect(result.usage.cacheRead).toBe(2);
 		expect(result.usage.totalTokens).toBe(15);
+	});
+
+	it("keeps unindexed batched tool-call arguments isolated", async () => {
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+		} as ModelSpec<"openai-completions">);
+		const fetchMock = createMockFetch([
+			{
+				id: "chatcmpl-batched-tools",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [
+					{
+						index: 0,
+						delta: {
+							tool_calls: [
+								{ function: { name: "bash", arguments: '{"command":"echo hello"}' } },
+								{ function: { name: "bash", arguments: '{"command":"echo goodbye"}' } },
+							],
+						},
+					},
+				],
+			},
+			{
+				id: "chatcmpl-batched-tools",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+			},
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
+
+		const calls = result.content.filter(content => content.type === "toolCall");
+		expect(calls.map(call => call.arguments)).toEqual([{ command: "echo hello" }, { command: "echo goodbye" }]);
+	});
+
+	it("routes unindexed batched tool-call continuation chunks back by array offset", async () => {
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+		} as ModelSpec<"openai-completions">);
+		const fetchMock = createMockFetch([
+			{
+				id: "chatcmpl-batched-continuation",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [
+					{
+						index: 0,
+						delta: {
+							tool_calls: [
+								{ function: { name: "bash", arguments: '{"command":"echo hello"' } },
+								{ function: { name: "bash", arguments: '{"command":"echo goodbye"' } },
+							],
+						},
+					},
+				],
+			},
+			{
+				id: "chatcmpl-batched-continuation",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [
+					{
+						index: 0,
+						delta: {
+							tool_calls: [{ function: { arguments: "}" } }, { function: { arguments: "}" } }],
+						},
+					},
+				],
+			},
+			{
+				id: "chatcmpl-batched-continuation",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+			},
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
+
+		const calls = result.content.filter(content => content.type === "toolCall");
+		expect(calls.map(call => call.arguments)).toEqual([{ command: "echo hello" }, { command: "echo goodbye" }]);
+	});
+
+	it("falls through zero cached-token candidates to later non-zero usage fields", () => {
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+		} as ModelSpec<"openai-completions">);
+		const cases: Array<{
+			name: string;
+			usage: object;
+			expectedCacheRead: number;
+		}> = [
+			{
+				name: "root zero falls through to nested prompt token details",
+				usage: {
+					prompt_tokens: 50_000,
+					completion_tokens: 3,
+					cached_tokens: 0,
+					prompt_tokens_details: { cached_tokens: 49_216 },
+				},
+				expectedCacheRead: 49_216,
+			},
+			{
+				name: "missing root uses prompt cache hit tokens",
+				usage: {
+					prompt_tokens: 100,
+					completion_tokens: 3,
+					prompt_cache_hit_tokens: 41,
+				},
+				expectedCacheRead: 41,
+			},
+			{
+				name: "standard nested prompt token details",
+				usage: {
+					prompt_tokens: 100,
+					completion_tokens: 3,
+					prompt_tokens_details: { cached_tokens: 37 },
+				},
+				expectedCacheRead: 37,
+			},
+			{
+				name: "all candidates missing or zero",
+				usage: {
+					prompt_tokens: 100,
+					completion_tokens: 3,
+					cached_tokens: 0,
+					prompt_cache_hit_tokens: 0,
+					prompt_tokens_details: { cached_tokens: 0 },
+				},
+				expectedCacheRead: 0,
+			},
+			{
+				name: "multiple non-zero fields preserve priority order",
+				usage: {
+					prompt_tokens: 100,
+					completion_tokens: 3,
+					cached_tokens: 11,
+					prompt_cache_hit_tokens: 13,
+					prompt_tokens_details: { cached_tokens: 17 },
+				},
+				expectedCacheRead: 11,
+			},
+		];
+
+		for (const testCase of cases) {
+			const usage = parseChunkUsage(testCase.usage, model, undefined);
+			expect(usage.cacheRead).toBe(testCase.expectedCacheRead);
+			expect(usage.input).toBe(
+				(testCase.usage as { prompt_tokens: number }).prompt_tokens - testCase.expectedCacheRead,
+			);
+		}
 	});
 
 	it("maps qwen chat template reasoning into chat_template_kwargs", async () => {

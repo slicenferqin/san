@@ -29,7 +29,7 @@ import type {
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
-import { kStreamingLastParseLen } from "../utils/block-symbols";
+import { isDemotedThinking, kStreamingLastParseLen } from "../utils/block-symbols";
 import { hasVisibleAssistantContent, withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import type { RawHttpRequestDump } from "../utils/http-inspector";
@@ -82,6 +82,7 @@ import {
 	createInitialResponsesAssistantMessage,
 	createOpenAIStrictToolsState,
 	disableStrictToolsForScope,
+	getOpenAIPromptCacheKey,
 	getOpenAIStrictToolsScope,
 	isCompiledGrammarTooLargeStrictError,
 	isOpenRouterAnthropicModel,
@@ -147,6 +148,13 @@ type OpenAICompletionsPromptTokenDetails = {
 type OpenAICompletionsCompletionTokenDetails = {
 	reasoning_tokens?: unknown;
 };
+
+function firstPositiveNumber(...values: unknown[]): number {
+	for (const value of values) {
+		if (typeof value === "number" && value > 0) return value;
+	}
+	return 0;
+}
 
 /**
  * Normalize tool call ID for Mistral.
@@ -609,6 +617,7 @@ const streamOpenAICompletionsOnce = (
 				apiKey,
 				options?.headers,
 				options?.initiatorOverride,
+				getOpenAIPromptCacheKey(options),
 			);
 			const premiumRequestsTotal = copilotPremiumRequests;
 			let appliedStrictTools = false;
@@ -677,9 +686,10 @@ const streamOpenAICompletionsOnce = (
 						body: params,
 						signal: requestSignal,
 						fetch: options?.fetch,
-						// With a first-event watchdog armed, transport retries must
-						// not silently extend the deadline (old SDK `maxRetries: 0`).
-						maxAttempts: requestTimeoutMs === undefined ? undefined : 1,
+						// Transient 408/429/5xx get Retry-After-aware transport retries.
+						// The first-event watchdog above aborts `requestSignal`, which
+						// bounds every attempt and backoff sleep — retries cannot
+						// extend the deadline.
 						onSseEvent: rawSseObserver,
 					});
 					await notifyProviderResponse(options, response, model, requestId);
@@ -752,6 +762,16 @@ const streamOpenAICompletionsOnce = (
 			type OpenAIStreamBlock = TextContent | ThinkingContent | ToolCallStreamBlock;
 			const pendingToolCallBlocks: ToolCallStreamBlock[] = [];
 			const toolCallBlockByIndex = new Map<number, ToolCallStreamBlock>();
+			// Blocks born from an unkeyed multi-entry `tool_calls` array (no `id`,
+			// no `index`), tracked by array offset so continuation chunks that omit
+			// the entry name still route back to the sibling created earlier
+			// instead of collapsing onto `currentBlock`.
+			const unkeyedBatchBlocks: (ToolCallStreamBlock | undefined)[] = [];
+			const clearUnkeyedBatchSlot = (block: ToolCallStreamBlock): void => {
+				for (let index = 0; index < unkeyedBatchBlocks.length; index++) {
+					if (unkeyedBatchBlocks[index] === block) unkeyedBatchBlocks[index] = undefined;
+				}
+			};
 			let currentBlock: OpenAIStreamBlock | undefined;
 			const blockIndex = (block: OpenAIStreamBlock | undefined): number => {
 				if (!block) return Math.max(0, output.content.length - 1);
@@ -784,6 +804,7 @@ const streamOpenAICompletionsOnce = (
 				}
 				const pendingIndex = pendingToolCallBlocks.indexOf(block);
 				if (pendingIndex >= 0) pendingToolCallBlocks.splice(pendingIndex, 1);
+				clearUnkeyedBatchSlot(block);
 				stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
 			};
 			const finishPendingToolCallBlocks = (): void => {
@@ -1085,14 +1106,27 @@ const streamOpenAICompletionsOnce = (
 					}
 
 					if (choice?.delta?.tool_calls && choice.delta.tool_calls.length > 0) {
-						for (const toolCall of choice.delta.tool_calls) {
+						const toolCalls = choice.delta.tool_calls;
+						for (let toolCallOffset = 0; toolCallOffset < toolCalls.length; toolCallOffset++) {
+							const toolCall = toolCalls[toolCallOffset]!;
 							const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
+							const incomingName = toolCall.function?.name || "";
+							// Multi-entry `tool_calls` arrays without `id`/`index` — either the
+							// opening chunk that carries per-entry names, or a continuation whose
+							// entries are argument-only. Either way, route by array offset so
+							// sibling calls stay isolated.
+							const unkeyedBatchedArrayEntry = toolCalls.length > 1 && streamIndex === undefined && !toolCall.id;
 							let block = streamIndex !== undefined ? toolCallBlockByIndex.get(streamIndex) : undefined;
 							if (!block && toolCall.id) {
 								block = pendingToolCallBlocks.find(candidate => candidate.id === toolCall.id);
 							}
+							if (!block && unkeyedBatchedArrayEntry) {
+								const offsetBlock = unkeyedBatchBlocks[toolCallOffset];
+								if (offsetBlock && offsetBlock.partialArgs !== undefined) block = offsetBlock;
+							}
 							if (
 								!block &&
+								!unkeyedBatchedArrayEntry &&
 								currentBlock?.type === "toolCall" &&
 								(!toolCall.id || currentBlock.id === toolCall.id)
 							) {
@@ -1106,7 +1140,7 @@ const streamOpenAICompletionsOnce = (
 								block = {
 									type: "toolCall",
 									id: toolCall.id || "",
-									name: toolCall.function?.name || "",
+									name: incomingName,
 									arguments: {},
 									partialArgs: "",
 									streamIndex,
@@ -1120,6 +1154,7 @@ const streamOpenAICompletionsOnce = (
 									contentIndex: blockIndex(block),
 									partial: output,
 								});
+								if (unkeyedBatchedArrayEntry) unkeyedBatchBlocks[toolCallOffset] = block;
 							} else {
 								// Resuming a pending call after interleaved text/thinking:
 								// close the text/thinking block we drifted into.
@@ -1134,7 +1169,7 @@ const streamOpenAICompletionsOnce = (
 							}
 
 							if (toolCall.id) block.id = toolCall.id;
-							if (toolCall.function?.name) block.name = toolCall.function.name;
+							if (incomingName) block.name = incomingName;
 							let delta = "";
 							// The OpenAI SDK types `function.arguments` as a JSON string, but MiniMax-compatible
 							// hosts stream a fully-formed object instead. Model both shapes so the branches below
@@ -1326,6 +1361,7 @@ function createRequestSetup(
 	apiKey?: string,
 	extraHeaders?: Record<string, string>,
 	initiatorOverride?: MessageAttribution,
+	promptCacheSessionId?: string,
 ): OpenAIRequestSetup & { baseUrl: string } {
 	const apiVersion = $env.AZURE_OPENAI_API_VERSION || "2024-10-21";
 	const deploymentName = parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(model.id) ?? model.id;
@@ -1333,6 +1369,7 @@ function createRequestSetup(
 		apiKey,
 		extraHeaders,
 		initiatorOverride,
+		promptCacheSessionId,
 		messages: context.messages,
 		defaultBaseUrl: "https://api.openai.com/v1",
 		// Provider auth/header overlay: Kimi-code hosts require shared client
@@ -1380,7 +1417,11 @@ function buildParams(
 	context: Context,
 	options: OpenAICompletionsOptions | undefined,
 	toolStrictModeOverride?: ToolStrictModeOverride,
-): { params: OpenAICompletionsParams; toolStrictMode: AppliedToolStrictMode; strictToolsApplied: boolean } {
+): {
+	params: OpenAICompletionsParams;
+	toolStrictMode: AppliedToolStrictMode;
+	strictToolsApplied: boolean;
+} {
 	const initialPolicy = resolveOpenAICompatForRequest(model, options);
 	const initialCompat = initialPolicy.compat as ResolvedOpenAICompat;
 
@@ -1426,7 +1467,7 @@ function buildParams(
 	if (options?.frequencyPenalty !== undefined) {
 		params.frequency_penalty = options.frequencyPenalty;
 	}
-	applyOpenAIServiceTier(params, options?.serviceTier, model.provider);
+	applyOpenAIServiceTier(params, options?.serviceTier, model);
 
 	if (context.tools?.length) {
 		const builtTools = convertTools(context.tools, initialCompat, toolStrictModeOverride);
@@ -1558,11 +1599,7 @@ export function parseChunkUsage(
 	const accounting = calculateOpenAIUsageAccounting({
 		promptTokens: typeof promptTokens === "number" ? promptTokens : 0,
 		outputTokens,
-		cachedTokens:
-			(typeof cachedTokens === "number" ? cachedTokens : undefined) ??
-			(typeof promptCacheHitTokens === "number" ? promptCacheHitTokens : undefined) ??
-			(typeof promptTokenCachedTokens === "number" ? promptTokenCachedTokens : undefined) ??
-			0,
+		cachedTokens: firstPositiveNumber(cachedTokens, promptCacheHitTokens, promptTokenCachedTokens),
 		reasoningTokens: typeof completionReasoningTokens === "number" ? completionReasoningTokens : 0,
 		cacheWriteOpenRouter: typeof cacheWriteTokens === "number" ? cacheWriteTokens : undefined,
 		cacheWriteDeepSeek: typeof promptCacheMissTokens === "number" ? promptCacheMissTokens : undefined,
@@ -1775,7 +1812,20 @@ export function convertMessages(
 				// Always send assistant content as a plain string. Some OpenAI-compatible
 				// backends mirror array-of-text-block payloads back to the model literally,
 				// causing recursive nested content in subsequent turns.
-				assistantMsg.content = nonEmptyTextBlocks.map(b => b.text.toWellFormed()).join("");
+				// Join ordinary adjacent text blocks with no separator so bridge
+				// stitching, imported transcripts, and streaming chunks keep their
+				// original byte sequence. Demoted-thinking blocks (kDemotedThinking,
+				// synthesized by transformMessages) are the one exception: bare
+				// Anthropic-dialect reasoning would otherwise glue onto the first word
+				// of the visible answer. Insert a paragraph break after them — only
+				// when another block actually follows, so a trailing demoted block
+				// never ships trailing whitespace.
+				assistantMsg.content = nonEmptyTextBlocks
+					.map((b, i) => {
+						const text = b.text.toWellFormed();
+						return isDemotedThinking(b) && i < nonEmptyTextBlocks.length - 1 ? `${text}\n` : text;
+					})
+					.join("");
 			}
 
 			// Handle thinking blocks
@@ -1786,12 +1836,12 @@ export function convertMessages(
 				if (compat.requiresThinkingAsText) {
 					const thinkingText = nonEmptyThinkingBlocks
 						.map(b => renderDemotedThinking(model.id, b.thinking))
-						.join("");
+						.join(" ");
 					// `content` is a plain string at this point (set above) or null —
 					// never an array. Prepend the demoted thinking to the string form.
 					assistantMsg.content =
 						typeof assistantMsg.content === "string" && assistantMsg.content.length > 0
-							? `${thinkingText}${assistantMsg.content}`
+							? `${thinkingText} ${assistantMsg.content}`
 							: thinkingText;
 				} else if (compat.requiresReasoningContentForToolCalls) {
 					// Use the streamed signature when the backend accepts whichever
@@ -2112,6 +2162,17 @@ function convertTools(
 	return {
 		tools: adaptedTools.map(({ tool, baseParameters, parameters, strict }) => {
 			const includeStrict = toolStrictMode === "all_strict" || (toolStrictMode === "mixed" && strict);
+			// `strict: false` is semantically distinct from omitted `strict` on some
+			// backends: with it absent, optional properties may be over-filled with
+			// placeholder values (#4336). Preserve the author's explicit `false`,
+			// but only in "mixed" mode against a provider that understands the
+			// field — the `all_strict → none` collapse and `supportsStrictMode:
+			// false` paths deliberately keep the wire flag uniformly absent.
+			const includeExplicitFalse =
+				!includeStrict &&
+				tool.strict === false &&
+				toolStrictMode === "mixed" &&
+				compat.supportsStrictMode !== false;
 			const wireParameters = includeStrict ? parameters : baseParameters;
 			return {
 				type: "function",
@@ -2125,7 +2186,7 @@ function convertTools(
 							? (normalizeSchemaForMoonshot(wireParameters) as Record<string, unknown>)
 							: wireParameters,
 					// Only include strict if provider supports it. Some reject unknown fields.
-					...(includeStrict && { strict: true }),
+					...(includeStrict ? { strict: true } : includeExplicitFalse ? { strict: false } : {}),
 				},
 			};
 		}),
