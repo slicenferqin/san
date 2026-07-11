@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { MnemopiOptions } from "@oh-my-pi/pi-mnemopi";
 import { getMemoriesDir, logger } from "@oh-my-pi/pi-utils";
+import { resolveSanBrainLegacyAutoRetain } from "../brain/compatibility";
 import type { Settings } from "../config/settings";
 
 export type MnemopiLlmMode = "none" | "smol" | "remote";
@@ -60,6 +61,8 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 	// env (documented model-level override) > variant-derived default. Without the env
 	// term a variant default would silently shadow a user's configured env model.
 	const embeddingModel = embeddingOverride?.trim() || Bun.env.MNEMOPI_EMBEDDING_MODEL?.trim() || variantModel;
+	const autoRetain = resolveSanBrainLegacyAutoRetain(settings, "mnemopi", settings.get("mnemopi.autoRetain"));
+	if (autoRetain.warning) logger.warn(autoRetain.warning);
 	return {
 		dbPath,
 		baseBank: scope.baseBank,
@@ -69,7 +72,7 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 		recallBanks,
 		scoping,
 		autoRecall: settings.get("mnemopi.autoRecall"),
-		autoRetain: settings.get("mnemopi.autoRetain"),
+		autoRetain: autoRetain.effective,
 		polyphonicRecall: settings.get("mnemopi.polyphonicRecall"),
 		enhancedRecall: settings.get("mnemopi.enhancedRecall"),
 		proactiveLinking: settings.get("mnemopi.proactiveLinking"),

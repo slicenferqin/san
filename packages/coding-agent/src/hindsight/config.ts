@@ -11,6 +11,7 @@
  */
 
 import { logger } from "@oh-my-pi/pi-utils";
+import { resolveSanBrainLegacyAutoRetain } from "../brain/compatibility";
 import type { Settings } from "../config/settings";
 
 export type HindsightScoping = "global" | "per-project" | "per-project-tagged";
@@ -131,6 +132,9 @@ export function loadHindsightConfig(settings: Settings, env: NodeJS.ProcessEnv =
 		});
 	}
 
+	const configuredAutoRetain = autoRetainEnv ?? settings.get("hindsight.autoRetain");
+	const autoRetain = resolveSanBrainLegacyAutoRetain(settings, "hindsight", configuredAutoRetain);
+	if (autoRetain.warning) logger.warn(autoRetain.warning);
 	const config: HindsightConfig = {
 		hindsightApiUrl: apiUrlEnv ?? settings.get("hindsight.apiUrl") ?? null,
 		hindsightApiToken: apiTokenEnv ?? settings.get("hindsight.apiToken") ?? null,
@@ -142,7 +146,7 @@ export function loadHindsightConfig(settings: Settings, env: NodeJS.ProcessEnv =
 		retainMission: settings.get("hindsight.retainMission") ?? null,
 
 		autoRecall: autoRecallEnv ?? settings.get("hindsight.autoRecall"),
-		autoRetain: autoRetainEnv ?? settings.get("hindsight.autoRetain"),
+		autoRetain: autoRetain.effective,
 
 		retainMode: retainModeEnv ?? settingsRetainMode ?? "full-session",
 		retainEveryNTurns: retainEveryNTurnsEnv ?? settings.get("hindsight.retainEveryNTurns"),

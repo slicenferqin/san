@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { SessionEntry } from "../session/session-entries";
 import { mergeSanBrainCandidateRecords } from "./consolidate";
 import { listSanBrainLedgerEntries } from "./ledger";
+import { buildSanBrainProjectionPlans } from "./projection-plan";
 import {
 	isSanBrainDecision,
 	isSanBrainExperienceCandidate,
@@ -11,6 +12,9 @@ import {
 	type SanBrainCandidate,
 	type SanBrainCandidateKind,
 	type SanBrainDecision,
+	type SanBrainProjection,
+	type SanBrainProjectionState,
+	type SanBrainProjectionTarget,
 } from "./types";
 
 const BRAIN_DB_SCHEMA_VERSION = 1;
@@ -89,6 +93,10 @@ CREATE INDEX IF NOT EXISTS projections_decision_idx ON projections(decision_id, 
 type CandidateStatus = "pending" | "active" | "discarded" | "superseded" | "undone";
 type DecisionApplicationState = "pending" | "applied" | "blocked";
 
+interface SchemaVersionDbRow {
+	user_version: number;
+}
+
 interface CandidateDbRow {
 	candidate_id: string;
 	kind: SanBrainCandidateKind;
@@ -108,6 +116,20 @@ interface DecisionDbRow {
 	payload_json: string;
 }
 
+interface CandidateCollisionDbRow {
+	candidate_id: string;
+	kind: string;
+	source_entry_id: string;
+	payload_json: string;
+}
+
+interface DecisionCollisionDbRow {
+	decision_id: string;
+	source_entry_id: string;
+	idempotency_key: string;
+	payload_json: string;
+}
+
 interface ActiveStateDbRow {
 	owner_id: string;
 	kind: SanBrainCandidateKind;
@@ -120,8 +142,8 @@ interface ActiveStateDbRow {
 interface ProjectionDbRow {
 	projection_id: string;
 	decision_id: string;
-	target: string;
-	state: string;
+	target: SanBrainProjectionTarget;
+	state: SanBrainProjectionState;
 	attempt_count: number;
 	revision: number | null;
 	before_hash: string | null;
@@ -157,8 +179,8 @@ export interface SanBrainActiveStateRecord {
 export interface SanBrainProjectionRecord {
 	projectionId: string;
 	decisionId: string;
-	target: string;
-	state: string;
+	target: SanBrainProjectionTarget;
+	state: SanBrainProjectionState;
 	attemptCount: number;
 	revision?: number;
 	beforeHash?: string;
@@ -224,6 +246,21 @@ function activeStateRecord(row: ActiveStateDbRow): SanBrainActiveStateRecord {
 	};
 }
 
+function projectionRecord(row: ProjectionDbRow): SanBrainProjectionRecord {
+	return {
+		projectionId: row.projection_id,
+		decisionId: row.decision_id,
+		target: row.target,
+		state: row.state,
+		attemptCount: row.attempt_count,
+		...(row.revision === null ? {} : { revision: row.revision }),
+		...(row.before_hash ? { beforeHash: row.before_hash } : {}),
+		...(row.after_hash ? { afterHash: row.after_hash } : {}),
+		...(row.error ? { error: row.error } : {}),
+		updatedAt: row.updated_at,
+	};
+}
+
 export function getSanBrainDbPath(agentDir: string): string {
 	return path.join(agentDir, "brain", "brain.sqlite");
 }
@@ -252,7 +289,7 @@ export class SanBrainStore {
 	}
 
 	get schemaVersion(): number {
-		const row = this.#db.query("PRAGMA user_version").get() as { user_version: number } | null;
+		const row = this.#db.query("PRAGMA user_version").get() as SchemaVersionDbRow | null;
 		return row?.user_version ?? 0;
 	}
 
@@ -304,6 +341,7 @@ export class SanBrainStore {
 				if (state === "applied") result.decisionsApplied++;
 				if (state === "blocked") result.decisionsBlocked++;
 			}
+			for (const entry of ledger.projections) this.#applyProjectionAudit(entry.data);
 		});
 		sync();
 		return result;
@@ -347,12 +385,7 @@ export class SanBrainStore {
 			.query(
 				"SELECT candidate_id, kind, source_entry_id, payload_json FROM candidates WHERE candidate_id = ? OR source_entry_id = ?",
 			)
-			.get(candidate.candidateId, entryId) as {
-			candidate_id: string;
-			kind: string;
-			source_entry_id: string;
-			payload_json: string;
-		} | null;
+			.get(candidate.candidateId, entryId) as CandidateCollisionDbRow | null;
 		if (
 			existing?.candidate_id === candidate.candidateId &&
 			existing.kind === kind &&
@@ -391,12 +424,7 @@ export class SanBrainStore {
 			.query(
 				"SELECT decision_id, source_entry_id, idempotency_key, payload_json FROM decisions WHERE decision_id = ? OR source_entry_id = ? OR idempotency_key = ?",
 			)
-			.get(decision.decisionId, entryId, decision.idempotencyKey) as {
-			decision_id: string;
-			source_entry_id: string;
-			idempotency_key: string;
-			payload_json: string;
-		} | null;
+			.get(decision.decisionId, entryId, decision.idempotencyKey) as DecisionCollisionDbRow | null;
 		if (
 			existing?.decision_id === decision.decisionId &&
 			existing.source_entry_id === entryId &&
@@ -463,11 +491,28 @@ export class SanBrainStore {
 			);
 		}
 
+		const materializedCandidate =
+			decision.action === "approve"
+				? this.#consolidatedCandidate(candidateRow)
+				: parseCandidate(candidateRow.kind, candidateRow.payload_json);
+		const projectionPlans = buildSanBrainProjectionPlans(materializedCandidate, decision);
+		const expectedProjectionIds = projectionPlans.map(plan => plan.projectionId);
+		if (
+			decision.projectionIds.length > 0 &&
+			(decision.projectionIds.length !== expectedProjectionIds.length ||
+				decision.projectionIds.some((projectionId, index) => projectionId !== expectedProjectionIds[index]))
+		) {
+			return this.#blockDecision(
+				decisionId,
+				"Decision projection IDs do not match the deterministic Brain M5 plan.",
+			);
+		}
+
 		const updatedAt = decision.createdAt;
 		let status: CandidateStatus;
 		if (decision.action === "approve") {
 			status = "active";
-			const consolidatedCandidate = this.#consolidatedCandidate(candidateRow);
+			const consolidatedCandidate = materializedCandidate;
 			this.#db
 				.prepare(
 					`INSERT INTO active_states (
@@ -504,7 +549,40 @@ export class SanBrainStore {
 		this.#db
 			.prepare("UPDATE decisions SET application_state = 'applied', application_error = NULL WHERE decision_id = ?")
 			.run(decisionId);
+		if (decision.projectionIds.length > 0) {
+			for (const plan of projectionPlans) {
+				this.#db
+					.prepare(
+						`INSERT OR IGNORE INTO projections (
+							projection_id, decision_id, target, state, attempt_count, revision, updated_at
+						) VALUES (?, ?, ?, 'pending', 0, ?, ?)`,
+					)
+					.run(plan.projectionId, decision.decisionId, plan.target, decision.nextRevision, updatedAt);
+			}
+		}
 		return "applied";
+	}
+
+	#applyProjectionAudit(projection: SanBrainProjection): void {
+		this.#db
+			.prepare(
+				`UPDATE projections SET
+					state = ?, attempt_count = ?, revision = ?, before_hash = ?, after_hash = ?, error = ?, updated_at = ?
+				 WHERE projection_id = ? AND decision_id = ? AND target = ? AND updated_at <= ?`,
+			)
+			.run(
+				projection.state,
+				projection.attemptCount,
+				projection.revision ?? null,
+				projection.beforeHash ?? null,
+				projection.afterHash ?? null,
+				projection.error ?? null,
+				projection.updatedAt,
+				projection.projectionId,
+				projection.decisionId,
+				projection.target,
+				projection.updatedAt,
+			);
 	}
 
 	#blockDecision(decisionId: string, error: string): "blocked" {
@@ -563,6 +641,49 @@ export class SanBrainStore {
 		return row ? decisionRecord(row) : undefined;
 	}
 
+	getProjection(projectionId: string): SanBrainProjectionRecord | undefined {
+		const row = this.#db
+			.query(
+				`SELECT projection_id, decision_id, target, state, attempt_count, revision, before_hash, after_hash, error, updated_at
+				 FROM projections WHERE projection_id = ?`,
+			)
+			.get(projectionId) as ProjectionDbRow | null;
+		return row ? projectionRecord(row) : undefined;
+	}
+
+	listProjections(
+		states: readonly SanBrainProjectionState[] = ["pending", "failed", "applying", "compensating"],
+		limit = DEFAULT_LIST_LIMIT,
+	): SanBrainProjectionRecord[] {
+		if (states.length === 0) return [];
+		const placeholders = states.map(() => "?").join(", ");
+		const rows = this.#db
+			.query(
+				`SELECT projection_id, decision_id, target, state, attempt_count, revision, before_hash, after_hash, error, updated_at
+				 FROM projections WHERE state IN (${placeholders}) ORDER BY updated_at, projection_id LIMIT ?`,
+			)
+			.all(...states, Math.max(1, Math.trunc(limit))) as ProjectionDbRow[];
+		return rows.map(projectionRecord);
+	}
+
+	findPreviousAppliedProjection(
+		ownerId: string,
+		target: SanBrainProjectionTarget,
+		excludeDecisionId: string,
+	): SanBrainProjectionRecord | undefined {
+		const row = this.#db
+			.query(
+				`SELECT p.projection_id, p.decision_id, p.target, p.state, p.attempt_count, p.revision,
+					p.before_hash, p.after_hash, p.error, p.updated_at
+				 FROM projections p
+				 JOIN decisions d ON d.decision_id = p.decision_id
+				 WHERE d.owner_id = ? AND p.target = ? AND p.decision_id <> ? AND p.state = 'applied'
+				 ORDER BY p.updated_at DESC, p.projection_id DESC LIMIT 1`,
+			)
+			.get(ownerId, target, excludeDecisionId) as ProjectionDbRow | null;
+		return row ? projectionRecord(row) : undefined;
+	}
+
 	explain(id: string): SanBrainExplanation | undefined {
 		const directCandidate = this.getCandidate(id);
 		const decisionById = directCandidate
@@ -598,18 +719,7 @@ export class SanBrainStore {
 			candidate,
 			decisions: decisions.map(decisionRecord),
 			...(activeRow ? { activeState: activeStateRecord(activeRow) } : {}),
-			projections: projectionRows.map(row => ({
-				projectionId: row.projection_id,
-				decisionId: row.decision_id,
-				target: row.target,
-				state: row.state,
-				attemptCount: row.attempt_count,
-				...(row.revision === null ? {} : { revision: row.revision }),
-				...(row.before_hash ? { beforeHash: row.before_hash } : {}),
-				...(row.after_hash ? { afterHash: row.after_hash } : {}),
-				...(row.error ? { error: row.error } : {}),
-				updatedAt: row.updated_at,
-			})),
+			projections: projectionRows.map(projectionRecord),
 		};
 	}
 }

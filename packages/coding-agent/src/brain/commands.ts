@@ -6,6 +6,7 @@ import {
 	type SanBrainConsolidationReport,
 } from "./consolidate";
 import { appendSanBrainDecision } from "./ledger";
+import { buildSanBrainProjectionPlans } from "./projection-plan";
 import type { SanBrainCandidateRecord, SanBrainDecisionRecord, SanBrainStore, SanBrainSyncResult } from "./store";
 import { BRAIN_SCHEMA_VERSION, type SanBrainDecision, type SanBrainDecisionAction } from "./types";
 
@@ -45,9 +46,14 @@ function createDecision(
 ): SanBrainDecision {
 	const nextRevision = candidate.revision + 1;
 	const idempotencyKey = `${BRAIN_M3_POLICY_VERSION}:${action}:${candidate.candidate.candidateId}:${nextRevision}:${context}`;
+	const nextDecisionId = decisionId(idempotencyKey);
+	const projectionIds = buildSanBrainProjectionPlans(candidate.candidate, {
+		decisionId: nextDecisionId,
+		action,
+	}).map(plan => plan.projectionId);
 	return {
 		schemaVersion: BRAIN_SCHEMA_VERSION,
-		decisionId: decisionId(idempotencyKey),
+		decisionId: nextDecisionId,
 		ownerType: ownerType(candidate),
 		ownerId: candidate.candidate.candidateId,
 		action,
@@ -57,7 +63,7 @@ function createDecision(
 		reason,
 		policyVersion: BRAIN_M3_POLICY_VERSION,
 		idempotencyKey,
-		projectionIds: [],
+		projectionIds,
 		createdAt,
 	};
 }

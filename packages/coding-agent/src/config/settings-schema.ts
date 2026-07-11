@@ -2707,6 +2707,13 @@ export const SETTINGS_SCHEMA = {
 	"san.brain.activation.maxTokens": { type: "number", default: 1200 },
 	"san.brain.activation.minConfidence": { type: "number", default: 0.75 },
 	"san.brain.activation.globalMaxTokens": { type: "number", default: 6000 },
+	"san.brain.projections.enabled": { type: "boolean", default: false },
+	"san.brain.projections.maxAttempts": { type: "number", default: 3 },
+	"san.brain.compatibility.legacyAutoRetain": {
+		type: "enum",
+		values: ["allow", "warn", "block"] as const,
+		default: "warn",
+	},
 
 	// San v0.2 Execution Loop
 	"san.executionLoop.enabled": {

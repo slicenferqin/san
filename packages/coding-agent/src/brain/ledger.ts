@@ -5,14 +5,17 @@ import {
 	BRAIN_DECISION_CUSTOM_TYPE,
 	BRAIN_EXPERIENCE_CANDIDATE_CUSTOM_TYPE,
 	BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE,
+	BRAIN_PROJECTION_CUSTOM_TYPE,
 	isSanBrainActivation,
 	isSanBrainDecision,
 	isSanBrainExperienceCandidate,
 	isSanBrainProfileCandidate,
+	isSanBrainProjection,
 	type SanBrainActivation,
 	type SanBrainDecision,
 	type SanBrainExperienceCandidate,
 	type SanBrainProfileCandidate,
+	type SanBrainProjection,
 } from "./types";
 
 export interface SanBrainLedgerEntry<T> {
@@ -26,6 +29,7 @@ export interface SanBrainLedgerSnapshot {
 	profileCandidates: Array<SanBrainLedgerEntry<SanBrainProfileCandidate>>;
 	experienceCandidates: Array<SanBrainLedgerEntry<SanBrainExperienceCandidate>>;
 	decisions: Array<SanBrainLedgerEntry<SanBrainDecision>>;
+	projections: Array<SanBrainLedgerEntry<SanBrainProjection>>;
 	activations: Array<SanBrainLedgerEntry<SanBrainActivation>>;
 }
 
@@ -45,6 +49,13 @@ export function appendSanBrainExperienceCandidate(
 
 export function appendSanBrainDecision(sessionManager: ReadonlySessionManager, decision: SanBrainDecision): string {
 	return sessionManager.appendCustomEntry(BRAIN_DECISION_CUSTOM_TYPE, decision);
+}
+
+export function appendSanBrainProjection(
+	sessionManager: ReadonlySessionManager,
+	projection: SanBrainProjection,
+): string {
+	return sessionManager.appendCustomEntry(BRAIN_PROJECTION_CUSTOM_TYPE, projection);
 }
 
 export function appendSanBrainActivation(
@@ -68,6 +79,7 @@ export function listSanBrainLedgerEntries(entries: readonly SessionEntry[]): San
 		profileCandidates: [],
 		experienceCandidates: [],
 		decisions: [],
+		projections: [],
 		activations: [],
 	};
 
@@ -87,6 +99,11 @@ export function listSanBrainLedgerEntries(entries: readonly SessionEntry[]): San
 			case BRAIN_DECISION_CUSTOM_TYPE:
 				if (isSanBrainDecision(entry.data)) {
 					snapshot.decisions.push(ledgerEntry(entry, entry.data));
+				}
+				break;
+			case BRAIN_PROJECTION_CUSTOM_TYPE:
+				if (isSanBrainProjection(entry.data)) {
+					snapshot.projections.push(ledgerEntry(entry, entry.data));
 				}
 				break;
 			case BRAIN_ACTIVATION_CUSTOM_TYPE:

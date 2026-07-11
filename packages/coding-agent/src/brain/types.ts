@@ -84,12 +84,27 @@ export interface SanBrainTriggerSelector {
 	riskClasses?: string[];
 }
 
+export type SanBrainCheckSeverity = "info" | "warning" | "error" | "blocker";
+
 export type SanBrainAction =
 	| { kind: "prelude_fact"; subject: string; predicate: string; value: string }
 	| { kind: "risk_rule"; riskClass: string; requiredCheck: string }
 	| { kind: "workflow_suggestion"; workflowId: string }
-	| { kind: "skill_reference"; skillName: string }
-	| { kind: "check_suggestion"; checkId: string }
+	| {
+			kind: "skill_reference";
+			skillName: string;
+			description?: string;
+			body?: string;
+			action?: "create" | "update";
+			expectedHash?: string;
+	  }
+	| {
+			kind: "check_suggestion";
+			checkId: string;
+			title?: string;
+			severity?: SanBrainCheckSeverity;
+			body?: string;
+	  }
 	| { kind: "recall_policy"; queryTemplateId: string };
 
 export type SanBrainExperienceCandidateType =
@@ -145,6 +160,30 @@ export interface SanBrainDecision {
 	idempotencyKey: string;
 	projectionIds: string[];
 	createdAt: string;
+}
+
+export type SanBrainProjectionTarget = "memory" | "managed_skill" | "check_suggestion";
+export type SanBrainProjectionState =
+	| "pending"
+	| "applying"
+	| "applied"
+	| "failed"
+	| "compensating"
+	| "compensated"
+	| "blocked";
+
+export interface SanBrainProjection {
+	schemaVersion: typeof BRAIN_SCHEMA_VERSION;
+	projectionId: string;
+	decisionId: string;
+	target: SanBrainProjectionTarget;
+	state: SanBrainProjectionState;
+	attemptCount: number;
+	revision?: number;
+	beforeHash?: string;
+	afterHash?: string;
+	error?: string;
+	updatedAt: string;
 }
 
 export type SanBrainActivationRole = "primary" | "commander" | "worker" | "supervisor" | "oracle";
@@ -335,9 +374,24 @@ export function isSanBrainAction(value: unknown): value is SanBrainAction {
 		case "workflow_suggestion":
 			return isNonEmptyString(value.workflowId);
 		case "skill_reference":
-			return isNonEmptyString(value.skillName);
+			return (
+				isNonEmptyString(value.skillName) &&
+				isOptionalString(value.description) &&
+				isOptionalString(value.body) &&
+				(value.action === undefined || value.action === "create" || value.action === "update") &&
+				isOptionalString(value.expectedHash)
+			);
 		case "check_suggestion":
-			return isNonEmptyString(value.checkId);
+			return (
+				isNonEmptyString(value.checkId) &&
+				isOptionalString(value.title) &&
+				(value.severity === undefined ||
+					value.severity === "info" ||
+					value.severity === "warning" ||
+					value.severity === "error" ||
+					value.severity === "blocker") &&
+				isOptionalString(value.body)
+			);
 		case "recall_policy":
 			return isNonEmptyString(value.queryTemplateId);
 		default:
@@ -411,6 +465,40 @@ export function isSanBrainDecision(value: unknown): value is SanBrainDecision {
 		isNonEmptyString(value.idempotencyKey) &&
 		isStringArray(value.projectionIds) &&
 		isNonEmptyString(value.createdAt)
+	);
+}
+
+function isProjectionTarget(value: unknown): value is SanBrainProjectionTarget {
+	return value === "memory" || value === "managed_skill" || value === "check_suggestion";
+}
+
+function isProjectionState(value: unknown): value is SanBrainProjectionState {
+	return (
+		value === "pending" ||
+		value === "applying" ||
+		value === "applied" ||
+		value === "failed" ||
+		value === "compensating" ||
+		value === "compensated" ||
+		value === "blocked"
+	);
+}
+
+export function isSanBrainProjection(value: unknown): value is SanBrainProjection {
+	return (
+		isRecord(value) &&
+		value.schemaVersion === BRAIN_SCHEMA_VERSION &&
+		isNonEmptyString(value.projectionId) &&
+		isNonEmptyString(value.decisionId) &&
+		isProjectionTarget(value.target) &&
+		isProjectionState(value.state) &&
+		Number.isInteger(value.attemptCount) &&
+		(value.attemptCount as number) >= 0 &&
+		(value.revision === undefined || (Number.isInteger(value.revision) && (value.revision as number) >= 0)) &&
+		isOptionalString(value.beforeHash) &&
+		isOptionalString(value.afterHash) &&
+		isOptionalString(value.error) &&
+		isNonEmptyString(value.updatedAt)
 	);
 }
 

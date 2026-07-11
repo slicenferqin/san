@@ -170,6 +170,7 @@ import {
 	planSanBrainGlobalInjection,
 	recordSanBrainActivationError,
 	recordSanBrainCaptureError,
+	runSanBrainProjections,
 	type SanBrainActivation,
 	SanBrainStore,
 } from "../brain";
@@ -7914,6 +7915,13 @@ export class AgentSession {
 			!options?.synthetic &&
 			this.settings.get("san.brain.enabled") === true &&
 			(brainMode === "activation" || brainMode === "projection");
+		if (
+			!options?.synthetic &&
+			brainMode === "projection" &&
+			this.settings.get("san.brain.projections.enabled") === true
+		) {
+			await this.#runPendingSanBrainProjections();
+		}
 		const brainPrelude = brainActivationEnabled ? await this.#buildBrainStatePrelude(expandedText) : undefined;
 		if (brainActivationEnabled) {
 			const brainStateMessage: CustomMessage | undefined = brainPrelude?.content
@@ -8055,6 +8063,27 @@ export class AgentSession {
 			attribution: "agent",
 			timestamp: Date.now(),
 		};
+	}
+
+	async #runPendingSanBrainProjections(): Promise<void> {
+		const store = SanBrainStore.open(this.settings.getAgentDir());
+		try {
+			await runSanBrainProjections({
+				store,
+				sessionManager: this.sessionManager,
+				session: this,
+				agentDir: this.settings.getAgentDir(),
+				cwd: path.resolve(this.settings.getCwd()),
+				maxAttempts: this.settings.get("san.brain.projections.maxAttempts"),
+			});
+		} catch (error) {
+			logger.warn("Failed to run pending San Brain projections", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionId: this.sessionId,
+			});
+		} finally {
+			store.close();
+		}
 	}
 
 	async #buildBrainStatePrelude(

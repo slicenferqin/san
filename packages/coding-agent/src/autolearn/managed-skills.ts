@@ -86,6 +86,18 @@ export interface WriteManagedSkillInput {
 	name: string;
 	description: string;
 	body: string;
+	agentDir?: string;
+	expectedHash?: string;
+}
+
+export interface ManagedSkillMutationResult {
+	path: string;
+	beforeHash?: string;
+	afterHash: string;
+}
+
+function managedSkillContentHash(content: string): string {
+	return Bun.hash(content).toString(36);
 }
 
 /**
@@ -114,8 +126,8 @@ function serializeSkillMutation<T>(name: string, op: () => Promise<T>): Promise<
  * valid name write/delete outside the isolated directory (e.g. onto authored
  * skills). Checked before composing any child path.
  */
-async function assertManagedRootSafe(): Promise<void> {
-	const rootStat = await fs.lstat(getManagedSkillsDir()).catch(err => {
+async function assertManagedRootSafe(agentDir: string): Promise<void> {
+	const rootStat = await fs.lstat(getManagedSkillsDir(agentDir)).catch(err => {
 		if (isEnoent(err)) return null;
 		throw err;
 	});
@@ -124,7 +136,7 @@ async function assertManagedRootSafe(): Promise<void> {
 	}
 }
 
-const UPDATE_FILE_OPEN_FLAGS = fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW;
+const UPDATE_FILE_OPEN_FLAGS = fsConstants.O_RDWR | fsConstants.O_NOFOLLOW;
 
 function assertManagedSkillFileSafeForUpdate(name: string, fileStat: Stats): void {
 	if (!fileStat.isFile()) {
@@ -137,22 +149,29 @@ function assertManagedSkillFileSafeForUpdate(name: string, fileStat: Stats): voi
 	}
 }
 
+function errorCode(error: unknown): string | undefined {
+	if (!error || typeof error !== "object" || !("code" in error)) return undefined;
+	return typeof error.code === "string" ? error.code : undefined;
+}
+
 async function openManagedSkillFileForUpdate(name: string, file: string) {
 	try {
 		return await fs.open(file, UPDATE_FILE_OPEN_FLAGS);
 	} catch (err) {
-		if ((err as { code?: string }).code === "ELOOP") {
+		if (errorCode(err) === "ELOOP") {
 			throw new Error(`Managed skill "${name}" SKILL.md is a symlink; refusing to overwrite it.`);
 		}
 		throw err;
 	}
 }
 
-/** Create or update a managed `SKILL.md`. Returns the resolved file path. */
-export async function writeManagedSkill(input: WriteManagedSkillInput): Promise<{ path: string }> {
+/** Create or update a managed `SKILL.md`. Returns its path and content hashes. */
+export async function writeManagedSkill(input: WriteManagedSkillInput): Promise<ManagedSkillMutationResult> {
 	const name = sanitizeSkillName(input.name);
 	const description = sanitizeManagedDescription(input.description);
 	const body = input.body.trim();
+	const agentDir = input.agentDir ?? getAgentDir();
+	const afterHash = managedSkillContentHash(`${toSkillFrontmatter(name, description)}\n${body}\n`);
 	// Reject empty content: an all-whitespace/control description sanitizes to ""
 	// and the `requireDescription` discovery scan then silently drops the skill,
 	// so the tool would report success for a skill that never appears.
@@ -172,8 +191,8 @@ export async function writeManagedSkill(input: WriteManagedSkillInput): Promise<
 		);
 	}
 	return serializeSkillMutation(name, async () => {
-		await assertManagedRootSafe();
-		const dir = path.join(getManagedSkillsDir(), name);
+		await assertManagedRootSafe(agentDir);
+		const dir = path.join(getManagedSkillsDir(agentDir), name);
 		const file = path.join(dir, "SKILL.md");
 		// Reject a symlinked skill directory: an intermediate symlink would let the
 		// write escape the isolated managed root. lstat does not follow the final
@@ -194,12 +213,12 @@ export async function writeManagedSkill(input: WriteManagedSkillInput): Promise<
 			try {
 				await fs.writeFile(file, content, { flag: "wx" });
 			} catch (err) {
-				if ((err as { code?: string }).code === "EEXIST") {
+				if (errorCode(err) === "EEXIST") {
 					throw new Error(`Managed skill "${name}" already exists. Use action "update" to change it.`);
 				}
 				throw err;
 			}
-			return { path: file };
+			return { path: file, afterHash };
 		}
 		// update: the file must already exist, be a plain managed file, and must
 		// not share an inode with a user-authored file via hard link. Open the
@@ -217,25 +236,78 @@ export async function writeManagedSkill(input: WriteManagedSkillInput): Promise<
 		}
 		assertManagedSkillFileSafeForUpdate(name, fileStat);
 		const handle = await openManagedSkillFileForUpdate(name, file);
+		let beforeHash: string | undefined;
 		try {
 			const openStat = await handle.stat();
 			assertManagedSkillFileSafeForUpdate(name, openStat);
+			const currentContent = await handle.readFile({ encoding: "utf8" });
+			beforeHash = managedSkillContentHash(currentContent);
+			if (input.expectedHash !== undefined && input.expectedHash !== beforeHash) {
+				throw new Error(
+					`Managed skill "${name}" changed since approval: expected ${input.expectedHash}, found ${beforeHash}.`,
+				);
+			}
 			await handle.truncate(0);
-			await handle.writeFile(content);
+			await handle.write(content, 0, "utf8");
 		} finally {
 			await handle.close();
 		}
-		return { path: file };
+		if (!beforeHash) throw new Error(`Managed skill "${name}" update did not produce a content hash.`);
+		return { path: file, beforeHash, afterHash };
 	});
 }
 
-/** Delete a managed skill directory. Throws when it does not exist. */
-export async function deleteManagedSkill(name: string): Promise<void> {
+export async function restoreManagedSkillContent(
+	name: string,
+	content: string,
+	options: { agentDir?: string; expectedHash: string },
+): Promise<ManagedSkillMutationResult> {
 	const safe = sanitizeSkillName(name);
-	await serializeSkillMutation(safe, async () => {
-		await assertManagedRootSafe();
-		const dir = path.join(getManagedSkillsDir(), safe);
-		// Refuse to follow a symlinked skill directory (rm would delete the target).
+	const agentDir = options.agentDir ?? getAgentDir();
+	if (!content.trim()) throw new Error(`Managed skill "${safe}" restore content is empty.`);
+	const bytes = Buffer.byteLength(content, "utf8");
+	if (bytes > MAX_MANAGED_SKILL_BYTES) {
+		throw new Error(`Managed skill restore is ${bytes} bytes; the limit is ${MAX_MANAGED_SKILL_BYTES}.`);
+	}
+	return serializeSkillMutation(safe, async () => {
+		await assertManagedRootSafe(agentDir);
+		const file = path.join(getManagedSkillsDir(agentDir), safe, "SKILL.md");
+		const fileStat = await fs.lstat(file);
+		if (fileStat.isSymbolicLink()) {
+			throw new Error(`Managed skill "${safe}" SKILL.md is a symlink; refusing to restore it.`);
+		}
+		assertManagedSkillFileSafeForUpdate(safe, fileStat);
+		const handle = await openManagedSkillFileForUpdate(safe, file);
+		try {
+			const openStat = await handle.stat();
+			assertManagedSkillFileSafeForUpdate(safe, openStat);
+			const currentContent = await handle.readFile({ encoding: "utf8" });
+			const beforeHash = managedSkillContentHash(currentContent);
+			if (beforeHash !== options.expectedHash) {
+				throw new Error(
+					`Managed skill "${safe}" changed since approval: expected ${options.expectedHash}, found ${beforeHash}.`,
+				);
+			}
+			await handle.truncate(0);
+			await handle.write(content, 0, "utf8");
+			return { path: file, beforeHash, afterHash: managedSkillContentHash(content) };
+		} finally {
+			await handle.close();
+		}
+	});
+}
+
+/** Delete a managed skill directory. Optional hash provides CAS protection. */
+export async function deleteManagedSkill(
+	name: string,
+	options: { agentDir?: string; expectedHash?: string } = {},
+): Promise<{ beforeHash: string }> {
+	const safe = sanitizeSkillName(name);
+	const agentDir = options.agentDir ?? getAgentDir();
+	return serializeSkillMutation(safe, async () => {
+		await assertManagedRootSafe(agentDir);
+		const dir = path.join(getManagedSkillsDir(agentDir), safe);
+		const file = path.join(dir, "SKILL.md");
 		const dirStat = await fs.lstat(dir).catch(err => {
 			if (isEnoent(err)) return null;
 			throw err;
@@ -243,13 +315,15 @@ export async function deleteManagedSkill(name: string): Promise<void> {
 		if (dirStat?.isSymbolicLink()) {
 			throw new Error(`Managed skill "${safe}" is a symlink; refusing to delete outside the managed directory.`);
 		}
-		try {
-			await fs.rm(dir, { recursive: true });
-		} catch (err) {
-			if (isEnoent(err)) {
-				throw new Error(`Managed skill "${safe}" does not exist.`);
-			}
-			throw err;
+		if (dirStat === null) throw new Error(`Managed skill "${safe}" does not exist.`);
+		const content = await fs.readFile(file, "utf8");
+		const beforeHash = managedSkillContentHash(content);
+		if (options.expectedHash !== undefined && options.expectedHash !== beforeHash) {
+			throw new Error(
+				`Managed skill "${safe}" changed since approval: expected ${options.expectedHash}, found ${beforeHash}.`,
+			);
 		}
+		await fs.rm(dir, { recursive: true });
+		return { beforeHash };
 	});
 }

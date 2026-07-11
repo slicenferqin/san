@@ -12,6 +12,8 @@ import {
 	buildSanBrainInboxReportText,
 	buildSanBrainMutationResultText,
 	buildSanBrainProfileReportText,
+	buildSanBrainProjectionReportText,
+	runSanBrainProjections,
 	SanBrainStore,
 } from "../brain";
 import { COLLAB_GUEST_ALLOWED_COMMANDS, CollabGuestLink } from "../collab/guest";
@@ -1316,7 +1318,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "brain",
 		description: "Inspect and review San Brain candidates and active state",
 		acpDescription: "Inspect or review San Brain state",
-		acpInputHint: "[inbox|profile|explain|approve|discard|undo|consolidate]",
+		acpInputHint: "[inbox|profile|explain|approve|discard|undo|consolidate|project]",
 		allowArgs: true,
 		subcommands: [
 			{ name: "inbox", description: "List pending Brain candidates" },
@@ -1326,14 +1328,15 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "discard", description: "Discard one Brain candidate", usage: "<id>" },
 			{ name: "undo", description: "Undo the current approve decision", usage: "<id>" },
 			{ name: "consolidate", description: "Inspect duplicate and conflicting candidates" },
+			{ name: "project", description: "Run or retry pending Brain projections" },
 		],
 		handle: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
 			const action = verb || "inbox";
-			const supported = ["inbox", "profile", "explain", "approve", "discard", "undo", "consolidate"];
+			const supported = ["inbox", "profile", "explain", "approve", "discard", "undo", "consolidate", "project"];
 			if (!supported.includes(action)) {
 				return usage(
-					"Usage: /brain [inbox|profile|explain <id>|approve <id>|discard <id>|undo <id>|consolidate]",
+					"Usage: /brain [inbox|profile|explain <id>|approve <id>|discard <id>|undo <id>|consolidate|project]",
 					runtime,
 				);
 			}
@@ -1341,16 +1344,42 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			if (idAction && (!rest.trim() || /\s/.test(rest.trim()))) {
 				return usage(`Usage: /brain ${action} <id>`, runtime);
 			}
-			if (action === "consolidate" && rest.trim()) {
-				return usage("Usage: /brain consolidate", runtime);
+			if ((action === "consolidate" || action === "project") && rest.trim()) {
+				return usage(`Usage: /brain ${action}`, runtime);
 			}
 
 			const store = SanBrainStore.open(runtime.settings.getAgentDir());
 			try {
 				store.syncSessionEntries(runtime.sessionManager.getSessionId(), runtime.sessionManager.getEntries());
-				if (action === "approve" || action === "discard" || action === "undo") {
+				if (action === "project") {
+					const projectionResult = await runSanBrainProjections({
+						store,
+						sessionManager: runtime.sessionManager,
+						session: runtime.session,
+						agentDir: runtime.settings.getAgentDir(),
+						cwd: runtime.cwd,
+						maxAttempts: runtime.settings.get("san.brain.projections.maxAttempts"),
+					});
+					await runtime.output(buildSanBrainProjectionReportText(projectionResult));
+				} else if (action === "approve" || action === "discard" || action === "undo") {
 					const result = applySanBrainMutation(store, runtime.sessionManager, { action, id: rest.trim() });
-					await runtime.output(buildSanBrainMutationResultText(result));
+					const output = [buildSanBrainMutationResultText(result)];
+					if (
+						(action === "approve" || action === "undo") &&
+						runtime.settings.get("san.brain.mode") === "projection" &&
+						runtime.settings.get("san.brain.projections.enabled")
+					) {
+						const projectionResult = await runSanBrainProjections({
+							store,
+							sessionManager: runtime.sessionManager,
+							session: runtime.session,
+							agentDir: runtime.settings.getAgentDir(),
+							cwd: runtime.cwd,
+							maxAttempts: runtime.settings.get("san.brain.projections.maxAttempts"),
+						});
+						output.push(buildSanBrainProjectionReportText(projectionResult));
+					}
+					await runtime.output(output.join("\n"));
 				} else {
 					const report =
 						action === "profile"
