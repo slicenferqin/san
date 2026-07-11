@@ -864,6 +864,14 @@ describe("Settings", () => {
 				).rejects.toThrow("Provider request limits must be positive numbers: umans");
 			});
 
+			it("keeps San v0.4 Workflows and isolated writes opt-in", async () => {
+				const settings = await Settings.init({ cwd: projectDir, agentDir, inMemory: true });
+
+				expect(settings.get("san.workflows.enabled")).toBe(false);
+				expect(settings.get("san.workflows.adHocEnabled")).toBe(false);
+				expect(settings.get("san.workflows.allowIsolatedWrite")).toBe(false);
+			});
+
 			it("loads the recommended San context steady overlay", async () => {
 				const overlayPath = path.resolve(
 					import.meta.dir,

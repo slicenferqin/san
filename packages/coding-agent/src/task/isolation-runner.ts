@@ -115,6 +115,15 @@ export interface IsolatedRunOptions {
 	buildFailureResult: (err: unknown) => SingleResult;
 }
 
+/** Map an approved repository subtree onto the same subtree in an isolation worktree. */
+export function rebaseToolPathScopeForIsolation(toolPathScope: string, repoRoot: string, isolationDir: string): string {
+	const relativeScope = path.relative(repoRoot, toolPathScope);
+	if (relativeScope === ".." || relativeScope.startsWith(`..${path.sep}`) || path.isAbsolute(relativeScope)) {
+		throw new Error("Approved tool path scope is outside the isolated repository.");
+	}
+	return path.resolve(isolationDir, relativeScope);
+}
+
 async function writeIsolationPatch(
 	isolationDir: string,
 	baseline: WorktreeBaseline,
@@ -150,9 +159,13 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		const taskBaseline = structuredClone(opts.context.baseline);
 		handle = await ensureIsolation(opts.context.repoRoot, opts.agentId, opts.preferredBackend);
 		const isolationDir = handle.mergedDir;
+		const toolPathScope = opts.baseOptions.toolPathScope
+			? rebaseToolPathScopeForIsolation(opts.baseOptions.toolPathScope, opts.context.repoRoot, isolationDir)
+			: undefined;
 		const result = await runSubprocess({
 			...opts.baseOptions,
 			worktree: isolationDir,
+			toolPathScope,
 			preloadedExtensionPaths: undefined,
 			preloadedCustomToolPaths: undefined,
 		});

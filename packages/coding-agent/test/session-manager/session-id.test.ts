@@ -24,11 +24,14 @@ describe("SessionManager session ids", () => {
 	it("generates a fresh UUIDv7 when starting a new session", async () => {
 		const session = SessionManager.inMemory();
 		const firstId = expectUuidV7SessionId(session);
+		const changes: Array<{ previousSessionId: string; sessionId: string }> = [];
+		session.onSessionIdentityChanged(change => changes.push(change));
 
 		await session.newSession();
 
 		const secondId = expectUuidV7SessionId(session);
 		expect(secondId).not.toBe(firstId);
+		expect(changes).toEqual([{ previousSessionId: firstId, sessionId: secondId }]);
 	});
 
 	it("generates a UUIDv7 when branching a session", () => {
@@ -36,11 +39,14 @@ describe("SessionManager session ids", () => {
 		session.appendMessage({ role: "user", content: "hello", timestamp: 1 });
 		const branchPointId = session.appendMessage({ role: "user", content: "follow up", timestamp: 2 });
 		const firstId = expectUuidV7SessionId(session);
+		const changes: Array<{ previousSessionId: string; sessionId: string }> = [];
+		session.onSessionIdentityChanged(change => changes.push(change));
 
 		session.createBranchedSession(branchPointId);
 
 		const branchedId = expectUuidV7SessionId(session);
 		expect(branchedId).not.toBe(firstId);
+		expect(changes).toEqual([{ previousSessionId: firstId, sessionId: branchedId }]);
 	});
 
 	it("generates a UUIDv7 when forking a persisted session", async () => {
@@ -49,6 +55,8 @@ describe("SessionManager session ids", () => {
 		session.appendMessage({ role: "user", content: "hello", timestamp: 1 });
 		await session.flush();
 		const firstId = expectUuidV7SessionId(session);
+		const changes: Array<{ previousSessionId: string; sessionId: string }> = [];
+		session.onSessionIdentityChanged(change => changes.push(change));
 
 		const forkResult = await session.fork();
 		if (!forkResult) throw new Error("Expected fork result");
@@ -56,6 +64,18 @@ describe("SessionManager session ids", () => {
 		const forkedId = expectUuidV7SessionId(session);
 		expect(forkedId).not.toBe(firstId);
 		expect(session.getHeader()?.parentSession).toBe(firstId);
+		expect(changes).toEqual([{ previousSessionId: firstId, sessionId: forkedId }]);
+	});
+
+	it("stops notifying after an identity listener is removed", async () => {
+		const session = SessionManager.inMemory();
+		let calls = 0;
+		const unregister = session.onSessionIdentityChanged(() => calls++);
+		unregister();
+
+		await session.newSession();
+
+		expect(calls).toBe(0);
 	});
 
 	it("preserves existing session ids when reopening a saved session", async () => {

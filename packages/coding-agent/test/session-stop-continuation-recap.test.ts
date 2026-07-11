@@ -66,6 +66,35 @@ function malformedContentSideStreamFn(
 	return stream;
 }
 
+function workflowToolCallSideStreamFn(
+	model: Model,
+	_context: Context,
+	_options?: SimpleStreamOptions,
+): AssistantMessageEventStream {
+	const stream = new AssistantMessageEventStream();
+	queueMicrotask(() => {
+		const message: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "toolCall", id: "workflow-tool-call", name: "read", arguments: { path: "secret" } }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+		stream.push({ type: "done", reason: "toolUse", message });
+	});
+	return stream;
+}
+
 describe("session_stop block continuation — idle recap resilience (#4323)", () => {
 	let session: AgentSession;
 	let tempDir: string;
@@ -158,5 +187,77 @@ describe("session_stop block continuation — idle recap resilience (#4323)", ()
 		expect(result.assistantMessage.role).toBe("assistant");
 		expect(Array.isArray(result.assistantMessage.content)).toBe(true);
 		expect(result.assistantMessage.content).toEqual([]);
+	});
+
+	it("rejects an Ad-hoc Workflow draft generation response that attempts a tool call", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: workflowToolCallSideStreamFn,
+			convertToLlm,
+		});
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn(() => false),
+			emitSessionStop: vi.fn().mockResolvedValue(undefined),
+		} as unknown as ExtensionRunner;
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "workflow-test-auth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "workflow-models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			extensionRunner,
+			sideStreamFn: workflowToolCallSideStreamFn,
+		});
+
+		await expect(session.generateAdHocWorkflowDraft("inspect the current routes once")).rejects.toThrow(
+			"attempted to call a tool",
+		);
+		expect(session.messages).toEqual([]);
+	});
+
+	it("rejects a Managed SOP draft generation response that attempts a tool call", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: workflowToolCallSideStreamFn,
+			convertToLlm,
+		});
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn(() => false),
+			emitSessionStop: vi.fn().mockResolvedValue(undefined),
+		} as unknown as ExtensionRunner;
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "managed-workflow-test-auth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "managed-workflow-models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			extensionRunner,
+			sideStreamFn: workflowToolCallSideStreamFn,
+		});
+
+		await expect(session.generateManagedSopWorkflowDraft("inspect then verify")).rejects.toThrow(
+			"attempted to call a tool",
+		);
+		expect(session.messages).toEqual([]);
 	});
 });

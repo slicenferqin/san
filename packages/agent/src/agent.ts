@@ -203,6 +203,9 @@ export interface AgentOptions {
 	temperature?: number;
 
 	/** Additional sampling controls for providers that support them. */
+	maxTokens?: number;
+	/** Recompute the provider output cap immediately before each model call. */
+	maxTokensResolver?: () => number | undefined;
 	topP?: number;
 	topK?: number;
 	minP?: number;
@@ -357,6 +360,8 @@ export class Agent {
 	#providerSessionState?: Map<string, ProviderSessionState>;
 	#thinkingBudgets?: ThinkingBudgets;
 	#temperature?: number;
+	#maxTokens?: number;
+	#maxTokensResolver?: () => number | undefined;
 	#topP?: number;
 	#topK?: number;
 	#minP?: number;
@@ -435,6 +440,8 @@ export class Agent {
 		this.#providerSessionState = opts.providerSessionState;
 		this.#thinkingBudgets = opts.thinkingBudgets;
 		this.#temperature = opts.temperature;
+		this.#maxTokens = opts.maxTokens;
+		this.#maxTokensResolver = opts.maxTokensResolver;
 		this.#topP = opts.topP;
 		this.#topK = opts.topK;
 		this.#minP = opts.minP;
@@ -594,6 +601,19 @@ export class Agent {
 	 */
 	get temperature(): number | undefined {
 		return this.#temperature;
+	}
+
+	/** Maximum provider output tokens for every model call in this Agent run. */
+	get maxTokens(): number | undefined {
+		return this.#maxTokens;
+	}
+
+	set maxTokens(value: number | undefined) {
+		this.#maxTokens = value;
+	}
+
+	setMaxTokensResolver(resolver: (() => number | undefined) | undefined): void {
+		this.#maxTokensResolver = resolver;
 	}
 
 	/**
@@ -1122,6 +1142,8 @@ export class Agent {
 
 		const config: AgentLoopConfig = {
 			model,
+			maxTokens: this.#maxTokens,
+			getMaxTokens: this.#maxTokensResolver,
 			reasoning,
 			disableReasoning: this.#state.disableReasoning,
 			temperature: this.#temperature,

@@ -47,6 +47,17 @@ describe("buildAvailableSlashCommands", () => {
 		expect(byName["reset-usage"]).toBeUndefined();
 
 		expect(byName.fast.description).toBe("Toggle fast mode");
+		expect(byName.workflows.description).toContain("Managed SOP");
+		expect(byName.workflow.subcommands).toContainEqual({
+			name: "cancel-node",
+			description: "Stop one active Workflow Agent",
+			usage: "<run-id> <node-id>",
+		});
+		expect(byName.workflow.subcommands).toContainEqual({
+			name: "revise-draft",
+			description: "Replace an Ad-hoc draft with modified boundaries",
+			usage: "<draft-id> <JSON or .json path>",
+		});
 		expect(byName["ext:hello"].description).toBe("Extension hello");
 		expect(byName["custom:hello"].description).toBe("Custom hello");
 		expect(byName["server:prompt"].description).toBe("MCP prompt");

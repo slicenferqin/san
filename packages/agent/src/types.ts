@@ -88,6 +88,8 @@ export function isSoftToolRequirement(directive: ToolChoiceDirective | undefined
  */
 export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model;
+	/** Resolve an output cap immediately before each provider request. */
+	getMaxTokens?: () => number | undefined;
 
 	/**
 	 * When to interrupt tool execution for steering messages.

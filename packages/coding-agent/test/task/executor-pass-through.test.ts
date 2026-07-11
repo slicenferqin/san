@@ -145,6 +145,36 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		expect(forwarded?.preloadedCustomToolPaths).toBeUndefined();
 	});
 
+	it("drops parent discovery and collaboration capabilities for a strict programmatic child", async () => {
+		const session = yieldEmittingSession();
+		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+
+		const result = await runSubprocess({
+			...baseOptions,
+			agent: { ...baseAgent, tools: ["read", "yield"], spawns: "*" },
+			rules: [{ name: "rule-a" } as unknown as Rule],
+			preloadedExtensionPaths: ["/abs/parent/.omp/extensions/foo.ts"],
+			preloadedCustomToolPaths: [
+				{ path: "tools/x.ts", source: { provider: "config", providerName: "Config", level: "project" } },
+			],
+			strictToolNames: true,
+			toolPathScope: "/tmp",
+			hardTokenLimit: 777,
+		});
+
+		expect(result.exitCode).toBe(0);
+		const forwarded = spy.mock.calls[0]?.[0];
+		expect(forwarded?.toolNames).toEqual(["read", "yield"]);
+		expect(forwarded?.strictToolNames).toBe(true);
+		expect(forwarded?.toolPathScope).toBe("/tmp");
+		expect(forwarded?.maxOutputTokens).toBe(777);
+		expect(forwarded?.disableExtensionDiscovery).toBe(true);
+		expect(forwarded?.preloadedExtensionPaths).toEqual([]);
+		expect(forwarded?.preloadedCustomToolPaths).toEqual([]);
+		expect(forwarded?.enableMCP).toBe(false);
+		expect(forwarded?.mcpManager).toBeUndefined();
+	});
+
 	it("records the spawning agent as parentAgentId, distinct from the child's own id and prefix", async () => {
 		const session = yieldEmittingSession();
 		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));

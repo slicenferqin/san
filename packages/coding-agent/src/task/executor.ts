@@ -399,6 +399,17 @@ export interface ExecutorOptions {
 	 * set this false so disposal unregisters them instead of leaving idle peers.
 	 */
 	keepAlive?: boolean;
+	/**
+	 * Treat {@link AgentDefinition.tools} as an exact capability list. Programmatic
+	 * runtimes use this when an approved manifest is the authorization boundary:
+	 * no task/IRC aliases are injected, MCP and extension/custom-tool discovery is
+	 * disabled, and SDK helpers may not force additional tools active.
+	 */
+	strictToolNames?: boolean;
+	/** Absolute host-approved filesystem root for strict tool calls. */
+	toolPathScope?: string;
+	/** Hard cumulative total-token cap for this subagent process. */
+	hardTokenLimit?: number;
 }
 
 function parseStringifiedJson(value: unknown): unknown {
@@ -819,6 +830,8 @@ interface RunMonitorArgs {
 	softRequestBudgetNotice: boolean;
 	/** Wall-clock cap in ms; 0 disables the timer. */
 	maxRuntimeMs: number;
+	/** Hard cumulative token cap; 0 disables the guard. */
+	hardTokenLimit: number;
 }
 
 /**
@@ -870,6 +883,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		softRequestBudget,
 		softRequestBudgetNotice,
 		maxRuntimeMs,
+		hardTokenLimit,
 	} = args;
 	const startTime = Date.now();
 
@@ -1005,7 +1019,9 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 			return `Subagent runtime limit exceeded (task.maxRuntimeMs=${maxRuntimeMs})`;
 		}
 		if (budgetLimitExceeded) {
-			return `Soft request budget exceeded (${progress.requests} requests; budget ${softRequestBudget})`;
+			return hardTokenLimit > 0 && accumulatedUsage.totalTokens >= hardTokenLimit
+				? `Hard token budget exhausted (${accumulatedUsage.totalTokens}/${hardTokenLimit} tokens)`
+				: `Soft request budget exceeded (${progress.requests} requests; budget ${softRequestBudget})`;
 		}
 		return resolveSignalAbortReason();
 	};
@@ -1339,6 +1355,9 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 					}
 					// Accumulate tokens for progress display
 					progress.tokens += getUsageTokens(messageUsage);
+					if (hardTokenLimit > 0 && accumulatedUsage.totalTokens >= hardTokenLimit && !abortSent) {
+						requestAbort("budget");
+					}
 					// Track latest per-turn context size so the UI can show
 					// "current context", not just cumulative billing volume.
 					if (role === "assistant") {
@@ -1898,11 +1917,17 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	}
 
 	const settings = options.settings ?? Settings.isolated();
-	const subagentSettings = createSubagentSettings(
-		settings,
-		agent.readSummarize === false ? { "read.summarize.enabled": false } : undefined,
-		options.parentServiceTier,
-	);
+	const subagentOverrides: Partial<Record<SettingPath, unknown>> = {};
+	if (agent.readSummarize === false) subagentOverrides["read.summarize.enabled"] = false;
+	if (options.strictToolNames) {
+		// A strict programmatic caller has already approved the complete tool set.
+		// Generic discovery would let search_tool_bm25 activate tools outside that
+		// set, so it must be disabled in the child session as part of the boundary.
+		subagentOverrides["tools.discoveryMode"] = "off";
+		subagentOverrides["mcp.discoveryMode"] = false;
+		subagentOverrides["goal.enabled"] = false;
+	}
+	const subagentSettings = createSubagentSettings(settings, subagentOverrides, options.parentServiceTier);
 	const maxRecursionDepth = settings.get("task.maxRecursionDepth") ?? 2;
 	// Tailored specialist identity for this spawn. `subagentRole` is the full
 	// (trimmed) role text fed to the system-prompt preamble; `subagentDisplayName`
@@ -1914,6 +1939,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		0,
 		Math.trunc(Number(options.maxRuntimeMs ?? settings.get("task.maxRuntimeMs") ?? 0) || 0),
 	);
+	const hardTokenLimit = Math.max(0, Math.trunc(Number(options.hardTokenLimit ?? 0) || 0));
 	// TTL before an adopted idle subagent is parked by the lifecycle manager.
 	// <= 0 disables parking (the session stays live until process teardown).
 	const agentIdleTtlMs = Math.trunc(Number(settings.get("task.agentIdleTtlMs") ?? 420_000) || 0);
@@ -1928,9 +1954,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const childDepth = parentDepth + 1;
 	const atMaxDepth = maxRecursionDepth >= 0 && childDepth >= maxRecursionDepth;
 
-	// Add tools if specified
-	let toolNames: string[] | undefined;
-	if (agent.tools && agent.tools.length > 0) {
+	// Add tools if specified. Strict callers use the agent definition as an
+	// exact capability manifest; the ordinary task/eval path retains its legacy
+	// convenience aliases and collaboration tools below.
+	let toolNames: string[] | undefined = options.strictToolNames ? [...(agent.tools ?? [])] : undefined;
+	if (!options.strictToolNames && agent.tools && agent.tools.length > 0) {
 		toolNames = agent.tools;
 		// Auto-include task tool if spawns defined but task not in tools
 		if (agent.spawns !== undefined && !toolNames.includes("task") && !atMaxDepth) {
@@ -1943,10 +1971,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	}
 	// IRC is always available; the COOP prompt section advertises it, so a restricted
 	// whitelist must still carry `irc` for the subagent to actually use it.
-	if (toolNames && !toolNames.includes("irc")) {
+	if (!options.strictToolNames && toolNames && !toolNames.includes("irc")) {
 		toolNames = [...toolNames, "irc"];
 	}
-	if (toolNames?.includes("exec")) {
+	if (!options.strictToolNames && toolNames?.includes("exec")) {
 		const backends = resolveEvalBackends({ settings } as ToolSession);
 		const expanded = toolNames.filter(name => name !== "exec");
 		if (backends.python || backends.js || backends.ruby || backends.julia) expanded.push("eval");
@@ -1956,13 +1984,15 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	const modelPatterns = normalizeModelPatterns(modelOverride ?? agent.model);
 	const sessionFile = subtaskSessionFile ?? null;
-	const spawnsEnv = atMaxDepth
+	const spawnsEnv = options.strictToolNames
 		? ""
-		: agent.spawns === undefined
+		: atMaxDepth
 			? ""
-			: agent.spawns === "*"
-				? "*"
-				: agent.spawns.join(",");
+			: agent.spawns === undefined
+				? ""
+				: agent.spawns === "*"
+					? "*"
+					: agent.spawns.join(",");
 
 	const lspEnabled = enableLsp ?? true;
 	const ircEnabled = isIrcEnabled(subagentSettings, childDepth);
@@ -1985,6 +2015,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		softRequestBudget,
 		softRequestBudgetNotice,
 		maxRuntimeMs,
+		hardTokenLimit,
 	});
 	const progress = monitor.progress;
 	let unsubscribe: (() => void) | null = null;
@@ -2127,8 +2158,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 			sessionOpenedAt = performance.now();
 
-			const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
-			const enableMCP = !options.mcpManager;
+			const mcpProxyTools =
+				options.strictToolNames || !options.mcpManager ? [] : createMCPProxyTools(options.mcpManager);
+			const enableMCP = options.strictToolNames ? false : !options.mcpManager;
 
 			// Derive subagent-scoped telemetry from the parent's config so the
 			// child loop's spans nest under the parent's active execute_tool span
@@ -2190,8 +2222,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				promptTemplates: options.promptTemplates,
 				workspaceTree: options.workspaceTree,
 				rules: options.rules,
-				preloadedExtensionPaths: options.preloadedExtensionPaths,
-				preloadedCustomToolPaths: options.preloadedCustomToolPaths,
+				disableExtensionDiscovery: options.strictToolNames,
+				preloadedExtensionPaths: options.strictToolNames ? [] : options.preloadedExtensionPaths,
+				preloadedCustomToolPaths: options.strictToolNames ? [] : options.preloadedCustomToolPaths,
+				strictToolNames: options.strictToolNames,
+				toolPathScope: options.toolPathScope,
+				maxOutputTokens: hardTokenLimit > 0 ? hardTokenLimit : undefined,
 				systemPrompt: defaultPrompt => {
 					const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
 						agent: agent.systemPrompt,
@@ -2222,7 +2258,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				enableLsp: lspEnabled,
 				skipPythonPreflight,
 				enableMCP,
-				mcpManager: options.mcpManager,
+				mcpManager: options.strictToolNames ? undefined : options.mcpManager,
 				customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
 				localProtocolOptions: options.localProtocolOptions,
 				telemetry: subagentTelemetry,

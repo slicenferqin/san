@@ -66,6 +66,21 @@ export function shouldSkipHistory(slashText: string): boolean {
 		const args = body.slice(sep + 1).trim();
 		return args.startsWith("add") && /--token\s/.test(args);
 	}
+	if (name === "workflow" && hasArgs) {
+		const args = body.slice(sep + 1).trim();
+		const verb = args.split(/\s+/, 1)[0];
+		return (
+			verb === "approve" ||
+			verb === "approve-draft" ||
+			verb === "apply-write" ||
+			verb === "draft" ||
+			verb === "draft-managed" ||
+			verb === "generate" ||
+			verb === "revise-draft" ||
+			verb === "run" ||
+			verb === "run-draft"
+		);
+	}
 	return false;
 }
 

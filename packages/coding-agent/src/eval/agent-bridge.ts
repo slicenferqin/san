@@ -4,6 +4,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { Usage } from "@oh-my-pi/pi-ai";
 import { prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
@@ -95,6 +96,23 @@ export interface EvalAgentBridgeOptions {
 	session: ToolSession;
 	signal?: AbortSignal;
 	emitStatus?: (event: JsStatusEvent) => void;
+	/** Host-only capability boundary used by approved programmatic runtimes. */
+	toolPolicy?: ProgrammaticAgentToolPolicy;
+}
+
+export interface ProgrammaticAgentToolPolicy {
+	/** Maximum tool set approved by the caller's manifest. */
+	allowedTools: readonly string[];
+	/** Absolute filesystem root enforced before each child tool executes. */
+	pathScope: string;
+	/**
+	 * Also require every approved tool to be active in the parent session. This
+	 * should be true for Workflow runs so a manifest can never re-enable a tool
+	 * the user removed from the current session.
+	 */
+	requireSessionActivation?: boolean;
+	/** Remaining approved aggregate token budget for this child. */
+	hardTokenLimit?: number;
 }
 
 export interface EvalAgentResult {
@@ -123,6 +141,17 @@ export interface EvalAgentResult {
 		/** Human-readable isolation apply/merge summary; kept out of schema-backed `text`. */
 		isolationSummary?: string;
 	};
+}
+
+/** Detailed host result used by non-Eval adapters without changing Eval's wire shape. */
+export interface EvalAgentExecutionResult {
+	result: EvalAgentResult;
+	usage?: Usage;
+	durationMs: number;
+	/** Exact capability intersection handed to the subagent executor. */
+	allowedTools?: string[];
+	/** Host-only isolation material used by a later explicit delivery gate. */
+	isolation?: { context: IsolationContext; artifactsDir: string };
 }
 
 function parseAgentArgs(args: unknown): EvalAgentArgs {
@@ -165,6 +194,26 @@ function assertAgentEnabled(session: ToolSession, agentName: string, agents: Age
 	throw new ToolError(
 		`Agent "${agentName}" is disabled in settings. Enable it via /agents, or use a different agent type.${enabled.length > 0 ? ` Available: ${enabled.join(", ")}` : ""}`,
 	);
+}
+
+function resolveProgrammaticTools(
+	policy: ProgrammaticAgentToolPolicy,
+	session: ToolSession,
+	agent: AgentDefinition,
+): string[] {
+	const approved = [...new Set(policy.allowedTools.map(name => name.trim()).filter(Boolean))];
+	if (policy.requireSessionActivation && !session.isToolActive) {
+		throw new ToolError("Programmatic agent execution requires an active-session tool boundary.");
+	}
+	const agentTools = agent.tools ? new Set(agent.tools) : null;
+	return approved.filter(name => {
+		// `yield` is the child completion protocol, not a parent-session
+		// capability. Top-level sessions intentionally keep it inactive while
+		// every programmatic child requires it to return a checked result.
+		if (name === "yield") return true;
+		if (policy.requireSessionActivation && session.isToolActive?.(name) !== true) return false;
+		return agentTools === null || agentTools.has(name);
+	});
 }
 
 function assertNotPlanMode(session: ToolSession): void {
@@ -305,10 +354,11 @@ function buildSubagentFailureMessage(agentName: string, result: SingleResult): s
 	);
 }
 
-/**
- * Run a single subagent on behalf of an eval cell's `agent()` call.
- */
-export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOptions): Promise<EvalAgentResult> {
+/** Run a single subagent and retain host-side usage metrics for trusted adapters. */
+export async function runEvalAgentExecution(
+	args: unknown,
+	options: EvalAgentBridgeOptions,
+): Promise<EvalAgentExecutionResult> {
 	const parsed = parseAgentArgs(args);
 	const agentName = parsed.agent ?? resolveSpawnPolicy(options.session.getSessionSpawns()).defaultAgent;
 	const structured = Object.hasOwn(parsed, "schema");
@@ -332,7 +382,10 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	}
 	assertAgentEnabled(options.session, agentName, agents);
 
-	const effectiveAgent = agent;
+	const allowedTools = options.toolPolicy
+		? resolveProgrammaticTools(options.toolPolicy, options.session, agent)
+		: undefined;
+	const effectiveAgent: AgentDefinition = allowedTools ? { ...agent, tools: allowedTools, spawns: undefined } : agent;
 	const parentActiveModelPattern = options.session.getActiveModelString?.();
 	const agentModelOverrides = options.session.settings.get("task.agentModelOverrides");
 	const modelOverride = resolveAgentModelPatterns({
@@ -357,7 +410,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		getSessionId: options.session.getSessionId ?? (() => null),
 	};
 	const parentArtifactManager = options.session.getArtifactManager?.() ?? undefined;
-	const mcpManager = options.session.mcpManager ?? MCPManager.instance();
+	const mcpManager = options.toolPolicy ? undefined : (options.session.mcpManager ?? MCPManager.instance());
 	const { sessionFile, artifactsDir, unregisterArtifactsDir, tempArtifactsDir } = await getArtifacts(options.session);
 	const outputManager = getOutputManager(options.session);
 	const id = await outputManager.allocate(outputIdBase(parsed.label, agentName));
@@ -420,6 +473,9 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		// regardless of the inherited session setting.
 		maxRuntimeMs: 0,
 		keepAlive: false,
+		strictToolNames: options.toolPolicy !== undefined,
+		toolPathScope: options.toolPolicy?.pathScope,
+		hardTokenLimit: options.toolPolicy?.hardTokenLimit,
 		mcpManager,
 		contextFiles,
 		skills: availableSkills,
@@ -449,6 +505,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	// runtime is parked waiting for the result, and the cell timeout must
 	// not abort us mid-cherry-pick or mid-nested-commit. The clock restarts
 	// only after we hand control back to the runtime.
+	let capturedIsolationContext: IsolationContext | undefined;
 	const { result, mergeSummary, changesApplied } = await withBridgeTimeoutPause(options.emitStatus, async () => {
 		let isolationContext: IsolationContext | null = null;
 		if (isIsolated) {
@@ -458,6 +515,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 				const message = err instanceof Error ? err.message : String(err);
 				throw new ToolError(`Isolated agent() execution requires a git repository. ${message}`);
 			}
+			capturedIsolationContext = isolationContext;
 		}
 		const preferredBackend = isIsolated ? parseIsolationMode(isolationMode) : undefined;
 
@@ -575,18 +633,31 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	});
 
 	return {
-		text: structured ? result.output : result.output + mergeSummary,
-		details: {
-			agent: result.agent,
-			id: result.id,
-			model: result.resolvedModel ?? modelOverride,
-			structured,
-			isolated: isIsolated || undefined,
-			patchPath: result.patchPath,
-			branchName: result.branchName,
-			nestedPatches: result.nestedPatches?.length ? result.nestedPatches : undefined,
-			changesApplied: isIsolated ? changesApplied : undefined,
-			isolationSummary: mergeSummary ? mergeSummary.trim() : undefined,
+		result: {
+			text: structured ? result.output : result.output + mergeSummary,
+			details: {
+				agent: result.agent,
+				id: result.id,
+				model: result.resolvedModel ?? modelOverride,
+				structured,
+				isolated: isIsolated || undefined,
+				patchPath: result.patchPath,
+				branchName: result.branchName,
+				nestedPatches: result.nestedPatches?.length ? result.nestedPatches : undefined,
+				changesApplied: isIsolated ? changesApplied : undefined,
+				isolationSummary: mergeSummary ? mergeSummary.trim() : undefined,
+			},
 		},
+		usage: result.usage,
+		durationMs: result.durationMs,
+		allowedTools,
+		...(capturedIsolationContext
+			? { isolation: { context: structuredClone(capturedIsolationContext), artifactsDir } }
+			: {}),
 	};
+}
+
+/** Run a single subagent on behalf of an Eval cell's `agent()` call. */
+export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOptions): Promise<EvalAgentResult> {
+	return (await runEvalAgentExecution(args, options)).result;
 }

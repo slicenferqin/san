@@ -138,6 +138,51 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
+	it("keeps an approved programmatic tool list exact", async () => {
+		const tempDir = makeTempDir();
+
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			extensions: [toolActivationExtension],
+			requireYieldTool: true,
+			toolNames: ["read", "yield"],
+			strictToolNames: true,
+		});
+
+		try {
+			expect(session.getActiveToolNames()).toEqual(["read", "yield"]);
+			expect(session.getActiveToolNames()).not.toContain("default_active_tool");
+			expect(session.getActiveToolNames()).not.toContain("default_inactive_tool");
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("does not auto-add AST, memory or learning tools to a strict programmatic list", async () => {
+		const tempDir = makeTempDir();
+
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			requireYieldTool: true,
+			settings: Settings.isolated({
+				"astGrep.enabled": true,
+				"memory.backend": "mnemopi",
+				"autolearn.enabled": true,
+			}),
+			toolNames: ["grep", "yield"],
+			strictToolNames: true,
+		});
+
+		try {
+			expect(session.getActiveToolNames()).toEqual(["grep", "yield"]);
+			expect(session.getActiveToolNames()).not.toContain("ast_grep");
+			expect(session.getActiveToolNames()).not.toContain("recall");
+			expect(session.getActiveToolNames()).not.toContain("manage_skill");
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	it("activates the yield tool when requireYieldTool is set and toolNames is explicit", async () => {
 		// Regression for #1408: plan-mode subagents pass an explicit `toolNames` list
 		// (e.g. `["read", "grep", "glob", "lsp", "web_search"]`). Without this

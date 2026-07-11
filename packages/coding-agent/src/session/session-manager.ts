@@ -343,6 +343,11 @@ export type ReadonlySessionManager = Pick<
 	| "putBlobSync"
 >;
 
+export interface SessionIdentityChange {
+	previousSessionId: string;
+	sessionId: string;
+}
+
 interface SessionManagerStateSnapshot {
 	cwd: string;
 	sessionDir: string;
@@ -447,6 +452,7 @@ export class SessionManager {
 
 	#suppressBreadcrumb = false;
 	#sessionNameChangedCallbacks = new Set<() => void>();
+	#sessionIdentityChangedCallbacks = new Set<(change: SessionIdentityChange) => void>();
 
 	private constructor(cwd: string, sessionDir: string, persist: boolean, storage: SessionStorage) {
 		this.#cwd = cwd;
@@ -898,6 +904,18 @@ export class SessionManager {
 		}
 	}
 
+	#notifySessionIdentityListeners(previousSessionId: string): void {
+		if (previousSessionId === this.#sessionId) return;
+		const change = { previousSessionId, sessionId: this.#sessionId };
+		for (const callback of [...this.#sessionIdentityChangedCallbacks]) {
+			try {
+				callback(change);
+			} catch (err) {
+				logger.warn("SessionManager: session identity change hook failed", { error: String(err) });
+			}
+		}
+	}
+
 	static #cleanTitle(raw: string): string {
 		return raw
 			.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
@@ -936,6 +954,7 @@ export class SessionManager {
 	}
 
 	restoreState(snapshot: SessionManagerStateSnapshot): void {
+		const previousSessionId = this.#sessionId;
 		this.#closeWriterEventually();
 		this.#diskTail = Promise.resolve();
 		this.#clearDiskError();
@@ -957,10 +976,12 @@ export class SessionManager {
 		this.#adoptedArtifactManager = null;
 
 		if (this.#sessionFile) this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
+		this.#notifySessionIdentityListeners(previousSessionId);
 	}
 
 	/** Switch to a different session file (resume / branch). */
 	async setSessionFile(sessionFile: string): Promise<void> {
+		const previousSessionId = this.#sessionId;
 		await this.#drainAndCloseWriter();
 		this.#clearDiskError();
 		this.#draftOnlySessionCleanupArmed = false;
@@ -978,6 +999,7 @@ export class SessionManager {
 			this.#forceFileCreation = true;
 			await this.#rewriteAtomically();
 			this.#fileIsCurrent = true;
+			this.#notifySessionIdentityListeners(previousSessionId);
 			return;
 		}
 
@@ -1009,12 +1031,16 @@ export class SessionManager {
 		this.#artifactManagerSessionFile = null;
 
 		if (this.sanitizeLoadedOpenAIResponsesReplayMetadata()) this.#rewriteRequired = true;
+		this.#notifySessionIdentityListeners(previousSessionId);
 	}
 
 	/** Start a new session. Drains and closes any existing writer first. */
 	async newSession(options?: NewSessionOptions): Promise<string | undefined> {
 		await this.#drainAndCloseWriter();
-		return this.#resetToNewSession(options);
+		const previousSessionId = this.#sessionId;
+		const result = this.#resetToNewSession(options);
+		this.#notifySessionIdentityListeners(previousSessionId);
+		return result;
 	}
 
 	/** Delete a session file and its artifact directory. ENOENT is treated as success. */
@@ -1065,6 +1091,7 @@ export class SessionManager {
 		this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
 
 		await this.#rewriteAtomically();
+		this.#notifySessionIdentityListeners(parentSessionId);
 		return { oldSessionFile, newSessionFile: this.#sessionFile };
 	}
 
@@ -1393,6 +1420,13 @@ export class SessionManager {
 		this.#sessionNameChangedCallbacks.add(cb);
 		return () => {
 			this.#sessionNameChangedCallbacks.delete(cb);
+		};
+	}
+
+	onSessionIdentityChanged(cb: (change: SessionIdentityChange) => void): () => void {
+		this.#sessionIdentityChangedCallbacks.add(cb);
+		return () => {
+			this.#sessionIdentityChangedCallbacks.delete(cb);
 		};
 	}
 
@@ -1757,6 +1791,7 @@ export class SessionManager {
 	 */
 	createBranchedSession(leafId: string): string | undefined {
 		const sourceSessionFile = this.#sessionFile;
+		const previousSessionId = this.#sessionId;
 		const branchPath = this.getBranch(leafId);
 		if (branchPath.length === 0) throw new Error(`Entry ${leafId} not found`);
 
@@ -1811,12 +1846,14 @@ export class SessionManager {
 			this.#sessionFile = undefined;
 			this.#fileIsCurrent = false;
 			this.#rewriteRequired = false;
+			this.#notifySessionIdentityListeners(previousSessionId);
 			return undefined;
 		}
 
 		this.#sessionFile = newSessionFile;
 		this.#rewriteSynchronously();
 		this.#rememberBreadcrumb(this.#cwd, newSessionFile);
+		this.#notifySessionIdentityListeners(previousSessionId);
 		return newSessionFile;
 	}
 

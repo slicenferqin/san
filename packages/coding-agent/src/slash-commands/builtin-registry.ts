@@ -74,6 +74,7 @@ import { handleSshAcp } from "./helpers/ssh";
 import { launchStatsDashboard, parseStatsDashboardArgs } from "./helpers/stats-dashboard";
 import { handleTodoAcp } from "./helpers/todo";
 import { buildUsageReportText } from "./helpers/usage-report";
+import { handleWorkflowCommand, handleWorkflowTuiCommand } from "./helpers/workflows";
 import { parseMarketplaceInstallArgs, parsePluginScopeArgs } from "./marketplace-install-parser";
 import type {
 	BuiltinSlashCommand,
@@ -333,6 +334,74 @@ function parseShakeMode(args: string): ShakeMode | { error: string } {
 }
 
 const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
+	{
+		name: "workflows",
+		description: "List Managed SOP Workflows and Ad-hoc drafts",
+		acpDescription: "List Managed SOP Workflows and Ad-hoc drafts",
+		handle: handleWorkflowCommand,
+		handleTui: handleWorkflowTuiCommand,
+	},
+	{
+		name: "workflow",
+		description: "Review, approve, run and control explicit Workflows",
+		acpDescription: "Review, approve, run and control explicit Workflows",
+		acpInputHint:
+			"<list|show|draft-managed|publish|approve|revoke|run|generate|draft|approve-draft|revise-draft|run-draft|reject-draft|review-write|apply-write|reject-write|status|pause|resume|cancel|cancel-node>",
+		allowArgs: true,
+		subcommands: [
+			{ name: "list", description: "List Managed and Ad-hoc Workflows" },
+			{
+				name: "show",
+				description: "Show approval boundaries and raw script",
+				usage: "<name|name@version|draft-id>",
+			},
+			{ name: "publish", description: "Publish a discovered Managed version without approving it", usage: "<name>" },
+			{
+				name: "draft-managed",
+				description: "Convert an existing SOP into an inert Managed draft",
+				usage: "<SOP text>",
+			},
+			{ name: "approve", description: "Review or confirm one exact Managed version", usage: "<name@version|token>" },
+			{ name: "revoke", description: "Revoke one Managed version and its approval", usage: "<name@version>" },
+			{
+				name: "run",
+				description: "Explicitly run an approved Managed version",
+				usage: "<name@version> [JSON args]",
+			},
+			{ name: "draft", description: "Save an Ad-hoc draft without running it", usage: "<JSON or .json path>" },
+			{
+				name: "generate",
+				description: "Ask the model for a one-time draft without running it",
+				usage: "<plain-language task>",
+			},
+			{ name: "approve-draft", description: "Review or confirm one exact Ad-hoc draft", usage: "<draft-id|token>" },
+			{
+				name: "revise-draft",
+				description: "Replace an Ad-hoc draft with modified boundaries",
+				usage: "<draft-id> <JSON or .json path>",
+			},
+			{ name: "run-draft", description: "Run an approved Ad-hoc draft once", usage: "<draft-id>" },
+			{ name: "reject-draft", description: "Reject a pending or approved Ad-hoc draft", usage: "<draft-id>" },
+			{
+				name: "review-write",
+				description: "Show a complete isolated patch and issue one review token",
+				usage: "<artifact-id>",
+			},
+			{
+				name: "apply-write",
+				description: "Apply one reviewed isolated patch exactly once",
+				usage: "<review-token>",
+			},
+			{ name: "reject-write", description: "Reject one isolated patch without applying it", usage: "<artifact-id>" },
+			{ name: "status", description: "Show live Workflow run status", usage: "[run-id]" },
+			{ name: "pause", description: "Pause a live Workflow before its next node", usage: "<run-id>" },
+			{ name: "resume", description: "Resume a paused Workflow", usage: "<run-id>" },
+			{ name: "cancel", description: "Cancel a live Workflow", usage: "<run-id>" },
+			{ name: "cancel-node", description: "Stop one active Workflow Agent", usage: "<run-id> <node-id>" },
+		],
+		handle: handleWorkflowCommand,
+		handleTui: handleWorkflowTuiCommand,
+	},
 	{
 		name: "settings",
 		description: "Open settings menu",

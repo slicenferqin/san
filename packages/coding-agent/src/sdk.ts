@@ -125,6 +125,7 @@ import { SessionManager } from "./session/session-manager";
 import { createSettingsAwareStreamFn } from "./session/settings-stream-fn";
 import { SnapcompactInlineTransformer } from "./session/snapcompact-inline";
 import { createSnapcompactSavingsRecorder } from "./session/snapcompact-savings-journal";
+import { registerWorkflowToolSession } from "./session/workflow-host";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
@@ -192,6 +193,7 @@ import { normalizeToolName, normalizeToolNames } from "./tools/builtin-names";
 import { ToolContextStore } from "./tools/context";
 import { getImageGenTools } from "./tools/image-gen";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
+import { assertToolArgumentsWithinPathScope } from "./tools/path-scope";
 import { queueResolveHandler } from "./tools/resolve";
 import { ttsTool } from "./tools/tts";
 import { resolveActiveRepoContext } from "./utils/active-repo-context";
@@ -501,6 +503,18 @@ export interface CreateAgentSessionOptions {
 	skipPythonPreflight?: boolean;
 	/** Tool names explicitly requested (enables disabled-by-default tools) */
 	toolNames?: string[];
+	/**
+	 * Keep `toolNames` exact for an approved programmatic runtime. Disables
+	 * automatic activation of extension/custom helpers and other convenience
+	 * tools that are normally added to interactive or task sessions.
+	 *
+	 * @internal
+	 */
+	strictToolNames?: boolean;
+	/** Absolute host-approved filesystem root enforced before strict tool execution. */
+	toolPathScope?: string;
+	/** Hard provider output cap for every request in an approved programmatic child. */
+	maxOutputTokens?: number;
 
 	/** Output schema for structured completion (subagents) */
 	outputSchema?: unknown;
@@ -1539,6 +1553,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			isToolActive: name => activeToolNames.has(name),
 			setActiveToolNames,
 			hasUI: options.hasUI ?? false,
+			strictToolNames: options.strictToolNames,
 			enableLsp,
 			get hasEditTool() {
 				const requestedToolNames = options.toolNames ? normalizeToolNames(options.toolNames) : undefined;
@@ -2458,7 +2473,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// exactly the builtins createTools built (`builtInToolNames` — provenance, so a
 		// same-named custom/extension tool is never force-activated when auto-learn is
 		// off) to keep guidance, controller, and the active set consistent.
-		if (explicitlyRequestedToolNames) {
+		if (explicitlyRequestedToolNames && !options.strictToolNames) {
 			for (const name of ["manage_skill", "learn"]) {
 				if (builtInToolNames.includes(name) && !explicitlyRequestedToolNames.includes(name)) {
 					explicitlyRequestedToolNames.push(name);
@@ -2511,10 +2526,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 
 		// Custom tools and extension-registered tools are always included regardless of toolNames filter
-		const alwaysInclude: string[] = [
-			...sdkCustomTools.map(t => (isCustomTool(t) ? t.name : t.name)),
-			...registeredTools.filter(t => !t.definition.defaultInactive).map(t => t.definition.name),
-		];
+		const alwaysInclude: string[] = options.strictToolNames
+			? []
+			: [
+					...sdkCustomTools.map(t => (isCustomTool(t) ? t.name : t.name)),
+					...registeredTools.filter(t => !t.definition.defaultInactive).map(t => t.definition.name),
+				];
 		for (const name of alwaysInclude) {
 			if (mcpDiscoveryEnabled && name.startsWith("mcp__")) {
 				continue;
@@ -2686,6 +2703,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			settings,
 			createSettingsAwareStreamFn(settings),
 		);
+		let strictUsageTokens = 0;
 		agent = new Agent({
 			initialState: {
 				systemPrompt,
@@ -2712,6 +2730,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			followUpMode: settings.get("followUpMode") ?? "one-at-a-time",
 			interruptMode: settings.get("interruptMode") ?? "immediate",
 			thinkingBudgets: settings.getGroup("thinkingBudgets"),
+			maxTokens: options.maxOutputTokens,
+			maxTokensResolver:
+				options.maxOutputTokens === undefined
+					? undefined
+					: () => Math.max(1, options.maxOutputTokens! - strictUsageTokens),
 			temperature: settings.get("temperature") >= 0 ? settings.get("temperature") : undefined,
 			topP: settings.get("topP") >= 0 ? settings.get("topP") : undefined,
 			topK: settings.get("topK") >= 0 ? settings.get("topK") : undefined,
@@ -2738,7 +2761,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return settingsAwareStreamFn(streamModel, context, streamOptions);
 			},
 			cursorExecHandlers,
-			transformToolCallArguments: (args, _toolName) => {
+			transformToolCallArguments: (args, toolName) => {
 				let result = args;
 				const maxTimeout = settings.get("tools.maxTimeout");
 				if (maxTimeout > 0 && typeof result.timeout === "number") {
@@ -2746,6 +2769,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				}
 				if (obfuscator?.hasSecrets()) {
 					result = deobfuscateToolArguments(obfuscator, result);
+				}
+				if (options.toolPathScope) {
+					assertToolArgumentsWithinPathScope({
+						args: result,
+						toolName,
+						cwd,
+						scopeRoot: options.toolPathScope,
+					});
 				}
 				return result;
 			},
@@ -2761,6 +2792,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					: undefined
 				: undefined,
 		});
+		if (options.maxOutputTokens !== undefined) {
+			agent.subscribe(event => {
+				if (event.type !== "message_end" || event.message.role !== "assistant") return;
+				strictUsageTokens += event.message.usage.totalTokens;
+			});
+		}
 
 		cursorEventEmitter = event => agent.emitExternalEvent(event);
 
@@ -2892,6 +2929,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			advisorTools,
 			titleSystemPrompt: options.titleSystemPrompt,
 		});
+		registerWorkflowToolSession(session, toolSession);
 		hasSession = true;
 		if (asyncJobManager) {
 			session.yieldQueue.register<AsyncResultEntry>("async-result", {

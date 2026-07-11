@@ -309,6 +309,8 @@ import toolCallLoopRedirectTemplate from "../prompts/system/tool-call-loop-redir
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
 import unexpectedStopRetryTemplate from "../prompts/system/unexpected-stop-retry.md" with { type: "text" };
+import adHocWorkflowDraftPrompt from "../prompts/workflows/ad-hoc-draft.md" with { type: "text" };
+import managedSopWorkflowDraftPrompt from "../prompts/workflows/managed-sop-draft.md" with { type: "text" };
 import { AgentRegistry } from "../registry/agent-registry";
 import {
 	appendSanLoopRoleContextDebugEntry,
@@ -15237,7 +15239,7 @@ export class AgentSession {
 		onTextDelta?: (delta: string) => void;
 		signal?: AbortSignal;
 		dedupeReply?: boolean;
-	}): Promise<{ replyText: string; assistantMessage: AssistantMessage }> {
+	}): Promise<{ replyText: string; assistantMessage: AssistantMessage; attemptedToolCall?: boolean }> {
 		const model = this.model;
 		if (!model) {
 			throw new Error("No active model on session");
@@ -15304,6 +15306,7 @@ export class AgentSession {
 		if (!assistantMessage) {
 			throw new Error("Ephemeral turn ended without a final message");
 		}
+		const attemptedToolCall = assistantMessage.content.some(block => block.type === "toolCall");
 		const replyText = this.#deobfuscateFromProvider(providerReplyText);
 		if (args.onTextDelta && replyText.length > emittedReplyText.length) {
 			args.onTextDelta(replyText.slice(emittedReplyText.length));
@@ -15315,7 +15318,40 @@ export class AgentSession {
 		return {
 			replyText: args.dedupeReply === false ? replyText.trim() : dedupeEphemeralReply(replyText.trim()),
 			assistantMessage: sanitizedMessage,
+			attemptedToolCall,
 		};
+	}
+
+	/** Generate an Ad-hoc Workflow descriptor only; no Workflow or tool is executed by this side request. */
+	async generateAdHocWorkflowDraft(objective: string, signal?: AbortSignal): Promise<string> {
+		const normalized = objective.trim();
+		if (!normalized) throw new Error("Ad-hoc Workflow draft objective must not be empty");
+		if (normalized.length > 20_000) throw new Error("Ad-hoc Workflow draft objective is too long");
+		const result = await this.runEphemeralTurn({
+			promptText: prompt.render(adHocWorkflowDraftPrompt, { objective: normalized }),
+			signal,
+			dedupeReply: false,
+		});
+		if (result.attemptedToolCall) {
+			throw new Error("Ad-hoc Workflow draft generation attempted to call a tool");
+		}
+		return result.replyText;
+	}
+
+	/** Convert a supplied SOP to an inert Managed source draft; never publishes, approves or executes it. */
+	async generateManagedSopWorkflowDraft(sop: string, signal?: AbortSignal): Promise<string> {
+		const normalized = sop.trim();
+		if (!normalized) throw new Error("Managed Workflow SOP must not be empty");
+		if (normalized.length > 100_000) throw new Error("Managed Workflow SOP is too long");
+		const result = await this.runEphemeralTurn({
+			promptText: prompt.render(managedSopWorkflowDraftPrompt, { sop: normalized }),
+			signal,
+			dedupeReply: false,
+		});
+		if (result.attemptedToolCall) {
+			throw new Error("Managed Workflow draft generation attempted to call a tool");
+		}
+		return result.replyText;
 	}
 
 	/**

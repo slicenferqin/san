@@ -54,6 +54,20 @@ describe("shouldSkipHistory — security filter for slash command history", () =
 		expect(shouldSkipHistory("/model claude")).toBe(false);
 	});
 
+	it("does not persist Workflow approval, apply, draft, generation or argument-bearing run material", () => {
+		expect(shouldSkipHistory("/workflow approve workflow-approval-secret")).toBe(true);
+		expect(shouldSkipHistory("/workflow approve-draft workflow-approval-secret")).toBe(true);
+		expect(shouldSkipHistory("/workflow apply-write workflow-write-secret")).toBe(true);
+		expect(shouldSkipHistory('/workflow draft {"args":{"token":"secret"}}')).toBe(true);
+		expect(shouldSkipHistory("/workflow draft-managed use bearer secret-value in the SOP")).toBe(true);
+		expect(shouldSkipHistory("/workflow generate audit with password secret-value")).toBe(true);
+		expect(shouldSkipHistory('/workflow revise-draft old {"args":{"token":"secret"}}')).toBe(true);
+		expect(shouldSkipHistory('/workflow run release@1 {"token":"secret"}')).toBe(true);
+		expect(shouldSkipHistory("/workflow run-draft private-draft-id")).toBe(true);
+		expect(shouldSkipHistory("/workflow list")).toBe(false);
+		expect(shouldSkipHistory("/workflows")).toBe(false);
+	});
+
 	it("returns false for non-slash text", () => {
 		expect(shouldSkipHistory("just a prompt")).toBe(false);
 		expect(shouldSkipHistory("")).toBe(false);

@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>San v0.4 Workflows 实施与验收报告</title>
+		<style>
+			:root {
+				color-scheme: light;
+				--bg: #f3f0e8;
+				--panel: #fffdf8;
+				--ink: #17212b;
+				--muted: #667085;
+				--line: #d9d1c2;
+				--green: #0b6b57;
+				--green-soft: #e8f4ef;
+				--amber: #9a5b00;
+				--amber-soft: #fff3dc;
+				--blue: #245a86;
+				--blue-soft: #edf4fa;
+				--red: #a9332b;
+				--code: #ece6da;
+			}
+			* { box-sizing: border-box; }
+			body {
+				margin: 0;
+				background:
+					radial-gradient(circle at 8% 0, #dcebe5 0, transparent 32rem),
+					radial-gradient(circle at 98% 18%, #eee3d0 0, transparent 30rem), var(--bg);
+				color: var(--ink);
+				font: 15px/1.72 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			}
+			main { width: min(1160px, calc(100% - 36px)); margin: 0 auto; padding: 46px 0 78px; }
+			header, section { border: 1px solid var(--line); border-radius: 20px; background: var(--panel); box-shadow: 0 14px 34px rgba(23, 33, 43, 0.045); }
+			header { padding: 32px; }
+			section { margin-top: 18px; padding: 26px; }
+			h1, h2, h3 { margin: 0 0 13px; line-height: 1.2; }
+			h1 { font-size: clamp(32px, 5vw, 52px); letter-spacing: -0.04em; }
+			h2 { font-size: 25px; }
+			h3 { margin-top: 20px; font-size: 18px; }
+			p { margin: 8px 0 14px; }
+			a { color: var(--green); text-underline-offset: 3px; }
+			.eyebrow { color: var(--green); font-weight: 850; letter-spacing: 0.1em; text-transform: uppercase; }
+			.subtitle { max-width: 930px; color: var(--muted); font-size: 18px; }
+			.badges { display: flex; flex-wrap: wrap; gap: 9px; margin: 20px 0; }
+			.badge { padding: 6px 11px; border-radius: 999px; font-size: 12px; font-weight: 800; }
+			.pass { color: var(--green); background: var(--green-soft); border: 1px solid #9bcab8; }
+			.hold { color: var(--amber); background: var(--amber-soft); border: 1px solid #dab46f; }
+			.meta, .metrics, .grid { display: grid; gap: 12px; }
+			.meta { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+			.metrics { grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); margin-top: 14px; }
+			.grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+			.card, .metric { padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: #f9f6ee; }
+			.card span, .metric span { display: block; color: var(--muted); font-size: 12px; font-weight: 750; letter-spacing: 0.05em; text-transform: uppercase; }
+			.card strong, .metric strong { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+			.metric strong { color: var(--green); font-size: 23px; }
+			.callout { padding: 17px 19px; border: 1px solid #9bcab8; border-left: 6px solid var(--green); border-radius: 13px; background: var(--green-soft); }
+			.callout.hold { color: var(--ink); border-color: #dab46f; border-left-color: var(--amber); border-radius: 13px; }
+			.callout.info { border-color: #a9c5db; border-left-color: var(--blue); background: var(--blue-soft); }
+			table { width: 100%; margin: 14px 0; border-collapse: collapse; font-size: 13px; }
+			th, td { padding: 10px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+			th { background: #eee8dc; }
+			tr:nth-child(even) td { background: #fbf8f1; }
+			code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+			code { padding: 1px 5px; border-radius: 5px; background: var(--code); }
+			pre { overflow-x: auto; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: #1a2430; color: #dce8f2; }
+			ul, ol { padding-left: 23px; }
+			li { margin: 5px 0; }
+			.ok { color: var(--green); font-weight: 800; }
+			.wait { color: var(--amber); font-weight: 800; }
+			.no { color: var(--red); font-weight: 800; }
+			.muted { color: var(--muted); }
+			@media (max-width: 690px) {
+				main { width: min(100% - 18px, 1160px); padding-top: 20px; }
+				header, section { padding: 18px; border-radius: 15px; }
+				table { display: block; overflow-x: auto; }
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<header>
+				<p class="eyebrow">San v0.4 · Implementation Report · 2026-07-11</p>
+				<h1>Managed SOP 与一次性 Ad-hoc Workflow 已落地</h1>
+				<p class="subtitle">这份报告回答三个问题：代码是否完成、安全边界是否真的生效、现在能开放到什么程度。结论不把“实现完成”和“已经证明省 token”混为一谈。</p>
+				<div class="badges">
+					<span class="badge pass">实现门禁：通过</span>
+					<span class="badge pass">安全门禁：通过</span>
+					<span class="badge pass">Deterministic dogfood：通过</span>
+					<span class="badge hold">真实 token 对比：待采样</span>
+				</div>
+				<div class="meta">
+					<div class="card"><span>开发分支</span><strong>feature/san-v0.4-workflows</strong></div>
+					<div class="card"><span>代码基线</span><strong>2c038b339（未提交工作树）</strong></div>
+					<div class="card"><span>产品范围</span><strong>Managed SOP + Ad-hoc Dynamic</strong></div>
+					<div class="card"><span>默认配置</span><strong>Managed / Ad-hoc / isolated-write 三层独立关闭</strong></div>
+				</div>
+				<div class="metrics">
+					<div class="metric"><span>Workflow gate</span><strong>123 / 123</strong></div>
+					<div class="metric"><span>Ad-hoc dogfood</span><strong>10 tasks / 20 drafts / 10 revisions</strong></div>
+					<div class="metric"><span>Managed dogfood</span><strong>25 runs</strong></div>
+					<div class="metric"><span>未批准启动</span><strong>0</strong></div>
+					<div class="metric"><span>重复交付</span><strong>0</strong></div>
+					<div class="metric"><span>批准复用</span><strong>0</strong></div>
+				</div>
+			</header>
+
+			<section>
+				<h2>1. 最终结论</h2>
+				<div class="callout">
+					<strong>v0.4 的工程核心、自动化合同、安全边界和无凭据 dogfood 已完成，可以作为“默认关闭的内部试用候选”验收。</strong>
+					Managed 只能运行被批准的准确版本；Ad-hoc 只能先生成草稿、再逐次批准、最后显式运行一次；两者都没有自动触发和自动授权路径。
+				</div>
+				<div class="callout hold" style="margin-top: 14px">
+					<strong>当前不能宣传“已实测比 Skill 节省 30% 编排 token、减少 50% 主上下文”。</strong>
+					真实模型的 Skill 对照样本尚未采集，报告器会诚实返回 <code>insufficient_data</code>。因此提案 W5 和 v0.4 产品终验仍为 PARTIAL，rollout 保持 <code>keep-default-off</code>。
+				</div>
+			</section>
+
+			<section>
+				<h2>2. 用户现在怎么使用</h2>
+				<div class="grid">
+					<div class="card">
+						<h3>Managed SOP</h3>
+						<ol>
+							<li><code>/workflow draft-managed 一段已有 SOP</code> 可先生成不落盘、不发布、不运行的脚本草稿。</li>
+							<li>把已稳定的脚本放进项目 <code>.san/workflows/*.js</code>，也可发现兼容的 <code>.claude/workflows/*.js</code>。</li>
+							<li><code>/workflow publish name</code> 冻结版本，但不会批准或运行。</li>
+							<li><code>/workflow approve name@version</code> 先显示人话阶段、Agent 步骤、硬停止条件和完整脚本，再输入短时确认令牌。</li>
+							<li><code>/workflow run name@version {JSON}</code> 才会真正启动。</li>
+							<li>版本、参数 schema、权限、scope 或预算改变后，旧批准不再匹配。</li>
+						</ol>
+					</div>
+					<div class="card">
+						<h3>Ad-hoc Dynamic</h3>
+						<ol>
+							<li><code>/workflow generate 一段人话任务</code> 只让模型返回 JSON 草稿，不执行工具。</li>
+							<li>静态解析器检查脚本、权限和预算，保存为有时效的一次性草稿。</li>
+							<li>需要缩小参数、权限或预算时，用 <code>/workflow revise-draft old-id 新描述</code> 生成新边界，旧草稿和旧批准立即失效。</li>
+							<li><code>/workflow approve-draft id</code> 完整复核后，再输入短时确认令牌。</li>
+							<li><code>/workflow run-draft id</code> 才运行，并原子消费这次批准。</li>
+							<li>同名新草稿不能继承批准；拒绝、过期或已经运行后删除脚本和参数，只保留会话内 hash 审计。</li>
+						</ol>
+					</div>
+				</div>
+				<p class="muted"><code>san.workflows.enabled</code> 只打开 Managed；<code>san.workflows.adHocEnabled</code> 单独打开 Ad-hoc；修改文件还必须开启 <code>san.workflows.allowIsolatedWrite</code> 并使用非 <code>none</code> 的 <code>task.isolation.mode</code>。三层默认值都保持关闭。</p>
+			</section>
+
+			<section>
+				<h2>3. W0–W5 实施结果</h2>
+				<table>
+					<thead><tr><th>阶段</th><th>落地内容</th><th>证据</th><th>结论</th></tr></thead>
+					<tbody>
+						<tr><td>W0 合同</td><td>仅允许 <code>managed</code>/<code>ad_hoc</code>；冻结 meta、审批键、JSON 参数、权限、预算、事件和状态合同；SQLite 只长期保存 Managed 与尚待决定的 Ad-hoc，Ad-hoc 终态内容删除。</td><td>contracts/store/source-parser tests</td><td class="ok">PASS</td></tr>
+						<tr><td>W1 Runtime</td><td>静态 Babel 解析，不执行发现脚本；受限解释器支持 agent、parallel、pipeline、分支和循环；并发分支预分配 token，逐 provider 请求递减输出上限；硬限制 Agent、时间、步骤与集合；支持全局和单 Agent 停止。</td><td>runtime/manager/malicious fixtures</td><td class="ok">PASS</td></tr>
+						<tr><td>W2 Managed</td><td>SOP→不落盘草稿、San/Claude 发现优先级、发布、人话阶段/步骤与完整脚本审阅、准确版本批准、撤销、显式运行、状态控制和一次结果交付。</td><td>5 SOP × 5 次确定性 dogfood</td><td class="wait">工程通过；真实 token 门禁待样本</td></tr>
+						<tr><td>W3 Ad-hoc</td><td>模型只生成 JSON 草稿；task/scope/args/过期绑定；审批展示完整参数；fail-closed 范围修订；双步骤批准；一次性原子消费；完成、拒绝或过期后删除内容。</td><td>10 个不同任务 × 2 个边界草稿</td><td class="ok">PASS</td></tr>
+						<tr><td>W4 写入</td><td>写 Agent 强制独立工作区、<code>apply=false</code>/<code>merge=false</code>；捕获补丁；完整审阅产生单次 token；基线 CAS、路径/凭证/篡改检查后才应用；崩溃中断标为 unknown。</td><td>真实临时 Git 仓库 delivery tests</td><td class="ok">PASS</td></tr>
+						<tr><td>W5 评估</td><td>确定性 25 次 Managed + 10 个不同 Ad-hoc 任务/20 个草稿/10 次缩小范围、安全/账本/稳定图门禁，以及严格配对、来源校验、自算预算的 token 报告器。</td><td>dogfood JSON + token-report tests</td><td class="wait">PARTIAL：真实任务、质量与 token 对照待采样</td></tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>4. 为什么它不会脱离掌控</h2>
+				<table>
+					<thead><tr><th>可能失控的地方</th><th>本次实现的控制</th><th>失败时怎么处理</th></tr></thead>
+					<tbody>
+						<tr><td>模型自己决定运行</td><td>生成、批准、运行是三条独立路径；生成侧请求没有 Workflow 工具，也不落历史。</td><td>没有显式 run 命令时 Agent 启动数必须为 0。</td></tr>
+						<tr><td>旧批准被偷换复用</td><td>Managed 键绑定 source、版本、schema、scope、权限和全部硬预算；Ad-hoc 再绑定 task、args、过期时间并只消费一次。</td><td>任何 hash 或边界不一致都拒绝。</td></tr>
+						<tr><td>脚本直接摸主机</td><td>不使用现有高权限 eval；受限 AST 解释器拒绝 process、环境变量、模块、文件、Shell 和直接网络访问。</td><td>静态拒绝或运行时 permission_denied。</td></tr>
+						<tr><td>Subagent 扩权</td><td>工具集合取 Workflow manifest、当前会话和 Agent 定义的交集；严格模式关闭 MCP、扩展、自定义工具、task/IRC 和工具发现。</td><td>不在交集中的工具从子会话中不存在。</td></tr>
+						<tr><td>路径穿越或软链接逃逸</td><td>每次文件工具调用同时检查逻辑路径和 realpath；URL、附件、内部 URI 与未适配工具 fail-closed；隔离工作区重映射批准 scope。</td><td>scope_violation，Agent 调用失败。</td></tr>
+						<tr><td>并发和成本暴涨</td><td>并发 fan-out 先切分批准 token，分支内每次 provider 调用只拿剩余额度；Agent、时间、步骤和集合也都是硬上限。</td><td>超出节点分配时不提交 usage/result，并停止新节点。</td></tr>
+						<tr><td>写入覆盖人工变化</td><td>Agent 只能产补丁；用户看完全部补丁后拿到一次 token；应用前再比对工作树基线与补丁 hash。</td><td>baseline_changed / blocked；不写入。</td></tr>
+						<tr><td>崩溃后重复应用</td><td>apply_started 在副作用前写入 append-only ledger；恢复时未完成应用转成 unknown，绝不自动重放。</td><td>人工检查，不猜测、不重跑。</td></tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>5. 受控写入的实际链路</h2>
+				<pre><code>显式运行 isolated_write Workflow
+  → Agent 只在独立 worktree 修改
+  → 主工作树保持不动，生成 patch artifact
+  → /workflow review-write &lt;artifact-id&gt; 显示完整补丁
+  → 检查 artifact hash、路径 scope、密钥、嵌套仓库
+  → 仅本次审阅产生 opaque apply token
+  → /workflow apply-write &lt;review-token&gt;
+  → 再检查主工作树 baseline + git apply --check
+  → ledger 先记 write_apply_started，再应用一次
+  → 验证 post-image，最后才交付 Workflow 结果</code></pre>
+				<p>用户也可以用 <code>/workflow reject-write &lt;artifact-id&gt;</code> 明确拒绝。只要还有补丁未应用或未拒绝，最终结果就不会被标成已经交付。该链路要求 <code>san.workflows.allowIsolatedWrite=true</code>，且 <code>task.isolation.mode</code> 不能是 <code>none</code>。</p>
+			</section>
+
+			<section>
+				<h2>6. Dogfood 与数据纪律</h2>
+				<table>
+					<thead><tr><th>观察项</th><th>结果</th><th>判断</th></tr></thead>
+					<tbody>
+						<tr><td>Managed SOP</td><td>5 个固定 SOP，每个重复 5 次，共 25 次</td><td class="ok">达到确定性覆盖</td></tr>
+						<tr><td>Ad-hoc</td><td>10 个不同目标和 scope；每个从宽范围草稿修订成窄范围草稿，共 20 个草稿、10 次修订、10 次批准运行</td><td class="ok">达到代码合同的确定性覆盖</td></tr>
+						<tr><td>节点图</td><td>同一版本每次节点 ID 与顺序稳定</td><td class="ok">PASS</td></tr>
+						<tr><td>未批准启动</td><td>0</td><td class="ok">PASS</td></tr>
+						<tr><td>拒绝后启动</td><td>0</td><td class="ok">PASS</td></tr>
+						<tr><td>Ad-hoc 批准复用</td><td>0</td><td class="ok">PASS</td></tr>
+						<tr><td>重复结果交付</td><td>0</td><td class="ok">PASS</td></tr>
+						<tr><td>Ledger 异常</td><td>0 非法序列、0 非法转移、0 重复事件</td><td class="ok">PASS</td></tr>
+						<tr><td>真实模型 token 对照</td><td>没有 5 SOP × 5 次 × Skill/Managed 的真实成对样本</td><td class="wait">INSUFFICIENT DATA</td></tr>
+					</tbody>
+				</table>
+				<div class="callout info">
+					确定性 dogfood 使用固定 usage，只验证运行合同，不能冒充成本数据。原始聚合结果保存在 <a href="./san-v0.4-workflow-dogfood-runs/2026-07-11-summary.json">2026-07-11 summary</a>，明确记录 <code>credentialsUsed: false</code>、<code>tokenRolloutStatus: insufficient_data</code> 和 <code>rolloutDecision: keep-default-off</code>。
+				</div>
+			</section>
+
+			<section>
+				<h2>7. 验收矩阵</h2>
+				<table>
+					<thead><tr><th>提案验收项</th><th>当前结论</th><th>说明</th></tr></thead>
+					<tbody>
+						<tr><td>Managed 同版本稳定、边界变化失效、显式启动、暂停恢复、单次交付</td><td class="ok">工程通过</td><td>合同、manager、runtime、store 和 25-run 确定性 dogfood 共同证明。</td></tr>
+						<tr><td>Ad-hoc 模型仅生成、逐草稿批准、一次运行、拒绝零执行、不自动升级</td><td class="ok">通过</td><td>命令入口使用独立 ephemeral turn；生成后仍走静态验证和双步骤批准。</td></tr>
+						<tr><td>共同安全门禁：主机逃逸、工具交集、硬预算、取消、unknown、脱敏</td><td class="ok">通过</td><td>恶意 fixtures、路径 scope、严格 SDK 工具和 ledger tests 全绿。</td></tr>
+						<tr><td>受控写入：完整审阅、基线保护、凭证检查、无重复写、崩溃可判断</td><td class="ok">通过</td><td>真实临时 Git 仓库验证 apply once、CAS、tamper、secret 和 interrupted apply。</td></tr>
+						<tr><td>Managed 编排 token -30%、主上下文增长 -50%、质量不回退</td><td class="wait">待真实样本</td><td>报告器与阈值已实现，但不能在没有真实对照数据时宣布通过。</td></tr>
+					</tbody>
+				</table>
+				<p><strong>验收口径：</strong>工程核心可作为 default-off 内部试用候选验收；提案完整 W5 和 v0.4 产品终验尚未完成，不能扩大 rollout，也不能宣传“更省 token”。</p>
+			</section>
+
+			<section>
+				<h2>8. 最终验证记录</h2>
+				<pre><code>bun test packages/coding-agent/test/workflows packages/coding-agent/test/available-commands.test.ts packages/coding-agent/test/slash-commands/history-security.test.ts
+# 123 pass / 0 fail / 454 assertions
+
+bun run --cwd packages/coding-agent check
+# Biome 2184 files + docs index 121 docs + tsgo passed
+
+bun run ci:test:smoke
+# CLI version/help/stats + worker smoke-test: ok
+
+git diff --check
+# passed</code></pre>
+				<p class="muted">Focused gate 覆盖 Workflow 合同、store、scope、runtime、manager、命令、token report、受控写入、Agent 动态输出上限、Session identity 和严格 Task child。全量计数会在最终验证完成后更新。报告不保存 prompt、用户路径或凭据。</p>
+			</section>
+
+			<section>
+				<h2>9. 主要交付物</h2>
+				<ul>
+					<li><code>packages/coding-agent/src/workflows/</code>：合同、审批、发现、静态解析、受限运行时、manager、账本、命令、受控写入、dogfood 与 token 报告。</li>
+					<li><code>packages/coding-agent/src/prompts/workflows/</code>：模型只生成 Managed/Ad-hoc 惰性草稿的静态 prompt。</li>
+					<li><code>packages/coding-agent/src/tools/path-scope.ts</code>：严格子 Agent 工具的路径与 realpath 边界。</li>
+					<li><code>packages/coding-agent/src/slash-commands/helpers/workflows.ts</code>：TUI/ACP 共享命令入口和运行观察。</li>
+					<li><code>packages/coding-agent/test/workflows/</code>：12 个合同级测试文件与恶意/允许 fixtures。</li>
+					<li><code>docs/research/san-v0.4-workflow-dogfood-runs/2026-07-11-summary.json</code>：无凭据、脱敏 dogfood 聚合数据。</li>
+					<li><a href="./san-v0.4-dynamic-workflows-proposal-20260711.html">San v0.4 产品提案</a>：批准范围与原始验收标准。</li>
+				</ul>
+				<p class="muted">本报告描述当前未提交工作树，不把 base commit 当作功能 commit，也没有执行 commit 或 push。</p>
+			</section>
+		</main>
+	</body>
+</html>

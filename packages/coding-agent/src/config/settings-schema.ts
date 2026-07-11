@@ -2717,6 +2717,40 @@ export const SETTINGS_SCHEMA = {
 		default: "warn",
 	},
 
+	// San v0.4 Workflows
+	"san.workflows.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tasks",
+			group: "Modes",
+			label: "Managed SOP Workflows",
+			description: "Enable explicitly published, approved and manually started Managed SOP Workflows.",
+		},
+	},
+	"san.workflows.adHocEnabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tasks",
+			group: "Modes",
+			label: "Ad-hoc Workflows",
+			description:
+				"Separately enable model-generated, task-bound drafts that require one-time approval before every run.",
+		},
+	},
+	"san.workflows.allowIsolatedWrite": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tasks",
+			group: "Isolation",
+			label: "Workflow Isolated Writes",
+			description:
+				"Allow approved Workflows to produce changes in isolated workspaces for separate review and application.",
+		},
+	},
+
 	// San v0.2 Execution Loop
 	"san.executionLoop.enabled": {
 		type: "boolean",

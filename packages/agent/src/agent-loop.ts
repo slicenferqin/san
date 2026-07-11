@@ -1300,6 +1300,7 @@ async function streamAssistantResponse(
 	// `getCwd` is read once per LLM call so a mid-run session move (`/move`) reaches
 	// workspace-scoped provider discovery; falls back to the static `cwd` when unset.
 	const effectiveCwd = config.getCwd?.() ?? config.cwd;
+	const effectiveMaxTokens = config.getMaxTokens?.() ?? config.maxTokens;
 
 	const chatStepNumber = stepCounter.count;
 	stepCounter.count += 1;
@@ -1307,7 +1308,7 @@ async function streamAssistantResponse(
 		parent: invokeAgentSpan,
 		stepNumber: chatStepNumber,
 		request: {
-			maxTokens: config.maxTokens,
+			maxTokens: effectiveMaxTokens,
 			temperature: effectiveTemperature,
 			topP: config.topP,
 			topK: config.topK,
@@ -1344,6 +1345,7 @@ async function streamAssistantResponse(
 		return await runInActiveSpan(chatSpan, async () => {
 			let response = await streamFunction(model, llmContext, {
 				...config,
+				maxTokens: effectiveMaxTokens,
 				apiKey,
 				metadata: resolvedMetadata,
 				toolChoice: effectiveToolChoice,

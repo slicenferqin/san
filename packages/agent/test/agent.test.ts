@@ -6,6 +6,65 @@ import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream"
 import { createAssistantMessage } from "./helpers";
 
 describe("Agent", () => {
+	it("forwards a configured provider output-token cap on every model call", async () => {
+		const mock = createMockModel({ responses: [{ content: ["capped"] }] });
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			maxTokens: 777,
+		});
+
+		await agent.prompt("respect the cap");
+
+		expect(mock.calls).toHaveLength(1);
+		expect(mock.calls[0]?.options?.maxTokens).toBe(777);
+	});
+
+	it("recomputes a provider output-token cap between provider calls", async () => {
+		const mock = createMockModel({ responses: [{ content: ["first"] }, { content: ["second"] }] });
+		let remaining = 900;
+		const agent = new Agent({
+			initialState: { systemPrompt: ["test"], model: mock.model, tools: [] },
+			streamFn: mock.stream,
+			maxTokensResolver: () => remaining,
+		});
+		await agent.prompt("go");
+		remaining = 400;
+		await agent.prompt("continue");
+
+		expect(mock.calls.map(call => call.options?.maxTokens)).toEqual([900, 400]);
+	});
+
+	it("recomputes the cap within one tool-calling run", async () => {
+		const tool: AgentTool = {
+			name: "use_once",
+			label: "Use once",
+			description: "Use once",
+			parameters: z.object({}),
+			execute: async () => {
+				return { content: [{ type: "text", text: "done" }], details: {} };
+			},
+		};
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [{ type: "toolCall", id: "call-1", name: tool.name, arguments: {} }],
+					usage: { totalTokens: 500 },
+				},
+				{ content: ["complete"] },
+			],
+		});
+		const agent = new Agent({
+			initialState: { systemPrompt: ["test"], model: mock.model, tools: [tool] },
+			streamFn: mock.stream,
+			maxTokensResolver: () => 900 - mock.calls.filter(call => call.options?.maxTokens === 900).length * 500,
+		});
+
+		await agent.prompt("go");
+
+		expect(mock.calls.map(call => call.options?.maxTokens)).toEqual([900, 400]);
+	});
+
 	it("should support steering message queueing", async () => {
 		const agent = new Agent();
 

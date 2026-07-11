@@ -1,0 +1,1587 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>San v0.4 Managed SOP 与 Ad-hoc Workflows 产品提案</title>
+		<style>
+			:root {
+				color-scheme: light;
+				--bg: #f4f0e7;
+				--panel: #fffdf8;
+				--panel-soft: #f9f5ec;
+				--ink: #17212b;
+				--muted: #667085;
+				--line: #d9d1c2;
+				--navy: #17324d;
+				--green: #0b6b57;
+				--green-soft: #e8f4ef;
+				--amber: #a15c00;
+				--amber-soft: #fff3dc;
+				--red: #a9332b;
+				--red-soft: #fff0ee;
+				--purple: #6545a4;
+				--purple-soft: #f2edff;
+				--blue-soft: #edf3f7;
+				--code: #ede6d8;
+			}
+
+			* {
+				box-sizing: border-box;
+			}
+
+			html {
+				scroll-behavior: smooth;
+			}
+
+			body {
+				margin: 0;
+				background:
+					radial-gradient(circle at 8% 0, #dcebe5 0, transparent 32rem),
+					radial-gradient(circle at 96% 16%, #eee5d5 0, transparent 28rem), var(--bg);
+				color: var(--ink);
+				font-family:
+					Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+				line-height: 1.7;
+			}
+
+			header,
+			main,
+			footer {
+				width: min(1160px, calc(100vw - 40px));
+				margin: 0 auto;
+			}
+
+			header {
+				padding: 52px 0 24px;
+			}
+
+			h1 {
+				max-width: 1020px;
+				margin: 8px 0 14px;
+				font-size: clamp(38px, 6vw, 66px);
+				line-height: 1.04;
+				letter-spacing: -0.04em;
+			}
+
+			h2 {
+				margin: 0 0 18px;
+				font-size: clamp(25px, 3vw, 34px);
+				line-height: 1.2;
+			}
+
+			h3 {
+				margin: 0 0 10px;
+				font-size: 19px;
+				line-height: 1.35;
+			}
+
+			p {
+				margin: 9px 0;
+			}
+
+			a {
+				color: var(--green);
+				text-underline-offset: 3px;
+			}
+
+			code {
+				padding: 2px 6px;
+				border-radius: 6px;
+				background: var(--code);
+				font-size: 0.92em;
+			}
+
+			.eyebrow {
+				color: var(--green);
+				font-weight: 850;
+				letter-spacing: 0.1em;
+				text-transform: uppercase;
+			}
+
+			.subtitle {
+				max-width: 920px;
+				color: var(--muted);
+				font-size: 18px;
+			}
+
+			.status {
+				display: inline-flex;
+				gap: 9px;
+				align-items: center;
+				margin-top: 18px;
+				padding: 9px 14px;
+				border: 1px solid #9bcab8;
+				border-radius: 999px;
+				background: var(--green-soft);
+				color: #075846;
+				font-weight: 800;
+			}
+
+			.status::before {
+				width: 9px;
+				height: 9px;
+				border-radius: 50%;
+				background: var(--green);
+				content: "";
+			}
+
+			main {
+				padding-bottom: 56px;
+			}
+
+			section,
+			nav {
+				margin: 18px 0;
+				padding: 28px;
+				border: 1px solid var(--line);
+				border-radius: 22px;
+				background: var(--panel);
+				box-shadow: 0 14px 36px rgba(23, 33, 43, 0.05);
+			}
+
+			nav {
+				padding: 20px 24px;
+			}
+
+			nav ul {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 8px 16px;
+				margin: 0;
+				padding: 0;
+				list-style: none;
+			}
+
+			nav a {
+				font-weight: 750;
+				text-decoration: none;
+			}
+
+			.hero-answer {
+				padding: 28px;
+				border: 1px solid #9bcab8;
+				border-left: 7px solid var(--green);
+				border-radius: 18px;
+				background: var(--green-soft);
+				font-size: 19px;
+			}
+
+			.hero-answer strong {
+				color: #075846;
+			}
+
+			.scope-lock {
+				margin-top: 16px;
+				padding: 20px;
+				border: 1px solid #c7b7e8;
+				border-radius: 16px;
+				background: var(--purple-soft);
+			}
+
+			.scope-lock strong {
+				color: #513587;
+			}
+
+			.grid {
+				display: grid;
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+				gap: 14px;
+			}
+
+			.grid.two {
+				grid-template-columns: repeat(2, minmax(0, 1fr));
+			}
+
+			.card {
+				padding: 19px;
+				border: 1px solid var(--line);
+				border-radius: 16px;
+				background: var(--panel-soft);
+			}
+
+			.card.managed {
+				border-top: 6px solid var(--green);
+			}
+
+			.card.adhoc {
+				border-top: 6px solid var(--purple);
+			}
+
+			.card.warn {
+				border-top: 6px solid var(--amber);
+			}
+
+			.card.stop {
+				border-top: 6px solid var(--red);
+			}
+
+			.card h3 small {
+				display: block;
+				margin-top: 4px;
+				color: var(--muted);
+				font-size: 13px;
+				font-weight: 650;
+			}
+
+			.metric strong {
+				display: block;
+				margin-bottom: 4px;
+				color: var(--navy);
+				font-size: 24px;
+			}
+
+			.metric span {
+				color: var(--muted);
+			}
+
+			.callout {
+				margin: 18px 0;
+				padding: 18px 20px;
+				border-left: 5px solid var(--amber);
+				border-radius: 12px;
+				background: var(--amber-soft);
+			}
+
+			.callout.danger {
+				border-left-color: var(--red);
+				background: var(--red-soft);
+			}
+
+			.callout.info {
+				border-left-color: var(--purple);
+				background: var(--purple-soft);
+			}
+
+			table {
+				width: 100%;
+				border-collapse: collapse;
+				font-size: 14px;
+			}
+
+			th,
+			td {
+				padding: 12px 14px;
+				border-bottom: 1px solid var(--line);
+				vertical-align: top;
+				text-align: left;
+			}
+
+			th {
+				background: #edf1f4;
+				font-weight: 850;
+			}
+
+			tr:last-child td {
+				border-bottom: 0;
+			}
+
+			.yes,
+			.no,
+			.later {
+				white-space: nowrap;
+				font-weight: 850;
+			}
+
+			.yes {
+				color: var(--green);
+			}
+
+			.no {
+				color: var(--red);
+			}
+
+			.later {
+				color: var(--amber);
+			}
+
+			.flow {
+				padding: 20px;
+				border: 1px solid #b6c6d4;
+				border-radius: 16px;
+				background: var(--blue-soft);
+				color: var(--navy);
+				font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+				font-size: 14px;
+				text-align: center;
+				white-space: pre-wrap;
+			}
+
+			.example {
+				overflow: auto;
+				padding: 20px;
+				border-radius: 16px;
+				background: #17222f;
+				color: #edf6f2;
+				font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+				font-size: 13px;
+				line-height: 1.65;
+				white-space: pre;
+			}
+
+			.journey {
+				display: grid;
+				grid-template-columns: repeat(4, minmax(0, 1fr));
+				gap: 10px;
+				margin-top: 16px;
+			}
+
+			.journey-step {
+				min-height: 160px;
+				padding: 15px;
+				border: 1px solid var(--line);
+				border-radius: 15px;
+				background: var(--panel-soft);
+			}
+
+			.journey-step b {
+				display: grid;
+				place-items: center;
+				width: 29px;
+				height: 29px;
+				margin-bottom: 10px;
+				border-radius: 50%;
+				background: var(--navy);
+				color: white;
+			}
+
+			.phase {
+				display: grid;
+				grid-template-columns: 74px 1fr;
+				gap: 18px;
+				padding: 18px 0;
+				border-bottom: 1px solid var(--line);
+			}
+
+			.phase:last-child {
+				border-bottom: 0;
+			}
+
+			.phase-name {
+				display: grid;
+				place-items: center;
+				width: 64px;
+				height: 64px;
+				border-radius: 18px;
+				background: var(--navy);
+				color: white;
+				font-size: 19px;
+				font-weight: 900;
+			}
+
+			.phase p {
+				color: var(--muted);
+			}
+
+			.checklist {
+				padding-left: 0;
+				list-style: none;
+			}
+
+			.checklist li {
+				position: relative;
+				margin: 8px 0;
+				padding-left: 28px;
+			}
+
+			.checklist li::before {
+				position: absolute;
+				top: 1px;
+				left: 0;
+				color: var(--green);
+				content: "✓";
+				font-weight: 900;
+			}
+
+			.blocklist {
+				padding-left: 0;
+				list-style: none;
+			}
+
+			.blocklist li {
+				position: relative;
+				margin: 8px 0;
+				padding-left: 28px;
+			}
+
+			.blocklist li::before {
+				position: absolute;
+				top: 1px;
+				left: 0;
+				color: var(--red);
+				content: "×";
+				font-weight: 900;
+			}
+
+			ul,
+			ol {
+				margin: 10px 0 0;
+				padding-left: 23px;
+			}
+
+			li {
+				margin: 6px 0;
+			}
+
+			details {
+				margin: 12px 0;
+				overflow-x: auto;
+				padding: 15px 17px;
+				border: 1px solid var(--line);
+				border-radius: 14px;
+				background: var(--panel-soft);
+			}
+
+			details table {
+				table-layout: fixed;
+			}
+
+			details th,
+			details td,
+			details .yes,
+			details .no,
+			details .later {
+				overflow-wrap: anywhere;
+				white-space: normal;
+			}
+
+			summary {
+				cursor: pointer;
+				color: var(--navy);
+				font-weight: 850;
+			}
+
+			.tag {
+				display: inline-block;
+				margin: 2px 5px 2px 0;
+				padding: 3px 8px;
+				border-radius: 999px;
+				background: var(--green-soft);
+				color: #075846;
+				font-size: 12px;
+				font-weight: 800;
+			}
+
+			.tag.purple {
+				background: var(--purple-soft);
+				color: #513587;
+			}
+
+			.muted {
+				color: var(--muted);
+			}
+
+			footer {
+				padding: 0 0 48px;
+				color: var(--muted);
+				font-size: 14px;
+			}
+
+			@media (max-width: 900px) {
+				.grid,
+				.grid.two,
+				.journey {
+					grid-template-columns: 1fr;
+				}
+
+				.journey-step {
+					min-height: auto;
+				}
+			}
+
+			@media (max-width: 640px) {
+				header,
+				main,
+				footer {
+					width: min(100% - 22px, 1160px);
+				}
+
+				header {
+					padding-top: 34px;
+				}
+
+				section,
+				nav {
+					padding: 21px;
+					border-radius: 17px;
+				}
+
+				.phase {
+					grid-template-columns: 1fr;
+				}
+
+				table {
+					display: block;
+					max-width: 100%;
+					overflow-x: auto;
+					overscroll-behavior-inline: contain;
+				}
+
+				details table {
+					display: table;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<header>
+			<p class="eyebrow">San v0.4 · Revised Product Proposal · 2026-07-11</p>
+			<h1>把工作 SOP 变成真正会执行的 Workflow</h1>
+			<p class="subtitle">
+				San v0.4 只做两种 Workflow：固定、版本化、人工批准、显式启动的 Managed SOP
+				Workflow；以及模型为当前任务现场生成、必须先审后跑的 Ad-hoc Dynamic Workflow。
+			</p>
+			<div class="status">范围已收敛：两种 Workflow，没有自治型第三种</div>
+			<p class="subtitle" style="margin-top: 14px">
+				实施状态：核心代码、安全测试和确定性 dogfood 已落地；Ad-hoc 已提供 fail-closed 的 <code>revise-draft</code> 范围缩小路径，token 报告只接受来源一致的 Skill/Managed 成对证据。真实模型对照仍待采样，因此 Managed 与 Ad-hoc 两层开关都默认关闭。详见
+				<a href="./san-v0.4-workflows-implementation-report-20260711.html">San v0.4 Workflows 实施与验收报告</a>。
+			</p>
+		</header>
+
+		<main>
+			<section id="decision">
+				<div class="hero-answer">
+					<strong>本提案的核心决定：</strong>
+					v0.4 不追求“让 San 自己无限编排”。它只解决两件事：把已经成熟的 SOP
+					变成精确、低重复、可复用的执行流程；以及在一次复杂任务里，让模型先生成流程草稿，经人批准后只运行这一次。
+				</div>
+
+				<div class="grid two" style="margin-top: 16px">
+					<article class="card managed">
+						<h3>
+							Managed SOP Workflow
+							<small>v0.4 第一优先级</small>
+						</h3>
+						<p>固定步骤、固定角色、固定权限、固定预算边界，发布前人工批准，每次由用户明确启动。</p>
+						<p>
+							<span class="tag">可版本化</span>
+							<span class="tag">可重复</span>
+							<span class="tag">低风险</span>
+						</p>
+					</article>
+					<article class="card adhoc">
+						<h3>
+							Ad-hoc Dynamic Workflow
+							<small>v0.4 第二优先级</small>
+						</h3>
+						<p>模型根据当前任务现场生成草稿；用户查看步骤、权限和预算后批准，只运行当前草稿。</p>
+						<p>
+							<span class="tag purple">一次性</span>
+							<span class="tag purple">先审后跑</span>
+							<span class="tag purple">中风险</span>
+						</p>
+					</article>
+				</div>
+
+				<div class="scope-lock">
+					<strong>范围锁：</strong>
+					v0.4 没有“自动生成、自动批准、自动运行”的 Autonomous Workflow。没有定时触发、后台自发触发、Brain
+					自动提升权限，也没有无需用户意图的静默运行。
+				</div>
+			</section>
+
+			<nav aria-label="文档目录">
+				<ul>
+					<li><a href="#why">为什么不是 Skill</a></li>
+					<li><a href="#two-types">两种 Workflow</a></li>
+					<li><a href="#managed">Managed 怎么用</a></li>
+					<li><a href="#adhoc">Ad-hoc 怎么用</a></li>
+					<li><a href="#relationship">两者如何转换</a></li>
+					<li><a href="#control">如何保持掌控</a></li>
+					<li><a href="#tokens">怎样证明省 token</a></li>
+					<li><a href="#scope">v0.4 范围</a></li>
+					<li><a href="#phases">实施阶段</a></li>
+					<li><a href="#acceptance">验收标准</a></li>
+					<li><a href="#appendix">工程附录</a></li>
+				</ul>
+			</nav>
+
+			<section id="why">
+				<h2>1. 为什么有些 SOP 应该是 Workflow，而不是 Skill</h2>
+				<p>
+					Skill 是一份给 Agent 阅读的说明书。它擅长传递知识、判断原则和注意事项，但每次执行时，Agent
+					仍然需要重新理解说明书、重新拆步骤、重新决定先后顺序。
+				</p>
+				<p>
+					当一个 SOP 的步骤、角色、交接格式和停止条件已经稳定时，每次重新理解反而会带来误差和重复 token。此时更适合把“怎么执行”交给
+					Workflow。
+				</p>
+
+				<table>
+					<thead>
+						<tr>
+							<th>比较</th>
+							<th>Skill</th>
+							<th>Managed SOP Workflow</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td>本质</td>
+							<td>给 Agent 的说明书</td>
+							<td>运行时直接执行的工作安排</td>
+						</tr>
+						<tr>
+							<td>步骤顺序</td>
+							<td>Agent 每次重新理解</td>
+							<td>版本中已经固定</td>
+						</tr>
+						<tr>
+							<td>并行关系</td>
+							<td>Agent 每次重新决定</td>
+							<td>流程明确规定</td>
+						</tr>
+						<tr>
+							<td>中间结果</td>
+							<td>容易进入主上下文</td>
+							<td>留在 Workflow 节点和结构化结果中</td>
+						</tr>
+						<tr>
+							<td>失败处理</td>
+							<td>依赖当前 Agent 临场判断</td>
+							<td>重试、跳过、停止条件已定义</td>
+						</tr>
+						<tr>
+							<td>重复运行</td>
+							<td>可能每次略有不同</td>
+							<td>同一版本走同一条流程</td>
+						</tr>
+						<tr>
+							<td>适合内容</td>
+							<td>知识、规范、判断方法</td>
+							<td>稳定 SOP、固定质量门、重复性任务</td>
+						</tr>
+					</tbody>
+				</table>
+
+				<div class="callout info">
+					<strong>不是所有 Skill 都要改成 Workflow。</strong>
+					“怎样写好 TypeScript”“怎样评审安全风险”仍然适合 Skill；“依次检查类型、测试、变更日志，再并行做两轮复核”更适合
+					Workflow。Workflow 内部的 Agent 仍然可以加载 Skill。
+				</div>
+			</section>
+
+			<section id="two-types">
+				<h2>2. v0.4 只有这两种 Workflow</h2>
+				<table>
+					<thead>
+						<tr>
+							<th>类型</th>
+							<th>谁创建</th>
+							<th>批准方式</th>
+							<th>怎么启动</th>
+							<th>是否保存</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td><strong>Managed SOP</strong></td>
+							<td>用户、团队，或模型根据已有 SOP 生成草稿</td>
+							<td>发布具体版本时人工批准</td>
+							<td>用户每次明确运行命令</td>
+							<td>保存为版本化文件</td>
+						</tr>
+						<tr>
+							<td><strong>Ad-hoc Dynamic</strong></td>
+							<td>模型根据当前任务现场生成</td>
+							<td>每个草稿、每次运行都要批准</td>
+							<td>用户批准当前草稿后运行一次</td>
+							<td>默认不保存</td>
+						</tr>
+					</tbody>
+				</table>
+
+				<h3 style="margin-top: 24px">两者共用的底线</h3>
+				<ul class="checklist">
+					<li>Workflow 脚本只负责安排 Agent，不能直接碰电脑。</li>
+					<li>运行前都能看到阶段、最大 Agent 数、权限和预算。</li>
+					<li>脚本、权限、scope 或预算变化后，旧批准不能继续使用。</li>
+					<li>Agent 权限只能比当前会话更少，不能通过 Workflow 变多。</li>
+					<li>每次运行都有状态、成本、证据和最终结果记录。</li>
+					<li>用户可以查看、暂停、停止，并知道失败发生在哪一步。</li>
+				</ul>
+			</section>
+
+			<section id="managed">
+				<h2>3. Managed SOP Workflow 怎么用</h2>
+				<p>
+					Managed SOP 是 v0.4 的核心产品。它把一个已经认可的工作方法，从“每次让 Agent 重新读说明”变成“直接运行同一个已批准版本”。
+				</p>
+
+				<div class="journey">
+					<article class="journey-step">
+						<b>1</b>
+						<h3>准备 SOP</h3>
+						<p>来源可以是现有 Skill、Markdown 文档、人工描述，或一次已经验证成功的任务流程。</p>
+					</article>
+					<article class="journey-step">
+						<b>2</b>
+						<h3>生成草稿</h3>
+						<p>San 把步骤、输入、输出、角色、权限、预算和失败条件整理成 Workflow 草稿。</p>
+					</article>
+					<article class="journey-step">
+						<b>3</b>
+						<h3>批准版本</h3>
+						<p>用户查看人话摘要和原始脚本，批准一个准确版本。任何变化都会产生新版本。</p>
+					</article>
+					<article class="journey-step">
+						<b>4</b>
+						<h3>明确运行</h3>
+						<p>以后通过命令传入参数运行。只要没有超出已批准边界，不需要每次重读整份 SOP。</p>
+					</article>
+				</div>
+
+				<h3 style="margin-top: 24px">建议体验</h3>
+				<div class="example">/workflow publish release-readiness-v1
+
+将发布以下 Managed SOP Workflow：
+  名称：release-readiness
+  版本：v1
+  输入：branch, target
+  阶段：基线检查 → 并行验证 → 风险复核 → 汇总
+  最大并发：6
+  最大 Agent：12
+  权限：只读
+  token 上限：120k
+
+操作：
+  查看人话步骤
+  查看原始脚本
+  批准并发布
+  拒绝</div>
+
+				<div class="example" style="margin-top: 14px">/release-readiness branch=feature/payments target=staging
+
+将显式启动已批准版本：
+  release-readiness@v1
+  参数范围符合批准条件
+  权限没有变化
+  预算没有变化
+
+运行 / 取消</div>
+
+				<div class="callout">
+					<strong>方便但不放松控制：</strong>
+					Managed Workflow 的版本批准可以复用，但每一次执行都必须由用户明确启动。脚本指纹、权限、scope、参数格式或预算发生变化时，必须发布并批准新版本。
+				</div>
+			</section>
+
+			<section id="adhoc">
+				<h2>4. Ad-hoc Dynamic Workflow 怎么用</h2>
+				<p>
+					Ad-hoc 用于当前任务很复杂，但还没有成熟 SOP 的情况。用户明确要求“用 Workflow
+					做”，模型先生成一份一次性草稿，而不是直接启动一群 Agent。
+				</p>
+
+				<div class="journey">
+					<article class="journey-step">
+						<b>1</b>
+						<h3>用户明确提出</h3>
+						<p>例如：“用 Workflow 审计全仓权限校验，并让另一批 Agent 复核发现。”</p>
+					</article>
+					<article class="journey-step">
+						<b>2</b>
+						<h3>模型只生成草稿</h3>
+						<p>草稿包括阶段、Agent 数、工具、预算、停止条件和预期输出，不立即执行。</p>
+					</article>
+					<article class="journey-step">
+						<b>3</b>
+						<h3>用户批准这一次</h3>
+						<p>用户可以查看、修改、缩小范围或拒绝。批准只对当前草稿和当前参数有效。</p>
+					</article>
+					<article class="journey-step">
+						<b>4</b>
+						<h3>运行一次</h3>
+						<p>完成、拒绝或过期后删除草稿脚本和参数，只在当前会话审计里保留不可复用的 hash 证据。是否沉淀成 Managed SOP 由用户另行决定。</p>
+					</article>
+				</div>
+
+				<h3 style="margin-top: 24px">运行前必须让用户看懂</h3>
+				<div class="example">Ad-hoc Workflow 草稿：audit-auth-routes
+
+目的：
+  检查 42 个路由文件是否遗漏鉴权，并复核每个发现
+
+阶段：
+  1. 1 个 Agent 列出路由
+  2. 最多 8 个 Agent 并行审计
+  3. 最多 4 个 Agent 复核发现
+  4. 1 个 Agent 汇总报告
+
+边界：
+  只读 · 不修改文件 · 不执行 Shell
+  最多 14 个 Agent · 最多 150k token
+
+操作：
+  查看原始脚本
+  缩小范围
+  批准运行一次
+  拒绝</div>
+
+				<div class="callout danger">
+					<strong>Ad-hoc 永远不能“记住批准”。</strong>
+					因为每次脚本都是现场生成的，即使名称相同，也必须重新展示和批准。成功运行一次也不会自动变成 Managed Workflow。
+				</div>
+			</section>
+
+			<section id="relationship">
+				<h2>5. 两种 Workflow 如何转换</h2>
+				<div class="flow">已有 SOP / Skill / 人工步骤
+  → 生成 Managed 草稿
+  → 人工审阅并发布版本
+  → 用户显式重复运行
+
+复杂的一次性任务
+  → 模型生成 Ad-hoc 草稿
+  → 人工批准
+  → 只运行一次
+  → 用户认为值得复用时，重新进入 Managed 发布流程</div>
+
+				<p>
+					Ad-hoc 可以成为 Managed 的素材，但不能自动升级。升级时必须重新检查：
+				</p>
+				<ul>
+					<li>步骤是否真的稳定，而不是只适合当时那个任务；</li>
+					<li>参数能否明确描述；</li>
+					<li>Agent 的输入和输出能否固定格式；</li>
+					<li>权限是否可以进一步缩小；</li>
+					<li>失败、重试和停止条件是否清楚；</li>
+					<li>预算是否适合重复运行；</li>
+					<li>适用 scope 是用户、项目、仓库还是某个目录。</li>
+				</ul>
+
+				<div class="scope-lock">
+					<strong>没有第三条自动路线：</strong>
+					运行成功的 Ad-hoc 不会被 Brain 自动保存，不会静默变成命令，也不会在相似任务出现时自行启动。
+				</div>
+			</section>
+
+			<section id="control">
+				<h2>6. 如何确保不会脱离掌控</h2>
+				<p>控制不是依赖“模型应该听话”，而是由运行时强制执行五道锁。</p>
+
+				<div class="grid two">
+					<article class="card">
+						<h3>1. 内容锁</h3>
+						<p>批准绑定到具体脚本指纹。改一个步骤、参数、权限或预算，都算新版本。</p>
+					</article>
+					<article class="card">
+						<h3>2. 权限锁</h3>
+						<p>脚本不能读写文件、执行 Shell、访问网络、环境变量、密钥或模块。实际工作只能交给受限 Agent。</p>
+					</article>
+					<article class="card">
+						<h3>3. 规模锁</h3>
+						<p>并发、Agent 总量、token 和时间都是硬上限。达到上限就停止调度，不只是显示警告。</p>
+					</article>
+					<article class="card">
+						<h3>4. 启动锁</h3>
+						<p>Managed 每次必须显式运行；Ad-hoc 每次必须批准。没有定时、自发或静默启动。</p>
+					</article>
+					<article class="card">
+						<h3>5. 副作用锁</h3>
+						<p>第一版只读。后续写入只允许在独立工作区产生补丁，应用前再次检查和确认。</p>
+					</article>
+					<article class="card">
+						<h3>失败原则</h3>
+						<p>无法证明节点已经完成、权限仍一致或结果已应用时，一律 blocked，不猜、不重复执行。</p>
+					</article>
+				</div>
+
+				<h3 style="margin-top: 24px">建议默认限制</h3>
+				<table>
+					<thead>
+						<tr>
+							<th>限制</th>
+							<th>默认</th>
+							<th>硬上限</th>
+							<th>说明</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td>同时运行的 Agent</td>
+							<td>8</td>
+							<td>16</td>
+							<td>Workflow 有独立限制，不直接继承 task 的 unlimited 配置。</td>
+						</tr>
+						<tr>
+							<td>单次 Agent 总数</td>
+							<td>建议不超过 25</td>
+							<td>100</td>
+							<td>超过 25 必须显示大规模运行警告；v0.4 不开放上游的千 Agent 规模。</td>
+						</tr>
+						<tr>
+							<td>Managed 首版权限</td>
+							<td>只读</td>
+							<td>批准范围内</td>
+							<td>后续写入必须使用独立工作区。</td>
+						</tr>
+						<tr>
+							<td>Ad-hoc 首版权限</td>
+							<td>只读</td>
+							<td>每次批准范围内</td>
+							<td>不允许保存“以后都信任这个名字”。</td>
+						</tr>
+						<tr>
+							<td>token / 时间</td>
+							<td>运行前展示</td>
+							<td>每次运行固定</td>
+							<td>脚本只能查看剩余预算，不能修改预算。</td>
+						</tr>
+					</tbody>
+				</table>
+
+				<h3 style="margin-top: 24px">用户始终拥有的控制</h3>
+				<ul class="checklist">
+					<li>查看当前阶段和所有 Agent。</li>
+					<li>查看已用 token、剩余预算和耗时。</li>
+					<li>暂停，不再启动新 Agent。</li>
+					<li>停止整个 Workflow 或单个 Agent。</li>
+					<li>查看原始脚本和人话步骤。</li>
+					<li>查看每个结果的来源和最终交付状态。</li>
+					<li>知道当前是 Managed 版本还是一次性 Ad-hoc 草稿。</li>
+				</ul>
+			</section>
+
+			<section id="tokens">
+				<h2>7. 怎样证明它真的更省 token、更精确</h2>
+				<p>
+					Workflow 不应该只靠感觉宣称“更省”。v0.4 必须把相同 SOP 用 Skill 和 Managed Workflow
+					各跑一组，比较真实数据。
+				</p>
+
+				<h3>为什么有机会节省</h3>
+				<ul>
+					<li>主 Agent 不再每次读取和重新解释完整 SOP。</li>
+					<li>步骤和并行关系由运行时执行，不需要主 Agent 反复思考。</li>
+					<li>中间结果保存在节点中，不全部进入主对话。</li>
+					<li>Agent 只收到当前节点需要的输入，而不是完整历史。</li>
+					<li>结构化输出减少“解释上一轮文本再决定下一步”的 token。</li>
+					<li>相同版本不需要每次重新生成工作计划。</li>
+				</ul>
+
+				<div class="callout">
+					<strong>需要诚实区分：</strong>
+					Workflow 应该显著减少主上下文和编排 token，但如果它启动更多 Agent，总 token 不一定总是更低。目标是以更低的编排成本获得更稳定的质量，并把总成本锁在运行前可见预算内。
+				</div>
+
+				<h3>建议对比指标</h3>
+				<table>
+					<thead>
+						<tr>
+							<th>指标</th>
+							<th>要回答的问题</th>
+							<th>v0.4 建议门禁</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td>主会话编排 token</td>
+							<td>主 Agent 为理解 SOP、拆分和调度花了多少 token？</td>
+							<td>Managed 中位数至少比 Skill 基线低 30%。</td>
+						</tr>
+						<tr>
+							<td>主会话上下文增长</td>
+							<td>中间结果有多少进入主对话？</td>
+							<td>中位数至少减少 50%。</td>
+						</tr>
+						<tr>
+							<td>总 token</td>
+							<td>全部 Agent 加起来是否失控？</td>
+							<td>不得超过运行前批准预算；超出即失败，不追加。</td>
+						</tr>
+						<tr>
+							<td>步骤一致性</td>
+							<td>同一版本重复运行是否漏步骤或换顺序？</td>
+							<td>固定 fixtures 下 100% 走同一节点图。</td>
+						</tr>
+						<tr>
+							<td>一次通过率</td>
+							<td>更精确是否真的减少返工？</td>
+							<td>不低于 Skill 基线，关键 SOP 应有提升。</td>
+						</tr>
+						<tr>
+							<td>重复运行成本</td>
+							<td>第 2–10 次是否仍重复付出计划成本？</td>
+							<td>Managed 不重新生成计划，不重复注入完整 SOP。</td>
+						</tr>
+					</tbody>
+				</table>
+
+				<p>
+					建议先选 5 个真实 SOP，每个用 Skill 和 Managed Workflow 各跑至少 5 次。只有在质量不下降、主会话 token
+					明显下降、成本可预测时，才能正式宣传“更精确、更省 token”。
+				</p>
+			</section>
+
+			<section id="format">
+				<h2>8. 一个 Managed SOP 大概长什么样</h2>
+				<p>普通用户不必手写代码，但批准前应该同时看到人话版本和原始脚本。</p>
+
+				<div class="example">名称：release-readiness
+版本：v1
+用途：发布前确认代码、测试、变更日志和风险均满足要求
+
+输入：
+  branch：待发布分支
+  target：目标环境
+
+阶段：
+  1. 检查分支和工作区基线
+  2. 并行运行类型、测试、变更日志检查
+  3. 让复核 Agent 检查失败和风险
+  4. 汇总为发布建议
+
+权限：
+  只读
+
+限制：
+  最大并发 6
+  最大 Agent 12
+  最大 120k token
+
+停止：
+  基线不满足立即 blocked
+  预算耗尽立即 stopped
+  关键检查缺证据不得给出通过</div>
+
+				<p>对应脚本只表达调度，不直接操作系统：</p>
+				<div class="example">export const meta = {
+  name: "release-readiness",
+  description: "发布前检查",
+  version: 1,
+};
+
+phase("基线");
+const baseline = await agent("检查发布基线", { schema: baselineSchema });
+
+phase("并行验证");
+const checks = await parallel([
+  () => agent("检查 TypeScript 合同", { schema: checkSchema }),
+  () => agent("检查测试结果", { schema: checkSchema }),
+  () => agent("检查变更日志", { schema: checkSchema }),
+]);
+
+phase("复核");
+const review = await agent("复核基线和检查证据", {
+  schema: releaseReviewSchema,
+});
+
+return review;</div>
+
+				<p>
+					真正读取文件和运行检查的是拥有明确工具范围的 Agent。Workflow 脚本只安排阶段、并行关系和结构化交接。
+				</p>
+			</section>
+
+			<section id="compatibility">
+				<h2>9. San 与 Claude Dynamic Workflows 的关系</h2>
+				<p>
+					San 会兼容 Claude Code 公开的 Workflow 子集，但产品重点不是复制界面，而是让 Managed SOP
+					更容易版本化、审批、测量 token 和控制副作用。
+				</p>
+
+				<table>
+					<thead>
+						<tr>
+							<th>内容</th>
+							<th>v0.4 决定</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td><code>.claude/workflows/*.js</code></td>
+							<td>支持公开格式和最近目录优先规则。</td>
+						</tr>
+						<tr>
+							<td>San 原生路径</td>
+							<td>提供 <code>.san/workflows</code>，用于 Managed SOP 和 San 专属元数据。</td>
+						</tr>
+						<tr>
+							<td><code>meta</code>、<code>args</code>、顶层 await</td>
+							<td>支持公开合同。</td>
+						</tr>
+						<tr>
+							<td><code>agent</code>、<code>parallel</code>、<code>pipeline</code></td>
+							<td>支持公开行为；可以增加 San helper，但不改变已有含义。</td>
+						</tr>
+						<tr>
+							<td>未公开内部 API</td>
+							<td>不兼容、不猜测。</td>
+						</tr>
+						<tr>
+							<td><code>workflowz</code></td>
+							<td>v0.4 内测期间保持现有“快速 task 编排”行为，不静默改变语义。</td>
+						</tr>
+						<tr>
+							<td><code>ultracode</code></td>
+							<td>不作为首版自动触发器；用户明确要求 Ad-hoc 后才生成草稿。</td>
+						</tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section id="scope">
+				<h2>10. v0.4 做什么，不做什么</h2>
+				<div class="grid two">
+					<article class="card managed">
+						<h3>v0.4 会交付</h3>
+						<ul class="checklist">
+							<li>Managed SOP Workflow 的草稿、发布、版本和显式运行。</li>
+							<li>Ad-hoc Dynamic Workflow 的生成草稿、人工批准和一次性运行。</li>
+							<li>安全 Runtime，只暴露白名单 Workflow helper。</li>
+							<li>San 与 Claude Workflow 文件发现。</li>
+							<li>结构化参数和结构化 Agent 结果。</li>
+							<li>后台运行、进度、暂停、停止和同会话恢复。</li>
+							<li>Agent 数、并发、token 和时间硬预算。</li>
+							<li>只读内测，以及后续独立工作区写入。</li>
+							<li>Skill 与 Managed SOP 的真实 token 对比报告。</li>
+							<li>运行审计、结果证据和只交付一次。</li>
+						</ul>
+					</article>
+					<article class="card stop">
+						<h3>v0.4 明确不做</h3>
+						<ul class="blocklist">
+							<li>Autonomous Workflow。</li>
+							<li>模型自动批准自己生成的 Workflow。</li>
+							<li>没有用户意图的自动或定时启动。</li>
+							<li>Brain 自动保存、升级或运行 Workflow。</li>
+							<li>Workflow 脚本直接访问文件、Shell、网络、环境变量或密钥。</li>
+							<li>脚本在运行中提高自己的预算或权限。</li>
+							<li>Ad-hoc 根据名字记住永久批准。</li>
+							<li>Ad-hoc 成功后自动升级为 Managed。</li>
+							<li>首版直接修改用户当前工作区。</li>
+							<li>退出 San 后自动继续未完成 Workflow。</li>
+							<li>兼容 Claude 未公开的私有行为。</li>
+						</ul>
+					</article>
+				</div>
+			</section>
+
+			<section id="phases">
+				<h2>11. 实施阶段</h2>
+				<p>实施顺序围绕两个产品逐步展开，不再为未来的自治型 Workflow 预留产品范围。</p>
+
+				<div class="phase">
+					<div class="phase-name">W0</div>
+					<div>
+						<h3>冻结两种 Workflow 的合同</h3>
+						<p>
+							冻结 Managed 和 Ad-hoc 的文件格式、版本、审批、参数、权限、预算、节点身份、暂停恢复和错误语义。建立允许脚本与恶意脚本 fixtures。
+						</p>
+						<strong>完成标准：</strong>
+						任何需求都能明确归入 Managed、Ad-hoc 或“不属于 v0.4”，并能判断脚本应运行、询问还是拒绝。
+					</div>
+				</div>
+
+				<div class="phase">
+					<div class="phase-name">W1</div>
+					<div>
+						<h3>安全 Runtime、Agent Bridge 与运行记录</h3>
+						<p>
+							实现受限 JavaScript、agent/parallel/pipeline、结构化结果、硬预算、取消、run/phase/node 事件和最终结果一次性交付。先只读。
+						</p>
+						<strong>完成标准：</strong>
+						公开示例可运行；越权脚本全部阻止；预算和停止真实生效；没有结果重复交付。
+					</div>
+				</div>
+
+				<div class="phase">
+					<div class="phase-name">W2</div>
+					<div>
+						<h3>交付 Managed SOP Workflow</h3>
+						<p>
+							实现 SOP→草稿、版本发布、批准记录、显式命令、参数校验、同会话暂停恢复、San/Claude 路径和 <code>/workflows</code>。
+						</p>
+						<strong>完成标准：</strong>
+						至少 5 个真实 SOP 可以稳定重复运行；版本变化重新批准；同一版本不重复生成计划；token 对比达到门禁。
+					</div>
+				</div>
+
+				<div class="phase">
+					<div class="phase-name">W3</div>
+					<div>
+						<h3>交付 Ad-hoc Dynamic Workflow</h3>
+						<p>
+							用户明确要求后，模型生成人话步骤和脚本草稿；展示规模、权限和预算；批准后只运行一次，默认不保存。
+						</p>
+						<strong>完成标准：</strong>
+						未批准零执行；每个草稿独立批准；相同名称不能复用信任；成功后不会自动升级为 Managed。
+					</div>
+				</div>
+
+				<div class="phase">
+					<div class="phase-name">W4</div>
+					<div>
+						<h3>受控写入</h3>
+						<p>
+							Managed 与 Ad-hoc 都只能让 Agent 在独立工作区修改，输出补丁或分支；应用时检查基线、凭证和人工变化，冲突即 blocked。
+						</p>
+						<strong>完成标准：</strong>
+						零重复写入、零不安全覆盖；崩溃后能判断副作用状态；用户能在应用前查看完整变化。
+					</div>
+				</div>
+
+				<div class="phase">
+					<div class="phase-name">W5</div>
+					<div>
+						<h3>Dogfood、token 报告与 rollout</h3>
+						<p>
+							对 Managed 和 Ad-hoc 分别做真实任务评估，记录准确率、主上下文 token、总 token、Agent 数、暂停恢复、越权尝试和用户停止行为。
+						</p>
+						<strong>完成标准：</strong>
+						安全门禁全绿；Managed 达到 token 目标；Ad-hoc 无未批准执行；再决定是否扩大内部 opt-in。默认开启仍是独立决策。
+					</div>
+				</div>
+			</section>
+
+			<section id="acceptance">
+				<h2>12. v0.4 怎么验收</h2>
+
+				<h3>Managed SOP 必须证明</h3>
+				<ul class="checklist">
+					<li>同一版本、同一参数会产生同一节点图和相同权限边界。</li>
+					<li>版本、参数格式、权限、scope 或预算变化后旧批准失效。</li>
+					<li>用户没有显式运行时绝不启动。</li>
+					<li>重复运行不重新生成计划，不重复注入完整 SOP。</li>
+					<li>主会话编排 token 中位数比 Skill 基线至少降低 30%。</li>
+					<li>主会话上下文增长中位数至少减少 50%。</li>
+					<li>质量和一次通过率不低于 Skill 基线。</li>
+					<li>暂停恢复不重复已完成节点，最终结果只交付一次。</li>
+				</ul>
+
+				<h3>Ad-hoc 必须证明</h3>
+				<ul class="checklist">
+					<li>模型只能生成草稿，不能直接执行。</li>
+					<li>用户能在批准前看懂步骤、规模、权限、预算和停止条件。</li>
+					<li>每个草稿都单独批准，名称相同也不能复用。</li>
+					<li>用户缩小范围后，运行的必须是修改后的草稿。</li>
+					<li>完成后默认不保存、不自动复用、不自动升级。</li>
+					<li>拒绝或取消后，Agent 启动数必须为 0。</li>
+				</ul>
+
+				<h3>共同安全门禁</h3>
+				<ul class="checklist">
+					<li>脚本直接访问文件、Shell、网络、process、环境变量、模块和密钥全部被阻止。</li>
+					<li>Agent 权限是 Workflow、会话、Agent 三者允许范围的交集。</li>
+					<li>并发、Agent 总数、token、时间达到上限后真实停止。</li>
+					<li>停止后状态明确为 cancelled/aborted，不能显示 completed。</li>
+					<li>无法证明完成的节点进入 blocked/unknown，不盲目重跑。</li>
+					<li>日志、UI 和报告不泄漏本机路径或凭据。</li>
+					<li>现有 task、San Loop、Brain、Skill 和 workflowz 行为不回归。</li>
+				</ul>
+
+				<h3>建议 dogfood 样本</h3>
+				<table>
+					<thead>
+						<tr>
+							<th>类型</th>
+							<th>样本</th>
+							<th>次数</th>
+							<th>重点</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td>Managed</td>
+							<td>5 个真实 SOP</td>
+							<td>每个至少 5 次</td>
+							<td>步骤稳定、token 节省、重复运行成本</td>
+						</tr>
+						<tr>
+							<td>Ad-hoc</td>
+							<td>10 个不同复杂任务</td>
+							<td>每个至少 2 个草稿版本</td>
+							<td>审批、范围修改、预算和一次性边界</td>
+						</tr>
+						<tr>
+							<td>恶意脚本</td>
+							<td>文件、Shell、网络、密钥、无限循环</td>
+							<td>完整矩阵</td>
+							<td>全部阻止或硬停止</td>
+						</tr>
+						<tr>
+							<td>恢复</td>
+							<td>暂停、Agent 失败、预算耗尽、用户停止</td>
+							<td>每种至少 3 次</td>
+							<td>无重复节点、无双重交付</td>
+						</tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section id="rollout">
+				<h2>13. Rollout 顺序</h2>
+				<div class="flow">开发期：默认关闭，只跑 fixtures
+  ↓
+Managed 只读 dogfood：固定 5 个 SOP
+  ↓
+Managed 内部 opt-in：验证 token 与重复运行
+  ↓
+Ad-hoc 只读 dogfood：每次完整审批
+  ↓
+Ad-hoc 内部 opt-in
+  ↓
+独立工作区写入 dogfood
+  ↓
+根据数据决定是否扩大使用</div>
+				<p>
+					Rollout 使用两个独立开关：<code>san.workflows.enabled</code> 只控制 Managed；<code>san.workflows.adHocEnabled</code>
+					在 Managed 已开启的前提下单独控制 Ad-hoc。隔离写入仍由第三个开关 <code>san.workflows.allowIsolatedWrite</code> 控制。
+				</p>
+
+				<p>任何阶段出现以下情况都停止扩大 rollout：</p>
+				<ul class="blocklist">
+					<li>未批准却启动 Agent；</li>
+					<li>脚本获得直接系统权限；</li>
+					<li>预算上限只提示但没有停止；</li>
+					<li>暂停恢复重复已完成节点；</li>
+					<li>写入覆盖人工变化；</li>
+					<li>Ad-hoc 自动保存或自动复用；</li>
+					<li>Managed token 没有明显优于 Skill 基线；</li>
+					<li>用户无法判断当前到底在运行什么。</li>
+				</ul>
+			</section>
+
+			<section id="approval">
+				<h2>14. 推荐批准口径</h2>
+				<div class="hero-answer">
+					<strong>建议批准：</strong>
+					San v0.4 只实施 Managed SOP Workflow 和 Ad-hoc Dynamic Workflow。Managed
+					用于固定、版本化、人工批准、显式启动的重复 SOP；Ad-hoc 由模型为当前任务生成草稿，必须逐次人工批准，只运行一次，默认不保存。两者共用受限
+					Runtime、硬预算、运行记录和用户停止能力。v0.4 不实施自治型 Workflow、自动批准、自动触发或 Brain 自动运行。
+				</div>
+
+				<div class="grid three" style="margin-top: 16px">
+					<article class="card metric">
+						<strong>两个类型</strong>
+						<span>Managed + Ad-hoc</span>
+					</article>
+					<article class="card metric">
+						<strong>三次明确</strong>
+						<span>明确生成、明确批准、明确启动</span>
+					</article>
+					<article class="card metric">
+						<strong>零自治</strong>
+						<span>没有自动批准或静默运行</span>
+					</article>
+				</div>
+			</section>
+
+			<section id="glossary">
+				<h2>15. 简单词汇表</h2>
+				<table>
+					<thead>
+						<tr>
+							<th>词</th>
+							<th>这里是什么意思</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td>Managed SOP</td>
+							<td>已经审阅、批准并保存版本的固定 Workflow。</td>
+						</tr>
+						<tr>
+							<td>Ad-hoc</td>
+							<td>为当前一次任务现场生成、批准后只运行一次的 Workflow。</td>
+						</tr>
+						<tr>
+							<td>草稿</td>
+							<td>可以查看和修改，但还没有获得执行许可的 Workflow。</td>
+						</tr>
+						<tr>
+							<td>Runtime</td>
+							<td>读取 Workflow、安排 Agent、执行限制并记录状态的小引擎。</td>
+						</tr>
+						<tr>
+							<td>脚本指纹</td>
+							<td>根据脚本内容生成的版本标识；任何内容变化都会产生不同指纹。</td>
+						</tr>
+						<tr>
+							<td>节点</td>
+							<td>Workflow 中一个可以单独记录的工作单元，通常对应一次 Agent 调用。</td>
+						</tr>
+						<tr>
+							<td>blocked</td>
+							<td>San 无法安全继续，需要停止并告诉用户原因，而不是自己猜。</td>
+						</tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section id="appendix">
+				<h2>16. 工程附录</h2>
+				<p class="muted">下面内容供实施人员使用。产品审阅不需要理解这些细节。</p>
+
+				<details>
+					<summary>建议的产品数据类型</summary>
+					<ul>
+						<li>
+							<code>ManagedWorkflow</code>：name、version、sourceHash、argsSchema、permissionManifest、scope、limits、approval。
+						</li>
+						<li>
+							<code>AdHocWorkflowDraft</code>：draftId、sourceHash、taskRef、args、permissionManifest、limits、expiresAt。
+						</li>
+						<li>
+							<code>WorkflowRun</code>：runId、workflowKind、sourceHash、argsHash、approvalRef、status、budget、deliveryState。
+						</li>
+						<li>
+							<code>WorkflowNode</code>：nodeId、phase、attempt、inputHash、status、agentRef、resultRef、committedAt。
+						</li>
+					</ul>
+					<p>
+						公开 product union 只允许 <code>managed</code> 和 <code>ad_hoc</code>；不要预留
+						<code>autonomous</code> 枚举值，避免未来实现把未批准路径悄悄接入。
+					</p>
+				</details>
+
+				<details>
+					<summary>当前模块的复用边界</summary>
+					<table style="margin-top: 14px">
+						<thead>
+							<tr>
+								<th>模块</th>
+								<th>结论</th>
+								<th>用途</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td>task/subagent executor</td>
+								<td><span class="yes">复用</span></td>
+								<td>Workflow <code>agent()</code> 的调度后端。</td>
+							</tr>
+							<tr>
+								<td>structured output validator</td>
+								<td><span class="yes">复用</span></td>
+								<td>节点输入输出合同。</td>
+							</tr>
+							<tr>
+								<td>eval agent bridge</td>
+								<td><span class="later">抽出后复用</span></td>
+								<td>重构成不依赖 eval 的中立 spawn service。</td>
+							</tr>
+							<tr>
+								<td>eval parallel/pipeline</td>
+								<td><span class="later">复用行为合同</span></td>
+								<td>保留 barrier、顺序和错误传播测试。</td>
+							</tr>
+							<tr>
+								<td>eval JsRuntime</td>
+								<td><span class="no">禁止作为沙箱</span></td>
+								<td>当前暴露 process、fs、require、import、write 和任意活动工具。</td>
+							</tr>
+							<tr>
+								<td>Extension loader</td>
+								<td><span class="no">不复用</span></td>
+								<td>同进程高信任模型不适合项目 Workflow。</td>
+							</tr>
+							<tr>
+								<td>AsyncJobManager</td>
+								<td><span class="later">执行层复用</span></td>
+								<td>不能作为持久状态权威。</td>
+							</tr>
+							<tr>
+								<td>AgentOutputManager / agent://</td>
+								<td><span class="yes">复用</span></td>
+								<td>节点结果和大输出。</td>
+							</tr>
+							<tr>
+								<td>task worktree isolation</td>
+								<td><span class="yes">W4 复用</span></td>
+								<td>写入 Agent 的补丁和分支。</td>
+							</tr>
+							<tr>
+								<td>Brain</td>
+								<td><span class="no">v0.4 不接自动运行</span></td>
+								<td>保持现状，不增加自动发布或触发路径。</td>
+							</tr>
+						</tbody>
+					</table>
+				</details>
+
+				<details>
+					<summary>建议的审批键</summary>
+					<p>Managed 发布批准至少绑定：</p>
+					<div class="example">workflowKind
+name
+version
+sourceHash
+argsSchemaHash
+scopeKey
+permissionManifestHash
+concurrencyLimit
+agentLimit
+tokenLimit
+writeMode</div>
+					<p>Ad-hoc 运行批准还要绑定当前 taskRef、具体 argsHash 和过期时间，并且不能持久化成名称级信任。</p>
+				</details>
+
+				<details>
+					<summary>建议的运行事件</summary>
+					<p>
+						<code>draft_created</code>、<code>version_published</code>、<code>run_approved</code>、<code>run_started</code>、<code>phase_started</code>、<code>node_scheduled</code>、<code>agent_started</code>、<code>agent_completed</code>、<code>agent_failed</code>、<code>node_committed</code>、<code>run_paused</code>、<code>run_resumed</code>、<code>run_cancelled</code>、<code>run_blocked</code>、<code>run_completed</code>、<code>result_delivered</code>。
+					</p>
+					<p>
+						Ad-hoc 还需记录 <code>draft_rejected</code> 和 <code>draft_expired</code>；Managed 还需记录
+						<code>version_revoked</code>。没有自动批准或自动触发事件。
+					</p>
+				</details>
+
+				<details>
+					<summary>建议的代码边界</summary>
+					<ul>
+						<li><code>src/workflows/types.ts</code>：两个 product kind 和运行状态。</li>
+						<li><code>src/workflows/schema.ts</code>：meta、args、权限和限制验证。</li>
+						<li><code>src/workflows/discovery.ts</code>：San/Claude 路径与优先级。</li>
+						<li><code>src/workflows/runtime/</code>：受限 JavaScript。</li>
+						<li><code>src/workflows/agent-bridge.ts</code>：白名单 helper 到 subagent 调度。</li>
+						<li><code>src/workflows/ledger.ts</code>：append-only 事件与读模型。</li>
+						<li><code>src/workflows/approval.ts</code>：Managed 发布和 Ad-hoc 单次批准。</li>
+						<li><code>src/workflows/manager.ts</code>：run/pause/resume/cancel/block。</li>
+						<li><code>src/workflows/delivery.ts</code>：结果 exactly-once 交付。</li>
+						<li><code>src/workflows/token-report.ts</code>：Skill/Managed 对比数据。</li>
+						<li><code>src/modes/components/workflows/</code>：管理和进度 UI。</li>
+					</ul>
+				</details>
+
+				<details>
+					<summary>参考资料</summary>
+					<ul>
+						<li>
+							<a href="https://code.claude.com/docs/en/workflows.md">
+								Claude Code：Orchestrate subagents at scale with dynamic workflows
+							</a>
+							（核对日期：2026-07-11）
+						</li>
+						<li>
+							<a href="./san-dynamic-workflows-compatibility-proposal-20260710.html">
+								旧版 Dynamic Workflows 兼容方案（历史搁置稿）
+							</a>
+						</li>
+						<li>
+							<a href="./san-v0.3-p0-design-freeze-20260710.html">San v0.3 P0 Design Freeze</a>
+						</li>
+						<li>
+							<a href="./san-v0.3-m6-dogfood-report-20260711.html">San v0.3 M6 实施报告</a>
+						</li>
+						<li>
+							<a href="../../packages/coding-agent/src/eval/js/shared/runtime.ts">现有 JS eval runtime</a>
+						</li>
+						<li>
+							<a href="../../packages/coding-agent/src/task/index.ts">现有 task/subagent scheduler</a>
+						</li>
+					</ul>
+				</details>
+			</section>
+		</main>
+
+		<footer>
+			<p>
+				文档状态：San v0.4 Workflows 产品范围重写稿。产品类型已冻结为 Managed SOP 与需逐次批准的 Ad-hoc
+				Dynamic 两种；旧搁置稿继续保留，用于追溯早期兼容判断。
+			</p>
+		</footer>
+	</body>
+</html>

@@ -55,6 +55,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "catalog:",
     "@babel/parser": "catalog:",
+    "@babel/types": "catalog:",
     "@mozilla/readability": "catalog:",
     "@oh-my-pi/hashline": "catalog:",
     "@oh-my-pi/omp-stats": "catalog:",
@@ -137,6 +138,10 @@
     "./autoresearch/tools/*": {
       "types": "./src/autoresearch/tools/*.ts",
       "import": "./src/autoresearch/tools/*.ts"
+    },
+    "./workflows": {
+      "types": "./src/workflows/index.ts",
+      "import": "./src/workflows/index.ts"
     },
     "./capability": {
       "types": "./src/capability/index.ts",

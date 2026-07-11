@@ -158,6 +158,8 @@ export interface ToolSession {
 	cwd: string;
 	/** Whether UI is available */
 	hasUI: boolean;
+	/** Keep an approved programmatic tool list exact; internal strict-runtime boundary. */
+	strictToolNames?: boolean;
 	/**
 	 * Suppress the spawn specialization/coordination advisory appended to `task`
 	 * results. Set by internal/programmatic callers (e.g. the commit agent's
@@ -557,6 +559,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	// Auto-include AST counterparts when their text-based sibling is present
 	if (requestedTools) {
 		if (
+			session.strictToolNames !== true &&
 			requestedTools.includes("grep") &&
 			!requestedTools.includes("ast_grep") &&
 			session.settings.get("astGrep.enabled")
@@ -564,13 +567,17 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			requestedTools.push("ast_grep");
 		}
 		if (
+			session.strictToolNames !== true &&
 			requestedTools.includes("edit") &&
 			!requestedTools.includes("ast_edit") &&
 			session.settings.get("astEdit.enabled")
 		) {
 			requestedTools.push("ast_edit");
 		}
-		if (["hindsight", "mnemopi"].includes(session.settings.get("memory.backend") ?? "")) {
+		if (
+			session.strictToolNames !== true &&
+			["hindsight", "mnemopi"].includes(session.settings.get("memory.backend") ?? "")
+		) {
 			for (const name of ["recall", "retain", "reflect"]) {
 				if (!requestedTools.includes(name)) requestedTools.push(name);
 			}
@@ -581,7 +588,11 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		// active still exposes the tools the nudge points at. Gated to top-level
 		// (taskDepth 0): the controller only runs there, so a subagent's explicit
 		// tool whitelist must never be silently widened with write-capable tools.
-		if (session.settings.get("autolearn.enabled") && (session.taskDepth ?? 0) === 0) {
+		if (
+			session.strictToolNames !== true &&
+			session.settings.get("autolearn.enabled") &&
+			(session.taskDepth ?? 0) === 0
+		) {
 			if (!requestedTools.includes("manage_skill")) requestedTools.push("manage_skill");
 			if (
 				["hindsight", "mnemopi", "local"].includes(session.settings.get("memory.backend") ?? "") &&
