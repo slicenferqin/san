@@ -86,6 +86,28 @@ describe("Context steady recall quality helpers", () => {
 		]);
 	});
 
+	test("filters typed recall metadata without rejecting backend-scoped legacy items", () => {
+		const items = normalizeContextSteadyRecallItems(
+			[
+				{ id: "repo-risk", content: "Release retry failed", memoryType: "episodic", scope: "repo:/repo" },
+				{ id: "user-fact", content: "Prefer HTML", memoryType: "fact", scope: "user:user:local" },
+				{ id: "working", content: "Transient note", memoryType: "working", scope: "repo:/repo" },
+				{ id: "legacy", content: "Bank-scoped legacy memory" },
+			],
+			{ maxItems: 5, memoryTypes: ["episodic", "fact"], scopeKeys: ["repo:/repo"] },
+		);
+
+		expect(items).toEqual([
+			{
+				id: "repo-risk",
+				content: "Release retry failed",
+				memoryType: "episodic",
+				scope: "repo:/repo",
+			},
+			{ id: "legacy", content: "Bank-scoped legacy memory" },
+		]);
+	});
+
 	test("does not treat one-token CJK overlap as topic relevance", () => {
 		expect(isTextRelevantToPrompt("模型", "模型价格调研")).toBe(false);
 		expect(isTextRelevantToPrompt("上下文稳态", "上下文稳态验收报告")).toBe(true);

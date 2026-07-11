@@ -1,0 +1,40 @@
+# San v0.3 M6 opt-in dogfood overlay. Credentials and backend URLs belong in
+# a separate untracked overlay supplied after this file.
+mnemopi:
+  autoRetain: false
+
+hindsight:
+  autoRetain: false
+
+san:
+  contextSteady:
+    enabled: true
+    digest:
+      enabled: true
+      persistFallback: true
+    contextPacket:
+      enabled: true
+    recall:
+      enabled: true
+      maxItems: 3
+      maxTokens: 1000
+      maxQueryChars: 2000
+  brain:
+    enabled: true
+    mode: projection
+    capture:
+      enabled: true
+      maxCandidatesPerTurn: 5
+      minConfidence: 0.72
+    activation:
+      maxItems: 8
+      maxTokens: 1200
+      minConfidence: 0.75
+      globalMaxTokens: 6000
+    projections:
+      enabled: true
+      maxAttempts: 3
+      attemptTimeoutMs: 10000
+      maxPerTurn: 4
+    compatibility:
+      legacyAutoRetain: block

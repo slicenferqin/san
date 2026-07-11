@@ -35,6 +35,9 @@ export interface MemoryBackendStatus {
 
 export interface MemoryBackendSearchOptions {
 	limit?: number;
+	maxTokens?: number;
+	memoryTypes?: readonly string[];
+	scopeKeys?: readonly string[];
 	/** Best-effort abort signal. Backends may only observe it before/after an underlying recall call. */
 	signal?: AbortSignal;
 }
@@ -45,6 +48,8 @@ export interface MemoryBackendSearchItem {
 	source?: string;
 	timestamp?: string;
 	score?: number;
+	memoryType?: string;
+	scope?: string;
 }
 
 export interface MemoryBackendSearchResult {
@@ -67,6 +72,23 @@ export interface MemoryBackendSaveResult {
 	stored: number;
 	ids?: string[];
 	queued?: boolean;
+	message?: string;
+}
+
+export interface MemoryBackendProjectionInput extends MemoryBackendSaveInput {
+	operationId: string;
+	signal?: AbortSignal;
+}
+
+export interface MemoryBackendProjectionReceipt {
+	state: "applied" | "missing" | "unsupported";
+	receiptId?: string;
+	message?: string;
+}
+
+export interface MemoryBackendProjectionCompensationResult {
+	state: "compensated" | "missing" | "unsupported" | "blocked";
+	receiptId?: string;
 	message?: string;
 }
 
@@ -132,6 +154,26 @@ export interface MemoryBackend {
 
 	/** Explicit user-facing save operation. */
 	save?(context: MemoryBackendOperationContext, input: MemoryBackendSaveInput): Promise<MemoryBackendSaveResult>;
+
+	/** Durable Brain projection write with a stable operation id. */
+	project?(
+		context: MemoryBackendOperationContext,
+		input: MemoryBackendProjectionInput,
+	): Promise<MemoryBackendSaveResult>;
+
+	/** Resolve a possibly interrupted Brain projection without replaying the write. */
+	reconcileProjection?(
+		context: MemoryBackendOperationContext,
+		operationId: string,
+		signal?: AbortSignal,
+	): Promise<MemoryBackendProjectionReceipt>;
+
+	/** Compensate one Brain projection by stable operation id when safe. */
+	compensateProjection?(
+		context: MemoryBackendOperationContext,
+		operationId: string,
+		signal?: AbortSignal,
+	): Promise<MemoryBackendProjectionCompensationResult>;
 
 	/** Render backend-specific memory statistics as markdown (`/memory stats`). */
 	stats?(agentDir: string, cwd: string, session?: AgentSession): Promise<string | undefined>;

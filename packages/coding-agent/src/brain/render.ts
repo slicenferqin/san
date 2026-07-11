@@ -1,7 +1,13 @@
+import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../tools/render-utils";
+import { sanitizeSanBrainAuditError } from "./audit";
 import type { SanBrainMutationResult } from "./commands";
 import type { SanBrainConsolidationReport } from "./consolidate";
-import type { SanBrainStore } from "./store";
+import type { SanBrainProjectionDebugFilter, SanBrainProjectionDebugRecord, SanBrainStore } from "./store";
 import { summarizeSanBrainCandidate } from "./types";
+
+function sanitizeBrainDebugText(value: string): string {
+	return truncateToWidth(replaceTabs(sanitizeSanBrainAuditError(value)), TRUNCATE_LENGTHS.LINE);
+}
 
 function formatScope(scope: { kind: string; key: string }): string {
 	return `${scope.kind}:${scope.key}`;
@@ -56,6 +62,44 @@ export function buildSanBrainExplanationText(store: SanBrainStore, id: string): 
 	}
 	lines.push(`Active: ${explanation.activeState ? `yes, decision=${explanation.activeState.decisionId}` : "no"}`);
 	lines.push(`Projections: ${explanation.projections.length}`);
+	for (const projection of explanation.projections) {
+		lines.push(
+			`- ${projection.projectionId}: target=${projection.target}; state=${projection.state}; attempt=${projection.attemptCount}; errorCode=${projection.errorCode ?? "none"}; receipt=${projection.receiptId ? "present" : "none"}`,
+		);
+		if (projection.error) lines.push(`  error=${sanitizeBrainDebugText(projection.error)}`);
+	}
+	return lines.join("\n");
+}
+
+function projectionDebugLine(record: SanBrainProjectionDebugRecord): string {
+	return [
+		`- ${record.projectionId}`,
+		`state=${record.state}`,
+		`target=${record.target}`,
+		`attempt=${record.attemptCount}`,
+		`decision=${record.decisionId}`,
+		`owner=${record.ownerId ?? "missing"}`,
+		`errorCode=${record.errorCode ?? "none"}`,
+		`duration=${record.durationMs === undefined ? "n/a" : `${record.durationMs}ms`}`,
+		`receipt=${record.receiptId ? "present" : "none"}`,
+		`notified=${record.notifiedAt ? "yes" : "no"}`,
+	].join(" ");
+}
+
+export function buildSanBrainDebugReportText(
+	store: SanBrainStore,
+	filter: SanBrainProjectionDebugFilter = "pending",
+	limit = 50,
+): string {
+	const debug = store.readProjectionDebug(filter, limit);
+	const counts = Object.entries(debug.stateCounts)
+		.map(([state, count]) => `${state}=${count}`)
+		.join(", ");
+	const lines = [`San Brain projection debug (${filter}): total=${debug.total}${counts ? `; ${counts}` : ""}`];
+	for (const record of debug.records) {
+		lines.push(projectionDebugLine(record));
+		if (record.error) lines.push(`  error=${sanitizeBrainDebugText(record.error)}`);
+	}
 	return lines.join("\n");
 }
 

@@ -371,12 +371,16 @@ export class HindsightApi {
 	}
 
 	/** Fetch a document. Returns `null` on 404 instead of throwing. */
-	async getDocument(bankId: string, documentId: string): Promise<DocumentResponse | null> {
+	async getDocument(
+		bankId: string,
+		documentId: string,
+		options: HindsightRequestOptions = {},
+	): Promise<DocumentResponse | null> {
 		return this.#request<DocumentResponse | null>(
 			"GET",
 			`/v1/default/banks/${encodeURIComponent(bankId)}/documents/${encodeURIComponent(documentId)}`,
 			"getDocument",
-			{ allow404: true },
+			{ allow404: true, signal: options.signal },
 		);
 	}
 
@@ -394,12 +398,12 @@ export class HindsightApi {
 	 * Delete a document and every memory derived from it. Returns `true` on
 	 * success, `false` if the document was already gone (404).
 	 */
-	async deleteDocument(bankId: string, documentId: string): Promise<boolean> {
+	async deleteDocument(bankId: string, documentId: string, options: HindsightRequestOptions = {}): Promise<boolean> {
 		const result = await this.#request<{ __deleted: boolean } | null>(
 			"DELETE",
 			`/v1/default/banks/${encodeURIComponent(bankId)}/documents/${encodeURIComponent(documentId)}`,
 			"deleteDocument",
-			{ allow404: true },
+			{ allow404: true, signal: options.signal },
 		);
 		return result !== null;
 	}

@@ -283,6 +283,26 @@ export class MnemopiSessionState {
 		return null;
 	}
 
+	findScopedMemoryBySource(source: string): MnemopiScopedMemoryHit | null {
+		const targets = dedupeScopedTargets([
+			this.scoped.retain,
+			...this.scoped.recall,
+			...(this.scoped.global ? [this.scoped.global] : []),
+		]);
+		for (const target of targets) {
+			const row = target.memory.conn
+				.query(
+					`SELECT id FROM working_memory WHERE source = ?
+					 UNION ALL SELECT id FROM episodic_memory WHERE source = ? LIMIT 1`,
+				)
+				.get(source, source) as { id: string } | null;
+			if (!row) continue;
+			const hit = this.getScopedMemory(row.id);
+			if (hit) return hit;
+		}
+		return null;
+	}
+
 	editScopedMemory(
 		op: MnemopiMemoryEditOperation,
 		id: string,

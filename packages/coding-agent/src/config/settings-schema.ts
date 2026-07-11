@@ -2709,6 +2709,8 @@ export const SETTINGS_SCHEMA = {
 	"san.brain.activation.globalMaxTokens": { type: "number", default: 6000 },
 	"san.brain.projections.enabled": { type: "boolean", default: false },
 	"san.brain.projections.maxAttempts": { type: "number", default: 3 },
+	"san.brain.projections.attemptTimeoutMs": { type: "number", default: 10000 },
+	"san.brain.projections.maxPerTurn": { type: "number", default: 4 },
 	"san.brain.compatibility.legacyAutoRetain": {
 		type: "enum",
 		values: ["allow", "warn", "block"] as const,

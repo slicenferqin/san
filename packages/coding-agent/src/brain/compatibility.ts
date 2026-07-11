@@ -1,4 +1,5 @@
 import type { Settings } from "../config/settings";
+import { resolveSanBrainRuntimePolicy } from "./runtime-policy";
 
 export interface SanBrainLegacyAutoRetainResolution {
 	effective: boolean;
@@ -10,16 +11,17 @@ export function resolveSanBrainLegacyAutoRetain(
 	backend: "mnemopi" | "hindsight",
 	configured: boolean,
 ): SanBrainLegacyAutoRetainResolution {
-	if (!configured || settings.get("san.brain.enabled") !== true) return { effective: configured };
-	const mode = settings.get("san.brain.mode");
+	if (!configured) return { effective: false };
+	const runtime = resolveSanBrainRuntimePolicy(settings);
+	if (!runtime.enabled) return { effective: true };
 	const policy = settings.get("san.brain.compatibility.legacyAutoRetain");
-	if (mode === "projection") {
+	if (runtime.mode === "projection") {
 		return {
 			effective: false,
 			warning: `San Brain projection mode disabled ${backend}.autoRetain for this session; durable writes must use the Brain outbox.`,
 		};
 	}
-	if (policy === "block") {
+	if (!runtime.legacyAutoRetainAllowed) {
 		return {
 			effective: false,
 			warning: `San Brain compatibility policy blocked ${backend}.autoRetain for this session.`,

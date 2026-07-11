@@ -38,11 +38,26 @@ interface ActivationMatchContext {
 	now: number;
 }
 
-interface RankedRule {
+export interface SanBrainSelectedActiveState {
 	record: SanBrainActiveStateRecord;
 	action: SanBrainAction;
 	priority: number;
 	relevance: number;
+}
+
+export interface SelectSanBrainActiveStatesOptions {
+	role: SanBrainActivationRole;
+	scopes: readonly SanBrainScope[];
+	promptText: string;
+	minConfidence: number;
+	blockedClaimKeys?: readonly string[];
+	now?: number;
+}
+
+export interface SanBrainActiveStateSelection {
+	selectedStates: SanBrainSelectedActiveState[];
+	skippedRules: SanBrainActivation["skippedRules"];
+	scopeKeys: string[];
 }
 
 interface RenderedRule {
@@ -123,8 +138,12 @@ export function estimateSanBrainInjectionTokens(content: string): number {
 	});
 }
 
-function scopeKey(scope: SanBrainScope): string {
+export function sanBrainScopeKey(scope: SanBrainScope): string {
 	return `${scope.kind}:${scope.key}`;
+}
+
+export function isSanBrainHistorySuppressed(promptText: string): boolean {
+	return GLOBAL_CONFLICT_PATTERN.test(promptText);
 }
 
 function extractFilePaths(promptText: string): string[] {
@@ -282,7 +301,7 @@ function actionSearchText(action: SanBrainAction): string {
 }
 
 function conflictsWithCurrentPrompt(promptText: string, action: SanBrainAction): boolean {
-	if (GLOBAL_CONFLICT_PATTERN.test(promptText)) return true;
+	if (isSanBrainHistorySuppressed(promptText)) return true;
 	if (!NEGATION_PATTERN.test(promptText)) return false;
 	const normalizedPrompt = normalizeMatchText(promptText);
 	return actionSearchText(action)
@@ -298,7 +317,7 @@ function eligibilityReason(
 	minConfidence: number,
 ): { reason?: SanBrainActivationSkipReason; relevance: number; action?: SanBrainAction } {
 	const candidate = record.candidate;
-	if (!context.scopeKeys.has(scopeKey(candidate.scope))) return { reason: "scope_mismatch", relevance: 0 };
+	if (!context.scopeKeys.has(sanBrainScopeKey(candidate.scope))) return { reason: "scope_mismatch", relevance: 0 };
 	if (candidate.sensitivity !== "normal") return { reason: "sensitive", relevance: 0 };
 	if (candidate.confidence < minConfidence) return { reason: "below_confidence", relevance: 0 };
 	if (candidate.expiresAt) {
@@ -306,6 +325,9 @@ function eligibilityReason(
 		if (Number.isFinite(expiresAt) && expiresAt <= context.now) return { reason: "expired", relevance: 0 };
 	}
 	if (context.blockedClaimKeys.has(candidate.claimKey)) return { reason: "blocked_claim", relevance: 0 };
+	if (isSanBrainHistorySuppressed(context.promptText)) {
+		return { reason: "current_user_conflict", relevance: 0 };
+	}
 	const match = selectorMatch(record, context);
 	if (!match.matches) {
 		const selector = isSanBrainExperienceCandidate(candidate) ? candidate.selector : undefined;
@@ -347,7 +369,7 @@ function sanitizeAction(action: SanBrainAction): SanBrainAction {
 	}
 }
 
-function renderedRule(rule: RankedRule): RenderedRule {
+function renderedRule(rule: SanBrainSelectedActiveState): RenderedRule {
 	return {
 		id: rule.record.candidate.candidateId,
 		decisionId: rule.record.decisionId,
@@ -367,7 +389,7 @@ function renderStatePrelude(rules: readonly RenderedRule[]): string {
 	});
 }
 
-function selectedRule(rule: RankedRule, tokenEstimate: number): SanBrainActivationSelectedRule {
+function selectedRule(rule: SanBrainSelectedActiveState, tokenEstimate: number): SanBrainActivationSelectedRule {
 	return {
 		ownerId: rule.record.candidate.candidateId,
 		decisionId: rule.record.decisionId,
@@ -381,12 +403,10 @@ function selectedRule(rule: RankedRule, tokenEstimate: number): SanBrainActivati
 	};
 }
 
-export function buildSanBrainStatePrelude(
+export function selectSanBrainActiveStates(
 	activeStates: readonly SanBrainActiveStateRecord[],
-	options: BuildSanBrainStatePreludeOptions,
-): BuiltSanBrainStatePrelude {
-	const maxItems = clampNonNegativeInteger(options.maxItems);
-	const maxTokens = clampNonNegativeInteger(options.maxTokens);
+	options: SelectSanBrainActiveStatesOptions,
+): SanBrainActiveStateSelection {
 	const minConfidence = clampProbability(options.minConfidence);
 	const normalizedPrompt = normalizeMatchText(options.promptText);
 	const filePaths = extractFilePaths(options.promptText);
@@ -394,13 +414,13 @@ export function buildSanBrainStatePrelude(
 		promptText: options.promptText,
 		normalizedPrompt,
 		role: options.role,
-		scopeKeys: new Set(options.scopes.map(scopeKey)),
+		scopeKeys: new Set(options.scopes.map(sanBrainScopeKey)),
 		blockedClaimKeys: new Set(options.blockedClaimKeys ?? []),
 		filePaths,
 		languages: extractLanguages(options.promptText, filePaths),
-		now: Date.now(),
+		now: options.now ?? Date.now(),
 	};
-	const ranked: RankedRule[] = [];
+	const selectedStates: SanBrainSelectedActiveState[] = [];
 	const skippedRules: SanBrainActivation["skippedRules"] = [];
 
 	for (const record of activeStates) {
@@ -412,7 +432,7 @@ export function buildSanBrainStatePrelude(
 			});
 			continue;
 		}
-		ranked.push({
+		selectedStates.push({
 			record,
 			action: eligibility.action,
 			priority: priority(record, eligibility.action),
@@ -420,7 +440,7 @@ export function buildSanBrainStatePrelude(
 		});
 	}
 
-	ranked.sort(
+	selectedStates.sort(
 		(left, right) =>
 			right.priority - left.priority ||
 			right.relevance - left.relevance ||
@@ -429,12 +449,37 @@ export function buildSanBrainStatePrelude(
 			left.record.candidate.candidateId.localeCompare(right.record.candidate.candidateId),
 	);
 
+	return {
+		selectedStates,
+		skippedRules,
+		scopeKeys: [...context.scopeKeys].sort(),
+	};
+}
+
+export function buildSanBrainStatePrelude(
+	activeStates: readonly SanBrainActiveStateRecord[],
+	options: BuildSanBrainStatePreludeOptions,
+): BuiltSanBrainStatePrelude {
+	const maxItems = clampNonNegativeInteger(options.maxItems);
+	const maxTokens = clampNonNegativeInteger(options.maxTokens);
+	const instructionStates = activeStates.filter(
+		record => !(isSanBrainExperienceCandidate(record.candidate) && record.candidate.action.kind === "recall_policy"),
+	);
+	const selection = selectSanBrainActiveStates(instructionStates, {
+		role: options.role,
+		scopes: options.scopes,
+		promptText: options.promptText,
+		minConfidence: options.minConfidence,
+		blockedClaimKeys: options.blockedClaimKeys,
+	});
+	const skippedRules = [...selection.skippedRules];
+
 	const renderedRules: RenderedRule[] = [];
 	const selectedRules: SanBrainActivationSelectedRule[] = [];
 	let content: string | undefined;
 	let tokenEstimate = 0;
 	let trimReason: SanBrainActivation["trimReason"];
-	for (const rule of ranked) {
+	for (const rule of selection.selectedStates) {
 		if (renderedRules.length >= maxItems) {
 			skippedRules.push({ ownerId: rule.record.candidate.candidateId, reason: "item_limit" });
 			trimReason ??= "item_limit";
@@ -463,7 +508,7 @@ export function buildSanBrainStatePrelude(
 			sessionId: options.sessionId,
 			turnId: options.turnId,
 			role: options.role,
-			scopeKeys: [...context.scopeKeys].sort(),
+			scopeKeys: selection.scopeKeys,
 			selectedRules,
 			skippedRules,
 			tokenEstimate,

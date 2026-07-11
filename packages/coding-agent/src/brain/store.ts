@@ -13,11 +13,13 @@ import {
 	type SanBrainCandidateKind,
 	type SanBrainDecision,
 	type SanBrainProjection,
+	type SanBrainProjectionErrorCode,
+	type SanBrainProjectionNotification,
 	type SanBrainProjectionState,
 	type SanBrainProjectionTarget,
 } from "./types";
 
-const BRAIN_DB_SCHEMA_VERSION = 1;
+const BRAIN_DB_SCHEMA_VERSION = 2;
 const DEFAULT_LIST_LIMIT = 20;
 
 const BRAIN_SCHEMA_SQL = `
@@ -83,7 +85,11 @@ CREATE TABLE IF NOT EXISTS projections (
 	revision INTEGER,
 	before_hash TEXT,
 	after_hash TEXT,
+	error_code TEXT,
 	error TEXT,
+	duration_ms INTEGER,
+	receipt_id TEXT,
+	notified_at TEXT,
 	updated_at TEXT NOT NULL
 );
 
@@ -148,8 +154,24 @@ interface ProjectionDbRow {
 	revision: number | null;
 	before_hash: string | null;
 	after_hash: string | null;
+	error_code: SanBrainProjectionErrorCode | null;
 	error: string | null;
+	duration_ms: number | null;
+	receipt_id: string | null;
+	notified_at: string | null;
 	updated_at: string;
+}
+
+interface ProjectionDebugDbRow extends ProjectionDbRow {
+	owner_id: string | null;
+	idempotency_key: string | null;
+	owner_kind: SanBrainCandidateKind | null;
+	owner_status: CandidateStatus | null;
+}
+
+interface ProjectionStateCountDbRow {
+	state: SanBrainProjectionState;
+	count: number;
 }
 
 export interface SanBrainCandidateRecord {
@@ -185,8 +207,28 @@ export interface SanBrainProjectionRecord {
 	revision?: number;
 	beforeHash?: string;
 	afterHash?: string;
+	errorCode?: SanBrainProjectionErrorCode;
 	error?: string;
+	durationMs?: number;
+	receiptId?: string;
+	notifiedAt?: string;
 	updatedAt: string;
+}
+
+export type SanBrainProjectionDebugFilter = "pending" | "failed" | "blocked" | "all";
+
+export interface SanBrainProjectionDebugRecord extends SanBrainProjectionRecord {
+	ownerId?: string;
+	idempotencyKey?: string;
+	ownerKind?: SanBrainCandidateKind;
+	ownerStatus?: CandidateStatus;
+}
+
+export interface SanBrainProjectionDebugReadModel {
+	filter: SanBrainProjectionDebugFilter;
+	total: number;
+	stateCounts: Partial<Record<SanBrainProjectionState, number>>;
+	records: SanBrainProjectionDebugRecord[];
 }
 
 export interface SanBrainExplanation {
@@ -256,8 +298,22 @@ function projectionRecord(row: ProjectionDbRow): SanBrainProjectionRecord {
 		...(row.revision === null ? {} : { revision: row.revision }),
 		...(row.before_hash ? { beforeHash: row.before_hash } : {}),
 		...(row.after_hash ? { afterHash: row.after_hash } : {}),
+		...(row.error_code ? { errorCode: row.error_code } : {}),
 		...(row.error ? { error: row.error } : {}),
+		...(row.duration_ms === null ? {} : { durationMs: row.duration_ms }),
+		...(row.receipt_id ? { receiptId: row.receipt_id } : {}),
+		...(row.notified_at ? { notifiedAt: row.notified_at } : {}),
 		updatedAt: row.updated_at,
+	};
+}
+
+function projectionDebugRecord(row: ProjectionDebugDbRow): SanBrainProjectionDebugRecord {
+	return {
+		...projectionRecord(row),
+		...(row.owner_id ? { ownerId: row.owner_id } : {}),
+		...(row.idempotency_key ? { idempotencyKey: row.idempotency_key } : {}),
+		...(row.owner_kind ? { ownerKind: row.owner_kind } : {}),
+		...(row.owner_status ? { ownerStatus: row.owner_status } : {}),
 	};
 }
 
@@ -306,7 +362,14 @@ export class SanBrainStore {
 		}
 		if (currentVersion === BRAIN_DB_SCHEMA_VERSION) return;
 		const migrate = this.#db.transaction(() => {
-			this.#db.run(BRAIN_SCHEMA_SQL);
+			if (currentVersion === 0) {
+				this.#db.run(BRAIN_SCHEMA_SQL);
+			} else if (currentVersion === 1) {
+				this.#db.run("ALTER TABLE projections ADD COLUMN error_code TEXT");
+				this.#db.run("ALTER TABLE projections ADD COLUMN duration_ms INTEGER");
+				this.#db.run("ALTER TABLE projections ADD COLUMN receipt_id TEXT");
+				this.#db.run("ALTER TABLE projections ADD COLUMN notified_at TEXT");
+			}
 			this.#db.run(`PRAGMA user_version = ${BRAIN_DB_SCHEMA_VERSION}`);
 		});
 		migrate();
@@ -342,6 +405,7 @@ export class SanBrainStore {
 				if (state === "blocked") result.decisionsBlocked++;
 			}
 			for (const entry of ledger.projections) this.#applyProjectionAudit(entry.data);
+			for (const entry of ledger.projectionNotifications) this.#applyProjectionNotification(entry.data);
 		});
 		sync();
 		return result;
@@ -567,7 +631,8 @@ export class SanBrainStore {
 		this.#db
 			.prepare(
 				`UPDATE projections SET
-					state = ?, attempt_count = ?, revision = ?, before_hash = ?, after_hash = ?, error = ?, updated_at = ?
+					state = ?, attempt_count = ?, revision = ?, before_hash = ?, after_hash = ?,
+					error_code = ?, error = ?, duration_ms = ?, receipt_id = ?, updated_at = ?
 				 WHERE projection_id = ? AND decision_id = ? AND target = ? AND updated_at <= ?`,
 			)
 			.run(
@@ -576,13 +641,25 @@ export class SanBrainStore {
 				projection.revision ?? null,
 				projection.beforeHash ?? null,
 				projection.afterHash ?? null,
+				projection.errorCode ?? null,
 				projection.error ?? null,
+				projection.durationMs ?? null,
+				projection.receiptId ?? null,
 				projection.updatedAt,
 				projection.projectionId,
 				projection.decisionId,
 				projection.target,
 				projection.updatedAt,
 			);
+	}
+
+	#applyProjectionNotification(notification: SanBrainProjectionNotification): void {
+		this.#db
+			.prepare(
+				`UPDATE projections SET notified_at = ?
+				 WHERE projection_id = ? AND (notified_at IS NULL OR notified_at <= ?)`,
+			)
+			.run(notification.notifiedAt, notification.projectionId, notification.notifiedAt);
 	}
 
 	#blockDecision(decisionId: string, error: string): "blocked" {
@@ -644,7 +721,8 @@ export class SanBrainStore {
 	getProjection(projectionId: string): SanBrainProjectionRecord | undefined {
 		const row = this.#db
 			.query(
-				`SELECT projection_id, decision_id, target, state, attempt_count, revision, before_hash, after_hash, error, updated_at
+				`SELECT projection_id, decision_id, target, state, attempt_count, revision, before_hash, after_hash,
+					error_code, error, duration_ms, receipt_id, notified_at, updated_at
 				 FROM projections WHERE projection_id = ?`,
 			)
 			.get(projectionId) as ProjectionDbRow | null;
@@ -659,7 +737,8 @@ export class SanBrainStore {
 		const placeholders = states.map(() => "?").join(", ");
 		const rows = this.#db
 			.query(
-				`SELECT projection_id, decision_id, target, state, attempt_count, revision, before_hash, after_hash, error, updated_at
+				`SELECT projection_id, decision_id, target, state, attempt_count, revision, before_hash, after_hash,
+					error_code, error, duration_ms, receipt_id, notified_at, updated_at
 				 FROM projections WHERE state IN (${placeholders}) ORDER BY updated_at, projection_id LIMIT ?`,
 			)
 			.all(...states, Math.max(1, Math.trunc(limit))) as ProjectionDbRow[];
@@ -674,7 +753,7 @@ export class SanBrainStore {
 		const row = this.#db
 			.query(
 				`SELECT p.projection_id, p.decision_id, p.target, p.state, p.attempt_count, p.revision,
-					p.before_hash, p.after_hash, p.error, p.updated_at
+					p.before_hash, p.after_hash, p.error_code, p.error, p.duration_ms, p.receipt_id, p.notified_at, p.updated_at
 				 FROM projections p
 				 JOIN decisions d ON d.decision_id = p.decision_id
 				 WHERE d.owner_id = ? AND p.target = ? AND p.decision_id <> ? AND p.state = 'applied'
@@ -709,7 +788,8 @@ export class SanBrainStore {
 			.get(candidate.candidate.candidateId) as ActiveStateDbRow | null;
 		const projectionRows = this.#db
 			.query(
-				`SELECT projection_id, decision_id, target, state, attempt_count, revision, before_hash, after_hash, error, updated_at
+				`SELECT projection_id, decision_id, target, state, attempt_count, revision, before_hash, after_hash,
+					error_code, error, duration_ms, receipt_id, notified_at, updated_at
 				 FROM projections WHERE decision_id IN (SELECT decision_id FROM decisions WHERE owner_id = ?)
 				 ORDER BY updated_at, projection_id`,
 			)
@@ -721,5 +801,41 @@ export class SanBrainStore {
 			...(activeRow ? { activeState: activeStateRecord(activeRow) } : {}),
 			projections: projectionRows.map(projectionRecord),
 		};
+	}
+
+	readProjectionDebug(
+		filter: SanBrainProjectionDebugFilter = "pending",
+		limit = 50,
+	): SanBrainProjectionDebugReadModel {
+		const states: SanBrainProjectionState[] =
+			filter === "pending"
+				? ["pending", "applying", "compensating"]
+				: filter === "all"
+					? ["pending", "applying", "applied", "failed", "compensating", "compensated", "blocked"]
+					: [filter];
+		const placeholders = states.map(() => "?").join(", ");
+		const countRows = this.#db
+			.query(`SELECT state, COUNT(*) AS count FROM projections WHERE state IN (${placeholders}) GROUP BY state`)
+			.all(...states) as ProjectionStateCountDbRow[];
+		const stateCounts: Partial<Record<SanBrainProjectionState, number>> = {};
+		let total = 0;
+		for (const row of countRows) {
+			stateCounts[row.state] = row.count;
+			total += row.count;
+		}
+		const rows = this.#db
+			.query(
+				`SELECT p.projection_id, p.decision_id, p.target, p.state, p.attempt_count, p.revision,
+					p.before_hash, p.after_hash, p.error_code, p.error, p.duration_ms, p.receipt_id,
+					p.notified_at, p.updated_at, d.owner_id, d.idempotency_key,
+					c.kind AS owner_kind, c.status AS owner_status
+				 FROM projections p
+				 LEFT JOIN decisions d ON d.decision_id = p.decision_id
+				 LEFT JOIN candidates c ON c.candidate_id = d.owner_id
+				 WHERE p.state IN (${placeholders})
+				 ORDER BY p.updated_at DESC, p.projection_id DESC LIMIT ?`,
+			)
+			.all(...states, Math.max(1, Math.trunc(limit))) as ProjectionDebugDbRow[];
+		return { filter, total, stateCounts, records: rows.map(projectionDebugRecord) };
 	}
 }

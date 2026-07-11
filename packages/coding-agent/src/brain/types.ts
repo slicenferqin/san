@@ -4,6 +4,8 @@ export const BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE = "san.brain.profile_candidate"
 export const BRAIN_EXPERIENCE_CANDIDATE_CUSTOM_TYPE = "san.brain.experience_candidate";
 export const BRAIN_DECISION_CUSTOM_TYPE = "san.brain.decision";
 export const BRAIN_PROJECTION_CUSTOM_TYPE = "san.brain.projection";
+export const BRAIN_PROJECTION_NOTIFICATION_CUSTOM_TYPE = "san.brain.projection_notification";
+export const BRAIN_RECALL_CUSTOM_TYPE = "san.brain.recall";
 export const BRAIN_ACTIVATION_CUSTOM_TYPE = "san.brain.activation";
 export const BRAIN_ERROR_CUSTOM_TYPE = "san.brain.error";
 
@@ -12,6 +14,8 @@ export const BRAIN_CUSTOM_TYPES = [
 	BRAIN_EXPERIENCE_CANDIDATE_CUSTOM_TYPE,
 	BRAIN_DECISION_CUSTOM_TYPE,
 	BRAIN_PROJECTION_CUSTOM_TYPE,
+	BRAIN_PROJECTION_NOTIFICATION_CUSTOM_TYPE,
+	BRAIN_RECALL_CUSTOM_TYPE,
 	BRAIN_ACTIVATION_CUSTOM_TYPE,
 	BRAIN_ERROR_CUSTOM_TYPE,
 ] as const;
@@ -163,6 +167,18 @@ export interface SanBrainDecision {
 }
 
 export type SanBrainProjectionTarget = "memory" | "managed_skill" | "check_suggestion";
+export type SanBrainProjectionErrorCode =
+	| "backend_unavailable"
+	| "search_unsupported"
+	| "invalid_draft"
+	| "cas_mismatch"
+	| "unsafe_undo"
+	| "owner_unavailable"
+	| "receipt_missing"
+	| "stale_in_progress"
+	| "attempts_exhausted"
+	| "external_timeout"
+	| "external_failure";
 export type SanBrainProjectionState =
 	| "pending"
 	| "applying"
@@ -182,8 +198,36 @@ export interface SanBrainProjection {
 	revision?: number;
 	beforeHash?: string;
 	afterHash?: string;
+	errorCode?: SanBrainProjectionErrorCode;
 	error?: string;
+	durationMs?: number;
+	receiptId?: string;
 	updatedAt: string;
+}
+
+export interface SanBrainProjectionNotification {
+	schemaVersion: typeof BRAIN_SCHEMA_VERSION;
+	projectionId: string;
+	notifiedAt: string;
+}
+
+export type SanBrainRecallOutcome = "applied" | "suppressed" | "backend_unavailable" | "search_unsupported" | "failed";
+
+export interface SanBrainRecallAudit {
+	schemaVersion: typeof BRAIN_SCHEMA_VERSION;
+	recallId: string;
+	sessionId: string;
+	turnId: string;
+	policyVersion: string;
+	selectedPolicyIds: string[];
+	queryTemplateId?: string;
+	backend: "off" | "local" | "hindsight" | "mnemopi";
+	outcome: SanBrainRecallOutcome;
+	resultCount: number;
+	durationMs: number;
+	skipReasons: Array<{ ownerId: string; reason: string }>;
+	errorCode?: SanBrainProjectionErrorCode;
+	createdAt: string;
 }
 
 export type SanBrainActivationRole = "primary" | "commander" | "worker" | "supervisor" | "oracle";
@@ -484,6 +528,22 @@ function isProjectionState(value: unknown): value is SanBrainProjectionState {
 	);
 }
 
+export function isSanBrainProjectionErrorCode(value: unknown): value is SanBrainProjectionErrorCode {
+	return (
+		value === "backend_unavailable" ||
+		value === "search_unsupported" ||
+		value === "invalid_draft" ||
+		value === "cas_mismatch" ||
+		value === "unsafe_undo" ||
+		value === "owner_unavailable" ||
+		value === "receipt_missing" ||
+		value === "stale_in_progress" ||
+		value === "attempts_exhausted" ||
+		value === "external_timeout" ||
+		value === "external_failure"
+	);
+}
+
 export function isSanBrainProjection(value: unknown): value is SanBrainProjection {
 	return (
 		isRecord(value) &&
@@ -497,8 +557,58 @@ export function isSanBrainProjection(value: unknown): value is SanBrainProjectio
 		(value.revision === undefined || (Number.isInteger(value.revision) && (value.revision as number) >= 0)) &&
 		isOptionalString(value.beforeHash) &&
 		isOptionalString(value.afterHash) &&
+		(value.errorCode === undefined || isSanBrainProjectionErrorCode(value.errorCode)) &&
 		isOptionalString(value.error) &&
+		(value.durationMs === undefined || (isFiniteNumber(value.durationMs) && value.durationMs >= 0)) &&
+		isOptionalString(value.receiptId) &&
 		isNonEmptyString(value.updatedAt)
+	);
+}
+
+export function isSanBrainProjectionNotification(value: unknown): value is SanBrainProjectionNotification {
+	return (
+		isRecord(value) &&
+		value.schemaVersion === BRAIN_SCHEMA_VERSION &&
+		isNonEmptyString(value.projectionId) &&
+		isNonEmptyString(value.notifiedAt)
+	);
+}
+
+function isSanBrainRecallOutcome(value: unknown): value is SanBrainRecallOutcome {
+	return (
+		value === "applied" ||
+		value === "suppressed" ||
+		value === "backend_unavailable" ||
+		value === "search_unsupported" ||
+		value === "failed"
+	);
+}
+
+export function isSanBrainRecallAudit(value: unknown): value is SanBrainRecallAudit {
+	return (
+		isRecord(value) &&
+		value.schemaVersion === BRAIN_SCHEMA_VERSION &&
+		isNonEmptyString(value.recallId) &&
+		isNonEmptyString(value.sessionId) &&
+		isNonEmptyString(value.turnId) &&
+		isNonEmptyString(value.policyVersion) &&
+		isStringArray(value.selectedPolicyIds) &&
+		isOptionalString(value.queryTemplateId) &&
+		(value.backend === "off" ||
+			value.backend === "local" ||
+			value.backend === "hindsight" ||
+			value.backend === "mnemopi") &&
+		isSanBrainRecallOutcome(value.outcome) &&
+		Number.isInteger(value.resultCount) &&
+		(value.resultCount as number) >= 0 &&
+		isFiniteNumber(value.durationMs) &&
+		value.durationMs >= 0 &&
+		Array.isArray(value.skipReasons) &&
+		value.skipReasons.every(
+			item => isRecord(item) && isNonEmptyString(item.ownerId) && isNonEmptyString(item.reason),
+		) &&
+		(value.errorCode === undefined || isSanBrainProjectionErrorCode(value.errorCode)) &&
+		isNonEmptyString(value.createdAt)
 	);
 }
 

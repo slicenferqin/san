@@ -10,10 +10,10 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { logger } from "@oh-my-pi/pi-utils";
 import { onHindsightScopeChanged, type Settings } from "../config/settings";
-import type { MemoryBackend, MemoryBackendStartOptions } from "../memory-backend/types";
+import type { MemoryBackend, MemoryBackendSearchItem, MemoryBackendStartOptions } from "../memory-backend/types";
 import type { AgentSession } from "../session/agent-session";
 import { type BankScope, computeBankScope } from "./bank";
-import { createHindsightClient } from "./client";
+import { createHindsightClient, type RecallResult } from "./client";
 import { isHindsightConfigured, loadHindsightConfig } from "./config";
 import { type HindsightMessage, hasSubstantiveContent } from "./content";
 import { HindsightSessionState } from "./state";
@@ -131,6 +131,78 @@ export const hindsightBackend: MemoryBackend = {
 		await primary.forceRetainCurrentSession();
 	},
 
+	async search({ session }, query, options) {
+		const state = session?.getHindsightSessionState();
+		const primary = state?.aliasOf ?? state;
+		if (!primary) {
+			return {
+				backend: "hindsight",
+				query,
+				count: 0,
+				items: [],
+				message: "Hindsight backend is not initialised for this session.",
+			};
+		}
+		if (options?.signal?.aborted) {
+			return { backend: "hindsight", query, count: 0, items: [], message: "Search aborted." };
+		}
+		const response = await primary.client.recall(primary.bankId, query, {
+			budget: primary.config.recallBudget,
+			maxTokens: options?.maxTokens ?? primary.config.recallMaxTokens,
+			types:
+				options?.memoryTypes && options.memoryTypes.length > 0
+					? [...options.memoryTypes]
+					: primary.config.recallTypes.length > 0
+						? primary.config.recallTypes
+						: undefined,
+			tags: primary.recallTags,
+			tagsMatch: primary.recallTagsMatch,
+			signal: options?.signal,
+		});
+		if (options?.signal?.aborted) {
+			return { backend: "hindsight", query, count: 0, items: [], message: "Search aborted." };
+		}
+		const items = (response.results ?? []).slice(0, clampSearchLimit(options?.limit)).map(hindsightSearchItem);
+		return { backend: "hindsight", query, count: items.length, items };
+	},
+
+	async project({ session }, input) {
+		const state = session?.getHindsightSessionState();
+		const primary = state?.aliasOf ?? state;
+		if (!primary) {
+			return {
+				backend: "hindsight",
+				stored: 0,
+				message: "Hindsight backend is not initialised for this session.",
+			};
+		}
+		await primary.client.retain(primary.bankId, input.content, {
+			context: input.context,
+			documentId: input.operationId,
+			metadata: { source: input.source ?? "san.brain.projection", operation_id: input.operationId },
+			tags: primary.retainTags,
+			updateMode: "replace",
+			signal: input.signal,
+		});
+		return { backend: "hindsight", stored: 1, ids: [input.operationId] };
+	},
+
+	async reconcileProjection({ session }, operationId, signal) {
+		const state = session?.getHindsightSessionState();
+		const primary = state?.aliasOf ?? state;
+		if (!primary) return { state: "unsupported", message: "Hindsight backend is not initialised." };
+		const document = await primary.client.getDocument(primary.bankId, operationId, { signal });
+		return document ? { state: "applied", receiptId: operationId } : { state: "missing" };
+	},
+
+	async compensateProjection({ session }, operationId, signal) {
+		const state = session?.getHindsightSessionState();
+		const primary = state?.aliasOf ?? state;
+		if (!primary) return { state: "unsupported", message: "Hindsight backend is not initialised." };
+		const deleted = await primary.client.deleteDocument(primary.bankId, operationId, { signal });
+		return deleted ? { state: "compensated", receiptId: operationId } : { state: "missing" };
+	},
+
 	async preCompactionContext(
 		messages: AgentMessage[],
 		settings: Settings,
@@ -146,6 +218,36 @@ export const hindsightBackend: MemoryBackend = {
 		return await state.recallForCompaction(flat);
 	},
 };
+
+function clampSearchLimit(value: number | undefined): number {
+	if (!Number.isFinite(value)) return 10;
+	return Math.max(1, Math.min(50, Math.trunc(value ?? 10)));
+}
+
+function stringField(value: unknown, key: string): string | undefined {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const field = (value as Record<string, unknown>)[key];
+	return typeof field === "string" && field.trim().length > 0 ? field : undefined;
+}
+
+function numberField(value: unknown, key: string): number | undefined {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const field = (value as Record<string, unknown>)[key];
+	return typeof field === "number" && Number.isFinite(field) ? field : undefined;
+}
+
+function hindsightSearchItem(result: RecallResult): MemoryBackendSearchItem {
+	const scope = stringField(result, "context") ?? stringField(result.metadata, "context");
+	return {
+		...(result.id ? { id: result.id } : {}),
+		content: result.text,
+		source: "hindsight",
+		...(result.mentioned_at ? { timestamp: result.mentioned_at } : {}),
+		...(numberField(result, "score") !== undefined ? { score: numberField(result, "score") } : {}),
+		...(result.type ? { memoryType: result.type } : {}),
+		...(scope ? { scope } : {}),
+	};
+}
 interface PrimaryRebuildTask {
 	pending: boolean;
 }

@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>San v0.3 M6 Dogfood &amp; Observability 实施报告</title>
+		<style>
+			:root {
+				color-scheme: dark;
+				--bg: #0b1018;
+				--panel: #111925;
+				--panel-2: #172131;
+				--line: #2b3a4e;
+				--text: #e8eef7;
+				--muted: #9eacc0;
+				--green: #67d391;
+				--green-soft: #173529;
+				--blue: #72b7ff;
+				--amber: #f1c66d;
+				--red: #ff8585;
+				--code: #0a0f16;
+			}
+			* { box-sizing: border-box; }
+			body {
+				margin: 0;
+				background: radial-gradient(circle at 85% 0%, #17283e 0, transparent 34rem), var(--bg);
+				color: var(--text);
+				font: 15px/1.65 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			}
+			main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 48px 0 80px; }
+			header, section { border: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 94%, transparent); border-radius: 14px; }
+			header { padding: 32px; margin-bottom: 18px; }
+			section { padding: 24px; margin-top: 18px; }
+			h1, h2, h3 { line-height: 1.2; margin: 0 0 14px; }
+			h1 { font-size: clamp(28px, 5vw, 46px); letter-spacing: -0.035em; }
+			h2 { font-size: 23px; }
+			h3 { font-size: 17px; margin-top: 22px; }
+			p { margin: 8px 0 14px; }
+			.sub { color: var(--muted); font-size: 17px; max-width: 850px; }
+			.meta, .metrics { display: grid; gap: 10px; }
+			.meta { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 24px; }
+			.metrics { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-top: 18px; }
+			.card, .metric { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px; }
+			.card span, .metric span { display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+			.card strong, .metric strong { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+			.metric strong { color: var(--green); font-size: 23px; }
+			.badge { display: inline-flex; align-items: center; gap: 7px; border-radius: 999px; padding: 4px 10px; font-weight: 700; font-size: 12px; }
+			.pass { color: var(--green); background: var(--green-soft); border: 1px solid #2c6746; }
+			.info { color: var(--blue); background: #172f49; border: 1px solid #315c82; }
+			.warn { color: var(--amber); background: #3b3019; border: 1px solid #735f2f; }
+			.callout { border-left: 4px solid var(--green); background: var(--green-soft); padding: 14px 16px; border-radius: 8px; }
+			.callout.note { border-left-color: var(--blue); background: #142a40; }
+			table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13px; }
+			th, td { border: 1px solid var(--line); padding: 9px 10px; text-align: left; vertical-align: top; }
+			th { background: #192536; color: #c8d5e7; }
+			tr:nth-child(even) td { background: rgba(23, 33, 49, 0.48); }
+			code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+			code { color: #c8e2ff; background: var(--code); border: 1px solid #253244; border-radius: 5px; padding: 1px 5px; }
+			pre { overflow-x: auto; background: var(--code); border: 1px solid var(--line); border-radius: 9px; padding: 14px; color: #c8d5e7; }
+			ul, ol { padding-left: 22px; }
+			li { margin: 5px 0; }
+			.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 12px; }
+			.ok { color: var(--green); font-weight: 700; }
+			.muted { color: var(--muted); }
+			@media (max-width: 680px) {
+				main { width: min(100% - 18px, 1180px); padding-top: 20px; }
+				header, section { padding: 18px; }
+				table { display: block; overflow-x: auto; white-space: nowrap; }
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<header>
+				<div class="badge pass">M6 implementation gates passed</div>
+				<h1>San v0.3 M6 Dogfood &amp; Observability 实施报告</h1>
+				<p class="sub">Policy-aware recall、可重建 projection 审计、crash reconcile、静默失败 UX，以及 14-turn / 四 backend 可量化验收。</p>
+				<div class="meta">
+					<div class="card"><span>记录时间</span><strong>2026-07-11 12:57:19 +08:00</strong></div>
+					<div class="card"><span>分支</span><strong>feature/san-v0.3</strong></div>
+					<div class="card"><span>基线 Commit</span><strong>dee24857e778590ad6fadfef070702fca05547a9</strong></div>
+					<div class="card"><span>Dogfood Policy</span><strong>brain-m6-dogfood-v1</strong></div>
+					<div class="card"><span>DB / Payload Schema</span><strong>2 / 1</strong></div>
+					<div class="card"><span>Overlay SHA-256</span><strong>823dfc971b677202806e1aad415ba94f442ea1582b212de81ea3a109b6e70493</strong></div>
+				</div>
+				<div class="metrics">
+					<div class="metric"><span>Deterministic turns</span><strong>14 / 14</strong></div>
+					<div class="metric"><span>Focused tests</span><strong>72 / 72</strong></div>
+					<div class="metric"><span>Heavy chunks</span><strong>98 / 98</strong></div>
+					<div class="metric"><span>Duplicate writes</span><strong>0</strong></div>
+					<div class="metric"><span>Unsafe overwrites</span><strong>0</strong></div>
+					<div class="metric"><span>Secret leaks</span><strong>0</strong></div>
+				</div>
+			</header>
+
+			<section>
+				<h2>1. 结论</h2>
+				<div class="callout">
+					<strong>单一 rollout 结论：扩大内部 opt-in。</strong>
+					所有 P0/P1 安全、precision、审计、backend capability、package、heavy 与 smoke 门禁均已通过；默认配置继续关闭，只通过无凭据 overlay 显式开启。
+				</div>
+				<p>本轮没有观察到全局关闭旁路、跨 scope recall、重复外部写、人工内容覆盖、projection 审计孤儿、重复提示或敏感信息泄露。默认阈值暂不调整；量化数据没有给出降低安全余量或放宽候选上限的依据。</p>
+			</section>
+
+			<section>
+				<h2>2. 实施范围与证据</h2>
+				<table>
+					<thead><tr><th>切片</th><th>落地结果</th><th>权威证据</th></tr></thead>
+					<tbody>
+						<tr><td>M6.0</td><td>统一 effective runtime policy；全局 disabled 和 leaf/mode gate 对自动及显式 projection 同样生效；legacy auto-retain 在 projection dogfood 中 block。</td><td>truth-table tests、slash disabled test、真实 overlay loader</td></tr>
+						<tr><td>M6.1</td><td>Recall policy 只接受静态 allowlist template；共享 scope/role/selector/conflict/expiry/sensitivity selection；无关 policy 不回退到通用查询。</td><td>real AgentSession recall test、allowlist approval test、Turn 7/8</td></tr>
+						<tr><td>M6.2</td><td>SQLite schema v2 增加 error code、duration、receipt、notification；debug join owner/decision/idempotency；错误脱敏、截断、home 缩写。</td><td>v1→v2 migration test、debug read-model test、Turn 14</td></tr>
+						<tr><td>M6.3</td><td>Projection 使用 applying/compensating 中间态、target reconcile、attempt timeout、explicit-only failed retry；blocked 仅 UI 提示一次。</td><td>apply/undo/reconcile/timeout tests、真实 AgentSession 两回合 UX test</td></tr>
+						<tr><td>M6.4</td><td>可复用 14-turn verifier 覆盖 Candidate→Decision→Activation/Recall→Projection→Debug 完整闭环。</td><td><code>runSanBrainDogfood()</code> 与 <code>brain/dogfood.test.ts</code></td></tr>
+						<tr><td>M6.5</td><td>无凭据 overlay、四 backend verifier、脱敏 JSON summary、HTML 报告和 changelog 已交付。</td><td>本报告、summary artifact、最终验证命令</td></tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>3. 14-turn deterministic dogfood</h2>
+				<table>
+					<thead><tr><th>Turn</th><th>场景</th><th>观察结果</th><th>状态</th></tr></thead>
+					<tbody>
+						<tr><td>1</td><td>稳定输出偏好</td><td>1 个 pending profile candidate；active=0。</td><td class="ok">PASS</td></tr>
+						<tr><td>2</td><td>独立重复证据</td><td>第 2 个 candidate 进入 duplicate group；批准后合并为 1 个 active state，evidence count=2。</td><td class="ok">PASS</td></tr>
+						<tr><td>3</td><td>完全无关任务</td><td>Brain activation=0，policy recall=0，前台消息=0。</td><td class="ok">PASS</td></tr>
+						<tr><td>命令</td><td>Approve 偏好</td><td>2 条不可变 Decision（approve + supersede），memory projection receipt 只写 1 次。</td><td class="ok">PASS</td></tr>
+						<tr><td>4</td><td>相关交付任务</td><td>approved profile 被选中；activation audit token=166，低于 1200。</td><td class="ok">PASS</td></tr>
+						<tr><td>5</td><td>当前用户相反要求</td><td>selected=0；skip reason=<code>current_user_conflict</code>。</td><td class="ok">PASS</td></tr>
+						<tr><td>6</td><td>构造 recall policy</td><td>候选保持 pending，未改变 recall；非 allowlist template 的 approve 被拒绝。</td><td class="ok">PASS</td></tr>
+						<tr><td>命令</td><td>Approve recall policy</td><td><code>risk-history-v1</code> 通过静态 allowlist 并成为 active state。</td><td class="ok">PASS</td></tr>
+						<tr><td>7</td><td>相关 release recall</td><td>policy query 生效；只保留 repo scope + episodic/fact 的 <code>release-risk</code>。</td><td class="ok">PASS</td></tr>
+						<tr><td>8</td><td>无关 TypeScript recall</td><td>selector mismatch；query 不生成，结果数=0。</td><td class="ok">PASS</td></tr>
+						<tr><td>9</td><td>Managed skill</td><td>首次 applied=1，第二次 applied=0，attempt=1，文件字节不变。</td><td class="ok">PASS</td></tr>
+						<tr><td>10</td><td>Check suggestion</td><td>typed frontmatter 与 after hash 一致。</td><td class="ok">PASS</td></tr>
+						<tr><td>11</td><td>人工修改后 undo</td><td><code>cas_mismatch</code> blocked；人工内容保留；通知 1/0。</td><td class="ok">PASS</td></tr>
+						<tr><td>12</td><td>applying 后 crash/resume</td><td>reconciled=1，attempt=1，无第二次 side effect。</td><td class="ok">PASS</td></tr>
+						<tr><td>13</td><td>backend failure</td><td><code>external_failure</code>；下一 turn 不自动重试；project call 总数=1；前台提示=0。</td><td class="ok">PASS</td></tr>
+						<tr><td>14</td><td>debug all</td><td>6 条 projection 均可追溯；orphan=0；secret/home path 已脱敏。</td><td class="ok">PASS</td></tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>4. 量化门禁</h2>
+				<div class="grid">
+					<div class="card"><span>Candidate</span><strong>7 candidates / 7 turns；单 turn 最大 1（cap=5）</strong></div>
+					<div class="card"><span>Activation</span><strong>1 个 selected turn；最大 166 tokens（cap=1200）</strong></div>
+					<div class="card"><span>Recall</span><strong>2 audits；1 applied / 1 selector-suppressed</strong></div>
+					<div class="card"><span>Projection</span><strong>5 turns / 6 records；max attempt=1</strong></div>
+					<div class="card"><span>Notification</span><strong>1 blocked notification；每 projection 最大 1</strong></div>
+					<div class="card"><span>Latency</span><strong>p50=0 ms / p95=3 ms / max=3 ms</strong></div>
+				</div>
+				<table>
+					<thead><tr><th>指标</th><th>标准</th><th>实测</th><th>结论</th></tr></thead>
+					<tbody>
+						<tr><td>Happy path 前台暴露</td><td>0</td><td>0</td><td class="ok">PASS</td></tr>
+						<tr><td>无关 activation / recall</td><td>0 / 0</td><td>0 / 0</td><td class="ok">PASS</td></tr>
+						<tr><td>重复写 / 不安全覆盖</td><td>0 / 0</td><td>0 / 0</td><td class="ok">PASS</td></tr>
+						<tr><td>Projection orphan</td><td>0</td><td>0</td><td class="ok">PASS</td></tr>
+						<tr><td>Attempt</td><td>≤ 3</td><td>1</td><td class="ok">PASS</td></tr>
+						<tr><td>Secret/sensitive 泄露</td><td>0</td><td>0</td><td class="ok">PASS</td></tr>
+						<tr><td>External attempt latency</td><td>≤ 10000 ms</td><td>max 3 ms</td><td class="ok">PASS</td></tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>5. Backend 证明矩阵</h2>
+				<table>
+					<thead><tr><th>Backend</th><th>Recall</th><th>Projection</th><th>Compensation / degradation</th><th>耗时</th></tr></thead>
+					<tbody>
+						<tr><td><code>off</code></td><td>安全 skip</td><td><code>blocked:backend_unavailable</code></td><td>无写入，重复执行无副作用</td><td>6 ms</td></tr>
+						<tr><td><code>local</code></td><td><code>search_unsupported</code></td><td>applied + durable receipt</td><td>无安全 undo 能力时 <code>blocked:unsafe_undo</code></td><td>8 ms</td></tr>
+						<tr><td><code>mnemopi</code></td><td>真实本地 SQLite structured recall；alpha/beta scope metadata 均可恢复</td><td>applied + receipt；missing receipt 映射为 missing</td><td>compensated 后 reconcile=missing；autoRetain=false</td><td>38 ms</td></tr>
+						<tr><td><code>hindsight</code></td><td>实际 adapter + 受控 service seam；不可用时调用方继续</td><td>applied + document receipt</td><td>delete 后 reconcile=missing；autoRetain=false</td><td>1 ms</td></tr>
+					</tbody>
+				</table>
+				<div class="callout note">
+					Hindsight 本轮没有使用真实凭据或公网 endpoint。矩阵运行实际 backend adapter，并以受控 client seam 覆盖 structured recall、document receipt、delete/reconcile 和服务不可用；这与实施计划允许的“真实服务或可控不可用场景”一致。Mnemopi 使用真实本地 SQLite adapter，关闭 embeddings 以保持 deterministic。
+				</div>
+			</section>
+
+			<section>
+				<h2>6. 真实 Session / Slash smoke</h2>
+				<p>“真实 session”指实际构造并运行 <code>AgentSession</code> 的完整 prompt 生命周期，provider transport 使用 deterministic mock model，因此不依赖随机模型输出，也不写真实用户 bank。验证覆盖：</p>
+				<ul>
+					<li>approved recall policy 进入真实 Context Steady recall 路径并写入 <code>san.brain.recall</code> audit；</li>
+					<li>projection blocked 后两个真实 user prompt 均继续完成；</li>
+					<li>blocked 状态只产生一次 UI-only notice，provider messages 不含该提示；</li>
+					<li>capture、activation、ContextPacket resume/rebuild 走真实 SessionManager journal；</li>
+					<li><code>/brain project</code> 在 effective policy disabled 时不能旁路；debug 保持只读。</li>
+				</ul>
+				<p class="muted">没有提交完整 transcript、evidence 原文、凭据、用户 home 绝对路径或 backend 地址。</p>
+			</section>
+
+			<section>
+				<h2>7. 报告问题逐项回答</h2>
+				<ol>
+					<li><strong>发生频次：</strong>7 个 turn 产生 7 个 Candidate；1 个 turn 选中 activation；2 次 recall audit（1 applied、1 suppressed）；5 个 turn 执行 projection，最终 6 条 projection record。</li>
+					<li><strong>相关与跳过：</strong>Turn 4 的交付任务激活 profile；Turn 7 的 release 任务启用 risk-history recall；Turn 5 因 current-user conflict 跳过；Turn 8 因 selector mismatch 不生成 query；wrong scope/type recall items 被过滤。</li>
+					<li><strong>安全异常：</strong>重复写、错误 recall、CAS 覆盖、审计孤儿、重复通知和 secret 泄露均为 0；唯一 blocked 是预期的人工修改 CAS 保护。</li>
+					<li><strong>Backend 边界：</strong>off/local 明确报告能力缺失；Mnemopi receipt/scope/compensation 成立；Hindsight document receipt 与受控 outage 降级成立。</li>
+					<li><strong>阈值：</strong>不调整。candidate max=1 远低于 5，activation max=166 远低于 1200，attempt max=1 低于 3，deterministic latency 远低于 10 秒。当前数据不足以支持缩短生产网络 timeout。</li>
+					<li><strong>最终决策：</strong>扩大内部 opt-in；默认仍关闭。</li>
+				</ol>
+			</section>
+
+			<section>
+				<h2>8. 最终验证</h2>
+				<pre><code>bun test \
+  packages/coding-agent/test/brain \
+  packages/coding-agent/test/slash-commands/brain.test.ts \
+  packages/coding-agent/test/context-steady/recall.test.ts \
+  packages/coding-agent/test/context-steady/agent-session-m2.test.ts
+# 72 pass / 0 fail / 350 expectations
+
+bun run --cwd packages/coding-agent check
+# biome + docs index + tsgo passed
+
+OMP_TEST_CONCURRENCY=4 bun run ci:test:coding-agent:heavy
+# 98 command chunks passed / 0 failed / 141.6s
+
+bun run ci:test:smoke
+# smoke-test: ok</code></pre>
+				<p>第一次 heavy 运行暴露本机旧 native addon（6 月 30 日）与当前 TS/JS surface 不匹配：缺失 <code>snapcompactSupportedChars</code> 与 shell <code>workingDir</code>。执行 <code>bun run build:native</code> 重建后，原失败分片 77/77 全绿，完整 heavy 随后 98/98 全绿。最终当前代码复验使用 <code>OMP_TEST_CONCURRENCY=4</code>：默认并发曾在主机饱和时使两个既有 5 秒 CLI 启动测试超时，但二者单独复验均通过，且此前默认并发完整运行已经 98/98；限并发复验没有放宽断言或测试超时。未为绕过这些环境问题修改产品逻辑。</p>
+			</section>
+
+			<section>
+				<h2>9. 交付物与数据纪律</h2>
+				<ul>
+					<li><code>packages/coding-agent/examples/config/san-brain-m6-dogfood.yml</code>：无凭据 opt-in overlay；</li>
+					<li><code>packages/coding-agent/src/brain/dogfood.ts</code>：14-turn verifier；</li>
+					<li><code>packages/coding-agent/src/brain/backend-dogfood.ts</code>：四 backend verifier；</li>
+					<li><code>packages/coding-agent/test/brain/dogfood.test.ts</code>：deterministic、matrix、真实 Settings loader 合同；</li>
+					<li><code>docs/research/san-v0.3-m6-dogfood-runs/2026-07-11-summary.json</code>：脱敏聚合数据；</li>
+					<li><code>packages/coding-agent/CHANGELOG.md</code>：M6 Unreleased 记录。</li>
+				</ul>
+				<p class="muted">本报告基于未提交工作树，记录 base commit 与 overlay hash；不把工作树状态伪装成已提交 commit。</p>
+			</section>
+		</main>
+	</body>
+</html>

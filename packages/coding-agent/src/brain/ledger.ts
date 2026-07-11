@@ -6,16 +6,22 @@ import {
 	BRAIN_EXPERIENCE_CANDIDATE_CUSTOM_TYPE,
 	BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE,
 	BRAIN_PROJECTION_CUSTOM_TYPE,
+	BRAIN_PROJECTION_NOTIFICATION_CUSTOM_TYPE,
+	BRAIN_RECALL_CUSTOM_TYPE,
 	isSanBrainActivation,
 	isSanBrainDecision,
 	isSanBrainExperienceCandidate,
 	isSanBrainProfileCandidate,
 	isSanBrainProjection,
+	isSanBrainProjectionNotification,
+	isSanBrainRecallAudit,
 	type SanBrainActivation,
 	type SanBrainDecision,
 	type SanBrainExperienceCandidate,
 	type SanBrainProfileCandidate,
 	type SanBrainProjection,
+	type SanBrainProjectionNotification,
+	type SanBrainRecallAudit,
 } from "./types";
 
 export interface SanBrainLedgerEntry<T> {
@@ -30,6 +36,8 @@ export interface SanBrainLedgerSnapshot {
 	experienceCandidates: Array<SanBrainLedgerEntry<SanBrainExperienceCandidate>>;
 	decisions: Array<SanBrainLedgerEntry<SanBrainDecision>>;
 	projections: Array<SanBrainLedgerEntry<SanBrainProjection>>;
+	projectionNotifications: Array<SanBrainLedgerEntry<SanBrainProjectionNotification>>;
+	recalls: Array<SanBrainLedgerEntry<SanBrainRecallAudit>>;
 	activations: Array<SanBrainLedgerEntry<SanBrainActivation>>;
 }
 
@@ -58,6 +66,17 @@ export function appendSanBrainProjection(
 	return sessionManager.appendCustomEntry(BRAIN_PROJECTION_CUSTOM_TYPE, projection);
 }
 
+export function appendSanBrainProjectionNotification(
+	sessionManager: ReadonlySessionManager,
+	notification: SanBrainProjectionNotification,
+): string {
+	return sessionManager.appendCustomEntry(BRAIN_PROJECTION_NOTIFICATION_CUSTOM_TYPE, notification);
+}
+
+export function appendSanBrainRecallAudit(sessionManager: ReadonlySessionManager, audit: SanBrainRecallAudit): string {
+	return sessionManager.appendCustomEntry(BRAIN_RECALL_CUSTOM_TYPE, audit);
+}
+
 export function appendSanBrainActivation(
 	sessionManager: ReadonlySessionManager,
 	activation: SanBrainActivation,
@@ -80,6 +99,8 @@ export function listSanBrainLedgerEntries(entries: readonly SessionEntry[]): San
 		experienceCandidates: [],
 		decisions: [],
 		projections: [],
+		projectionNotifications: [],
+		recalls: [],
 		activations: [],
 	};
 
@@ -104,6 +125,16 @@ export function listSanBrainLedgerEntries(entries: readonly SessionEntry[]): San
 			case BRAIN_PROJECTION_CUSTOM_TYPE:
 				if (isSanBrainProjection(entry.data)) {
 					snapshot.projections.push(ledgerEntry(entry, entry.data));
+				}
+				break;
+			case BRAIN_PROJECTION_NOTIFICATION_CUSTOM_TYPE:
+				if (isSanBrainProjectionNotification(entry.data)) {
+					snapshot.projectionNotifications.push(ledgerEntry(entry, entry.data));
+				}
+				break;
+			case BRAIN_RECALL_CUSTOM_TYPE:
+				if (isSanBrainRecallAudit(entry.data)) {
+					snapshot.recalls.push(ledgerEntry(entry, entry.data));
 				}
 				break;
 			case BRAIN_ACTIVATION_CUSTOM_TYPE:

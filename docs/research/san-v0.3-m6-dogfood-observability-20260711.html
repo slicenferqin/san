@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>San v0.3 M6 实施计划：Policy-Aware Recall、Silent Guardrails 与 Dogfood</title>
+		<style>
+			:root {
+				color-scheme: light;
+				--bg: #f3f5f4;
+				--panel: #ffffff;
+				--ink: #17211c;
+				--muted: #5f6b64;
+				--line: #ccd4cf;
+				--green: #11653c;
+				--green-soft: #e8f4ed;
+				--blue: #2456a6;
+				--blue-soft: #eaf1fb;
+				--amber: #9a5700;
+				--amber-soft: #fff3dc;
+				--red: #a12a23;
+				--red-soft: #fcebe9;
+				--code: #101914;
+			}
+			* { box-sizing: border-box; }
+			html { scroll-behavior: smooth; }
+			body {
+				margin: 0;
+				background: var(--bg);
+				color: var(--ink);
+				font: 15px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+				letter-spacing: 0;
+			}
+			main { width: min(1180px, calc(100vw - 40px)); margin: 0 auto; padding: 36px 0 72px; }
+			header, nav, section {
+				background: var(--panel);
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				padding: 24px;
+				margin-bottom: 16px;
+			}
+			header { border-top: 5px solid var(--green); }
+			h1, h2, h3, h4 { margin: 0 0 12px; line-height: 1.28; letter-spacing: 0; }
+			h1 { font-size: 30px; }
+			h2 { font-size: 21px; padding-bottom: 9px; border-bottom: 1px solid var(--line); }
+			h3 { font-size: 17px; color: var(--blue); margin-top: 20px; }
+			h4 { font-size: 15px; margin-top: 16px; }
+			p { margin: 8px 0; }
+			ul, ol { margin: 8px 0 0 22px; padding: 0; }
+			li { margin: 5px 0; }
+			a { color: var(--blue); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+			code, pre { font-family: "SFMono-Regular", Consolas, monospace; }
+			code { color: var(--code); background: #edf0ee; border-radius: 4px; padding: 1px 5px; }
+			pre {
+				overflow: auto;
+				background: #111915;
+				color: #f5faf7;
+				border-radius: 6px;
+				padding: 14px 16px;
+				line-height: 1.48;
+				white-space: pre;
+			}
+			pre code { color: inherit; background: transparent; padding: 0; }
+			table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+			th, td { border: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }
+			th { background: #edf1ee; font-weight: 700; }
+			tr:nth-child(even) td { background: #fafcfb; }
+			.badge { display: inline-block; border-radius: 999px; padding: 2px 9px; font-weight: 700; font-size: 12px; }
+			.pass { background: var(--green-soft); color: var(--green); }
+			.info { background: var(--blue-soft); color: var(--blue); }
+			.warn { background: var(--amber-soft); color: var(--amber); }
+			.block { background: var(--red-soft); color: var(--red); }
+			.grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
+			.metric { border: 1px solid var(--line); border-radius: 6px; padding: 13px; background: #fafcfb; min-width: 0; }
+			.metric strong { display: block; font-size: 22px; line-height: 1.18; margin-bottom: 5px; overflow-wrap: anywhere; }
+			.note { color: var(--muted); font-size: 14px; }
+			.callout { border-left: 4px solid var(--green); background: var(--green-soft); padding: 12px 14px; border-radius: 4px; margin: 14px 0; }
+			.callout.warning { border-left-color: var(--amber); background: var(--amber-soft); }
+			.callout.danger { border-left-color: var(--red); background: var(--red-soft); }
+			.callout.info-box { border-left-color: var(--blue); background: var(--blue-soft); }
+			.toc { columns: 2; column-gap: 32px; }
+			.toc li { break-inside: avoid; }
+			.flow { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin: 14px 0; }
+			.flow div { border: 1px solid var(--line); border-radius: 6px; padding: 11px; background: #fafcfb; text-align: center; }
+			.flow strong { display: block; color: var(--blue); margin-bottom: 4px; }
+			.checklist td:first-child { width: 34px; text-align: center; font-weight: 700; }
+			.small { font-size: 13px; color: var(--muted); }
+			@media (max-width: 920px) {
+				main { width: min(100vw - 24px, 1180px); padding-top: 20px; }
+				.grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+				.flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+				.toc { columns: 1; }
+				header, nav, section { padding: 18px; }
+				table { display: block; overflow-x: auto; }
+			}
+			@media print {
+				body { background: #fff; }
+				main { width: 100%; padding: 0; }
+				header, nav, section { break-inside: avoid; box-shadow: none; }
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<header>
+				<h1>San v0.3 M6 实施计划</h1>
+				<p><strong>Policy-Aware Recall、Silent Guardrails 与可量化 Dogfood</strong></p>
+				<p class="note">修订日期：2026-07-11。依据当前 <code>feature/san-v0.3</code> 代码、M5 交接文档、P0 冻结合同及 M6 规划评审结果重写。</p>
+				<div class="callout">
+					<strong>实施状态（2026-07-11）：</strong>M6.0-M6.5 已全部落地。聚焦套件 <code>72 pass / 0 fail</code>，package check、<code>98 / 98</code> heavy chunks 和 CLI smoke 全绿；14-turn 与四 backend matrix 均通过。实测见 <code>san-v0.3-m6-dogfood-report-20260711.html</code> 和脱敏 summary。
+				</div>
+				<div class="grid">
+					<div class="metric"><strong class="pass">M1-M6</strong><span>规划范围已落地</span></div>
+					<div class="metric"><strong class="pass">72 green</strong><span>M6 聚焦合同</span></div>
+					<div class="metric"><strong class="info">Default Off</strong><span>M6 后仍不默认开启</span></div>
+					<div class="metric"><strong class="pass">98 / 98</strong><span>Heavy command chunks</span></div>
+				</div>
+			</header>
+
+			<nav aria-label="文档目录">
+				<h2>目录</h2>
+				<ol class="toc">
+					<li><a href="#scope">规范范围与退出定义</a></li>
+					<li><a href="#baseline">当前代码基线</a></li>
+					<li><a href="#configuration">配置状态机与 Dogfood Overlay</a></li>
+					<li><a href="#m60">M6.0 Baseline Stabilization</a></li>
+					<li><a href="#m61">M6.1 Policy-Aware Recall</a></li>
+					<li><a href="#m62">M6.2 Audit 与 Debug Read Model</a></li>
+					<li><a href="#m63">M6.3 Reconcile、Retry 与 Silent UX</a></li>
+					<li><a href="#m64">M6.4 Deterministic Dogfood</a></li>
+					<li><a href="#m65">M6.5 Real Session Report</a></li>
+					<li><a href="#files">实施文件与测试矩阵</a></li>
+					<li><a href="#verification">验证命令</a></li>
+					<li><a href="#rollout">Rollout 决策门禁</a></li>
+				</ol>
+			</nav>
+
+			<section id="scope">
+				<h2>1. 规范范围与退出定义</h2>
+				<p>M6 不是单纯的 projection 可视化阶段，也不是扩大外部写入面的阶段。它必须同时完成冻结文档中的 Policy-aware recall、安全可恢复 projection、低噪音交互和真实 dogfood 证明。</p>
+
+				<h3>必须交付</h3>
+				<ul>
+					<li>修复 M5 遗留的 slash 测试回归，并建立统一的 Brain effective runtime policy。</li>
+					<li>让 approved <code>recall_policy</code> 真正影响 recall query、候选过滤和预算，而不是只进入 prompt prelude。</li>
+					<li>提供可按需读取、可迁移、可脱敏的 projection audit/debug read model。</li>
+					<li>按 target 定义并实现 crash reconcile、有限 retry、CAS undo 和 blocked 处理。</li>
+					<li>完成可重复的 10+ turn deterministic dogfood、真实 slash/session smoke 和真实会话报告。</li>
+					<li>对 <code>off</code>、<code>local</code>、<code>mnemopi</code>、<code>hindsight</code> 四种 memory backend 给出成功或安全降级证明。</li>
+					<li>形成明确 rollout 结论：扩大 opt-in、继续收敛或回退。</li>
+				</ul>
+
+				<h3>明确非目标</h3>
+				<ul>
+					<li>不新增 projection target，不自动创建 hook，不改变工具权限。</li>
+					<li>不实现 auto-approve；所有外部行为变化仍来自不可变 approve Decision。</li>
+					<li>不把 audit 或 explain 变成每轮默认前台文本。</li>
+					<li>不自动修改用户的持久化配置文件，不提交机器凭据和真实会话原文。</li>
+					<li>不把自由文本历史升级为 recall policy、activation rule 或当前指令。</li>
+					<li>M6 完成后仍保持 <code>san.brain.enabled=false</code> 默认值；默认开启必须是后续独立决策。</li>
+				</ul>
+
+				<h3>执行纪律</h3>
+				<table>
+					<thead><tr><th>纪律</th><th>实施合同</th></tr></thead>
+					<tbody>
+						<tr><td>M6.0 硬门禁</td><td>配置状态机、projection 写入旁路、现有 slash 红测和验证命令未全部修复前，不并行推进 recall、schema migration 或真实 dogfood。M6.0 完成后固定一次全绿基线，后续切片不得破坏。</td></tr>
+						<tr><td>独立可回退切片</td><td>M6.0-M6.5 每个切片都必须有独立输出、定向测试和退出证据；失败时只回退当前切片，不跨切片掩盖红测。</td></tr>
+						<tr><td>隔离数据面</td><td>Deterministic test 和第一轮 projection smoke 使用临时 agent directory。真实用户 Brain store、managed skills 和 memory bank 只在前置门禁全部通过后接入。</td></tr>
+						<tr><td>行为版本化</td><td>Recall template allowlist、selection policy、projection error mapping 和 dogfood fixture 使用稳定 policy/version id；报告记录 commit、配置 hash、DB schema、payload schema、policy version、backend 和 capability。</td></tr>
+					</tbody>
+				</table>
+
+				<h3>真实 Dogfood 分阶段启用</h3>
+				<table>
+					<thead><tr><th>阶段</th><th>配置</th><th>进入下一阶段的条件</th></tr></thead>
+					<tbody>
+						<tr><td>A. Review-only</td><td><code>mode=review-only</code>，capture 开启，legacy autoRetain block。</td><td>候选数受控、dedupe 正确、当前回答零变化、无 legacy 旁路写入。</td></tr>
+						<tr><td>B. Activation</td><td><code>mode=activation</code>，仍禁止 projection。</td><td>相关任务正确命中；无关任务、敏感状态和当前用户冲突全部跳过。</td></tr>
+						<tr><td>C. Isolated Projection</td><td><code>mode=projection</code>，使用临时 agent directory 和受控 backend。</td><td>Managed skill/check suggestion reconcile、CAS undo、timeout、一次通知全部通过。</td></tr>
+						<tr><td>D. Real Backend</td><td>使用实际 Mnemopi/Hindsight overlay；仍保持默认配置关闭。</td><td>Receipt、scope、latency、失败降级和四 backend matrix 与合同一致。</td></tr>
+					</tbody>
+				</table>
+
+				<h3>立即停止条件</h3>
+				<p>出现下列任一情况时立即关闭 dogfood overlay，保留 ledger 供排障，不继续观察更多 turn：</p>
+				<ul>
+					<li><code>brain.enabled=false</code> 时仍发生任何外部 projection。</li>
+					<li>Recall 或 activation 跨 scope、role 或项目污染。</li>
+					<li>同一 projection operation key 产生重复外部写入。</li>
+					<li>CAS mismatch、人工修改或后续 revision 存在时仍覆盖外部状态。</li>
+					<li>JSONL 无法重建 SQLite 最终状态，或出现无法追溯到 Decision/owner 的 projection。</li>
+					<li>Debug、日志或报告泄露 secret、完整 evidence、凭据或未缩写的用户 home path。</li>
+				</ul>
+
+				<div class="callout">
+					<strong>M6 完成定义：</strong>不是“功能能跑”，而是配置 gate 无旁路、无关任务零污染、外部写入不重复、异常可恢复或安全 blocked、审计可追溯且默认体验安静。
+				</div>
+			</section>
+
+			<section id="baseline">
+				<h2>2. 规划时代码基线（历史快照）</h2>
+				<p class="note">下表保留实施开始时的差距，作为 M6 范围和退出条件的来源；顶部状态与实测报告是当前结果。</p>
+				<table>
+					<thead><tr><th>能力</th><th>当前状态</th><th>M6 必须补齐</th></tr></thead>
+					<tbody>
+						<tr><td>Capture</td><td><code>san.brain.enabled &amp;&amp; capture.enabled</code> 时从 TurnDigest 或 message-span fallback 生成 typed Candidate。</td><td>保持现状；dogfood 统计每 turn 候选数、重复率和无关候选。</td></tr>
+						<tr><td>Activation</td><td>approved active state 已按 scope、role、selector、confidence、authority 和 token budget 选择。</td><td>抽取共享 selection，使 activation 与 recall 使用同一组 eligibility 判定。</td></tr>
+						<tr><td>Recall</td><td>Context Steady 使用当前 prompt + 最近 digest 构造 query；Brain <code>recall_policy</code> 只被渲染为 typed prelude action。</td><td>实现 policy-aware query、候选过滤、backend capability 降级和 recall audit。</td></tr>
+						<tr><td>Projection</td><td>memory、managed skill、check suggestion 支持 pending/applied/failed/blocked/compensated。</td><td>统一 gate；区分 retryable failure 与 terminal block；实现 target-specific reconcile。</td></tr>
+						<tr><td>Audit</td><td>JSONL 为权威源，SQLite 为物化视图；projection 只有自由文本 <code>error</code>。</td><td>增加机器可读错误码、耗时、receipt/notification 信息和 join 后的 debug read model。</td></tr>
+						<tr><td>Commands</td><td><code>/brain inbox|profile|explain|approve|discard|undo|consolidate|project</code> 已存在。</td><td>新增 <code>/brain debug</code>；增强 explain；所有写命令遵守 effective projection gate。</td></tr>
+						<tr><td>Compatibility</td><td>projection mode 可在 session 内关闭 Mnemopi/Hindsight legacy autoRetain。</td><td>修复 global disabled 时 projection 仍可能运行的组合；建立完整 truth table。</td></tr>
+						<tr><td>Verification</td><td>Brain + slash 定向套件当前 <code>31 pass / 1 fail</code>；正确 type check 通过。</td><td>M6.0 先恢复全绿；禁止以打印 Bun 帮助但退出 0 的错误命令作为验证。</td></tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section id="configuration">
+				<h2>3. 配置状态机与 Dogfood Overlay</h2>
+				<p>Brain 的有效行为必须由一个共享 resolver 计算，session、slash command、memory compatibility 和测试不得各自拼接条件。</p>
+
+				<h3>Effective runtime policy</h3>
+				<pre><code>interface SanBrainRuntimePolicy {
+	enabled: boolean;
+	captureEnabled: boolean;
+	activationEnabled: boolean;
+	projectionEnabled: boolean;
+	legacyAutoRetainAllowed: boolean;
+}</code></pre>
+				<table>
+					<thead><tr><th>配置组合</th><th>Capture</th><th>Activation</th><th>Projection</th><th>Legacy autoRetain</th></tr></thead>
+					<tbody>
+						<tr><td><code>brain.enabled=false</code></td><td>Off</td><td>Off</td><td>Off</td><td>保持用户原配置</td></tr>
+						<tr><td><code>enabled=true, mode=review-only</code></td><td>按 leaf 开关</td><td>Off</td><td>Off</td><td>普通兼容可 warn；M6 dogfood 必须 block/显式关闭</td></tr>
+						<tr><td><code>enabled=true, mode=activation</code></td><td>按 leaf 开关</td><td>On</td><td>Off</td><td>M6 dogfood 必须 block/显式关闭</td></tr>
+						<tr><td><code>enabled=true, mode=projection, projections.enabled=false</code></td><td>按 leaf 开关</td><td>On</td><td>Off</td><td>Block，避免旁路长期写入</td></tr>
+						<tr><td><code>enabled=true, mode=projection, projections.enabled=true</code></td><td>按 leaf 开关</td><td>On</td><td>On</td><td>Block；长期自动写入只来自 Brain outbox</td></tr>
+					</tbody>
+				</table>
+
+				<h3>推荐 overlay 模板</h3>
+				<p>M6 实施时新增无凭据、可提交的模板 <code>packages/coding-agent/examples/config/san-brain-m6-dogfood.yml</code>。真实凭据或 backend 地址继续放在未跟踪的第二层 overlay。</p>
+				<pre><code># packages/coding-agent/examples/config/san-brain-m6-dogfood.yml
+mnemopi:
+  autoRetain: false
+
+hindsight:
+  autoRetain: false
+
+san:
+  contextSteady:
+    enabled: true
+    digest:
+      enabled: true
+      persistFallback: true
+    contextPacket:
+      enabled: true
+    recall:
+      enabled: true
+      maxItems: 3
+      maxTokens: 1000
+      maxQueryChars: 2000
+  brain:
+    enabled: true
+    mode: projection
+    capture:
+      enabled: true
+      maxCandidatesPerTurn: 5
+      minConfidence: 0.72
+    activation:
+      maxItems: 8
+      maxTokens: 1200
+      minConfidence: 0.75
+      globalMaxTokens: 6000
+    projections:
+      enabled: true
+      maxAttempts: 3
+      attemptTimeoutMs: 10000
+      maxPerTurn: 4
+    compatibility:
+      legacyAutoRetain: block</code></pre>
+				<pre><code>san --config packages/coding-agent/examples/config/san-brain-m6-dogfood.yml
+
+# Hindsight 等机器配置使用第二层未跟踪 overlay：
+san \
+	--config packages/coding-agent/examples/config/san-brain-m6-dogfood.yml \
+	--config ~/.san/overlays/m6-hindsight.yml</code></pre>
+				<div class="callout danger">
+					任何有效路径都必须满足：<code>brain.enabled &amp;&amp; mode === "projection" &amp;&amp; projections.enabled</code> 才能执行外部 projection。显式 <code>/brain project</code> 也不能绕过该合同。
+				</div>
+			</section>
+
+			<section id="m60">
+				<h2>4. M6.0 Baseline Stabilization</h2>
+				<p><span class="badge block">必须先完成</span> M6.0 只收敛现有基线和配置安全，不引入 recall 或新交互。</p>
+				<table>
+					<thead><tr><th>工作项</th><th>实施要求</th><th>退出证据</th></tr></thead>
+					<tbody>
+						<tr><td>修复现有红测</td><td>补齐 slash harness 的真实 Settings seam；测试 approve/undo 在 projection off/on 下的可观察输出。</td><td>现有 Brain + slash 定向套件 0 fail。</td></tr>
+						<tr><td>统一 runtime policy</td><td>新增纯 resolver；capture、activation、session projection、slash projection、legacy autoRetain 全部调用它。</td><td>配置 truth table 一行一个契约测试。</td></tr>
+						<tr><td>关闭写入旁路</td><td>全局 Brain disabled 时，任何自动或显式 projection 都不得写外部系统。</td><td>外部 adapter 未被调用，projection 保持 pending 或返回 disabled。</td></tr>
+						<tr><td>修正文档命令</td><td>统一使用 <code>bun run --cwd packages/coding-agent ...</code>。</td><td>命令实际运行 type checker，不是打印 Bun help。</td></tr>
+						<tr><td>冻结 overlay</td><td>增加可提交的无凭据模板，并用真实 Settings loader 读取。</td><td>断言所有 effective setting 与预期一致。</td></tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section id="m61">
+				<h2>5. M6.1 Policy-Aware Recall</h2>
+				<p>Policy-aware recall 是冻结 M6 范围，不能以“projection dogfood”为由省略。它属于 runtime control plane，不是给模型阅读的历史建议。</p>
+
+				<h3>核心合同</h3>
+				<ul>
+					<li>只读取 approved、active、normal sensitivity、未过期且与当前 scope/role/task 匹配的 <code>recall_policy</code>。</li>
+					<li><code>queryTemplateId</code> 必须来自静态 allowlist；未知模板跳过并写 audit，不把 id 当自由文本 query。</li>
+					<li><code>recall_policy</code> 被 recall planner 消费后，不再作为普通 action 渲染进 Brain prelude。</li>
+					<li>当前用户明确要求忽略 Brain/memory/history 时，recall policy 与 recall search 一并跳过。</li>
+					<li>查询只使用 typed fields、当前 prompt、经过裁剪的 digest 字段和可信 scope；禁止拼接候选原文或 evidence 原文。</li>
+					<li>所有 query template 文本放在静态 <code>.md</code> 文件，通过 <code>with { type: "text" }</code> 导入；动态字段用 Handlebars。</li>
+				</ul>
+
+				<h3>共享 selection</h3>
+				<p>从现有 activation 中提取纯 selection 阶段，使 activation 和 recall 共用 scope、role、selector、confidence、expiry、sensitivity、current-user conflict 判断。两条路径不得各自实现近似匹配。</p>
+				<pre><code>interface SanBrainRecallPlan {
+	selectedPolicyIds: string[];
+	queryTemplateId?: string;
+	scopeKeys: string[];
+	memoryTypes: string[];
+	role: SanBrainActivationRole;
+	limit: number;
+	tokenBudget: number;
+	skipReasons: Array&lt;{ ownerId: string; reason: string }&gt;;
+}</code></pre>
+
+				<h3>每轮顺序</h3>
+				<div class="flow" aria-label="Policy-aware recall 每轮顺序">
+					<div><strong>1</strong>解析当前用户、scope、role</div>
+					<div><strong>2</strong>共享 selection 选择 recall policies</div>
+					<div><strong>3</strong>构造 typed recall plan/query</div>
+					<div><strong>4</strong>backend search 与安全过滤</div>
+					<div><strong>5</strong>构造 ContextPacket 与 Brain prelude</div>
+					<div><strong>6</strong>统一预算并写 activation/recall audit</div>
+				</div>
+
+				<h3>Backend capability 与降级</h3>
+				<table>
+					<thead><tr><th>Backend</th><th>Policy-aware recall 行为</th><th>降级合同</th></tr></thead>
+					<tbody>
+						<tr><td><code>off</code></td><td>不执行 search。</td><td>返回 <code>backend_unavailable</code> skip；不影响主 turn。</td></tr>
+						<tr><td><code>local</code></td><td>当前无 structured search。</td><td>返回 <code>search_unsupported</code> skip；不伪造 recall item。</td></tr>
+						<tr><td><code>mnemopi</code></td><td>按当前 bank/scope 搜索；支持的 metadata 参与过滤。</td><td>能力缺失字段显式记录，不放宽到跨项目 bank。</td></tr>
+						<tr><td><code>hindsight</code></td><td>按 active bank、typed query 和 limit 搜索。</td><td>超时或服务不可用时返回空 recall layer 并写 debug audit。</td></tr>
+					</tbody>
+				</table>
+
+				<div class="callout info-box">
+					如果现有 <code>MemoryBackendSearchItem</code> 无法表达 type/scope metadata，M6 可以添加可选 typed metadata；不支持 metadata 的 backend 必须声明 capability，不得假装完成精确过滤。
+				</div>
+			</section>
+
+			<section id="m62">
+				<h2>6. M6.2 Audit 与 Debug Read Model</h2>
+				<p>JSONL 继续是权威源，SQLite 继续是可重建物化视图。M6 不在 projection event 中重复存储可从 Decision 稳定派生的字段，而是建立 join 后的 debug read model。</p>
+
+				<h3>持久化字段</h3>
+				<table>
+					<thead><tr><th>字段</th><th>来源</th><th>合同</th></tr></thead>
+					<tbody>
+						<tr><td><code>projectionId</code></td><td>Projection event</td><td>同时作为外部 operation key；同一次 retry 必须稳定。</td></tr>
+						<tr><td><code>decisionId</code></td><td>Projection event</td><td>指向不可变 Decision。</td></tr>
+						<tr><td><code>ownerId</code> / Decision <code>idempotencyKey</code></td><td>Debug 时 join Decision</td><td>不在 projection event 重复存储。</td></tr>
+						<tr><td><code>target</code> / <code>state</code> / <code>attemptCount</code></td><td>Projection event</td><td>固定状态机与有限尝试。</td></tr>
+						<tr><td><code>revision</code> / <code>beforeHash</code> / <code>afterHash</code></td><td>Projection event</td><td>支持 CAS、reconcile 和 undo；按 target 允许为空。</td></tr>
+						<tr><td><code>errorCode</code> / <code>error</code></td><td>Projection event</td><td>机器可读枚举 + 已脱敏短 message。</td></tr>
+						<tr><td><code>durationMs</code> / <code>receiptId</code></td><td>Projection event</td><td>衡量主 turn 延迟并支持外部 receipt 对账。</td></tr>
+						<tr><td><code>notifiedAt</code></td><td>Projection notification receipt</td><td>保证 blocked 最多自动提示一次。</td></tr>
+					</tbody>
+				</table>
+
+				<h3>错误码最小集合</h3>
+				<pre><code>type SanBrainProjectionErrorCode =
+	| "backend_unavailable"
+	| "search_unsupported"
+	| "invalid_draft"
+	| "cas_mismatch"
+	| "unsafe_undo"
+	| "owner_unavailable"
+	| "receipt_missing"
+	| "stale_in_progress"
+	| "attempts_exhausted"
+	| "external_timeout"
+	| "external_failure";</code></pre>
+
+				<h3>Schema 迁移</h3>
+				<ul>
+					<li>Projection JSONL event 以可选字段扩展保持向后兼容；旧 event 仍可读取。</li>
+					<li>SQLite 升级到新的 <code>PRAGMA user_version</code>，以原子 migration 增加 error code、duration、receipt 和 notification 字段。</li>
+					<li>迁移测试必须从真实 v1 database fixture 打开并验证旧 projection audit 未丢失。</li>
+					<li>future DB version 继续拒绝写入；future JSONL payload 只读展示，不执行 projection/activation。</li>
+				</ul>
+
+				<h3>命令合同</h3>
+				<table>
+					<thead><tr><th>入口</th><th>输出</th><th>禁止行为</th></tr></thead>
+					<tbody>
+						<tr><td><code>/brain debug [pending|failed|blocked|all]</code></td><td>计数、projection/decision/owner 指针、状态、attempt、错误码、耗时、receipt 摘要。</td><td>不自动 approve、retry、undo；默认不输出 evidence 原文。</td></tr>
+						<tr><td><code>/brain explain &lt;id&gt;</code></td><td>Candidate、Decision、active revision 和相关 projection chain 摘要。</td><td>不显示 secret/sensitive evidence 内容。</td></tr>
+						<tr><td><code>/brain profile</code></td><td>approved profile active state。</td><td>不混入无关 projection 细节。</td></tr>
+						<tr><td>开发日志 / dogfood report</td><td>聚合数字、error code、duration、backend capability。</td><td>不提交凭据、绝对 home path、完整真实会话文本。</td></tr>
+					</tbody>
+				</table>
+				<p>所有 TUI/status/debug 文本必须执行 tab 替换、路径缩写、宽度截断和 secret redaction。外部异常不得原样进入主对话。</p>
+			</section>
+
+			<section id="m63">
+				<h2>7. M6.3 Reconcile、Retry 与 Silent UX</h2>
+				<h3>状态机规则</h3>
+				<table>
+					<thead><tr><th>当前状态</th><th>自动路径</th><th>显式命令</th><th>下一状态</th></tr></thead>
+					<tbody>
+						<tr><td><code>pending</code></td><td>允许执行一次。</td><td><code>/brain project</code> 也可执行。</td><td>applying → applied / failed / blocked</td></tr>
+						<tr><td><code>failed</code></td><td>不在每个 prompt 前自动重试。</td><td>仅显式 <code>/brain project</code> 重试，受 maxAttempts 限制。</td><td>applying → applied / failed / blocked</td></tr>
+						<tr><td><code>applying</code> / <code>compensating</code></td><td>启动 target-specific reconcile，不盲重放。</td><td>命令显示 reconcile 结果。</td><td>applied / compensated / blocked</td></tr>
+						<tr><td><code>blocked</code></td><td>不重试；最多一次短状态提示。</td><td>debug/explain 可读；修复外部状态后需显式新 Decision 或受控 retry。</td><td>保持 blocked</td></tr>
+						<tr><td><code>applied</code> / <code>compensated</code></td><td>跳过。</td><td>只读展示。</td><td>终态</td></tr>
+					</tbody>
+				</table>
+
+				<h3>Target-specific reconcile</h3>
+				<table>
+					<thead><tr><th>Target</th><th>Apply crash 后判定</th><th>Undo / compensation</th></tr></thead>
+					<tbody>
+						<tr><td>Managed skill create/update</td><td>执行前计算预期 after hash；恢复时读取受管文件。匹配则补 applied receipt，不匹配则 CAS blocked。</td><td>Create 仅删除匹配自身 after hash 的文件；Update 仅在当前 hash 匹配时恢复备份。</td></tr>
+						<tr><td>Check suggestion</td><td>内容由 typed draft + projection id 确定；文件 hash 匹配即补 applied，否则 blocked。</td><td>仅删除与原 after hash 匹配的建议文件。</td></tr>
+						<tr><td>Memory</td><td>先查询 backend capability。支持按 operation/source 查询时对账 receipt；不支持时标记 <code>receipt_missing</code> blocked。</td><td>Backend 无 projection-id compensation 能力时明确 <code>unsafe_undo</code> blocked。</td></tr>
+					</tbody>
+				</table>
+
+				<h3>延迟与资源门禁</h3>
+				<ul>
+					<li>增加每次 external attempt timeout；dogfood 推荐值为 10 秒，超时记录 <code>external_timeout</code>。</li>
+					<li>单 turn 处理 projection 数量必须有上限，避免积压 outbox 阻塞首个 prompt。</li>
+					<li>report 记录每个 target/backend 的 p50、p95、max duration；不得只统计状态数量。</li>
+					<li>projection failure 不改变 assistant 回答内容，不取消当前用户任务。</li>
+				</ul>
+
+				<h3>可见性合同</h3>
+				<table>
+					<thead><tr><th>场景</th><th>主对话</th><th>状态面</th><th>Audit</th></tr></thead>
+					<tbody>
+						<tr><td>自动 applied</td><td>0 条 Brain 文本</td><td>不提示</td><td>完整记录</td></tr>
+						<tr><td>自动 failed，可重试</td><td>0 条 Brain 文本</td><td>默认不提示</td><td>记录 error code、attempt、duration</td></tr>
+						<tr><td>首次 blocked / unsafe undo</td><td>不修改 assistant 文本</td><td>一次短状态提示，不含 hash/path</td><td>完整记录并写 notification receipt</td></tr>
+						<tr><td>显式 approve/undo/project</td><td>仅命令结果</td><td>显示简短成功/失败计数</td><td>完整记录</td></tr>
+						<tr><td>显式 debug/explain</td><td>按需输出</td><td>脱敏详细信息</td><td>只读，不触发状态变化</td></tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section id="m64">
+				<h2>8. M6.4 Deterministic 10+ Turn Dogfood</h2>
+				<p>Deterministic dogfood 是可重复验收，不依赖真实 provider 随机输出；真实会话报告不能替代它。建议固定 14 个 turn，覆盖完整闭环。</p>
+				<table>
+					<thead><tr><th>Turn / 操作</th><th>场景</th><th>必须观察到的合同</th></tr></thead>
+					<tbody>
+						<tr><td>1</td><td>用户声明稳定输出偏好。</td><td>生成一个 pending profile candidate，不改变当前回答。</td></tr>
+						<tr><td>2</td><td>独立上下文重复相同偏好。</td><td>证据可 consolidation，不产生重复 active state。</td></tr>
+						<tr><td>3</td><td>完全无关任务。</td><td>无错误 activation、无错误 recall、无 Brain 前台噪音。</td></tr>
+						<tr><td>命令</td><td><code>/brain approve</code> 偏好。</td><td>生成不可变 Decision；projection 遵守有效 gate。</td></tr>
+						<tr><td>4</td><td>相关任务。</td><td>approved state 被选中并写 activation audit。</td></tr>
+						<tr><td>5</td><td>当前用户明确给出相反要求。</td><td>Brain state 因 current-user conflict 跳过。</td></tr>
+						<tr><td>6</td><td>构造可批准的 recall policy。</td><td>policy 仍为 pending，不直接改变 recall。</td></tr>
+						<tr><td>命令</td><td>approve recall policy。</td><td>只批准 allowlisted template id。</td></tr>
+						<tr><td>7</td><td>相关 recall 任务。</td><td>policy-aware query 生效；结果遵守 scope/type/role/budget。</td></tr>
+						<tr><td>8</td><td>无关 recall 任务。</td><td>policy 不匹配，不召回无关记忆。</td></tr>
+						<tr><td>9</td><td>Managed skill projection。</td><td>成功路径只写一次，主对话 0 噪音。</td></tr>
+						<tr><td>10</td><td>Check suggestion projection。</td><td>typed content 和 after hash 可对账。</td></tr>
+						<tr><td>11</td><td>外部人工修改后 undo。</td><td>CAS mismatch blocked，不覆盖人工内容，只提示一次。</td></tr>
+						<tr><td>12</td><td>模拟 applying 后 crash/resume。</td><td>通过 target reconcile 得到 applied/blocked，不盲写第二次。</td></tr>
+						<tr><td>13</td><td>Backend timeout/failure。</td><td>当前任务继续；failed 不自动每 turn 重试。</td></tr>
+						<tr><td>14</td><td><code>/brain debug all</code>。</td><td>完整链可追溯，输出已脱敏、截断、缩短路径。</td></tr>
+					</tbody>
+				</table>
+
+				<h3>量化门禁</h3>
+				<table class="checklist">
+					<thead><tr><th></th><th>指标</th><th>通过标准</th></tr></thead>
+					<tbody>
+						<tr><td>1</td><td>Happy path 主对话 Brain 主动暴露</td><td><strong>0</strong></td></tr>
+						<tr><td>2</td><td>无关 turn 错误 activation / recall</td><td><strong>0 / 0</strong></td></tr>
+						<tr><td>3</td><td>重复外部写入 / 不安全覆盖</td><td><strong>0 / 0</strong></td></tr>
+						<tr><td>4</td><td>Blocked 自动提示</td><td>每个 projection state revision 最多 1 次</td></tr>
+						<tr><td>5</td><td>Projection orphan audit</td><td><strong>0</strong>；每条 projection 可追溯到 Decision 和 owner</td></tr>
+						<tr><td>6</td><td>Attempt 数</td><td>不超过配置 <code>maxAttempts</code>；无后台无限循环</td></tr>
+						<tr><td>7</td><td>Candidate 数</td><td>每 turn 不超过配置 cap；相同 dedupe key 不重复 materialize</td></tr>
+						<tr><td>8</td><td>Prompt/token authority</td><td>只注入 approved typed state；总量不超过共享 token cap</td></tr>
+						<tr><td>9</td><td>Secret/sensitive 泄露</td><td><strong>0</strong>；debug/report 不含凭据和 evidence 原文</td></tr>
+						<tr><td>10</td><td>Projection latency</td><td>无 attempt 超过 timeout；报告 p50/p95/max</td></tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section id="m65">
+				<h2>9. M6.5 Real Session Report</h2>
+				<p>真实 dogfood 在 deterministic suite 全绿后执行。报告只提交脱敏事实和聚合指标，不提交完整真实 transcript。</p>
+
+				<h3>Backend 证明矩阵</h3>
+				<table>
+					<thead><tr><th>Backend</th><th>Recall</th><th>Memory projection</th><th>预期结论</th></tr></thead>
+					<tbody>
+						<tr><td><code>off</code></td><td>安全 skip</td><td><code>backend_unavailable</code> blocked</td><td>无写入、无重复、主任务继续</td></tr>
+						<tr><td><code>local</code></td><td><code>search_unsupported</code> skip</td><td>可 save；memory undo 若无安全能力则 blocked</td><td>能力边界明确，不伪造成功</td></tr>
+						<tr><td><code>mnemopi</code></td><td>真实 structured recall</td><td>应用并记录 receipt；测试 receipt 丢失降级</td><td>scope 不串、autoRetain 无旁路</td></tr>
+						<tr><td><code>hindsight</code></td><td>真实服务 recall 或可控不可用场景</td><td>applied/queued/timeout 均有确定映射</td><td>网络失败不阻断主任务</td></tr>
+					</tbody>
+				</table>
+
+				<h3>交付物</h3>
+				<ul>
+					<li><code>packages/coding-agent/examples/config/san-brain-m6-dogfood.yml</code>：无凭据、可提交的基础 overlay。</li>
+					<li><code>packages/coding-agent/test/brain/dogfood.test.ts</code>：14 turn deterministic contract。</li>
+					<li><code>docs/research/san-v0.3-m6-dogfood-report-20260711.html</code>：真实会话评估和 rollout 结论。</li>
+					<li><code>docs/research/san-v0.3-m6-dogfood-runs/2026-07-11-summary.json</code>：脱敏聚合数据、配置 hash、commit、backend、计数和 duration；不含完整对话。</li>
+					<li><code>packages/coding-agent/CHANGELOG.md</code>：在 <code>[Unreleased]</code> 记录 policy-aware recall、debug、reconcile 和 dogfood overlay。</li>
+				</ul>
+
+				<h3>报告必须回答</h3>
+				<ol>
+					<li>Brain 在多少 turn 中生成 Candidate、激活 state、执行 recall 和 projection？</li>
+					<li>哪些行为发生在相关任务，哪些被 scope/role/current-user conflict 正确跳过？</li>
+					<li>是否出现重复写、错误 recall、CAS 覆盖、审计孤儿、重复通知或超时？</li>
+					<li>四种 backend 的能力边界和降级状态是否与合同一致？</li>
+					<li>默认阈值是否需要调整，调整依据是否来自量化数据？</li>
+					<li>最终结论是扩大 opt-in、继续收敛还是回退？</li>
+				</ol>
+			</section>
+
+			<section id="files">
+				<h2>10. 实施文件与测试矩阵</h2>
+				<table>
+					<thead><tr><th>切片</th><th>主要源码</th><th>主要测试</th><th>退出条件</th></tr></thead>
+					<tbody>
+						<tr><td>M6.0</td><td><code>brain/runtime-policy.ts</code>、<code>compatibility.ts</code>、<code>agent-session.ts</code>、<code>builtin-registry.ts</code></td><td><code>brain/runtime-policy.test.ts</code>、现有 slash/compatibility tests</td><td>配置 truth table 和现有 Brain suite 全绿</td></tr>
+						<tr><td>M6.1</td><td><code>brain/activation.ts</code> 共享 selection、<code>brain/recall.ts</code>、<code>context-steady/recall.ts</code>、memory backend types/adapters</td><td><code>brain/recall.test.ts</code>、<code>brain/agent-session-recall.test.ts</code>、context recall tests</td><td>相关 recall 生效；无关/sensitive/conflict 全部跳过</td></tr>
+						<tr><td>M6.2</td><td><code>brain/types.ts</code>、<code>store.ts</code>、<code>render.ts</code>、<code>commands.ts</code>、slash registry</td><td><code>brain/store.test.ts</code>、<code>brain/debug.test.ts</code>、slash tests</td><td>v1→v2 migration、结构化错误、脱敏 debug 通过</td></tr>
+						<tr><td>M6.3</td><td><code>brain/projection.ts</code>、<code>projection-plan.ts</code>、managed skill 与 memory adapters、session integration</td><td>扩展 <code>brain/projection.test.ts</code>、真实 session projection tests</td><td>crash reconcile、不盲重试、一次通知、timeout 通过</td></tr>
+						<tr><td>M6.4</td><td><code>brain/dogfood.ts</code> 或现有纯函数组合</td><td><code>brain/dogfood.test.ts</code></td><td>14 turn deterministic gate 全部通过</td></tr>
+						<tr><td>M6.5</td><td>example overlay、report、summary artifact、CHANGELOG</td><td>实际 overlay 解析 test + real smoke evidence</td><td>报告给出可审计 rollout 结论</td></tr>
+					</tbody>
+				</table>
+
+				<h3>测试原则</h3>
+				<ul>
+					<li>每个新测试保护一个外部可观察合同，不断言内部 helper 接线或源码文本。</li>
+					<li>不得使用 <code>mock.module()</code>；backend failure 使用 namespace import + <code>vi.spyOn</code> 或真实 adapter seam。</li>
+					<li>配置测试读取实际 example YAML，通过 Settings loader 验证 effective values。</li>
+					<li>生命周期测试必须覆盖 live session 与 resume/rebuild 两条路径。</li>
+					<li>No-noise 测试检查 provider/TUI 可观察输出，不以“函数没有 throw”代替行为断言。</li>
+				</ul>
+			</section>
+
+			<section id="verification">
+				<h2>11. 验证命令</h2>
+				<h3>每个切片的定向验证</h3>
+				<pre><code>bun test \
+	packages/coding-agent/test/brain \
+	packages/coding-agent/test/slash-commands/brain.test.ts \
+	packages/coding-agent/test/context-steady/recall.test.ts
+
+bun run --cwd packages/coding-agent check:types</code></pre>
+
+				<h3>M6 完成前的 package 验证</h3>
+				<pre><code>bun run --cwd packages/coding-agent check
+bun run ci:test:coding-agent:heavy
+bun run ci:test:smoke</code></pre>
+				<div class="callout warning">
+					不要使用 <code>bun --cwd packages/coding-agent run check:types</code>。在当前 Bun 版本上该写法会打印帮助并可能以 0 退出，不能作为验证证据。
+				</div>
+			</section>
+
+			<section id="rollout">
+				<h2>12. Rollout 决策门禁</h2>
+				<table>
+					<thead><tr><th>结论</th><th>必要条件</th><th>动作</th></tr></thead>
+					<tbody>
+						<tr><td><span class="badge pass">扩大 opt-in</span></td><td>所有 P0/P1 gate 通过；0 重复写、0 无关污染、0 secret 泄露；四 backend 合同成立；延迟在 timeout 内。</td><td>保留默认关闭，发布推荐 overlay，并扩大内部 dogfood 用户。</td></tr>
+						<tr><td><span class="badge warn">继续收敛</span></td><td>安全 gate 通过，但 recall precision、candidate 数、通知噪音或延迟未达标。</td><td>保持当前 opt-in 范围，调整策略和阈值后重跑完整报告。</td></tr>
+						<tr><td><span class="badge block">回退</span></td><td>出现 global disabled 仍写入、跨 scope recall、重复外部写、覆盖人工修改、审计不可重建或敏感信息泄露。</td><td>关闭 projection/activation overlay，保留 ledger 供排障，不扩大 rollout。</td></tr>
+					</tbody>
+				</table>
+
+				<h3>最终完成清单</h3>
+				<table class="checklist">
+					<tbody>
+						<tr><td>✓</td><td>M6.0 配置状态机与现有红测完成，所有定向测试全绿。</td></tr>
+						<tr><td>✓</td><td>Policy-aware recall 使用 approved typed policy，且无关任务零污染。</td></tr>
+						<tr><td>✓</td><td>Audit schema/read model、迁移、debug redaction 和 explain chain 完成。</td></tr>
+						<tr><td>✓</td><td>Managed skill、check suggestion、memory 的 reconcile/undo 边界有确定结果。</td></tr>
+						<tr><td>✓</td><td>自动路径 happy/failed 静默；blocked 只提示一次；显式命令可解释。</td></tr>
+						<tr><td>✓</td><td>14 turn deterministic dogfood 与四 backend matrix 全部通过。</td></tr>
+						<tr><td>✓</td><td>真实会话报告、脱敏 summary、example overlay 和 CHANGELOG 已交付。</td></tr>
+						<tr><td>✓</td><td>报告给出扩大、继续收敛或回退的单一结论；默认配置仍关闭。</td></tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>13. 规范依据</h2>
+				<ul>
+					<li><code>docs/research/san-v0.3-p0-design-freeze-20260710.html</code>：状态权威、Prompt authority、legacy compatibility、M6 Policy-aware recall 与实施顺序。</li>
+					<li><code>docs/research/san-v0.3-brain-technical-implementation-20260708.html</code>：Brain runtime 类型、存储、生命周期、测试计划与 M6 退出条件。</li>
+					<li><code>docs/research/san-v0.3-technical-design-review-20260710.html</code>：候选数、无关任务污染、四 backend 降级和 rollout 门禁。</li>
+					<li><code>docs/research/san-v0.3-m5-handoff-20260710.html</code>：Projection Execution 当前实现与 M6 接力入口。</li>
+				</ul>
+			</section>
+		</main>
+	</body>
+</html>

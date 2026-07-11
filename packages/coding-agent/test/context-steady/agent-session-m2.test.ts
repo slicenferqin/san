@@ -9,6 +9,10 @@ import * as path from "node:path";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { applySanBrainMutation } from "@oh-my-pi/pi-coding-agent/brain/commands";
+import { appendSanBrainExperienceCandidate } from "@oh-my-pi/pi-coding-agent/brain/ledger";
+import { SanBrainStore } from "@oh-my-pi/pi-coding-agent/brain/store";
+import type { SanBrainExperienceCandidate } from "@oh-my-pi/pi-coding-agent/brain/types";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as memoryBackend from "@oh-my-pi/pi-coding-agent/memory-backend";
@@ -865,5 +869,104 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 
 		expect(customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE)).toHaveLength(1);
 		expect(customMessageEntries(sessionManager, CONTEXT_PACKET_MESSAGE_TYPE)).toHaveLength(1);
+	});
+
+	it("applies an approved Brain recall policy through the real session and records its audit", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const search = vi.fn(async (_context, query: string) => ({
+			backend: "mnemopi" as const,
+			query,
+			count: 1,
+			items: [
+				{
+					id: "risk-memory",
+					content: "A prior release retry failed.",
+					memoryType: "episodic",
+					scope: "user:user:local",
+				},
+			],
+		}));
+		const fakeBackend: MemoryBackend = {
+			id: "mnemopi",
+			async start() {},
+			async buildDeveloperInstructions() {
+				return undefined;
+			},
+			async clear() {},
+			async enqueue() {},
+			search,
+		};
+		vi.spyOn(memoryBackend, "resolveMemoryBackend").mockResolvedValue(fakeBackend);
+		const sessionManager = SessionManager.inMemory();
+		const candidate: SanBrainExperienceCandidate = {
+			schemaVersion: 1,
+			candidateId: "risk-recall-policy",
+			scope: { kind: "user", key: "user:local", resolverVersion: 1 },
+			type: "recall",
+			selector: { roles: ["primary"], taskFamilies: ["release"] },
+			action: { kind: "recall_policy", queryTemplateId: "risk-history-v1" },
+			taskTags: ["release"],
+			claimKey: "recall:release-risk",
+			dedupeKey: "recall:release-risk:v1",
+			conflictKey: "recall:release-risk",
+			repeatCount: 2,
+			confidence: 0.95,
+			impact: "low",
+			sensitivity: "normal",
+			evidence: [],
+			createdAt: "2026-07-11T08:00:00.000Z",
+		};
+		appendSanBrainExperienceCandidate(sessionManager, candidate);
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"memory.backend": "mnemopi",
+			"san.contextSteady.recall.enabled": true,
+			"san.brain.enabled": true,
+			"san.brain.mode": "activation",
+			"san.brain.capture.enabled": false,
+		});
+		vi.spyOn(settings, "getAgentDir").mockReturnValue(tempDir);
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		const store = new SanBrainStore(path.join(tempDir, "brain.sqlite"));
+		try {
+			store.syncSessionEntries(sessionManager.getSessionId(), sessionManager.getEntries());
+			applySanBrainMutation(store, sessionManager, { action: "approve", id: candidate.candidateId });
+		} finally {
+			store.close();
+		}
+
+		await session.prompt("Review the release failure before retrying.");
+		await session.waitForIdle();
+
+		expect(search).toHaveBeenCalledTimes(1);
+		expect(search.mock.calls[0]?.[1]).toContain("Prior failures, recovery outcomes, and required checks");
+		const recallAudit = sessionManager
+			.getEntries()
+			.find(entry => entry.type === "custom" && entry.customType === "san.brain.recall");
+		expect(recallAudit?.type === "custom" ? recallAudit.data : undefined).toMatchObject({
+			policyVersion: "brain-m6-recall-v1",
+			selectedPolicyIds: [candidate.candidateId],
+			queryTemplateId: "risk-history-v1",
+			backend: "mnemopi",
+			outcome: "applied",
+			resultCount: 1,
+		});
+		const packet = customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE).at(-1)?.data as Record<string, unknown>;
+		expect(packet.recallPolicy).toMatchObject({
+			policyVersion: "brain-m6-recall-v1",
+			selectedPolicyIds: [candidate.candidateId],
+			queryTemplateId: "risk-history-v1",
+		});
 	});
 });

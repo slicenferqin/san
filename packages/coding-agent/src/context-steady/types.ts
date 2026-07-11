@@ -122,12 +122,18 @@ export interface ContextRecallItem {
 	source?: string;
 	timestamp?: string;
 	score?: number;
+	memoryType?: string;
+	scope?: string;
 }
 
 export interface ContextPacketRecallLayer {
 	query: string;
 	items: ContextRecallItem[];
 	tokenBudget: number;
+	policyVersion?: string;
+	selectedPolicyIds?: string[];
+	queryTemplateId?: string;
+	skipReasons?: Array<{ ownerId: string; reason: string }>;
 }
 
 export interface ContextCheckpointSummaryItem {
@@ -184,6 +190,12 @@ export interface ContextPacket {
 	digestRefs: string[];
 	recallQuery?: string;
 	recallRefs: string[];
+	recallPolicy?: {
+		policyVersion: string;
+		selectedPolicyIds: string[];
+		queryTemplateId?: string;
+		skipReasons: Array<{ ownerId: string; reason: string }>;
+	};
 	tokenEstimate: number;
 	tokenBudget: number;
 	budget: {

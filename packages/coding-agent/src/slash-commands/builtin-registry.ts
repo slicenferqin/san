@@ -8,11 +8,13 @@ import {
 	applySanBrainMutation,
 	buildSanBrainConsolidation,
 	buildSanBrainConsolidationReportText,
+	buildSanBrainDebugReportText,
 	buildSanBrainExplanationText,
 	buildSanBrainInboxReportText,
 	buildSanBrainMutationResultText,
 	buildSanBrainProfileReportText,
 	buildSanBrainProjectionReportText,
+	resolveSanBrainRuntimePolicy,
 	runSanBrainProjections,
 	SanBrainStore,
 } from "../brain";
@@ -1318,12 +1320,13 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "brain",
 		description: "Inspect and review San Brain candidates and active state",
 		acpDescription: "Inspect or review San Brain state",
-		acpInputHint: "[inbox|profile|explain|approve|discard|undo|consolidate|project]",
+		acpInputHint: "[inbox|profile|explain|debug|approve|discard|undo|consolidate|project]",
 		allowArgs: true,
 		subcommands: [
 			{ name: "inbox", description: "List pending Brain candidates" },
 			{ name: "profile", description: "List active profile state" },
 			{ name: "explain", description: "Explain one candidate or decision", usage: "<id>" },
+			{ name: "debug", description: "Inspect projection audit", usage: "[pending|failed|blocked|all]" },
 			{ name: "approve", description: "Approve one Brain candidate", usage: "<id>" },
 			{ name: "discard", description: "Discard one Brain candidate", usage: "<id>" },
 			{ name: "undo", description: "Undo the current approve decision", usage: "<id>" },
@@ -1333,10 +1336,20 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		handle: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
 			const action = verb || "inbox";
-			const supported = ["inbox", "profile", "explain", "approve", "discard", "undo", "consolidate", "project"];
+			const supported = [
+				"inbox",
+				"profile",
+				"explain",
+				"debug",
+				"approve",
+				"discard",
+				"undo",
+				"consolidate",
+				"project",
+			];
 			if (!supported.includes(action)) {
 				return usage(
-					"Usage: /brain [inbox|profile|explain <id>|approve <id>|discard <id>|undo <id>|consolidate|project]",
+					"Usage: /brain [inbox|profile|explain <id>|debug [pending|failed|blocked|all]|approve <id>|discard <id>|undo <id>|consolidate|project]",
 					runtime,
 				);
 			}
@@ -1346,6 +1359,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			}
 			if ((action === "consolidate" || action === "project") && rest.trim()) {
 				return usage(`Usage: /brain ${action}`, runtime);
+			}
+			if (action === "debug" && rest.trim() && !["pending", "failed", "blocked", "all"].includes(rest.trim())) {
+				return usage("Usage: /brain debug [pending|failed|blocked|all]", runtime);
+			}
+			const brainPolicy = resolveSanBrainRuntimePolicy(runtime.settings);
+			if (action === "project" && !brainPolicy.projectionEnabled) {
+				await runtime.output("San Brain project failed: projection is disabled by the effective runtime policy.");
+				return commandConsumed();
 			}
 
 			const store = SanBrainStore.open(runtime.settings.getAgentDir());
@@ -1359,16 +1380,15 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 						agentDir: runtime.settings.getAgentDir(),
 						cwd: runtime.cwd,
 						maxAttempts: runtime.settings.get("san.brain.projections.maxAttempts"),
+						attemptTimeoutMs: runtime.settings.get("san.brain.projections.attemptTimeoutMs"),
+						limit: runtime.settings.get("san.brain.projections.maxPerTurn"),
+						includeFailed: true,
 					});
 					await runtime.output(buildSanBrainProjectionReportText(projectionResult));
 				} else if (action === "approve" || action === "discard" || action === "undo") {
 					const result = applySanBrainMutation(store, runtime.sessionManager, { action, id: rest.trim() });
 					const output = [buildSanBrainMutationResultText(result)];
-					if (
-						(action === "approve" || action === "undo") &&
-						runtime.settings.get("san.brain.mode") === "projection" &&
-						runtime.settings.get("san.brain.projections.enabled")
-					) {
+					if ((action === "approve" || action === "undo") && brainPolicy.projectionEnabled) {
 						const projectionResult = await runSanBrainProjections({
 							store,
 							sessionManager: runtime.sessionManager,
@@ -1376,6 +1396,8 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 							agentDir: runtime.settings.getAgentDir(),
 							cwd: runtime.cwd,
 							maxAttempts: runtime.settings.get("san.brain.projections.maxAttempts"),
+							attemptTimeoutMs: runtime.settings.get("san.brain.projections.attemptTimeoutMs"),
+							limit: runtime.settings.get("san.brain.projections.maxPerTurn"),
 						});
 						output.push(buildSanBrainProjectionReportText(projectionResult));
 					}
@@ -1386,9 +1408,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 							? buildSanBrainProfileReportText(store)
 							: action === "explain"
 								? buildSanBrainExplanationText(store, rest.trim())
-								: action === "consolidate"
-									? buildSanBrainConsolidationReportText(buildSanBrainConsolidation(store))
-									: buildSanBrainInboxReportText(store);
+								: action === "debug"
+									? buildSanBrainDebugReportText(
+											store,
+											(rest.trim() || "pending") as "pending" | "failed" | "blocked" | "all",
+										)
+									: action === "consolidate"
+										? buildSanBrainConsolidationReportText(buildSanBrainConsolidation(store))
+										: buildSanBrainInboxReportText(store);
 					await runtime.output(report);
 				}
 			} catch (error) {

@@ -163,15 +163,21 @@ import { type AsyncJob, type AsyncJobDeliveryState, AsyncJobManager } from "../a
 import { classifyDifficulty } from "../auto-thinking/classifier";
 import {
 	appendSanBrainActivation,
+	appendSanBrainProjectionNotification,
+	appendSanBrainRecallAudit,
 	BRAIN_STATE_MESSAGE_TYPE,
+	buildSanBrainRecallPlan,
 	buildSanBrainStatePrelude,
 	captureSanBrainTurn,
 	finalizeSanBrainActivation,
 	planSanBrainGlobalInjection,
 	recordSanBrainActivationError,
 	recordSanBrainCaptureError,
+	resolveSanBrainRuntimePolicy,
 	runSanBrainProjections,
 	type SanBrainActivation,
+	type SanBrainActiveStateRecord,
+	type SanBrainScope,
 	SanBrainStore,
 } from "../brain";
 import { reset as resetCapabilities } from "../capability";
@@ -4261,8 +4267,7 @@ export class AgentSession {
 				const contextSteadyEnabled = settings.get("san.contextSteady.enabled") as boolean;
 				const digestEnabled = settings.get("san.contextSteady.digest.enabled") as boolean;
 				const persistFallback = settings.get("san.contextSteady.digest.persistFallback") as boolean;
-				const brainCaptureEnabled =
-					(settings.get("san.brain.enabled") as boolean) && (settings.get("san.brain.capture.enabled") as boolean);
+				const brainCaptureEnabled = resolveSanBrainRuntimePolicy(settings).captureEnabled;
 				if (!contextSteadyEnabled && !brainCaptureEnabled) return;
 				if (!digestEnabled && !brainCaptureEnabled) return;
 
@@ -7910,16 +7915,9 @@ export class AgentSession {
 			? undefined
 			: await this.#buildContextSteadyPacketPrelude(expandedText);
 		const sanLoopPrelude = options?.synthetic ? undefined : this.#buildSanLoopCommanderPrelude();
-		const brainMode = this.settings.get("san.brain.mode");
-		const brainActivationEnabled =
-			!options?.synthetic &&
-			this.settings.get("san.brain.enabled") === true &&
-			(brainMode === "activation" || brainMode === "projection");
-		if (
-			!options?.synthetic &&
-			brainMode === "projection" &&
-			this.settings.get("san.brain.projections.enabled") === true
-		) {
+		const brainPolicy = resolveSanBrainRuntimePolicy(this.settings);
+		const brainActivationEnabled = !options?.synthetic && brainPolicy.activationEnabled;
+		if (!options?.synthetic && brainPolicy.projectionEnabled) {
 			await this.#runPendingSanBrainProjections();
 		}
 		const brainPrelude = brainActivationEnabled ? await this.#buildBrainStatePrelude(expandedText) : undefined;
@@ -8075,7 +8073,28 @@ export class AgentSession {
 				agentDir: this.settings.getAgentDir(),
 				cwd: path.resolve(this.settings.getCwd()),
 				maxAttempts: this.settings.get("san.brain.projections.maxAttempts"),
+				attemptTimeoutMs: this.settings.get("san.brain.projections.attemptTimeoutMs"),
+				limit: this.settings.get("san.brain.projections.maxPerTurn"),
 			});
+			const unnotified = store
+				.readProjectionDebug("blocked", this.settings.get("san.brain.projections.maxPerTurn"))
+				.records.filter(projection => !projection.notifiedAt);
+			for (const projection of unnotified) {
+				const notifiedAt = new Date().toISOString();
+				appendSanBrainProjectionNotification(this.sessionManager, {
+					schemaVersion: 1,
+					projectionId: projection.projectionId,
+					notifiedAt,
+				});
+				store.syncSessionEntries(this.sessionId, this.sessionManager.getEntries());
+			}
+			if (unnotified.length > 0) {
+				this.emitNotice(
+					"warning",
+					`${unnotified.length} San Brain projection${unnotified.length === 1 ? " is" : "s are"} blocked; use /brain debug blocked.`,
+					"brain",
+				);
+			}
 		} catch (error) {
 			logger.warn("Failed to run pending San Brain projections", {
 				error: error instanceof Error ? error.message : String(error),
@@ -8093,13 +8112,7 @@ export class AgentSession {
 		const turnId = `brain_prompt_${this.#promptGeneration + 1}`;
 		const cwd = path.resolve(this.settings.getCwd());
 		try {
-			const repoRoot = await findRepoRoot(cwd);
-			const scopes = [
-				{ kind: "user" as const, key: "user:local", resolverVersion: 1 as const },
-				{ kind: "session" as const, key: this.sessionId, resolverVersion: 1 as const },
-				{ kind: "project" as const, key: cwd, resolverVersion: 1 as const },
-				...(repoRoot ? [{ kind: "repo" as const, key: path.resolve(repoRoot), resolverVersion: 1 as const }] : []),
-			];
+			const scopes = await this.#resolveSanBrainScopes(cwd);
 			const store = SanBrainStore.open(this.settings.getAgentDir());
 			try {
 				store.syncSessionEntries(this.sessionId, this.sessionManager.getEntries());
@@ -8132,6 +8145,16 @@ export class AgentSession {
 		}
 	}
 
+	async #resolveSanBrainScopes(cwd = path.resolve(this.settings.getCwd())): Promise<SanBrainScope[]> {
+		const repoRoot = await findRepoRoot(cwd);
+		return [
+			{ kind: "user", key: "user:local", resolverVersion: 1 },
+			{ kind: "session", key: this.sessionId, resolverVersion: 1 },
+			{ kind: "project", key: cwd, resolverVersion: 1 },
+			...(repoRoot ? [{ kind: "repo" as const, key: path.resolve(repoRoot), resolverVersion: 1 as const }] : []),
+		];
+	}
+
 	#recoverPersistedSanLoopRun(): void {
 		if (this.settings.get("san.executionLoop.enabled") !== true) return;
 		if (this.settings.get("san.executionLoop.ledger.enabled") !== true) return;
@@ -8143,27 +8166,112 @@ export class AgentSession {
 	async #buildContextSteadyRecallLayer(expandedText: string): Promise<ContextPacketRecallLayer | undefined> {
 		if (this.settings.get("san.contextSteady.recall.enabled") !== true) return undefined;
 
-		const query = buildContextSteadyRecallQuery(this.sessionManager.getEntries(), expandedText, {
+		const maxQueryChars = this.settings.get("san.contextSteady.recall.maxQueryChars") as number;
+		const baseQuery = buildContextSteadyRecallQuery(this.sessionManager.getEntries(), expandedText, {
 			recentDigests: this.settings.get("san.contextSteady.contextPacket.recentDigests") as number,
-			maxQueryChars: this.settings.get("san.contextSteady.recall.maxQueryChars") as number,
+			maxQueryChars,
 		});
-		if (!query) return undefined;
-
-		const backend = await resolveMemoryBackend(this.settings);
-		if (!backend.search) return undefined;
+		if (!baseQuery) return undefined;
 
 		const maxItems = clampPositiveInteger(this.settings.get("san.contextSteady.recall.maxItems") as number, 3);
 		const maxTokens = clampPositiveInteger(this.settings.get("san.contextSteady.recall.maxTokens") as number, 1000);
+		const scopes = await this.#resolveSanBrainScopes();
+		let activeStates: SanBrainActiveStateRecord[] = [];
+		const brainPolicy = resolveSanBrainRuntimePolicy(this.settings);
+		if (brainPolicy.activationEnabled) {
+			const store = SanBrainStore.open(this.settings.getAgentDir());
+			try {
+				store.syncSessionEntries(this.sessionId, this.sessionManager.getEntries());
+				activeStates = store.listActiveStates(1000);
+			} catch (error) {
+				logger.debug("San Brain recall policy lookup failed", { error: String(error), sessionId: this.sessionId });
+			} finally {
+				store.close();
+			}
+		}
+		const recallPlan = buildSanBrainRecallPlan(activeStates, {
+			role: "primary",
+			scopes,
+			promptText: expandedText,
+			baseQuery,
+			maxItems,
+			tokenBudget: maxTokens,
+			minConfidence: this.settings.get("san.brain.activation.minConfidence") as number,
+			maxQueryChars,
+		});
+		const turnId = `brain_recall_${this.#promptGeneration + 1}`;
+		const appendRecallAudit = (
+			backend: "off" | "local" | "hindsight" | "mnemopi",
+			outcome: "applied" | "suppressed" | "backend_unavailable" | "search_unsupported" | "failed",
+			resultCount: number,
+			durationMs: number,
+			errorCode?: "backend_unavailable" | "search_unsupported" | "external_failure",
+		): void => {
+			appendSanBrainRecallAudit(this.sessionManager, {
+				schemaVersion: 1,
+				recallId: `brain_recall_${Bun.randomUUIDv7()}`,
+				sessionId: this.sessionId,
+				turnId,
+				policyVersion: recallPlan.policyVersion,
+				selectedPolicyIds: recallPlan.selectedPolicyIds,
+				...(recallPlan.queryTemplateId ? { queryTemplateId: recallPlan.queryTemplateId } : {}),
+				backend,
+				outcome,
+				resultCount,
+				durationMs,
+				skipReasons: recallPlan.skipReasons,
+				...(errorCode ? { errorCode } : {}),
+				createdAt: new Date().toISOString(),
+			});
+		};
+		if (!recallPlan.query) {
+			appendRecallAudit(this.settings.get("memory.backend"), "suppressed", 0, 0);
+			return undefined;
+		}
+
+		const backend = await resolveMemoryBackend(this.settings);
+		if (!backend.search) {
+			const outcome = backend.id === "off" ? "backend_unavailable" : "search_unsupported";
+			appendRecallAudit(backend.id, outcome, 0, 0, outcome);
+			return undefined;
+		}
+
+		const startedAt = performance.now();
 		try {
 			const result = await backend.search(
-				{ agentDir: this.sessionManager.getCwd(), cwd: this.sessionManager.getCwd(), session: this },
-				query,
-				{ limit: maxItems },
+				{ agentDir: this.settings.getAgentDir(), cwd: this.sessionManager.getCwd(), session: this },
+				recallPlan.query,
+				{
+					limit: recallPlan.maxItems,
+					maxTokens: recallPlan.tokenBudget,
+					memoryTypes: recallPlan.memoryTypes,
+					scopeKeys: recallPlan.scopeKeys,
+				},
 			);
-			const items = normalizeContextSteadyRecallItems(result.items, { maxItems });
+			const items = normalizeContextSteadyRecallItems(result.items, {
+				maxItems: recallPlan.maxItems,
+				memoryTypes: recallPlan.memoryTypes,
+				scopeKeys: recallPlan.scopeKeys,
+			});
+			appendRecallAudit(backend.id, "applied", items.length, Math.max(0, Math.round(performance.now() - startedAt)));
 			if (items.length === 0) return undefined;
-			return { query: result.query, items, tokenBudget: maxTokens };
+			return {
+				query: result.query,
+				items,
+				tokenBudget: recallPlan.tokenBudget,
+				policyVersion: recallPlan.policyVersion,
+				selectedPolicyIds: recallPlan.selectedPolicyIds,
+				...(recallPlan.queryTemplateId ? { queryTemplateId: recallPlan.queryTemplateId } : {}),
+				skipReasons: recallPlan.skipReasons,
+			};
 		} catch (error) {
+			appendRecallAudit(
+				backend.id,
+				"failed",
+				0,
+				Math.max(0, Math.round(performance.now() - startedAt)),
+				"external_failure",
+			);
 			logger.debug("San context steady recall failed", {
 				backend: backend.id,
 				error: String(error),

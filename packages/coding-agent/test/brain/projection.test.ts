@@ -1,15 +1,28 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { getManagedSkillsDir, writeManagedSkill } from "@oh-my-pi/pi-coding-agent/autolearn/managed-skills";
+import {
+	deleteManagedSkill,
+	getManagedSkillsDir,
+	writeManagedSkill,
+} from "@oh-my-pi/pi-coding-agent/autolearn/managed-skills";
 import { applySanBrainMutation } from "@oh-my-pi/pi-coding-agent/brain/commands";
-import { appendSanBrainExperienceCandidate, appendSanBrainProjection } from "@oh-my-pi/pi-coding-agent/brain/ledger";
+import {
+	appendSanBrainExperienceCandidate,
+	appendSanBrainProfileCandidate,
+	appendSanBrainProjection,
+} from "@oh-my-pi/pi-coding-agent/brain/ledger";
 import { runSanBrainProjections } from "@oh-my-pi/pi-coding-agent/brain/projection";
 import { SanBrainStore } from "@oh-my-pi/pi-coding-agent/brain/store";
 import type {
 	SanBrainAction,
 	SanBrainExperienceCandidate,
 	SanBrainExperienceCandidateType,
+	SanBrainProfileCandidate,
 } from "@oh-my-pi/pi-coding-agent/brain/types";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import * as memoryBackend from "@oh-my-pi/pi-coding-agent/memory-backend";
+import type { MemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/types";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -46,6 +59,10 @@ async function fileText(file: string): Promise<string | undefined> {
 	}
 }
 
+afterEach(() => {
+	vi.restoreAllMocks();
+});
+
 describe("San Brain M5 projections", () => {
 	it("materializes an approved managed skill exactly once", async () => {
 		using tempDir = TempDir.createSync("@san-brain-projection-create-");
@@ -73,6 +90,7 @@ describe("San Brain M5 projections", () => {
 				agentDir,
 				cwd: agentDir,
 				maxAttempts: 3,
+				includeFailed: true,
 			});
 			expect(first).toEqual({ applied: 1, compensated: 0, failed: 0, blocked: 0 });
 			const skillFile = path.join(getManagedSkillsDir(agentDir), "brain-created", "SKILL.md");
@@ -144,6 +162,57 @@ describe("San Brain M5 projections", () => {
 		}
 	});
 
+	it("reconciles a completed managed-skill compensation after an interrupted audit", async () => {
+		using tempDir = TempDir.createSync("@san-brain-projection-undo-reconcile-");
+		const agentDir = tempDir.path();
+		const manager = SessionManager.inMemory(agentDir);
+		const store = new SanBrainStore(tempDir.join("brain.sqlite"));
+		try {
+			const candidate = experienceCandidate("skill-undo-reconcile", "skill_candidate", {
+				kind: "skill_reference",
+				skillName: "undo-reconcile",
+				description: "Reconcile a completed delete after restart.",
+				body: "# Undo Reconcile\n\nDelete exactly once.",
+			});
+			appendSanBrainExperienceCandidate(manager, candidate);
+			store.syncSessionEntries(manager.getSessionId(), manager.getEntries());
+			applySanBrainMutation(store, manager, { action: "approve", id: candidate.candidateId });
+			expect(
+				await runSanBrainProjections({ store, sessionManager: manager, agentDir, cwd: agentDir, maxAttempts: 3 }),
+			).toMatchObject({ applied: 1 });
+			const applied = store.explain(candidate.candidateId)?.projections.find(record => record.state === "applied");
+			if (!applied?.afterHash) throw new Error("Expected applied managed-skill projection.");
+
+			const undo = applySanBrainMutation(store, manager, { action: "undo", id: candidate.candidateId });
+			const undoProjectionId = undo.decisions[0]?.projectionIds[0];
+			if (!undoProjectionId) throw new Error("Expected undo projection.");
+			await deleteManagedSkill("undo-reconcile", { agentDir, expectedHash: applied.afterHash });
+			appendSanBrainProjection(manager, {
+				schemaVersion: 1,
+				projectionId: undoProjectionId,
+				decisionId: undo.decisions[0]!.decisionId,
+				target: "managed_skill",
+				state: "compensating",
+				attemptCount: 1,
+				revision: 2,
+				updatedAt: new Date(Date.now() + 1).toISOString(),
+			});
+
+			const result = await runSanBrainProjections({
+				store,
+				sessionManager: manager,
+				agentDir,
+				cwd: agentDir,
+				maxAttempts: 3,
+			});
+			expect(result).toMatchObject({ compensated: 1, reconciled: 1, blocked: 0 });
+			expect(store.getProjection(undoProjectionId)).toMatchObject({ state: "compensated", attemptCount: 1 });
+			expect(await fileText(path.join(getManagedSkillsDir(agentDir), "undo-reconcile", "SKILL.md"))).toBeUndefined();
+		} finally {
+			store.close();
+		}
+	});
+
 	it("blocks one unsafe check suggestion without suppressing another projection", async () => {
 		using tempDir = TempDir.createSync("@san-brain-projection-isolation-");
 		const agentDir = tempDir.path();
@@ -177,6 +246,7 @@ describe("San Brain M5 projections", () => {
 				agentDir,
 				cwd: agentDir,
 				maxAttempts: 3,
+				includeFailed: true,
 			});
 			expect(result).toEqual({ applied: 1, compensated: 0, failed: 0, blocked: 1 });
 			expect(await fileText(path.join(getManagedSkillsDir(agentDir), "safe-sibling", "SKILL.md"))).toContain(
@@ -232,13 +302,17 @@ describe("San Brain M5 projections", () => {
 				agentDir,
 				cwd: agentDir,
 				maxAttempts: 3,
+				includeFailed: true,
 			});
 			expect(result).toEqual({ applied: 0, compensated: 0, failed: 0, blocked: 1 });
-			expect(await fileText(path.join(getManagedSkillsDir(agentDir), "stale-projection", "SKILL.md"))).toBeUndefined();
+			expect(
+				await fileText(path.join(getManagedSkillsDir(agentDir), "stale-projection", "SKILL.md")),
+			).toBeUndefined();
 			expect(store.listProjections(["blocked"])).toMatchObject([
 				{
 					projectionId,
-					error: "Previous projection attempt ended without a durable receipt; refusing a blind retry.",
+					errorCode: "receipt_missing",
+					error: "Projection receipt is missing after interrupted apply.",
 				},
 			]);
 		} finally {
@@ -289,14 +363,213 @@ describe("San Brain M5 projections", () => {
 				agentDir,
 				cwd: agentDir,
 				maxAttempts: 3,
+				includeFailed: true,
 			});
 			expect(result).toEqual({ applied: 0, compensated: 0, failed: 0, blocked: 1 });
-			expect(await fileText(path.join(getManagedSkillsDir(agentDir), "exhausted-projection", "SKILL.md"))).toBeUndefined();
+			expect(
+				await fileText(path.join(getManagedSkillsDir(agentDir), "exhausted-projection", "SKILL.md")),
+			).toBeUndefined();
 			expect(store.getProjection(projectionId)).toMatchObject({
 				state: "blocked",
 				attemptCount: 3,
 				error: "Projection exhausted 3 attempts.",
 			});
+		} finally {
+			store.close();
+		}
+	});
+
+	it("reconciles an interrupted managed-skill apply without replaying the write", async () => {
+		using tempDir = TempDir.createSync("@san-brain-projection-reconcile-");
+		const agentDir = tempDir.path();
+		const manager = SessionManager.inMemory(agentDir);
+		const store = new SanBrainStore(tempDir.join("brain.sqlite"));
+		try {
+			const candidate = experienceCandidate("skill-reconcile", "skill_candidate", {
+				kind: "skill_reference",
+				skillName: "reconciled-skill",
+				description: "Recovered from an interrupted apply.",
+				body: "# Reconciled\n\nUse the durable receipt.",
+			});
+			appendSanBrainExperienceCandidate(manager, candidate);
+			store.syncSessionEntries(manager.getSessionId(), manager.getEntries());
+			const mutation = applySanBrainMutation(store, manager, { action: "approve", id: candidate.candidateId });
+			const decision = mutation.decisions[0];
+			const projectionId = decision?.projectionIds[0];
+			if (!decision || !projectionId) throw new Error("Expected managed-skill projection.");
+			const write = await writeManagedSkill({
+				action: "create",
+				name: "reconciled-skill",
+				description: "Recovered from an interrupted apply.",
+				body: "# Reconciled\n\nUse the durable receipt.",
+				agentDir,
+			});
+			appendSanBrainProjection(manager, {
+				schemaVersion: 1,
+				projectionId,
+				decisionId: decision.decisionId,
+				target: "managed_skill",
+				state: "applying",
+				attemptCount: 1,
+				revision: 1,
+				updatedAt: new Date(Date.now() + 1).toISOString(),
+			});
+
+			const result = await runSanBrainProjections({
+				store,
+				sessionManager: manager,
+				agentDir,
+				cwd: agentDir,
+				maxAttempts: 3,
+			});
+
+			expect(result).toMatchObject({ applied: 1, reconciled: 1, failed: 0, blocked: 0 });
+			expect(store.getProjection(projectionId)).toMatchObject({
+				state: "applied",
+				attemptCount: 1,
+				afterHash: write.afterHash,
+				receiptId: write.afterHash,
+			});
+		} finally {
+			store.close();
+		}
+	});
+
+	it("keeps failed projections silent until an explicit retry includes them", async () => {
+		using tempDir = TempDir.createSync("@san-brain-projection-explicit-retry-");
+		const agentDir = tempDir.path();
+		const manager = SessionManager.inMemory(agentDir);
+		const store = new SanBrainStore(tempDir.join("brain.sqlite"));
+		try {
+			const candidate = experienceCandidate("skill-retry", "skill_candidate", {
+				kind: "skill_reference",
+				skillName: "explicit-retry",
+				description: "Retried only on explicit command.",
+				body: "# Explicit Retry\n\nDo not retry automatically.",
+			});
+			appendSanBrainExperienceCandidate(manager, candidate);
+			store.syncSessionEntries(manager.getSessionId(), manager.getEntries());
+			const mutation = applySanBrainMutation(store, manager, { action: "approve", id: candidate.candidateId });
+			const decision = mutation.decisions[0];
+			const projectionId = decision?.projectionIds[0];
+			if (!decision || !projectionId) throw new Error("Expected managed-skill projection.");
+			appendSanBrainProjection(manager, {
+				schemaVersion: 1,
+				projectionId,
+				decisionId: decision.decisionId,
+				target: "managed_skill",
+				state: "failed",
+				attemptCount: 1,
+				revision: 1,
+				errorCode: "external_failure",
+				error: "temporary failure",
+				updatedAt: new Date(Date.now() + 1).toISOString(),
+			});
+
+			expect(
+				await runSanBrainProjections({ store, sessionManager: manager, agentDir, cwd: agentDir, maxAttempts: 3 }),
+			).toEqual({
+				applied: 0,
+				compensated: 0,
+				failed: 0,
+				blocked: 0,
+			});
+			expect(await fileText(path.join(getManagedSkillsDir(agentDir), "explicit-retry", "SKILL.md"))).toBeUndefined();
+
+			const retried = await runSanBrainProjections({
+				store,
+				sessionManager: manager,
+				agentDir,
+				cwd: agentDir,
+				maxAttempts: 3,
+				includeFailed: true,
+			});
+			expect(retried).toMatchObject({ applied: 1, failed: 0, blocked: 0 });
+			expect(store.getProjection(projectionId)).toMatchObject({ state: "applied", attemptCount: 2 });
+		} finally {
+			store.close();
+		}
+	});
+
+	it("records an external timeout and reconciles without replaying the memory write", async () => {
+		using tempDir = TempDir.createSync("@san-brain-projection-timeout-");
+		const agentDir = tempDir.path();
+		const manager = SessionManager.inMemory(agentDir);
+		const store = new SanBrainStore(tempDir.join("brain.sqlite"));
+		try {
+			const candidate: SanBrainProfileCandidate = {
+				schemaVersion: 1,
+				candidateId: "memory-timeout",
+				scope: { kind: "user", key: "user:local", resolverVersion: 1 },
+				type: "user_preference",
+				subject: "delivery",
+				predicate: "format",
+				value: "HTML",
+				claimKey: "delivery:format",
+				dedupeKey: "delivery:format:html",
+				taskTags: [],
+				confidence: 0.95,
+				importance: 0.8,
+				independentEvidenceCount: 2,
+				sensitivity: "normal",
+				evidence: [],
+				createdAt: "2026-07-11T08:00:00.000Z",
+			};
+			appendSanBrainProfileCandidate(manager, candidate);
+			store.syncSessionEntries(manager.getSessionId(), manager.getEntries());
+			const mutation = applySanBrainMutation(store, manager, { action: "approve", id: candidate.candidateId });
+			const projectionId = mutation.decisions[0]?.projectionIds[0];
+			if (!projectionId) throw new Error("Expected memory projection.");
+			const project = vi.fn(async (_context, input) => {
+				await Bun.sleep(25);
+				input.signal?.throwIfAborted();
+				return { backend: "mnemopi" as const, stored: 1, ids: ["late-receipt"] };
+			});
+			const reconcileProjection = vi.fn(async () => ({ state: "missing" as const }));
+			const backend: MemoryBackend = {
+				id: "mnemopi",
+				async start() {},
+				async buildDeveloperInstructions() {
+					return undefined;
+				},
+				async clear() {},
+				async enqueue() {},
+				project,
+				reconcileProjection,
+			};
+			vi.spyOn(memoryBackend, "resolveMemoryBackend").mockResolvedValue(backend);
+			const settings = Settings.isolated({ "memory.backend": "mnemopi" });
+			const session = { settings } as AgentSession;
+
+			const timedOut = await runSanBrainProjections({
+				store,
+				sessionManager: manager,
+				session,
+				agentDir,
+				cwd: agentDir,
+				maxAttempts: 3,
+				attemptTimeoutMs: 1,
+			});
+			expect(timedOut).toMatchObject({ applied: 0, failed: 1, blocked: 0 });
+			expect(store.getProjection(projectionId)).toMatchObject({
+				state: "applying",
+				attemptCount: 1,
+				errorCode: "external_timeout",
+			});
+
+			const reconciled = await runSanBrainProjections({
+				store,
+				sessionManager: manager,
+				session,
+				agentDir,
+				cwd: agentDir,
+				maxAttempts: 3,
+				attemptTimeoutMs: 100,
+			});
+			expect(reconciled).toMatchObject({ applied: 0, failed: 0, blocked: 1 });
+			expect(project).toHaveBeenCalledTimes(1);
+			expect(reconcileProjection).toHaveBeenCalledTimes(1);
+			expect(store.getProjection(projectionId)).toMatchObject({ state: "blocked", errorCode: "receipt_missing" });
 		} finally {
 			store.close();
 		}

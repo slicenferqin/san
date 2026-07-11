@@ -142,7 +142,7 @@ git --no-pager status --short --branch</pre>
 				<h2>5. 建议先跑的验证</h2>
 				<p>到家后先跑定向测试和类型检查；不要直接跑全量 heavy suite，除非后续改动触及更广。</p>
 				<pre>bun test packages/coding-agent/test/brain/projection.test.ts packages/coding-agent/test/brain/compatibility.test.ts
-bun --cwd packages/coding-agent run check:types</pre>
+bun run --cwd packages/coding-agent check:types</pre>
 				<p class="note">如只改 Brain M6 附近逻辑，优先继续补 <code>test/brain/*.test.ts</code> 的契约测试，再按触达面扩大验证。</p>
 			</section>
 

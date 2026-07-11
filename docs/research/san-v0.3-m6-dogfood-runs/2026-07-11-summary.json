@@ -1,0 +1,140 @@
+{
+  "schemaVersion": 1,
+  "runId": "san-v0.3-m6-20260711-01",
+  "recordedAt": "2026-07-11T12:57:19+08:00",
+  "branch": "feature/san-v0.3",
+  "baseCommit": "dee24857e778590ad6fadfef070702fca05547a9",
+  "worktreeDirty": true,
+  "config": {
+    "path": "packages/coding-agent/examples/config/san-brain-m6-dogfood.yml",
+    "sha256": "823dfc971b677202806e1aad415ba94f442ea1582b212de81ea3a109b6e70493",
+    "credentialsIncluded": false,
+    "brainEnabled": true,
+    "mode": "projection",
+    "projectionEnabled": true,
+    "legacyAutoRetain": "block",
+    "mnemopiAutoRetain": false,
+    "hindsightAutoRetain": false
+  },
+  "versions": {
+    "brainPayloadSchema": 1,
+    "brainDatabaseSchema": 2,
+    "activationPolicy": "brain-m4-v1",
+    "recallPolicy": "brain-m6-recall-v1",
+    "dogfoodPolicy": "brain-m6-dogfood-v1"
+  },
+  "deterministic": {
+    "ok": true,
+    "turns": 14,
+    "candidateTurns": 7,
+    "candidates": 7,
+    "selectedActivationTurns": 1,
+    "recallAttempts": 2,
+    "recallAppliedTurns": 1,
+    "projectionTurns": 5,
+    "projections": 6,
+    "happyPathFrontendExposure": 0,
+    "unrelatedActivations": 0,
+    "unrelatedRecalls": 0,
+    "duplicateExternalWrites": 0,
+    "unsafeOverwrites": 0,
+    "blockedNotifications": 1,
+    "maxNotificationsPerProjection": 1,
+    "projectionOrphans": 0,
+    "maxProjectionAttempts": 1,
+    "maxCandidatesPerTurn": 1,
+    "maxActivationTokens": 166,
+    "secretLeaks": 0,
+    "latencyMs": {
+      "p50": 0,
+      "p95": 3,
+      "max": 3,
+      "attemptTimeout": 10000
+    }
+  },
+  "backends": [
+    {
+      "backend": "off",
+      "ok": true,
+      "recall": "safe skip (backend unavailable)",
+      "projection": "blocked:backend_unavailable",
+      "compensation": "not applicable",
+      "durationMs": 6,
+      "serviceMode": "actual adapter"
+    },
+    {
+      "backend": "local",
+      "ok": true,
+      "recall": "search_unsupported",
+      "projection": "applied:receipt=present",
+      "compensation": "blocked:unsafe_undo",
+      "durationMs": 8,
+      "serviceMode": "actual local filesystem adapter"
+    },
+    {
+      "backend": "mnemopi",
+      "ok": true,
+      "recall": "structured=2, alpha=1, beta=1",
+      "projection": "applied:receipt=present; missing=missing",
+      "compensation": "compensated; reconcile=missing",
+      "durationMs": 38,
+      "serviceMode": "actual local SQLite adapter with embeddings disabled"
+    },
+    {
+      "backend": "hindsight",
+      "ok": true,
+      "recall": "structured=1; controlled-unavailable=continued",
+      "projection": "applied:receipt=present",
+      "compensation": "compensated; reconcile=missing",
+      "durationMs": 1,
+      "serviceMode": "actual adapter with controlled service seam; no credentials or live endpoint"
+    }
+  ],
+  "realSessionSmoke": {
+    "ok": true,
+    "sessionImplementation": "AgentSession",
+    "providerTransport": "deterministic mock model",
+    "covered": [
+      "policy-aware recall and recall audit",
+      "projection failure isolation across two user prompts",
+      "one UI-only blocked notification",
+      "slash command runtime-policy gate",
+      "capture, activation, resume, and ContextPacket integration"
+    ],
+    "fullTranscriptStored": false
+  },
+  "verification": [
+    {
+      "command": "bun test packages/coding-agent/test/brain packages/coding-agent/test/slash-commands/brain.test.ts packages/coding-agent/test/context-steady/recall.test.ts packages/coding-agent/test/context-steady/agent-session-m2.test.ts",
+      "status": "passed",
+      "passed": 72,
+      "failed": 0,
+      "expectations": 350,
+      "durationSeconds": 1.97
+    },
+    {
+      "command": "bun run --cwd packages/coding-agent check",
+      "status": "passed"
+    },
+    {
+      "command": "OMP_TEST_CONCURRENCY=4 bun run ci:test:coding-agent:heavy",
+      "status": "passed",
+      "commandChunksPassed": 98,
+      "commandChunksFailed": 0,
+      "concurrency": 4,
+      "testTimeoutsRelaxed": false,
+      "stabilityNote": "Default concurrency briefly saturated the host and timed out two pre-existing 5-second CLI startup tests; both passed in isolation, an earlier default-concurrency full run passed 98/98, and the final current-code run passed without relaxing assertions or timeouts.",
+      "durationSeconds": 141.6
+    },
+    {
+      "command": "bun run ci:test:smoke",
+      "status": "passed",
+      "result": "smoke-test: ok"
+    }
+  ],
+  "rolloutDecision": {
+    "decision": "expand_internal_opt_in",
+    "defaultRemainsOff": true,
+    "reason": "All deterministic safety, precision, audit, backend-capability, package, heavy, and smoke gates passed with zero duplicate writes, unrelated pollution, unsafe overwrites, audit orphans, or secret leaks."
+  }
+}

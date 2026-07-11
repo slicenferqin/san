@@ -5,6 +5,7 @@ import {
 	type SanBrainDecision,
 	type SanBrainProfileCandidate,
 } from "@oh-my-pi/pi-coding-agent/brain/types";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
@@ -75,7 +76,12 @@ function createRuntime(entries: SessionEntry[]) {
 		appendCustomEntry,
 	};
 	const agentDir = tempDir.join("agent");
-	const settings = { getAgentDir: () => agentDir };
+	const settings = Settings.isolated({
+		"san.brain.enabled": false,
+		"san.brain.mode": "review-only",
+		"san.brain.projections.enabled": false,
+	});
+	vi.spyOn(settings, "getAgentDir").mockReturnValue(agentDir);
 	const ctx = {
 		editor: { setText },
 		showStatus,
@@ -175,5 +181,14 @@ describe("/brain slash command", () => {
 
 		expect(await executeBuiltinSlashCommand("/brain explain", harness.runtime)).toBe(true);
 		expect(harness.showStatus).toHaveBeenCalledWith("Usage: /brain explain <id>");
+	});
+
+	it("does not let an explicit project command bypass the disabled runtime policy", async () => {
+		const harness = createRuntime([]);
+
+		expect(await executeBuiltinSlashCommand("/brain project", harness.runtime)).toBe(true);
+		expect(harness.showStatus).toHaveBeenCalledWith(
+			"San Brain project failed: projection is disabled by the effective runtime policy.",
+		);
 	});
 });

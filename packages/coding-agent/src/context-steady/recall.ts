@@ -16,6 +16,8 @@ export interface ContextSteadyRecallQueryOptions {
 
 export interface ContextSteadyRecallItemsOptions {
 	maxItems: number;
+	memoryTypes?: readonly string[];
+	scopeKeys?: readonly string[];
 }
 
 function clampNonNegativeInteger(value: number): number {
@@ -93,8 +95,12 @@ export function normalizeContextSteadyRecallItems(
 	if (maxItems === 0) return [];
 
 	const seen = new Set<string>();
+	const memoryTypes = new Set(options.memoryTypes ?? []);
+	const scopeKeys = new Set(options.scopeKeys ?? []);
 	const normalized: ContextRecallItem[] = [];
 	for (const item of items) {
+		if (item.memoryType && memoryTypes.size > 0 && !memoryTypes.has(item.memoryType)) continue;
+		if (item.scope && scopeKeys.size > 0 && !scopeKeys.has(item.scope)) continue;
 		const content = normalizeWhitespace(item.content);
 		if (!content) continue;
 		const key = recallItemKey({ ...item, content });
@@ -105,6 +111,8 @@ export function normalizeContextSteadyRecallItems(
 		if (item.source !== undefined && item.source.trim().length > 0) recallItem.source = item.source;
 		if (item.timestamp !== undefined && item.timestamp.trim().length > 0) recallItem.timestamp = item.timestamp;
 		if (item.score !== undefined) recallItem.score = item.score;
+		if (item.memoryType !== undefined && item.memoryType.trim().length > 0) recallItem.memoryType = item.memoryType;
+		if (item.scope !== undefined && item.scope.trim().length > 0) recallItem.scope = item.scope;
 		normalized.push(recallItem);
 		if (normalized.length >= maxItems) break;
 	}

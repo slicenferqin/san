@@ -7,8 +7,14 @@ import {
 } from "./consolidate";
 import { appendSanBrainDecision } from "./ledger";
 import { buildSanBrainProjectionPlans } from "./projection-plan";
+import { isSanBrainRecallTemplateId } from "./recall";
 import type { SanBrainCandidateRecord, SanBrainDecisionRecord, SanBrainStore, SanBrainSyncResult } from "./store";
-import { BRAIN_SCHEMA_VERSION, type SanBrainDecision, type SanBrainDecisionAction } from "./types";
+import {
+	BRAIN_SCHEMA_VERSION,
+	isSanBrainExperienceCandidate,
+	type SanBrainDecision,
+	type SanBrainDecisionAction,
+} from "./types";
 
 const BRAIN_M3_POLICY_VERSION = "brain-m3";
 
@@ -95,6 +101,13 @@ function planApprove(
 	createdAt: string,
 ): SanBrainDecision[] {
 	if (target.status === "active") return [];
+	if (
+		isSanBrainExperienceCandidate(target.candidate) &&
+		target.candidate.action.kind === "recall_policy" &&
+		!isSanBrainRecallTemplateId(target.candidate.action.queryTemplateId)
+	) {
+		throw new Error(`Unknown San Brain recall template: ${target.candidate.action.queryTemplateId}.`);
+	}
 	const candidates = store.listCandidates(5000);
 	const activeIds = new Set(store.listActiveStates(5000).map(state => state.candidate.candidateId));
 	const equivalents = candidates.filter(

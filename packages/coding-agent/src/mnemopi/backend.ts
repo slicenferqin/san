@@ -2,7 +2,7 @@ import { rm } from "node:fs/promises";
 import * as path from "node:path";
 import { type ApiKeyResolver, completeSimple } from "@oh-my-pi/pi-ai";
 import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
-import type { Mnemopi } from "@oh-my-pi/pi-mnemopi";
+import type { Mnemopi, RecallResult } from "@oh-my-pi/pi-mnemopi";
 import type * as MnemopiDiagnoseNs from "@oh-my-pi/pi-mnemopi/diagnose";
 import type { DiagnosticSummary } from "@oh-my-pi/pi-mnemopi/diagnose";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -232,6 +232,8 @@ export const mnemopiBackend: MemoryBackend = {
 			source: result.source ?? undefined,
 			timestamp: result.timestamp ?? undefined,
 			score: result.score,
+			memoryType: mnemopiRecallMemoryType(result),
+			scope: mnemopiRecallScope(result),
 		}));
 		return { backend: "mnemopi", query, count: items.length, items };
 	},
@@ -269,6 +271,58 @@ export const mnemopiBackend: MemoryBackend = {
 			ids: id ? [id] : [],
 			message: id ? undefined : "Mnemopi did not return a stored memory id.",
 		};
+	},
+
+	async project({ cwd, session }, input) {
+		input.signal?.throwIfAborted();
+		const state = getMnemopiSessionState(session);
+		const primary = state?.aliasOf ?? state;
+		if (!primary) {
+			return { backend: "mnemopi", stored: 0, message: "Mnemopi backend is not initialised for this session." };
+		}
+		const existing = primary.findScopedMemoryBySource(input.operationId);
+		if (existing) return { backend: "mnemopi", stored: 1, ids: [existing.row.id] };
+		const id = primary.rememberScoped(input.content.trim(), {
+			source: input.operationId,
+			importance: normalizeImportance(input.importance),
+			metadata: {
+				session_id: primary.sessionId,
+				cwd,
+				context: input.context ?? null,
+				operation: "san.brain.projection",
+				operation_id: input.operationId,
+			},
+			scope: "bank",
+			extract: true,
+			extractEntities: true,
+			veracity: "user",
+			memoryType: "fact",
+		});
+		input.signal?.throwIfAborted();
+		return { backend: "mnemopi", stored: id ? 1 : 0, ids: id ? [id] : [] };
+	},
+
+	async reconcileProjection({ session }, operationId, signal) {
+		signal?.throwIfAborted();
+		const state = getMnemopiSessionState(session);
+		const primary = state?.aliasOf ?? state;
+		if (!primary) return { state: "unsupported", message: "Mnemopi backend is not initialised." };
+		const hit = primary.findScopedMemoryBySource(operationId);
+		return hit ? { state: "applied", receiptId: hit.row.id } : { state: "missing" };
+	},
+
+	async compensateProjection({ session }, operationId, signal) {
+		signal?.throwIfAborted();
+		const state = getMnemopiSessionState(session);
+		const primary = state?.aliasOf ?? state;
+		if (!primary) return { state: "unsupported", message: "Mnemopi backend is not initialised." };
+		const hit = primary.findScopedMemoryBySource(operationId);
+		if (!hit) return { state: "missing" };
+		const edited = primary.editScopedMemory("forget", hit.row.id);
+		signal?.throwIfAborted();
+		return edited.status === "deleted"
+			? { state: "compensated", receiptId: hit.row.id }
+			: { state: "blocked", receiptId: hit.row.id, message: `Mnemopi memory is ${edited.status}.` };
 	},
 
 	async preCompactionContext(messages, _settings, session): Promise<string | undefined> {
@@ -392,6 +446,34 @@ function summarizeMnemopiStatus(
 function clampLimit(limit: number | undefined): number {
 	if (!Number.isFinite(limit)) return 10;
 	return Math.max(1, Math.min(50, Math.trunc(limit ?? 10)));
+}
+
+function mnemopiRecallMetadata(result: RecallResult): Record<string, unknown> | undefined {
+	if (result.metadata && typeof result.metadata === "object" && !Array.isArray(result.metadata)) {
+		return result.metadata;
+	}
+	if (!result.metadata_json) return undefined;
+	try {
+		const parsed: unknown = JSON.parse(result.metadata_json);
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+			? (parsed as Record<string, unknown>)
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function mnemopiRecallMemoryType(result: RecallResult): string | undefined {
+	const record = result as unknown as Record<string, unknown>;
+	const memoryType = record.memory_type;
+	if (typeof memoryType === "string" && memoryType.length > 0) return memoryType;
+	const tier = record.tier;
+	return typeof tier === "string" && tier.length > 0 ? tier : undefined;
+}
+
+function mnemopiRecallScope(result: RecallResult): string | undefined {
+	const context = mnemopiRecallMetadata(result)?.context;
+	return typeof context === "string" && context.length > 0 ? context : undefined;
 }
 
 function normalizeImportance(value: number | undefined): number {

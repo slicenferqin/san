@@ -99,7 +99,7 @@ describe("SanBrainStore", () => {
 		];
 		const store = createStore(dbPath);
 
-		expect(store.schemaVersion).toBe(1);
+		expect(store.schemaVersion).toBe(2);
 		expect(store.syncSessionEntries("session-1", entries)).toEqual({
 			candidatesAdded: 1,
 			decisionsAdded: 1,
@@ -119,7 +119,7 @@ describe("SanBrainStore", () => {
 
 		closeStore(store);
 		const resumed = createStore(dbPath);
-		expect(resumed.schemaVersion).toBe(1);
+		expect(resumed.schemaVersion).toBe(2);
 		expect(resumed.explain("decision-1")).toMatchObject({
 			candidate: { status: "active", revision: 1, candidate: { candidateId: "profile-1" } },
 			decisions: [{ applicationState: "applied", decision: { decisionId: "decision-1" } }],
@@ -190,6 +190,60 @@ describe("SanBrainStore", () => {
 		db.run("PRAGMA user_version = 99");
 		db.close();
 
-		expect(() => createStore(dbPath)).toThrow("Brain database schema 99 is newer than supported version 1.");
+		expect(() => createStore(dbPath)).toThrow("Brain database schema 99 is newer than supported version 2.");
+	});
+
+	it("migrates a v1 projection audit to v2 without losing its durable fields", () => {
+		if (!tempDir) throw new Error("Test temp directory is not initialized.");
+		const dbPath = tempDir.join("brain.sqlite");
+		const db = new Database(dbPath);
+		db.run(`
+			CREATE TABLE projections (
+				projection_id TEXT PRIMARY KEY,
+				decision_id TEXT NOT NULL,
+				target TEXT NOT NULL,
+				state TEXT NOT NULL,
+				attempt_count INTEGER NOT NULL DEFAULT 0,
+				revision INTEGER,
+				before_hash TEXT,
+				after_hash TEXT,
+				error TEXT,
+				updated_at TEXT NOT NULL
+			)
+		`);
+		db.prepare(
+			`INSERT INTO projections (
+				projection_id, decision_id, target, state, attempt_count, revision,
+				before_hash, after_hash, error, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"projection-v1",
+			"decision-v1",
+			"managed_skill",
+			"failed",
+			2,
+			1,
+			"before-v1",
+			"after-v1",
+			"legacy failure",
+			"2026-07-10T11:00:00.000Z",
+		);
+		db.run("PRAGMA user_version = 1");
+		db.close();
+
+		const store = createStore(dbPath);
+		expect(store.schemaVersion).toBe(2);
+		expect(store.getProjection("projection-v1")).toEqual({
+			projectionId: "projection-v1",
+			decisionId: "decision-v1",
+			target: "managed_skill",
+			state: "failed",
+			attemptCount: 2,
+			revision: 1,
+			beforeHash: "before-v1",
+			afterHash: "after-v1",
+			error: "legacy failure",
+			updatedAt: "2026-07-10T11:00:00.000Z",
+		});
 	});
 });

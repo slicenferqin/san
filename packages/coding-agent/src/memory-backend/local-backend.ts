@@ -1,3 +1,6 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 import {
 	buildMemoryToolDeveloperInstructions,
 	clearMemoryData,
@@ -27,12 +30,42 @@ export const localBackend: MemoryBackend = {
 	async clear(agentDir, cwd, session) {
 		clearMemoryToolDeveloperInstructionsCache(session);
 		await clearMemoryData(agentDir, cwd);
+		await fs.rm(path.join(agentDir, "brain", "local-memory-receipts"), { recursive: true, force: true });
 	},
 	async enqueue(agentDir, cwd) {
 		enqueueMemoryConsolidation(agentDir, cwd);
 	},
 	async save(context, input) {
 		return saveLearnedLesson(context.agentDir, context.cwd, input);
+	},
+	async project(context, input) {
+		input.signal?.throwIfAborted();
+		const saved = await saveLearnedLesson(context.agentDir, context.cwd, input);
+		input.signal?.throwIfAborted();
+		if (saved.stored < 1) return saved;
+		await Bun.write(
+			localProjectionReceiptPath(context.agentDir, input.operationId),
+			JSON.stringify({ operationId: input.operationId, appliedAt: new Date().toISOString() }),
+		);
+		return { ...saved, ids: [input.operationId] };
+	},
+	async reconcileProjection(context, operationId, signal) {
+		signal?.throwIfAborted();
+		try {
+			const value: unknown = await Bun.file(localProjectionReceiptPath(context.agentDir, operationId)).json();
+			if (
+				value !== null &&
+				typeof value === "object" &&
+				"operationId" in value &&
+				value.operationId === operationId
+			) {
+				return { state: "applied", receiptId: operationId };
+			}
+			return { state: "missing" };
+		} catch (error) {
+			if (isEnoent(error)) return { state: "missing" };
+			throw error;
+		}
 	},
 	async status() {
 		return {
@@ -45,3 +78,7 @@ export const localBackend: MemoryBackend = {
 		};
 	},
 };
+
+function localProjectionReceiptPath(agentDir: string, operationId: string): string {
+	return path.join(agentDir, "brain", "local-memory-receipts", `${Bun.hash(operationId).toString(36)}.json`);
+}

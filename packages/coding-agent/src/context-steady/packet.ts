@@ -528,6 +528,15 @@ export function buildContextPacket(
 		digestRefs,
 		recallQuery: selectedRecall && selectedRecallItems.length > 0 ? selectedRecall.query : undefined,
 		recallRefs,
+		recallPolicy:
+			selectedRecall?.policyVersion && selectedRecallItems.length > 0
+				? {
+						policyVersion: selectedRecall.policyVersion,
+						selectedPolicyIds: [...(selectedRecall.selectedPolicyIds ?? [])],
+						...(selectedRecall.queryTemplateId ? { queryTemplateId: selectedRecall.queryTemplateId } : {}),
+						skipReasons: [...(selectedRecall.skipReasons ?? [])],
+					}
+				: undefined,
 		tokenEstimate: packetTokenEstimate,
 		tokenBudget: packetTotalBudget,
 		budget,
