@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>San v0.3 M5 接力交接文档</title>
+		<style>
+			:root {
+				color-scheme: light;
+				--bg: #f6f1e8;
+				--panel: #fffdf8;
+				--ink: #17202a;
+				--muted: #667085;
+				--line: #d8d1c3;
+				--green: #027a48;
+				--blue: #2357c6;
+				--amber: #b45309;
+				--red: #b42318;
+				--code: #101828;
+			}
+			* { box-sizing: border-box; }
+			body {
+				margin: 0;
+				background: radial-gradient(circle at top left, #ede0c8 0, transparent 34rem), var(--bg);
+				color: var(--ink);
+				font: 15px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			}
+			main { width: min(1180px, calc(100vw - 44px)); margin: 0 auto; padding: 42px 0 72px; }
+			header, section {
+				background: var(--panel);
+				border: 1px solid var(--line);
+				border-radius: 16px;
+				padding: 26px;
+				margin-bottom: 18px;
+				box-shadow: 0 14px 36px rgba(23, 32, 42, 0.06);
+			}
+			h1, h2, h3 { margin: 0 0 12px; line-height: 1.25; }
+			h1 { font-size: 30px; }
+			h2 { font-size: 21px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+			h3 { font-size: 16px; color: var(--blue); margin-top: 18px; }
+			p { margin: 8px 0; }
+			ul, ol { margin: 8px 0 0 22px; padding: 0; }
+			li { margin: 5px 0; }
+			code, pre { font-family: "SFMono-Regular", Consolas, monospace; }
+			code { color: var(--code); background: #efe7d8; border-radius: 5px; padding: 1px 5px; }
+			pre { overflow: auto; background: #111827; color: #f9fafb; border-radius: 10px; padding: 14px 16px; line-height: 1.45; }
+			table { width: 100%; border-collapse: collapse; margin-top: 12px; border-radius: 10px; overflow: hidden; }
+			th, td { border: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }
+			th { background: #f1eadc; font-weight: 700; }
+			.badge { display: inline-block; border-radius: 999px; padding: 3px 10px; font-weight: 700; font-size: 12px; }
+			.pass { background: #e7f7ef; color: var(--green); }
+			.warn { background: #fff3d6; color: var(--amber); }
+			.block { background: #ffe4e1; color: var(--red); }
+			.grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 16px; }
+			.metric { border: 1px solid var(--line); border-radius: 12px; padding: 14px; background: #fffaf0; }
+			.metric strong { display: block; font-size: 25px; line-height: 1.1; margin-bottom: 6px; }
+			.note { color: var(--muted); font-size: 14px; }
+			.callout { border-left: 5px solid var(--green); background: #eef8f2; padding: 12px 14px; border-radius: 8px; margin: 14px 0; }
+			.warning { border-left-color: var(--amber); background: #fff8e7; }
+			.danger { border-left-color: var(--red); background: #fff1f0; }
+			@media (max-width: 860px) { main { width: min(100vw - 28px, 1180px); padding-top: 24px; } .grid { grid-template-columns: repeat(2, 1fr); } }
+		</style>
+	</head>
+	<body>
+		<main>
+			<header>
+				<h1>San v0.3 M5 接力交接文档</h1>
+				<p class="note">更新时间：2026-07-10。用途：在家里的机器上快速恢复 San v0.3 开发现场，继续从 M5 之后往前推进。</p>
+				<div class="callout">
+					当前结论：<strong>M5 已完成、已提交、已推送</strong>。当前分支是 <code>feature/san-v0.3</code>，最近提交是 <code>31bea0cab Add San Brain M5 projections</code>。工作区仅剩一个本地未跟踪文件 <code>.san/mcp.json</code>，不要误删或误提交。
+				</div>
+			</header>
+
+			<section>
+				<h2>1. 当前状态</h2>
+				<div class="grid">
+					<div class="metric"><strong class="pass">M1-M5</strong><span>San Brain 当前已完成里程碑</span></div>
+					<div class="metric"><strong>31bea0cab</strong><span>M5 最新提交</span></div>
+					<div class="metric"><strong>0</strong><span>staged / unstaged 改动</span></div>
+					<div class="metric"><strong>1</strong><span>未跟踪本地文件：<code>.san/mcp.json</code></span></div>
+				</div>
+				<table>
+					<thead><tr><th>项目</th><th>状态</th><th>证据 / 说明</th></tr></thead>
+					<tbody>
+						<tr><td>当前分支</td><td><span class="badge pass">已同步</span></td><td><code>feature/san-v0.3...origin/feature/san-v0.3</code></td></tr>
+						<tr><td>最近提交</td><td><span class="badge pass">M5 提交在顶端</span></td><td><code>31bea0cab Add San Brain M5 projections</code></td></tr>
+						<tr><td>工作区</td><td><span class="badge warn">仅本地配置未跟踪</span></td><td><code>git status --short</code> 显示只有 <code>?? .san/mcp.json</code></td></tr>
+						<tr><td>待办</td><td><span class="badge pass">清零</span></td><td>M5 剩余 todo 已完成：投影故障测试、Brain M5 定向验证、开发记录、提交推送。</td></tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>2. 在家里恢复现场</h2>
+				<ol>
+					<li>进入仓库并拉取最新分支。</li>
+					<li>确认分支顶端是 M5 提交。</li>
+					<li>不要直接覆盖本地 <code>.san/mcp.json</code>；它是机器本地 MCP 配置，不属于本次 M5 提交。</li>
+					<li>先跑 M5 定向验证，再继续下一个里程碑。</li>
+				</ol>
+				<pre>cd ~/development/self/projects/san
+git fetch origin
+git switch feature/san-v0.3
+git pull --ff-only
+git --no-pager log --oneline -n 5
+git --no-pager status --short --branch</pre>
+				<div class="callout warning">
+					如果家里机器已有自己的 <code>.san/mcp.json</code>，保留家里版本；如果没有，可以手动复制需要的 MCP 配置，但不要把它作为普通代码改动提交。
+				</div>
+			</section>
+
+			<section>
+				<h2>3. M5 已交付内容</h2>
+				<p>M5 的主题是 <strong>Projection Execution</strong>：把已经 approve 的 Brain candidate 投影到外部系统，并让投影动作具备 durable audit、重试、阻断和 undo 补偿能力。</p>
+				<table>
+					<thead><tr><th>模块</th><th>文件</th><th>内容</th></tr></thead>
+					<tbody>
+						<tr><td>Projection 执行器</td><td><code>src/brain/projection.ts</code><br /><code>src/brain/projection-plan.ts</code></td><td>新增投影计划与执行逻辑，覆盖 memory、managed skill、check suggestion 三类目标。</td></tr>
+						<tr><td>Ledger / Store</td><td><code>src/brain/ledger.ts</code><br /><code>src/brain/store.ts</code></td><td>新增 JSONL / SQLite 投影审计记录；SQLite 可从 ledger 幂等恢复投影最终状态。</td></tr>
+						<tr><td>类型契约</td><td><code>src/brain/types.ts</code></td><td>补齐 projection target/state、typed draft、projection audit、compatibility policy 等类型。</td></tr>
+						<tr><td>受管 Skill CAS</td><td><code>src/autolearn/managed-skills.ts</code></td><td>写入、删除、恢复都带内容 hash；undo 可以用原文恢复而不是盲写。</td></tr>
+						<tr><td>兼容策略</td><td><code>src/brain/compatibility.ts</code><br /><code>src/mnemopi/config.ts</code><br /><code>src/hindsight/config.ts</code></td><td>legacy <code>autoRetain</code> 不自动改用户配置；按策略 allow / warn / block 计算有效值并告警。</td></tr>
+						<tr><td>入口集成</td><td><code>src/session/agent-session.ts</code><br /><code>src/slash-commands/builtin-registry.ts</code><br /><code>src/brain/commands.ts</code></td><td>接入真实 turn、slash command 和 Brain 命令路径，保持默认关闭。</td></tr>
+						<tr><td>测试</td><td><code>test/brain/projection.test.ts</code><br /><code>test/brain/compatibility.test.ts</code></td><td>覆盖投影成功、故障、blocked、retry、CAS undo、legacy autoRetain 策略。</td></tr>
+				</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>4. M5 提交摘要</h2>
+				<p>最新提交：<code>31bea0cab Add San Brain M5 projections</code>。</p>
+				<ul>
+					<li><strong>17 个文件变更</strong>：1249 行新增，70 行删除。</li>
+					<li><strong>新增源码</strong>：<code>brain/projection.ts</code>、<code>brain/projection-plan.ts</code>、<code>brain/compatibility.ts</code>。</li>
+					<li><strong>新增测试</strong>：<code>test/brain/projection.test.ts</code>、<code>test/brain/compatibility.test.ts</code>。</li>
+					<li><strong>配置项</strong>：新增 <code>san.brain.projections.enabled</code>、<code>san.brain.projections.maxAttempts</code>、<code>san.brain.compatibility.legacyAutoRetain</code>。</li>
+					<li><strong>Changelog</strong>：<code>packages/coding-agent/CHANGELOG.md</code> 已记录 M5。</li>
+				</ul>
+			</section>
+
+			<section>
+				<h2>5. 建议先跑的验证</h2>
+				<p>到家后先跑定向测试和类型检查；不要直接跑全量 heavy suite，除非后续改动触及更广。</p>
+				<pre>bun test packages/coding-agent/test/brain/projection.test.ts packages/coding-agent/test/brain/compatibility.test.ts
+bun --cwd packages/coding-agent run check:types</pre>
+				<p class="note">如只改 Brain M6 附近逻辑，优先继续补 <code>test/brain/*.test.ts</code> 的契约测试，再按触达面扩大验证。</p>
+			</section>
+
+			<section>
+				<h2>6. 继续开发的入口</h2>
+				<h3>短期目标</h3>
+				<ul>
+					<li>从 M5 之后继续推进 v0.3，下一个自然方向是把投影执行从“能力已具备”推进到“dogfood 安全可观测”。</li>
+					<li>保持 Brain capture / activation / projection 默认关闭；任何 dogfood 都通过显式配置启用。</li>
+					<li>继续沿用 JSONL 为权威源、SQLite 为可重建物化视图的原则。</li>
+					<li>保持 undo 的边界：只撤销当前生效 approve；存在后续 revision 时明确拒绝。</li>
+				</ul>
+				<h3>优先检查点</h3>
+				<ol>
+					<li>确认 M5 的 projection audit 在真实 session 中能被 debug / explain 清楚呈现。</li>
+					<li>设计 M6 前先读 <code>docs/research/san-v0.3-brain-technical-implementation-20260708.html</code> 和 <code>docs/research/san-v0.3-p0-design-freeze-20260710.html</code>。</li>
+					<li>如果要开 dogfood，先写最小配置 overlay，不要直接改默认值。</li>
+					<li>新增任何外部投影目标时，必须先定义 typed draft 和 CAS / compensation 策略。</li>
+				</ol>
+			</section>
+
+			<section>
+				<h2>7. 风险与注意事项</h2>
+				<table>
+					<thead><tr><th>风险</th><th>处理方式</th></tr></thead>
+					<tbody>
+						<tr><td><code>.san/mcp.json</code> 未跟踪</td><td>这是本地配置。切换机器时手动处理，不要默认提交。</td></tr>
+						<tr><td>Projection 会写外部系统</td><td>当前默认关闭。任何真实写入必须要求 <code>san.brain.projections.enabled=true</code>，并保留 audit。</td></tr>
+						<tr><td>Managed Skill 写入</td><td>只允许写 <code>~/.san/agent/managed-skills</code>，不能碰用户手写 skills；继续保持 symlink 拒绝和 CAS。</td></tr>
+						<tr><td>legacy autoRetain</td><td>不要自动修改用户配置；只计算有效值并提示 warn / block。</td></tr>
+						<tr><td>规则中断</td><td>之前触发过 inline cast 读取属性规则。后续处理 unknown shape 时用 schema 或 type guard，不要写 <code>(value as { field: unknown }).field</code>。</td></tr>
+					</tbody>
+				</table>
+			</section>
+
+			<section>
+				<h2>8. 关键文件速查</h2>
+				<ul>
+					<li><code>packages/coding-agent/src/brain/types.ts</code>：Brain schema、candidate、decision、projection、activation 类型入口。</li>
+					<li><code>packages/coding-agent/src/brain/ledger.ts</code>：JSONL 自定义 entry 追加与 snapshot 重建。</li>
+					<li><code>packages/coding-agent/src/brain/store.ts</code>：SQLite 物化状态、decision apply、projection audit。</li>
+					<li><code>packages/coding-agent/src/brain/projection.ts</code>：M5 核心执行器、retry / blocked / undo compensation。</li>
+					<li><code>packages/coding-agent/src/autolearn/managed-skills.ts</code>：受管 Skill 安全写入、删除、恢复。</li>
+					<li><code>packages/coding-agent/test/brain/projection.test.ts</code>：M5 主契约测试。</li>
+				</ul>
+			</section>
+		</main>
+	</body>
+</html>
