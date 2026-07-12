@@ -37,6 +37,11 @@ export interface BuiltContextPacket {
 	content: string;
 }
 
+export interface PreviousContextPacketRefs {
+	checkpointRef?: string;
+	digestRefs: string[];
+}
+
 interface PacketDigestView {
 	index: number;
 	userIntent: string;
@@ -396,6 +401,7 @@ export function buildContextPacket(
 	currentPrompt: string,
 	settings: ContextPacketSettings,
 	recall?: ContextPacketRecallLayer,
+	previousPacket?: PreviousContextPacketRefs,
 ): BuiltContextPacket | null {
 	if (!settings.enabled) return null;
 
@@ -419,15 +425,22 @@ export function buildContextPacket(
 	const checkpointCovered = checkpointRef ? new Set(checkpointRef.checkpoint.entryRefs) : new Set<string>();
 	const uncoveredDigests = relevantDigests.filter(entry => !checkpointCovered.has(entry.entryId));
 	const checkpointCoveredTrimmed = relevantDigests.length - uncoveredDigests.length;
-	const recentTrimmed = recentCount > 0 ? Math.max(0, uncoveredDigests.length - recentCount) : uncoveredDigests.length;
-	const recentDigests = recentCount > 0 ? uncoveredDigests.slice(-recentCount) : [];
+	const previousDigestRefs = new Set(previousPacket?.digestRefs ?? []);
+	const deltaDigests = previousPacket
+		? uncoveredDigests.filter(entry => !previousDigestRefs.has(entry.entryId))
+		: uncoveredDigests;
+	const recentTrimmed = recentCount > 0 ? Math.max(0, deltaDigests.length - recentCount) : deltaDigests.length;
+	const recentDigests = recentCount > 0 ? deltaDigests.slice(-recentCount) : [];
 	const budget = resolvePacketBudget(settings);
 	const packetTotalBudget = budget.packetTokenBudget;
 	const budgetedDigests = selectedWithinBudget(recentDigests, packetTotalBudget);
 	let selectedDigests = budgetedDigests.selected;
 	let digestTokenEstimate = budgetedDigests.tokenEstimate;
 	let digestTokenTrimmed = budgetedDigests.tokenTrimmed;
-	let selectedCheckpoint = checkpointRef ? cloneCheckpoint(checkpointRef.checkpoint) : undefined;
+	let selectedCheckpoint =
+		checkpointRef && checkpointRef.entryId !== previousPacket?.checkpointRef
+			? cloneCheckpoint(checkpointRef.checkpoint)
+			: undefined;
 	let checkpointLayerTrimmed = 0;
 	let selectedRecall = recallLayer;
 	let selectedRecallItems = [...recallItems];

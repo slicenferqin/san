@@ -25,7 +25,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { CustomEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import { logger, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { TURN_DIGEST_CUSTOM_TYPE } from "../../src/context-steady/types";
 import { createAssistantMessage } from "../helpers/agent-session-setup";
 
@@ -637,5 +637,66 @@ describe("Context Steady State M1 — AgentSession integration", () => {
 			toEntry && "message" in toEntry ? (toEntry as unknown as Record<string, unknown>).message : undefined;
 		expect((toMsg as Record<string, unknown>).role).toBe("assistant");
 		expect((toMsg as Record<string, unknown>).stopReason).toBe("aborted");
+	});
+
+	it("logs and skips TurnDigest when the captured boundary leaves the active branch", async () => {
+		const debugSpy = vi.spyOn(logger, "debug").mockImplementation(() => {});
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		let agentEndCount = 0;
+		const extensionRunner = {
+			emit: vi.fn(async (event: { type: string }) => {
+				if (event.type !== "agent_end") return;
+				agentEndCount++;
+				if (agentEndCount === 2) sessionManager.resetLeaf();
+			}),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn(() => false),
+			emitSessionStop: vi.fn().mockResolvedValue(undefined),
+		} as unknown as ExtensionRunner;
+		const settings = Settings.isolated(BASE_SETTINGS);
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+		await session.prompt("First message");
+		await session.waitForIdle();
+		expect(extractDigestEntries(sessionManager)).toHaveLength(1);
+
+		await session.prompt("Second message");
+		await session.waitForIdle();
+
+		expect(
+			sessionManager
+				.getEntries()
+				.filter(e => e.type === "custom" && (e as CustomEntry).customType === TURN_DIGEST_CUSTOM_TYPE),
+		).toHaveLength(1);
+		expect(
+			debugSpy.mock.calls.some(([message, context]) => {
+				return (
+					message === "preTurnLeafId not found in branch while generating TurnDigest" &&
+					context?.branchLength === 0 &&
+					typeof context.preTurnLeafId === "string"
+				);
+			}),
+		).toBe(true);
+		expect(
+			debugSpy.mock.calls.some(([message, context]) => {
+				return (
+					message === "Skipping TurnDigest because source span has no digestible messages" &&
+					context?.branchLength === 0 &&
+					typeof context.currentLeafId === "string"
+				);
+			}),
+		).toBe(true);
 	});
 });

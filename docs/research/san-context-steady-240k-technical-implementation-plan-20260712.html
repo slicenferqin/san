@@ -1,0 +1,1820 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="San Context Steady 240K quality-first redesign technical implementation plan.">
+  <title>San Context Steady · 240K 技术实施方案</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f6f7f5;
+      --surface: #ffffff;
+      --ink: #182126;
+      --muted: #5d686e;
+      --faint: #899398;
+      --line: #d8dddc;
+      --line-strong: #abb7b8;
+      --teal: #08766f;
+      --teal-soft: #dcefea;
+      --blue: #315d8a;
+      --blue-soft: #e6edf5;
+      --amber: #9b6418;
+      --amber-soft: #f6ead5;
+      --red: #a33f3a;
+      --red-soft: #f7e0dd;
+      --plum: #76516f;
+      --plum-soft: #eee6ec;
+      --code: #182126;
+      --shadow: 0 18px 45px rgba(26, 38, 42, 0.08);
+      --mono: "SFMono-Regular", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+      --display: "Iowan Old Style", "Songti SC", "STSong", Georgia, serif;
+      --body: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: var(--body);
+      font-size: 16px;
+      line-height: 1.72;
+      letter-spacing: 0;
+    }
+
+    h1, h2, h3, h4, p, ul, ol, figure { margin-top: 0; }
+    h1, h2, h3, h4 { line-height: 1.18; letter-spacing: 0; text-wrap: balance; }
+    h1, h2, .display { font-family: var(--display); font-weight: 600; }
+    h1 { margin-bottom: 22px; font-size: clamp(42px, 5.2vw, 76px); }
+    h2 { margin-bottom: 16px; font-size: clamp(29px, 3.2vw, 42px); }
+    h3 { margin-bottom: 10px; font-size: 20px; }
+    h4 { margin-bottom: 8px; font-size: 15px; }
+    p { margin-bottom: 12px; text-wrap: pretty; }
+    strong { color: var(--ink); }
+    a { color: var(--teal); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    code {
+      padding: 2px 5px;
+      background: #edf0ef;
+      color: #253238;
+      font-family: var(--mono);
+      font-size: 0.88em;
+      overflow-wrap: anywhere;
+    }
+
+    .shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid rgba(216, 221, 220, 0.9);
+      background: rgba(246, 247, 245, 0.94);
+      backdrop-filter: blur(14px) saturate(120%);
+    }
+    .topbar-inner {
+      display: flex;
+      min-height: 58px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    .wordmark {
+      flex: 0 0 auto;
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+    .wordmark span { color: var(--teal); }
+    nav {
+      display: flex;
+      gap: 18px;
+      overflow-x: auto;
+      white-space: nowrap;
+      scrollbar-width: none;
+    }
+    nav::-webkit-scrollbar { display: none; }
+    nav a { color: var(--muted); font-size: 12px; text-decoration: none; }
+    nav a:hover { color: var(--ink); }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.14fr) minmax(360px, 0.86fr);
+      gap: 52px;
+      align-items: center;
+      min-height: min(750px, calc(100vh - 58px));
+      padding: 72px 0 62px;
+    }
+    .eyebrow, .section-kicker, .micro-label, .node-index, .phase-id, .step-id {
+      color: var(--teal);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+    .eyebrow { margin-bottom: 14px; }
+    .hero-copy { max-width: 770px; color: var(--muted); font-size: 19px; }
+    .hero-copy strong { color: var(--ink); }
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 18px;
+      margin-top: 28px;
+      color: var(--faint);
+      font-size: 13px;
+    }
+    .hero-meta span + span::before { content: "·"; margin-right: 18px; color: var(--line-strong); }
+
+    .hero-instrument {
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      padding: 27px;
+    }
+    .instrument-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+    }
+    .instrument-head h3 { margin: 0; font-size: 18px; }
+    .instrument-head small { color: var(--faint); font-size: 12px; }
+    .instrument-stat {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin: 26px 0 30px;
+    }
+    .instrument-stat div { border-top: 2px solid var(--line); padding-top: 10px; }
+    .instrument-stat div:first-child { border-color: var(--teal); }
+    .instrument-stat b { display: block; font-family: var(--display); font-size: 29px; line-height: 1; }
+    .instrument-stat span { color: var(--muted); font-size: 11px; }
+    .principle-stack { display: grid; gap: 0; border-top: 1px solid var(--line); }
+    .principle {
+      display: grid;
+      grid-template-columns: 30px 1fr;
+      gap: 11px;
+      border-bottom: 1px solid var(--line);
+      padding: 13px 0;
+    }
+    .principle > span { color: var(--teal); font-family: var(--mono); font-size: 11px; }
+    .principle p { margin: 0; color: var(--muted); font-size: 13px; }
+    .principle p strong { display: block; font-size: 14px; }
+
+    .band { border-top: 1px solid var(--line); }
+    .band.alt { background: var(--surface); }
+    .section { padding: 78px 0; }
+    .section-kicker { margin-bottom: 11px; }
+    .section-lead { max-width: 790px; color: var(--muted); font-size: 18px; }
+    .section-lead strong { color: var(--ink); }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1.08fr;
+      margin-top: 36px;
+      border-top: 1px solid var(--line-strong);
+      border-bottom: 1px solid var(--line-strong);
+    }
+    .meta-item { min-height: 176px; padding: 24px 28px 25px 0; }
+    .meta-item + .meta-item { border-left: 1px solid var(--line); padding-left: 28px; }
+    .meta-item h3 { margin: 24px 0 8px; }
+    .meta-item p { margin: 0; color: var(--muted); font-size: 14px; }
+    .meta-item .micro-label { color: var(--faint); }
+
+    .notice {
+      display: grid;
+      grid-template-columns: 144px 1fr;
+      gap: 28px;
+      margin-top: 35px;
+      border-top: 2px solid var(--amber);
+      border-bottom: 1px solid var(--line);
+      background: #fffdf8;
+      padding: 22px 0;
+    }
+    .notice-label { color: var(--amber); font-family: var(--mono); font-size: 11px; font-weight: 800; }
+    .notice p { margin: 0; color: var(--muted); }
+
+    .contract-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      margin-top: 37px;
+      border-top: 1px solid var(--line-strong);
+      border-left: 1px solid var(--line-strong);
+    }
+    .contract {
+      min-height: 210px;
+      border-right: 1px solid var(--line-strong);
+      border-bottom: 1px solid var(--line-strong);
+      background: var(--surface);
+      padding: 21px;
+    }
+    .contract:nth-child(2n) { background: #fbfcfb; }
+    .contract .contract-no { color: var(--teal); font-family: var(--mono); font-size: 11px; font-weight: 800; }
+    .contract h3 { margin: 27px 0 9px; font-size: 18px; }
+    .contract p { margin: 0; color: var(--muted); font-size: 13px; }
+
+    .before-after {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 62px minmax(0, 1fr);
+      align-items: stretch;
+      margin-top: 38px;
+    }
+    .route {
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      padding: 25px;
+    }
+    .route.legacy { background: #f1f3f2; }
+    .route .route-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 14px;
+    }
+    .route .route-head h3 { margin: 0; }
+    .route .route-head small { color: var(--faint); font-family: var(--mono); font-size: 10px; }
+    .route-list { margin: 20px 0 0; padding: 0; list-style: none; }
+    .route-list li {
+      display: grid;
+      grid-template-columns: 29px 1fr;
+      gap: 10px;
+      border-top: 1px solid var(--line);
+      padding: 13px 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .route-list li:first-child { border-top: 0; }
+    .route-list b { color: var(--faint); font-family: var(--mono); font-size: 11px; }
+    .route.target { border: 2px solid var(--teal); }
+    .route.target .route-head h3 { color: var(--teal); }
+    .route-arrow { display: grid; place-items: center; color: var(--teal); font-family: var(--mono); font-size: 27px; }
+
+    .flow {
+      display: grid;
+      grid-template-columns: 1fr 35px 1fr 35px 1.08fr 35px 1fr;
+      align-items: stretch;
+      margin-top: 38px;
+    }
+    .flow-node {
+      min-height: 238px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      padding: 21px;
+    }
+    .flow-node.primary { border: 2px solid var(--teal); background: #fbfffe; }
+    .flow-node .node-index { color: var(--faint); }
+    .flow-node.primary .node-index { color: var(--teal); }
+    .flow-node h3 { margin: 27px 0 9px; font-size: 19px; }
+    .flow-node p { color: var(--muted); font-size: 13px; }
+    .flow-node ul { margin: 15px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
+    .flow-arrow { display: grid; place-items: center; color: var(--faint); font-size: 21px; }
+    .flow-caption { margin-top: 17px; color: var(--faint); font-size: 13px; }
+
+    .budget-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 0.88fr) minmax(0, 1.12fr);
+      gap: 34px;
+      margin-top: 38px;
+    }
+    .budget-copy { padding-right: 14px; }
+    .budget-copy h3 { margin-top: 30px; }
+    .formula {
+      margin: 22px 0;
+      border: 1px solid var(--line-strong);
+      background: #f0f3f2;
+      padding: 18px;
+      color: #344147;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.8;
+      overflow-x: auto;
+    }
+    .formula div + div { margin-top: 5px; }
+    .calculator { border: 1px solid var(--line-strong); background: var(--surface); padding: 25px; }
+    .calculator-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+    .calculator-head h3 { margin: 0; }
+    .calculator-head span { color: var(--faint); font-family: var(--mono); font-size: 10px; }
+    .calculator-fields {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 15px;
+      margin: 22px 0;
+    }
+    .calculator label { color: var(--muted); font-size: 12px; }
+    .calculator input {
+      display: block;
+      width: 100%;
+      height: 40px;
+      margin-top: 5px;
+      border: 1px solid var(--line-strong);
+      border-radius: 0;
+      background: #fbfcfb;
+      color: var(--ink);
+      padding: 7px 9px;
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+    .calculator input:focus { outline: 2px solid var(--teal-soft); border-color: var(--teal); }
+    .budget-rail { margin: 23px 0 9px; }
+    .budget-rail-track {
+      position: relative;
+      height: 25px;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      background: #edf0ef;
+    }
+    .budget-zone { position: absolute; top: 0; bottom: 0; }
+    .budget-zone.comfort { left: 0; width: 62.5%; background: var(--teal-soft); }
+    .budget-zone.control { left: 62.5%; width: 18.75%; background: #aed8d0; }
+    .budget-zone.burst { left: 81.25%; width: 18.75%; background: var(--amber-soft); }
+    .budget-rail-marker {
+      position: absolute;
+      top: -6px;
+      bottom: -8px;
+      width: 1px;
+      background: var(--ink);
+    }
+    .budget-rail-marker.steady { left: 75%; background: var(--teal); }
+    .budget-rail-marker.burst { left: 100%; background: var(--amber); }
+    .budget-rail-labels { display: flex; justify-content: space-between; margin-top: 6px; color: var(--faint); font-family: var(--mono); font-size: 10px; }
+    .calculator-results {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      margin-top: 25px;
+      background: var(--line);
+      border: 1px solid var(--line);
+    }
+    .calc-result { min-height: 90px; background: var(--surface); padding: 13px; }
+    .calc-result b { display: block; margin-top: 12px; color: var(--ink); font-family: var(--display); font-size: 27px; line-height: 1; }
+    .calc-result span { color: var(--faint); font-family: var(--mono); font-size: 10px; }
+    .calc-result.emphasis { background: #effaf8; }
+    .calc-result.emphasis b { color: var(--teal); }
+    .calc-note { margin: 17px 0 0; color: var(--muted); font-size: 12px; }
+    .zone-legend {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-top: 28px;
+    }
+    .zone-legend div { border-top: 2px solid var(--line); padding-top: 8px; }
+    .zone-legend div:nth-child(1) { border-color: var(--teal); }
+    .zone-legend div:nth-child(3) { border-color: var(--amber); }
+    .zone-legend div:nth-child(4) { border-color: var(--red); }
+    .zone-legend b { display: block; font-size: 13px; }
+    .zone-legend span { color: var(--muted); font-size: 12px; }
+
+    .representation-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      margin-top: 35px;
+      border-left: 1px solid var(--line-strong);
+      border-top: 1px solid var(--line-strong);
+    }
+    .representation {
+      min-height: 210px;
+      border-right: 1px solid var(--line-strong);
+      border-bottom: 1px solid var(--line-strong);
+      background: var(--surface);
+      padding: 18px;
+    }
+    .representation:nth-child(2) { background: #f9fcfb; }
+    .representation:nth-child(3) { background: #fafbfd; }
+    .representation:nth-child(4) { background: #fdfaf6; }
+    .representation:nth-child(5) { background: #f9f2f1; }
+    .representation .rep-type { color: var(--teal); font-family: var(--mono); font-size: 11px; font-weight: 800; }
+    .representation:nth-child(4) .rep-type { color: var(--amber); }
+    .representation:nth-child(5) .rep-type { color: var(--red); }
+    .representation h3 { margin: 23px 0 8px; font-size: 17px; }
+    .representation p { margin: 0; color: var(--muted); font-size: 12px; }
+
+    .code-grid {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 27px;
+      margin-top: 36px;
+    }
+    .code-panel {
+      min-width: 0;
+      border: 1px solid #29363c;
+      background: var(--code);
+      color: #dfe9e7;
+      padding: 22px;
+    }
+    .code-panel .micro-label { color: #8bc8bf; }
+    .code-panel pre {
+      margin: 17px 0 0;
+      overflow-x: auto;
+      color: #dfe9e7;
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.7;
+      white-space: pre;
+    }
+    .code-panel .type { color: #8bc8bf; }
+    .code-panel .field { color: #b8cef3; }
+    .code-panel .literal { color: #f0c47e; }
+    .plain-panel { border: 1px solid var(--line-strong); background: var(--surface); padding: 22px; }
+    .plain-panel h3 { margin-top: 24px; }
+    .plain-panel p, .plain-panel li { color: var(--muted); font-size: 14px; }
+    .plain-panel ul { margin: 14px 0 0; padding-left: 19px; }
+    .plain-panel li + li { margin-top: 8px; }
+
+    .table-wrap { margin-top: 36px; overflow-x: auto; border: 1px solid var(--line-strong); background: var(--surface); }
+    table { width: 100%; border-collapse: collapse; min-width: 880px; }
+    th, td { border-bottom: 1px solid var(--line); padding: 15px 17px; text-align: left; vertical-align: top; }
+    th { background: #eef2f1; color: #3c4a50; font-family: var(--mono); font-size: 11px; font-weight: 800; }
+    td { color: var(--muted); font-size: 13px; }
+    td:first-child { color: var(--ink); font-family: var(--mono); font-size: 12px; }
+    tr:last-child td { border-bottom: 0; }
+    td strong { font-size: 13px; }
+    .verb-add { color: var(--teal); font-family: var(--mono); font-size: 11px; font-weight: 800; }
+    .verb-change { color: var(--blue); font-family: var(--mono); font-size: 11px; font-weight: 800; }
+    .verb-remove { color: var(--red); font-family: var(--mono); font-size: 11px; font-weight: 800; }
+    .verb-keep { color: var(--plum); font-family: var(--mono); font-size: 11px; font-weight: 800; }
+
+    .tree {
+      display: grid;
+      grid-template-columns: 0.84fr 1.16fr;
+      gap: 42px;
+      margin-top: 38px;
+      align-items: start;
+    }
+    .tree-intro { padding-top: 5px; }
+    .tree-intro p { color: var(--muted); }
+    .tree-intro .rule {
+      margin-top: 25px;
+      border-top: 2px solid var(--teal);
+      border-bottom: 1px solid var(--line);
+      padding: 16px 0;
+      font-family: var(--display);
+      font-size: 24px;
+      line-height: 1.4;
+    }
+    .decision-tree { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line-strong); }
+    .decision-tree li {
+      display: grid;
+      grid-template-columns: 43px minmax(0, 1fr);
+      gap: 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+      padding: 18px 18px 18px 0;
+    }
+    .decision-tree li:nth-child(2n) { background: #fbfcfb; }
+    .decision-tree .step-id { display: grid; place-items: start center; padding-top: 4px; color: var(--teal); }
+    .decision-tree h3 { margin: 0 0 6px; font-size: 17px; }
+    .decision-tree p { margin: 0; color: var(--muted); font-size: 13px; }
+    .decision-tree .branch { margin-top: 10px; color: var(--amber); font-size: 12px; font-weight: 700; }
+
+    .sequence {
+      position: relative;
+      display: grid;
+      grid-template-columns: 155px minmax(0, 1fr);
+      gap: 0 30px;
+      margin-top: 39px;
+      border-top: 1px solid var(--line-strong);
+    }
+    .sequence::before {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 154px;
+      width: 1px;
+      background: var(--line-strong);
+      content: "";
+    }
+    .sequence-stage {
+      position: relative;
+      padding: 24px 25px 24px 0;
+      color: var(--teal);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 800;
+      text-align: right;
+    }
+    .sequence-stage::after {
+      position: absolute;
+      right: -4px;
+      top: 28px;
+      width: 7px;
+      height: 7px;
+      background: var(--teal);
+      content: "";
+    }
+    .sequence-body {
+      border-bottom: 1px solid var(--line);
+      padding: 21px 0 24px 28px;
+    }
+    .sequence-body h3 { margin: 0 0 7px; font-size: 18px; }
+    .sequence-body p { margin: 0; color: var(--muted); font-size: 14px; }
+    .sequence-body code { font-size: 0.84em; }
+    .sequence-body ul { margin: 12px 0 0; padding-left: 19px; color: var(--muted); font-size: 13px; }
+    .sequence-body li + li { margin-top: 5px; }
+
+    .trust-map {
+      display: grid;
+      grid-template-columns: 1fr 42px 1.12fr 42px 1fr;
+      margin-top: 39px;
+      align-items: stretch;
+    }
+    .trust-node { border: 1px solid var(--line-strong); background: var(--surface); padding: 22px; }
+    .trust-node.sensitive { background: #fffdf9; border-color: #d8bd89; }
+    .trust-node.safe { border: 2px solid var(--teal); background: #fbfffe; }
+    .trust-node .node-index { color: var(--faint); }
+    .trust-node h3 { margin: 25px 0 8px; font-size: 18px; }
+    .trust-node p { margin: 0; color: var(--muted); font-size: 13px; }
+    .trust-node ul { margin: 13px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
+    .trust-arrow { display: grid; place-items: center; color: var(--faint); font-size: 21px; }
+    .role-table { margin-top: 32px; }
+    .role-table td:first-child { width: 24%; }
+
+    .compat-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0;
+      margin-top: 37px;
+      border-left: 1px solid var(--line-strong);
+      border-top: 1px solid var(--line-strong);
+    }
+    .compat-card {
+      min-height: 224px;
+      border-right: 1px solid var(--line-strong);
+      border-bottom: 1px solid var(--line-strong);
+      background: var(--surface);
+      padding: 22px;
+    }
+    .compat-card:nth-child(2n) { background: #fbfcfb; }
+    .compat-card h3 { margin: 27px 0 8px; font-size: 18px; }
+    .compat-card p { margin: 0; color: var(--muted); font-size: 13px; }
+    .compat-card .micro-label { color: var(--blue); }
+
+    .settings-grid {
+      display: grid;
+      grid-template-columns: 0.9fr 1.1fr;
+      gap: 35px;
+      margin-top: 36px;
+    }
+    .settings-card { border: 1px solid var(--line-strong); background: var(--surface); padding: 23px; }
+    .settings-card h3 { margin: 0 0 16px; }
+    .settings-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+    .settings-list li {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 100px;
+      gap: 14px;
+      border-bottom: 1px solid var(--line);
+      padding: 13px 0;
+    }
+    .settings-list code { align-self: start; background: transparent; padding: 0; color: #344147; font-size: 11px; }
+    .settings-list span { color: var(--muted); font-size: 12px; text-align: right; }
+    .settings-card p { color: var(--muted); font-size: 13px; }
+
+    .phase-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0;
+      margin-top: 36px;
+      border-bottom: 1px solid var(--line-strong);
+    }
+    .phase-tab {
+      min-width: 78px;
+      border: 0;
+      border-top: 2px solid transparent;
+      border-right: 1px solid var(--line);
+      border-radius: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 11px 14px;
+      font-family: var(--mono);
+      font-size: 12px;
+      text-align: left;
+    }
+    .phase-tab:hover { color: var(--ink); background: #eef2f1; }
+    .phase-tab[aria-selected="true"] { border-top-color: var(--teal); background: var(--surface); color: var(--teal); font-weight: 800; }
+    .phase-panel { display: none; border: 1px solid var(--line-strong); border-top: 0; background: var(--surface); padding: 30px; }
+    .phase-panel.active { display: grid; grid-template-columns: 0.72fr 1.28fr; gap: 35px; }
+    .phase-panel .phase-title { color: var(--teal); font-family: var(--display); font-size: 36px; line-height: 1.05; }
+    .phase-panel .phase-title span { display: block; margin-top: 9px; color: var(--muted); font-family: var(--body); font-size: 14px; line-height: 1.5; }
+    .phase-panel h3 { margin: 0 0 8px; font-size: 17px; }
+    .phase-panel p, .phase-panel li { color: var(--muted); font-size: 13px; }
+    .phase-panel ul { margin: 11px 0 22px; padding-left: 19px; }
+    .phase-panel li + li { margin-top: 5px; }
+    .phase-exit { border-top: 1px solid var(--line); padding-top: 13px; color: var(--ink); font-size: 13px; }
+
+    .test-matrix { margin-top: 38px; }
+    .test-matrix table { min-width: 950px; }
+    .test-matrix td:first-child { width: 19%; }
+    .test-matrix td:nth-child(2) { width: 37%; }
+    .test-matrix td:nth-child(3) { width: 44%; }
+
+    .handoff-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+      margin-top: 37px;
+      border-left: 1px solid var(--line-strong);
+      border-top: 1px solid var(--line-strong);
+    }
+    .handoff-card {
+      min-height: 250px;
+      border-right: 1px solid var(--line-strong);
+      border-bottom: 1px solid var(--line-strong);
+      background: var(--surface);
+      padding: 25px;
+    }
+    .handoff-card:nth-child(2n) { background: #fbfcfb; }
+    .handoff-card h3 { margin: 26px 0 11px; font-size: 19px; }
+    .handoff-card ol, .handoff-card ul { margin: 0; padding-left: 20px; color: var(--muted); font-size: 13px; }
+    .handoff-card li + li { margin-top: 8px; }
+    .handoff-card .micro-label { color: var(--teal); }
+
+    .stop-grid {
+      display: grid;
+      grid-template-columns: 0.92fr 1.08fr;
+      gap: 34px;
+      margin-top: 37px;
+    }
+    .stop-card { border: 1px solid #d5b7b3; background: #fffafa; padding: 25px; }
+    .stop-card h3 { color: var(--red); margin: 0 0 13px; }
+    .stop-card p, .stop-card li { color: #6e5653; font-size: 13px; }
+    .stop-card ul { margin: 13px 0 0; padding-left: 19px; }
+    .acceptance-card { border: 1px solid var(--line-strong); background: var(--surface); padding: 25px; }
+    .acceptance-card h3 { margin: 0 0 13px; }
+    .acceptance-row { border-top: 1px solid var(--line); padding: 14px 0; }
+    .acceptance-row:first-of-type { border-top: 0; }
+    .acceptance-row b { display: block; margin-bottom: 4px; font-size: 14px; }
+    .acceptance-row p { margin: 0; color: var(--muted); font-size: 13px; }
+
+    .finale { border-top: 1px solid var(--line); background: #162329; color: #eaf2f0; }
+    .finale .section { padding: 67px 0; }
+    .finale .section-kicker { color: #8bc8bf; }
+    .finale h2 { max-width: 920px; color: #fff; }
+    .finale p { max-width: 820px; color: #bdcfca; font-size: 17px; }
+    .finale-formula {
+      display: inline-block;
+      margin-top: 20px;
+      border: 1px solid #4f716e;
+      padding: 12px 15px;
+      color: #9bd5cc;
+      font-family: var(--mono);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    footer { border-top: 1px solid #40555a; color: #9db2ae; font-family: var(--mono); font-size: 11px; }
+    footer .shell { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 20px; padding: 18px 0; }
+    footer a { color: #b8ded8; }
+
+    @media (max-width: 980px) {
+      .hero { grid-template-columns: 1fr; gap: 35px; min-height: auto; }
+      .hero-instrument { max-width: 650px; }
+      .contract-grid { grid-template-columns: repeat(2, 1fr); }
+      .flow { grid-template-columns: 1fr 30px 1fr; }
+      .flow .flow-node:nth-of-type(3) { grid-column: 1 / 2; }
+      .flow .flow-arrow:nth-of-type(6) { display: none; }
+      .flow .flow-node:nth-of-type(4) { grid-column: 2 / 3; }
+      .budget-layout, .tree, .settings-grid, .stop-grid { grid-template-columns: 1fr; }
+      .budget-copy { padding-right: 0; }
+      .representation-grid { grid-template-columns: repeat(3, 1fr); }
+      .representation:nth-child(4), .representation:nth-child(5) { min-height: 180px; }
+      .code-grid { grid-template-columns: 1fr; }
+      .trust-map { grid-template-columns: 1fr 30px 1fr; }
+      .trust-map .trust-node:nth-of-type(3) { grid-column: 1 / 2; }
+      .trust-map .trust-arrow:nth-of-type(4) { display: none; }
+      .trust-map .trust-node:nth-of-type(5) { grid-column: 2 / 3; }
+      .phase-panel.active { grid-template-columns: 1fr; gap: 22px; }
+    }
+
+    @media (max-width: 680px) {
+      body { font-size: 16px; }
+      .shell { width: min(100% - 28px, 1180px); }
+      .topbar-inner { gap: 12px; }
+      .wordmark { font-size: 11px; }
+      nav { gap: 14px; }
+      .hero { padding: 48px 0 45px; }
+      h1 { font-size: clamp(40px, 13vw, 57px); }
+      h2 { font-size: 31px; }
+      .hero-copy, .section-lead { font-size: 17px; }
+      .hero-meta span + span::before { margin-right: 12px; }
+      .section { padding: 54px 0; }
+      .instrument-stat { grid-template-columns: 1fr; gap: 10px; }
+      .instrument-stat b { font-size: 33px; }
+      .meta-grid, .contract-grid, .compat-grid, .handoff-grid { grid-template-columns: 1fr; }
+      .meta-item, .meta-item + .meta-item { min-height: auto; border-left: 0; padding: 20px 0; }
+      .meta-item + .meta-item { border-top: 1px solid var(--line); }
+      .notice { grid-template-columns: 1fr; gap: 9px; }
+      .contract { min-height: 0; }
+      .before-after { grid-template-columns: 1fr; gap: 15px; }
+      .route-arrow { min-height: 30px; transform: rotate(90deg); }
+      .flow, .trust-map { grid-template-columns: 1fr; gap: 13px; }
+      .flow .flow-node:nth-of-type(3), .flow .flow-node:nth-of-type(4), .trust-map .trust-node:nth-of-type(3), .trust-map .trust-node:nth-of-type(5) { grid-column: auto; }
+      .flow-arrow, .trust-arrow { min-height: 24px; transform: rotate(90deg); }
+      .flow .flow-arrow:nth-of-type(6), .trust-map .trust-arrow:nth-of-type(4) { display: grid; }
+      .zone-legend { grid-template-columns: repeat(2, 1fr); }
+      .calculator-fields, .calculator-results { grid-template-columns: 1fr; }
+      .representation-grid { grid-template-columns: 1fr; }
+      .representation { min-height: 0; }
+      .sequence { grid-template-columns: 94px minmax(0, 1fr); }
+      .sequence::before { left: 93px; }
+      .sequence-stage { padding-right: 19px; font-size: 10px; }
+      .sequence-stage::after { right: -4px; }
+      .sequence-body { padding-left: 21px; }
+      .phase-tab { min-width: 62px; padding: 10px 9px; }
+      .phase-panel { padding: 22px; }
+      .settings-list li { grid-template-columns: 1fr; gap: 3px; }
+      .settings-list span { text-align: left; }
+      .stop-card, .acceptance-card { padding: 21px; }
+      footer .shell { display: block; }
+      footer .shell div + div { margin-top: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <div class="wordmark">SAN <span>CONTEXT STEADY</span> / IMPLEMENTATION</div>
+      <nav aria-label="文档目录">
+        <a href="#contract">合同</a>
+        <a href="#architecture">架构</a>
+        <a href="#budget">预算</a>
+        <a href="#runtime">运行时</a>
+        <a href="#delivery">实施</a>
+        <a href="#handoff">交接</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="shell hero" aria-labelledby="hero-title">
+      <div>
+        <div class="eyebrow">SAN v0.1 · technical implementation plan · 2026-07-12</div>
+        <h1 id="hero-title">把「240K 稳态」落实为一个可审计的运行时。</h1>
+        <p class="hero-copy">
+          这份文档把已批准的质量优先架构，拆成可直接交给 GPT-5.5 的工程工作单。
+          <strong>目标不是继续修补 ContextPacket，而是让完整 journal、唯一 ContextPlan、provider 投影、状态统计与 compaction 使用同一套选择结果。</strong>
+        </p>
+        <div class="hero-meta">
+          <span>状态：架构已批准 · 待实现</span>
+          <span>范围：packages/coding-agent</span>
+          <span>交接对象：GPT-5.5</span>
+        </div>
+      </div>
+
+      <aside class="hero-instrument" aria-label="实施目标摘要">
+        <div class="instrument-head">
+          <h3>实施上的三个「唯一」</h3>
+          <small>不再让多个裁剪器各自决定</small>
+        </div>
+        <div class="instrument-stat">
+          <div><b>1</b><span>完整 journal</span></div>
+          <div><b>1</b><span>ContextPlan</span></div>
+          <div><b>1</b><span>provider 投影</span></div>
+        </div>
+        <div class="principle-stack">
+          <div class="principle">
+            <span>01</span>
+            <p><strong>质量先行</strong>240K 是目标工作台，不是超过即删除的硬阈值。</p>
+          </div>
+          <div class="principle">
+            <span>02</span>
+            <p><strong>可追溯</strong>任何不再发送的原文，都必须有明确替代物与覆盖关系。</p>
+          </div>
+          <div class="principle">
+            <span>03</span>
+            <p><strong>低频重建</strong>只在安全的用户轮次边界 rebase，不在 tool loop 中途改变历史。</p>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="band alt">
+      <div class="shell section">
+        <div class="section-kicker">Reading this plan</div>
+        <h2>这是一份实施契约，不是新的产品提案。</h2>
+        <p class="section-lead">
+          产品方向以 <a href="san-context-steady-240k-redesign-proposal-20260712.html">《240K 质量优先重构提案》</a> 为准。
+          本文只回答：<strong>哪些模块要换、每一步怎样接入 AgentSession、什么情况下允许 burst、怎样证明没有丢任务信息，以及怎样安全地替换当前 ContextPacket + prune 路径。</strong>
+        </p>
+
+        <div class="meta-grid">
+          <article class="meta-item">
+            <div class="micro-label">Implementation scope</div>
+            <h3>重写的是投影层</h3>
+            <p>保留 session journal、TurnDigest、Brain、SanLoop 与既有 compaction 能力；替换「小 packet 注入 + 另一套 prune」这条并行决策路径。</p>
+          </article>
+          <article class="meta-item">
+            <div class="micro-label">Explicit non-goal</div>
+            <h3>不重写整个 San</h3>
+            <p>不迁移历史 JSONL，不改变用户可见 transcript 的完整性，不把自然语言摘要当作唯一历史，也不在本轮要求完整产品 dogfood。</p>
+          </article>
+          <article class="meta-item">
+            <div class="micro-label">Definition of done</div>
+            <h3>先代码闭环，后产品验收</h3>
+            <p>本次交接要求完成可测的运行时与兼容层。全历史 A/B、长任务质量和真实使用体验留给后续联合验收，不在实现中用猜测代替。</p>
+          </article>
+        </div>
+
+        <div class="notice">
+          <div class="notice-label">Current worktree rule</div>
+          <p>
+            当前工作区已有 GPT-5.5 / 用户未提交的 Context Steady 改动。实施者必须先 <code>git status --short</code>，保留其中已有的
+            entryId 证据、全 assistant decision 提取、importance 归一化、退化日志与附件边界等有价值改动；
+            <strong>不得 reset、checkout、revert 或为了让旧 packet 测试通过而回退它们。</strong>
+            本文要求替换的是旧的 all-digest pruning 与 packet delta 累积方向，而不是抹掉已完成的底层改良。
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="contract">
+      <div class="shell section">
+        <div class="section-kicker">Non-negotiable contract</div>
+        <h2>八条不可变合同。</h2>
+        <p class="section-lead">每一个模块、每一个测试和每一次降级都必须遵守这些合同。它们优先于「刚好把 token 压下来」的局部优化。</p>
+
+        <div class="contract-grid">
+          <article class="contract">
+            <div class="contract-no">C-01</div>
+            <h3>Journal 永远完整</h3>
+            <p>SessionEntry journal 是事实来源。ContextPlan 只是当前 provider 请求的工作投影，不能反向覆盖或删除原始历史。</p>
+          </article>
+          <article class="contract">
+            <div class="contract-no">C-02</div>
+            <h3>240K 统计全输入</h3>
+            <p>预算包括 system prompt、tool schemas、provider 固定开销与 messages；不允许只统计 packet 或可见 conversation。</p>
+          </article>
+          <article class="contract">
+            <div class="contract-no">C-03</div>
+            <h3>质量能打破目标</h3>
+            <p>200K–260K 是常态控制带，260K–320K 是有记录的质量 burst。质量闸门失败时，不能为回到 240K 强行删活跃证据。</p>
+          </article>
+          <article class="contract">
+            <div class="contract-no">C-04</div>
+            <h3>原文退出必须有替代</h3>
+            <p>每个已 settled 的旧 turn 在 provider 可见上下文中恰好一种表示：exact、evidence stub、digest、checkpoint 或明确 omitted；omitted 必须有 coverage 引用。</p>
+          </article>
+          <article class="contract">
+            <div class="contract-no">C-05</div>
+            <h3>工具对不可拆</h3>
+            <p>当前 assistant tool call 与对应 tool result 是原子 bundle；当前 prompt、未结束 turn、当前附件和活跃文件证据同样受保护。</p>
+          </article>
+          <article class="contract">
+            <div class="contract-no">C-06</div>
+            <h3>同一计划驱动一切</h3>
+            <p>发送、状态栏、/context、pre/mid/post compaction 估算与审计必须读取同一个 ContextPlan，而不是各自重新 prune。</p>
+          </article>
+          <article class="contract">
+            <div class="contract-no">C-07</div>
+            <h3>动态数据没有高权限</h3>
+            <p>digest、checkpoint、recall 和材料化的背景内容属于数据，必须以 user/data 语义进入 provider，不得伪装成 system 或 developer 指令。</p>
+          </article>
+          <article class="contract">
+            <div class="contract-no">C-08</div>
+            <h3>关闭即等价</h3>
+            <p><code>san.contextSteady.enabled=false</code> 时必须走原有非 steady 路径；不增加消息、不改变顺序、不重置 provider cache，也不改变旧 session 行为。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="band alt" id="architecture">
+      <div class="shell section">
+        <div class="section-kicker">Architecture replacement</div>
+        <h2>从两套独立裁剪，换成一次选择、两次使用。</h2>
+        <p class="section-lead">
+          当前实现在 <code>agent-session.ts</code> 中先构造并注入 ContextPacket，再在 provider transform 中单独调用 <code>buildContextSteadyPrunedMessages</code>。
+          两者看见的对象、预算口径和删除理由不同，容易造成<strong>重复、漏算、状态栏漂移与缓存抖动</strong>。
+        </p>
+
+        <div class="before-after">
+          <article class="route legacy">
+            <div class="route-head"><h3>当前路径</h3><small>ContextPacket + prune</small></div>
+            <ol class="route-list">
+              <li><b>01</b><span>从 digest / checkpoint 组装一个小型 ContextPacket，并作为自定义 prelude 注入消息链。</span></li>
+              <li><b>02</b><span>SanLoop / Brain / packet 进入全局 injection 候选池，可能再被各自的预算逻辑截断。</span></li>
+              <li><b>03</b><span>provider transform 对完整消息再做 <code>prune.ts</code>，却不知道 packet 是否覆盖了被裁内容。</span></li>
+              <li><b>04</b><span>状态、compaction 与发送不保证使用同一估算或同一选择。</span></li>
+            </ol>
+          </article>
+          <div class="route-arrow" aria-hidden="true">→</div>
+          <article class="route target">
+            <div class="route-head"><h3>目标路径</h3><small>Journal → ContextPlan → materialize</small></div>
+            <ol class="route-list">
+              <li><b>01</b><span>完整 journal 建立 source index，按 turn bundle 与证据材料归档，不直接删除原文。</span></li>
+              <li><b>02</b><span>planner 根据当前任务、epoch、质量闸门和总输入预算生成不可变 <code>ContextPlanAudit</code>。</span></li>
+              <li><b>03</b><span>materializer 严格按 plan 渲染 provider messages；同一 plan 也提供准确 token 估算和可读 debug。</span></li>
+              <li><b>04</b><span>在安全边界才新建 epoch / rebase；普通 tool loop 内稳定追加活跃 tail。</span></li>
+            </ol>
+          </article>
+        </div>
+
+        <figure class="flow" aria-label="目标 ContextPlan 数据流">
+          <article class="flow-node">
+            <div class="node-index">01 / persistent source</div>
+            <h3>完整 Journal</h3>
+            <p>messages、custom audit、compaction、branch history。保留原始事实与可回放的证据。</p>
+            <ul>
+              <li>不为省 token 改写</li>
+              <li>可 resume / rewind</li>
+              <li>是唯一历史来源</li>
+            </ul>
+          </article>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <article class="flow-node">
+            <div class="node-index">02 / pure indexing</div>
+            <h3>Source Index</h3>
+            <p>将 journal 归并成 turn bundles、文件证据、工具产物、digest、checkpoint 与可回读引用。</p>
+            <ul>
+              <li>不渲染 prompt</li>
+              <li>不决定 token cap</li>
+              <li>能说明来源</li>
+            </ul>
+          </article>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <article class="flow-node primary">
+            <div class="node-index">03 / one decision</div>
+            <h3>ContextPlan</h3>
+            <p>唯一的选择结果：材料、表示方式、coverage、token 估算、quality outcome、epoch 与 rebase 原因。</p>
+            <ul>
+              <li>稳定于一个 request / epoch</li>
+              <li>可写入审计，内容不落盘</li>
+              <li>共享给发送与状态层</li>
+            </ul>
+          </article>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <article class="flow-node">
+            <div class="node-index">04 / ephemeral projection</div>
+            <h3>Materializer</h3>
+            <p>把 plan 变成实际 provider messages，保留当前 prompt 与活跃 tool pair，背景材料是低权限数据。</p>
+            <ul>
+              <li>无二次选择</li>
+              <li>无 packet prelude</li>
+              <li>可比较实际输入</li>
+            </ul>
+          </article>
+        </figure>
+        <figcaption class="flow-caption">重点：ContextPlan 是选择记录，不是一段「更聪明的摘要」。digest 与 checkpoint 是它可选择的材料之一。</figcaption>
+      </div>
+    </section>
+
+    <section class="band" id="budget">
+      <div class="shell section">
+        <div class="section-kicker">Budget contract</div>
+        <h2>240K 是质量工作集目标，不是机械截断线。</h2>
+        <p class="section-lead">
+          预算的单位始终是<strong>本次 provider 的完整输入</strong>。如果模型窗口不足以承载 240K 加输出预留，系统必须显式降级；
+          如果质量闸门要求保留更多证据，系统可以进入有理由、可观察的 burst。
+        </p>
+
+        <div class="budget-layout">
+          <div class="budget-copy">
+            <h3>固定的计算口径</h3>
+            <div class="formula" aria-label="预算计算公式">
+              <div>configuredSteady = positive(qualityWindowTokens) ? value : 240000</div>
+              <div>reserve = max(32000, floor(model.contextWindow × reserveRatio))</div>
+              <div>hardInputCeiling = max(0, model.contextWindow - reserve)</div>
+              <div>steadyTarget = min(configuredSteady, hardInputCeiling)</div>
+              <div>configuredBurst = positive(burstWindowTokens) ? value : 320000</div>
+              <div>burstCeiling = min(max(configuredBurst, steadyTarget), hardInputCeiling)</div>
+              <div>controlMax = min(burstCeiling, floor(steadyTarget × 13 / 12))</div>
+              <div>messageBudget = selectedInputLimit - nonMessageTokens</div>
+            </div>
+            <p>
+              240K 时 <code>controlMax</code> 为 260K，舒适观察线为 <code>floor(steadyTarget × 5 / 6)</code>，即 200K。
+              舒适线只是「不用主动填满历史」的提醒，不触发删除。只要相关内容少于目标，宁可保持短而清楚。
+            </p>
+            <p>
+              <strong>nonMessageTokens</strong> 来自当前模型的 system prompt、tool schemas、provider overhead 等固定输入；它不是 Context Steady 可以假装不存在的容量。
+              当 <code>messageBudget</code> 连当前受保护材料也放不下，进入 <code>hard_pressure</code>，而不是悄悄截断。
+            </p>
+          </div>
+
+          <div class="calculator" aria-label="预算计算器">
+            <div class="calculator-head">
+              <h3>预算计算器</h3>
+              <span>可改数值查看低窗口降级</span>
+            </div>
+            <div class="calculator-fields">
+              <label>模型 context window
+                <input id="modelWindow" type="number" min="1" step="1000" value="400000">
+              </label>
+              <label>steady target
+                <input id="steadyInput" type="number" min="1" step="1000" value="240000">
+              </label>
+              <label>burst target
+                <input id="burstInput" type="number" min="1" step="1000" value="320000">
+              </label>
+              <label>reserve ratio
+                <input id="reserveInput" type="number" min="0" max="0.9" step="0.01" value="0.2">
+              </label>
+              <label>固定非消息输入估算
+                <input id="nonMessageInput" type="number" min="0" step="1000" value="48000">
+              </label>
+              <label>最低输出预留
+                <input id="minimumReserveInput" type="number" min="0" step="1000" value="32000">
+              </label>
+            </div>
+            <div class="budget-rail">
+              <div class="budget-rail-track" aria-hidden="true">
+                <div class="budget-zone comfort"></div>
+                <div class="budget-zone control"></div>
+                <div class="budget-zone burst"></div>
+                <div class="budget-rail-marker steady"></div>
+                <div class="budget-rail-marker burst"></div>
+              </div>
+              <div class="budget-rail-labels"><span id="comfortLabel">200K</span><span id="steadyLabel">240K</span><span id="controlLabel">260K</span><span id="burstLabel">320K</span></div>
+            </div>
+            <div class="calculator-results">
+              <div class="calc-result"><span>硬输入上限</span><b id="hardCeiling">320K</b></div>
+              <div class="calc-result emphasis"><span>稳态输入目标</span><b id="steadyTarget">240K</b></div>
+              <div class="calc-result"><span>可用消息预算</span><b id="messageBudget">192K</b></div>
+            </div>
+            <p class="calc-note" id="budgetNote">400K 窗口减去 80K 输出预留后，240K steady 与 320K burst 都可使用；48K 固定开销后，steady 的消息材料预算为 192K。</p>
+          </div>
+        </div>
+
+        <div class="zone-legend">
+          <div><b>0–200K</b><span>舒适区：只保留相关材料，不为了凑满 240K 加旧历史。</span></div>
+          <div><b>200K–260K</b><span>控制带：最常见且理想的 240K 稳态。</span></div>
+          <div><b>260K–320K</b><span>质量 burst：必须记录原因，在下一个安全边界复核。</span></div>
+          <div><b>320K+</b><span>强压力：走 rebase、证据回读、既有 compaction 或模型升级，不静默删任务。</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="band alt" id="plan">
+      <div class="shell section">
+        <div class="section-kicker">Plan data model</div>
+        <h2>把「为什么这个消息还在」写进 ContextPlan。</h2>
+        <p class="section-lead">
+          计划必须可审计，但审计记录不能再次存入大段敏感内容。持久化的是<strong>来源引用、表示方式、token 估算、质量结论与 coverage</strong>；
+          实际 provider message 只在内存中 materialize。
+        </p>
+
+        <div class="representation-grid">
+          <article class="representation">
+            <div class="rep-type">EXACT</div>
+            <h3>原样 turn bundle</h3>
+            <p>当前 turn、当前 tool pair，以及 epoch 内最近的 3–8 个高价值 settled turns。按时间顺序发送。</p>
+          </article>
+          <article class="representation">
+            <div class="rep-type">EVIDENCE_STUB</div>
+            <h3>可回读的证据指针</h3>
+            <p>旧大文件、旧 tool 输出、旧图像的完整内容退出后，保留 path、hash、entryId、为何相关与重读动作。</p>
+          </article>
+          <article class="representation">
+            <div class="rep-type">DIGEST</div>
+            <h3>轮次索引</h3>
+            <p>TurnDigest 是压缩后的「发生过什么」索引，不能自动等价为足够证据，也不能授权删除最近 exact turn。</p>
+          </article>
+          <article class="representation">
+            <div class="rep-type">CHECKPOINT</div>
+            <h3>epoch 事实底座</h3>
+            <p>只渲染最新 checkpoint；旧 checkpoint 保留在审计链中，不重复进入 provider。</p>
+          </article>
+          <article class="representation">
+            <div class="rep-type">OMITTED</div>
+            <h3>明确的缺席</h3>
+            <p>只能用于已被 digest/checkpoint/证据 stub 覆盖的历史，并记录 coverage refs。没有替代物，就不能 omitted。</p>
+          </article>
+        </div>
+
+        <div class="code-grid">
+          <article class="code-panel">
+            <div class="micro-label">New persisted audit type · no raw payload</div>
+            <pre><span class="type">interface</span> <span class="field">ContextPlanAudit</span> {
+  <span class="field">schemaVersion</span>: <span class="literal">1</span>;
+  <span class="field">planId</span>: string;
+  <span class="field">sessionId</span>: string;
+  <span class="field">epochId</span>: string;
+  <span class="field">promptGeneration</span>: number;
+  <span class="field">createdAt</span>: string;
+
+  <span class="field">budget</span>: {
+    modelWindow: number;
+    nonMessageTokens: number;
+    hardInputCeiling: number;
+    steadyTarget: number;
+    controlMax: number;
+    burstCeiling: number;
+    projectedInputTokens: number;
+  };
+
+  <span class="field">qualityGate</span>: {
+    outcome: <span class="literal">"pass"</span> | <span class="literal">"burst_required"</span> | <span class="literal">"hard_pressure"</span>;
+    requiredCoverage: string[];
+    missingCoverage: string[];
+    reason?: string;
+  };
+
+  <span class="field">materials</span>: ContextPlanMaterialAudit[];
+  <span class="field">rebase</span>?: ContextPlanRebaseAudit;
+}</pre>
+          </article>
+
+          <article class="plain-panel">
+            <div class="micro-label">Required in-memory companion</div>
+            <h3><code>BuiltContextPlan</code></h3>
+            <p>执行时不只需要 audit。planner 返回一个不可变的内存对象：</p>
+            <ul>
+              <li><code>audit</code>：可以 append 到 <code>san.context_plan</code> custom entry 的纯元数据。</li>
+              <li><code>messages</code>：由 materializer 生成、仅本次 provider 请求使用的 <code>AgentMessage[]</code>。</li>
+              <li><code>requestKey</code>：绑定 prompt generation、epoch 和 live tail，防止 tool loop 内重复选择旧历史。</li>
+              <li><code>coverage</code>：每个 omitted 或 stubbed source 指向它的替代材料，供 invariant 与 debug 读取。</li>
+            </ul>
+            <p><strong>禁止：</strong>把 rendered message 全量写进 audit；也禁止让 materializer 重新做一次「我觉得哪些重要」的选择。</p>
+          </article>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>类型 / 常量</th><th>持久化策略</th><th>实施要求</th><th>兼容性</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>san.context_plan</code><br><span class="verb-add">ADD</span></td>
+                <td>每个完成的用户 request 写一条精简 audit；不得包含文件正文、工具大输出或 secret 原文。</td>
+                <td>新增 <code>ContextPlanAudit</code> 与 schema parser；debug / report 读取它，而不是读取 provider message。</td>
+                <td>新类型，不影响旧 session。</td>
+              </tr>
+              <tr>
+                <td><code>san.context_checkpoint</code> v2<br><span class="verb-change">CHANGE</span></td>
+                <td>保留 checkpoint 链。v2 记录 <code>epochId</code>、覆盖的 turn ids、前一 checkpoint ref 与 <code>interval | budget | topic_shift | resume | manual</code> 原因。</td>
+                <td>writer 写 v2；reader 同时接受 v1 / v2；最新一个才可 materialize。</td>
+                <td>不重写历史 JSONL。</td>
+              </tr>
+              <tr>
+                <td><code>san.turn_digest</code> v1<br><span class="verb-keep">KEEP</span></td>
+                <td>继续作为 Brain 与 ContextPlan 的轮次索引材料。</td>
+                <td>保留数据结构；修改 side request 的输入净化和 transport 注入点。</td>
+                <td>Brain 现有引用不破坏。</td>
+              </tr>
+              <tr>
+                <td><code>san.context_packet</code> v1<br><span class="verb-remove">RETIRE</span></td>
+                <td>历史记录只读保留；新运行时不再写入，不再注入，不再作为 active context 来源。</td>
+                <td>过渡期 report 可以读它；resume 时过滤旧 injected packet message。</td>
+                <td>允许老 session 打开，不做数据迁移。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="modules">
+      <div class="shell section">
+        <div class="section-kicker">Module work map</div>
+        <h2>新建纯核心，薄接入 AgentSession，最后删除旧路径。</h2>
+        <p class="section-lead">
+          核心选择逻辑必须是独立、确定、可用 fixture 测的纯模块。<code>AgentSession</code> 只负责把现实运行时信息装配进 request state，
+          调用 planner，并把结果交给 provider、状态与审计。
+        </p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>动作</th><th>文件</th><th>责任</th><th>边界 / 注意点</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><span class="verb-add">ADD</span></td><td><code>context-steady/plan-types.ts</code></td><td>ContextPlan、material audit、coverage、epoch、quality result、request state 的明确类型。</td><td>审计数据与 in-memory rendered messages 分开；不使用模糊 <code>Record&lt;string, unknown&gt;</code> 代替核心合同。</td></tr>
+              <tr><td><span class="verb-add">ADD</span></td><td><code>context-steady/source-index.ts</code></td><td>从 branch / pending messages 生成 turn bundles、工具对、文件证据、历史 digest / checkpoint 引用。</td><td>不渲染、不 trim；每个 source 有稳定 id 与 entry refs。</td></tr>
+              <tr><td><span class="verb-add">ADD</span></td><td><code>context-steady/budget.ts</code></td><td>完整输入预算、低窗口降级、控制带与 burst ceiling。</td><td>所有入口复用，不能在状态栏和发送端复制公式。</td></tr>
+              <tr><td><span class="verb-add">ADD</span></td><td><code>context-steady/quality-gate.ts</code></td><td>判定 pass、burst_required、hard_pressure；检查当前规格、错误、工具对与重要证据覆盖。</td><td>质量闸门输出理由，不能只返回 boolean。</td></tr>
+              <tr><td><span class="verb-add">ADD</span></td><td><code>context-steady/planner.ts</code></td><td>选择材料与 representation，建立 coverage，稳定地生成 ContextPlan。</td><td>同一 request / epoch 内不重新洗牌历史选择。</td></tr>
+              <tr><td><span class="verb-add">ADD</span></td><td><code>context-steady/materialize.ts</code></td><td>按 plan 产生 provider 可见 messages 与总 token estimate。</td><td>无二次优先级决策；动态背景严格是低权限数据角色。</td></tr>
+              <tr><td><span class="verb-add">ADD</span></td><td><code>context-steady/runtime.ts</code></td><td>request state、epoch 生命周期、safe rebase 决策与 plan snapshot 访问。</td><td>保持对 <code>AgentSession</code> 的依赖薄；不在这里直接调用 provider。</td></tr>
+              <tr><td><span class="verb-add">ADD</span></td><td><code>context-steady/audit.ts</code></td><td>append / parse <code>san.context_plan</code>，生成 /context plan 所需视图。</td><td>白名单字段持久化；拒绝内容体积膨胀。</td></tr>
+              <tr><td><span class="verb-change">CHANGE</span></td><td><code>context-steady/digest.ts</code> + session adapter</td><td>将净化后的 digest 输入经 <code>AgentSession.prepareSimpleStreamOptions(...)</code> 准备的 side-request transport 发出。</td><td>由 session 注入 concrete transport / options seam，便于 provider payload contract test；不要对全局模块做 <code>mock.module()</code>。</td></tr>
+              <tr><td><span class="verb-add">ADD</span></td><td><code>prompts/context-steady/context-plan-data.md</code></td><td>背景数据容器的静态文案与不可信来源声明。</td><td>所有 prompt 文案放 .md；禁止在 TS 内拼 prompt 字符串。</td></tr>
+              <tr><td><span class="verb-change">CHANGE</span></td><td><code>context-steady/checkpoint.ts</code>, <code>digest.ts</code>, <code>session.ts</code>, <code>types.ts</code>, <code>index.ts</code></td><td>checkpoint v2、digest 输入净化、旧 packet 跳过逻辑、barrel exports。</td><td>纯 <code>index.ts</code> 使用 star exports；TurnDigest v1 与旧 readers 继续可用。</td></tr>
+              <tr><td><span class="verb-change">CHANGE</span></td><td><code>session/agent-session.ts</code></td><td>建立 request state、移除 packet prelude、在正确时机 materialize、写 audit、只在 rebase 时重置 cache。</td><td>这是接线层，不把 planner 算法塞进大类。</td></tr>
+              <tr><td><span class="verb-change">CHANGE</span></td><td><code>session/session-context.ts</code>, reports, dogfood, SanLoop</td><td>过滤旧 packet injection；读取 context plan audit；SanLoop 新增 plan refs。</td><td>旧 packet ref 字段作为兼容输入，不能继续成为新数据的主来源。</td></tr>
+              <tr><td><span class="verb-remove">REMOVE</span></td><td><code>context-steady/prune.ts</code>, <code>packet.ts</code>, <code>prompts/context-steady/context-packet.md</code></td><td>所有调用迁移、迁移 reader 到位后删除运行时 packet / prune 逻辑。</td><td>不要长期留双引擎配置开关；兼容仅限读取旧记录。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="band alt" id="planner">
+      <div class="shell section">
+        <div class="section-kicker">Planner algorithm</div>
+        <h2>先保护任务，再回收噪声，最后才考虑重建 epoch。</h2>
+        <p class="section-lead">
+          planner 的职责不是找「最短消息列表」，而是找<strong>能让当前任务继续高质量完成的最小充分工作集</strong>。
+          所有可删项都有固定优先级；不可删项由 quality gate 决定。
+        </p>
+
+        <div class="tree">
+          <div class="tree-intro">
+            <h3>每个 settled turn 只有一个 provider 可见表示</h3>
+            <p>exact 与 digest / checkpoint 不能不受控地叠加。否则看似保留了更多信息，实际是重复占用上下文、污染 cache，也让模型面对互相矛盾的旧状态。</p>
+            <div class="rule">「选择一次，渲染一次；没有 coverage，就不允许缺席。」</div>
+            <p>当前 open turn 不属于这条降级链。它保持 exact，直到 agent settled 且下一个安全边界到来。</p>
+          </div>
+
+          <ol class="decision-tree">
+            <li>
+              <div class="step-id">01</div>
+              <div><h3>建立 source index 与 turn bundles</h3><p>将 assistant tool call 与 result 配对；标记 current prompt、未解决错误、当前文件提及、附件、extension 增量、SanLoop / Brain 已验证的当前内容。</p></div>
+            </li>
+            <li>
+              <div class="step-id">02</div>
+              <div><h3>先选 required materials</h3><p>当前 prompt、当前 open turn、活跃 tool pair、用户显式约束和验收条件、最近至少 3 个 exact turns、可直接影响当前任务的文件 / 图像证据必须进入候选。</p></div>
+            </li>
+            <li>
+              <div class="step-id">03</div>
+              <div><h3>为旧 turn 指定恰好一种表示</h3><p>先保留 exact target 5（自适应范围 3–8）；可回读的大 payload 优先转 evidence stub；剩余历史选 digest 或最新 checkpoint 覆盖，并写 coverage map。</p></div>
+            </li>
+            <li>
+              <div class="step-id">04</div>
+              <div><h3>materialize 并估算完整 provider input</h3><p>将 system / tools 固定开销与计划 messages 合并计算。不要用字符数替代 provider token estimate，也不要只数 context steady 自己生成的部分。</p></div>
+            </li>
+            <li>
+              <div class="step-id">05</div>
+              <div><h3>控制带内：直接接受</h3><p>如果 projected input 不超过 <code>controlMax</code>，保存该 plan。小于 steady target 时不追加无关历史。</p></div>
+            </li>
+            <li>
+              <div class="step-id">06</div>
+              <div><h3>超过控制带：只回收低风险材料</h3><p>依次降低低分 recall、重复 / 过期的大 payload、已被 checkpoint 覆盖的 digest；只有到安全 rebase 边界才可把 oldest exact 降到 min 3。</p></div>
+            </li>
+            <li>
+              <div class="step-id">07</div>
+              <div><h3>质量闸门复核</h3><p>若所需规格、关键错误、工具因果、文件证据或验收条件缺失，恢复材料并标记 <code>burst_required</code>。</p><div class="branch">允许到 burst ceiling；记录什么被保护、为什么不能收缩。</div></div>
+            </li>
+            <li>
+              <div class="step-id">08</div>
+              <div><h3>超过 burst：进入 hard pressure</h3><p>仅在用户轮次边界尝试 safe rebase、针对性 evidence stub、既有 compaction / model promotion。仍放不下时中止静默发送并报告可解释的压力原因。</p><div class="branch">绝不丢当前任务材料来伪造「已稳定」。</div></div>
+            </li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="runtime">
+      <div class="shell section">
+        <div class="section-kicker">AgentSession integration</div>
+        <h2>运行时接入只有五个安全点。</h2>
+        <p class="section-lead">
+          当前关键锚点位于 <code>agent-session.ts</code> 的 <code>#generateTurnDigest</code>、<code>#maybeAppendContextSteadyCheckpoint</code>、
+          <code>#buildContextSteadyPacketPrelude</code>、<code>#promptWithMessage</code> 与 <code>#transformContextForProvider</code>。
+          新实现要移除 packet prelude，而不是在这些锚点旁边再叠一层上下文。
+        </p>
+
+        <div class="sequence">
+          <div class="sequence-stage">A / USER BOUNDARY</div>
+          <article class="sequence-body">
+            <h3>创建 <code>ContextSteadyRequestState</code></h3>
+            <p>在用户 prompt 进入实际 agent loop 前，异步执行 recall、读取 branch、评估 topic shift / resume 是否需要新 epoch，并冻结本 request 的 identity。</p>
+            <ul>
+              <li>state 至少包含 <code>requestId</code>、<code>promptGeneration</code>、<code>epochId</code>、recall 候选、rebase reason、plan snapshot。</li>
+              <li>此时<strong>不再</strong>调用 <code>#buildContextSteadyPacketPrelude</code>，不写 injected custom message，也不加入 Brain 全局 injection 候选池。</li>
+              <li>topic shift、resume、manual 和已到 interval 的 checkpoint 只能在这里或已 settled 的安全边界触发。</li>
+            </ul>
+          </article>
+
+          <div class="sequence-stage">B / PRE-FLIGHT</div>
+          <article class="sequence-body">
+            <h3>在 <code>#promptWithMessage</code> 前构建可解释的预检 plan</h3>
+            <p>文件 mention、附件、prepend messages、当前 prompt 和可见 session 状态准备完成后，基于 <code>[...this.messages, ...pendingMessages]</code> 形成 preflight source snapshot。</p>
+            <ul>
+              <li>pre-prompt compaction 查询的是这个 plan 的 projected input，不再调用独立 prune estimate。</li>
+              <li>plan 将当前扩展消息标记为 protected live content；没有 journal source 的 extension 增量不能被误认为可删旧历史。</li>
+              <li>此阶段只准备选择，不能在未结束 tool loop 中 reset append-only cache。</li>
+            </ul>
+          </article>
+
+          <div class="sequence-stage">C / PROVIDER SEND</div>
+          <article class="sequence-body">
+            <h3>在 <code>#transformContextForProvider</code> materialize 最终投影</h3>
+            <p>先保留现有 <code>#transformContext(messages, signal)</code> 的 extension 处理；随后从同一个 request state 取 plan，并根据最终 transformed messages 增量补入 live tail。</p>
+            <ul>
+              <li>关闭 steady 时原样返回 <code>transformedMessages</code>，保证 disabled parity。</li>
+              <li>开启 steady 时返回 <code>materializeContextPlan(...).messages</code>，不再调用 <code>buildContextSteadyPrunedMessages</code>。</li>
+              <li>旧 epoch 的选择稳定；只有本轮新产生的 assistant / tool tail 可以追加，不能重新排序历史。</li>
+            </ul>
+          </article>
+
+          <div class="sequence-stage">D / TOOL LOOP</div>
+          <article class="sequence-body">
+            <h3>保持一条 request state，保护工具原子性</h3>
+            <p>同一用户 request 的多次 provider 调用共享 epoch 与旧历史选择。每个新 tool call/result 以 bundle 追加；当前文件和图像保持第一轮完整内容。</p>
+            <ul>
+              <li>较早的大 tool 输出只有在存在 artifact / path / hash 可重取时才能变为 evidence stub。</li>
+              <li>较早完整文件副本转为 path + hash + entryId + re-read instruction；旧图像转为描述或证据指针。</li>
+              <li>禁止在中途 topic shift / rebase；否则 provider prefix 与 append-only context 会被无意义打断。</li>
+            </ul>
+          </article>
+
+          <div class="sequence-stage">E / AGENT END</div>
+          <article class="sequence-body">
+            <h3>写 digest、checkpoint 与 plan audit；只在必要时 rebase</h3>
+            <p>agent settled 后生成净化 digest，必要时写 checkpoint v2，并 append <code>san.context_plan</code> audit。若计划决定 rebase，才执行 cache / provider session 重置。</p>
+            <ul>
+              <li>唯一允许的重置：<code>agent.appendOnlyContext?.resetSyncCursor()</code> 与 <code>#resetCurrentResponsesProviderSession("context-steady-rebase")</code>。</li>
+              <li>非 rebase 普通 request 不得 reset cursor；否则 240K 稳态会反而制造 cache miss。</li>
+              <li>状态栏、breakdown、/context plan、后续 compaction 都读取最后的 plan snapshot / audit，不重新猜测。</li>
+            </ul>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="band alt" id="ordering">
+      <div class="shell section">
+        <div class="section-kicker">Materialization order</div>
+        <h2>有固定顺序，但不把动态摘要伪装成更高权限。</h2>
+        <p class="section-lead">顺序的目标是稳定 prefix、清晰的因果关系和可预测缓存，而不是把所有派生材料塞到最前面。</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>顺序</th><th>provider 可见内容</th><th>来源 / 信任</th><th>实施规则</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>0</td><td>system prompt、tool schemas、provider 固定元数据</td><td>现有 provider / session 设置</td><td>不属于 ContextPlan messages，但必须计入 <code>nonMessageTokens</code>。</td></tr>
+              <tr><td>1</td><td>背景数据容器：最新 checkpoint + 未覆盖 digest ledger</td><td>Context Steady 派生数据</td><td>以 user/data 语义和静态 <code>context-plan-data.md</code> 包装；只放 plan 选定的内容，旧 checkpoint 不重复出现。</td></tr>
+              <tr><td>2</td><td>epoch 内 exact settled turn bundles</td><td>journal 原文</td><td>严格按时间顺序；一般目标 5，范围 3–8；同一 turn 不同时出现在 digest / checkpoint 的可见层。</td></tr>
+              <tr><td>3</td><td>当前已验证的 SanLoop / Brain prelude</td><td>各自已有的可信策略</td><td>保留既有独立 authority boundary；Context Steady 新生成内容不能借此提升权限。</td></tr>
+              <tr><td>4</td><td>ephemeral recall</td><td>外部 / 记忆检索数据</td><td>同样是低权限数据；先去重、限额、标注 provenance，优先成为最先可回收的材料。</td></tr>
+              <tr><td>5</td><td>当前用户 prompt、附件、当前文件证据</td><td>live request</td><td>保护完整性；附件 / 图像第一个相关轮次不得因为预算目标变成无来源摘要。</td></tr>
+              <tr><td>6</td><td>live assistant / tool tail</td><td>当前未 settled loop</td><td>assistant tool call 与 result 原子配对；只追加，不重排旧 epoch。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="security">
+      <div class="shell section">
+        <div class="section-kicker">Trust and secret boundary</div>
+        <h2>摘要是数据处理，不是第二个高权限 agent。</h2>
+        <p class="section-lead">
+          现有 <code>generateContextSteadyDigest</code> 的 side request 必须严格缩小输入面。它的目标是为未来检索提供事实索引，
+          不是把完整原始消息 JSON 再送给一个小模型，也不是把模型产物变成 developer 指令。
+        </p>
+
+        <figure class="trust-map" aria-label="摘要安全边界">
+          <article class="trust-node sensitive">
+            <div class="node-index">01 / raw source</div>
+            <h3>完整 turn journal</h3>
+            <p>可能含 secret、长文件正文、二进制文本化内容、大工具输出、用户粘贴的外部指令。</p>
+            <ul><li>不作为 side request 原样 JSON 发送</li><li>不直接作为 digest prompt</li></ul>
+          </article>
+          <div class="trust-arrow" aria-hidden="true">→</div>
+          <article class="trust-node">
+            <div class="node-index">02 / controlled transport</div>
+            <h3>白名单净化输入</h3>
+            <p>只提取 user intent、工具状态、path / entryId、短证据摘要、错误状态、可回读引用；经过 SecretObfuscator。</p>
+            <ul><li>使用 <code>prepareSimpleStreamOptions</code></li><li>复用 session hooks、metadata、routing</li><li>注入 transport 以便 payload contract test</li></ul>
+          </article>
+          <div class="trust-arrow" aria-hidden="true">→</div>
+          <article class="trust-node safe">
+            <div class="node-index">03 / retained result</div>
+            <h3>TurnDigest / ContextPlan</h3>
+            <p>占位符原样持久化，不做 deobfuscation。之后 materialize 时仍作为低权限数据，永不获得 system / developer 权限。</p>
+            <ul><li>静态 .md prompt</li><li>内容和审计分离</li></ul>
+          </article>
+        </figure>
+
+        <div class="table-wrap role-table">
+          <table>
+            <thead>
+              <tr><th>内容类型</th><th>允许的 provider 语义</th><th>禁止事项</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>当前系统规则、现有可信 developer 指令</td><td>保持当前应用已有的角色与权限路径。</td><td>Context Steady 不修改或复制它们。</td></tr>
+              <tr><td>checkpoint、digest、evidence stub、recall</td><td>user / data 语义；静态包装明确它们是参考材料，不是控制指令。</td><td>不得 role=developer 或 system；不得把外部文本的命令当作任务规则执行。</td></tr>
+              <tr><td>SanLoop / Brain 已验证 prelude</td><td>遵循各模块现有的 runtime policy 和 provenance 检查。</td><td>不得借用为 Context Steady 的动态摘要提升权限。</td></tr>
+              <tr><td>ContextPlan audit</td><td>不发送；仅本地 debug / report / 运行时估算使用。</td><td>不得持久化 raw provider messages 或 secret 解密后的正文。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="band alt" id="compatibility">
+      <div class="shell section">
+        <div class="section-kicker">Compatibility and migration</div>
+        <h2>前向写新格式，向后读取旧记录，不做 session 大迁移。</h2>
+        <p class="section-lead">
+          历史 session 是用户资产。新实现不要求重写 JSONL，也不让老的 ContextPacket 重新混入 active provider context。
+          兼容层只做读取、展示和转换，不留下长期双运行时。
+        </p>
+
+        <div class="compat-grid">
+          <article class="compat-card">
+            <div class="micro-label">Checkpoint</div>
+            <h3>v1 / v2 双读，v2 单写</h3>
+            <p>checkpoint v2 增加 epoch、覆盖 turn、前置 checkpoint、rebase reason 与 fallback coverage。reader 先解析 v2，再兼容 v1；writer 从切换点起只产出 v2。</p>
+          </article>
+          <article class="compat-card">
+            <div class="micro-label">Old packet</div>
+            <h3>旧 packet 只读留档</h3>
+            <p><code>san.context_packet</code> 以及旧 injected packet message 在 resume 时从 active context 过滤。新 planner 忽略它们，但 <code>/context packet</code> 过渡期仍可解释历史记录。</p>
+          </article>
+          <article class="compat-card">
+            <div class="micro-label">Commands</div>
+            <h3>新增 <code>/context plan</code></h3>
+            <p>新报告展示 budget、quality outcome、representation、coverage 与 rebase。旧 <code>/context packet</code> 作为兼容 alias，可按 record schema 读取 v1 / v2，而不是要求用户记住迁移日期。</p>
+          </article>
+          <article class="compat-card">
+            <div class="micro-label">SanLoop</div>
+            <h3>计划引用成为新主字段</h3>
+            <p>SanLoop run / role context 新增 <code>sourceContextPlanRefs</code>。保留已有 <code>contextPacketRefs</code> 作为旧 run 的 optional input，不再为新 run 写 packet refs。</p>
+          </article>
+          <article class="compat-card">
+            <div class="micro-label">Brain</div>
+            <h3>TurnDigest v1 不动</h3>
+            <p>Brain 对 TurnDigest 的 capture / recall 合同不改。只改变 digest side request 的净化方式和 Context Steady 将其作为材料时的 coverage 规则。</p>
+          </article>
+          <article class="compat-card">
+            <div class="micro-label">Rollback</div>
+            <h3>一个总开关，零数据回滚</h3>
+            <p><code>san.contextSteady.enabled=false</code> 立即走旧 non-steady 发送路径。新 audit 是附加 custom entry；回滚不需清除用户历史，也不应留下两套活跃配置。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="settings">
+      <div class="shell section">
+        <div class="section-kicker">Configuration contract</div>
+        <h2>配置只暴露真实产品决定，不把内部调参泄露给用户。</h2>
+        <p class="section-lead">控制带从 steady target 推导，避免再新增一串互相冲突的 budget 参数。配置变更要同步更新 recommended YAML、设置说明和 changelog 的 Unreleased 段。</p>
+
+        <div class="settings-grid">
+          <article class="settings-card">
+            <h3>保留 / 新增的稳定设置</h3>
+            <ul class="settings-list">
+              <li><code>san.contextSteady.enabled</code><span>默认 false；总开关</span></li>
+              <li><code>san.contextSteady.qualityWindowTokens</code><span>默认 240000；非正数也解析为 240000</span></li>
+              <li><code>san.contextSteady.burstWindowTokens</code><span>新增，默认 320000</span></li>
+              <li><code>san.contextSteady.reserveRatio</code><span>保留，默认 0.2</span></li>
+              <li><code>san.contextSteady.exactTurns.target</code><span>新增，默认 5</span></li>
+              <li><code>san.contextSteady.exactTurns.min</code><span>新增，默认 3</span></li>
+              <li><code>san.contextSteady.exactTurns.max</code><span>新增，默认 8</span></li>
+              <li><code>digest / checkpoint / recall</code><span>保留各自的 enable 与上限</span></li>
+            </ul>
+          </article>
+          <article class="settings-card">
+            <h3>移除的旧 packet 配置</h3>
+            <ul class="settings-list">
+              <li><code>san.contextSteady.contextPacket.enabled</code><span>删除；总开关唯一</span></li>
+              <li><code>san.contextSteady.contextPacket.maxTokens</code><span>删除；不再有小 packet cap</span></li>
+              <li><code>san.contextSteady.contextPacket.recentDigests</code><span>迁移为 plan 选择输入或 digest 相关设置</span></li>
+            </ul>
+            <p>
+              这是一个有意的语义变化：当前 <code>qualityWindowTokens=0</code> 表示「不设质量窗口」，
+              新引擎中它表示「使用默认的 240K 质量工作台」。必须在 schema description、recommended YAML 和 changelog 的 Breaking Changes 中说清楚。
+            </p>
+            <p>
+              配置读取需要容错旧配置存在，但新 schema 与 UI 不应继续展示 packet 选项。不要为新旧 engine 再增加一个隐藏双开关。
+            </p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="band alt" id="delivery">
+      <div class="shell section">
+        <div class="section-kicker">Delivery plan</div>
+        <h2>按六个阶段推进；每阶段都留下可验证的出口。</h2>
+        <p class="section-lead">
+          下面的顺序刻意把纯决策逻辑放在大类接线之前。这样 GPT-5.5 可以用小 fixture 固化质量与 coverage 合同，
+          而不是先在 <code>AgentSession</code> 里堆分支、最后才发现没有办法解释为什么删了内容。
+        </p>
+
+        <div class="phase-tabs" role="tablist" aria-label="实施阶段">
+          <button class="phase-tab" type="button" role="tab" aria-selected="true" aria-controls="phase-r0" data-phase="r0">R0</button>
+          <button class="phase-tab" type="button" role="tab" aria-selected="false" aria-controls="phase-r1" data-phase="r1">R1</button>
+          <button class="phase-tab" type="button" role="tab" aria-selected="false" aria-controls="phase-r2" data-phase="r2">R2</button>
+          <button class="phase-tab" type="button" role="tab" aria-selected="false" aria-controls="phase-r3" data-phase="r3">R3</button>
+          <button class="phase-tab" type="button" role="tab" aria-selected="false" aria-controls="phase-r4" data-phase="r4">R4</button>
+          <button class="phase-tab" type="button" role="tab" aria-selected="false" aria-controls="phase-r5" data-phase="r5">R5</button>
+          <button class="phase-tab" type="button" role="tab" aria-selected="false" aria-controls="phase-r6" data-phase="r6">R6</button>
+        </div>
+
+        <article class="phase-panel active" id="phase-r0" role="tabpanel">
+          <div class="phase-title">R0<span>合同冻结与基线。</span></div>
+          <div>
+            <h3>交付物</h3>
+            <ul>
+              <li>阅读已批准重构提案、当前 rereview / drift 文档和未提交改动，写出不应回退的观察清单。</li>
+              <li>新增目标行为 fixtures：coverage、tool pair、burst、disabled parity、secret transport。此阶段可以先让新测试红灯，但不能改生产路径掩盖问题。</li>
+              <li>确认既有 ContextPacket 注入测试中哪些描述的是「将被删除的旧合同」，将其标记为 R5 替换对象，而非永久保护。</li>
+            </ul>
+            <div class="phase-exit"><strong>出口：</strong>团队对「当前失败是基线问题还是新回归」有明确分类；没有破坏用户的 dirty worktree。</div>
+          </div>
+        </article>
+
+        <article class="phase-panel" id="phase-r1" role="tabpanel">
+          <div class="phase-title">R1<span>纯领域模型与预算。</span></div>
+          <div>
+            <h3>交付物</h3>
+            <ul>
+              <li>实现 <code>plan-types.ts</code>、<code>budget.ts</code>、<code>source-index.ts</code>；为 journal source、turn bundle、representation 和 coverage 定义明确类型。</li>
+              <li>实现模型窗口降级、32K 最低输出预留、200/240/260/320K 推导与完整非消息预算计算。</li>
+              <li>为 current prompt、tool call/result、附件、文件证据和 extension live messages 建立保护标记。</li>
+            </ul>
+            <div class="phase-exit"><strong>出口：</strong>纯测试能证明低窗口不会虚报 240K；source index 能稳定生成原子工具对与可追溯 entry refs。</div>
+          </div>
+        </article>
+
+        <article class="phase-panel" id="phase-r2" role="tabpanel">
+          <div class="phase-title">R2<span>Planner、materializer 与 checkpoint v2。</span></div>
+          <div>
+            <h3>交付物</h3>
+            <ul>
+              <li>实现 quality gate、planner、materializer、audit；每个 settled turn 的唯一表示与 coverage validator 成为硬 invariant。</li>
+              <li>实现 epoch 与 safe-rebase 选择逻辑；exact target 5、自适应范围 3–8；旧 payload 的 evidence stub 规则。</li>
+              <li>升级 checkpoint writer 到 v2，并实现 v1/v2 reader；最新 checkpoint materialize、旧 checkpoint 仅审计。</li>
+            </ul>
+            <div class="phase-exit"><strong>出口：</strong>在纯 fixture 上能产生 pass、burst_required、hard_pressure 三种可解释 plan，并证明没有无 coverage 的 omission。</div>
+          </div>
+        </article>
+
+        <article class="phase-panel" id="phase-r3" role="tabpanel">
+          <div class="phase-title">R3<span>接入 AgentSession 与 cache 生命周期。</span></div>
+          <div>
+            <h3>交付物</h3>
+            <ul>
+              <li>创建 request state，删除 <code>#buildContextSteadyPacketPrelude</code> 的活跃路径与其在 San/Brain injection 候选池的位置。</li>
+              <li>在 <code>#promptWithMessage</code> 建预检 plan；在 <code>#transformContextForProvider</code> 用 materializer 替换 prune；send/status/compaction 共用 plan snapshot。</li>
+              <li>只在 safe rebase 时 reset append-only cursor 与 Responses provider session；tool loop 里追加 live tail，不重新挑选旧 history。</li>
+            </ul>
+            <div class="phase-exit"><strong>出口：</strong>AgentSession contract test 能捕获真实 provider payload，并证明工具对、当前 prompt、extension 消息和 disabled path 正确。</div>
+          </div>
+        </article>
+
+        <article class="phase-panel" id="phase-r4" role="tabpanel">
+          <div class="phase-title">R4<span>摘要安全、角色边界与恢复。</span></div>
+          <div>
+            <h3>交付物</h3>
+            <ul>
+              <li>为 digest side request 加白名单净化、SecretObfuscator、session prepared transport、静态 prompt 和 injected transport seam。</li>
+              <li>确保占位符持久化后不被 deobfuscate；Context Steady 派生内容以 user/data 语义 materialize。</li>
+              <li>覆盖 resume、rewind、topic shift、checkpoint chain 与 hard pressure 回退路径。</li>
+            </ul>
+            <div class="phase-exit"><strong>出口：</strong>测试证明 secret marker 不会进入 digest provider payload，且动态背景不以 developer / system 角色出现。</div>
+          </div>
+        </article>
+
+        <article class="phase-panel" id="phase-r5" role="tabpanel">
+          <div class="phase-title">R5<span>兼容层、报告与旧引擎删除。</span></div>
+          <div>
+            <h3>交付物</h3>
+            <ul>
+              <li>新增 <code>/context plan</code> report，旧 packet alias / legacy parser；SanLoop 加 source plan refs；dogfood 读取 plan audit。</li>
+              <li>更新 settings schema、recommended YAML、session-context 的 legacy packet filter、Context Steady index exports 与 changelog Unreleased。</li>
+              <li>迁移或删除所有依赖 packet injection / independent prune 的生产调用与测试，然后删除 <code>packet.ts</code>、<code>prune.ts</code> 和旧 prompt。</li>
+            </ul>
+            <div class="phase-exit"><strong>出口：</strong>仓库只剩一个 active steady engine；老 session 可读，新 session 不再写 ContextPacket。</div>
+          </div>
+        </article>
+
+        <article class="phase-panel" id="phase-r6" role="tabpanel">
+          <div class="phase-title">R6<span>聚焦验证与交付报告。</span></div>
+          <div>
+            <h3>交付物</h3>
+            <ul>
+              <li>运行 Context Steady、相关 AgentSession、session context、Brain / SanLoop 的目标测试，以及 coding-agent 类型检查。</li>
+              <li>检查 plan audit 没有大正文；检查 status / send / compaction 使用同一 plan；检查没有遗留 runtime packet / prune 路径。</li>
+              <li>报告代码级通过项、未覆盖的真实 dogfood 项与具体 residual risk；不把「测试绿」写成「产品已验收」。</li>
+            </ul>
+            <div class="phase-exit"><strong>出口：</strong>形成可审阅的代码验证记录，为后续全历史 A/B 和人工验收准备 fixture / telemetry。</div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="band" id="tests">
+      <div class="shell section">
+        <div class="section-kicker">Test contract matrix</div>
+        <h2>测试验证外部行为，不验证代码长什么样。</h2>
+        <p class="section-lead">
+          所有新测试必须捕获 observable contract：provider payload、plan audit、状态估算、可恢复性或错误映射。
+          不读取实现源码做 grep，不使用 <code>mock.module()</code>，不为了凑覆盖率写「长度变大」之类的弱断言。
+        </p>
+
+        <div class="table-wrap test-matrix">
+          <table>
+            <thead>
+              <tr><th>合同</th><th>fixture / 场景</th><th>断言</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>coverage 完整</td><td>旧 turn 含关键决定与大文件；尝试把 raw turn 移出 exact。</td><td>若没有 digest / checkpoint / evidence stub 覆盖，raw turn 仍在 provider payload；plan audit 的 omitted 项均有有效 coverage refs。</td></tr>
+              <tr><td>无重复表示</td><td>12–20 个 settled turns，含 checkpoint 与多个 digest。</td><td>每个 settled turn 在 materialized provider context 中恰一种表示；最新 checkpoint 不与它已覆盖的 digest 重复。</td></tr>
+              <tr><td>质量 burst</td><td>最终验收需要 diff、测试、错误与验收标准，超过 260K 但不超过 320K。</td><td>plan outcome 为 <code>burst_required</code>，payload 保留所需证据，audit 记录理由；不是直接压到 240K。</td></tr>
+              <tr><td>hard pressure</td><td>低窗口模型甚至放不下 protected live material。</td><td>返回可解释压力原因与安全回退，不悄悄删当前 prompt / tool pair，也不虚报 token estimate。</td></tr>
+              <tr><td>工具原子性</td><td>assistant 发 tool call，tool result 很长，随后继续分析。</td><td>当前 call/result 成对出现；可回读的旧长结果只能在 pair settled 后变 evidence stub。</td></tr>
+              <tr><td>rebase 与 cache</td><td>多轮 normal request、一个 topic shift、一个 resume。</td><td>normal request 不 reset append-only cursor；只有 rebase reset 一次并标明 reason；旧 epoch 不在 tool loop 内改写。</td></tr>
+              <tr><td>resume / rewind</td><td>含老 ContextPacket、v1 checkpoint、分支 rewind 的 session。</td><td>旧 injected packet 不回放；v1 checkpoint 可读；恢复后 plan 语义等价且不污染 active context。</td></tr>
+              <tr><td>disabled parity</td><td>同一输入，steady disabled。</td><td>provider messages 与当前非 steady transform 等价；不写 plan audit、不触发 reset、不加入背景数据。</td></tr>
+              <tr><td>secret transport</td><td>turn 中放置可识别 secret marker、长文件正文和工具大输出。</td><td>捕获的 digest side-request payload 不含原 marker / 大正文；持久化 digest 保留 placeholder 而非还原文本。</td></tr>
+              <tr><td>角色边界</td><td>checkpoint、recall、外部文本包含「忽略之前规则」等内容。</td><td>materialized derived message 使用 user/data 语义，不能出现 developer / system；当前可信指令路径不被改变。</td></tr>
+              <tr><td>单一计划</td><td>有 pre-compaction estimate、mid-run check、最终 provider send 的 session。</td><td>三处读取同一 request plan id 或等价 snapshot，且 token 组成与最终 payload 一致。</td></tr>
+              <tr><td>文件 / 图像 / artifact</td><td>当前附件、历史大文件、历史图像、可重取 tool artifact。</td><td>当前材料完整保留；历史内容只有在可重取且 stub 带 path/hash/entryId 时才可收缩。</td></tr>
+              <tr><td>兼容报告</td><td>同时含 packet v1、checkpoint v1/v2、plan v1 的 session。</td><td><code>/context plan</code> 读新 audit；兼容 alias 解释旧 packet；新写入不产生 packet ref。</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="notice">
+          <div class="notice-label">Focused commands</div>
+          <p>
+            每阶段只跑受影响的测试；最终至少运行
+            <code>bun test packages/coding-agent/test/context-steady</code>、
+            相关的 <code>AgentSession</code> / session-context / Brain / SanLoop 契约测试，以及
+            <code>bun run --cwd packages/coding-agent check</code>。
+            禁止用 <code>tsc</code> 替代 Bun check。完整产品 dogfood 与长时 A/B 不应阻塞纯代码阶段，但必须在交付报告中明确标为未完成。
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="band alt" id="handoff">
+      <div class="shell section">
+        <div class="section-kicker">GPT-5.5 handoff</div>
+        <h2>实施者从这里开始，不要先碰大类里的旧分支。</h2>
+        <p class="section-lead">下面是执行顺序、工作区保护与删除条件。它的目的不是限制实现者，而是避免这类跨 session/runtime 改造在中途变成不可审查的混合状态。</p>
+
+        <div class="handoff-grid">
+          <article class="handoff-card">
+            <div class="micro-label">Start sequence</div>
+            <h3>先建立共同事实</h3>
+            <ol>
+              <li>阅读已批准架构提案、本技术方案，以及现有 <code>context-steady</code> 的 packet、prune、checkpoint、digest、session 代码。</li>
+              <li>执行 <code>git status --short</code>，逐项确认 dirty worktree；不做 reset / checkout / revert。</li>
+              <li>运行当前聚焦测试，记录现状；区分已有改动导致的预期失效和真正回归。</li>
+              <li>先实现 R1/R2 的纯模块和契约测试，再把其接入 <code>AgentSession</code>。</li>
+            </ol>
+          </article>
+          <article class="handoff-card">
+            <div class="micro-label">Keep intentionally</div>
+            <h3>这些方向不是重构目标</h3>
+            <ul>
+              <li>已有 entryId 证据边界与可追溯性增强。</li>
+              <li>全 assistant message 的 decision extraction 改进。</li>
+              <li>importance 归一化到 0–1 的语义修正。</li>
+              <li>退化路径日志和用户附件边界处理。</li>
+              <li>TurnDigest v1 作为 Brain capture / recall 的稳定合同。</li>
+            </ul>
+          </article>
+          <article class="handoff-card">
+            <div class="micro-label">Replace deliberately</div>
+            <h3>这些方向必须退休</h3>
+            <ul>
+              <li>将所有 digest 直接裁成一个 packet 的全局 pruning 思路。</li>
+              <li>跨 request 累积 ContextPacket delta，再把它混入原 messages 的策略。</li>
+              <li>packet prelude 与 provider prune 各自做预算、各自删内容的双路径。</li>
+              <li>断言「ContextPacket 被注入」而非断言质量、coverage 与 provider payload 的旧测试。</li>
+            </ul>
+          </article>
+          <article class="handoff-card">
+            <div class="micro-label">Change hygiene</div>
+            <h3>交付方式</h3>
+            <ul>
+              <li>按 R0–R6 推进，每完成一段就运行局部契约测试并记录结果。</li>
+              <li>prompt 只能放静态 <code>.md</code>，通过 text import 使用；不要在 TS 里拼装 prompt。</li>
+              <li>不使用 <code>any</code>、<code>ReturnType&lt;&gt;</code>、inline import 或 <code>mock.module()</code>。</li>
+              <li>未得到明确请求前不提交、不推送；logical commit 边界可以记录在实施报告中。</li>
+            </ul>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="acceptance">
+      <div class="shell section">
+        <div class="section-kicker">Stop conditions and acceptance</div>
+        <h2>不能安全装下时，系统应该诚实地停下来，而不是安静地遗忘。</h2>
+        <p class="section-lead">这既是实现边界，也是后续验收边界。稳定不是让图表漂亮，而是让模型始终拥有完成任务所需的注意力与证据。</p>
+
+        <div class="stop-grid">
+          <article class="stop-card">
+            <h3>Hard-pressure 停止规则</h3>
+            <p>在 burst ceiling 内仍无法同时容纳 required material 时，按以下顺序处理：</p>
+            <ul>
+              <li>只在安全用户边界尝试 rebase，保留当前任务与 active tool bundle。</li>
+              <li>将已验证可重新读取的大文件、图像和 artifact 替换为 evidence stub。</li>
+              <li>调用既有 compaction / model promotion / fallback 策略，但把该操作记录为压力恢复，而不是 ContextPlan 的静默删除。</li>
+              <li>仍无法满足时，返回 <code>hard_pressure</code> 的可解释错误 / 暂停状态，明确缺的是窗口还是不可压缩的任务材料。</li>
+            </ul>
+          </article>
+
+          <article class="acceptance-card">
+            <h3>两层验收，不混为一谈</h3>
+            <div class="acceptance-row">
+              <b>代码级完成条件</b>
+              <p>所有目标 contracts 通过；Bun check 通过；无 active packet / prune runtime 路径；audit 无 raw 大内容；send、status 和 compaction 共用 plan；disabled parity 可证明。</p>
+            </div>
+            <div class="acceptance-row">
+              <b>产品级联合验收条件</b>
+              <p>后续单独执行 full-history 与 steady-plan A/B。20-turn 真实任务的常态 p95 不高于 260K；合理 burst 不高于 320K 且有原因与恢复；resume 语义等价；无 secret 泄露；复杂实现、排障与验收质量不下降。</p>
+            </div>
+            <div class="acceptance-row">
+              <b>Rollback 条件</b>
+              <p>发现任务规格、工具因果、秘密边界、resume 语义或缓存稳定性任一违反合同时，关闭 <code>san.contextSteady.enabled</code>，保留 audit 与 journal 供定位，不清理用户历史。</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="finale">
+      <div class="shell section">
+        <div class="section-kicker">Implementation thesis</div>
+        <h2>完整历史负责不遗忘；ContextPlan 负责当下；240K 负责集中；burst 负责质量。</h2>
+        <p>
+          这次改造的成功标准不是「又多了一个压缩器」，而是任何一轮都能回答：
+          当前 provider 看到了什么、为什么看到它、哪些原文由什么替代、何时可以安全 rebase，以及为什么这次允许超过 240K。
+        </p>
+        <div class="finale-formula">JOURNAL IS TRUTH → PLAN ONCE → MATERIALIZE ONCE → MEASURE THE SAME PLAN → BURST FOR QUALITY → REBASE ONLY WHEN SAFE</div>
+      </div>
+      <footer>
+        <div class="shell">
+          <div>San Context Steady · 240K 技术实施方案 · 2026-07-12</div>
+          <div>产品方向：<a href="san-context-steady-240k-redesign-proposal-20260712.html">240K 质量优先重构提案</a></div>
+        </div>
+      </footer>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      var inputIds = ["modelWindow", "steadyInput", "burstInput", "reserveInput", "nonMessageInput", "minimumReserveInput"];
+
+      function positiveNumber(id, fallback) {
+        var element = document.getElementById(id);
+        var value = element ? Number(element.value) : NaN;
+        return Number.isFinite(value) && value >= 0 ? value : fallback;
+      }
+
+      function formatTokens(value) {
+        var rounded = Math.max(0, Math.round(value / 1000));
+        return rounded + "K";
+      }
+
+      function updateBudget() {
+        var windowTokens = positiveNumber("modelWindow", 400000);
+        var configuredSteady = positiveNumber("steadyInput", 240000) || 240000;
+        var configuredBurst = positiveNumber("burstInput", 320000) || 320000;
+        var reserveRatio = Math.min(0.9, positiveNumber("reserveInput", 0.2));
+        var nonMessageTokens = positiveNumber("nonMessageInput", 48000);
+        var minimumReserve = positiveNumber("minimumReserveInput", 32000);
+        var reserve = Math.max(minimumReserve, Math.floor(windowTokens * reserveRatio));
+        var hardCeiling = Math.max(0, windowTokens - reserve);
+        var steadyTarget = Math.min(configuredSteady, hardCeiling);
+        var burstCeiling = Math.min(Math.max(configuredBurst, steadyTarget), hardCeiling);
+        var controlMax = Math.min(burstCeiling, Math.floor(steadyTarget * 13 / 12));
+        var comfort = Math.floor(steadyTarget * 5 / 6);
+        var messageBudget = Math.max(0, steadyTarget - nonMessageTokens);
+
+        document.getElementById("hardCeiling").textContent = formatTokens(hardCeiling);
+        document.getElementById("steadyTarget").textContent = formatTokens(steadyTarget);
+        document.getElementById("messageBudget").textContent = formatTokens(messageBudget);
+        document.getElementById("comfortLabel").textContent = formatTokens(comfort);
+        document.getElementById("steadyLabel").textContent = formatTokens(steadyTarget);
+        document.getElementById("controlLabel").textContent = formatTokens(controlMax);
+        document.getElementById("burstLabel").textContent = formatTokens(burstCeiling);
+
+        var note;
+        if (hardCeiling < configuredSteady) {
+          note = "模型窗口在预留 " + formatTokens(reserve) + " 输出容量后，只剩 " + formatTokens(hardCeiling) + " 可输入；steady 自动降为 " + formatTokens(steadyTarget) + "，burst 同样受硬上限约束。";
+        } else if (messageBudget <= 0) {
+          note = "固定非消息输入已占满 steady 工作集。实现必须产生 hard_pressure，而不是截断当前 prompt 或工具结果。";
+        } else {
+          note = formatTokens(windowTokens) + " 窗口减去 " + formatTokens(reserve) + " 输出预留后，steady 为 " + formatTokens(steadyTarget) + "，burst 为 " + formatTokens(burstCeiling) + "；固定开销后，steady 的消息材料预算为 " + formatTokens(messageBudget) + "。";
+        }
+        document.getElementById("budgetNote").textContent = note;
+      }
+
+      for (var i = 0; i < inputIds.length; i += 1) {
+        var input = document.getElementById(inputIds[i]);
+        if (input) input.addEventListener("input", updateBudget);
+      }
+      updateBudget();
+
+      var tabs = Array.prototype.slice.call(document.querySelectorAll(".phase-tab"));
+      var panels = Array.prototype.slice.call(document.querySelectorAll(".phase-panel"));
+      tabs.forEach(function (tab) {
+        tab.addEventListener("click", function () {
+          var phase = tab.getAttribute("data-phase");
+          tabs.forEach(function (candidate) {
+            candidate.setAttribute("aria-selected", candidate === tab ? "true" : "false");
+          });
+          panels.forEach(function (panel) {
+            panel.classList.toggle("active", panel.id === "phase-" + phase);
+          });
+        });
+      });
+    }());
+  </script>
+</body>
+</html>

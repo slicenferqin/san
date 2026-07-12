@@ -382,23 +382,19 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 
 		const debugEntries = customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE);
 		expect(debugEntries).toHaveLength(5);
-		const finalPacket = debugEntries.at(-1)!.data as Record<string, unknown>;
-		const finalRefs = finalPacket.digestRefs as string[];
-		expect(finalRefs).toHaveLength(5);
-
 		const digests = customEntries(sessionManager, TURN_DIGEST_CUSTOM_TYPE);
-		expect(finalRefs).toEqual(digests.slice(0, 5).map(entry => entry.id));
+		const packetRefs = debugEntries.flatMap(entry => (entry.data as Record<string, unknown>).digestRefs as string[]);
+		expect(packetRefs).toEqual(digests.slice(0, 5).map(entry => entry.id));
+
+		const finalPacket = debugEntries.at(-1)!.data as Record<string, unknown>;
+		expect(finalPacket.digestRefs).toEqual([digests[4]!.id]);
 		expect(finalPacket.trimDecisions).toEqual([]);
 
-		const finalPacketMessage = mock.calls
+		const finalPacketMessages = mock.calls
 			.at(-1)!
-			.context.messages.find(message => JSON.stringify(message.content).includes("<san_context_packet>"));
-		expect(
-			mock.calls
-				.at(-1)!
-				.context.messages.filter(message => JSON.stringify(message.content).includes("<san_context_packet>")),
-		).toHaveLength(1);
-		const finalPacketContent = JSON.stringify(finalPacketMessage?.content);
+			.context.messages.filter(message => JSON.stringify(message.content).includes("<san_context_packet>"));
+		expect(finalPacketMessages).toHaveLength(5);
+		const finalPacketContent = JSON.stringify(finalPacketMessages.map(message => message.content));
 		expect(finalPacketContent).toContain("M2 default window task 1");
 		expect(finalPacketContent).toContain("M2 default window task 5");
 		expect(finalPacketContent).not.toContain("M2 default window task 6");
@@ -437,8 +433,8 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		const thirdCallPackets = mock.calls[2]!.context.messages.filter(message =>
 			JSON.stringify(message.content).includes("<san_context_packet>"),
 		);
-		expect(thirdCallPackets).toHaveLength(1);
-		const thirdPacketText = JSON.stringify(thirdCallPackets[0]!.content);
+		expect(thirdCallPackets).toHaveLength(2);
+		const thirdPacketText = JSON.stringify(thirdCallPackets.map(message => message.content));
 		expect(thirdPacketText).toContain("M10 replay first turn");
 		expect(thirdPacketText).toContain("M10 replay second turn");
 		expect(thirdPacketText).not.toContain("M10 replay third turn");
@@ -487,14 +483,7 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		expect(finalPacket.tokenEstimate as number).toBeLessThanOrEqual(165);
 		const layers = finalPacket.layers as Array<Record<string, unknown>>;
 		expect(layers[0]?.tokenBudget).toBe(165);
-		expect(finalPacket.trimDecisions).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					layer: "turn_digest_ledger",
-					reason: "token_budget",
-				}),
-			]),
-		);
+		expect(finalPacket.digestRefs).toHaveLength(1);
 	});
 
 	it("writes stable checkpoints and injects them before the append-only digest tail", async () => {
@@ -537,20 +526,21 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		await session.waitForIdle();
 
 		const packetEntries = customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE);
-		const finalPacket = packetEntries.at(-1)!.data as Record<string, unknown>;
-		expect(finalPacket.checkpointRef).toBe(checkpointEntries[0]!.id);
-		const layers = finalPacket.layers as Array<Record<string, unknown>>;
-		expect(layers.map(layer => layer.name)).toEqual(["stable_checkpoint", "turn_digest_ledger"]);
-		expect(layers[0]).toMatchObject({
+		const packetData = packetEntries.map(entry => entry.data as Record<string, unknown>);
+		const checkpointPacket = packetData.find(packet => packet.checkpointRef === checkpointEntries[0]!.id);
+		expect(checkpointPacket).toBeDefined();
+		const checkpointLayers = checkpointPacket!.layers as Array<Record<string, unknown>>;
+		expect(checkpointLayers.map(layer => layer.name)).toEqual(["stable_checkpoint", "turn_digest_ledger"]);
+		expect(checkpointLayers[0]).toMatchObject({
 			entryRefs: [checkpointEntries[0]!.id],
 			stability: "stable",
 			cachePriority: "high",
 		});
-		expect(layers[1]).toMatchObject({
+		expect(checkpointLayers[1]).toMatchObject({
 			stability: "append-only",
 			cachePriority: "medium",
 		});
-		expect(finalPacket.trimDecisions).toEqual(
+		expect(checkpointPacket!.trimDecisions).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					layer: "turn_digest_ledger",
@@ -560,10 +550,13 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 			]),
 		);
 
-		const finalPacketMessage = mock.calls
+		const digests = customEntries(sessionManager, TURN_DIGEST_CUSTOM_TYPE);
+		const finalPacket = packetData.at(-1)!;
+		expect(finalPacket.digestRefs).toEqual([digests[2]!.id]);
+		const finalPacketMessages = mock.calls
 			.at(-1)!
-			.context.messages.find(message => JSON.stringify(message.content).includes("<san_context_packet>"));
-		const finalPacketContent = JSON.stringify(finalPacketMessage?.content);
+			.context.messages.filter(message => JSON.stringify(message.content).includes("<san_context_packet>"));
+		const finalPacketContent = JSON.stringify(finalPacketMessages.map(message => message.content));
 		expect(finalPacketContent).toContain("Stable checkpoint");
 		expect(finalPacketContent).toContain("M4 checkpoint stable task one");
 		expect(finalPacketContent).toContain("M4 checkpoint stable task three");

@@ -1,17 +1,20 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { CustomMessageEntry, SessionEntry } from "../session/session-entries";
+import type { CustomMessageEntry, SessionEntry, SessionMessageEntry } from "../session/session-entries";
 import {
 	CONTEXT_CHECKPOINT_CUSTOM_TYPE,
 	CONTEXT_PACKET_CUSTOM_TYPE,
 	CONTEXT_PACKET_MESSAGE_TYPE,
 	type ContextCheckpoint,
 	type ContextPacket,
+	TURN_DIGEST_CUSTOM_TYPE,
 	type TurnDigest,
 } from "./types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
+
+const DIGEST_PRUNABLE_CUSTOM_MESSAGE_TYPES: Record<string, true> = { "image-attachment-description": true };
 
 function contentKey(content: unknown): string {
 	return typeof content === "string" ? content : JSON.stringify(content);
@@ -21,9 +24,39 @@ function customMessageEntryKey(entry: CustomMessageEntry): string {
 	return `${entry.customType}\0${entry.timestamp}\0${contentKey(entry.content)}`;
 }
 
+function sessionMessageContentKey(message: AgentMessage): unknown {
+	if (message.role === "fileMention") return message.files;
+	if ("content" in message) return message.content;
+	return undefined;
+}
+
+function timestampKey(timestamp: unknown): string {
+	if (typeof timestamp === "number") return new Date(timestamp).toISOString();
+	if (typeof timestamp === "string") return new Date(timestamp).toISOString();
+	return "";
+}
+
+function sessionMessageEntryKey(entry: SessionMessageEntry): string {
+	const message = entry.message;
+	return `${message.role}\0${timestampKey(message.timestamp)}\0${contentKey(sessionMessageContentKey(message))}`;
+}
+
+function sessionMessageKey(message: AgentMessage): string | undefined {
+	if (
+		message.role !== "user" &&
+		message.role !== "developer" &&
+		message.role !== "assistant" &&
+		message.role !== "toolResult" &&
+		message.role !== "fileMention"
+	) {
+		return undefined;
+	}
+	return `${message.role}\0${timestampKey(message.timestamp)}\0${contentKey(sessionMessageContentKey(message))}`;
+}
+
 function customMessageKey(message: AgentMessage): string | undefined {
 	if (message.role !== "custom") return undefined;
-	return `${message.customType}\0${new Date(message.timestamp).toISOString()}\0${contentKey(message.content)}`;
+	return `${message.customType}\0${timestampKey(message.timestamp)}\0${contentKey(message.content)}`;
 }
 
 function packetIdFromMessage(message: AgentMessage): string | undefined {
@@ -55,6 +88,16 @@ function latestPacket(branchEntries: readonly SessionEntry[], packetId: string |
 		return entry.data;
 	}
 	return undefined;
+}
+
+function allDigestEntryRefs(branchEntries: readonly SessionEntry[]): string[] {
+	const refs: string[] = [];
+	for (const entry of branchEntries) {
+		if (entry.type !== "custom" || entry.customType !== TURN_DIGEST_CUSTOM_TYPE) continue;
+		if (!isTurnDigest(entry.data)) continue;
+		refs.push(entry.id);
+	}
+	return refs;
 }
 
 function checkpointDigestRefs(branchEntries: readonly SessionEntry[], checkpointRef: string | undefined): string[] {
@@ -92,10 +135,14 @@ function digestCoveredEntryIds(
 					covered.add(coveredEntry.id);
 				} else if (
 					coveredEntry.type === "custom_message" &&
-					toolEvidenceEntryIds.has(coveredEntry.id) &&
 					coveredEntry.customType !== CONTEXT_PACKET_MESSAGE_TYPE
 				) {
-					covered.add(coveredEntry.id);
+					if (
+						toolEvidenceEntryIds.has(coveredEntry.id) ||
+						DIGEST_PRUNABLE_CUSTOM_MESSAGE_TYPES[coveredEntry.customType]
+					) {
+						covered.add(coveredEntry.id);
+					}
 				}
 			}
 		} else {
@@ -114,23 +161,25 @@ export function buildContextSteadyPrunedMessages(
 	const packetMessage = messages.findLast(
 		message => message.role === "custom" && message.customType === CONTEXT_PACKET_MESSAGE_TYPE,
 	);
-	if (!packetMessage) return [...messages];
-
-	const packet = latestPacket(branchEntries, packetIdFromMessage(packetMessage));
-	if (!packet) return [...messages];
-
-	const digestRefs = new Set([...checkpointDigestRefs(branchEntries, packet.checkpointRef), ...packet.digestRefs]);
+	const packet = packetMessage ? latestPacket(branchEntries, packetIdFromMessage(packetMessage)) : undefined;
+	const digestRefs = new Set([
+		...allDigestEntryRefs(branchEntries),
+		...checkpointDigestRefs(branchEntries, packet?.checkpointRef),
+		...(packet?.digestRefs ?? []),
+	]);
 	if (digestRefs.size === 0) return [...messages];
 
 	const coveredEntryIds = digestCoveredEntryIds(branchEntries, digestRefs);
 	if (coveredEntryIds.size === 0) return [...messages];
 
 	const coveredMessageRefs = new WeakSet<AgentMessage>();
+	const coveredMessageKeys = new Set<string>();
 	const coveredCustomMessageKeys = new Set<string>();
 	for (const entry of branchEntries) {
 		if (!coveredEntryIds.has(entry.id)) continue;
 		if (entry.type === "message") {
 			coveredMessageRefs.add(entry.message);
+			coveredMessageKeys.add(sessionMessageEntryKey(entry));
 		} else if (entry.type === "custom_message" && entry.customType !== CONTEXT_PACKET_MESSAGE_TYPE) {
 			coveredCustomMessageKeys.add(customMessageEntryKey(entry));
 		}
@@ -139,8 +188,12 @@ export function buildContextSteadyPrunedMessages(
 	let pruned: AgentMessage[] | undefined;
 	for (let index = 0; index < messages.length; index++) {
 		const message = messages[index]!;
+		const messageKey = sessionMessageKey(message);
 		const key = customMessageKey(message);
-		const shouldPrune = coveredMessageRefs.has(message) || (key !== undefined && coveredCustomMessageKeys.has(key));
+		const shouldPrune =
+			coveredMessageRefs.has(message) ||
+			(messageKey !== undefined && coveredMessageKeys.has(messageKey)) ||
+			(key !== undefined && coveredCustomMessageKeys.has(key));
 		if (!shouldPrune) {
 			if (pruned) pruned.push(message);
 			continue;

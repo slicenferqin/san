@@ -52,7 +52,13 @@ export function computeTurnSourceSpan(
  * agent-driven continuations still need to be digestible as system-driven work.
  */
 export function skipContextPacketPreludeInDigestSource(
-	branch: ReadonlyArray<{ id: string; type: string; customType?: string; message?: unknown }>,
+	branch: ReadonlyArray<{
+		id: string;
+		type: string;
+		customType?: string;
+		message?: unknown;
+		attribution?: string;
+	}>,
 	fromEntryId: string,
 	toEntryId: string,
 ): string {
@@ -74,9 +80,10 @@ export function skipContextPacketPreludeInDigestSource(
 	for (let index = packetIndex + 1; index <= toIndex; index++) {
 		const entry = branch[index];
 		if (!entry) break;
-		if (entry.type === "message" && messageRole(entry.message) === "user") {
-			return entry.id;
-		}
+		if (entry.type === "custom_message" && entry.customType === CONTEXT_PACKET_MESSAGE_TYPE) continue;
+		if (entry.type === "custom_message" && entry.attribution === "agent") continue;
+		if (entry.type === "custom_message" && entry.attribution === "user") return entry.id;
+		if (entry.type === "message" && messageRole(entry.message) === "user") return entry.id;
 	}
 
 	return fromEntryId;

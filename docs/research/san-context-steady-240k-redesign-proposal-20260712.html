@@ -1,0 +1,851 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San Context Steady · 240K 质量优先重构提案</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f7f8f7;
+      --surface: #ffffff;
+      --ink: #172027;
+      --muted: #5e6970;
+      --faint: #89939a;
+      --line: #d8dedf;
+      --line-strong: #aeb9bc;
+      --teal: #08766f;
+      --teal-soft: #dcefeb;
+      --blue: #315d8a;
+      --blue-soft: #e5edf6;
+      --amber: #a16413;
+      --amber-soft: #f7ead2;
+      --red: #a43f39;
+      --red-soft: #f6dfdc;
+      --plum: #76516f;
+      --plum-soft: #eee6ec;
+      --code: #11191f;
+      --shadow: 0 18px 48px rgba(27, 39, 45, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      font-size: 16px;
+      line-height: 1.72;
+      letter-spacing: 0;
+    }
+
+    h1, h2, h3, h4 {
+      margin-top: 0;
+      letter-spacing: 0;
+      line-height: 1.2;
+      text-wrap: balance;
+    }
+
+    h1, .display {
+      font-family: "Iowan Old Style", "Songti SC", "STSong", Georgia, serif;
+      font-weight: 600;
+    }
+
+    h1 { max-width: 980px; margin-bottom: 22px; font-size: clamp(42px, 6vw, 78px); }
+    h2 { margin-bottom: 18px; font-size: clamp(28px, 3.2vw, 42px); }
+    h3 { margin-bottom: 10px; font-size: 21px; }
+    h4 { margin-bottom: 7px; font-size: 15px; }
+    p { margin: 10px 0; text-wrap: pretty; }
+    a { color: var(--teal); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    button, input { font: inherit; }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 3px;
+      background: #edf0ef;
+      font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+      font-size: 0.9em;
+      overflow-wrap: anywhere;
+    }
+
+    .shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid rgba(216, 222, 223, 0.88);
+      background: rgba(247, 248, 247, 0.94);
+      backdrop-filter: blur(16px) saturate(130%);
+    }
+
+    .topbar-inner {
+      display: flex;
+      min-height: 58px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .wordmark { font-family: "JetBrains Mono", monospace; font-size: 13px; font-weight: 800; }
+    .wordmark span { color: var(--teal); }
+    nav { display: flex; gap: 18px; overflow-x: auto; white-space: nowrap; }
+    nav a { color: var(--muted); font-size: 13px; text-decoration: none; }
+    nav a:hover { color: var(--ink); }
+
+    .hero {
+      min-height: min(760px, calc(100vh - 58px));
+      display: grid;
+      grid-template-columns: minmax(0, 1.18fr) minmax(360px, 0.82fr);
+      gap: 52px;
+      align-items: center;
+      padding: 72px 0 60px;
+    }
+
+    .eyebrow {
+      margin-bottom: 14px;
+      color: var(--teal);
+      font-family: "JetBrains Mono", monospace;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .hero-copy { max-width: 760px; color: var(--muted); font-size: 19px; }
+    .hero-copy strong { color: var(--ink); }
+    .hero-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 26px; color: var(--faint); font-size: 13px; }
+
+    .hero-instrument {
+      min-height: 470px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      padding: 28px;
+    }
+
+    .instrument-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .instrument-head small { color: var(--faint); }
+    .big-number { margin: 34px 0 4px; font-family: "Iowan Old Style", "Songti SC", serif; font-size: 88px; line-height: 0.95; }
+    .big-number span { color: var(--teal); font-family: "JetBrains Mono", monospace; font-size: 18px; }
+    .instrument-sub { margin-bottom: 30px; color: var(--muted); }
+
+    .rail-wrap { position: relative; padding-top: 28px; }
+    .rail {
+      position: relative;
+      height: 26px;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      background: #edf0ef;
+    }
+
+    .rail-zone { position: absolute; top: 0; bottom: 0; }
+    .rail-zone.comfort { left: 0; width: 58.8%; background: var(--teal-soft); }
+    .rail-zone.control { left: 58.8%; width: 17.7%; background: #b9ddd5; }
+    .rail-zone.burst { left: 76.5%; width: 17.6%; background: var(--amber-soft); }
+    .rail-zone.guard { right: 0; width: 5.9%; background: var(--red-soft); }
+    .rail-marker { position: absolute; top: 14px; bottom: -10px; width: 1px; background: var(--ink); }
+    .rail-marker.target { left: 70.6%; }
+    .rail-marker.burst { left: 94.1%; background: var(--amber); }
+    .marker-label { position: absolute; top: -4px; transform: translateX(-50%); color: var(--muted); font-family: "JetBrains Mono", monospace; font-size: 11px; white-space: nowrap; }
+    .marker-label.target { left: 70.6%; color: var(--teal); }
+    .marker-label.burst { left: 94.1%; color: var(--amber); }
+
+    .rail-legend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 22px; }
+    .rail-legend div { border-top: 2px solid var(--line); padding-top: 8px; color: var(--muted); font-size: 12px; }
+    .rail-legend b { display: block; color: var(--ink); font-size: 13px; }
+    .rail-legend .steady { border-color: var(--teal); }
+    .rail-legend .elastic { border-color: var(--amber); }
+    .rail-legend .hard { border-color: var(--red); }
+
+    .band { border-top: 1px solid var(--line); }
+    .band.alt { background: var(--surface); }
+    .section { padding: 78px 0; }
+    .section-lead { max-width: 780px; color: var(--muted); font-size: 18px; }
+    .section-kicker { margin-bottom: 12px; color: var(--teal); font-family: "JetBrains Mono", monospace; font-size: 12px; font-weight: 800; }
+
+    .thesis-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      margin-top: 38px;
+      border-top: 1px solid var(--line-strong);
+      border-bottom: 1px solid var(--line-strong);
+    }
+
+    .thesis-item { min-height: 220px; padding: 24px 28px 26px 0; }
+    .thesis-item + .thesis-item { border-left: 1px solid var(--line); padding-left: 28px; }
+    .thesis-index { color: var(--teal); font-family: "JetBrains Mono", monospace; font-size: 12px; }
+    .thesis-item h3 { margin-top: 30px; }
+    .thesis-item p { color: var(--muted); }
+
+    .statement {
+      display: grid;
+      grid-template-columns: 160px 1fr;
+      gap: 34px;
+      margin-top: 38px;
+      border-top: 1px solid var(--line);
+      padding-top: 28px;
+    }
+    .statement-label { color: var(--faint); font-family: "JetBrains Mono", monospace; font-size: 12px; }
+    .statement blockquote { margin: 0; font-family: "Iowan Old Style", "Songti SC", serif; font-size: clamp(26px, 3vw, 40px); line-height: 1.4; }
+
+    .compare {
+      display: grid;
+      grid-template-columns: 1fr 70px 1fr;
+      align-items: stretch;
+      margin-top: 38px;
+    }
+
+    .compare-side { border: 1px solid var(--line-strong); background: var(--surface); padding: 28px; }
+    .compare-side.current { background: #f2f3f2; color: #4d575d; }
+    .compare-arrow { display: grid; place-items: center; color: var(--teal); font-family: "JetBrains Mono", monospace; font-size: 26px; }
+    .flow-list { margin: 24px 0 0; padding: 0; list-style: none; }
+    .flow-list li { display: grid; grid-template-columns: 32px 1fr; gap: 12px; border-top: 1px solid var(--line); padding: 15px 0; }
+    .flow-list .n { color: var(--faint); font-family: "JetBrains Mono", monospace; font-size: 12px; }
+    .compare-side.proposed .n { color: var(--teal); }
+
+    .architecture {
+      display: grid;
+      grid-template-columns: 1fr 42px 1fr 42px 1.2fr 42px 1fr;
+      align-items: stretch;
+      margin-top: 38px;
+    }
+    .arch-node { position: relative; min-height: 190px; border: 1px solid var(--line-strong); background: var(--surface); padding: 22px; }
+    .arch-node strong { display: block; margin: 20px 0 8px; font-size: 18px; }
+    .arch-node p { color: var(--muted); font-size: 14px; }
+    .arch-node.primary { border: 2px solid var(--teal); background: #fbfffe; }
+    .arch-node.primary strong { color: var(--teal); }
+    .arch-label { color: var(--faint); font-family: "JetBrains Mono", monospace; font-size: 10px; text-transform: uppercase; }
+    .arch-arrow { display: grid; place-items: center; color: var(--faint); font-size: 22px; }
+    .arch-sinks { display: grid; gap: 8px; }
+    .arch-sinks div { border-bottom: 1px solid var(--line); padding: 8px 0; font-size: 13px; }
+
+    .plan-stack { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: 42px; margin-top: 42px; }
+    .layer-stack { border: 1px solid var(--line-strong); background: var(--surface); padding: 18px; }
+    .layer { display: grid; grid-template-columns: 140px 1fr auto; gap: 16px; align-items: center; min-height: 58px; border-top: 1px solid var(--line); padding: 10px 12px; }
+    .layer:first-child { border-top: 0; }
+    .layer-name { font-weight: 700; }
+    .layer-desc { color: var(--muted); font-size: 13px; }
+    .layer-cache { color: var(--faint); font-family: "JetBrains Mono", monospace; font-size: 10px; }
+    .layer.current { background: var(--teal-soft); }
+    .layer.prompt { background: var(--blue-soft); }
+    .layer.recall { background: var(--plum-soft); }
+    .plan-rules { padding-top: 4px; }
+    .rule { display: grid; grid-template-columns: 70px 1fr; gap: 16px; border-top: 1px solid var(--line); padding: 15px 0; }
+    .rule:first-child { border-top: 0; }
+    .rule b { color: var(--teal); font-family: "JetBrains Mono", monospace; font-size: 12px; }
+
+    .simulator { margin-top: 36px; border: 1px solid var(--line-strong); background: var(--surface); }
+    .scenario-tabs { display: grid; grid-template-columns: repeat(5, 1fr); border-bottom: 1px solid var(--line-strong); }
+    .scenario-tab { min-height: 52px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; padding: 8px 12px; }
+    .scenario-tab:last-child { border-right: 0; }
+    .scenario-tab:hover { background: #f2f5f4; color: var(--ink); }
+    .scenario-tab[aria-pressed="true"] { background: var(--ink); color: #fff; }
+    .sim-body { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(300px, 0.75fr); gap: 34px; padding: 30px; }
+    .sim-title { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+    .sim-total { font-family: "Iowan Old Style", "Songti SC", serif; font-size: 52px; line-height: 1; }
+    .sim-total span { font-family: "JetBrains Mono", monospace; font-size: 14px; }
+    .sim-state { padding: 4px 8px; border: 1px solid var(--line-strong); font-family: "JetBrains Mono", monospace; font-size: 11px; }
+    .budget-chart { position: relative; height: 58px; margin: 42px 0 16px; border: 1px solid var(--line-strong); background: #edf0ef; }
+    .budget-segments { display: flex; width: 100%; height: 100%; overflow: hidden; }
+    .budget-segment { height: 100%; min-width: 1px; transition: width 260ms ease; }
+    .budget-segment.stable { background: #789a95; }
+    .budget-segment.evidence { background: var(--blue); }
+    .budget-segment.exact { background: var(--teal); }
+    .budget-segment.summary { background: var(--plum); }
+    .budget-segment.recall { background: var(--amber); }
+    .budget-mark { position: absolute; top: -25px; bottom: -8px; width: 1px; border-left: 1px dashed var(--line-strong); }
+    .budget-mark::before { position: absolute; top: -2px; left: 4px; color: var(--faint); font-family: "JetBrains Mono", monospace; font-size: 10px; white-space: nowrap; }
+    .budget-mark.target { left: 70.588%; border-color: var(--teal); }
+    .budget-mark.target::before { content: "240K target"; color: var(--teal); }
+    .budget-mark.burst { left: 94.117%; border-color: var(--amber); }
+    .budget-mark.burst::before { content: "320K burst"; color: var(--amber); transform: translateX(-100%); left: -4px; }
+    .segment-legend { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+    .segment-legend div { color: var(--muted); font-size: 11px; }
+    .segment-legend b { display: block; color: var(--ink); font-family: "JetBrains Mono", monospace; font-size: 12px; }
+    .sim-decision { border-left: 1px solid var(--line); padding-left: 30px; }
+    .decision-label { color: var(--faint); font-family: "JetBrains Mono", monospace; font-size: 11px; }
+    .sim-decision h3 { margin-top: 16px; }
+    .sim-decision p { color: var(--muted); }
+    .decision-list { margin: 20px 0 0; padding: 0; list-style: none; }
+    .decision-list li { border-top: 1px solid var(--line); padding: 11px 0; font-size: 13px; }
+
+    .zones { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 38px; border: 1px solid var(--line-strong); }
+    .zone { min-height: 230px; padding: 22px; }
+    .zone + .zone { border-left: 1px solid var(--line); }
+    .zone-range { font-family: "JetBrains Mono", monospace; font-size: 13px; }
+    .zone h3 { margin-top: 42px; }
+    .zone p { color: var(--muted); font-size: 14px; }
+    .zone.comfort { background: #edf6f3; }
+    .zone.control { background: var(--teal-soft); }
+    .zone.burst { background: var(--amber-soft); }
+    .zone.pressure { background: var(--red-soft); }
+
+    .gate { display: grid; grid-template-columns: 0.75fr 1.25fr; gap: 48px; margin-top: 42px; }
+    .gate-flow { border: 1px solid var(--line-strong); background: var(--surface); padding: 26px; }
+    .gate-step { display: grid; grid-template-columns: 32px 1fr; gap: 12px; border-top: 1px solid var(--line); padding: 14px 0; }
+    .gate-step:first-child { border-top: 0; }
+    .gate-step span { color: var(--teal); font-family: "JetBrains Mono", monospace; font-size: 11px; }
+    .gate-outcome { margin-top: 22px; border-top: 2px solid var(--teal); padding-top: 16px; font-weight: 700; }
+    .gate-checks { display: grid; grid-template-columns: repeat(2, 1fr); border-top: 1px solid var(--line-strong); }
+    .gate-check { min-height: 126px; border-bottom: 1px solid var(--line); padding: 18px 18px 18px 0; }
+    .gate-check:nth-child(even) { border-left: 1px solid var(--line); padding-left: 18px; }
+    .gate-check b { display: block; margin-bottom: 8px; }
+    .gate-check span { color: var(--muted); font-size: 13px; }
+
+    .matrix { width: 100%; margin-top: 34px; border-collapse: collapse; background: var(--surface); }
+    .matrix th, .matrix td { border: 1px solid var(--line); padding: 13px 14px; text-align: left; vertical-align: top; }
+    .matrix th { background: #eef1f0; font-size: 13px; }
+    .matrix td { font-size: 14px; }
+    .keep { color: var(--teal); font-weight: 700; }
+    .adapt { color: var(--amber); font-weight: 700; }
+    .replace { color: var(--blue); font-weight: 700; }
+
+    .difference { display: grid; grid-template-columns: 1fr 1fr; gap: 36px; margin-top: 38px; }
+    .difference-column { border-top: 3px solid var(--line-strong); padding-top: 20px; }
+    .difference-column.agree { border-color: var(--teal); }
+    .difference-column.adjust { border-color: var(--amber); }
+    .difference-row { border-top: 1px solid var(--line); padding: 16px 0; }
+    .difference-row:first-of-type { border-top: 0; }
+    .difference-row p { color: var(--muted); }
+
+    .roadmap { display: grid; grid-template-columns: repeat(6, 1fr); margin-top: 38px; border-top: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); }
+    .milestone { min-height: 250px; padding: 22px 18px; }
+    .milestone + .milestone { border-left: 1px solid var(--line); }
+    .milestone-id { color: var(--teal); font-family: "JetBrains Mono", monospace; font-size: 12px; }
+    .milestone h3 { margin-top: 34px; font-size: 18px; }
+    .milestone p { color: var(--muted); font-size: 13px; }
+
+    .acceptance { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 38px; border: 1px solid var(--line-strong); }
+    .accept-col { padding: 24px; }
+    .accept-col + .accept-col { border-left: 1px solid var(--line); }
+    .accept-col h3 { margin-bottom: 20px; }
+    .accept-col ul { margin: 0; padding-left: 18px; }
+    .accept-col li { margin: 10px 0; color: var(--muted); font-size: 14px; }
+
+    .decision-board { display: grid; grid-template-columns: 1fr 1fr; margin-top: 38px; border-top: 1px solid var(--line-strong); }
+    .decision-item { display: grid; grid-template-columns: 94px 1fr; gap: 18px; min-height: 150px; border-bottom: 1px solid var(--line); padding: 22px 24px 22px 0; }
+    .decision-item:nth-child(even) { border-left: 1px solid var(--line); padding-left: 24px; }
+    .decision-item .id { color: var(--teal); font-family: "JetBrains Mono", monospace; font-size: 12px; }
+    .decision-item p { color: var(--muted); }
+
+    .finale { padding: 86px 0 100px; background: var(--ink); color: #f4f7f6; }
+    .finale h2 { max-width: 900px; font-family: "Iowan Old Style", "Songti SC", serif; font-size: clamp(36px, 5vw, 64px); }
+    .finale p { max-width: 820px; color: #bac5c7; font-size: 18px; }
+    .finale .formula { margin-top: 36px; border-top: 1px solid #4a565b; border-bottom: 1px solid #4a565b; padding: 22px 0; color: #fff; font-family: "JetBrains Mono", monospace; font-size: clamp(16px, 2vw, 23px); }
+    .doc-footer { padding: 26px 0 42px; color: var(--faint); font-size: 12px; }
+
+    @media (max-width: 980px) {
+      .hero { grid-template-columns: 1fr; min-height: auto; }
+      .hero-instrument { min-height: auto; }
+      .architecture { grid-template-columns: 1fr; gap: 10px; }
+      .arch-arrow { transform: rotate(90deg); min-height: 26px; }
+      .plan-stack, .gate, .sim-body { grid-template-columns: 1fr; }
+      .sim-decision { border-left: 0; border-top: 1px solid var(--line); padding: 24px 0 0; }
+      .roadmap { grid-template-columns: repeat(3, 1fr); }
+      .milestone:nth-child(4) { border-left: 0; }
+    }
+
+    @media (max-width: 720px) {
+      .shell { width: min(100% - 28px, 1180px); }
+      nav { display: none; }
+      .hero { padding: 50px 0; gap: 34px; }
+      .hero-instrument { padding: 20px; }
+      .big-number { font-size: 68px; }
+      .section { padding: 58px 0; }
+      .thesis-grid, .zones, .acceptance, .difference, .decision-board { grid-template-columns: 1fr; }
+      .thesis-item + .thesis-item, .zone + .zone, .accept-col + .accept-col, .decision-item:nth-child(even) { border-left: 0; padding-left: 0; }
+      .thesis-item { border-top: 1px solid var(--line); }
+      .thesis-item:first-child { border-top: 0; }
+      .compare { grid-template-columns: 1fr; gap: 10px; }
+      .compare-arrow { transform: rotate(90deg); min-height: 42px; }
+      .scenario-tabs { grid-template-columns: 1fr 1fr; }
+      .scenario-tab { border-bottom: 1px solid var(--line); }
+      .budget-mark::before { display: none; }
+      .segment-legend { grid-template-columns: 1fr 1fr; }
+      .gate-checks { grid-template-columns: 1fr; }
+      .gate-check:nth-child(even) { border-left: 0; padding-left: 0; }
+      .layer { grid-template-columns: 1fr; gap: 3px; }
+      .statement { grid-template-columns: 1fr; gap: 12px; }
+      .roadmap { grid-template-columns: 1fr; }
+      .milestone + .milestone { border-left: 0; border-top: 1px solid var(--line); }
+      .decision-item { grid-template-columns: 66px 1fr; }
+      .matrix { display: block; overflow-x: auto; }
+    }
+
+    @media print {
+      .topbar { position: static; }
+      .scenario-tabs { display: none; }
+      .band, .finale { break-inside: avoid; }
+      body { background: #fff; }
+    }
+  </style>
+</head>
+<body>
+  <!--
+    Assumptions for review:
+    1. 240K refers to total provider input context, including system prompt, tool schemas and messages.
+    2. 240K is the steady target, not an unconditional hard ceiling.
+    3. 320K is a proposed burst ceiling for discussion, not a measured production constant.
+    4. The design preserves the full journal and bounds only the provider working set.
+  -->
+  <div class="topbar">
+    <div class="shell topbar-inner">
+      <div class="wordmark">SAN <span>/ CONTEXT STEADY</span></div>
+      <nav aria-label="文档章节">
+        <a href="#thesis">原则</a>
+        <a href="#architecture">架构</a>
+        <a href="#budget">240K 预算</a>
+        <a href="#quality">质量闸门</a>
+        <a href="#differences">差异</a>
+        <a href="#delivery">实施</a>
+      </nav>
+    </div>
+  </div>
+
+  <header class="shell hero">
+    <div>
+      <div class="eyebrow">破坏性重构提案 · 讨论稿 01</div>
+      <h1>先保证高质量，<br>再把上下文稳定在 240K。</h1>
+      <p class="hero-copy">
+        这份方案修正了我上一版偏“预算控制”的倾向。<strong>240K 不是一把砍内容的刀，而是一块足够宽的高质量工作台。</strong>
+        稳态的目的，是减少噪声、提高注意力和可预测性；当压缩会损害任务完成度时，系统应当暂时扩张，而不是机械服从数字。
+      </p>
+      <div class="hero-meta">
+        <span>稳态目标：240K input tokens</span>
+        <span>正常控制带：200K–260K</span>
+        <span>建议弹性区：260K–320K</span>
+        <span>完整 journal 永久保留</span>
+      </div>
+    </div>
+
+    <aside class="hero-instrument" aria-label="240K 稳态仪表">
+      <div class="instrument-head">
+        <div><strong>QUALITY WORKING SET</strong><br><small>provider 每次真正看到的工作上下文</small></div>
+        <small>PROPOSED</small>
+      </div>
+      <div class="big-number">240<span>K tokens</span></div>
+      <div class="instrument-sub">柔性目标，不是硬上限。复杂任务可以短时进入弹性区。</div>
+      <div class="rail-wrap">
+        <div class="marker-label target">240K 稳态</div>
+        <div class="marker-label burst">320K 弹性上限</div>
+        <div class="rail">
+          <div class="rail-zone comfort"></div>
+          <div class="rail-zone control"></div>
+          <div class="rail-zone burst"></div>
+          <div class="rail-zone guard"></div>
+        </div>
+        <div class="rail-marker target"></div>
+        <div class="rail-marker burst"></div>
+      </div>
+      <div class="rail-legend">
+        <div class="steady"><b>0–260K</b>正常工作与稳态控制</div>
+        <div class="elastic"><b>260K–320K</b>复杂任务临时扩张</div>
+        <div class="hard"><b>320K+</b>进入强质量审查与回收准备</div>
+      </div>
+    </aside>
+  </header>
+
+  <main>
+    <section class="band alt" id="thesis">
+      <div class="shell section">
+        <div class="section-kicker">01 / 共同原则</div>
+        <h2>“稳定”服务于质量，而不是与质量竞争。</h2>
+        <p class="section-lead">我们真正要控制的是无关噪声、重复 payload 和失控增长，不是为了数字好看而减少模型完成任务所需要的证据。</p>
+
+        <div class="thesis-grid">
+          <article class="thesis-item">
+            <div class="thesis-index">CONSTRAINT 0</div>
+            <h3>高质量交付优先</h3>
+            <p>当前需求、关键文件、未解决错误、测试证据和最新用户指令不允许被预算策略机械删除。</p>
+          </article>
+          <article class="thesis-item">
+            <div class="thesis-index">CONSTRAINT 1</div>
+            <h3>240K 是稳态目标</h3>
+            <p>常态请求尽量落在 200K–260K；上下文稳定后，注意力更集中、缓存更可预测、成本更平滑。</p>
+          </article>
+          <article class="thesis-item">
+            <div class="thesis-index">CONSTRAINT 2</div>
+            <h3>必要时允许扩张</h3>
+            <p>大型重构、复杂排障和最终验收可以暂时进入 260K–320K，待安全边界再回到稳态。</p>
+          </article>
+        </div>
+
+        <div class="statement">
+          <div class="statement-label">核心判断</div>
+          <blockquote>低质量的 120K 不如高质量的 280K；但经过正确整理的 240K，通常会优于充满重复和旧噪声的 400K。</blockquote>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="architecture">
+      <div class="shell section">
+        <div class="section-kicker">02 / 基本模型</div>
+        <h2>从“维护一条不断增长的消息链”，改成“每轮生成一个高质量工作投影”。</h2>
+        <p class="section-lead">完整历史仍然存在，但它属于 journal。模型每轮看到的内容由 Context Planner 从 journal 中重新选择，不再先塞满历史、再靠 pruner 猜哪些可以删。</p>
+
+        <div class="compare">
+          <article class="compare-side current">
+            <div class="arch-label">当前思路 · 容易漂移</div>
+            <h3>先累积，再删除</h3>
+            <ol class="flow-list">
+              <li><span class="n">01</span><span>agent.state.messages 持续增长</span></li>
+              <li><span class="n">02</span><span>每轮再插入 ContextPacket</span></li>
+              <li><span class="n">03</span><span>pruner 扫 digest 推断删除范围</span></li>
+              <li><span class="n">04</span><span>provider、状态栏、compaction 各自估算</span></li>
+            </ol>
+          </article>
+          <div class="compare-arrow" aria-hidden="true">→</div>
+          <article class="compare-side proposed">
+            <div class="arch-label">重构后 · 可证明</div>
+            <h3>先选择，再渲染</h3>
+            <ol class="flow-list">
+              <li><span class="n">01</span><span>journal 保存完整、可回读的事实</span></li>
+              <li><span class="n">02</span><span>planner 按当前任务与预算选择材料</span></li>
+              <li><span class="n">03</span><span>生成不可变 ContextPlan</span></li>
+              <li><span class="n">04</span><span>发送、统计、调试共用同一计划</span></li>
+            </ol>
+          </article>
+        </div>
+
+        <div class="architecture" aria-label="Context Steady 新架构流程图">
+          <article class="arch-node">
+            <div class="arch-label">Source of truth</div>
+            <strong>Session Journal</strong>
+            <p>完整原始历史、工具证据、附件、分支与 entryId。允许增长，不默认全量发送。</p>
+          </article>
+          <div class="arch-arrow" aria-hidden="true">→</div>
+          <article class="arch-node">
+            <div class="arch-label">Derived index</div>
+            <strong>Turn Index</strong>
+            <p>TurnDigest、checkpoint、exact-turn 边界、证据索引与摘要质量状态。</p>
+          </article>
+          <div class="arch-arrow" aria-hidden="true">→</div>
+          <article class="arch-node primary">
+            <div class="arch-label">Single decision point</div>
+            <strong>Context Planner</strong>
+            <p>结合当前 prompt、任务阶段、模型窗口、240K 目标、质量闸门与 recall，产出唯一 ContextPlan。</p>
+          </article>
+          <div class="arch-arrow" aria-hidden="true">→</div>
+          <article class="arch-node">
+            <div class="arch-label">One plan, many consumers</div>
+            <strong>ContextPlan</strong>
+            <div class="arch-sinks">
+              <div>Provider Renderer</div>
+              <div>Token / Status</div>
+              <div>Compaction Gate</div>
+              <div>Debug / Audit</div>
+            </div>
+          </article>
+        </div>
+
+        <div class="plan-stack">
+          <div class="layer-stack" aria-label="Provider 上下文层级">
+            <div class="layer"><span class="layer-name">稳定规则与工具</span><span class="layer-desc">system、开发规则、tool schemas</span><span class="layer-cache">CACHE HIGH</span></div>
+            <div class="layer"><span class="layer-name">Epoch Checkpoint</span><span class="layer-desc">低频变化的项目与任务状态</span><span class="layer-cache">CACHE HIGH</span></div>
+            <div class="layer"><span class="layer-name">Digest Ledger</span><span class="layer-desc">epoch 内 append-only 的轮次索引</span><span class="layer-cache">CACHE MED</span></div>
+            <div class="layer"><span class="layer-name">最近精确轮次</span><span class="layer-desc">目标 5 轮，保留语义与工具配对</span><span class="layer-cache">CACHE LOW</span></div>
+            <div class="layer current"><span class="layer-name">当前任务证据</span><span class="layer-desc">文件、错误、测试、diff、活跃计划</span><span class="layer-cache">QUALITY CORE</span></div>
+            <div class="layer recall"><span class="layer-name">本轮 Recall</span><span class="layer-desc">只对当前 prompt 生效，不累积</span><span class="layer-cache">EPHEMERAL</span></div>
+            <div class="layer prompt"><span class="layer-name">当前 Prompt</span><span class="layer-desc">完整、最后、最高近因权重</span><span class="layer-cache">AUTHORITATIVE</span></div>
+          </div>
+          <div class="plan-rules">
+            <h3>ContextPlan 不是一段小摘要</h3>
+            <p>它是对整个 240K 工作集的选择计划。TurnDigest 可能只有几千 tokens，但它只是一层索引，不能替代任务所需的全部原文和证据。</p>
+            <div class="rule"><b>RULE 01</b><span>没有明确 replacement coverage，就不能从 provider payload 省略原始 entry。</span></div>
+            <div class="rule"><b>RULE 02</b><span>最近精确轮次和当前证据是独立层，不与 recentDigests 混为一谈。</span></div>
+            <div class="rule"><b>RULE 03</b><span>动态历史和 recall 是不可信数据，不提升为 developer 权限。</span></div>
+            <div class="rule"><b>RULE 04</b><span>同一个 plan 同时驱动发送、token 统计、状态栏和 compaction。</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="band alt" id="budget">
+      <div class="shell section">
+        <div class="section-kicker">03 / 预算不是配额</div>
+        <h2>240K 是质量工作集目标；不同任务，内部构成应该不同。</h2>
+        <p class="section-lead">下面是策略模拟，不是 benchmark 数据。它表达的是 planner 如何根据任务现场调整材料，而不是给每层锁死一个固定配额。</p>
+
+        <div class="simulator">
+          <div class="scenario-tabs" role="group" aria-label="任务场景">
+            <button class="scenario-tab" type="button" data-scenario="routine" aria-pressed="true">常规实现</button>
+            <button class="scenario-tab" type="button" data-scenario="refactor" aria-pressed="false">大型重构</button>
+            <button class="scenario-tab" type="button" data-scenario="debug" aria-pressed="false">复杂排障</button>
+            <button class="scenario-tab" type="button" data-scenario="acceptance" aria-pressed="false">最终验收</button>
+            <button class="scenario-tab" type="button" data-scenario="shift" aria-pressed="false">切换话题</button>
+          </div>
+          <div class="sim-body">
+            <div>
+              <div class="sim-title">
+                <div><div class="decision-label">PROJECTED INPUT</div><div class="sim-total" id="simTotal">224<span>K tokens</span></div></div>
+                <div class="sim-state" id="simState">STEADY</div>
+              </div>
+              <div class="budget-chart">
+                <div class="budget-mark target"></div>
+                <div class="budget-mark burst"></div>
+                <div class="budget-segments" id="budgetSegments" aria-label="上下文组成"></div>
+              </div>
+              <div class="segment-legend" id="segmentLegend"></div>
+            </div>
+            <aside class="sim-decision">
+              <div class="decision-label">PLANNER DECISION</div>
+              <h3 id="simHeading">维持当前 epoch，不需要压缩。</h3>
+              <p id="simDescription">工作集处在稳态区，保留最近 5 轮精确上下文与当前文件证据。</p>
+              <ul class="decision-list" id="simDecisions"></ul>
+            </aside>
+          </div>
+        </div>
+
+        <div class="zones">
+          <article class="zone comfort"><div class="zone-range">0–200K</div><h3>舒适区</h3><p>不主动为了填满预算增加历史。保持清晰、相关、足够即可。</p></article>
+          <article class="zone control"><div class="zone-range">200K–260K</div><h3>稳态控制带</h3><p>理想常态。240K 是目标中心，不要求每轮精确命中一个数字。</p></article>
+          <article class="zone burst"><div class="zone-range">260K–320K</div><h3>质量弹性区</h3><p>复杂任务允许进入。记录原因，在下一个安全边界尝试回收。</p></article>
+          <article class="zone pressure"><div class="zone-range">320K+</div><h3>强审查区</h3><p>先做质量闸门，再决定 rebase、重读、checkpoint 或应急 compaction。</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="quality">
+      <div class="shell section">
+        <div class="section-kicker">04 / 质量闸门</div>
+        <h2>系统不能仅因为“超过 240K”就开始删内容。</h2>
+        <p class="section-lead">每次裁剪或 rebase 前，Planner 先证明任务所需信息仍然存在。如果证明失败，默认动作是保留或扩张，而不是压缩。</p>
+
+        <div class="gate">
+          <div class="gate-flow">
+            <div class="gate-step"><span>01</span><div><strong>识别当前交付阶段</strong><br>探索、实现、排障、验收的证据需求不同。</div></div>
+            <div class="gate-step"><span>02</span><div><strong>建立 Required Context Set</strong><br>列出当前任务不可缺少的指令、文件、错误、决定和测试。</div></div>
+            <div class="gate-step"><span>03</span><div><strong>验证 replacement coverage</strong><br>被省略的原文是否有 checkpoint、digest、stub 或可重读 entryId。</div></div>
+            <div class="gate-step"><span>04</span><div><strong>比较压缩前后风险</strong><br>若可能降低完成度，进入 burst；若只是重复噪声，安全回收。</div></div>
+            <div class="gate-outcome">质量检查通过，才允许 rebase 回到 240K。</div>
+          </div>
+          <div class="gate-checks">
+            <div class="gate-check"><b>最新用户指令</b><span>完整保留，不能被旧 digest 或 checkpoint 覆盖。</span></div>
+            <div class="gate-check"><b>当前任务规格</b><span>验收条件、禁止项、设计决策与输出格式仍可见。</span></div>
+            <div class="gate-check"><b>活跃文件与差异</b><span>保留当前版本或重新读取，避免依赖陈旧文件副本。</span></div>
+            <div class="gate-check"><b>未解决错误</b><span>错误信息、失败测试与尝试过的方案不能只剩“失败了”。</span></div>
+            <div class="gate-check"><b>工具调用配对</b><span>assistant tool call 与 tool result 作为原子 turn bundle 处理。</span></div>
+            <div class="gate-check"><b>开放决定与下一步</b><span>没有落地的选择仍保留来源和状态，避免重复探索。</span></div>
+            <div class="gate-check"><b>秘密与权限</b><span>摘要副请求先混淆；历史派生内容保持不可信 data 权限。</span></div>
+            <div class="gate-check"><b>证据可回读</b><span>长日志可变成短摘，但必须携带稳定 entryId 与重读路径。</span></div>
+          </div>
+        </div>
+
+        <table class="matrix">
+          <thead><tr><th>上下文材料</th><th>常态策略</th><th>预算压力下</th><th>绝不能做</th></tr></thead>
+          <tbody>
+            <tr><td>当前用户 prompt</td><td><span class="keep">完整保留</span></td><td>必要时扩大 burst</td><td>摘要、截断或被旧指令覆盖</td></tr>
+            <tr><td>当前活跃文件</td><td><span class="keep">保留当前版本</span></td><td>重新读取相关范围</td><td>依赖多轮前的陈旧全文</td></tr>
+            <tr><td>最近精确轮次</td><td>目标 5 轮</td><td><span class="adapt">3–8 轮自适应</span></td><td>一有 digest 就全部删除</td></tr>
+            <tr><td>大型工具输出</td><td>保留相关片段</td><td><span class="replace">evidence stub + entryId</span></td><td>每轮重复发送完整日志</td></tr>
+            <tr><td>旧轮次</td><td>digest ledger</td><td>checkpoint 吸收</td><td>checkpoint 与旧 delta 双份常驻</td></tr>
+            <tr><td>Recall</td><td>当前 prompt 相关</td><td>先降低分 recall</td><td>跨轮永久累积</td></tr>
+            <tr><td>失败或 fallback digest</td><td>作为弱索引</td><td>保留更多精确原文</td><td>授权删除整段 user/assistant 历史</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="band alt" id="differences">
+      <div class="shell section">
+        <div class="section-kicker">05 / 与你的想法对齐</div>
+        <h2>我保留架构判断，但调整预算哲学。</h2>
+        <p class="section-lead">我们在目标上没有冲突。差异主要在于我上一版更强调“有界”，现在把“有界”明确降为质量之后的第二约束，并把 240K 变成宽裕的工作集目标。</p>
+
+        <div class="difference">
+          <div class="difference-column agree">
+            <h3>完全一致的部分</h3>
+            <div class="difference-row"><strong>高质量交付是第一目标</strong><p>稳态不能以遗漏需求、证据或降低完成度为代价。</p></div>
+            <div class="difference-row"><strong>240K 足够宽裕</strong><p>不需要把 ContextPacket 压到几千 tokens 后就认为上下文治理完成。</p></div>
+            <div class="difference-row"><strong>稳定本身能提高质量</strong><p>减少重复和旧噪声后，注意力更集中，模型更容易保持任务主线。</p></div>
+            <div class="difference-row"><strong>完整历史应当保留</strong><p>省略的是 provider 工作集，不是删除 session journal 中的证据。</p></div>
+          </div>
+          <div class="difference-column adjust">
+            <h3>我对上一版的修正</h3>
+            <div class="difference-row"><strong>从硬 cap 改为控制带</strong><p>240K 是目标中心；260K–320K 是明确允许的质量弹性区。</p></div>
+            <div class="difference-row"><strong>从“先压缩”改为“先证明可压缩”</strong><p>Quality Gate 失败时，系统应暂时保留更多材料。</p></div>
+            <div class="difference-row"><strong>从固定分层配额改为任务自适应</strong><p>实现、排障和验收可以拥有不同的 exact/evidence/recall 比例。</p></div>
+            <div class="difference-row"><strong>仍坚持单一 ContextPlan</strong><p>预算宽裕不代表可以接受多套裁剪与统计逻辑继续漂移。</p></div>
+          </div>
+        </div>
+
+        <div class="statement">
+          <div class="statement-label">边界共识</div>
+          <blockquote>允许上下文暂时变大，但不允许它在没有理由、没有审计、没有回收点的情况下永久变大。</blockquote>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="delivery">
+      <div class="shell section">
+        <div class="section-kicker">06 / 破坏性重构边界</div>
+        <h2>重写上下文投影，不重写整个 San。</h2>
+        <p class="section-lead">TurnDigest 和 journal 已经有可复用价值。真正需要推倒的是 pruner、packet 累积、预算统计和 provider 注入之间的耦合。</p>
+
+        <div class="roadmap">
+          <article class="milestone"><div class="milestone-id">R0</div><h3>合同冻结</h3><p>定义 240K、burst、exact turns、quality gate、provider input 计量口径。</p></article>
+          <article class="milestone"><div class="milestone-id">R1</div><h3>ContextPlan</h3><p>实现 turn index、材料选择、coverage、预算分配和确定性 plan。</p></article>
+          <article class="milestone"><div class="milestone-id">R2</div><h3>Provider 投影</h3><p>用 materializer 替代 prune；发送、状态栏和 compaction 共用 plan。</p></article>
+          <article class="milestone"><div class="milestone-id">R3</div><h3>Epoch / Rebase</h3><p>epoch 内 append-only；在安全边界低频 rebase，退休旧 delta。</p></article>
+          <article class="milestone"><div class="milestone-id">R4</div><h3>安全与兼容</h3><p>secret pipeline、消息权限、Brain/San Loop/report v1-v2 adapter。</p></article>
+          <article class="milestone"><div class="milestone-id">R5</div><h3>真实验收</h3><p>长任务、排障、大文件、resume、topic shift 与质量 A/B dogfood。</p></article>
+        </div>
+
+        <div class="acceptance">
+          <div class="accept-col">
+            <h3>质量验收</h3>
+            <ul>
+              <li>与 full-history 基线相比，任务完成质量不得下降。</li>
+              <li>当前 prompt、验收标准和未解决错误不得丢失。</li>
+              <li>复杂任务允许进入 burst，不因追求 240K 中断工作。</li>
+              <li>最新文件状态优先于陈旧历史副本。</li>
+            </ul>
+          </div>
+          <div class="accept-col">
+            <h3>稳态验收</h3>
+            <ul>
+              <li>普通 20 轮任务绝大多数请求处于 200K–260K。</li>
+              <li>burst 有明确原因、持续轮数和回收结果。</li>
+              <li>checkpoint 后不再重复发送已吸收的旧 delta。</li>
+              <li>resume 前后生成语义等价的 ContextPlan。</li>
+            </ul>
+          </div>
+          <div class="accept-col">
+            <h3>安全验收</h3>
+            <ul>
+              <li>摘要和主 provider payload 均不含秘密明文。</li>
+              <li>历史、文件和 recall 不进入 developer/system 权限。</li>
+              <li>任何省略都能追溯 replacement coverage。</li>
+              <li>provider、token status 与 compaction 消息集合一致。</li>
+            </ul>
+          </div>
+        </div>
+
+        <h3 style="margin-top: 48px;">需要在实施前冻结的产品决定</h3>
+        <div class="decision-board">
+          <div class="decision-item"><div class="id">D-01</div><div><strong>240K 的计量口径</strong><p>建议统计 provider 实际输入的全部内容，包括 system prompt、tool schemas 和 conversation messages，不只统计 ContextPacket。</p></div></div>
+          <div class="decision-item"><div class="id">D-02</div><div><strong>弹性上限</strong><p>建议初值 320K；它是 planner 的强审查线，不等同于模型硬窗口。</p></div></div>
+          <div class="decision-item"><div class="id">D-03</div><div><strong>最近精确轮次</strong><p>建议目标 5 轮，自适应范围 3–8；工具长输出可替换为带 entryId 的短摘。</p></div></div>
+          <div class="decision-item"><div class="id">D-04</div><div><strong>Rebase 安全边界</strong><p>建议只在用户轮次边界、agent settled 后执行，不在未完成的 tool loop 中途改写上下文。</p></div></div>
+          <div class="decision-item"><div class="id">D-05</div><div><strong>低窗口模型降级</strong><p>当模型硬窗口不足以支撑 240K + 输出预留时，按比例降低 steady target，并显式显示降级原因。</p></div></div>
+          <div class="decision-item"><div class="id">D-06</div><div><strong>质量 A/B 基线</strong><p>重构验收同时跑 full-history 与 steady-plan，对最终正确性、遗漏约束和返工次数做对照。</p></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="finale">
+      <div class="shell">
+        <div class="section-kicker">FINAL POSITION</div>
+        <h2>不是把上下文做小，而是把 240K 变成一份高密度、低噪声、完成任务所需信息充分的工作集。</h2>
+        <p>完整 journal 负责不遗忘；ContextPlan 负责当前任务；240K 负责稳定注意力；burst 负责在真正复杂时保护交付质量。四者各自承担不同职责，不再互相替代。</p>
+        <div class="formula">QUALITY FIRST → PLAN ONCE → STAY NEAR 240K → BURST WHEN JUSTIFIED → REBASE SAFELY</div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="shell doc-footer">
+    <div>San Context Steady · 240K 质量优先重构提案 · 2026-07-12</div>
+    <div>基于原始需求、当前代码复审与本轮产品反馈形成。320K burst 等参数均为待评审建议值，不是既有系统实测结论。</div>
+  </footer>
+
+  <script>
+    const scenarios = {
+      routine: {
+        total: 224,
+        state: "STEADY",
+        heading: "维持当前 epoch，不需要压缩。",
+        description: "工作集处在稳态区，保留最近 5 轮精确上下文与当前文件证据。",
+        parts: { stable: 44, evidence: 70, exact: 62, summary: 30, recall: 18 },
+        decisions: ["当前 prompt 完整保留", "最近精确轮次：5", "Recall 仅本轮生效", "不触发 rebase"]
+      },
+      refactor: {
+        total: 294,
+        state: "QUALITY BURST",
+        heading: "允许临时扩张，不为回到 240K 删除活跃证据。",
+        description: "跨模块重构需要更多当前文件、diff 和设计约束。记录 burst 原因，待实现阶段结束后再 rebase。",
+        parts: { stable: 44, evidence: 132, exact: 70, summary: 30, recall: 18 },
+        decisions: ["保留跨模块当前文件", "最近精确轮次：6", "旧日志转 evidence stub", "下一用户轮次重新评估"]
+      },
+      debug: {
+        total: 276,
+        state: "QUALITY BURST",
+        heading: "保留失败证据，优先裁重复日志。",
+        description: "排障质量依赖错误文本、复现步骤和已尝试方案。大段重复输出可以缩短，但不能只剩“执行失败”。",
+        parts: { stable: 44, evidence: 116, exact: 66, summary: 28, recall: 22 },
+        decisions: ["错误与复现步骤完整", "重复日志按 hash 去重", "工具结果保持配对", "问题定位后再 checkpoint"]
+      },
+      acceptance: {
+        total: 308,
+        state: "REVIEW BURST",
+        heading: "验收轮允许接近弹性上限。",
+        description: "最终判断需要重新装载测试、diff、验收标准和关键决策。此时压缩过早会直接降低审查质量。",
+        parts: { stable: 44, evidence: 142, exact: 72, summary: 34, recall: 16 },
+        decisions: ["重读最终 diff 与测试", "恢复所有验收条件", "保留关键决策来源", "验收结束后强制 rebase"]
+      },
+      shift: {
+        total: 158,
+        state: "REBASED",
+        heading: "新话题建立新 epoch。",
+        description: "旧任务进入 checkpoint，只带必要项目状态；不让旧 digest 和 recall 继续占据当前任务注意力。",
+        parts: { stable: 44, evidence: 48, exact: 28, summary: 30, recall: 8 },
+        decisions: ["旧任务写入 checkpoint", "旧 recall 全部退休", "精确轮次降至 3", "新 prompt 成为唯一当前意图"]
+      }
+    };
+
+    const partLabels = {
+      stable: "规则与工具",
+      evidence: "当前证据",
+      exact: "精确轮次",
+      summary: "摘要状态",
+      recall: "本轮召回"
+    };
+
+    function renderScenario(name) {
+      const scenario = scenarios[name];
+      const max = 340;
+      document.getElementById("simTotal").innerHTML = `${scenario.total}<span>K tokens</span>`;
+      document.getElementById("simState").textContent = scenario.state;
+      document.getElementById("simHeading").textContent = scenario.heading;
+      document.getElementById("simDescription").textContent = scenario.description;
+
+      const segments = document.getElementById("budgetSegments");
+      segments.replaceChildren();
+      Object.entries(scenario.parts).forEach(([key, value]) => {
+        const segment = document.createElement("div");
+        segment.className = `budget-segment ${key}`;
+        segment.style.width = `${(value / max) * 100}%`;
+        segment.title = `${partLabels[key]} ${value}K`;
+        segments.appendChild(segment);
+      });
+
+      const legend = document.getElementById("segmentLegend");
+      legend.replaceChildren();
+      Object.entries(scenario.parts).forEach(([key, value]) => {
+        const item = document.createElement("div");
+        item.innerHTML = `<b>${value}K</b>${partLabels[key]}`;
+        legend.appendChild(item);
+      });
+
+      const decisions = document.getElementById("simDecisions");
+      decisions.replaceChildren();
+      scenario.decisions.forEach(decision => {
+        const item = document.createElement("li");
+        item.textContent = decision;
+        decisions.appendChild(item);
+      });
+
+      document.querySelectorAll(".scenario-tab").forEach(button => {
+        button.setAttribute("aria-pressed", button.dataset.scenario === name ? "true" : "false");
+      });
+    }
+
+    document.querySelectorAll(".scenario-tab").forEach(button => {
+      button.addEventListener("click", () => renderScenario(button.dataset.scenario));
+    });
+
+    renderScenario("routine");
+  </script>
+</body>
+</html>

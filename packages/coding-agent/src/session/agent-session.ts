@@ -4425,14 +4425,23 @@ export class AgentSession {
 		appendContextCheckpoint(this.sessionManager, built.checkpoint);
 	}
 
-	#dropContextSteadyPacketMessagesFromActiveContext(): void {
-		const messages = this.agent.state.messages;
-		if (!messages.some(message => message.role === "custom" && message.customType === CONTEXT_PACKET_MESSAGE_TYPE)) {
-			return;
+	#activeContextSteadyPacketRefs(): { checkpointRef?: string; digestRefs: string[] } | undefined {
+		const digestRefs = new Set<string>();
+		let checkpointRef: string | undefined;
+		for (const message of this.agent.state.messages) {
+			if (message.role !== "custom" || message.customType !== CONTEXT_PACKET_MESSAGE_TYPE) continue;
+			if (!isRecord(message.details)) continue;
+			if (Array.isArray(message.details.digestRefs)) {
+				for (const ref of message.details.digestRefs) {
+					if (typeof ref === "string" && ref.length > 0) digestRefs.add(ref);
+				}
+			}
+			if (typeof message.details.checkpointRef === "string" && message.details.checkpointRef.length > 0) {
+				checkpointRef = message.details.checkpointRef;
+			}
 		}
-		this.agent.replaceMessages(
-			messages.filter(message => !(message.role === "custom" && message.customType === CONTEXT_PACKET_MESSAGE_TYPE)),
-		);
+		if (digestRefs.size === 0 && checkpointRef === undefined) return undefined;
+		return checkpointRef ? { checkpointRef, digestRefs: [...digestRefs] } : { digestRefs: [...digestRefs] };
 	}
 
 	#dropSanLoopRoleContextMessagesFromActiveContext(): void {
@@ -7997,9 +8006,9 @@ export class AgentSession {
 
 	async #buildContextSteadyPacketPrelude(expandedText: string): Promise<CustomMessage | undefined> {
 		if (this.settings.get("san.contextSteady.enabled") !== true) return undefined;
-		this.#dropContextSteadyPacketMessagesFromActiveContext();
 		if (this.settings.get("san.contextSteady.contextPacket.enabled") !== true) return undefined;
 
+		const previousPacket = this.#activeContextSteadyPacketRefs();
 		const recall = await this.#buildContextSteadyRecallLayer(expandedText);
 		const built = buildContextPacket(
 			this.sessionManager.getEntries(),
@@ -8013,6 +8022,7 @@ export class AgentSession {
 				reserveRatio: this.settings.get("san.contextSteady.reserveRatio") as number,
 			},
 			recall,
+			previousPacket,
 		);
 		if (!built) return undefined;
 

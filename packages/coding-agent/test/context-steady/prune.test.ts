@@ -168,6 +168,76 @@ describe("buildContextSteadyPrunedMessages", () => {
 		expect(JSON.stringify(pruned)).toContain("<san_context_packet>");
 	});
 
+	test("prunes digest-covered raw history even before a packet is injected", () => {
+		const oldUser = { role: "user", content: "old raw user", timestamp: 1, provider: "x", model: "x" };
+		const oldAssistant = { role: "assistant", content: "old raw assistant", timestamp: 2, provider: "x", model: "x" };
+		const currentUser = { role: "user", content: "new prompt", timestamp: 3, provider: "x", model: "x" };
+
+		const pruned = buildContextSteadyPrunedMessages(
+			asMessages([oldUser, oldAssistant, currentUser]),
+			asEntries([
+				messageEntry("u1", oldUser),
+				messageEntry("a1", oldAssistant),
+				customEntry(
+					"d1",
+					TURN_DIGEST_CUSTOM_TYPE,
+					digest({ sessionId: "s1", fromEntryId: "u1", toEntryId: "a1", promptGeneration: 1 }),
+				),
+				messageEntry("u2", currentUser),
+			]),
+		);
+
+		expect(JSON.stringify(pruned)).not.toContain("old raw user");
+		expect(JSON.stringify(pruned)).not.toContain("old raw assistant");
+		expect(JSON.stringify(pruned)).toContain("new prompt");
+	});
+
+	test("prunes digest-covered file mentions and image descriptions", () => {
+		const fileTimestamp = new Date("2026-07-02T00:00:00.000Z").getTime();
+		const imageTimestamp = new Date("2026-07-02T00:00:01.000Z").getTime();
+		const activeFileMention = {
+			role: "fileMention",
+			files: [{ path: "large-notes.md", content: "large attached file content" }],
+			timestamp: fileTimestamp,
+		};
+		const persistedFileMention = {
+			role: "fileMention",
+			files: [{ path: "large-notes.md", content: "large attached file content" }],
+			timestamp: fileTimestamp,
+		};
+		const imageDescription = {
+			role: "custom",
+			customType: "image-attachment-description",
+			content: "screenshot visual description",
+			display: false,
+			timestamp: imageTimestamp,
+		};
+		const currentUser = { role: "user", content: "new prompt", timestamp: 4, provider: "x", model: "x" };
+
+		const pruned = buildContextSteadyPrunedMessages(
+			asMessages([activeFileMention, imageDescription, currentUser]),
+			asEntries([
+				messageEntry("fm1", persistedFileMention),
+				customMessageEntry(
+					"img1",
+					"image-attachment-description",
+					"screenshot visual description",
+					new Date(imageTimestamp).toISOString(),
+				),
+				customEntry(
+					"d1",
+					TURN_DIGEST_CUSTOM_TYPE,
+					digest({ sessionId: "s1", fromEntryId: "fm1", toEntryId: "img1", promptGeneration: 1 }),
+				),
+				messageEntry("u2", currentUser),
+			]),
+		);
+
+		expect(JSON.stringify(pruned)).not.toContain("large attached file content");
+		expect(JSON.stringify(pruned)).not.toContain("screenshot visual description");
+		expect(JSON.stringify(pruned)).toContain("new prompt");
+	});
+
 	test("does not prune a reversed digest source span", () => {
 		const oldUser = { role: "user", content: "old raw user", timestamp: 1, provider: "x", model: "x" };
 		const oldAssistant = { role: "assistant", content: "old raw assistant", timestamp: 2, provider: "x", model: "x" };

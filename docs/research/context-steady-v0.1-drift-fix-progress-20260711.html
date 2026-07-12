@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Context Steady v0.1 承诺漂移修复进度</title>
+  <style>
+    :root { color-scheme: light; --ink:#17202a; --muted:#667085; --paper:#f7f8f5; --panel:#fff; --line:#d8ddd2; --green:#0b6b57; --amber:#9a5b10; --red:#9a2f2f; --blue:#1e4d74; --soft:#eef2ea; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:15px/1.68 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+    header { padding:44px 0 30px; background:linear-gradient(180deg,#fff,#f7f8f5); border-bottom:1px solid var(--line); }
+    .wrap { width:min(1120px,calc(100% - 44px)); margin:0 auto; }
+    h1 { margin:0; font-family:Georgia,"Times New Roman",serif; font-size:clamp(34px,5vw,58px); line-height:1.05; }
+    .sub { max-width:920px; margin:16px 0 0; color:var(--muted); font-size:17px; }
+    .meta { display:flex; flex-wrap:wrap; gap:8px; margin-top:22px; }
+    .pill { border:1px solid var(--line); border-radius:999px; padding:4px 10px; background:#fff; font-size:12px; font-weight:700; color:var(--blue); }
+    main { padding:26px 0 70px; }
+    section { padding:28px 0; border-bottom:1px solid var(--line); }
+    h2 { margin:0 0 14px; font-size:26px; }
+    h3 { margin:22px 0 10px; font-size:18px; }
+    p { max-width:940px; margin:0 0 12px; }
+    code { padding:2px 6px; border-radius:5px; background:#e9ecef; font-family:"SFMono-Regular",Consolas,monospace; font-size:.92em; }
+    table { width:100%; border-collapse:collapse; margin:16px 0; background:var(--panel); }
+    th,td { border:1px solid var(--line); padding:9px 11px; text-align:left; vertical-align:top; }
+    th { background:var(--soft); font-weight:800; }
+    .tag { display:inline-block; border-radius:999px; padding:2px 8px; font-size:12px; font-weight:800; white-space:nowrap; }
+    .p0 { background:#f4dedb; color:var(--red); border:1px solid #e8b7b1; }
+    .p1 { background:#f5ead4; color:var(--amber); border:1px solid #e5ca95; }
+    .p2 { background:#dfeaf3; color:var(--blue); border:1px solid #adc8dd; }
+    .todo { background:#fff7e6; color:var(--amber); }
+    .doing { background:#e7f0ff; color:var(--blue); }
+    .done { background:#dfeee7; color:var(--green); }
+    .blocked { background:#f4dedb; color:var(--red); }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin:16px 0; }
+    .callout { border-left:4px solid var(--amber); background:#fff9ee; padding:14px 16px; border-radius:8px; margin:16px 0; }
+    .evidence { color:var(--muted); font-size:13px; }
+    ul { margin:8px 0 0; padding-left:22px; }
+    li { margin:4px 0; }
+    footer { margin-top:36px; color:var(--muted); font-size:12.5px; }
+  </style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>Context Steady v0.1 承诺漂移修复进度</h1>
+    <p class="sub">基于真实会话 <code>019f4ead-fa52-7000-839f-430948b8d9d7</code>、既有 v0.1 质量报告与当前代码实现的逐项修复台账。每完成一项修复，本文件同步更新状态、证据与剩余风险。</p>
+    <div class="meta">
+      <span class="pill">日期: 2026-07-11</span>
+      <span class="pill">范围: packages/coding-agent context-steady</span>
+      <span class="pill">状态: 已完成本轮逐项修复与验证</span>
+    </div>
+  </div>
+</header>
+<main class="wrap">
+  <section>
+    <h2>1. 当前结论</h2>
+    <div class="callout">
+      <strong>核心漂移:</strong> v0.1 已实现 TurnDigest、checkpoint、ContextPacket 与 replay 过滤等基础能力，但真实会话暴露出“稳定增长曲线”不等于“上下文窗口长期低于 50%”。当前实现缺少强制 compaction/target budget，也未把大文件、图片、附件、长工具结果从后续上下文中系统性排除。
+    </div>
+    <p>产品目标需要拆成两个可测合同：一是每轮形成 <code>context-packet</code> 格式的结构化摘要；二是大 payload 不重复进入后续上下文，并在预算压力下触发明确裁剪或压缩，而不是只依赖状态栏百分比自然下降。</p>
+  </section>
+
+  <section>
+    <h2>2. 承诺漂移清单</h2>
+    <table>
+      <thead><tr><th>优先级</th><th>漂移项</th><th>当前证据</th><th>修复方向</th><th>状态</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="tag p0">P0</span></td>
+          <td>大文件 / 图片 / 附件 / 长工具输出的重复注入已有 provider-bound prune 覆盖</td>
+          <td><code>prune.ts</code> 基于 digest source span、toolEvidence.entryIds、fileMention 与 <code>image-attachment-description</code> 删除已摘要覆盖的 raw payload；<code>prune.test.ts</code> 覆盖长工具证据、file mention、图片描述。</td>
+          <td>保留可回读 journal entry 与 digest 引用，provider payload 不重复携带原文；后续若要“长期 &lt;50%”仍需全局 compaction target。</td>
+          <td><span class="tag done">完成</span></td>
+        </tr>
+        <tr>
+          <td><span class="tag p0">P0</span></td>
+          <td>ContextPacket 注入已改为 append-only delta</td>
+          <td><code>agent-session.ts</code> 不再删除 active context 中旧 packet；<code>packet.ts</code> 根据 active packet refs 只渲染新 digest，checkpoint 仅在 checkpointRef 变化时重新注入。</td>
+          <td>旧 delta 消息保留在 active prefix；新轮只追加新增 digest / 新 checkpoint / recall，避免每轮重写全量 packet。</td>
+          <td><span class="tag done">完成</span></td>
+        </tr>
+        <tr>
+          <td><span class="tag p1">P1</span></td>
+          <td>状态栏可到 50%+，因为没有长期 <code>&lt;50%</code> 目标预算合同</td>
+          <td><code>packet.ts</code> 有 packet token budget gate，但它只约束 ContextPacket 注入体，不会驱动全局 compaction 阈值或把整轮上下文压回 50%。</td>
+          <td>明确目标: 若产品要长期低于 50%，新增 target budget/compaction 触发条件；若只保证增长放缓，文档改口径。</td>
+          <td><span class="tag todo">待定口径，先不改产品语义</span></td>
+        </tr>
+        <tr>
+          <td><span class="tag p1">P1</span></td>
+          <td>ContextPacket 总预算 gate 已有实现，并用行为测试固化</td>
+          <td><code>packet.ts</code> 当前按 recall → old digests → checkpoint 尾部裁剪；<code>context-packet.test.ts</code> 覆盖整包预算、裁剪顺序、最近 digest 保留与超预算返回 null。</td>
+          <td>无需改实现；保留该 gate，并把后续 payload/delta 修复建立在同一预算合同上。</td>
+          <td><span class="tag done">完成</span></td>
+        </tr>
+        <tr>
+          <td><span class="tag p2">P2</span></td>
+          <td>digest 证据、fallback 质量与降级可观测性已具备行为覆盖</td>
+          <td><code>extractSpanMessages</code> 会给 message shim 附 <code>entryId</code>；fallback 已收集所有 assistant decisions；<code>normalizeDigest</code> 已按 0–1 clamp importance；<code>agent-session-m1.test.ts</code> 新增 span 脱轨日志回归。</td>
+          <td>无需改现有实现；后续重点转向 bulky payload 排除与 append-only delta 注入形态。</td>
+          <td><span class="tag done">完成</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>3. 修复顺序</h2>
+    <ol>
+      <li><strong>先固化已有 packet 总预算 gate。</strong> 这是最小、安全、可测试的一项；若代码已经实现，补测试和文档状态即可。</li>
+      <li><strong>修 digest 证据质量。</strong> entryIds、multi-assistant decisions、importance、降级日志都属于摘要可信度，不改变注入架构。</li>
+      <li><strong>处理 bulky payload。</strong> 从 active context 组装路径解决大文件/图片/附件/长工具输出重复进入上下文的问题。</li>
+      <li><strong>设计并实现 append-only delta。</strong> 拆 checkpoint 与 per-turn digest delta，避免每轮重写全量 packet。</li>
+      <li><strong>最后跑 context-steady focused suite 与 <code>bun check</code>。</strong> 验证证据写回本文。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>4. 进度日志</h2>
+    <table>
+      <thead><tr><th>时间</th><th>项</th><th>状态</th><th>证据</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>2026-07-11</td>
+          <td>发现落档</td>
+          <td><span class="tag done">完成</span></td>
+          <td class="evidence">创建本文档；引用既有 <code>context-steady-v0.1-fix-plan.html</code> 与当前 <code>packet.ts</code>/<code>digest.ts</code> 代码观察。</td>
+        </tr>
+        <tr>
+          <td>2026-07-11</td>
+          <td>Packet 总预算 gate</td>
+          <td><span class="tag done">完成</span></td>
+          <td class="evidence">代码已具备 aggregate packet budget gate；<code>bun test packages/coding-agent/test/context-steady/context-packet.test.ts</code> 通过 22 tests / 109 expects。</td>
+        </tr>
+        <tr>
+          <td>2026-07-11</td>
+          <td>Digest evidence / decisions / importance</td>
+          <td><span class="tag done">完成</span></td>
+          <td class="evidence"><code>bun test packages/coding-agent/test/context-steady/turn-digest.test.ts</code> 通过 47 tests / 107 expects；覆盖 entryIds、多 assistant decisions、0–1 importance normalize。</td>
+        </tr>
+        <tr>
+          <td>2026-07-11</td>
+          <td>Digest degrade observability</td>
+          <td><span class="tag done">完成</span></td>
+          <td class="evidence"><code>bun test packages/coding-agent/test/context-steady/agent-session-m1.test.ts</code> 通过 12 tests / 60 expects；新增 boundary 离开 active branch 时 debug 日志与 digest skip 合同覆盖。</td>
+        </tr>
+        <tr>
+          <td>2026-07-11</td>
+          <td>Payload prune + append-only delta packet</td>
+          <td><span class="tag done">完成</span></td>
+          <td class="evidence"><code>bun test packages/coding-agent/test/context-steady/context-packet.test.ts packages/coding-agent/test/context-steady/agent-session-m2.test.ts packages/coding-agent/test/context-steady/prune.test.ts</code> 通过 41 tests / 234 expects；覆盖 delta packet、checkpoint 低频注入、provider-bound payload prune。</td>
+        </tr>
+        <tr>
+          <td>2026-07-11</td>
+          <td>Final verification</td>
+          <td><span class="tag done">完成</span></td>
+          <td class="evidence"><code>bun test packages/coding-agent/test/context-steady</code> 通过 111 tests / 457 expects；<code>bun check</code> passed，覆盖全 repo TS/Rust 检查链。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>5. 不改口径的风险</h2>
+    <ul>
+      <li>如果继续把目标描述为“上下文窗口稳定不超过 50%”，必须新增全局 target budget 与 compaction 触发合同；现有 packet budget 不足以保证该指标。</li>
+      <li>如果目标是“重复历史不线性增长”，则需要把用户可见文档改成增长曲线/重复 payload 控制，而不是状态栏百分比上限。</li>
+      <li>真实工具噪音压测已经从 R3 风险变成实证问题；后续测试必须覆盖长工具输出、大文件读取与附件场景。</li>
+    </ul>
+  </section>
+
+  <footer>
+    文档路径: <code>docs/research/context-steady-v0.1-drift-fix-progress-20260711.html</code>。本文件作为修复台账，代码每完成一个问题即更新对应状态和验证证据。
+  </footer>
+</main>
+</body>
+</html>

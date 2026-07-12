@@ -1,0 +1,725 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San Context Steady v0.1 二次代码审查报告</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f6f8;
+      --paper: #ffffff;
+      --ink: #18212b;
+      --muted: #5d6975;
+      --line: #dce2e8;
+      --critical: #a52a2a;
+      --critical-bg: #fff1f0;
+      --high: #9a5b00;
+      --high-bg: #fff7e8;
+      --medium: #315d73;
+      --medium-bg: #edf7fb;
+      --good: #226341;
+      --good-bg: #edf8f1;
+      --code: #f2f4f6;
+      --link: #1f5c86;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      font-size: 16px;
+      line-height: 1.72;
+      letter-spacing: 0;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      background: #17212b;
+      color: #fff;
+    }
+
+    .wrap {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+    }
+
+    header .wrap { padding: 44px 0 36px; }
+    main.wrap { padding: 28px 0 56px; }
+
+    h1, h2, h3, h4 { line-height: 1.3; letter-spacing: 0; }
+    h1 { margin: 0 0 12px; font-size: 32px; }
+    h2 { margin: 0 0 16px; font-size: 24px; }
+    h3 { margin: 0 0 12px; font-size: 20px; }
+    h4 { margin: 22px 0 8px; font-size: 16px; }
+    p { margin: 10px 0; }
+
+    .subtitle { margin: 0 0 18px; color: #d2dbe4; font-size: 17px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; }
+    .meta span {
+      border: 1px solid #526170;
+      border-radius: 4px;
+      padding: 3px 9px;
+      color: #e8edf2;
+      font-size: 13px;
+    }
+
+    section {
+      margin: 0 0 22px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--paper);
+      padding: 24px;
+    }
+
+    .verdict {
+      border-left: 5px solid var(--critical);
+      background: var(--critical-bg);
+    }
+
+    .verdict strong { color: var(--critical); }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin: 18px 0 0;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 14px;
+      background: #fff;
+    }
+
+    .metric b { display: block; font-size: 24px; line-height: 1.1; }
+    .metric span { color: var(--muted); font-size: 13px; }
+    .metric.critical b { color: var(--critical); }
+    .metric.high b { color: var(--high); }
+    .metric.medium b { color: var(--medium); }
+    .metric.good b { color: var(--good); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0;
+      font-size: 14px;
+    }
+
+    th, td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th { background: #f2f5f7; }
+
+    .tag {
+      display: inline-block;
+      min-width: 62px;
+      border-radius: 4px;
+      padding: 2px 7px;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .tag.critical { color: var(--critical); background: var(--critical-bg); border: 1px solid #efb7b2; }
+    .tag.high { color: var(--high); background: var(--high-bg); border: 1px solid #e8c68f; }
+    .tag.medium { color: var(--medium); background: var(--medium-bg); border: 1px solid #a9d1df; }
+    .tag.good { color: var(--good); background: var(--good-bg); border: 1px solid #acd2ba; }
+
+    .finding {
+      margin: 20px 0 0;
+      border: 1px solid var(--line);
+      border-left-width: 5px;
+      border-radius: 6px;
+      padding: 20px;
+    }
+
+    .finding:first-of-type { margin-top: 0; }
+    .finding.critical { border-left-color: var(--critical); }
+    .finding.high { border-left-color: var(--high); }
+    .finding.medium { border-left-color: var(--medium); }
+
+    .finding-title {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .finding-title h3 { flex: 1; margin: 0; }
+
+    .location {
+      margin: 8px 0 14px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    code {
+      border-radius: 3px;
+      background: var(--code);
+      padding: 1px 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.9em;
+      overflow-wrap: anywhere;
+    }
+
+    pre {
+      overflow-x: auto;
+      margin: 12px 0;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #111820;
+      color: #edf2f7;
+      padding: 14px 16px;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    pre code { padding: 0; background: transparent; color: inherit; }
+
+    ul, ol { margin: 8px 0 12px; padding-left: 24px; }
+    li { margin: 5px 0; }
+
+    .plain {
+      border-left: 4px solid #687683;
+      margin: 14px 0;
+      background: #f3f5f7;
+      padding: 12px 14px;
+    }
+
+    .risk {
+      border-left: 4px solid var(--high);
+      margin: 14px 0;
+      background: var(--high-bg);
+      padding: 12px 14px;
+    }
+
+    .positive {
+      border-left: 4px solid var(--good);
+      margin: 14px 0;
+      background: var(--good-bg);
+      padding: 12px 14px;
+    }
+
+    .phase {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 14px;
+      border-top: 1px solid var(--line);
+      padding: 18px 0;
+    }
+
+    .phase:first-of-type { border-top: 0; padding-top: 0; }
+    .phase-name { font-weight: 700; color: var(--link); }
+
+    a { color: var(--link); }
+    footer { color: var(--muted); font-size: 13px; padding-top: 4px; }
+
+    @media (max-width: 760px) {
+      h1 { font-size: 26px; }
+      section { padding: 18px; }
+      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .finding-title { display: block; }
+      .finding-title .tag { margin-bottom: 8px; }
+      .phase { grid-template-columns: 1fr; gap: 4px; }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>San Context Steady v0.1 二次代码审查报告</h1>
+      <p class="subtitle">对 GPT-5.5 修订后的当前工作区进行需求、运行时正确性、预算边界与安全边界复审</p>
+      <div class="meta">
+        <span>日期：2026-07-12</span>
+        <span>分支：feature/san-v0.4-workflows</span>
+        <span>基线：b014dd7c7 + 未提交修订</span>
+        <span>范围：packages/coding-agent/context-steady</span>
+        <span>性质：只审查，不修改实现</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="verdict">
+      <h2>结论先说</h2>
+      <p>
+        <strong>本轮复审不通过，当前修订不建议合入。</strong>
+        GPT-5.5 修对了一批摘要质量问题，但新加入的“直接裁掉所有已生成 digest 的原始历史”与“永久保留每轮 delta packet”组合在一起，产生了两个阻断问题：
+        一边可能在没有替代上下文时丢失历史，另一边又让已注入的摘要、checkpoint 和召回内容无限累积。它目前既不能保证“上下文不失忆”，也不能保证“上下文进入稳态”。
+      </p>
+      <p>
+        功能默认仍处于实验关闭状态，这限制了普通用户面的影响；但推荐 dogfood 配置会把整条链路打开，因此不能用“默认关闭”代替修复。
+        当前更准确的状态是：<strong>TurnDigest 质量修复大体可保留，ContextPacket 裁剪与 append-only delta 架构需要重做。</strong>
+      </p>
+      <div class="summary-grid">
+        <div class="metric critical"><b>2</b><span>阻断问题</span></div>
+        <div class="metric high"><b>3</b><span>高风险问题</span></div>
+        <div class="metric medium"><b>2</b><span>中风险问题</span></div>
+        <div class="metric good"><b>111 / 0</b><span>测试通过 / 失败，但合同有偏</span></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>审查范围与验证</h2>
+      <p>本次以当前未提交工作区为准，重点检查以下四条链路：</p>
+      <ol>
+        <li>一轮结束后如何生成、持久化 TurnDigest。</li>
+        <li>下一轮如何选取 checkpoint、digest、recall 并生成 ContextPacket。</li>
+        <li>provider 请求前如何裁掉原始历史，以及 token 估算是否与真实请求一致。</li>
+        <li>摘要副请求和 ContextPacket 是否保持秘密保护、消息权限与不可信数据边界。</li>
+      </ol>
+      <table>
+        <thead>
+          <tr><th>验证</th><th>结果</th><th>如何理解</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>bun test packages/coding-agent/test/context-steady</code></td>
+            <td>111 pass，0 fail，457 expect</td>
+            <td>代码内部自洽；不代表产品合同正确，因为至少两个测试明确固化了错误行为。</td>
+          </tr>
+          <tr>
+            <td><code>bun run --cwd packages/coding-agent check</code></td>
+            <td>通过</td>
+            <td>类型、格式与仓库检查通过；本报告问题属于运行时语义和架构边界。</td>
+          </tr>
+          <tr>
+            <td>定向运行时复现：无可用 packet</td>
+            <td>旧 user/assistant 原文被删除，只剩当前 prompt</td>
+            <td>证明“有 digest”被错误等同为“当前请求已有替代上下文”。</td>
+          </tr>
+          <tr>
+            <td>定向运行时复现：8 轮 delta</td>
+            <td>每块约 114 tokens；累计 912 tokens；累计 8 个 digest refs</td>
+            <td>配置的 <code>maxTokens=200</code> 和 <code>recentDigests=5</code> 只约束单块 delta，没有约束真实 active context。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>问题总表</h2>
+      <table>
+        <thead>
+          <tr><th>级别</th><th>问题</th><th>直接后果</th><th>归因</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="tag critical">P0</span></td>
+            <td>没有当前替代 packet，也会删除 digest 覆盖的原始历史</td>
+            <td>上下文失忆；最近精确轮次合同失效</td>
+            <td>本轮修订新引入</td>
+          </tr>
+          <tr>
+            <td><span class="tag critical">P0</span></td>
+            <td>append-only delta 没有 epoch/rebase，总预算和最近 5 轮变成“每个 delta 的预算”</td>
+            <td>packet、checkpoint、recall 永久累积，无法稳态</td>
+            <td>本轮修订新引入</td>
+          </tr>
+          <tr>
+            <td><span class="tag high">P1</span></td>
+            <td>TurnDigest LLM 副请求绕过秘密混淆与统一 provider 出站管线</td>
+            <td>原始 prompt、文件/工具内容可能明文发送到摘要模型或另一 provider</td>
+            <td>既有实现，推荐配置会触发</td>
+          </tr>
+          <tr>
+            <td><span class="tag high">P1</span></td>
+            <td>摘要与召回内容被提升为 developer 消息</td>
+            <td>历史用户文本、仓库内容和记忆中的提示注入获得高于当前用户的权限</td>
+            <td>既有实现</td>
+          </tr>
+          <tr>
+            <td><span class="tag high">P1</span></td>
+            <td>真实 provider payload 与 token/compaction 估算使用不同裁剪条件</td>
+            <td>关闭功能或关闭 packet 后可能低估上下文并延迟 compaction</td>
+            <td>本轮修订放大</td>
+          </tr>
+          <tr>
+            <td><span class="tag medium">P2</span></td>
+            <td>fallback digest 也能授权整段原文删除，没有摘要质量门槛</td>
+            <td>高度有损的摘要成为唯一工作记忆</td>
+            <td>本轮修订新引入</td>
+          </tr>
+          <tr>
+            <td><span class="tag medium">P2</span></td>
+            <td>用 role + timestamp + 全内容指纹匹配克隆消息</td>
+            <td>重复消息可能误删，异常时间戳可让 provider 转换抛错，长 payload 反复序列化</td>
+            <td>本轮修订新引入</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>详细发现</h2>
+
+      <article class="finding critical">
+        <div class="finding-title">
+          <span class="tag critical">P0-1</span>
+          <h3>原始历史在没有替代上下文时仍会被删除</h3>
+        </div>
+        <p class="location">
+          <code>packages/coding-agent/src/context-steady/prune.ts:93</code>、<code>:128</code>、<code>:157</code>；
+          <code>packages/coding-agent/src/context-steady/packet.ts:413</code>、<code>:457</code>；
+          <code>packages/coding-agent/test/context-steady/prune.test.ts:171</code>
+        </p>
+        <p>
+          当前 pruner 在 <code>allDigestEntryRefs()</code> 中收集分支上的<strong>所有</strong> TurnDigest，然后把这些 digest 覆盖范围内的普通消息全部删除。
+          它不再要求当前 provider 请求中真的存在 ContextPacket，也不要求某个 digest 被当前 prompt 选中。
+        </p>
+        <p>因此以下情况都会删掉原文，却没有等价替代内容：</p>
+        <ul>
+          <li>当前 prompt 与旧 digest 无关，相关性过滤后 packet 为 <code>null</code>。</li>
+          <li><code>contextPacket.maxTokens=0</code> 或 packet 内容大于预算，builder 返回 <code>null</code>。</li>
+          <li>digest 没有进入最近窗口，或者被 token budget 裁掉。</li>
+          <li>第一轮已经产生 digest，但下一轮 packet 尚未成功构建。</li>
+        </ul>
+        <pre><code>复现结果：
+irrelevantPacket = null
+zeroBudgetPacket = null
+provider messages = ["unrelated weather question"]
+
+被 digest 覆盖的 old user / old assistant 均已消失。</code></pre>
+        <p>
+          这不是普通的信息压缩，而是“先删除、后看有没有替代”。它也直接违反原始方案中的
+          <strong>Recent Exact Turns：最近 5 轮保留原文</strong>。当前实现实际做的是“上一轮一旦有 digest，下一轮就可以删除整轮原文”。
+        </p>
+        <div class="plain">
+          <strong>根因：</strong>代码把“journal 中存在摘要”错误地当成“当前请求中已激活且足够完整的替代表示”。这两个状态必须分开。
+        </div>
+        <h4>改造方案</h4>
+        <ol>
+          <li>packet builder 输出显式的 <code>PruneCoverage</code>，逐项列出本次请求实际注入了哪些 digest/checkpoint，以及它们允许替代哪些 journal entry。</li>
+          <li>pruner 只消费这份 active coverage；禁止再扫描“所有 digest”自行推断。</li>
+          <li>packet 为 <code>null</code>、功能关闭、预算不足、相关性未命中时，coverage 为空，原始历史不得被删除。</li>
+          <li>实现独立的 <code>recentExactTurns</code> 窗口。最近 N 轮至少保留 user prompt、关键 assistant 决策和必要的工具短摘。</li>
+          <li>digest 只提供索引，不自动获得删除原始证据的权力。</li>
+        </ol>
+      </article>
+
+      <article class="finding critical">
+        <div class="finding-title">
+          <span class="tag critical">P0-2</span>
+          <h3>append-only delta 没有边界，ContextPacket 仍然线性累积</h3>
+        </div>
+        <p class="location">
+          <code>packages/coding-agent/src/session/agent-session.ts:4428</code>、<code>:8007</code>；
+          <code>packages/coding-agent/src/context-steady/packet.ts:428</code>、<code>:434</code>、<code>:493</code>；
+          <code>packages/coding-agent/src/context-steady/checkpoint.ts:217</code>；
+          <code>packages/coding-agent/test/context-steady/agent-session-m2.test.ts:361</code>
+        </p>
+        <p>
+          修订移除了旧 packet 的清理逻辑，让每轮只追加一个新 digest delta。方向上是在追求 prompt cache，但缺少“何时结束一个 append-only 段”的设计。
+          现在 <code>recentDigests=5</code> 和 <code>maxTokens</code> 只作用于<strong>本轮新建的 delta</strong>，旧 delta 全部继续留在 active context。
+        </p>
+        <pre><code>配置：recentDigests=5, maxTokens=200
+8 次同主题 delta：每次 tokenEstimate ≈ 114
+
+单块检查：114 &lt;= 200       通过
+真实累计：912 &gt; 200         失败
+active digest refs：8 &gt; 5   失败</code></pre>
+        <p>问题不只在 digest：</p>
+        <ul>
+          <li>新 checkpoint 是此前 checkpoint 的累计摘要，但旧 checkpoint packet 仍保留，导致覆盖内容重复。</li>
+          <li>checkpoint 覆盖的旧 digest delta 也不退休，形成 checkpoint + 原 digest 的双份表示。</li>
+          <li>recall 是随当前 prompt 变化的 volatile 层，但旧 recall packet 也永久保留；切换话题后仍会继续影响模型。</li>
+          <li>实时会话保留旧 packet；resume 时 SessionManager 又会过滤旧注入消息，行为在重启前后不一致。</li>
+        </ul>
+        <p>
+          当前进度文档所写的“ContextPacket 总预算 gate 已完成”只对<strong>单个新 packet</strong>成立，已经不再代表 provider 实际看到的 packet 总量。
+        </p>
+        <div class="plain">
+          <strong>根因：</strong>append-only 是缓存布局策略，不是无限保留策略。它必须有 bounded epoch、累计预算和受控 rebase。
+        </div>
+        <h4>改造方案：有界 epoch</h4>
+        <ol>
+          <li>把 active context-steady 状态建模为一个 epoch：<code>epochId</code>、base checkpoint、delta refs、exact-tail refs、累计 token。</li>
+          <li>epoch 内允许逐轮追加 digest delta，以保住缓存前缀。</li>
+          <li>达到 checkpoint、最近窗口、总 token、topic shift 或 resume 边界时，执行一次受控 rebase：用“新 checkpoint + 最近精确轮次 + 当前相关 tail”替换旧 packet 消息。</li>
+          <li>承认 rebase 会造成一次缓存断点，但断点必须低频、显式、可观测；不能用无限累积来换缓存。</li>
+          <li>recall 独立为本轮 ephemeral 层，每轮替换，不进入 append-only 历史。</li>
+          <li>所有预算都对 active union 计算，而不是只计算新 delta。</li>
+        </ol>
+      </article>
+
+      <article class="finding high">
+        <div class="finding-title">
+          <span class="tag high">P1-1</span>
+          <h3>摘要模型副请求绕过秘密混淆与统一出站管线</h3>
+        </div>
+        <p class="location">
+          <code>packages/coding-agent/src/session/agent-session.ts:4290</code>、<code>:4345</code>、<code>:7213</code>；
+          <code>packages/coding-agent/src/context-steady/digest.ts:243</code>、<code>:317</code>；
+          <code>packages/coding-agent/src/sdk.ts:2661</code>；
+          <code>packages/coding-agent/examples/config/san-context-steady-recommended.yml:12</code>
+        </p>
+        <p>
+          主请求和其他副请求会经过 <code>SecretObfuscator</code>；TurnDigest 则把原始 turn span 直接 JSON 序列化，最多携带约 18K 字符，然后直接调用 <code>completeSimple()</code>。
+          它没有调用 <code>#convertToLlmForSideRequest()</code>，也没有走 SDK 的 <code>transformProviderContext</code>。
+        </p>
+        <p>
+          这意味着用户 prompt、工具结果、文件片段或错误文本里的已配置秘密，可能明文发送给 <code>pi/smol</code> 对应的模型；该模型还可能属于不同 provider。
+          推荐 dogfood 配置明确开启了 LLM digest，因此这不是只有手工实验配置才会触发的理论风险。
+        </p>
+        <div class="risk">
+          <strong>额外放大：</strong>fallback 的 <code>userIntent</code> 会复制用户文本前 200 字符，工具错误短摘也会复制错误内容。摘要随后被包装为 agent-attributed developer 消息，而现有秘密混淆器有意跳过 agent-attributed developer 内容。因此秘密一旦进入 digest，后续主请求也可能绕过保护。
+        </div>
+        <h4>改造方案</h4>
+        <ol>
+          <li>给 digest 统一使用 session 的 provider-bound side-request preparation，包括秘密混淆、provider transform、路由与审计 hooks。</li>
+          <li>不要把原始 message 对象整体交给摘要模型；构造最小化、字段白名单的 digest input。</li>
+          <li>文件正文、长工具输出和二进制附件默认不进入摘要请求，只发送工具名、状态、路径、entryId 和受限短摘。</li>
+          <li>持久化 digest 时保留秘密占位符，不把 provider 回复中的占位符反解回明文。</li>
+          <li>增加跨 provider 数据边界说明：开启 LLM digest 时，哪些数据会发往哪个 model role。</li>
+        </ol>
+      </article>
+
+      <article class="finding high">
+        <div class="finding-title">
+          <span class="tag high">P1-2</span>
+          <h3>不可信历史内容被提升为 developer 权限</h3>
+        </div>
+        <p class="location">
+          <code>packages/coding-agent/src/session/agent-session.ts:8030</code>；
+          <code>packages/agent/src/compaction/messages.ts:162</code>；
+          <code>packages/coding-agent/src/prompts/context-steady/context-packet.md:1</code>；
+          <code>packages/coding-agent/test/context-steady/agent-session-m2.test.ts:152</code>
+        </p>
+        <p>
+          ContextPacket 以 <code>role: custom</code>、<code>attribution: agent</code> 注入；通用转换器把 custom 消息转换成 <code>role: developer</code>。
+          测试还明确断言了这一行为。
+        </p>
+        <p>
+          但 packet 中的动态内容来自历史用户 prompt、assistant 摘要、工具输出、仓库文件和 memory recall。这些都不是可信开发者指令。
+          模板虽然写了“当前用户 prompt 优先”，provider 的角色层级却恰好相反：developer 高于 user。自然语言免责声明不能抵消消息权限。
+        </p>
+        <p>
+          一个写在 issue、README、工具输出或旧用户 prompt 中的恶意指令，经过 digest/recall 后可能长期停留，并以更高权限影响当前任务。这是典型的 confused-deputy / prompt-injection 放大。
+        </p>
+        <h4>改造方案</h4>
+        <ol>
+          <li>可信规则与不可信数据分离。只有固定、静态、仓库受控的处理规则可以是 developer 内容。</li>
+          <li>digest、checkpoint、recall 的实际数据使用 user/data 语义，放在当前 user prompt 之前；不要转为 developer。</li>
+          <li>每条数据携带 provenance 与 trust label，例如 <code>source=user_history</code>、<code>source=repository</code>、<code>trust=untrusted</code>。</li>
+          <li>对结构边界做转义和长度限制，但不要把“加 XML 标签”当成权限隔离。</li>
+          <li>增加消息角色级测试，断言任何用户/工具/记忆派生文本都不能进入 system/developer 角色。</li>
+        </ol>
+      </article>
+
+      <article class="finding high">
+        <div class="finding-title">
+          <span class="tag high">P1-3</span>
+          <h3>token 估算与真实 provider 请求的裁剪条件不一致</h3>
+        </div>
+        <p class="location">
+          <code>packages/coding-agent/src/session/agent-session.ts:7224</code>、<code>:10975</code>、<code>:16220</code>
+        </p>
+        <p>
+          provider 路径只有在 <code>san.contextSteady.enabled=true</code> 且 <code>contextPacket.enabled=true</code> 时才调用 pruner；
+          <code>#estimateStoredContextTokens()</code> 和 <code>getContextBreakdown()</code> 却无条件调用同一个 pruner。
+        </p>
+        <p>
+          一旦 session 中已有 TurnDigest，用户随后关闭 context steady 或只关闭 ContextPacket，provider 会发送完整原始历史，状态栏与 pre-prompt compaction 却按“原始历史已被裁掉”来估算。
+          结果是低估 token、延迟 compaction，最坏情况下直到真实 provider 请求溢出才发现。
+        </p>
+        <h4>改造方案</h4>
+        <ol>
+          <li>集中生成一个 <code>ContextSteadyProviderPlan</code>，包含最终消息集合、coverage 与 token 估算。</li>
+          <li>provider conversion、状态栏 breakdown、pre-prompt compaction、自动 compaction 全部消费同一 plan。</li>
+          <li>功能关闭、packet 关闭或 active coverage 为空时，plan 必须是 no-op。</li>
+          <li>增加开关切换测试，比较“估算使用的消息集合”和“mock provider 实际收到的消息集合”。</li>
+        </ol>
+      </article>
+
+      <article class="finding medium">
+        <div class="finding-title">
+          <span class="tag medium">P2-1</span>
+          <h3>任何 digest 都能授权整段删除，没有质量与完整性门槛</h3>
+        </div>
+        <p class="location">
+          <code>packages/coding-agent/src/context-steady/digest.ts:132</code>、<code>:187</code>；
+          <code>packages/coding-agent/src/context-steady/fallback.ts:221</code>；
+          <code>packages/coding-agent/src/context-steady/prune.ts:113</code>
+        </p>
+        <p>
+          fallback digest 是为了“摘要模型失败时不断主流程”，它只保留有限的意图、工具状态和规则匹配文本。它不是完整替代品。
+          当前 pruner 不区分 LLM digest、fallback digest、错误/中止轮次或摘要字段完整度，只要有 source span，就会删除 span 中全部普通消息。
+        </p>
+        <p>
+          原始设计明确说 digest 是证据索引，关键证据应可重读，并保留最近精确轮次。当前实现却让最弱的 fallback 也可以立即成为整轮唯一表示。
+        </p>
+        <h4>改造方案</h4>
+        <ol>
+          <li>给 digest 增加可执行语义：<code>generationMode</code>、<code>completeness</code>、<code>evidenceRefs</code>、<code>terminalState</code>。</li>
+          <li>fallback 默认只能帮助裁剪明确的 bulky payload，不能授权删除 user prompt 和 assistant 决策原文。</li>
+          <li>中止、错误和摘要失败的轮次默认进入 exact tail，直到后续 checkpoint 明确吸收。</li>
+          <li>coverage 必须逐 entry 声明，而不是用 source span 一刀切。</li>
+        </ol>
+      </article>
+
+      <article class="finding medium">
+        <div class="finding-title">
+          <span class="tag medium">P2-2</span>
+          <h3>克隆消息用内容指纹关联，身份不稳定</h3>
+        </div>
+        <p class="location">
+          <code>packages/coding-agent/src/context-steady/prune.ts:19</code>、<code>:33</code>、<code>:39</code>、<code>:175</code>
+        </p>
+        <p>
+          为了识别 transform 后的克隆消息，修订用 <code>role + timestamp + JSON.stringify(content)</code> 生成 key。
+          这能修掉一部分 fileMention/image clone 场景，但它不是稳定身份：相同时间戳和内容的重复消息会碰撞；非法日期字符串会在 <code>toISOString()</code> 抛出；大型文件内容还会在每次请求中重复序列化。
+        </p>
+        <h4>改造方案</h4>
+        <ol>
+          <li>在 journal 到 active-message 的构建阶段保留稳定 <code>entryId</code> 或内部 source ref。</li>
+          <li>provider plan 直接按 entryId 生成 keep/drop 集合，避免通过内容反向猜身份。</li>
+          <li>内部 source ref 不进入 provider payload；只用于本地组装和审计。</li>
+        </ol>
+      </article>
+    </section>
+
+    <section>
+      <h2>哪些修改是正确的</h2>
+      <p>本次不建议把 GPT-5.5 的改动整体回退。以下修订解决了真实问题，可以作为后续重构的保留项：</p>
+      <div class="positive">
+        <ul>
+          <li><code>extractSpanMessages</code> 为 message shim 带上 journal entryId，修复 tool evidence 无法回指原始证据的问题。</li>
+          <li>fallback digest 收集所有 assistant 消息中的决策，不再只看最后一条。</li>
+          <li><code>memoryCandidates.importance</code> 与 0-1 契约统一。</li>
+          <li>turn boundary 脱离 active branch 时增加 debug 证据，降级不再完全静默。</li>
+          <li>用户归属的附件描述可以进入 turn source span，方向正确。</li>
+          <li>单个 packet 的内部 total-budget 裁剪逻辑仍有价值，但必须上移为 active epoch 总预算的一部分。</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>建议重构方案</h2>
+      <p>建议不要继续在现有 <code>previousPacket refs + allDigest prune</code> 上打补丁。下一轮按下面四个阶段重构，顺序不可颠倒。</p>
+
+      <div class="phase">
+        <div class="phase-name">R1 安全止血</div>
+        <div>
+          <strong>目标：先保证不失忆。</strong>
+          删除 <code>allDigestEntryRefs()</code> 对裁剪资格的参与；没有 active replacement 就不裁原文。恢复最近精确轮次窗口，并让 fallback digest 失去“整段删除授权”。
+        </div>
+      </div>
+
+      <div class="phase">
+        <div class="phase-name">R2 有界 epoch</div>
+        <div>
+          <strong>目标：真正进入稳态。</strong>
+          epoch 内 append-only；达到窗口、预算、checkpoint、topic shift 或 resume 条件时受控 rebase。checkpoint 吸收的 delta 必须退休；recall 每轮替换。
+        </div>
+      </div>
+
+      <div class="phase">
+        <div class="phase-name">R3 统一计划</div>
+        <div>
+          <strong>目标：一个事实源。</strong>
+          引入一次性 provider plan，统一最终消息、entry coverage、token estimate 和 debug 数据。provider、状态栏和 compaction 不再分别重算。
+        </div>
+      </div>
+
+      <div class="phase">
+        <div class="phase-name">R4 安全边界</div>
+        <div>
+          <strong>目标：秘密与权限不降级。</strong>
+          digest 副请求走统一出站管线；动态上下文不使用 developer 角色；数据带 provenance/trust 标签；增加 secret 与 prompt injection 合同测试。
+        </div>
+      </div>
+
+      <h3>建议的数据合同</h3>
+      <pre><code>ContextSteadyProviderPlan
+  enabled
+  epochId
+  baseCheckpointRef?
+  activeDigestRefs[]
+  exactTurnEntryIds[]
+  ephemeralRecallRefs[]
+  prunableEntryIds[]
+  providerMessages[]
+  tokenEstimate
+  tokenBudget
+  rebaseReason?
+
+关键不变量：
+1. prunableEntryIds 只能来自本次 plan 的显式 replacement coverage
+2. providerMessages 的 packet 总量 &lt;= tokenBudget
+3. activeDigestRefs 的窗口作用于 active union，不是单个 delta
+4. exactTurnEntryIds 永远不会同时出现在 prunableEntryIds
+5. token/status/compaction 与 provider 共用同一个 plan</code></pre>
+    </section>
+
+    <section>
+      <h2>必须补的验收测试</h2>
+      <table>
+        <thead>
+          <tr><th>场景</th><th>必须断言的外部合同</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>无关新话题</td><td>packet 未选择旧 digest 时，旧原文仍在 provider payload，或由明确 checkpoint/recall 替代；不能静默消失。</td></tr>
+          <tr><td>packet 预算为 0 / packet 超预算</td><td>builder 返回 null 时 pruner 是 no-op。</td></tr>
+          <tr><td>LLM digest 失败并 fallback</td><td>fallback 不得删除最近 user/assistant 精确历史。</td></tr>
+          <tr><td>12-20 轮连续同主题</td><td>所有 active packet 消息 token 之和不超过总预算；active digest union 不超过窗口。</td></tr>
+          <tr><td>checkpoint 触发</td><td>已被 checkpoint 吸收的旧 delta 不再同时出现在 active provider context。</td></tr>
+          <tr><td>多次 recall + 切换话题</td><td>只有当前轮 recall 生效；旧 volatile recall 不残留。</td></tr>
+          <tr><td>session resume</td><td>恢复前后相同 journal + prompt 产生等价语义和同级预算，不依赖内存里残留的旧 packet。</td></tr>
+          <tr><td>关闭 context steady / 关闭 packet</td><td>状态栏、compaction token estimate 与 mock provider 实际消息集合一致。</td></tr>
+          <tr><td>秘密出现在 prompt、file、tool result</td><td>digest provider payload 和后续主 provider payload 都不含明文 secret。</td></tr>
+          <tr><td>历史文本包含恶意指令</td><td>该文本只能进入 untrusted data/user 层，不能成为 system/developer 内容。</td></tr>
+          <tr><td>重复消息、克隆消息、异常时间戳</td><td>按稳定 entryId 精确裁剪，不误删、不抛错。</td></tr>
+          <tr><td>长工具输出、大文件、图片描述</td><td>旧 bulky payload 不重复发送，但 journal 证据仍可按 entryId 重读。</td></tr>
+        </tbody>
+      </table>
+      <div class="plain">
+        当前 <code>prune.test.ts:171</code> 的“即使还没注入 packet 也裁原文”应反转；
+        <code>agent-session-m2.test.ts:361</code> 必须至少运行到第 7-12 轮并统计所有 active packet 的联合 refs 与联合 token，而不是只检查最后一块 delta。
+      </div>
+    </section>
+
+    <section>
+      <h2>对现有进度文档的修正建议</h2>
+      <p><code>docs/research/context-steady-v0.1-drift-fix-progress-20260711.html</code> 中以下状态需要回退：</p>
+      <table>
+        <thead>
+          <tr><th>原状态</th><th>建议状态</th><th>原因</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Payload prune：完成</td><td><span class="tag critical">阻断</span></td><td>能删 bulky payload，但也会在没有替代 packet 时删除所有 digest-covered 原文。</td></tr>
+          <tr><td>Append-only delta：完成</td><td><span class="tag high">部分完成</span></td><td>只有 append，没有 bounded epoch、累计预算、retirement 和 rebase。</td></tr>
+          <tr><td>ContextPacket 总预算：完成</td><td><span class="tag critical">回归</span></td><td>预算只限制单个 delta，不限制 provider 当前持有的所有 packet。</td></tr>
+          <tr><td>Final verification：完成</td><td><span class="tag high">测试绿，验收未通过</span></td><td>测试套件通过，但关键测试固化了错误产品合同。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>最终判定</h2>
+      <table>
+        <tbody>
+          <tr><th>能否合入当前修订</th><td><strong>否。</strong>先解决 P0-1 与 P0-2。</td></tr>
+          <tr><th>能否继续 dogfood</th><td>只适合受控、本地、无敏感数据的调试；不应使用当前 recommended overlay 做真实敏感项目会话。</td></tr>
+          <tr><th>是否需要推倒全部实现</th><td>不需要。TurnDigest schema、证据 entryId、摘要质量修复、checkpoint 聚合函数和单 packet 裁剪逻辑可以复用。</td></tr>
+          <tr><th>核心重构边界</th><td>重做 provider plan、replacement coverage、bounded epoch、消息权限与秘密出站路径。</td></tr>
+          <tr><th>v0.1 当前准确口径</th><td>已具备结构化摘要与 packet 原型，但尚未形成“无失忆、总量有界、权限安全”的上下文稳态闭环。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <footer>
+      审查基于 2026-07-12 当前工作区快照。除新增本 HTML 报告外，未修改任何业务代码、测试或既有进度文档，也未执行提交操作。
+    </footer>
+  </main>
+</body>
+</html>

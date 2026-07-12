@@ -107,8 +107,21 @@ function msgEntry(id: string, role: string, content = ""): Record<string, unknow
 	};
 }
 
-function customMsgEntry(id: string, customType: string, content = ""): Record<string, unknown> {
-	return { type: "custom_message", id, parentId: null, timestamp: new Date().toISOString(), customType, content };
+function customMsgEntry(
+	id: string,
+	customType: string,
+	content = "",
+	attribution?: "agent" | "user",
+): Record<string, unknown> {
+	return {
+		type: "custom_message",
+		id,
+		parentId: null,
+		timestamp: new Date().toISOString(),
+		customType,
+		content,
+		...(attribution ? { attribution } : {}),
+	};
 }
 
 const asM = (m: Msg[]) => m as unknown as Parameters<typeof generateFallbackDigest>[0];
@@ -935,6 +948,17 @@ describe("skipContextPacketPreludeInDigestSource", () => {
 		]);
 
 		expect(skipContextPacketPreludeInDigestSource(branch, "eager", "assistant")).toBe("user");
+	});
+
+	test("starts digest at user-attributed attachment description after ContextPacket prelude", () => {
+		const branch = asE([
+			customMsgEntry("packet", CONTEXT_PACKET_MESSAGE_TYPE, "<san_context_packet>", "agent"),
+			customMsgEntry("image-description", "image-attachment-description", "cat screenshot", "user"),
+			msgEntry("user", "user", "Explain the screenshot"),
+			msgEntry("assistant", "assistant", "Done"),
+		]);
+
+		expect(skipContextPacketPreludeInDigestSource(branch, "packet", "assistant")).toBe("image-description");
 	});
 
 	test("leaves agent-only continuations digestible when no ContextPacket was injected", () => {
