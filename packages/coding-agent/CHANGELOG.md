@@ -40,6 +40,7 @@
 
 ### Fixed
 
+- Fixed ContextPlan user-boundary hard pressure to attempt model promotion and configured context maintenance before refusing the prompt, and aligned ContextPlan status/compaction estimates with the converted provider-wire snapshot.
 - Fixed ContextPlan hard pressure, tool-loop burst overflow and double-count estimates, discarded-branch checkpoint pollution, fallback-through-checkpoint raw deletion, wire clamp that truncated covering replacements, same-session hard-pressure recovery, natural topic shift without marker phrases, pending audit refs, and digest `toEntryId` pollution by plan audit appends.
 
 ### Fixed

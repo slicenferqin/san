@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="San Context Steady 240K v0.1 code-level completion and verification report after closing the fifth-review residual work."
+    />
+    <title>San Context Steady 240K · v0.1 代码级完成报告</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4f6f7;
+        --paper: #ffffff;
+        --ink: #18212b;
+        --muted: #5e6b78;
+        --line: #d7dde3;
+        --navy: #162231;
+        --blue: #225ea8;
+        --blue-soft: #edf4fc;
+        --green: #176348;
+        --green-soft: #eaf6f0;
+        --amber: #8b5a12;
+        --amber-soft: #fff4df;
+        --red: #982f35;
+        --red-soft: #fae9ea;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--bg);
+        font:
+          15px/1.72 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          "PingFang SC",
+          "Microsoft YaHei",
+          sans-serif;
+      }
+
+      a {
+        color: var(--blue);
+        text-decoration: none;
+      }
+
+      a:hover {
+        text-decoration: underline;
+      }
+
+      code {
+        padding: 2px 5px;
+        border-radius: 4px;
+        background: #edf0f3;
+        font:
+          0.91em ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+      }
+
+      pre {
+        overflow: auto;
+        margin: 12px 0 0;
+        padding: 14px;
+        border-radius: 6px;
+        color: #edf4ff;
+        background: #171e29;
+        font:
+          12px/1.55 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+        white-space: pre-wrap;
+      }
+
+      .shell {
+        width: min(1180px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      header {
+        padding: 52px 0 42px;
+        color: white;
+        background: var(--navy);
+      }
+
+      .eyebrow,
+      .label {
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      .eyebrow {
+        color: #b9d0ec;
+      }
+
+      .label {
+        margin-bottom: 7px;
+        color: var(--muted);
+      }
+
+      h1 {
+        max-width: 1020px;
+        margin: 10px 0 16px;
+        font-size: 50px;
+        line-height: 1.08;
+      }
+
+      h2 {
+        margin: 0 0 14px;
+        font-size: 30px;
+        line-height: 1.22;
+      }
+
+      h3 {
+        margin: 0 0 8px;
+        font-size: 18px;
+        line-height: 1.35;
+      }
+
+      p {
+        margin: 0 0 12px;
+      }
+
+      ul,
+      ol {
+        margin: 8px 0 0;
+        padding-left: 22px;
+      }
+
+      li {
+        margin: 5px 0;
+      }
+
+      .lead {
+        max-width: 990px;
+        color: #dbe5f1;
+        font-size: 17px;
+      }
+
+      .verdict {
+        display: inline-flex;
+        margin-top: 22px;
+        padding: 9px 14px;
+        border: 1px solid #8fd1af;
+        border-radius: 6px;
+        background: rgba(23, 99, 72, 0.48);
+        font-weight: 900;
+      }
+
+      main section {
+        padding: 36px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(245px, 1fr));
+        gap: 14px;
+      }
+
+      .card,
+      .finding,
+      .callout {
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--paper);
+      }
+
+      .card.green {
+        border-color: #9dcab8;
+        background: var(--green-soft);
+      }
+
+      .card.amber {
+        border-color: #dfbd7c;
+        background: var(--amber-soft);
+      }
+
+      .card.red {
+        border-color: #dda8ab;
+        background: var(--red-soft);
+      }
+
+      .metric {
+        margin: 5px 0;
+        font-size: 31px;
+        font-weight: 900;
+        line-height: 1.08;
+      }
+
+      .finding {
+        margin-top: 14px;
+        border-left: 6px solid var(--blue);
+      }
+
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 8px;
+        align-items: stretch;
+        margin-top: 16px;
+      }
+
+      .flow div {
+        position: relative;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--paper);
+      }
+
+      .flow div:not(:last-child)::after {
+        position: absolute;
+        top: 50%;
+        right: -9px;
+        z-index: 2;
+        color: var(--blue);
+        content: "→";
+        font-weight: 900;
+        transform: translateY(-50%);
+      }
+
+      .table-wrap {
+        overflow: auto;
+        border-radius: 6px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--paper);
+      }
+
+      th,
+      td {
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: #e9edf1;
+        font-weight: 900;
+      }
+
+      .status {
+        display: inline-flex;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 900;
+        white-space: nowrap;
+      }
+
+      .status.yes {
+        color: var(--green);
+        background: #dbeee6;
+      }
+
+      .status.external {
+        color: var(--amber);
+        background: #f6e7c8;
+      }
+
+      .status.no {
+        color: var(--red);
+        background: #f3d9dc;
+      }
+
+      .callout {
+        border-left: 6px solid var(--green);
+        background: var(--green-soft);
+      }
+
+      .notice {
+        margin-top: 14px;
+        padding: 16px 18px;
+        border-left: 5px solid var(--amber);
+        border-radius: 6px;
+        background: var(--amber-soft);
+      }
+
+      footer {
+        padding: 30px 0 45px;
+        color: var(--muted);
+      }
+
+      @media (max-width: 850px) {
+        .flow {
+          grid-template-columns: 1fr;
+        }
+
+        .flow div:not(:last-child)::after {
+          top: auto;
+          right: 50%;
+          bottom: -18px;
+          transform: translateX(50%) rotate(90deg);
+        }
+      }
+
+      @media (max-width: 720px) {
+        .shell {
+          width: min(100% - 24px, 1180px);
+        }
+
+        header {
+          padding-top: 38px;
+        }
+
+        h1 {
+          font-size: 34px;
+        }
+
+        h2 {
+          font-size: 24px;
+        }
+
+        main section {
+          padding: 28px 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="shell">
+        <div class="eyebrow">Code-level completion · 2026-07-12 · ContextPlan v0.1</div>
+        <h1>Context Steady 240K：第五轮残余代码工作已收口。</h1>
+        <p class="lead">
+          本报告承接
+          <a href="./san-context-steady-240k-implementation-acceptance-fifth-review-20260712.html">第五轮 CR</a>
+          与
+          <a href="./san-context-steady-240k-fifth-review-fix-summary-20260712.html">第五轮修复说明</a>，
+          专门回答技术实施方案中的代码级 DoD。20-turn 真实 AgentSession 路径、LLM digest、fallback-only、
+          resume、shared snapshot、pass / burst / hard-pressure、wire cap 与 disabled parity 均已有可重复合同。
+        </p>
+        <div class="verdict">CONTEXT STEADY CODE GO · PRODUCT ACCEPTANCE REMAINS SEPARATE</div>
+      </div>
+    </header>
+
+    <main>
+      <section>
+        <div class="shell">
+          <h2>1. 结论边界</h2>
+          <div class="grid">
+            <article class="card green">
+              <div class="label">Context Steady code</div>
+              <div class="metric">GO</div>
+              <p>本轮列出的代码缺口、生产路径缺口和自动化合同均已完成。</p>
+            </article>
+            <article class="card amber">
+              <div class="label">Product acceptance</div>
+              <div class="metric">待实测</div>
+              <p>真实模型 A/B、20-turn p95、burst 持续轮数和任务质量由产品验收执行，不在本报告伪装为已通过。</p>
+            </article>
+            <article class="card red">
+              <div class="label">Dirty worktree suite</div>
+              <div class="metric">11 external</div>
+              <p>整仓当前有 11 个失败，全部来自并行出现的 <code>max</code>/<code>ultra</code> thinking-effort 改动与旧断言不一致；不属于 Context Steady。</p>
+            </article>
+          </div>
+          <div class="notice">
+            <strong>严格表述：</strong>Context Steady v0.1 的代码级剩余工作已经完成；当前工作区的“整仓零失败”合并门槛仍被另一组未提交改动阻塞。排除其直接影响的 3 个测试文件后，其余 992 个文件为 0 fail。
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <h2>2. 本轮发现并修复的生产缺口</h2>
+          <article class="finding">
+            <h3>Fallback-only 在大窗口模型上会先 hard-pressure，而不是先维护上下文</h3>
+            <p>
+              请求计划在 pre-prompt compaction 之前构建；fallback digest 又不能授权 raw coverage。历史增长到 burst ceiling
+              时，旧实现会直接持久化拒绝并抛错，方案 Step 7 中的 promotion / compaction 没有机会运行。
+            </p>
+            <p>
+              新路径先做一次不持久化的 preflight；hard pressure 时在用户安全边界尝试模型升级，再运行用户配置的 context
+              maintenance，并针对改写后的 active context 重建 ContextPlan。只有两种恢复均失败时，才沿用原有 fail-closed
+              拒绝、audit 与 prompt 持久化合同。
+            </p>
+          </article>
+          <div class="flow" aria-label="ContextPlan hard-pressure recovery flow">
+            <div><strong>1. Preflight</strong><br />构建但不写 hard audit</div>
+            <div><strong>2. Promote</strong><br />尝试更大 context model</div>
+            <div><strong>3. Maintain</strong><br />按配置执行 compaction / handoff</div>
+            <div><strong>4. Rebuild</strong><br />基于改写后的 active context</div>
+            <div><strong>5. Fail closed</strong><br />仍超限才拒绝并保留证据</div>
+          </div>
+
+          <article class="finding">
+            <h3>Status 与 plan audit 仍可能对同一请求算出不同 token</h3>
+            <p>
+              provider usage anchor 包含上一轮 ephemeral plan，新请求却会用当前 plan 替换它；继续复用旧 anchor 会重复计算已退休的
+              plan。另一个偏差来自 <code>compactionSummary</code>：raw estimator 只统计 summary 本文，而 provider 实际发送带安全边界的
+              wrapper。
+            </p>
+            <p>
+              active ContextPlan 现在统一按 <code>convertToLlm</code> 后的 provider-wire message 估算；provider projection、stored estimate
+              与 status 都消费同一 materialized snapshot。non-steady 路径仍保留原有 provider-anchor 行为，避免扩大改动面。
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <h2>3. 新增生产路径合同</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>合同</th>
+                  <th>真实路径</th>
+                  <th>通过证据</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>20-turn / LLM digest</td>
+                  <td>真实 <code>AgentSession.prompt()</code>、mock provider、真实 post-turn digest orchestration；第 10 轮执行 persisted reload。</td>
+                  <td>20 provider calls、20 个非 fallback digest、至少 4 个 checkpoint；无 compaction；raw stored tokens 超过 16K 时 final wire 仍更小，旧 raw marker 只保留最近有界窗口。</td>
+                </tr>
+                <tr>
+                  <td>20-turn / fallback-only</td>
+                  <td>LLM digest 关闭、fallback 不获得 coverage authority、模型窗口 500K、ContextPlan burst 24K、普通 compaction threshold 故意设为 200K。</td>
+                  <td>20 轮全部发送；ContextPlan hard boundary 主动触发 maintenance；无持久化 hard-pressure audit；checkpoint 的 <code>coveredSourceEntryRefs</code> 始终为空。</td>
+                </tr>
+                <tr>
+                  <td>Single plan</td>
+                  <td>在 provider handler 内同时读取真实 payload token 与 <code>getContextBreakdown()</code>，再对齐持久化 audit。</td>
+                  <td>每轮均满足 <code>providerTokens === statusTokens === qualityGate.projectedInputTokens</code>；wire plan 不超过 <code>planTokenBudget</code>。</td>
+                </tr>
+                <tr>
+                  <td>Resume / bounded epoch</td>
+                  <td>第 10 轮 flush + reload，第 11 轮继续同主题。</td>
+                  <td>新 plan 记录 <code>rebaseReason=resume</code>；上一轮语义仍在 payload；active derived materials 不超过 1 checkpoint + 5 digest/recall；checkpoint 已吸收 digest 不在 active tail 重复。</td>
+                </tr>
+                <tr>
+                  <td>Pass / burst / hard</td>
+                  <td>普通 20-turn pass；带可覆盖旧 baseline 的 10K→18K burst；单个不可容纳的 protected current prompt。</td>
+                  <td>pass 可发送；burst 保留完整 replacement 且 wire cap 生效；hard 不发送 provider request，audit 的 projected input 明确超过 limit，当前 prompt 仍在 journal 与 live agent state。</td>
+                </tr>
+                <tr>
+                  <td>Disabled parity</td>
+                  <td>同一两轮输入分别走默认 non-steady 与显式 <code>san.contextSteady.enabled=false</code>。</td>
+                  <td>去除时间型元数据后 provider messages 等价；不写 digest / plan / checkpoint；不关闭 provider session。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <h2>4. 技术方案 DoD 对照</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>代码级要求</th>
+                  <th>状态</th>
+                  <th>依据</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>目标 contract tests</td>
+                  <td><span class="status yes">通过</span></td>
+                  <td>新增 production-path 文件 4 tests / 124 expects；Context Steady 目录 169 tests / 784 expects。</td>
+                </tr>
+                <tr>
+                  <td>Bun package check</td>
+                  <td><span class="status yes">通过</span></td>
+                  <td>Biome 2201 files、docs index 121 docs、<code>tsgo -p tsconfig.json --noEmit</code> 全绿。</td>
+                </tr>
+                <tr>
+                  <td>单一 active engine</td>
+                  <td><span class="status yes">通过</span></td>
+                  <td>provider runtime 只 materialize ContextPlan；legacy packet/prune 文件仅为旧 session report/compat 保留，不参与 active send。</td>
+                </tr>
+                <tr>
+                  <td>Audit 无 raw 大正文 / secret</td>
+                  <td><span class="status yes">通过</span></td>
+                  <td>audit 只持久化 refs、budget、materials、coverage 与 gate；既有 digest secret transport / role-boundary tests 继续通过。</td>
+                </tr>
+                <tr>
+                  <td>Send / status / compaction 同一 plan</td>
+                  <td><span class="status yes">通过</span></td>
+                  <td>真实 provider payload、status 与 audit 逐轮 token 相等；16K compaction threshold 没有被 20-turn raw journal 误触发。</td>
+                </tr>
+                <tr>
+                  <td>Disabled parity</td>
+                  <td><span class="status yes">通过</span></td>
+                  <td>provider messages 等价，无 steady journal 写入，无 provider reset。</td>
+                </tr>
+                <tr>
+                  <td>整仓当前零失败</td>
+                  <td><span class="status external">外部阻塞</span></td>
+                  <td>未过滤套件为 8665 pass / 378 skip / 11 fail；11 条均属于当前未提交 thinking-effort 改动。排除 3 个直接受影响测试文件后为 8536 pass / 378 skip / 0 fail。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <h2>5. 验证记录</h2>
+          <div class="grid">
+            <article class="card green">
+              <div class="label">Context Steady suite</div>
+              <div class="metric">169 / 0</div>
+              <p>169 pass、0 fail、784 expects，覆盖 17 个测试文件。</p>
+            </article>
+            <article class="card green">
+              <div class="label">Compaction / status focus</div>
+              <div class="metric">105 / 0</div>
+              <p>handoff、queue、progress guard、snapcompact budget、status cache 与 consolidation 全绿。</p>
+            </article>
+            <article class="card green">
+              <div class="label">Isolated full remainder</div>
+              <div class="metric">8536 / 0</div>
+              <p>992 files、378 skip、188617 expects；排除并行 thinking 改动直接影响的 3 个测试文件。</p>
+            </article>
+          </div>
+          <pre>bun test packages/coding-agent/test/context-steady
+# 169 pass / 0 fail / 784 expects
+
+bun run --cwd packages/coding-agent check
+# Biome 2201 files; docs index fresh; tsgo --noEmit passed
+
+bun test --only-failures packages/coding-agent/test
+# 8665 pass / 378 skip / 11 fail
+# failures: model-resolver.test.ts (9), cli-hide-thinking-flag.test.ts (1), cli/completions.test.ts (1)
+# all expect old max=>xhigh behavior while the parallel implementation now exposes max/ultra
+
+# same suite excluding those 3 directly affected files
+# 8536 pass / 378 skip / 0 fail / 188617 expects</pre>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <h2>6. 代码与结构说明</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>文件</th>
+                  <th>本轮职责</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><a href="../../packages/coding-agent/src/session/agent-session.ts"><code>session/agent-session.ts</code></a></td>
+                  <td>用户边界 hard-pressure recovery；provider-wire projection；active-plan status/stored estimate 共享。</td>
+                </tr>
+                <tr>
+                  <td><a href="../../packages/coding-agent/test/context-steady/agent-session-production-path.test.ts"><code>agent-session-production-path.test.ts</code></a></td>
+                  <td>20-turn 双 digest 路径、resume、bounded epoch、single plan、burst coverage、wire cap 与 disabled parity。</td>
+                </tr>
+                <tr>
+                  <td><a href="../../packages/coding-agent/test/context-steady/agent-session-m2.test.ts"><code>agent-session-m2.test.ts</code></a></td>
+                  <td>补强 hard-pressure audit 的 projected limit、plan budget 与 replacement join 完整性。</td>
+                </tr>
+                <tr>
+                  <td><a href="../../packages/coding-agent/CHANGELOG.md"><code>CHANGELOG.md</code></a></td>
+                  <td>记录 user-boundary recovery 与 shared provider-wire estimate 修复。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="notice">
+            <strong>方案形状偏差：</strong><code>runtime.ts</code>/<code>audit.ts</code> 的职责目前分别落在 AgentSession、planner、materializer 与 report helper；这不是第二套行为引擎。legacy <code>packet.ts</code>/<code>prune.ts</code> 仍为旧 session 兼容与历史 report 保留，但 active provider path 不引用它们。代码级验收以 C-01 至 C-10 的可观察合同为准，不以文件名做 source-grep 式验收。
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <div class="callout">
+            <h2>最终判定</h2>
+            <p>
+              对照
+              <a href="./san-context-steady-240k-technical-implementation-plan-20260712.html">240K 技术实施方案</a>，
+              Context Steady v0.1 的代码级剩余工作已经完成：生产 provider 路径可在 LLM digest 与 fallback-only 两种模式下连续运行 20
+              轮；fallback 不越权删除 raw；必要时在安全边界维护上下文；send、status、compaction 与 audit 对同一 plan 的 token
+              组成一致；pass / burst / hard 和 disabled parity 都有真实 AgentSession 合同。
+            </p>
+            <p>
+              此结论不替代产品验收。真实模型 A/B、240K/260K p95、320K burst 恢复、复杂任务质量、resume 语义质量和真实 secret
+              transport 仍按方案由产品 dogfood 验收。当前工作区 11 个 thinking-effort 测试失败也必须在合并前由对应并行改动收口，但它们不是 Context Steady 的剩余代码工作。
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="shell">
+        Baseline commit: <code>d12fc5b10510</code> · Branch:
+        <code>refactor/context-steady-240k-plan-rewrite</code> · Generated 2026-07-12 Asia/Shanghai
+      </div>
+    </footer>
+  </body>
+</html>

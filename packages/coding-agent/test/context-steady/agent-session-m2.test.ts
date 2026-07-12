@@ -25,7 +25,11 @@ import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { CustomEntry, CustomMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
-import { CONTEXT_PLAN_CUSTOM_TYPE, CONTEXT_PLAN_MESSAGE_TYPE } from "../../src/context-steady/plan-types";
+import {
+	CONTEXT_PLAN_CUSTOM_TYPE,
+	CONTEXT_PLAN_MESSAGE_TYPE,
+	type ContextPlanAudit,
+} from "../../src/context-steady/plan-types";
 import {
 	CONTEXT_CHECKPOINT_CUSTOM_TYPE,
 	CONTEXT_PACKET_CUSTOM_TYPE,
@@ -1143,9 +1147,14 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 
 		const plans = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE);
 		expect(plans.length).toBeGreaterThan(0);
-		const plan = plans.at(-1)!.data as { qualityGate?: { outcome?: string; protectedEntryRefs?: string[] } };
-		expect(plan.qualityGate?.outcome).toBe("hard_pressure");
-		const protectedRefs = plan.qualityGate?.protectedEntryRefs ?? [];
+		const plan = plans.at(-1)!.data as ContextPlanAudit;
+		expect(plan.qualityGate.outcome).toBe("hard_pressure");
+		expect((plan.qualityGate.projectedInputTokens ?? 0) > (plan.qualityGate.projectedInputLimit ?? 0)).toBe(true);
+		expect(plan.budget.planTokenBudget).toBe(500);
+		for (const coverage of plan.coverage) {
+			expect(plan.materials.some(material => material.materialId === coverage.replacementMaterialId)).toBe(true);
+		}
+		const protectedRefs = plan.qualityGate.protectedEntryRefs;
 		expect(protectedRefs.some(ref => !ref.startsWith("pending_"))).toBe(true);
 
 		const userEntries = sessionManager

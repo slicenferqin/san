@@ -8208,6 +8208,43 @@ export class AgentSession {
 	}
 
 	/**
+	 * Hard pressure at a user boundary gets one safe recovery pass before the
+	 * request is refused. A larger model may restore the input budget; otherwise
+	 * configured context maintenance rewrites settled history and the plan is
+	 * rebuilt against that new active context. The final build retains the normal
+	 * fail-closed audit + prompt persistence when neither recovery makes room.
+	 */
+	async #buildContextSteadyRequestPlanWithRecovery(
+		messages: readonly AgentMessage[],
+		expandedText: string,
+	): Promise<BuiltContextPlan | undefined> {
+		let plan = await this.#buildContextSteadyRequestPlan(messages, expandedText, {
+			persistAudit: false,
+			throwOnHardPressure: false,
+		});
+		if (plan?.audit.qualityGate.outcome !== "hard_pressure") return plan;
+
+		if (await this.#promoteContextModel()) {
+			plan = await this.#buildContextSteadyRequestPlan(messages, expandedText, {
+				persistAudit: false,
+				throwOnHardPressure: false,
+			});
+			if (plan?.audit.qualityGate.outcome !== "hard_pressure") return plan;
+		}
+
+		await this.#runAutoCompaction("threshold", false, false, false, {
+			autoContinue: false,
+			triggerContextTokens: plan.audit.qualityGate.projectedInputTokens,
+			suppressContinuation: true,
+		});
+
+		// Rebuild with the normal hard-pressure behavior. A committed compaction
+		// now sees its rewritten active messages; a skipped/failed pass persists
+		// the refused prompt and audit exactly as before.
+		return await this.#buildContextSteadyRequestPlan(messages, expandedText);
+	}
+
+	/**
 	 * Tool-loop re-gate: rebuild plan from current branch + live messages when
 	 * projected full input would cross control/burst bands. Freezes old-history
 	 * selection from the request-start plan when still under ceiling.
@@ -8414,7 +8451,22 @@ export class AgentSession {
 		mode: "pending" | "full" = "pending",
 	): number {
 		const activeMessages = mode === "full" ? [...messages] : [...this.messages, ...messages];
-		return computeNonMessageTokens(this) + estimateContextPlanProjectedTokens(activeMessages, planningEntries, plan);
+		return (
+			computeNonMessageTokens(this) +
+			estimateContextPlanProjectedTokens(activeMessages, planningEntries, plan, message =>
+				this.#estimateProviderWireMessageTokens(message),
+			)
+		);
+	}
+
+	#estimateProviderWireMessageTokens(
+		message: AgentMessage,
+		options?: { excludeEncryptedReasoning?: boolean },
+	): number {
+		return convertToLlm([message]).reduce(
+			(sum, providerMessage) => sum + estimateTokens(providerMessage as unknown as AgentMessage, options),
+			0,
+		);
 	}
 
 	#contextSteadyMessageContentKey(message: AgentMessage): string {
@@ -9076,7 +9128,7 @@ export class AgentSession {
 
 			// Build ContextPlan before pre-prompt compaction so send/status/compaction
 			// share one projected snapshot for this request lifecycle.
-			this.#contextSteadyRequestPlan = await this.#buildContextSteadyRequestPlan(messages, expandedText);
+			this.#contextSteadyRequestPlan = await this.#buildContextSteadyRequestPlanWithRecovery(messages, expandedText);
 			if (this.#contextSteadyRequestPlan) {
 				this.#contextSteadyLastPlan = this.#contextSteadyRequestPlan;
 			}
@@ -11568,14 +11620,15 @@ export class AgentSession {
 		// would let a thinking-heavy turn falsely trip the floor. The provider usage
 		// (the other arm of compactionContextTokens) already accounts for it.
 		const opts = { excludeEncryptedReasoning: true } as const;
-		const estimate = (msg: AgentMessage) => estimateTokens(msg, opts);
 		const activeMessages = [...this.messages, ...pendingMessages];
 		const plan = this.#contextSteadyActivePlan();
 		return (
 			computeNonMessageTokens(this) +
 			(plan
-				? estimateContextPlanProjectedTokens(activeMessages, this.sessionManager.getBranch(), plan, estimate)
-				: activeMessages.reduce((sum, message) => sum + estimate(message), 0))
+				? estimateContextPlanProjectedTokens(activeMessages, this.sessionManager.getBranch(), plan, message =>
+						this.#estimateProviderWireMessageTokens(message, opts),
+					)
+				: activeMessages.reduce((sum, message) => sum + estimateTokens(message, opts), 0))
 		);
 	}
 
@@ -16817,6 +16870,29 @@ export class AgentSession {
 		const resolvedActiveMessages = activePlan
 			? materializeContextPlanMessages(activeMessages, branchEntries, activePlan)
 			: activeMessages;
+		if (activePlan) {
+			// ContextPlan is ephemeral per request. A provider usage anchor from the
+			// previous turn includes that turn's old plan message, which is absent from
+			// the next request and replaced by the current snapshot. Reusing the anchor
+			// therefore double-counts the retired plan. Estimate the bounded, fully
+			// materialized snapshot directly so status and compaction see the same wire
+			// composition as the provider and the persisted audit.
+			for (const message of resolvedActiveMessages) {
+				usedTokens += this.#estimateProviderWireMessageTokens(message);
+			}
+			usedTokens += currentNonMessageTokens;
+			const messagesTokens = Math.max(0, usedTokens - categoryNonMessageTokens);
+			return {
+				contextWindow,
+				anchored: false,
+				usedTokens,
+				systemPromptTokens,
+				systemToolsTokens: toolsTokens,
+				systemContextTokens,
+				skillsTokens,
+				messagesTokens,
+			};
+		}
 		const resolvedPendingStartIndex = Math.max(0, resolvedActiveMessages.length - pendingMessages.length);
 		let resolvedAnchorIndex = -1;
 		let anchorAssistant: AssistantMessage | undefined;
