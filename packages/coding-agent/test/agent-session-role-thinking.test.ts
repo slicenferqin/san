@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import { Effort } from "@oh-my-pi/pi-ai";
+import { Effort, type Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import * as autoThinkingClassifier from "@oh-my-pi/pi-coding-agent/auto-thinking/classifier";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -50,22 +50,30 @@ describe("AgentSession role model thinking behavior", () => {
 		modelRoles: Record<string, string>;
 	}) {
 		const model = getAnthropicModelOrThrow(options.initialModelId);
+		await createSessionWithModel(model, options.initialThinkingLevel, options.modelRoles);
+	}
+
+	async function createSessionWithModel(
+		model: Model,
+		initialThinkingLevel: Effort,
+		modelRoles: Record<string, string>,
+	) {
 		const agent = new Agent({
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
-				thinkingLevel: options.initialThinkingLevel,
+				thinkingLevel: initialThinkingLevel,
 			},
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.setRuntimeApiKey(model.provider, "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 
 		sessionSettings = Settings.isolated();
-		for (const [role, modelRoleValue] of Object.entries(options.modelRoles)) {
+		for (const [role, modelRoleValue] of Object.entries(modelRoles)) {
 			sessionSettings.setModelRole(role, modelRoleValue);
 		}
 		session = new AgentSession({
@@ -489,6 +497,30 @@ describe("AgentSession role model thinking behavior", () => {
 		expect(classifierSpy).not.toHaveBeenCalled();
 		expect(session.thinkingLevel).toBe(expected);
 		expect(session.autoResolvedThinkingLevel()).toBe(expected);
+	});
+
+	it("maps ultrathink to ultra when a custom model advertises the extended ladder", async () => {
+		const baseModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const model: Model = {
+			...baseModel,
+			id: "custom-extended-thinking",
+			name: "Custom Extended Thinking",
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Low, Effort.Max, Effort.Ultra],
+				defaultLevel: Effort.Max,
+			},
+		};
+		await createSessionWithModel(model, Effort.Max, { default: `${model.provider}/${model.id}` });
+		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+		const classifierSpy = vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.Low);
+
+		session.setThinkingLevel(AUTO_THINKING);
+		await session.prompt("ultrathink through the unsafe refactor");
+
+		expect(classifierSpy).not.toHaveBeenCalled();
+		expect(session.thinkingLevel).toBe(Effort.Ultra);
+		expect(session.autoResolvedThinkingLevel()).toBe(Effort.Ultra);
 	});
 
 	it("keeps auto effectively off for non-reasoning models", async () => {

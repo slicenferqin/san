@@ -23,6 +23,8 @@ const ReasoningEffortMapSchema = type({
 	"medium?": "string",
 	"high?": "string",
 	"xhigh?": "string",
+	"max?": "string",
+	"ultra?": "string",
 });
 
 const OpenAICompatFields = {
@@ -74,13 +76,13 @@ const ApiSchema = type(
 	'"openai-completions" | "openai-responses" | "openai-codex-responses" | "azure-openai-responses" | "anthropic-messages" | "google-generative-ai" | "google-gemini-cli" | "google-vertex"',
 );
 
-const EffortSchema = type('"minimal" | "low" | "medium" | "high" | "xhigh"');
+const EffortSchema = type('"minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"');
 
 const ThinkingControlModeSchema = type(
 	'"effort" | "budget" | "google-level" | "anthropic-adaptive" | "anthropic-budget-effort"',
 );
 
-const EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh"] as const;
+const EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
 
 /**
  * Accepts the canonical `efforts` vocabulary plus the legacy

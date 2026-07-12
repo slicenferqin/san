@@ -4074,6 +4074,7 @@ describe("openai-codex streaming", () => {
 			apiKey: token,
 			sessionId: "turn-state-session",
 			providerSessionState,
+			preferWebsockets: false,
 		};
 
 		const first = await streamOpenAICodexResponses(model, { systemPrompt, messages: [firstUser] }, options).result();

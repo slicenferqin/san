@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added canonical `max` and `ultra` reasoning efforts for custom model capability surfaces, passing explicit extended ladders through verbatim while leaving inferred provider ladders unchanged.
+
 ## [16.3.15] - 2026-07-09
 
 ### Added

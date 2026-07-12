@@ -1,4 +1,4 @@
-import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { Effort, type EffortName } from "@oh-my-pi/pi-catalog/effort";
 import { supportsAllTurnsReasoningContext, supportsCodexReasoningSummary } from "@oh-my-pi/pi-catalog/identity";
 import { requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { Model } from "../../types";
@@ -8,7 +8,7 @@ import { mapOpenAIReasoningEffort } from "../openai-shared";
 export type CodexReasoningContext = "auto" | "current_turn" | "all_turns";
 
 /** User-facing effort levels accepted by Codex request options. */
-type CodexCallerEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+type CodexCallerEffort = EffortName;
 
 /** Caller literal → catalog `Effort` bridge (the enum is nominal). */
 const EFFORT_BY_NAME: Record<CodexCallerEffort, Effort> = {
@@ -17,10 +17,12 @@ const EFFORT_BY_NAME: Record<CodexCallerEffort, Effort> = {
 	medium: Effort.Medium,
 	high: Effort.High,
 	xhigh: Effort.XHigh,
+	max: Effort.Max,
+	ultra: Effort.Ultra,
 };
 
 export interface ReasoningConfig {
-	effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+	effort: "none" | EffortName;
 	summary?: "auto" | "concise" | "detailed";
 	context?: CodexReasoningContext;
 	/** Pro reasoning serving mode (gpt-5.6+ catalog pro aliases). */
@@ -28,7 +30,7 @@ export interface ReasoningConfig {
 }
 
 export interface CodexRequestOptions {
-	/** User-facing effort; the wire-only `max` tier is reached via the model's effort map. */
+	/** User-facing effort. Provider-specific models may expose tiers above `xhigh`. */
 	reasoningEffort?: CodexCallerEffort | "none";
 	reasoningSummary?: ReasoningConfig["summary"] | null;
 	/** Explicit `reasoning.context` override; defaults to `all_turns` when unset. The `all_turns` value is gated to gpt-5.4+ Codex models — older ids reject it, so it is suppressed and `context` omitted. */
@@ -115,6 +117,7 @@ function mapCodexWireEffort(
 		case "high":
 		case "xhigh":
 		case "max":
+		case "ultra":
 			return mapped;
 		default:
 			throw new Error(

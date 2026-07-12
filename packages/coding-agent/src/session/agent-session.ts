@@ -1115,7 +1115,6 @@ function parseRetryFallbackSelector(
 	const trimmed = selector.trim();
 	if (!trimmed) return undefined;
 	const parsed = parseModelString(trimmed, {
-		allowMaxAlias: true,
 		allowAutoAlias: true,
 		isLiteralModelId: (provider, id) => modelLookup?.find(provider, id) !== undefined,
 	});
@@ -10565,7 +10564,7 @@ export class AgentSession {
 	}
 
 	/**
-	 * Cycle to next thinking level: off → auto → minimal..xhigh → off.
+	 * Cycle to next thinking level: off → auto → every model-supported effort → off.
 	 * @returns New selector, or undefined if model doesn't support thinking
 	 */
 	cycleThinkingLevel(): ConfiguredThinkingLevel | undefined {
@@ -10608,7 +10607,7 @@ export class AgentSession {
 		if (this.#magicKeywordEnabled("ultrathink") && containsUltrathink(promptText)) {
 			// The user explicitly asked for maximum thinking; bypass the classifier
 			// and jump straight to the highest auto-supported level for this model.
-			resolved = clampAutoThinkingEffort(model, Effort.XHigh);
+			resolved = clampAutoThinkingEffort(model, Effort.Ultra);
 		} else {
 			const controller = new AbortController();
 			const timer = setTimeout(() => controller.abort(), AgentSession.#AUTO_THINKING_TIMEOUT_MS);
@@ -13238,7 +13237,6 @@ export class AgentSession {
 		if (!trimmedTarget) return undefined;
 
 		const parsed = parseModelString(trimmedTarget, {
-			allowMaxAlias: true,
 			allowAutoAlias: true,
 			isLiteralModelId: (provider, id) =>
 				availableModels.some(model => model.provider === provider && model.id === id),

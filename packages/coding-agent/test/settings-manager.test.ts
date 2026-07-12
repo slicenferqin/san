@@ -157,6 +157,14 @@ describe("Settings", () => {
 				"minimax",
 			]);
 		});
+
+		it("exposes max and ultra exactly once in the default thinking options", () => {
+			const values = getEnumValues("defaultThinkingLevel");
+			if (!values) throw new Error("defaultThinkingLevel must expose enum values");
+			expect(values).toContain(Effort.Max);
+			expect(values).toContain(Effort.Ultra);
+			expect(new Set(values).size).toBe(values.length);
+		});
 	});
 
 	describe("get()", () => {

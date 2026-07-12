@@ -1072,14 +1072,29 @@ describe("ModelRegistry", () => {
 			mode: "anthropic-adaptive",
 			efforts: [Effort.Minimal, Effort.High],
 		};
+		const extendedThinking: ThinkingConfig = {
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max, Effort.Ultra],
+			defaultLevel: Effort.Max,
+		};
 		let thinkingCustom: ModelRegistry;
 		let thinkingOverride: ModelRegistry;
+		let extendedThinkingCustom: ModelRegistry;
 		beforeAll(() => {
 			thinkingCustom = readonlyRegistry({
 				providers: {
 					anthropic: providerConfig("https://my-proxy.example.com/v1", [
 						{ id: "claude-custom", reasoning: true, thinking: customThinking },
 					]),
+				},
+			});
+			extendedThinkingCustom = readonlyRegistry({
+				providers: {
+					asxs: providerConfig(
+						"https://api.example.test/v1",
+						[{ id: "gpt-5.6-sol", reasoning: true, thinking: extendedThinking }],
+						"openai-responses",
+					),
 				},
 			});
 			thinkingOverride = readonlyRegistry({
@@ -1103,6 +1118,11 @@ describe("ModelRegistry", () => {
 				// filtered to the declared efforts (no xhigh).
 				effortMap: { minimal: "low" },
 			});
+		});
+
+		test("custom GPT-5.6 models preserve explicit max and ultra efforts", () => {
+			const model = getModelsForProvider(extendedThinkingCustom, "asxs").find(m => m.id === "gpt-5.6-sol");
+			expect(model?.thinking).toEqual(extendedThinking);
 		});
 
 		test("model overrides can replace canonical thinking metadata", () => {

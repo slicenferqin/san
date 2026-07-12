@@ -67,13 +67,16 @@ describe("status line model segment advisor badge", () => {
 });
 
 describe("status line model segment compact thinking level", () => {
-	function createThinkingContext(compactThinkingLevel: boolean): SegmentContext {
+	function createThinkingContext(
+		compactThinkingLevel: boolean,
+		thinkingLevel: ThinkingLevel = ThinkingLevel.High,
+	): SegmentContext {
 		return {
 			...createModelContext(false),
 			session: {
 				state: {
 					model: { id: "test-model", name: "Test Model", thinking: true },
-					thinkingLevel: ThinkingLevel.High,
+					thinkingLevel,
 				},
 				isFastModeActive: () => false,
 				isAutoThinking: false,
@@ -97,5 +100,22 @@ describe("status line model segment compact thinking level", () => {
 		const rendered = renderSegment("model", createThinkingContext(true));
 		expect(Bun.stripANSI(rendered.content)).toBe(`${glyph} Test Model`);
 		expect(Bun.stripANSI(rendered.content)).not.toContain(theme.sep.dot);
+	});
+
+	it("renders max and ultra with their own exact labels instead of the xhigh label", () => {
+		expect(theme.thinking.max).toContain("max");
+		expect(theme.thinking.ultra).toContain("ultra");
+		expect(theme.thinking.max).not.toBe(theme.thinking.xhigh);
+		expect(theme.thinking.ultra).not.toBe(theme.thinking.xhigh);
+
+		const maxRendered = Bun.stripANSI(
+			renderSegment("model", createThinkingContext(false, ThinkingLevel.Max)).content,
+		);
+		const ultraRendered = Bun.stripANSI(
+			renderSegment("model", createThinkingContext(false, ThinkingLevel.Ultra)).content,
+		);
+		const modelPrefix = theme.icon.model ? `${theme.icon.model} ` : "";
+		expect(maxRendered).toBe(`${modelPrefix}Test Model${theme.sep.dot}${theme.thinking.max}`);
+		expect(ultraRendered).toBe(`${modelPrefix}Test Model${theme.sep.dot}${theme.thinking.ultra}`);
 	});
 });

@@ -71,7 +71,8 @@ describe("auto thinking classifier helpers", () => {
 	it("parses CLI --thinking selectors while rejecting inherit", () => {
 		expect(parseCliThinkingLevel(ThinkingLevel.Off)).toBe(ThinkingLevel.Off);
 		expect(parseCliThinkingLevel(AUTO_THINKING)).toBe(AUTO_THINKING);
-		expect(parseCliThinkingLevel("max")).toBe(ThinkingLevel.XHigh);
+		expect(parseCliThinkingLevel("max")).toBe(ThinkingLevel.Max);
+		expect(parseCliThinkingLevel("ultra")).toBe(ThinkingLevel.Ultra);
 		expect(parseCliThinkingLevel(ThinkingLevel.Inherit)).toBeUndefined();
 		expect(parseCliThinkingLevel("bogus")).toBeUndefined();
 	});
@@ -205,10 +206,13 @@ describe("auto thinking classifier helpers", () => {
 		expect(resolveProvisionalAutoLevel(devinModel)).toBeUndefined();
 	});
 
-	it("accepts max as the top configured thinking alias", () => {
-		expect(parseEffort("max")).toBe(Effort.XHigh);
-		expect(parseThinkingLevel("max")).toBeUndefined();
-		expect(parseConfiguredThinkingLevel("max")).toBe(ThinkingLevel.XHigh);
+	it("accepts max and ultra as concrete configured thinking levels", () => {
+		expect(parseEffort("max")).toBe(Effort.Max);
+		expect(parseEffort("ultra")).toBe(Effort.Ultra);
+		expect(parseThinkingLevel("max")).toBe(ThinkingLevel.Max);
+		expect(parseThinkingLevel("ultra")).toBe(ThinkingLevel.Ultra);
+		expect(parseConfiguredThinkingLevel("max")).toBe(ThinkingLevel.Max);
+		expect(parseConfiguredThinkingLevel("ultra")).toBe(ThinkingLevel.Ultra);
 	});
 
 	it("rejects inherited object keys as thinking selectors", () => {

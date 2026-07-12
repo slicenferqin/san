@@ -1,5 +1,6 @@
 import * as os from "node:os";
 import { scheduler } from "node:timers/promises";
+import type { EffortName } from "@oh-my-pi/pi-catalog/effort";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import {
 	CODEX_BASE_URL,
@@ -106,7 +107,7 @@ import {
 import { transformMessages } from "./transform-messages";
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
-	reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	reasoning?: "none" | EffortName;
 	reasoningSummary?: "auto" | "concise" | "detailed" | null;
 	/** `reasoning.context` replay scope; defaults to `all_turns` when unset. The `all_turns` value is gated to gpt-5.4+ Codex models — older ids reject it, so it is suppressed and `context` omitted. */
 	reasoningContext?: CodexReasoningContext;

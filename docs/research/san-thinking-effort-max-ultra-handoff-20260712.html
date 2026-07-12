@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="San thinking effort max/ultra implementation handoff: current worktree, completed fixes, verification evidence, residual risks, and takeover steps."
+    />
+    <title>San Thinking Effort Max/Ultra 修复交接</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f3f5f6;
+        --paper: #ffffff;
+        --ink: #18212a;
+        --muted: #5d6975;
+        --line: #d5dce2;
+        --navy: #17222f;
+        --blue: #1f5f99;
+        --blue-soft: #edf5fb;
+        --green: #176346;
+        --green-soft: #e9f6ef;
+        --amber: #815611;
+        --amber-soft: #fff4dd;
+        --red: #8e3036;
+        --red-soft: #faeaeb;
+        --violet: #694d8c;
+        --violet-soft: #f4effa;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--bg);
+        font:
+          15px/1.7 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          "PingFang SC",
+          "Microsoft YaHei",
+          sans-serif;
+      }
+
+      a {
+        color: var(--blue);
+        text-decoration: none;
+      }
+
+      a:hover {
+        text-decoration: underline;
+      }
+
+      code {
+        padding: 2px 5px;
+        border-radius: 4px;
+        background: #edf0f2;
+        font:
+          0.91em ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+      }
+
+      pre {
+        overflow: auto;
+        margin: 12px 0 0;
+        padding: 15px;
+        border-radius: 6px;
+        color: #edf4fb;
+        background: #171e27;
+        font:
+          12px/1.58 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+        white-space: pre-wrap;
+      }
+
+      .shell {
+        width: min(1180px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      header {
+        padding: 48px 0 40px;
+        color: white;
+        background: var(--navy);
+      }
+
+      .eyebrow,
+      .label {
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      .eyebrow {
+        color: #b8cee5;
+      }
+
+      .label {
+        margin-bottom: 6px;
+        color: var(--muted);
+      }
+
+      h1 {
+        max-width: 960px;
+        margin: 10px 0 14px;
+        font-size: 46px;
+        line-height: 1.1;
+      }
+
+      h2 {
+        margin: 0 0 14px;
+        font-size: 28px;
+        line-height: 1.25;
+      }
+
+      h3 {
+        margin: 0 0 8px;
+        font-size: 18px;
+        line-height: 1.35;
+      }
+
+      p {
+        margin: 0 0 12px;
+      }
+
+      ul,
+      ol {
+        margin: 8px 0 0;
+        padding-left: 22px;
+      }
+
+      li {
+        margin: 5px 0;
+      }
+
+      .lead {
+        max-width: 980px;
+        color: #dce6ef;
+        font-size: 17px;
+      }
+
+      .badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 20px;
+      }
+
+      .badge {
+        padding: 8px 12px;
+        border: 1px solid #7896b3;
+        border-radius: 5px;
+        background: rgba(255, 255, 255, 0.08);
+        font-weight: 800;
+      }
+
+      .badge.ok {
+        border-color: #75b797;
+        background: rgba(23, 99, 70, 0.48);
+      }
+
+      .badge.warn {
+        border-color: #d2aa60;
+        background: rgba(129, 86, 17, 0.5);
+      }
+
+      main section {
+        padding: 34px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 14px;
+      }
+
+      .card,
+      .callout,
+      .item {
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--paper);
+      }
+
+      .card.green,
+      .callout.green {
+        border-color: #9bc9b4;
+        background: var(--green-soft);
+      }
+
+      .card.amber,
+      .callout.amber {
+        border-color: #dfbd7b;
+        background: var(--amber-soft);
+      }
+
+      .card.red,
+      .callout.red {
+        border-color: #dda8ab;
+        background: var(--red-soft);
+      }
+
+      .card.violet {
+        border-color: #c6b4da;
+        background: var(--violet-soft);
+      }
+
+      .metric {
+        margin: 5px 0;
+        font-size: 30px;
+        font-weight: 900;
+        line-height: 1.08;
+      }
+
+      .callout {
+        margin-top: 14px;
+        border-left: 6px solid var(--blue);
+      }
+
+      .item {
+        margin-top: 12px;
+      }
+
+      .item h3 code {
+        font-size: 0.82em;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--paper);
+      }
+
+      th,
+      td {
+        padding: 11px 12px;
+        border: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        width: 210px;
+        background: #eef1f3;
+      }
+
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 16px;
+      }
+
+      .flow div {
+        padding: 13px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--paper);
+        text-align: center;
+      }
+
+      .flow strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+
+      .status-ok {
+        color: var(--green);
+        font-weight: 800;
+      }
+
+      .status-warn {
+        color: var(--amber);
+        font-weight: 800;
+      }
+
+      .status-block {
+        color: var(--red);
+        font-weight: 800;
+      }
+
+      footer {
+        padding: 24px 0 40px;
+        color: var(--muted);
+      }
+
+      @media (max-width: 820px) {
+        .shell {
+          width: min(100% - 24px, 1180px);
+        }
+
+        h1 {
+          font-size: 34px;
+        }
+
+        .flow {
+          grid-template-columns: 1fr;
+        }
+
+        th {
+          width: 140px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="shell">
+        <div class="eyebrow">Engineering handoff · 2026-07-12 23:11 CST</div>
+        <h1>Thinking Effort <code>max</code> / <code>ultra</code> 修复交接</h1>
+        <p class="lead">
+          交给 Grok 的接手基线。当前代码已经修复用户截图中的核心问题：实际 effort 为 <code>max</code> 时，状态栏不再复用
+          <code>xhigh</code> 的火焰与 <code>xhi</code> 文案；同时补齐选择器兼容、设置项、显式扩展 ladder、provider fallback 与
+          <code>ultrathink</code> 上限。改动尚未提交，工作树还混有上一阶段 Context Steady 收尾代码，接手时必须按 hunk
+          保护，不能整文件回退。
+        </p>
+        <div class="badges">
+          <span class="badge ok">核心修复完成</span>
+          <span class="badge ok">Focused: 358 pass / 0 fail</span>
+          <span class="badge ok">bun check 通过</span>
+          <span class="badge warn">未提交、未推送</span>
+          <span class="badge warn">全量测试有 4 个非本改动失败</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section>
+        <div class="shell">
+          <h2>一、接手快照</h2>
+          <table>
+            <tbody>
+              <tr>
+                <th>仓库</th>
+                <td><code>/Users/slicenfer/work/projects/self/san</code></td>
+              </tr>
+              <tr>
+                <th>分支</th>
+                <td><code>refactor/context-steady-240k-plan-rewrite</code>，跟踪同名 <code>origin</code> 分支</td>
+              </tr>
+              <tr>
+                <th>HEAD</th>
+                <td><code>d12fc5b105102c296e2d94d146a331b8a38593f7</code> · <code>feat(coding-agent): rewrite Context Steady request planning</code></td>
+              </tr>
+              <tr>
+                <th>提交状态</th>
+                <td><span class="status-warn">本轮 Thinking Effort 与 Context Steady 收尾均未提交、未推送</span></td>
+              </tr>
+              <tr>
+                <th>工作树</th>
+                <td>交接文档创建前有 44 个 tracked 文件修改、2 个 untracked 文件；本文件是第 3 个 untracked 文件。</td>
+              </tr>
+              <tr>
+                <th>主要包</th>
+                <td><code>packages/coding-agent</code>，并联动 <code>packages/catalog</code>、<code>packages/ai</code>、<code>packages/agent</code></td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="callout red">
+            <h3>工作树保护规则</h3>
+            <p>
+              不要执行 <code>git reset --hard</code>、<code>git checkout -- &lt;file&gt;</code> 或任何整文件回退。
+              <code>packages/coding-agent/src/session/agent-session.ts</code> 与
+              <code>packages/coding-agent/CHANGELOG.md</code> 同时包含 Context Steady 和 Thinking Effort 两组修改，必须按 diff hunk
+              审阅和暂存。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <h2>二、用户问题与目标契约</h2>
+          <div class="grid">
+            <article class="card red">
+              <div class="label">Observed</div>
+              <h3>实际为 <code>max</code>，状态栏显示火焰 <code>xhi</code></h3>
+              <p>
+                主题层把 <code>max</code>、<code>ultra</code> 都映射到了 <code>thinking.xhigh</code>，因此 provider/config
+                层即使保存了正确的 <code>max</code>，最终视觉仍谎报为 <code>xhigh</code>。
+              </p>
+            </article>
+            <article class="card green">
+              <div class="label">Expected</div>
+              <h3>选择、传输与展示保持同一语义</h3>
+              <p>
+                <code>max</code> 显示为 <code>max</code>，<code>ultra</code> 显示为 <code>ultra</code>；支持扩展 ladder
+                的自定义模型原样发送，不支持的模型按自身最高档 clamp。
+              </p>
+            </article>
+            <article class="card violet">
+              <div class="label">Compatibility</div>
+              <h3>不能破坏历史上的冒号模型 ID</h3>
+              <p>
+                <code>provider/model:max</code> 现在可表达真实 effort，但 catalog 中真实存在的 literal <code>:max</code> / <code>:auto</code>
+                模型 ID 与 glob 仍必须优先匹配。
+              </p>
+            </article>
+          </div>
+
+          <div class="flow" aria-label="thinking effort data flow">
+            <div><strong>Catalog</strong>声明 effort ladder</div>
+            <div><strong>Resolver</strong>解析 selector 并保护 literal ID</div>
+            <div><strong>Session</strong>选择、cycle、clamp</div>
+            <div><strong>Provider</strong>映射 wire effort / fallback</div>
+            <div><strong>TUI</strong>显示精确 tier</div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <h2>三、已完成修复</h2>
+
+          <article class="item">
+            <h3>1. 状态栏为 <code>max</code> / <code>ultra</code> 使用独立符号</h3>
+            <p>
+              <code>packages/coding-agent/src/modes/theme/theme.ts</code> 新增 <code>thinking.max</code> 与
+              <code>thinking.ultra</code>。Nerd 字体分别显示星标 <code>max</code> 与火箭 <code>ultra</code>；Unicode
+              分别为星形 <code>max</code> 与菱星 <code>ultra</code>；ASCII 分别为 <code>[max]</code> 与
+              <code>[ultra]</code>。两档继续复用顶档颜色 <code>thinkingXhigh</code>，但不再复用文案或图标。
+            </p>
+            <p>
+              <code>packages/coding-agent/test/status-line-model.test.ts</code> 增加回归契约，验证 Max/Ultra 的实际渲染标签与
+              XHigh 不同。
+            </p>
+          </article>
+
+          <article class="item">
+            <h3>2. <code>max</code> 从旧 alias 升级为 canonical effort</h3>
+            <p>
+              <code>packages/catalog/src/effort.ts</code> 与 <code>packages/agent/src/thinking.ts</code> 均加入
+              <code>Max</code>、<code>Ultra</code>。<code>packages/coding-agent/src/thinking.ts</code> 的解析、描述、配置选择与
+              clamp 路径同步扩展。
+            </p>
+            <p>
+              XHigh 的 UI 描述从误导性的 “Maximum” 改为 “Extra-high”，Max/Ultra 各自有独立描述。
+            </p>
+          </article>
+
+          <article class="item">
+            <h3>3. 修复 selector 与 literal <code>:max</code> / <code>:auto</code> 冲突</h3>
+            <p>
+              <code>packages/coding-agent/src/config/model-resolver.ts</code> 删除旧的 <code>allowMaxAlias</code> 分支；Max
+              直接按 concrete effort 解析。与此同时保留精确模型 ID、literal glob 和已知 literal selector 的优先级。
+              <code>pi/&lt;role&gt;:max</code> 仍是显式 Max，随后根据目标模型 ladder clamp。
+            </p>
+            <p>
+              相应 call site 已从 <code>agent-session.ts</code>、<code>sdk.ts</code>、<code>model-registry.ts</code>
+              移除旧 alias 开关。<code>model-resolver.test.ts</code> 覆盖 exact ID、glob、OpenRouter route、role alias、CLI 与
+              enabledModels 边界。
+            </p>
+          </article>
+
+          <article class="item">
+            <h3>4. 修复设置项重复与预算缺口</h3>
+            <p>
+              <code>packages/coding-agent/src/config/settings-schema.ts</code> 去掉
+              <code>[...THINKING_EFFORTS, AUTO_THINKING, "max"]</code> 中重复追加的 Max；现在 Max/Ultra 各出现一次。
+              新增 <code>thinkingBudgets.max</code> 与 <code>thinkingBudgets.ultra</code>，默认均为 32768。
+            </p>
+            <p><code>settings-manager.test.ts</code> 验证默认 thinking 枚举包含 Max/Ultra 且全表无重复值。</p>
+          </article>
+
+          <article class="item">
+            <h3>5. <code>ultrathink</code> 能到模型真正的最高档</h3>
+            <p>
+              <code>AgentSession.#applyAutoThinkingLevel</code> 的 ceiling 从 <code>Effort.XHigh</code> 调整为
+              <code>Effort.Ultra</code>。旧模型仍由 <code>clampAutoThinkingEffort</code> 限制到自身最高档；显式声明扩展 ladder
+              的模型则可落到 Ultra。集成测试验证 Ultra 路径会跳过分类器。
+            </p>
+          </article>
+
+          <article class="item">
+            <h3>6. 显式 GPT-5.6 扩展 ladder 不再被隐式平移</h3>
+            <p>
+              <code>packages/catalog/src/model-thinking.ts</code> 新增显式扩展 effort 检测：当自定义 GPT-5.6 模型明确声明
+              Max 或 Ultra 时，整条 ladder 原样保留，且不再自动附加通用的 shifted five-tier <code>effortMap</code>。
+              普通推断出来的 GPT-5.6 仍维持既有 shift 策略。
+            </p>
+            <p>
+              这消除了过去必须在自定义模型中偷偷写 <code>effortMap: {}</code> 才能让 Low/Max/Ultra 原样发送的 workaround。
+            </p>
+          </article>
+
+          <article class="item">
+            <h3>7. OpenAI-compatible fallback 识别 Ultra</h3>
+            <p>
+              <code>packages/ai/src/providers/openai-reasoning-fallback.ts</code> 的已知值、排序和错误文本解析都加入
+              <code>ultra</code>。当请求 Ultra 而 provider 400 明示最高只支持 Max 时，会重试 Max 并缓存成功 fallback 参数。
+            </p>
+            <p>
+              OpenAI Responses、Codex Responses、Chat Completions、Azure、Bedrock、Ollama 等相关 wire/schema 类型也扩展到
+              Max/Ultra；Google 映射把两档安全折叠到其最高 <code>HIGH</code>。
+            </p>
+          </article>
+
+          <article class="item">
+            <h3>8. Codex SSE 测试消除 WebSocket 等待干扰</h3>
+            <p>
+              <code>packages/ai/test/openai-codex-stream.test.ts</code> 中专门验证 SSE turn-state scope 的测试增加
+              <code>preferWebsockets: false</code>。原测试在当前环境会先等待 WebSocket 约 10 秒，但测试超时仅 5 秒；改后约
+              12ms 通过。这是测试确定性修复，不改变生产行为，接手者需要决定是否与本批一起保留。
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <h2>四、关键文件地图</h2>
+          <div class="grid">
+            <article class="card">
+              <h3>Catalog / Agent 类型</h3>
+              <ul>
+                <li><code>packages/catalog/src/effort.ts</code></li>
+                <li><code>packages/catalog/src/model-thinking.ts</code></li>
+                <li><code>packages/catalog/test/model-thinking.test.ts</code></li>
+                <li><code>packages/agent/src/thinking.ts</code></li>
+                <li><code>packages/agent/src/compaction/compaction.ts</code></li>
+                <li><code>packages/agent/README.md</code></li>
+              </ul>
+            </article>
+            <article class="card">
+              <h3>AI provider / wire</h3>
+              <ul>
+                <li><code>packages/ai/src/providers/openai-reasoning-fallback.ts</code></li>
+                <li><code>packages/ai/src/providers/openai-*-wire.ts</code></li>
+                <li><code>packages/ai/src/providers/openai-*.ts</code></li>
+                <li><code>packages/ai/src/providers/azure-openai-responses.ts</code></li>
+                <li><code>packages/ai/src/providers/amazon-bedrock.ts</code></li>
+                <li><code>packages/ai/src/providers/ollama.ts</code></li>
+                <li><code>packages/ai/src/stream.ts</code></li>
+              </ul>
+            </article>
+            <article class="card">
+              <h3>Coding Agent runtime</h3>
+              <ul>
+                <li><code>packages/coding-agent/src/thinking.ts</code></li>
+                <li><code>packages/coding-agent/src/config/model-resolver.ts</code></li>
+                <li><code>packages/coding-agent/src/config/model-registry.ts</code></li>
+                <li><code>packages/coding-agent/src/config/models-config-schema.ts</code></li>
+                <li><code>packages/coding-agent/src/config/settings-schema.ts</code></li>
+                <li><code>packages/coding-agent/src/session/agent-session.ts</code></li>
+                <li><code>packages/coding-agent/src/sdk.ts</code></li>
+              </ul>
+            </article>
+            <article class="card">
+              <h3>TUI 与回归测试</h3>
+              <ul>
+                <li><code>packages/coding-agent/src/modes/theme/theme.ts</code></li>
+                <li><code>packages/coding-agent/test/status-line-model.test.ts</code></li>
+                <li><code>packages/coding-agent/test/model-resolver.test.ts</code></li>
+                <li><code>packages/coding-agent/test/model-registry.test.ts</code></li>
+                <li><code>packages/coding-agent/test/settings-manager.test.ts</code></li>
+                <li><code>packages/coding-agent/test/agent-session-role-thinking.test.ts</code></li>
+                <li><code>packages/ai/test/openai-reasoning-effort-fallback.test.ts</code></li>
+              </ul>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <h2>五、与 Context Steady 改动的边界</h2>
+          <div class="callout amber">
+            <h3>这是同一 dirty worktree 中的另一条工作流，不是 Thinking Effort 的附属改动</h3>
+            <p>
+              上一阶段已经完成 Context Steady 第五轮修复及代码级收尾，但未提交。Thinking Effort 工作是在这棵工作树上继续的，
+              因此接手者必须同时保护以下内容。
+            </p>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>文件</th>
+                <th>边界说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>packages/coding-agent/src/session/agent-session.ts</code></td>
+                <td>
+                  混合文件。Context Steady 包含 hard-pressure recovery、provider-wire token estimate、active plan usage 去重；Thinking
+                  Effort 包含 Max alias 清理与 <code>ultrathink</code> ceiling。
+                </td>
+              </tr>
+              <tr>
+                <td><code>packages/coding-agent/CHANGELOG.md</code></td>
+                <td>混合文件。顶部同时有 Max/Ultra 与 ContextPlan Added/Changed/Fixed 条目。</td>
+              </tr>
+              <tr>
+                <td><code>packages/coding-agent/test/context-steady/agent-session-m2.test.ts</code></td>
+                <td>Context Steady 收尾测试，保留。</td>
+              </tr>
+              <tr>
+                <td><code>packages/coding-agent/test/context-steady/agent-session-production-path.test.ts</code></td>
+                <td>新文件，Context Steady 生产路径回归测试，保留。</td>
+              </tr>
+              <tr>
+                <td><code>docs/research/san-context-steady-240k-code-level-completion-20260712.html</code></td>
+                <td>新文件，Context Steady 代码级完成报告，保留。</td>
+              </tr>
+            </tbody>
+          </table>
+          <p style="margin-top: 12px">
+            Context Steady 的详细结论以
+            <code>docs/research/san-context-steady-240k-code-level-completion-20260712.html</code> 与
+            <code>docs/research/san-context-steady-240k-fifth-review-fix-summary-20260712.html</code> 为准。
+          </p>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <h2>六、验证证据</h2>
+          <div class="grid">
+            <article class="card green">
+              <div class="label">Type / Lint / Docs</div>
+              <div class="metric">通过</div>
+              <p><code>bun check</code> 在最终 settings test guard 修复后通过；包含 Biome、workspace tsgo 与 docs index 检查。</p>
+            </article>
+            <article class="card green">
+              <div class="label">Focused regression</div>
+              <div class="metric">358 / 0</div>
+              <p>11 个相关测试文件，358 pass、0 fail、3857 次 expect，耗时约 6.9 秒。</p>
+            </article>
+            <article class="card amber">
+              <div class="label">Full suite</div>
+              <div class="metric">4 fail + 2 error</div>
+              <p>15270 pass、722 skip；失败均位于未改动的 AuthStorage SQLite/OAuth 测试，Thinking 相关失败为 0。</p>
+            </article>
+          </div>
+
+          <h3 style="margin-top: 22px">最终 focused 命令</h3>
+          <pre>bun test \
+  packages/agent/test/compaction-thinking-level.test.ts \
+  packages/ai/test/openai-reasoning-effort-fallback.test.ts \
+  packages/catalog/test/model-thinking.test.ts \
+  packages/coding-agent/test/model-registry.test.ts \
+  packages/coding-agent/test/model-resolver.test.ts \
+  packages/coding-agent/test/status-line-model.test.ts \
+  packages/coding-agent/test/cli-hide-thinking-flag.test.ts \
+  packages/coding-agent/test/cli/completions.test.ts \
+  packages/coding-agent/test/auto-thinking-classifier.test.ts \
+  packages/coding-agent/test/agent-session-role-thinking.test.ts \
+  packages/coding-agent/test/settings-manager.test.ts
+
+# 358 pass, 0 fail, 3857 expect() calls, 11 files</pre>
+
+          <h3 style="margin-top: 22px">全量测试残留</h3>
+          <p><code>bun test --only-failures</code> 的结果：</p>
+          <pre>15270 pass
+722 skip
+4 fail
+2 errors
+15996 tests / 1638 files</pre>
+          <ul>
+            <li>
+              <code>packages/ai/test/auth-storage-block-persistence.test.ts</code>：两个 5 秒 timeout，清理后伴随
+              <code>SQLITE_IOERR_VNODE</code>。
+            </li>
+            <li>
+              <code>packages/ai/test/auth-storage-oauth-refresh-race.test.ts</code>：两个 timeout，清理后出现 finalized statement 相关错误。
+            </li>
+            <li>Block persistence 文件单独运行可复现；把 timeout 放宽到 15 秒后其失败消失。</li>
+            <li>OAuth refresh race 在 15 秒 timeout 下仍有 2 个 timeout，另外 11 个测试通过。</li>
+            <li>本批没有修改 <code>auth-storage.ts</code> 或上述两个测试文件，当前证据不指向 Thinking Effort 回归。</li>
+          </ul>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <h2>七、Grok 剩余工作</h2>
+          <div class="grid">
+            <article class="card amber">
+              <div class="label">P0 · Required</div>
+              <h3>做一次最终 diff review</h3>
+              <p>
+                重点审查 selector collision、显式 GPT-5.6 ladder 语义、各 provider wire 类型与
+                <code>agent-session.ts</code> 的混合 hunks。不要只看测试通过。
+              </p>
+            </article>
+            <article class="card amber">
+              <div class="label">P0 · Required</div>
+              <h3>真实 TUI 产品验收</h3>
+              <p>
+                使用用户当前那套实际 Max 配置启动 <code>bun run dev</code>，确认状态栏显示 <code>max</code> 而非
+                <code>xhi</code>；再验证 Ultra。至少覆盖当前 Nerd symbols，最好再切 Unicode 与 ASCII。
+              </p>
+            </article>
+            <article class="card amber">
+              <div class="label">P0 · Required</div>
+              <h3>复跑 merge gate</h3>
+              <p>
+                执行 <code>git diff --check</code>、<code>bun check</code> 与本页 focused 命令。若继续改代码，需要重新跑相关包测试。
+              </p>
+            </article>
+            <article class="card violet">
+              <div class="label">P1 · Decision</div>
+              <h3>决定 SSE 测试修复是否同批保留</h3>
+              <p>
+                建议保留 <code>preferWebsockets: false</code>，因为该用例明确测试 SSE；若希望严格缩小 Thinking diff，需单独拆 commit，
+                不要直接丢失这个确定性修复。
+              </p>
+            </article>
+            <article class="card violet">
+              <div class="label">P1 · Merge hygiene</div>
+              <h3>规划提交边界</h3>
+              <p>
+                建议至少分为 Context Steady 收尾与 Thinking Max/Ultra 两个逻辑提交；混合文件使用交互式 hunk 暂存。用户当前只要求交接，
+                本轮没有新的提交授权。
+              </p>
+            </article>
+            <article class="card violet">
+              <div class="label">P1 · Repository health</div>
+              <h3>处理或隔离 AuthStorage flaky failures</h3>
+              <p>
+                合并前需要决定：单独修复 SQLite/OAuth race，还是基于基线证据标记为独立已知失败。不要把它误归因于 Thinking Effort。
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <h2>八、验收清单</h2>
+          <ol>
+            <li><code>max</code> 在 Nerd / Unicode / ASCII 状态栏中都显示 Max 自己的标签，不出现 <code>xhi</code>。</li>
+            <li><code>ultra</code> 在三种 symbol set 中显示 Ultra 自己的标签。</li>
+            <li>Max/Ultra 在配置、CLI、role selector、cycle 与 session resume 中保持 concrete effort 语义。</li>
+            <li>真实存在的 literal <code>:max</code> / <code>:auto</code> 模型 ID 和 glob 不被 selector parser 吞掉。</li>
+            <li>普通 GPT-5.6 推断模型继续使用 shifted ladder；显式声明 Max/Ultra 的自定义模型原样发送。</li>
+            <li>旧模型收到 Max/Ultra 选择时 clamp 到其 metadata 声明的最高档，不越界发送。</li>
+            <li><code>ultrathink</code> 对扩展模型落到 Ultra，对普通模型落到其最高支持档。</li>
+            <li>OpenAI-compatible provider 明示不支持 Ultra 但支持 Max 时，fallback 重试 Max。</li>
+            <li><code>defaultThinkingLevel</code> 的选项无重复，Max/Ultra 各一次；两档预算键能正常读取。</li>
+            <li><code>bun check</code>、focused 358 tests 与 <code>git diff --check</code> 全绿。</li>
+            <li>Context Steady 未提交修改与两个新文件完整保留。</li>
+          </ol>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <h2>九、建议接手顺序</h2>
+          <ol>
+            <li>先执行 <code>git status --short --branch</code>，确认仍在本页记录的 branch/HEAD，且 dirty files 没有丢失。</li>
+            <li>阅读本页、Context Steady 代码完成报告，以及 <code>git diff --stat</code> / <code>git diff</code>。</li>
+            <li>按“验收清单”做代码 review，优先看 resolver、model-thinking、fallback、theme 与 session。</li>
+            <li>运行真实 TUI 验收，保留显示 Max/Ultra 的终端证据。</li>
+            <li>复跑 <code>git diff --check</code>、<code>bun check</code>、focused tests。</li>
+            <li>按团队 gate 处理 AuthStorage 残留，或留下可复现的独立基线记录。</li>
+            <li>获得用户提交授权后按逻辑边界提交并推送；提交前再次核对 untracked 文件都已正确纳入。</li>
+          </ol>
+
+          <h3 style="margin-top: 22px">常用命令</h3>
+          <pre>git status --short --branch
+git diff --stat
+git diff --check
+bun check
+bun run dev
+bun test --only-failures</pre>
+
+          <div class="callout green">
+            <h3>当前结论</h3>
+            <p>
+              截图中的“实际 Max、显示 xhi”已经在代码与回归测试层修复。剩余工作主要是独立代码复核、真实终端验收、全量测试残留处置和
+              commit/push，而不是继续补同一个已知 UI 映射 bug。
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="shell">
+        文档生成于 2026-07-12 23:11 CST。事实基线：branch
+        <code>refactor/context-steady-240k-plan-rewrite</code>，HEAD <code>d12fc5b10510</code>。
+      </div>
+    </footer>
+  </body>
+</html>

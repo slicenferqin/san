@@ -1,3 +1,4 @@
+import type { EffortName } from "@oh-my-pi/pi-catalog/effort";
 import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
 import { $flag, logger, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
@@ -95,7 +96,7 @@ import {
 
 // OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends StreamOptions {
-	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
+	reasoning?: EffortName;
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
 	serviceTier?: ServiceTier;
 	textVerbosity?: "low" | "medium" | "high";

@@ -142,6 +142,8 @@ export type SymbolKey =
 	| "thinking.medium"
 	| "thinking.high"
 	| "thinking.xhigh"
+	| "thinking.max"
+	| "thinking.ultra"
 	| "thinking.autoPending"
 	// Checkboxes
 	| "checkbox.checked"
@@ -349,6 +351,8 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"thinking.medium": "◒ med",
 	"thinking.high": "◕ high",
 	"thinking.xhigh": "◉ xhigh",
+	"thinking.max": "★ max",
+	"thinking.ultra": "✦ ultra",
 	"thinking.autoPending": "⟳",
 	// Checkboxes
 	"checkbox.checked": "☑",
@@ -650,6 +654,10 @@ const NERD_SYMBOLS: SymbolMap = {
 	"thinking.high": "\u{F111} high",
 	// pick: 🧠 xhi | alt:  xhi  xhi
 	"thinking.xhigh": "\u{F06D} xhi",
+	// pick:  max | alt:  max
+	"thinking.max": "\u{F005} max",
+	// pick:  ultra | alt:  ultra
+	"thinking.ultra": "\u{F135} ultra",
 	// pick:  (fa-circle-o-notch) | alt: 󰂼 (nf-md-cached) ⟳
 	"thinking.autoPending": "\uf1ce",
 	// Checkboxes
@@ -868,6 +876,8 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"thinking.medium": "[med]",
 	"thinking.high": "[high]",
 	"thinking.xhigh": "[xhi]",
+	"thinking.max": "[max]",
+	"thinking.ultra": "[ultra]",
 	"thinking.autoPending": "[~]",
 	// Checkboxes
 	"checkbox.checked": "[x]",
@@ -1675,6 +1685,9 @@ export class Theme {
 				return (str: string) => this.fg("thinkingHigh", str);
 			case "xhigh":
 				return (str: string) => this.fg("thinkingXhigh", str);
+			case "max":
+			case "ultra":
+				return (str: string) => this.fg("thinkingXhigh", str);
 			default:
 				return (str: string) => this.fg("thinkingOff", str);
 		}
@@ -1861,6 +1874,8 @@ export class Theme {
 			medium: this.#symbols["thinking.medium"],
 			high: this.#symbols["thinking.high"],
 			xhigh: this.#symbols["thinking.xhigh"],
+			max: this.#symbols["thinking.max"],
+			ultra: this.#symbols["thinking.ultra"],
 			autoPending: this.#symbols["thinking.autoPending"],
 		};
 	}

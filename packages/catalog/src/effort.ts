@@ -5,7 +5,12 @@ export const enum Effort {
 	Medium = "medium",
 	High = "high",
 	XHigh = "xhigh",
+	Max = "max",
+	Ultra = "ultra",
 }
+
+/** String-literal form accepted at public provider boundaries. */
+export type EffortName = `${Effort}`;
 
 export const THINKING_EFFORTS: readonly Effort[] = [
 	Effort.Minimal,
@@ -13,4 +18,6 @@ export const THINKING_EFFORTS: readonly Effort[] = [
 	Effort.Medium,
 	Effort.High,
 	Effort.XHigh,
+	Effort.Max,
+	Effort.Ultra,
 ];

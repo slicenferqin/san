@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added agent thinking selectors for the `max` and `ultra` reasoning effort tiers.
+
 ## [16.3.12] - 2026-07-08
 
 ### Added

@@ -319,6 +319,11 @@ function isGpt56PlusWireEffortModel<TApi extends Api>(spec: ModelSpec<TApi>): bo
 	return parsed !== null && semverGte(parsed.version, "5.6");
 }
 
+function getExplicitExtendedEfforts<TApi extends Api>(spec: ModelSpec<TApi>): readonly Effort[] | undefined {
+	const efforts = spec.thinking?.efforts;
+	return efforts?.includes(Effort.Max) === true || efforts?.includes(Effort.Ultra) === true ? efforts : undefined;
+}
+
 function getModelDefinedEfforts<TApi extends Api>(
 	spec: ModelSpec<TApi>,
 	compat: CompatOf<TApi>,
@@ -338,6 +343,10 @@ function getModelDefinedEfforts<TApi extends Api>(
 		return FUGU_REASONING_EFFORTS;
 	}
 	if (isGpt56PlusWireEffortModel(spec)) {
+		const extendedEfforts = getExplicitExtendedEfforts(spec);
+		if (extendedEfforts) {
+			return extendedEfforts;
+		}
 		// Normalize stale baked/discovered `low..xhigh` surfaces to the full
 		// five-tier ladder so the shifted map keeps the native `low` tier
 		// reachable (user `minimal`).
@@ -427,7 +436,7 @@ function inferDetectedEffortMap<TApi extends Api>(
 	if (isSakanaFuguReasoningModel(spec)) {
 		return FUGU_REASONING_EFFORT_MAP;
 	}
-	if (isGpt56PlusWireEffortModel(spec)) {
+	if (isGpt56PlusWireEffortModel(spec) && getExplicitExtendedEfforts(spec) === undefined) {
 		return SHIFTED_FIVE_TIER_EFFORT_MAP;
 	}
 	if (!isOpenAICompatReasoningApi(spec.api)) {
@@ -752,6 +761,8 @@ export function mapEffortToGoogleThinkingLevel(effort: Effort): "MINIMAL" | "LOW
 			return "MEDIUM";
 		case Effort.High:
 		case Effort.XHigh:
+		case Effort.Max:
+		case Effort.Ultra:
 			return "HIGH";
 	}
 }

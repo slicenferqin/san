@@ -1,4 +1,4 @@
-import type { Effort } from "@oh-my-pi/pi-catalog/effort";
+import type { Effort, EffortName } from "@oh-my-pi/pi-catalog/effort";
 import { toFirepassWireModelId, toFireworksWireModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
 import { isGlm52ReasoningEffortModelId } from "@oh-my-pi/pi-catalog/identity";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
@@ -643,7 +643,7 @@ export type OpenAICompletionsParams = Omit<ChatCompletionCreateParamsStreaming, 
 
 /** Reasoning-relevant slice of caller options the Chat Completions dialect dispatch reads. */
 export interface ChatCompletionsReasoningOptions {
-	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
+	reasoning?: EffortName;
 	disableReasoning?: boolean;
 }
 

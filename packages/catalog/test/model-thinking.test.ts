@@ -568,7 +568,7 @@ describe("model thinking derivation", () => {
 		expect(clampThinkingLevelForModel(model, Effort.High)).toBeUndefined();
 	});
 
-	it("bakes the GPT-5.6 shifted five-tier effort map on wire-effort APIs", () => {
+	it("shifts inferred GPT-5.6 ladders while preserving explicit extended efforts", () => {
 		const codex = createModel({
 			id: "gpt-5.6-sol",
 			api: "openai-codex-responses",
@@ -611,6 +611,23 @@ describe("model thinking derivation", () => {
 				high: "xhigh",
 				xhigh: "max",
 			},
+		});
+
+		const explicitExtended = createModel({
+			id: "gpt-5.6-sol",
+			api: "openai-responses",
+			provider: "custom-responses",
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max, Effort.Ultra],
+				defaultLevel: Effort.Max,
+			},
+		});
+
+		expect(explicitExtended.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max, Effort.Ultra],
+			defaultLevel: Effort.Max,
 		});
 	});
 

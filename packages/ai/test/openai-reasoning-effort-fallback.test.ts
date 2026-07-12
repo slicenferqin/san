@@ -218,7 +218,84 @@ function createAzureResponsesModel(): Model<"azure-openai-responses"> {
 	});
 }
 
+function createExtendedResponsesModel(): Model<"openai-responses"> {
+	return buildModel({
+		id: "gpt-5.6-sol",
+		name: "GPT-5.6 Sol",
+		api: "openai-responses",
+		provider: "custom-responses",
+		baseUrl: "https://responses.example.test/v1",
+		reasoning: true,
+		compat: { supportsReasoningParams: true, supportsReasoningEffort: true },
+		thinking: {
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max, Effort.Ultra],
+			defaultLevel: Effort.Max,
+		},
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 500_000,
+		maxTokens: 128_000,
+	});
+}
+
 describe("OpenAI reasoning effort fallback retry", () => {
+	it("sends explicitly advertised extended Responses efforts verbatim", async () => {
+		const model = createExtendedResponsesModel();
+		const bodies: Record<string, unknown>[] = [];
+		const fetchMock: FetchImpl = Object.assign(
+			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+				bodies.push(parseJsonBody(init));
+				return createResponsesSseResponse();
+			},
+			{ preconnect: fetch.preconnect },
+		);
+
+		for (const reasoning of [Effort.Low, Effort.Max, Effort.Ultra]) {
+			const result = await streamOpenAIResponses(model, testContext, {
+				apiKey: "test-key",
+				fetch: fetchMock,
+				reasoning,
+			}).result();
+			expect(result.stopReason).toBe("stop");
+		}
+
+		expect(model.input).toEqual(["text", "image"]);
+		expect(model.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max, Effort.Ultra],
+			defaultLevel: Effort.Max,
+		});
+		expect(bodies.map(body => (body.reasoning as { effort?: string } | undefined)?.effort)).toEqual([
+			"low",
+			"max",
+			"ultra",
+		]);
+	});
+
+	it("retries unsupported ultra at the provider-advertised max tier", async () => {
+		const bodies: Record<string, unknown>[] = [];
+		const fetchMock: FetchImpl = Object.assign(
+			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+				const body = parseJsonBody(init);
+				bodies.push(body);
+				return bodies.length === 1
+					? invalidReasoningResponse("reasoning.effort", "ultra")
+					: createResponsesSseResponse();
+			},
+			{ preconnect: fetch.preconnect },
+		);
+
+		const result = await streamOpenAIResponses(createExtendedResponsesModel(), testContext, {
+			apiKey: "test-key",
+			fetch: fetchMock,
+			reasoning: Effort.Ultra,
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(bodies.map(body => (body.reasoning as { effort?: string } | undefined)?.effort)).toEqual(["ultra", "max"]);
+	});
+
 	it("retries Chat Completions xhigh as provider max", async () => {
 		const bodies: Record<string, unknown>[] = [];
 		const fetchMock: FetchImpl = Object.assign(

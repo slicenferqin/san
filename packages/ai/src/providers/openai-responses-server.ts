@@ -40,7 +40,15 @@ export type { ParsedRequest };
 // ─── narrow guards ──────────────────────────────────────────────────────────
 
 function isReasoningEffort(value: unknown): value is NonNullable<ParsedRequest["options"]["reasoning"]> {
-	return value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh";
+	return (
+		value === "minimal" ||
+		value === "low" ||
+		value === "medium" ||
+		value === "high" ||
+		value === "xhigh" ||
+		value === "max" ||
+		value === "ultra"
+	);
 }
 
 function isServiceTier(value: unknown): value is NonNullable<ParsedRequest["options"]["serviceTier"]> {

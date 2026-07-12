@@ -52,10 +52,11 @@ describe("parseArgs — --thinking flag", () => {
 		expect(parseArgs(["--thinking=off"]).thinking).toBe(ThinkingLevel.Off);
 	});
 
-	it("accepts auto, concrete efforts, and the max alias", () => {
+	it("accepts auto and every concrete extended effort", () => {
 		expect(parseArgs(["--thinking", "auto"]).thinking).toBe(AUTO_THINKING);
 		expect(parseArgs(["--thinking", "medium"]).thinking).toBe(Effort.Medium);
-		expect(parseArgs(["--thinking", "max"]).thinking).toBe(ThinkingLevel.XHigh);
+		expect(parseArgs(["--thinking", "max"]).thinking).toBe(ThinkingLevel.Max);
+		expect(parseArgs(["--thinking", "ultra"]).thinking).toBe(ThinkingLevel.Ultra);
 	});
 
 	it("ignores invalid levels and the internal inherit selector", () => {

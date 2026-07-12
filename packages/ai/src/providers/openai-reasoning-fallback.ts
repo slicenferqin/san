@@ -9,7 +9,7 @@ export interface OpenAIReasoningEffortFallbackState {
 	reasoningEffortFallbacks: Map<string, OpenAIReasoningEffortFallback>;
 }
 
-const ENABLED_REASONING_VALUES = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const ENABLED_REASONING_VALUES = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
 const KNOWN_REASONING_VALUE: Readonly<Record<string, true>> = {
 	none: true,
 	minimal: true,
@@ -18,6 +18,7 @@ const KNOWN_REASONING_VALUE: Readonly<Record<string, true>> = {
 	high: true,
 	xhigh: true,
 	max: true,
+	ultra: true,
 };
 const REASONING_VALUE_RANK: Readonly<Record<string, number>> = {
 	minimal: 0,
@@ -26,6 +27,7 @@ const REASONING_VALUE_RANK: Readonly<Record<string, number>> = {
 	high: 3,
 	xhigh: 4,
 	max: 5,
+	ultra: 6,
 };
 
 /** @internal */
@@ -180,7 +182,7 @@ function escapeRegExp(value: string): string {
 
 function parseKnownReasoningValues(text: string): Set<string> {
 	const values = new Set<string>();
-	const quotedPattern = /["'`](none|minimal|low|medium|high|xhigh|max)["'`]/gi;
+	const quotedPattern = /["'`](none|minimal|low|medium|high|xhigh|max|ultra)["'`]/gi;
 	let quotedMatch = quotedPattern.exec(text);
 	while (quotedMatch !== null) {
 		values.add(quotedMatch[1]!.toLowerCase());
@@ -189,7 +191,7 @@ function parseKnownReasoningValues(text: string): Set<string> {
 	const allowedMatch = /(?:must be|one of|allowed values?|supported values?(?: are)?|expected)([^.\n]+)/i.exec(text);
 	if (allowedMatch) {
 		const allowedText = allowedMatch[1]!;
-		const barePattern = /\b(none|minimal|low|medium|high|xhigh|max)\b/gi;
+		const barePattern = /\b(none|minimal|low|medium|high|xhigh|max|ultra)\b/gi;
 		let bareMatch = barePattern.exec(allowedText);
 		while (bareMatch !== null) {
 			values.add(bareMatch[1]!.toLowerCase());

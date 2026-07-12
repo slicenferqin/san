@@ -1,3 +1,4 @@
+import type { EffortName } from "@oh-my-pi/pi-catalog/effort";
 import { fetchWithRetry, parseStreamingJson } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { getEnvApiKey } from "../stream";
@@ -35,7 +36,7 @@ import { transformMessages } from "./transform-messages";
 import { joinTextWithImagePlaceholder, partitionVisionContent } from "./vision-guard";
 
 export interface OllamaChatOptions extends StreamOptions {
-	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
+	reasoning?: EffortName;
 	disableReasoning?: boolean;
 	toolChoice?: ToolChoice;
 }

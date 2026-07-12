@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added OpenAI-compatible request support for explicit `max` and `ultra` reasoning efforts advertised by custom models, including provider-error fallback from unsupported `ultra` to `max`.
+
 ## [16.3.15] - 2026-07-09
 
 ### Breaking Changes
