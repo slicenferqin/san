@@ -23,6 +23,7 @@ import { CollabHost } from "../collab/host";
 import { applyProviderGlobalsFromSettings } from "../config/provider-globals";
 import type { SettingPath, Settings, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";
+import { CONTEXT_PLAN_CUSTOM_TYPE } from "../context-steady/plan-types";
 import {
 	clearPluginRootsAndCaches,
 	resolveActiveProjectRegistryPath,
@@ -63,6 +64,7 @@ import { getChangelogPath, parseChangelog } from "../utils/changelog";
 import { copyToClipboard } from "../utils/clipboard";
 import { CollabQrCodeComponent } from "./helpers/collab-qrcode";
 import { buildContextPacketReportText, parseContextPacketReportCount } from "./helpers/context-packet-report";
+import { buildContextPlanReportText, parseContextPlanReportCount } from "./helpers/context-plan-report";
 import { buildContextReportText } from "./helpers/context-report";
 import { formatDuration } from "./helpers/format";
 import { createMarketplaceManager } from "./helpers/marketplace-manager";
@@ -140,6 +142,13 @@ function sanLoopMaxTurnsForMode(settingsSource: Settings, mode: SanLoopMode): nu
 	}
 }
 
+function latestContextPlanRefs(entries: readonly SessionEntry[], limit = 3): string[] {
+	return entries
+		.filter(entry => entry.type === "custom" && entry.customType === CONTEXT_PLAN_CUSTOM_TYPE)
+		.slice(-Math.max(0, Math.floor(limit)))
+		.map(entry => entry.id);
+}
+
 async function runConfiguredSanLoop(options: {
 	mode: SanLoopMode;
 	objective: string;
@@ -155,6 +164,7 @@ async function runConfiguredSanLoop(options: {
 		maxRetries: options.settings.get("san.executionLoop.maxRetries"),
 		maxWorkers: options.settings.get("san.executionLoop.maxWorkers"),
 		maxTurns: sanLoopMaxTurnsForMode(options.settings, options.mode),
+		contextPlanRefs: latestContextPlanRefs(options.sessionManager.getBranch()),
 		executor: createSanLoopTaskAgentExecutor({
 			session: options.session,
 			cwd: options.cwd,
@@ -1343,9 +1353,12 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "context",
 		description: "Show estimated context usage breakdown",
 		acpDescription: "Show context usage",
-		acpInputHint: "[packet [count]]",
+		acpInputHint: "[plan|packet [count]]",
 		allowArgs: true,
-		subcommands: [{ name: "packet", description: "Show San ContextPacket debug view", usage: "[count]" }],
+		subcommands: [
+			{ name: "plan", description: "Show San ContextPlan audit view", usage: "[count]" },
+			{ name: "packet", description: "Show legacy San ContextPacket debug view", usage: "[count]" },
+		],
 		getTuiAutocompleteDescription: runtime => {
 			const usage = runtime.ctx.session.getContextUsage();
 			if (!usage) return "Context: unavailable";
@@ -1353,18 +1366,35 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 		handle: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
+			if (verb === "plan") {
+				const count = parseContextPlanReportCount(rest);
+				if (typeof count !== "number") return usage(count.error, runtime);
+				await runtime.output(buildContextPlanReportText(runtime.sessionManager.getEntries(), { count }));
+				return commandConsumed();
+			}
 			if (verb === "packet") {
 				const count = parseContextPacketReportCount(rest);
 				if (typeof count !== "number") return usage(count.error, runtime);
 				await runtime.output(buildContextPacketReportText(runtime.sessionManager.getEntries(), { count }));
 				return commandConsumed();
 			}
-			if (verb) return usage("Usage: /context [packet [count]]", runtime);
+			if (verb) return usage("Usage: /context [plan [count]|packet [count]]", runtime);
 			await runtime.output(buildContextReportText(runtime));
 			return commandConsumed();
 		},
 		handleTui: (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
+			if (verb === "plan") {
+				const count = parseContextPlanReportCount(rest);
+				runtime.ctx.showStatus(
+					typeof count === "number"
+						? buildContextPlanReportText(runtime.ctx.session.sessionManager.getEntries(), { count })
+						: count.error,
+					{ dim: false },
+				);
+				runtime.ctx.editor.setText("");
+				return;
+			}
 			if (verb === "packet") {
 				const count = parseContextPacketReportCount(rest);
 				runtime.ctx.showStatus(
@@ -1377,7 +1407,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 			if (verb) {
-				runtime.ctx.showStatus("Usage: /context [packet [count]]");
+				runtime.ctx.showStatus("Usage: /context [plan [count]|packet [count]]");
 				runtime.ctx.editor.setText("");
 				return;
 			}

@@ -2659,7 +2659,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Experimental",
 			label: "Context Steady State",
 			description:
-				"Enable San context steady state: persist settled-turn digests and inject a compact ContextPacket into later user turns.",
+				"Enable San context steady state: persist settled-turn digests and inject a compact ContextPlan into later provider requests.",
 		},
 	},
 	"san.contextSteady.digest.enabled": { type: "boolean", default: true },
@@ -2670,9 +2670,21 @@ export const SETTINGS_SCHEMA = {
 	"san.contextSteady.qualityWindowTokens": {
 		type: "number",
 		default: 0,
-		description: "Quality-window token cap used to derive the ContextPacket budget; 0 means no quality-window cap.",
+		description:
+			"Steady-target token budget for full provider input (system + tools + messages). 0 uses the default 240K steady target; values above the model hard input ceiling are clamped.",
+	},
+	"san.contextSteady.burstWindowTokens": {
+		type: "number",
+		default: 320000,
+		description:
+			"Hard burst ceiling for full provider input under quality pressure. Requests above this outcome are hard_pressure.",
 	},
 	"san.contextSteady.reserveRatio": { type: "number", default: 0.2 },
+	"san.contextSteady.contextPlan.enabled": { type: "boolean", default: true },
+	"san.contextSteady.contextPlan.recentDigests": { type: "number", default: 5 },
+	"san.contextSteady.contextPlan.maxTokens": { type: "number", default: 2000 },
+	// Legacy ContextPacket setting paths are still accepted as aliases when the
+	// corresponding ContextPlan path is not explicitly configured.
 	"san.contextSteady.contextPacket.enabled": { type: "boolean", default: true },
 	"san.contextSteady.contextPacket.recentDigests": { type: "number", default: 5 },
 	"san.contextSteady.contextPacket.maxTokens": { type: "number", default: 2000 },
@@ -2760,7 +2772,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Experimental",
 			label: "Execution Loop",
 			description:
-				"Enable San v0.2 execution loop scaffolding: run ledger, role context packets, San Checks, and orchestrator entrypoints.",
+				"Enable San v0.2 execution loop scaffolding: run ledger, role context plans, San Checks, and orchestrator entrypoints.",
 		},
 	},
 	"san.executionLoop.defaultMode": { type: "enum", values: ["solo", "team", "council"] as const, default: "team" },

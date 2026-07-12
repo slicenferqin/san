@@ -12,6 +12,7 @@ import type { SessionEntry } from "../session/session-entries";
 import type { ReadonlySessionManager } from "../session/session-manager";
 import { latestContextCheckpoint } from "./checkpoint";
 import { isCheckpointRelevantToPrompt, isContinuationPrompt, isDigestRelevantToPrompt } from "./relevance";
+import { collectDigestRefs as collectDigestRefsFromSession } from "./session";
 import { polishContextSteadyText } from "./text";
 import {
 	CONTEXT_PACKET_MESSAGE_TYPE,
@@ -23,13 +24,17 @@ import {
 	type ContextPacketSettings,
 	type ContextPacketTrimDecision,
 	type ContextRecallItem,
-	TURN_DIGEST_CUSTOM_TYPE,
 	type TurnDigest,
 } from "./types";
 
 interface DigestEntryRef {
 	entryId: string;
 	digest: TurnDigest;
+}
+
+/** @deprecated Prefer collectDigestRefs from session.ts; re-exported for legacy tests. */
+export function collectDigestRefs(entries: readonly SessionEntry[]): DigestEntryRef[] {
+	return collectDigestRefsFromSession(entries);
 }
 
 export interface BuiltContextPacket {
@@ -380,19 +385,6 @@ function appendTrimDecision(
 		return;
 	}
 	trimDecisions.push({ layer, reason, omitted });
-}
-
-export function collectDigestRefs(entries: readonly SessionEntry[]): DigestEntryRef[] {
-	const refs: DigestEntryRef[] = [];
-	for (const entry of entries) {
-		if (entry.type !== "custom") continue;
-		if (entry.customType !== TURN_DIGEST_CUSTOM_TYPE) continue;
-		const data = entry.data;
-		if (!data || typeof data !== "object") continue;
-		if (!("schemaVersion" in data) || !("turnId" in data) || !("source" in data)) continue;
-		refs.push({ entryId: entry.id, digest: data as TurnDigest });
-	}
-	return refs;
 }
 
 export function buildContextPacket(

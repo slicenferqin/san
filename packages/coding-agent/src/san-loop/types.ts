@@ -164,6 +164,8 @@ export interface SanLoopRunSnapshot {
 	objective: string;
 	mode: SanLoopMode;
 	status: SanLoopStatus;
+	contextPlanRefs?: string[];
+	/** Legacy ContextPacket refs kept for old session readability. */
 	contextPacketRefs: string[];
 	plan?: SanLoopPlan;
 	assignments: SanLoopWorkerAssignment[];
@@ -196,6 +198,8 @@ export interface SanLoopRoleContextPacketDebug {
 	sessionId: string;
 	createdAt: string;
 	role: SanLoopRole;
+	sourceContextPlanRefs?: string[];
+	/** Legacy ContextPacket refs kept for old session readability. */
 	sourceContextPacketRefs: string[];
 	entryRefs: string[];
 	tokenEstimate: number;

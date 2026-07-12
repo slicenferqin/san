@@ -29,6 +29,7 @@ export interface CreateSanLoopRunOptions {
 	runId?: string;
 	createdAt?: string;
 	maxRetries?: number;
+	contextPlanRefs?: string[];
 	contextPacketRefs?: string[];
 	initialRemainingTurns?: number;
 }
@@ -36,6 +37,7 @@ export interface CreateSanLoopRunOptions {
 export interface UpdateSanLoopRunOptions {
 	status?: SanLoopStatus;
 	updatedAt?: string;
+	contextPlanRefs?: string[];
 	contextPacketRefs?: string[];
 	retryCount?: number;
 	finalVerdict?: SanLoopRunSnapshot["finalVerdict"];
@@ -111,9 +113,16 @@ function isSanLoopStatus(value: unknown): value is SanLoopStatus {
 	);
 }
 
+function stringArray(value: unknown): string[] {
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
 function normalizeRunSnapshotMode(run: SanLoopRunSnapshot): SanLoopRunSnapshot {
 	const mode = normalizeSanLoopMode(run.mode) ?? "team";
-	return run.mode === mode ? run : { ...run, mode };
+	const record = run as SanLoopRunSnapshot & { contextPlanRefs?: unknown; contextPacketRefs?: unknown };
+	const contextPlanRefs = stringArray(record.contextPlanRefs);
+	const contextPacketRefs = stringArray(record.contextPacketRefs);
+	return { ...run, mode, contextPlanRefs, contextPacketRefs };
 }
 
 export function isSanLoopRunSnapshot(value: unknown): value is SanLoopRunSnapshot {
@@ -127,7 +136,7 @@ export function isSanLoopRunSnapshot(value: unknown): value is SanLoopRunSnapsho
 		hasString(value, "objective") &&
 		isSanLoopMode(value.mode) &&
 		isSanLoopStatus(value.status) &&
-		hasArray(value, "contextPacketRefs") &&
+		(hasArray(value, "contextPlanRefs") || hasArray(value, "contextPacketRefs")) &&
 		hasArray(value, "assignments") &&
 		hasArray(value, "workerResults") &&
 		hasArray(value, "reviewReports") &&
@@ -199,6 +208,7 @@ export function createSanLoopRunSnapshot(options: CreateSanLoopRunOptions): SanL
 		objective: options.objective,
 		mode: options.mode ?? "team",
 		status: "planning",
+		contextPlanRefs: options.contextPlanRefs ? [...options.contextPlanRefs] : [],
 		contextPacketRefs: options.contextPacketRefs ? [...options.contextPacketRefs] : [],
 		assignments: [],
 		workerResults: [],
@@ -221,6 +231,7 @@ export function updateSanLoopRunSnapshot(
 		...run,
 		updatedAt: options.updatedAt ?? nowIso(),
 		status: options.status ?? run.status,
+		contextPlanRefs: options.contextPlanRefs ? [...options.contextPlanRefs] : [...(run.contextPlanRefs ?? [])],
 		contextPacketRefs: options.contextPacketRefs ? [...options.contextPacketRefs] : [...run.contextPacketRefs],
 		plan: options.plan ?? run.plan,
 		assignments: options.assignments ? [...options.assignments] : [...run.assignments],

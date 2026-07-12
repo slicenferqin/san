@@ -1,7 +1,7 @@
 import type { MemoryBackendSearchItem } from "../memory-backend/types";
 import type { SessionEntry } from "../session/session-entries";
-import { collectDigestRefs } from "./packet";
 import { isContinuationPrompt, isDigestRelevantToPrompt } from "./relevance";
+import { collectDigestRefs } from "./session";
 import type { ContextRecallItem, TurnDigest } from "./types";
 
 interface DigestEntryRef {

@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { coerceServiceTierByFamily, type ProviderPayload, type ServiceTierByFamily } from "@oh-my-pi/pi-ai";
 import * as snapcompact from "@oh-my-pi/snapcompact";
+import { CONTEXT_PLAN_MESSAGE_TYPE } from "../context-steady/plan-types";
 import { CONTEXT_PACKET_MESSAGE_TYPE } from "../context-steady/types";
 import {
 	createBranchSummaryMessage,
@@ -310,7 +311,12 @@ export function buildSessionContext(
 		} else if (entry.type === "custom_message") {
 			if (!isCustomMessageContent(entry.content)) return;
 			const normalized = normalizeCustomMessagePayload(entry);
-			if (!options?.transcript && normalized.customType === CONTEXT_PACKET_MESSAGE_TYPE) return;
+			if (
+				!options?.transcript &&
+				(normalized.customType === CONTEXT_PACKET_MESSAGE_TYPE ||
+					normalized.customType === CONTEXT_PLAN_MESSAGE_TYPE)
+			)
+				return;
 			const attribution = entry.attribution === undefined ? undefined : normalized.attribution;
 			pushMessage(
 				createCustomMessage(

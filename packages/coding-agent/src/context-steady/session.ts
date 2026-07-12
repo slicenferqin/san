@@ -8,8 +8,21 @@
 
 import type { SessionEntry } from "../session/session-entries";
 import type { ReadonlySessionManager } from "../session/session-manager";
-import type { TurnDigest, TurnDigestSource } from "./types";
-import { CONTEXT_PACKET_MESSAGE_TYPE, TURN_DIGEST_CUSTOM_TYPE } from "./types";
+import { CONTEXT_PACKET_MESSAGE_TYPE, TURN_DIGEST_CUSTOM_TYPE, type TurnDigest, type TurnDigestSource } from "./types";
+
+/** Collect TurnDigest custom entries from a journal slice (branch or tree). */
+export function collectDigestRefs(entries: readonly SessionEntry[]): Array<{ entryId: string; digest: TurnDigest }> {
+	const refs: Array<{ entryId: string; digest: TurnDigest }> = [];
+	for (const entry of entries) {
+		if (entry.type !== "custom") continue;
+		if (entry.customType !== TURN_DIGEST_CUSTOM_TYPE) continue;
+		const data = entry.data;
+		if (!data || typeof data !== "object") continue;
+		if (!("schemaVersion" in data) || !("turnId" in data) || !("source" in data)) continue;
+		refs.push({ entryId: entry.id, digest: data as TurnDigest });
+	}
+	return refs;
+}
 
 // ── Source span extraction ──────────────────────────────────────────────────
 
@@ -22,12 +35,32 @@ import { CONTEXT_PACKET_MESSAGE_TYPE, TURN_DIGEST_CUSTOM_TYPE } from "./types";
  * This is extracted as a pure function so the source-span computation can
  * be unit-tested independently of AgentSession.
  */
+/**
+ * Prefer the last message/custom_message as the digest endpoint. Custom audit
+ * entries (ContextPlan, etc.) may land after the settled assistant but must not
+ * become toEntryId or pollute source spans.
+ */
+function resolveDigestToEntryId(
+	branch: ReadonlyArray<{ id: string; type: string }>,
+	currentLeafId: string | null,
+): string {
+	if (!currentLeafId) return "";
+	const leafIndex = branch.findIndex(entry => entry.id === currentLeafId);
+	if (leafIndex < 0) return currentLeafId;
+	for (let index = leafIndex; index >= 0; index--) {
+		const entry = branch[index];
+		if (!entry) continue;
+		if (entry.type === "message" || entry.type === "custom_message") return entry.id;
+	}
+	return currentLeafId;
+}
+
 export function computeTurnSourceSpan(
 	branch: ReadonlyArray<{ id: string; type: string }>,
 	preTurnLeafId: string | null,
 	currentLeafId: string | null,
 ): { fromEntryId: string; toEntryId: string } | null {
-	const toEntryId = currentLeafId ?? "";
+	const toEntryId = resolveDigestToEntryId(branch, currentLeafId);
 	if (!toEntryId) return null;
 
 	let fromEntryId = "";

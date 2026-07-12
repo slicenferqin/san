@@ -20,6 +20,7 @@ import type {
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { prompt } from "@oh-my-pi/pi-utils";
+import { CONTEXT_PLAN_MESSAGE_TYPE } from "../context-steady/plan-types";
 import userInterjectionTemplate from "../prompts/steering/user-interjection.md" with { type: "text" };
 
 export {
@@ -789,6 +790,16 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 			}
 			case "custom": {
 				if (!isCustomMessageContent(m.content)) return [];
+				if (m.customType === CONTEXT_PLAN_MESSAGE_TYPE) {
+					return [
+						{
+							role: "user",
+							content: customMessageContentToLlmContent(m.content),
+							attribution: "agent",
+							timestamp: m.timestamp,
+						},
+					];
+				}
 				if (isUserInvokedSkillPrompt(m)) {
 					return [
 						{

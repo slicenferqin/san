@@ -7,6 +7,7 @@ import {
 	SKILL_PROMPT_MESSAGE_TYPE,
 	wrapSteeringForModel,
 } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { CONTEXT_PLAN_MESSAGE_TYPE } from "../src/context-steady/plan-types";
 
 function expectAttribution(message: Message | undefined, expected: "user" | "agent" | undefined): void {
 	expect(message).toBeDefined();
@@ -287,6 +288,26 @@ describe("convertToLlm custom message mapping", () => {
 		}
 		const text = converted[0].content.find(content => content.type === "text")?.text ?? "";
 		expect(text).toContain("Run this skill with my arguments");
+	});
+
+	it("maps ContextPlan derived data to the user role", () => {
+		const messages: AgentMessage[] = [
+			{
+				role: "custom",
+				customType: CONTEXT_PLAN_MESSAGE_TYPE,
+				content: "<san_context_plan>derived background</san_context_plan>",
+				display: false,
+				attribution: "agent",
+				timestamp: Date.now(),
+			},
+		];
+
+		const converted = convertToLlm(messages);
+
+		expect(converted).toHaveLength(1);
+		expect(converted[0]?.role).toBe("user");
+		expectAttribution(converted[0], "agent");
+		expect(inferCopilotInitiator(converted)).toBe("agent");
 	});
 
 	it("keeps user-invoked skill prompt images in the user message", () => {

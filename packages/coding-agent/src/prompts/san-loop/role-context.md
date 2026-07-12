@@ -65,7 +65,14 @@ Recent events:
 - none
 {{/each}}
 
-Source ContextPacket refs:
+Source ContextPlan refs:
+{{#each sourceContextPlanRefs}}
+- {{this}}
+{{else}}
+- none
+{{/each}}
+
+Legacy ContextPacket refs:
 {{#each sourceContextPacketRefs}}
 - {{this}}
 {{else}}

@@ -5,7 +5,15 @@
  * never appends messages to the session, and never triggers new agent_end events.
  */
 
-import { type Api, type ApiKey, type AssistantMessage, completeSimple, type Model, type Tool } from "@oh-my-pi/pi-ai";
+import {
+	type Api,
+	type ApiKey,
+	type AssistantMessage,
+	completeSimple,
+	type Model,
+	type SimpleStreamOptions,
+	type Tool,
+} from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 
 import type { Settings } from "../config/settings";
@@ -100,6 +108,17 @@ export interface ContextSteadyDigestModel {
 	model: Model<Api>;
 	apiKey: ApiKey;
 	metadata?: Record<string, unknown>;
+	obfuscator?: ContextSteadyDigestObfuscator;
+	/**
+	 * Optional session-prepared stream options (routing, payload hooks, loop guard).
+	 * When set, merged over the default digest request options before completeSimple.
+	 */
+	prepareStreamOptions?: (options: SimpleStreamOptions, provider: string) => SimpleStreamOptions;
+}
+
+export interface ContextSteadyDigestObfuscator {
+	hasSecrets(): boolean;
+	obfuscate(text: string): string;
 }
 
 interface DigestTextPart {
@@ -246,6 +265,28 @@ async function generateLlmDigest(
 	steadySettings: ContextSteadySettings,
 	digestModel: ContextSteadyDigestModel,
 ): Promise<Record<string, unknown>> {
+	const userContent = formatDigestUserMessage(messages, fallbackDigest);
+	const outboundUserContent = obfuscateDigestText(digestModel.obfuscator, userContent);
+	const baseOptions: SimpleStreamOptions = {
+		apiKey: digestModel.apiKey,
+		maxTokens: digestModel.model.reasoning ? Math.max(DIGEST_MAX_TOKENS, 4096) : DIGEST_MAX_TOKENS,
+		disableReasoning: true,
+		toolChoice: { type: "tool", name: RECORD_TURN_DIGEST_TOOL_NAME },
+		metadata: {
+			...(digestModel.metadata ?? {}),
+			sanSideRequest: "context_steady.turn_digest",
+			turnId: fallbackDigest.turnId,
+			sessionId: fallbackDigest.sessionId,
+		},
+		signal: AbortSignal.timeout(Math.max(1, steadySettings.digest.timeoutMs)),
+		// Isolate from main append-only conversation cache while keeping a stable cache key family.
+		sessionId: `${fallbackDigest.sessionId}:digest:${fallbackDigest.turnId}`,
+		promptCacheKey: fallbackDigest.sessionId,
+		preferWebsockets: false,
+	};
+	const preparedOptions = digestModel.prepareStreamOptions
+		? digestModel.prepareStreamOptions(baseOptions, digestModel.model.provider)
+		: baseOptions;
 	const response = await completeSimple(
 		digestModel.model,
 		{
@@ -253,20 +294,13 @@ async function generateLlmDigest(
 			messages: [
 				{
 					role: "user",
-					content: formatDigestUserMessage(messages, fallbackDigest),
+					content: outboundUserContent,
 					timestamp: Date.now(),
 				},
 			],
 			tools: [recordTurnDigestTool],
 		},
-		{
-			apiKey: digestModel.apiKey,
-			maxTokens: digestModel.model.reasoning ? Math.max(DIGEST_MAX_TOKENS, 4096) : DIGEST_MAX_TOKENS,
-			disableReasoning: true,
-			toolChoice: { type: "tool", name: RECORD_TURN_DIGEST_TOOL_NAME },
-			metadata: digestModel.metadata,
-			signal: AbortSignal.timeout(Math.max(1, steadySettings.digest.timeoutMs)),
-		},
+		preparedOptions,
 	);
 
 	if (response.stopReason === "error") {
@@ -312,6 +346,10 @@ function extractJsonObjectFromText(response: AssistantMessage): Record<string, u
 	}
 
 	return undefined;
+}
+
+function obfuscateDigestText(obfuscator: ContextSteadyDigestObfuscator | undefined, text: string): string {
+	return obfuscator?.hasSecrets() ? obfuscator.obfuscate(text) : text;
 }
 
 function formatDigestUserMessage(messages: readonly unknown[], fallbackDigest: TurnDigest): string {

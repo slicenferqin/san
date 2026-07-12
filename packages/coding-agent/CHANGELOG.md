@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added ContextPlan request lifecycle hardening for 240K steady: per-provider-call hard-ceiling re-gate (including tool loops), branch-isolated checkpoints, fallback digests that never gain raw coverage via checkpoints, hard-pressure audit+prompt persistence with same-session agent-state recovery, shared plan snapshots for send/status/compaction, bounded semantic required sets, natural + explicit topic-shift relevance, atomic material-level wire caps, stable epoch IDs, SanLoop branch-only plan refs, `burstWindowTokens` settings, real AgentSession multi-turn dogfood, and session-prepared digest side-request transport.
+- Added ContextPlan-backed San context steady runtime wiring with low-authority provider injection, fail-closed coverage validation, v2 checkpoint audit fields, `/context plan` reporting, and deterministic ContextPlan dogfood coverage while retaining legacy ContextPacket reports for old sessions.
 - Added independently default-off San v0.4 Managed SOP and Ad-hoc Workflows with inert SOP/dynamic draft generation, human-readable Managed review summaries, static JavaScript discovery, exact version and one-shot task/scope-bound approvals, fail-closed Ad-hoc draft revision, terminal draft deletion, a restricted orchestration runtime, strict subagent capability and path scopes, preallocated hard concurrency/agent/token/time budgets, pause/resume/whole-run and single-Agent cancellation, append-only run evidence, exactly-once delivery, isolated write review gates, explicit `/workflows` and `/workflow` commands, deterministic 5×5 Managed plus 10 distinct narrowed Ad-hoc task dogfood, and provenance-validated paired token-report tooling that stays insufficient until real-model evidence is supplied.
 - Added San Brain M1 with append-only profile/experience candidate and decision contracts, a WAL-backed SQLite materialized store with idempotent reconciliation and revision checks, plus read-only `/brain inbox`, `/brain profile`, and `/brain explain <id>` commands.
 - Added San Brain M2 deterministic settled-turn capture with structured source provenance, accepted San Loop attempt evidence, bounded confidence filtering, idempotent candidate persistence, and default-off `san.brain.*` settings.
@@ -32,8 +34,13 @@
 
 ### Changed
 
+- Changed San context steady active engine to ContextPlan-only: package exports mark packet/prune as legacy-compat, digest LLM calls reuse `prepareSimpleStreamOptions`, checkpoint synthesis hard-trims under extreme token budgets, and `qualityWindowTokens=0` resolves to the 240K steady default.
 - Changed remaining user-facing San surfaces to prefer `san`, `.san`, `~/.san`, and `SAN_*` names while keeping documented legacy aliases for compatibility.
 - Changed Hindsight's default bank/context names from `omp` to `san` for new memory configurations.
+
+### Fixed
+
+- Fixed ContextPlan hard pressure, tool-loop burst overflow and double-count estimates, discarded-branch checkpoint pollution, fallback-through-checkpoint raw deletion, wire clamp that truncated covering replacements, same-session hard-pressure recovery, natural topic shift without marker phrases, pending audit refs, and digest `toEntryId` pollution by plan audit appends.
 
 ### Fixed
 

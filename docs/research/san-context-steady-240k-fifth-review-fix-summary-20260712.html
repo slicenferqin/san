@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Reviewer-facing change summary after San Context Steady 240K fifth-review fixes."
+    />
+    <title>San Context Steady 240K · 第五轮 CR 修复说明</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f3f5f7;
+        --paper: #fff;
+        --ink: #18202b;
+        --muted: #5f6b7a;
+        --line: #d8dee7;
+        --navy: #172033;
+        --blue: #2359a8;
+        --blue-bg: #edf4ff;
+        --green: #176449;
+        --green-bg: #eaf7f0;
+        --amber: #8a5611;
+        --amber-bg: #fff4dd;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--bg);
+        font:
+          15px/1.7 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          "PingFang SC",
+          "Microsoft YaHei",
+          sans-serif;
+      }
+      a {
+        color: var(--blue);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      code {
+        padding: 2px 5px;
+        border-radius: 4px;
+        background: #edf0f4;
+        font:
+          0.91em ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+      }
+      pre {
+        overflow: auto;
+        margin: 12px 0 0;
+        padding: 14px;
+        border-radius: 6px;
+        color: #eef3ff;
+        background: #171c28;
+        font:
+          12px/1.55 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+        white-space: pre-wrap;
+      }
+      .shell {
+        width: min(1160px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+      header {
+        padding: 52px 0 40px;
+        color: white;
+        background: var(--navy);
+      }
+      .eyebrow,
+      .label {
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+      .eyebrow {
+        color: #b8cdf5;
+      }
+      .label {
+        margin-bottom: 7px;
+        color: var(--muted);
+      }
+      h1 {
+        max-width: 980px;
+        margin: 10px 0 16px;
+        font-size: clamp(31px, 5vw, 51px);
+        line-height: 1.08;
+      }
+      h2 {
+        margin: 0 0 14px;
+        font-size: clamp(22px, 3vw, 30px);
+        line-height: 1.2;
+      }
+      h3 {
+        margin: 0 0 8px;
+        font-size: 18px;
+        line-height: 1.35;
+      }
+      p {
+        margin: 0 0 12px;
+      }
+      ul {
+        margin: 8px 0 0;
+        padding-left: 22px;
+      }
+      li {
+        margin: 5px 0;
+      }
+      .lead {
+        max-width: 980px;
+        color: #d9e2f2;
+        font-size: 17px;
+      }
+      .verdict {
+        display: inline-flex;
+        margin-top: 22px;
+        padding: 9px 14px;
+        border: 1px solid #8fd3b0;
+        border-radius: 6px;
+        background: rgba(23, 100, 73, 0.45);
+        font-weight: 900;
+      }
+      main section {
+        padding: 36px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 14px;
+      }
+      .card,
+      .finding {
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--paper);
+      }
+      .card.green {
+        border-color: #9ecab9;
+        background: var(--green-bg);
+      }
+      .card.amber {
+        border-color: #dfbd7d;
+        background: var(--amber-bg);
+      }
+      .finding {
+        margin-top: 14px;
+      }
+      .finding.p0 {
+        border-left: 6px solid #a02d2d;
+      }
+      .finding.p1 {
+        border-left: 6px solid var(--amber);
+      }
+      .sev0 {
+        color: #a02d2d;
+      }
+      .sev1 {
+        color: var(--amber);
+      }
+      .table-wrap {
+        overflow: auto;
+        border-radius: 6px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--paper);
+      }
+      th,
+      td {
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: #e9edf2;
+        font-weight: 900;
+      }
+      .status {
+        display: inline-flex;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 900;
+        white-space: nowrap;
+      }
+      .status.yes {
+        color: var(--green);
+        background: #dbeee7;
+      }
+      .callout {
+        padding: 18px 20px;
+        border-left: 6px solid var(--green);
+        border-radius: 6px;
+        background: var(--green-bg);
+      }
+      .notice {
+        padding: 16px 18px;
+        border-left: 5px solid var(--amber);
+        border-radius: 6px;
+        background: var(--amber-bg);
+      }
+      footer {
+        padding: 30px 0 45px;
+        color: var(--muted);
+      }
+      @media (max-width: 720px) {
+        .shell {
+          width: min(100% - 24px, 1160px);
+        }
+        header {
+          padding-top: 38px;
+        }
+        main section {
+          padding: 28px 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="shell">
+        <div class="eyebrow">
+          Reviewer change brief · 2026-07-12 · post fifth review
+        </div>
+        <h1>第五轮 CR 修复说明：最终 wire cap 与 provider 投影收敛。</h1>
+        <p class="lead">
+          本文档对照
+          <a
+            href="./san-context-steady-240k-implementation-acceptance-fifth-review-20260712.html"
+            >第五轮验收 CR</a
+          >
+          的两个阻断项，说明已落地的实现、回归合同和完整 package
+          验证。修复不改变 ContextPlan
+          的覆盖原子性，也不把项目级模型角色覆盖误改为全局设置优先。
+        </p>
+        <div class="verdict">
+          READY FOR RE-REVIEW · 8671 pass / 378 skip / 0 fail
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section>
+        <div class="shell">
+          <h2>1. 本轮结论</h2>
+          <div class="grid">
+            <article class="card green">
+              <div class="label">P0 closed</div>
+              <h3>最终 ContextPlan 内容参与 cap 拟合。</h3>
+              <p>
+                候选 material 现在以最终 audit 渲染并计 token；quality gate 的
+                outcome、reasons 与 projected fields 不会在拟合后额外撑大 wire。
+              </p>
+            </article>
+            <article class="card green">
+              <div class="label">Provider boundary</div>
+              <h3>请求与 tool-loop 均使用固定点投影。</h3>
+              <p>
+                渲染后重新估算 provider 输入，直到 audit 记录值等于最终
+                wire；少数无法快速收敛的状态 fail-closed 为 hard pressure。
+              </p>
+            </article>
+            <article class="card amber">
+              <div class="label">P1 classified</div>
+              <h3>config-cli 失败是测试环境泄漏。</h3>
+              <p>
+                仓库 <code>.san/config.yml</code> 的项目级
+                <code>modelRoles</code> 正确覆盖临时全局设置；测试现在隔离并恢复
+                project root，产品优先级保持不变。
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <h2>2. 第五轮 Findings → 修复</h2>
+
+          <article class="finding p0">
+            <div class="label sev0">P0 · planTokenBudget 未覆盖最终 render</div>
+            <h3>
+              每个 candidate 都按最终 audit 渲染，再决定是否丢弃整个 material。
+            </h3>
+            <ul>
+              <li>
+                <code>fitMaterialsToPlanBudget</code> 接收
+                <code>buildAudit</code>，在每轮候选选择中渲染同一份
+                budget、quality gate、coverage 和 audit materials。
+              </li>
+              <li>
+                最终的 <code>renderedContent</code> 与
+                <code>tokenEstimate</code> 直接采用已通过 cap 的
+                candidate，不再先用固定的 <code>outcome: pass</code> 假 audit
+                拟合、后以真实 audit 重渲染。
+              </li>
+              <li>
+                仍然只整体丢弃 recall → 最旧 digest →
+                checkpoint；不做字符截断。若连空 shell 都超过极端
+                cap，继续保留无 coverage 的完整 shell，避免删 raw 后没有完整
+                replacement。
+              </li>
+            </ul>
+            <p>
+              <strong>主文件：</strong
+              ><code>packages/coding-agent/src/context-steady/planner.ts</code>
+            </p>
+            <p>
+              <strong>合同：</strong
+              ><code
+                >fits the final quality-gated ContextPlan wire content within
+                planMaxTokens</code
+              >
+            </p>
+          </article>
+
+          <article class="finding p0">
+            <div class="label sev0">
+              P0 · final plan 没有被重新投影与 re-gate
+            </div>
+            <h3>新增 provider-boundary 的固定点构建。</h3>
+            <ul>
+              <li>
+                <code>#buildContextSteadyPlanForProvider</code> 先构建无
+                projected audit 的 plan，再估算 materialized provider
+                input，并带该数值重建。
+              </li>
+              <li>
+                每次最终 render 都重新估算；只有
+                <code>finalProjection === projectedInputTokens</code>
+                时才接受。这样 audit 既不会低估真实
+                wire，也不会因初始估算偏高而错误 hard-pressure。
+              </li>
+              <li>
+                最多四次重建仍未收敛时，以
+                <code>Number.MAX_SAFE_INTEGER</code> 建立 hard-pressure
+                plan，调用方拒绝 provider call，避免带着未验证边界发请求。
+              </li>
+              <li>
+                首次请求与 <code>full</code> tool-loop re-gate
+                均复用此路径；tool-loop 的既有 full-context 去重计量保持有效。
+              </li>
+            </ul>
+            <p>
+              <strong>主文件：</strong
+              ><code>packages/coding-agent/src/session/agent-session.ts</code>
+            </p>
+            <p>
+              <strong>合同：</strong>m2
+              <code
+                >keeps the emitted quality-gated ContextPlan within its
+                configured wire budget</code
+              >，加上既有 true-overflow / legal-tail tool-loop tests。
+            </p>
+          </article>
+
+          <article class="finding p1">
+            <div class="label sev1">
+              P1 · config-cli sequential suite failure
+            </div>
+            <h3>
+              隔离 test project scope，而不是改变全局与项目配置的正确优先级。
+            </h3>
+            <ul>
+              <li>
+                失败测试将 agent dir 指向临时目录，但保留了仓库 project
+                root；<code>.san/config.yml</code> 的
+                <code>modelRoles</code> 因项目优先级覆盖其临时全局写入。
+              </li>
+              <li>
+                <code>config-cli.test.ts</code> 现在在
+                <code>beforeEach</code> 同时将 project root 指到临时目录，并在
+                <code>afterEach</code> 恢复原路径。
+              </li>
+              <li>
+                这恢复测试所宣称的合同：CLI 在没有 project overlay 时 set 后 get
+                返回刚设置的 record；不影响真实项目 overlay 行为。
+              </li>
+            </ul>
+            <p>
+              <strong>文件：</strong
+              ><code>packages/coding-agent/test/config-cli.test.ts</code>
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <h2>3. 回归覆盖</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>层级</th>
+                  <th>合同</th>
+                  <th>第五轮前反例</th>
+                  <th>现在的保护</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Planner</td>
+                  <td>
+                    最终 quality-gated content 不超过
+                    <code>planTokenBudget</code>
+                  </td>
+                  <td>拟合时没有 projected/reasons，最终 render 超 cap</td>
+                  <td>
+                    candidate 使用完整 final audit；assert
+                    <code
+                      >plan.tokenEstimate &lt;=
+                      plan.audit.budget.planTokenBudget</code
+                    >
+                  </td>
+                </tr>
+                <tr>
+                  <td>AgentSession</td>
+                  <td>provider 实际收到的 ContextPlan 也在配置 cap 内</td>
+                  <td>两轮真实 provider payload 的 plan wire 超 135</td>
+                  <td>
+                    从 mock provider payload 提取 plan body，用相同 token
+                    estimator 断言 <code>&lt;= 135</code>
+                  </td>
+                </tr>
+                <tr>
+                  <td>Config CLI</td>
+                  <td>隔离环境下 record set/get 往返</td>
+                  <td>仓库项目 overlay 污染临时配置测试</td>
+                  <td>临时 agent dir 与 project root 同步设置，随后恢复</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <h2>4. 验证</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>命令</th>
+                  <th>结果</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>git diff --check</code></td>
+                  <td><span class="status yes">通过</span></td>
+                </tr>
+                <tr>
+                  <td>
+                    <code
+                      >bun test
+                      packages/coding-agent/test/config-cli.test.ts</code
+                    >
+                  </td>
+                  <td><span class="status yes">7 pass / 0 fail</span></td>
+                </tr>
+                <tr>
+                  <td>
+                    <code
+                      >bun test packages/coding-agent/test/context-steady</code
+                    >
+                  </td>
+                  <td><span class="status yes">165 pass / 0 fail</span></td>
+                </tr>
+                <tr>
+                  <td>
+                    <code>bun run --cwd packages/coding-agent check</code>
+                  </td>
+                  <td>
+                    <span class="status yes">Biome / docs / tsgo 通过</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    <code
+                      >bun test packages/coding-agent/test --only-failures
+                      --max-concurrency=1</code
+                    >
+                  </td>
+                  <td>
+                    <span class="status yes"
+                      >8671 pass / 378 skip / 0 fail / 549333 expects</span
+                    >
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="notice">
+            <strong>完整套件说明：</strong>顺序完整套件耗时 130.91
+            秒。其原先唯一失败的 <code>config-cli</code> record round-trip
+            已通过；没有为该失败改变项目级设置应覆盖全局设置的产品语义。
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <div class="callout">
+            <h2>5. 给下一轮 reviewer 的结论</h2>
+            <p>
+              第五轮 P0 的两个边界都已关闭：ContextPlan 的 cap 现在以真实最终
+              wire 拟合，provider gate 也以最终 materialized input
+              的固定点判断。P1 是测试 scope 未隔离，已在测试层修复并以顺序完整
+              package suite 验证。下一轮应重点复查固定点 fail-closed 路径、空
+              shell 极端 cap 的有意例外，以及产品级长会话质量，不应再将
+              project-over-global 覆盖关系视为回归。
+            </p>
+            <p>相关文档：</p>
+            <ul>
+              <li>
+                <a
+                  href="./san-context-steady-240k-implementation-acceptance-fifth-review-20260712.html"
+                  >第五轮验收 CR（原 NO-GO）</a
+                >
+              </li>
+              <li>
+                <a
+                  href="./san-context-steady-240k-fourth-review-fix-summary-20260712.html"
+                  >第四轮修复说明</a
+                >
+              </li>
+              <li>
+                <a
+                  href="./san-context-steady-240k-technical-implementation-plan-20260712.html"
+                  >技术实施方案</a
+                >
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="shell">
+        San Context Steady 240K · Fifth-review fix summary for reviewers ·
+        2026-07-12
+      </div>
+    </footer>
+  </body>
+</html>

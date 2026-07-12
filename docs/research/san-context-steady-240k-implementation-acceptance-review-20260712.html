@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="San Context Steady 240K ContextPlan implementation acceptance review update, 2026-07-12.">
+  <title>San Context Steady 240K · 实施验收复核更新</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f2ec;
+      --paper: #fffdf9;
+      --ink: #182033;
+      --muted: #667085;
+      --line: #ddd5ca;
+      --red: #9f2f2f;
+      --red-bg: #fff0ee;
+      --amber: #8b5714;
+      --amber-bg: #fff7e7;
+      --green: #176b55;
+      --green-bg: #eef8f3;
+      --blue: #2454a6;
+      --blue-bg: #eef3fc;
+      --navy: #172033;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font: 15px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      padding: 2px 6px;
+      border-radius: 6px;
+      background: #eee9e1;
+      font: .92em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    pre {
+      overflow: auto;
+      margin: 12px 0 0;
+      padding: 15px;
+      border-radius: 12px;
+      color: #edf2ff;
+      background: #171c28;
+      font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .shell { width: min(1120px, calc(100% - 40px)); margin: 0 auto; }
+    header { padding: 54px 0 38px; background: var(--navy); color: white; }
+    .eyebrow { color: #a9c4ff; font-size: 12px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { max-width: 960px; margin: 10px 0 16px; font-size: clamp(38px, 6vw, 64px); line-height: 1.03; letter-spacing: -.045em; }
+    h2 { margin: 0 0 14px; font-size: clamp(25px, 3vw, 36px); line-height: 1.2; }
+    h3 { margin: 0 0 8px; font-size: 19px; line-height: 1.35; }
+    p { margin: 0 0 12px; }
+    ul, ol { margin: 8px 0 0; padding-left: 22px; }
+    li { margin: 5px 0; }
+    .lead { max-width: 960px; color: #d9e2f2; font-size: 18px; }
+    .verdict {
+      display: inline-flex;
+      align-items: center;
+      margin-top: 22px;
+      padding: 9px 14px;
+      border: 1px solid #9dcfbd;
+      border-radius: 999px;
+      color: #fff;
+      background: rgba(23, 107, 85, .65);
+      font-weight: 900;
+    }
+    main section { padding: 38px 0; border-bottom: 1px solid var(--line); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 14px; }
+    .card { padding: 17px; border: 1px solid var(--line); border-radius: 15px; background: var(--paper); }
+    .card.red { border-color: #e3aaa4; background: var(--red-bg); }
+    .card.amber { border-color: #dfbd7d; background: var(--amber-bg); }
+    .card.green { border-color: #9dcfbd; background: var(--green-bg); }
+    .card.blue { border-color: #a8bde5; background: var(--blue-bg); }
+    .label { margin-bottom: 7px; color: var(--muted); font-size: 12px; font-weight: 900; letter-spacing: .09em; text-transform: uppercase; }
+    .p0 { color: var(--red); }
+    .p1 { color: var(--amber); }
+    .ok { color: var(--green); }
+    table { width: 100%; border-collapse: collapse; background: var(--paper); }
+    th, td { padding: 10px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #ebe6de; font-weight: 900; }
+    .table-wrap { overflow: auto; border-radius: 13px; }
+    .status { display: inline-flex; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 900; white-space: nowrap; }
+    .status.no { color: var(--red); background: #f6d8d5; }
+    .status.partial { color: var(--amber); background: #f4e4c6; }
+    .status.yes { color: var(--green); background: #dbeee7; }
+    .finding { margin-top: 16px; padding: 20px; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); }
+    .finding.ok-box { border-left: 6px solid var(--green); }
+    .finding.warn-box { border-left: 6px solid var(--amber); }
+    .evidence { margin-top: 10px; padding: 12px 14px; border-radius: 11px; background: #f0ece5; }
+    .callout { padding: 16px 18px; border-left: 5px solid var(--green); border-radius: 12px; background: var(--green-bg); }
+    footer { padding: 30px 0 45px; color: var(--muted); }
+    @media (max-width: 720px) {
+      .shell { width: min(100% - 24px, 1120px); }
+      header { padding-top: 38px; }
+      main section { padding: 28px 0; }
+      th, td { min-width: 150px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="shell">
+      <div class="eyebrow">Implementation acceptance update · 2026-07-12</div>
+      <h1>ContextPlan 阻断项已修复，当前进入条件性通过。</h1>
+      <p class="lead">本轮把最初 NO-GO 审查中的 active runtime、coverage fail-closed、source identity、低权限注入、single-plan 预算、SanLoop refs、设置迁移和 digest secret 出站问题推进到可验证实现。剩余风险集中在产品级长程 dogfood、provider cache rebase 策略和 legacy packet 代码下线节奏。</p>
+      <div class="verdict">PASS WITH WARNINGS · 可进入产品级 dogfood</div>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <div class="shell">
+        <h2>1. 验收快照</h2>
+        <div class="grid">
+          <article class="card green"><div class="label">Runtime reachability</div><h3>ContextPlan 已接入 AgentSession</h3><p>provider send、stored estimate 与 context breakdown 使用同一个 request-level plan。</p></article>
+          <article class="card green"><div class="label">Safety</div><h3>coverage fail-closed</h3><p>缺 replacement material、audit material 或 source ref 时不删除原文。</p></article>
+          <article class="card green"><div class="label">Authority</div><h3>低权限 provider 表示</h3><p><code>san.context_plan.injected</code> 转为 <code>user</code> role / agent attribution，不再走旧 developer 权限。</p></article>
+          <article class="card amber"><div class="label">Product proof</div><h3>仍需长程 dogfood</h3><p>代码合同已覆盖核心风险；真实 20-turn / full-history A/B 仍是下一阶段验收。</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <h2>2. R0–R6 完成度</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>阶段</th><th>方案出口</th><th>当前状态</th><th>验收</th></tr></thead>
+            <tbody>
+              <tr><td>R0</td><td>把 P0/P1 转成失败合同，区分旧合同与目标合同</td><td>legacy prune 改为 fail-closed；错误的“无 active replacement 也删除原文”合同已改写。</td><td><span class="status yes">完成</span></td></tr>
+              <tr><td>R1</td><td>完整预算、SourceIndex、entryId 和 tool-pair 原子性</td><td>SourceIndex 覆盖 exact、turn bundle、tool pair、file evidence、attachment、digest、checkpoint；预算支持 steady/burst 选择。</td><td><span class="status yes">完成</span></td></tr>
+              <tr><td>R2</td><td>Planner、quality gate、coverage validator、materializer</td><td>新增 planner、quality gate、coverage validator、ContextPlan materializer；删除原文只由 validated coverage 驱动。</td><td><span class="status yes">完成</span></td></tr>
+              <tr><td>R3</td><td>bounded epoch、checkpoint v2、safe rebase、resume 等价</td><td>Plan audit 带 epoch/rebase reason；checkpoint v2 单写并保留 covered source refs、previous checkpoint ref。provider-session reset / 20-turn rebase 策略仍需 dogfood 验证。</td><td><span class="status partial">代码合同完成，产品验证待跑</span></td></tr>
+              <tr><td>R4</td><td>AgentSession 接线，send/status/compaction 共用 plan</td><td>AgentSession 持有 <code>#contextSteadyRequestPlan</code>；provider payload、stored estimate 和 in-flight breakdown 共用该 snapshot。</td><td><span class="status yes">完成</span></td></tr>
+              <tr><td>R5</td><td>安全出站、命令、SanLoop refs、设置、删除 legacy engine</td><td><code>/context plan</code> 已接入；SanLoop 迁到 contextPlanRefs；contextPlan.* 设置优先于 legacy aliases；digest LLM side request 已 obfuscate。旧 packet report/dogfood 仍保留为 legacy。</td><td><span class="status partial">主体完成，legacy 清理待后续</span></td></tr>
+              <tr><td>R6</td><td>目标测试、Bun check、交付报告和风险结论</td><td>已新增 ContextPlan pure core、AgentSession payload、report、settings alias、secret obfuscation、checkpoint v2 等测试。最终产品 dogfood 未执行。</td><td><span class="status partial">代码验收完成，产品验收待跑</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <h2>3. 原阻断项复核</h2>
+
+        <article class="finding ok-box">
+          <div class="label ok">P0 · Active runtime</div>
+          <h3>已修复：ContextPlan 进入真实 provider 路径。</h3>
+          <p><code>AgentSession</code> 构建 request-level <code>BuiltContextPlan</code>，并在 provider transform 中 materialize。focused integration test 断言真实 mock provider payload 包含 <code>&lt;san_context_plan&gt;</code> 且不再依赖 <code>&lt;san_context_packet&gt;</code>。</p>
+          <div class="evidence"><code>agent-session.ts</code>；<code>agent-session-m2.test.ts</code></div>
+        </article>
+
+        <article class="finding ok-box">
+          <div class="label ok">P0 · Data loss path</div>
+          <h3>已修复：没有 active replacement 不删除原文。</h3>
+          <p>legacy prune 和 ContextPlan materializer 都改为 fail-closed；coverage 必须指向存在的 material、audit material 和 source refs。</p>
+          <div class="evidence"><code>coverage.ts</code>；<code>materialize.ts</code>；<code>prune.test.ts</code>；<code>coverage.test.ts</code></div>
+        </article>
+
+        <article class="finding ok-box">
+          <div class="label ok">P1 · Source identity</div>
+          <h3>已修复：SourceIndex 和 materializer 使用 entry-aware coverage。</h3>
+          <p>SourceIndex 表达 exact、turn bundle、tool pair、file evidence、attachment、digest、checkpoint；重复消息只消费明确 coverage 数量，避免同 content/timestamp 误删。</p>
+          <div class="evidence"><code>source-index.ts</code>；<code>materialize.test.ts</code>；<code>source-index.test.ts</code></div>
+        </article>
+
+        <article class="finding ok-box">
+          <div class="label ok">P1 · Security</div>
+          <h3>已修复：派生上下文低权限注入，digest 副请求做 secret obfuscation。</h3>
+          <p><code>CONTEXT_PLAN_MESSAGE_TYPE</code> 映射到 provider <code>user</code> role；digest LLM side request 在发送前 obfuscate transcript，模型返回 placeholder 后再 deobfuscate 并持久化本地 digest。</p>
+          <div class="evidence"><code>messages.ts</code>；<code>digest.ts</code>；<code>session-messages.test.ts</code>；<code>turn-digest.test.ts</code></div>
+        </article>
+
+        <article class="finding ok-box">
+          <div class="label ok">P1 · Budget / single plan</div>
+          <h3>已修复：steady/burst 预算进入同一 ContextPlan audit。</h3>
+          <p>quality gate 可根据 protected refs 选择 burst，plan audit 记录 selectedInputMode、selectedInputLimit、planTokenBudget 和 quality outcome。AgentSession 的 send/status/breakdown 共享同一 request snapshot。</p>
+          <div class="evidence"><code>budget.ts</code>；<code>quality-gate.ts</code>；<code>planner.test.ts</code></div>
+        </article>
+
+        <article class="finding ok-box">
+          <div class="label ok">P1 · Legacy classifier</div>
+          <h3>已修复：legacy packet 与 checkpoint 分类分离。</h3>
+          <p><code>isContextPlanLegacyPacketEntry</code> 现在识别 <code>san.context_packet</code>，不会再把 checkpoint 当 packet。</p>
+          <div class="evidence"><code>source-index.ts</code>；<code>source-index.test.ts</code></div>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <h2>4. 验证结果</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>验证</th><th>结果</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td><code>bun test turn-digest + agent-session-m2</code></td><td><span class="status yes">63 pass</span></td><td>覆盖 digest secret obfuscation、ContextPlan provider payload、settings alias 优先级。</td></tr>
+              <tr><td><code>bun test context-packet/source-index/planner/turn-digest/agent-session-m2</code></td><td><span class="status yes">96 pass</span></td><td>覆盖 checkpoint v2、source index v2 refs、epoch/rebase audit。</td></tr>
+              <tr><td><code>bun run --cwd packages/coding-agent check</code></td><td><span class="status partial">待最终重跑</span></td><td>上一次在 settings/SanLoop 迁移后通过；checkpoint v2 与 digest secret 修复后需最终重跑。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <h2>5. 剩余风险</h2>
+        <ul>
+          <li><strong>产品级长程验证：</strong>还需要真实 12–20 turn dogfood，确认 p95 input 常态不高于 260K、burst 不高于 320K 且有 audit reason。</li>
+          <li><strong>provider cache 生命周期：</strong>checkpoint v2 / epoch audit 已具备，但 safe rebase 是否需要 reset provider session 仍应通过真实 provider payload 与缓存命中观测验证。</li>
+          <li><strong>legacy 清理：</strong>旧 ContextPacket builder/report/dogfood 仍保留为 legacy 读路径；active path 已迁移，但后续可独立删除或进一步隔离。</li>
+          <li><strong>文档一致性：</strong>历史研究文档仍有 ContextPacket 命名；代码配置已新增 ContextPlan path 并保留 alias，文档命名清理可后续做。</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <div class="callout">
+          <h2>最终结论：条件性通过</h2>
+          <p><strong>代码级验收可以从 NO-GO 调整为 PASS WITH WARNINGS。</strong>最初审查列出的 P0/P1 active runtime 与安全一致性问题已完成可运行修复并有 focused tests 覆盖。</p>
+          <p>进入下一阶段前建议先跑完整 focused suite 和 <code>bun run --cwd packages/coding-agent check</code>；随后执行 20-turn dogfood 和 full-history A/B，作为产品级通过条件。</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell">San Context Steady 240K · Implementation acceptance update · 2026-07-12</div>
+  </footer>
+</body>
+</html>

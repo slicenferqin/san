@@ -168,7 +168,7 @@ describe("buildContextSteadyPrunedMessages", () => {
 		expect(JSON.stringify(pruned)).toContain("<san_context_packet>");
 	});
 
-	test("prunes digest-covered raw history even before a packet is injected", () => {
+	test("preserves digest-covered raw history until an active packet provides replacement", () => {
 		const oldUser = { role: "user", content: "old raw user", timestamp: 1, provider: "x", model: "x" };
 		const oldAssistant = { role: "assistant", content: "old raw assistant", timestamp: 2, provider: "x", model: "x" };
 		const currentUser = { role: "user", content: "new prompt", timestamp: 3, provider: "x", model: "x" };
@@ -187,12 +187,12 @@ describe("buildContextSteadyPrunedMessages", () => {
 			]),
 		);
 
-		expect(JSON.stringify(pruned)).not.toContain("old raw user");
-		expect(JSON.stringify(pruned)).not.toContain("old raw assistant");
+		expect(JSON.stringify(pruned)).toContain("old raw user");
+		expect(JSON.stringify(pruned)).toContain("old raw assistant");
 		expect(JSON.stringify(pruned)).toContain("new prompt");
 	});
 
-	test("prunes digest-covered file mentions and image descriptions", () => {
+	test("preserves digest-covered file mentions and image descriptions without active replacement packet", () => {
 		const fileTimestamp = new Date("2026-07-02T00:00:00.000Z").getTime();
 		const imageTimestamp = new Date("2026-07-02T00:00:01.000Z").getTime();
 		const activeFileMention = {
@@ -233,9 +233,39 @@ describe("buildContextSteadyPrunedMessages", () => {
 			]),
 		);
 
-		expect(JSON.stringify(pruned)).not.toContain("large attached file content");
-		expect(JSON.stringify(pruned)).not.toContain("screenshot visual description");
+		expect(JSON.stringify(pruned)).toContain("large attached file content");
+		expect(JSON.stringify(pruned)).toContain("screenshot visual description");
 		expect(JSON.stringify(pruned)).toContain("new prompt");
+	});
+
+	test("preserves duplicate active messages beyond explicit packet coverage", () => {
+		const duplicateA = { role: "user", content: "same prompt", timestamp: 1, provider: "x", model: "x" };
+		const duplicateB = { role: "user", content: "same prompt", timestamp: 1, provider: "x", model: "x" };
+		const packetMessage = {
+			role: "custom",
+			customType: CONTEXT_PACKET_MESSAGE_TYPE,
+			content: "<san_context_packet>",
+			display: false,
+			timestamp: 3,
+			details: { packetId: "ctx-test" },
+		};
+
+		const pruned = buildContextSteadyPrunedMessages(
+			asMessages([duplicateA, duplicateB, packetMessage]),
+			asEntries([
+				messageEntry("u1", duplicateA),
+				customEntry(
+					"d1",
+					TURN_DIGEST_CUSTOM_TYPE,
+					digest({ sessionId: "s1", fromEntryId: "u1", toEntryId: "u1", promptGeneration: 1 }),
+				),
+				customEntry("p1", CONTEXT_PACKET_CUSTOM_TYPE, packet(["d1"])),
+			]),
+		);
+
+		expect(pruned).toHaveLength(2);
+		expect(JSON.stringify(pruned)).toContain("same prompt");
+		expect(JSON.stringify(pruned)).toContain("<san_context_packet>");
 	});
 
 	test("does not prune a reversed digest source span", () => {

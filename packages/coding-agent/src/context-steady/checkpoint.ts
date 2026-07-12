@@ -28,6 +28,8 @@ export interface ContextCheckpointSettings {
 	enabled: boolean;
 	checkpointEveryTurns: number;
 	checkpointMaxTokens: number;
+	epochId?: string;
+	rebaseReason?: ContextCheckpoint["rebaseReason"];
 }
 
 export interface BuiltContextCheckpoint {
@@ -62,6 +64,17 @@ function digestRefs(entries: readonly SessionEntry[]): DigestEntryRef[] {
 		refs.push({ entryId: entry.id, digest: data as TurnDigest });
 	}
 	return refs;
+}
+
+function sourceEntryRefsForDigest(entries: readonly SessionEntry[], digest: TurnDigest): string[] {
+	const fromIndex = entries.findIndex(entry => entry.id === digest.source.fromEntryId);
+	const toIndex = entries.findIndex(entry => entry.id === digest.source.toEntryId);
+	if (fromIndex < 0 || toIndex < 0 || fromIndex > toIndex) {
+		return digest.toolEvidence
+			.flatMap(evidence => evidence.entryIds ?? [])
+			.filter(entryId => entries.some(entry => entry.id === entryId));
+	}
+	return entries.slice(fromIndex, toIndex + 1).map(entry => entry.id);
 }
 
 export function collectContextCheckpoints(
@@ -216,14 +229,32 @@ export function buildContextCheckpoint(
 
 	const previousCheckpoint = latestContextCheckpoint(entries);
 	const selected = candidates.slice(0, checkpointEveryTurns);
+	const digestsByEntryId = new Map(digestRefs(entries).map(ref => [ref.entryId, ref.digest]));
 	const appendedEntryRefs = selected.map(ref => ref.entryId);
 	const entryRefs = uniqueEntryRefs([...(previousCheckpoint?.checkpoint.entryRefs ?? []), ...appendedEntryRefs]);
+	const previousCoveredSourceEntryRefs =
+		previousCheckpoint?.checkpoint.coveredSourceEntryRefs ??
+		previousCheckpoint?.checkpoint.entryRefs.flatMap(entryRef => {
+			const digest = digestsByEntryId.get(entryRef);
+			// Fallback digests never authorize raw coverage, even when folded.
+			if (!digest || digest.fallback === true) return [];
+			return sourceEntryRefsForDigest(entries, digest);
+		}) ??
+		[];
+	const coveredSourceEntryRefs = uniqueEntryRefs([
+		...previousCoveredSourceEntryRefs,
+		...selected.flatMap(ref => (ref.digest.fallback === true ? [] : sourceEntryRefsForDigest(entries, ref.digest))),
+	]);
 	const base: Omit<ContextCheckpoint, "tokenEstimate"> = {
 		schemaVersion: CONTEXT_CHECKPOINT_SCHEMA_VERSION,
 		checkpointId: `ckpt_${crypto.randomUUID().slice(-12)}`,
 		sessionId,
+		epochId: settings.epochId ?? `epoch_${sessionId}`,
 		createdAt: new Date().toISOString(),
 		entryRefs,
+		coveredSourceEntryRefs,
+		...(previousCheckpoint ? { previousCheckpointEntryId: previousCheckpoint.entryId } : {}),
+		rebaseReason: settings.rebaseReason ?? "checkpoint",
 		fromDigestEntryId: entryRefs[0]!,
 		toDigestEntryId: appendedEntryRefs.at(-1)!,
 		digestCount: entryRefs.length,
@@ -237,27 +268,55 @@ export function buildContextCheckpoint(
 		tokenEstimate: estimateCheckpointTokens(base),
 	};
 
-	while (checkpoint.tokenEstimate > checkpointMaxTokens && checkpoint.summary.nextSteps.length > 0) {
-		checkpoint = {
-			...checkpoint,
-			summary: {
-				...checkpoint.summary,
-				nextSteps: checkpoint.summary.nextSteps.slice(0, -1),
-			},
-		};
-		checkpoint = { ...checkpoint, tokenEstimate: estimateCheckpointTokens(checkpoint) };
+	// Trim lowest-priority summary fields first until the checkpoint fits maxTokens.
+	// Order: nextSteps → risks → filesTouched → decisions → userIntents (keep at least 1 intent).
+	const trimOrder: Array<keyof ContextCheckpoint["summary"]> = [
+		"nextSteps",
+		"risks",
+		"filesTouched",
+		"decisions",
+		"userIntents",
+	];
+	for (const field of trimOrder) {
+		while (
+			checkpoint.tokenEstimate > checkpointMaxTokens &&
+			checkpoint.summary[field].length > (field === "userIntents" ? 1 : 0)
+		) {
+			checkpoint = {
+				...checkpoint,
+				summary: {
+					...checkpoint.summary,
+					[field]: checkpoint.summary[field].slice(0, -1),
+				},
+			};
+			checkpoint = { ...checkpoint, tokenEstimate: estimateCheckpointTokens(checkpoint) };
+		}
 	}
 
-	while (checkpoint.tokenEstimate > checkpointMaxTokens && checkpoint.summary.risks.length > 0) {
-		checkpoint = {
-			...checkpoint,
-			summary: {
-				...checkpoint.summary,
-				risks: checkpoint.summary.risks.slice(0, -1),
-			},
-		};
-		checkpoint = { ...checkpoint, tokenEstimate: estimateCheckpointTokens(checkpoint) };
+	// Extreme budgets: clamp remaining narrative text so tokenEstimate never exceeds max.
+	if (checkpoint.tokenEstimate > checkpointMaxTokens) {
+		const clampItems = <T extends ContextCheckpointSummaryItem>(items: readonly T[], maxLen: number): T[] =>
+			items.map(item => ({ ...item, text: clampString(item.text, maxLen) }));
+		let maxLen = 120;
+		while (checkpoint.tokenEstimate > checkpointMaxTokens && maxLen >= 8) {
+			checkpoint = {
+				...checkpoint,
+				summary: {
+					userIntents: clampItems(checkpoint.summary.userIntents, maxLen),
+					decisions: clampItems(checkpoint.summary.decisions, maxLen),
+					filesTouched: clampItems(checkpoint.summary.filesTouched, maxLen),
+					risks: clampItems(checkpoint.summary.risks, maxLen),
+					nextSteps: clampItems(checkpoint.summary.nextSteps, maxLen),
+				},
+			};
+			checkpoint = { ...checkpoint, tokenEstimate: estimateCheckpointTokens(checkpoint) };
+			maxLen = Math.floor(maxLen / 2);
+		}
 	}
+
+	// Fail-closed: if even a single minimal intent cannot fit, do not emit a checkpoint
+	// that would claim coverage authority while exceeding its budget.
+	if (checkpoint.tokenEstimate > checkpointMaxTokens) return null;
 
 	return { checkpoint };
 }

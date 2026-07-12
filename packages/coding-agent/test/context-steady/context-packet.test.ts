@@ -8,6 +8,7 @@ import { buildContextPacket, collectDigestRefs } from "../../src/context-steady/
 import type { ContextPacketSettings, TurnDigest } from "../../src/context-steady/types";
 import {
 	CONTEXT_CHECKPOINT_CUSTOM_TYPE,
+	CONTEXT_CHECKPOINT_SCHEMA_VERSION,
 	CONTEXT_PACKET_MESSAGE_TYPE,
 	CONTEXT_PACKET_SCHEMA_VERSION,
 	TURN_DIGEST_CUSTOM_TYPE,
@@ -305,15 +306,75 @@ describe("ContextPacket builder", () => {
 				customEntry("d3", TURN_DIGEST_CUSTOM_TYPE, digest("t3", "third task")),
 			]),
 			"s1",
-			{ enabled: true, checkpointEveryTurns: 2, checkpointMaxTokens: 12000 },
+			{
+				enabled: true,
+				checkpointEveryTurns: 2,
+				checkpointMaxTokens: 12000,
+				epochId: "epoch_s1",
+				rebaseReason: "checkpoint",
+			},
 		);
 
 		expect(built).not.toBeNull();
+		expect(built!.checkpoint.schemaVersion).toBe(CONTEXT_CHECKPOINT_SCHEMA_VERSION);
+		expect(built!.checkpoint.epochId).toBe("epoch_s1");
+		expect(built!.checkpoint.rebaseReason).toBe("checkpoint");
 		expect(built!.checkpoint.entryRefs).toEqual(["d1", "d2"]);
 		expect(built!.checkpoint.digestCount).toBe(2);
 		expect(built!.checkpoint.stability).toBe("stable");
 		expect(built!.checkpoint.cachePriority).toBe("high");
 		expect(built!.checkpoint.summary.userIntents.map(item => item.text)).toEqual(["first task", "second task"]);
+	});
+
+	test("hard-trims checkpoint summary fields to fit extreme maxTokens budgets", () => {
+		const built = buildContextCheckpoint(
+			asEntries([
+				customEntry("d1", TURN_DIGEST_CUSTOM_TYPE, {
+					...digest("t1", `first task ${"x".repeat(200)}`),
+					decisions: [`decision one ${"y".repeat(120)}`, `decision two ${"z".repeat(120)}`],
+					risks: [`risk one ${"a".repeat(120)}`],
+					nextSteps: [`next one ${"b".repeat(120)}`],
+				}),
+				customEntry("d2", TURN_DIGEST_CUSTOM_TYPE, {
+					...digest("t2", `second task ${"x".repeat(200)}`),
+					decisions: [`decision three ${"y".repeat(120)}`],
+					risks: [`risk two ${"a".repeat(120)}`],
+					nextSteps: [`next two ${"b".repeat(120)}`],
+				}),
+			]),
+			"s1",
+			{
+				enabled: true,
+				checkpointEveryTurns: 2,
+				checkpointMaxTokens: 40,
+				epochId: "epoch_trim",
+				rebaseReason: "budget_pressure",
+			},
+		);
+
+		expect(built).not.toBeNull();
+		expect(built!.checkpoint.tokenEstimate).toBeLessThanOrEqual(40);
+		expect(built!.checkpoint.rebaseReason).toBe("budget_pressure");
+		expect(built!.checkpoint.summary.userIntents.length).toBeGreaterThan(0);
+	});
+
+	test("fail-closes checkpoint emission when even a minimal summary exceeds maxTokens", () => {
+		const built = buildContextCheckpoint(
+			asEntries([
+				customEntry("d1", TURN_DIGEST_CUSTOM_TYPE, digest("t1", "first task")),
+				customEntry("d2", TURN_DIGEST_CUSTOM_TYPE, digest("t2", "second task")),
+			]),
+			"s1",
+			{
+				enabled: true,
+				checkpointEveryTurns: 2,
+				checkpointMaxTokens: 1,
+				epochId: "epoch_fail_closed",
+				rebaseReason: "budget_pressure",
+			},
+		);
+
+		expect(built).toBeNull();
 	});
 
 	test("polishes turn-framed digest and checkpoint narration before packet rendering", () => {
@@ -396,6 +457,7 @@ describe("ContextPacket builder", () => {
 		);
 
 		expect(secondCheckpoint.entryRefs).toEqual(["d1", "d2", "d3", "d4"]);
+		expect(secondCheckpoint.previousCheckpointEntryId).toBe("ck1");
 		expect(secondCheckpoint.digestCount).toBe(4);
 		expect(secondCheckpoint.summary.userIntents.map(item => item.text)).toEqual([
 			"first task",

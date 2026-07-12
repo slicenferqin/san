@@ -1,5 +1,6 @@
 import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import { prompt } from "@oh-my-pi/pi-utils";
+import { CONTEXT_PLAN_CUSTOM_TYPE, type ContextPlanAudit } from "../context-steady/plan-types";
 import { CONTEXT_PACKET_CUSTOM_TYPE, type ContextPacket } from "../context-steady/types";
 import roleContextTemplate from "../prompts/san-loop/role-context.md" with { type: "text" };
 import type { SessionEntry } from "../session/session-entries";
@@ -60,6 +61,11 @@ function isContextPacket(value: unknown): value is ContextPacket {
 	);
 }
 
+function isContextPlanAudit(value: unknown): value is ContextPlanAudit {
+	if (!isRecord(value)) return false;
+	return value.schemaVersion === 1 && typeof value.planId === "string" && Array.isArray(value.materials);
+}
+
 function clampPositiveInteger(value: number | undefined, fallback: number): number {
 	if (value === undefined || !Number.isFinite(value)) return fallback;
 	return Math.max(1, Math.floor(value));
@@ -75,6 +81,17 @@ function latestContextPacketRefs(entries: readonly SessionEntry[]): string[] {
 		if (entry.type !== "custom") continue;
 		if (entry.customType !== CONTEXT_PACKET_CUSTOM_TYPE) continue;
 		if (!isContextPacket(entry.data)) continue;
+		refs.push(entry.id);
+	}
+	return refs.slice(-3);
+}
+
+function latestContextPlanRefs(entries: readonly SessionEntry[]): string[] {
+	const refs: string[] = [];
+	for (const entry of entries) {
+		if (entry.type !== "custom") continue;
+		if (entry.customType !== CONTEXT_PLAN_CUSTOM_TYPE) continue;
+		if (!isContextPlanAudit(entry.data)) continue;
 		refs.push(entry.id);
 	}
 	return refs.slice(-3);
@@ -123,6 +140,7 @@ export function buildSanLoopRoleContext(
 		maxEvents,
 	);
 	const decisions = run.decisions.slice(-maxDecisions);
+	const sourceContextPlanRefs = [...new Set([...(run.contextPlanRefs ?? []), ...latestContextPlanRefs(entries)])];
 	const sourceContextPacketRefs = [...new Set([...run.contextPacketRefs, ...latestContextPacketRefs(entries)])];
 	const content = renderRoleContext({
 		role: options.role,
@@ -131,6 +149,7 @@ export function buildSanLoopRoleContext(
 		latestReview,
 		events,
 		decisions,
+		sourceContextPlanRefs,
 		sourceContextPacketRefs,
 	});
 	const tokenEstimate = estimateRoleContextTokens(content);
@@ -141,6 +160,7 @@ export function buildSanLoopRoleContext(
 		sessionId: run.sessionId,
 		createdAt: options.createdAt ?? new Date().toISOString(),
 		role: options.role,
+		sourceContextPlanRefs,
 		sourceContextPacketRefs,
 		entryRefs: [
 			runRef.entryId,

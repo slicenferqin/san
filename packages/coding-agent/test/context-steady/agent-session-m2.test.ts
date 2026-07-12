@@ -1,5 +1,5 @@
 /**
- * Context Steady State M2 — AgentSession ContextPacket integration tests.
+ * Context Steady State M2 — AgentSession ContextPlan integration tests.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
@@ -7,6 +7,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
+import type { ProviderSessionState } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { applySanBrainMutation } from "@oh-my-pi/pi-coding-agent/brain/commands";
@@ -23,6 +25,7 @@ import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { CustomEntry, CustomMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import { CONTEXT_PLAN_CUSTOM_TYPE, CONTEXT_PLAN_MESSAGE_TYPE } from "../../src/context-steady/plan-types";
 import {
 	CONTEXT_CHECKPOINT_CUSTOM_TYPE,
 	CONTEXT_PACKET_CUSTOM_TYPE,
@@ -94,7 +97,7 @@ function customMessageEntries(sessionManager: SessionManager, customType: string
 		);
 }
 
-describe("Context Steady State M2 — AgentSession ContextPacket integration", () => {
+describe("Context Steady State M2 — AgentSession ContextPlan integration", () => {
 	let session: AgentSession;
 	let tempDir: string;
 	const authStorages: AuthStorage[] = [];
@@ -115,7 +118,7 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		removeSyncWithRetries(tempDir);
 	});
 
-	it("injects the previous turn digest into the next real user prompt and writes debug entry", async () => {
+	it("injects the previous turn digest into the next real user prompt and writes plan audit", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({
 			handler: context => ({
@@ -150,42 +153,78 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		await session.waitForIdle();
 
 		const secondCallMessages = mock.calls[1]!.context.messages;
-		const packetMessage = secondCallMessages.find(message =>
-			JSON.stringify(message.content).includes("<san_context_packet>"),
+		const planMessage = secondCallMessages.find(message =>
+			JSON.stringify(message.content).includes("<san_context_plan>"),
 		);
-		expect(packetMessage).toBeDefined();
-		expect(packetMessage?.role).toBe("developer");
-		expect(JSON.stringify(packetMessage?.content)).toContain("Fix the parser bug");
+		expect(planMessage).toBeDefined();
+		expect(planMessage?.role).toBe("user");
+		expect(JSON.stringify(planMessage?.content)).toContain("Fix the parser bug");
 
-		const debugEntries = customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE);
-		expect(debugEntries).toHaveLength(1);
-		const packetData = debugEntries[0]!.data as Record<string, unknown>;
-		expect(packetData.injectedMessageCustomType).toBe(CONTEXT_PACKET_MESSAGE_TYPE);
-		expect(packetData.digestRefs).toHaveLength(1);
-		expect(packetData.tokenBudget).toBe(2000);
-		expect(packetData.budget).toEqual({
-			qualityWindowTokens: 0,
-			reserveRatio: 0.2,
-			reservedTokens: 0,
-			packetTokenBudget: 2000,
-			configuredPacketMaxTokens: 2000,
-		});
-		const layers = packetData.layers as Array<Record<string, unknown>>;
-		expect(layers[0]?.tokenBudget).toBe(2000);
-
-		const injectedEntries = customMessageEntries(sessionManager, CONTEXT_PACKET_MESSAGE_TYPE);
-		expect(injectedEntries).toHaveLength(1);
-		expect(injectedEntries[0]!.display).toBe(false);
-		expect(injectedEntries[0]!.details).toEqual({
-			packetId: packetData.packetId,
-			digestRefs: packetData.digestRefs,
-		});
+		const planEntries = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE);
+		expect(planEntries.length).toBeGreaterThanOrEqual(1);
+		const planData = planEntries.at(-1)!.data as Record<string, unknown>;
+		const materials = planData.materials as Array<Record<string, unknown>>;
+		expect(materials.map(material => material.representation)).toContain("digest");
+		expect(planData.budget).toMatchObject({ reserveRatio: 0.2, planTokenBudget: 2000 });
+		expect(customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE)).toHaveLength(0);
+		expect(customMessageEntries(sessionManager, CONTEXT_PLAN_MESSAGE_TYPE)).toHaveLength(0);
 
 		const digests = customEntries(sessionManager, TURN_DIGEST_CUSTOM_TYPE);
 		const secondDigest = digests[1]!.data as Record<string, unknown>;
 		const secondDigestSource = secondDigest.source as Record<string, string>;
 		const fromEntry = sessionManager.getEntry(secondDigestSource.fromEntryId);
 		expect(fromEntry?.type).toBe("message");
+	});
+
+	it("keeps the emitted quality-gated ContextPlan within its configured wire budget", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"san.contextSteady.contextPlan.maxTokens": 135,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		await session.prompt("first budgeted context turn");
+		await session.waitForIdle();
+		await session.prompt("continue the budgeted context turn");
+		await session.waitForIdle();
+
+		const planMessage = mock.calls[1]!.context.messages.find(message => {
+			return JSON.stringify(message.content).includes("<san_context_plan>");
+		});
+		expect(planMessage).toBeDefined();
+		expect(planMessage?.role).toBe("user");
+		const planContent =
+			typeof planMessage?.content === "string"
+				? planMessage.content
+				: Array.isArray(planMessage?.content)
+					? planMessage.content
+							.filter((block): block is { type: "text"; text: string } => {
+								return block.type === "text" && typeof block.text === "string";
+							})
+							.map(block => block.text)
+							.join("\n")
+					: "";
+		expect(estimateTokens({ role: "user", content: planContent, timestamp: Date.now() })).toBeLessThanOrEqual(135);
+
+		const audit = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).at(-1)!.data as {
+			budget: { planTokenBudget: number };
+			qualityGate: { projectedInputTokens?: number };
+		};
+		expect(audit.budget.planTokenBudget).toBe(135);
+		expect(audit.qualityGate.projectedInputTokens).toBeGreaterThan(0);
 	});
 
 	it("injects latest San execution loop role context into real user prompts", async () => {
@@ -280,7 +319,7 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		});
 	});
 
-	it("replaces packet-covered raw transcript before provider send", async () => {
+	it("keeps fallback-digest raw transcript while adding ContextPlan reference", async () => {
 		const rawUserMarker = "RAW_USER_CONTEXT_STEADY_PRUNE_MARKER";
 		const rawAssistantMarker = "RAW_ASSISTANT_CONTEXT_STEADY_PRUNE_MARKER";
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
@@ -311,16 +350,16 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		await session.waitForIdle();
 
 		const secondProviderPayload = JSON.stringify(mock.calls[1]!.context.messages);
-		expect(secondProviderPayload).toContain("<san_context_packet>");
+		expect(secondProviderPayload).toContain("<san_context_plan>");
 		expect(secondProviderPayload).toContain("Layer one baseline task");
 		expect(secondProviderPayload).toContain("Continue after provider pruning");
-		expect(secondProviderPayload).not.toContain(rawUserMarker);
-		expect(secondProviderPayload).not.toContain(rawAssistantMarker);
+		expect(secondProviderPayload).toContain(rawUserMarker);
+		expect(secondProviderPayload).toContain(rawAssistantMarker);
 
-		const debugEntries = customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE);
-		expect(debugEntries).toHaveLength(1);
-		const packetData = debugEntries[0]!.data as Record<string, unknown>;
-		expect(packetData.digestRefs).toHaveLength(1);
+		const planEntries = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE);
+		expect(planEntries.length).toBeGreaterThan(0);
+		const planData = planEntries.at(-1)!.data as Record<string, unknown>;
+		expect(planData.coverage).toEqual([]);
 	});
 
 	it("does not inject ContextPacket when context packet setting is disabled", async () => {
@@ -350,6 +389,7 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 
 		expect(customEntries(sessionManager, TURN_DIGEST_CUSTOM_TYPE)).toHaveLength(2);
 		expect(customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE)).toHaveLength(0);
+		expect(customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE)).toHaveLength(0);
 		expect(customMessageEntries(sessionManager, CONTEXT_PACKET_MESSAGE_TYPE)).toHaveLength(0);
 		expect(
 			mock.calls[1]?.context.messages.some(message =>
@@ -358,7 +398,49 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		).toBe(false);
 	});
 
-	it("uses the default latest-five digest ledger window", async () => {
+	it("prefers ContextPlan settings over legacy ContextPacket aliases", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"san.contextSteady.contextPacket.enabled": false,
+			"san.contextSteady.contextPacket.recentDigests": 1,
+			"san.contextSteady.contextPacket.maxTokens": 10,
+			"san.contextSteady.contextPlan.enabled": true,
+			"san.contextSteady.contextPlan.recentDigests": 2,
+			"san.contextSteady.contextPlan.maxTokens": 1234,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		await session.prompt("Plan alias task one");
+		await session.waitForIdle();
+		await session.prompt("Plan alias task two");
+		await session.waitForIdle();
+		await session.prompt("Plan alias task three");
+		await session.waitForIdle();
+
+		const finalProviderPayload = JSON.stringify(mock.calls.at(-1)!.context.messages);
+		expect(finalProviderPayload).toContain("<san_context_plan>");
+		const finalPlan = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).at(-1)!.data as Record<string, unknown>;
+		expect(finalPlan.budget).toMatchObject({ planTokenBudget: 1234 });
+		const digestMaterials = (finalPlan.materials as Array<Record<string, unknown>>).filter(
+			material => material.representation === "digest",
+		);
+		expect(digestMaterials).toHaveLength(2);
+	});
+
+	it("uses the default latest-five digest material window", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
 		const agent = new Agent({
@@ -380,27 +462,28 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 			await session.waitForIdle();
 		}
 
-		const debugEntries = customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE);
-		expect(debugEntries).toHaveLength(5);
+		const planEntries = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE);
+		expect(planEntries).toHaveLength(6);
 		const digests = customEntries(sessionManager, TURN_DIGEST_CUSTOM_TYPE);
-		const packetRefs = debugEntries.flatMap(entry => (entry.data as Record<string, unknown>).digestRefs as string[]);
-		expect(packetRefs).toEqual(digests.slice(0, 5).map(entry => entry.id));
-
-		const finalPacket = debugEntries.at(-1)!.data as Record<string, unknown>;
-		expect(finalPacket.digestRefs).toEqual([digests[4]!.id]);
-		expect(finalPacket.trimDecisions).toEqual([]);
+		const finalPlan = planEntries.at(-1)!.data as Record<string, unknown>;
+		const digestMaterials = (finalPlan.materials as Array<Record<string, unknown>>).filter(
+			material => material.representation === "digest",
+		);
+		expect(digestMaterials.map(material => (material.entryRefs as string[])[0])).toEqual(
+			digests.slice(0, 5).map(entry => entry.id),
+		);
 
 		const finalPacketMessages = mock.calls
 			.at(-1)!
-			.context.messages.filter(message => JSON.stringify(message.content).includes("<san_context_packet>"));
-		expect(finalPacketMessages).toHaveLength(5);
+			.context.messages.filter(message => JSON.stringify(message.content).includes("<san_context_plan>"));
+		expect(finalPacketMessages).toHaveLength(1);
 		const finalPacketContent = JSON.stringify(finalPacketMessages.map(message => message.content));
 		expect(finalPacketContent).toContain("M2 default window task 1");
 		expect(finalPacketContent).toContain("M2 default window task 5");
 		expect(finalPacketContent).not.toContain("M2 default window task 6");
 	});
 
-	it("does not replay stale persisted ContextPacket injections into later active turns", async () => {
+	it("does not replay stale persisted ContextPlan audits into later active turns", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
 		const agent = new Agent({
@@ -424,23 +507,24 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		await session.prompt("M10 replay third turn");
 		await session.waitForIdle();
 
-		expect(customMessageEntries(sessionManager, CONTEXT_PACKET_MESSAGE_TYPE)).toHaveLength(2);
+		expect(customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE)).toHaveLength(3);
+		expect(customMessageEntries(sessionManager, CONTEXT_PLAN_MESSAGE_TYPE)).toHaveLength(0);
 		const activeContext = sessionManager.buildSessionContext();
 		const transcriptContext = sessionManager.buildSessionContext({ transcript: true });
-		expect(JSON.stringify(activeContext.messages)).not.toContain("<san_context_packet>");
-		expect(JSON.stringify(transcriptContext.messages)).toContain("<san_context_packet>");
+		expect(JSON.stringify(activeContext.messages)).not.toContain("<san_context_plan>");
+		expect(JSON.stringify(transcriptContext.messages)).not.toContain("<san_context_plan>");
 
 		const thirdCallPackets = mock.calls[2]!.context.messages.filter(message =>
-			JSON.stringify(message.content).includes("<san_context_packet>"),
+			JSON.stringify(message.content).includes("<san_context_plan>"),
 		);
-		expect(thirdCallPackets).toHaveLength(2);
+		expect(thirdCallPackets).toHaveLength(1);
 		const thirdPacketText = JSON.stringify(thirdCallPackets.map(message => message.content));
 		expect(thirdPacketText).toContain("M10 replay first turn");
 		expect(thirdPacketText).toContain("M10 replay second turn");
 		expect(thirdPacketText).not.toContain("M10 replay third turn");
 	});
 
-	it("derives the injected ContextPacket budget from quality window settings", async () => {
+	it("records the ContextPlan budget from quality window settings", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
 		const agent = new Agent({
@@ -469,24 +553,16 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		await session.prompt("M3 quality window baseline three");
 		await session.waitForIdle();
 
-		const debugEntries = customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE);
-		expect(debugEntries.length).toBeGreaterThan(0);
-		const finalPacket = debugEntries.at(-1)!.data as Record<string, unknown>;
-		expect(finalPacket.tokenBudget).toBe(165);
-		expect(finalPacket.budget).toEqual({
-			qualityWindowTokens: 220,
-			reserveRatio: 0.25,
-			reservedTokens: 55,
-			packetTokenBudget: 165,
-			configuredPacketMaxTokens: 2000,
-		});
-		expect(finalPacket.tokenEstimate as number).toBeLessThanOrEqual(165);
-		const layers = finalPacket.layers as Array<Record<string, unknown>>;
-		expect(layers[0]?.tokenBudget).toBe(165);
-		expect(finalPacket.digestRefs).toHaveLength(1);
+		const planEntries = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE);
+		expect(planEntries.length).toBeGreaterThan(0);
+		const finalPlan = planEntries.at(-1)!.data as Record<string, unknown>;
+		expect(finalPlan.budget).toMatchObject({ steadyTarget: 220, reserveRatio: 0.25 });
+		expect(finalPlan.materials).toEqual(
+			expect.arrayContaining([expect.objectContaining({ representation: "digest" })]),
+		);
 	});
 
-	it("writes stable checkpoints and injects them before the append-only digest tail", async () => {
+	it("writes stable checkpoints and includes them before the digest tail in ContextPlan", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
 		const agent = new Agent({
@@ -519,51 +595,71 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		);
 		expect(checkpointData.stability).toBe("stable");
 		expect(checkpointData.cachePriority).toBe("high");
+		let checkpointRebaseCloseCount = 0;
+		const checkpointProviderState: ProviderSessionState = {
+			close() {
+				checkpointRebaseCloseCount += 1;
+			},
+		};
+		session.providerSessionState.set("checkpoint-rebase", checkpointProviderState);
 
 		await session.prompt("M4 checkpoint stable task three");
 		await session.waitForIdle();
+		expect(checkpointRebaseCloseCount).toBe(1);
+		expect(session.providerSessionState.has("checkpoint-rebase")).toBe(false);
+
+		let duplicateRebaseCloseCount = 0;
+		session.providerSessionState.set("same-checkpoint-rebase", {
+			close() {
+				duplicateRebaseCloseCount += 1;
+			},
+		} satisfies ProviderSessionState);
 		await session.prompt("M4 checkpoint stable task four");
 		await session.waitForIdle();
+		expect(duplicateRebaseCloseCount).toBe(0);
+		session.providerSessionState.delete("same-checkpoint-rebase");
 
-		const packetEntries = customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE);
-		const packetData = packetEntries.map(entry => entry.data as Record<string, unknown>);
-		const checkpointPacket = packetData.find(packet => packet.checkpointRef === checkpointEntries[0]!.id);
-		expect(checkpointPacket).toBeDefined();
-		const checkpointLayers = checkpointPacket!.layers as Array<Record<string, unknown>>;
-		expect(checkpointLayers.map(layer => layer.name)).toEqual(["stable_checkpoint", "turn_digest_ledger"]);
-		expect(checkpointLayers[0]).toMatchObject({
-			entryRefs: [checkpointEntries[0]!.id],
-			stability: "stable",
-			cachePriority: "high",
+		const planEntries = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE);
+		const planData = planEntries.map(entry => entry.data as Record<string, unknown>);
+		const checkpointPlan = planData.find(plan => {
+			const materials = plan.materials as Array<Record<string, unknown>> | undefined;
+			return (
+				materials?.some(
+					material =>
+						material.representation === "checkpoint" &&
+						(material.entryRefs as string[]).includes(checkpointEntries[0]!.id),
+				) === true && materials.some(material => material.representation === "digest")
+			);
 		});
-		expect(checkpointLayers[1]).toMatchObject({
-			stability: "append-only",
-			cachePriority: "medium",
-		});
-		expect(checkpointPacket!.trimDecisions).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					layer: "turn_digest_ledger",
-					reason: "checkpoint_covered",
-					omitted: 2,
-				}),
-			]),
+		expect(checkpointPlan).toBeDefined();
+		const checkpointMaterials = checkpointPlan!.materials as Array<Record<string, unknown>>;
+		const contextMaterials = checkpointMaterials.filter(material =>
+			["checkpoint", "digest"].includes(material.representation as string),
 		);
-
+		expect(contextMaterials.map(material => material.representation)).toEqual(["checkpoint", "digest"]);
+		expect(contextMaterials[0]).toMatchObject({
+			entryRefs: [checkpointEntries[0]!.id],
+			representation: "checkpoint",
+		});
 		const digests = customEntries(sessionManager, TURN_DIGEST_CUSTOM_TYPE);
-		const finalPacket = packetData.at(-1)!;
-		expect(finalPacket.digestRefs).toEqual([digests[2]!.id]);
-		const finalPacketMessages = mock.calls
+		expect(contextMaterials[1]).toMatchObject({
+			entryRefs: [digests[2]!.id],
+			representation: "digest",
+		});
+		expect(checkpointMaterials).toEqual(
+			expect.arrayContaining([expect.objectContaining({ representation: "exact" })]),
+		);
+		const finalPlanMessages = mock.calls
 			.at(-1)!
-			.context.messages.filter(message => JSON.stringify(message.content).includes("<san_context_packet>"));
-		const finalPacketContent = JSON.stringify(finalPacketMessages.map(message => message.content));
-		expect(finalPacketContent).toContain("Stable checkpoint");
-		expect(finalPacketContent).toContain("M4 checkpoint stable task one");
-		expect(finalPacketContent).toContain("M4 checkpoint stable task three");
-		expect(finalPacketContent).not.toContain("M4 checkpoint stable task four");
+			.context.messages.filter(message => JSON.stringify(message.content).includes("<san_context_plan>"));
+		const finalPlanContent = JSON.stringify(finalPlanMessages.map(message => message.content));
+		expect(finalPlanContent).toContain("Stable checkpoints");
+		expect(finalPlanContent).toContain("M4 checkpoint stable task one");
+		expect(finalPlanContent).toContain("M4 checkpoint stable task three");
+		expect(finalPlanContent).not.toContain("M4 checkpoint stable task four");
 	});
 
-	it("injects read-only recalled memory as a volatile ContextPacket layer", async () => {
+	it("injects read-only recalled memory as ContextPlan recall material", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mockModel = createMockModel({ handler: () => ({ content: ["Done"] }) });
 		const agent = new Agent({
@@ -624,29 +720,21 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 
 		expect(search).toHaveBeenCalledTimes(1);
 		const firstCallMessages = mockModel.calls[0]!.context.messages;
-		const packetMessage = firstCallMessages.find(message =>
-			JSON.stringify(message.content).includes("<san_context_packet>"),
+		const planMessage = firstCallMessages.find(message =>
+			JSON.stringify(message.content).includes("<san_context_plan>"),
 		);
-		expect(packetMessage).toBeDefined();
-		const packetContent = JSON.stringify(packetMessage?.content);
-		expect(packetContent).toContain("Retrieved context");
-		expect(packetContent).toContain("San project decision: keep planning documents in HTML");
-		expect(packetContent).toContain("Treat retrieved context as read-only background memory");
+		expect(planMessage).toBeDefined();
+		const planContent = JSON.stringify(planMessage?.content);
+		expect(planContent).toContain("Retrieved context");
+		expect(planContent).toContain("San project decision: keep planning documents in HTML");
+		expect(planContent).toContain("read-only background data");
 
-		const packetEntries = customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE);
-		expect(packetEntries).toHaveLength(1);
-		const packetData = packetEntries[0]!.data as Record<string, unknown>;
-		expect(packetData.digestRefs).toEqual([]);
-		expect(packetData.recallRefs).toEqual(["mem-1"]);
-		expect(packetData.recallQuery).toBe("Recall San project decisions");
-		const layers = packetData.layers as Array<Record<string, unknown>>;
-		expect(layers.map(layer => layer.name)).toEqual(["turn_digest_ledger", "retrieved_context"]);
-		expect(layers[1]).toMatchObject({
-			entryRefs: ["mem-1"],
-			stability: "volatile",
-			cachePriority: "low",
-			tokenBudget: 500,
-		});
+		const planEntries = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE);
+		expect(planEntries).toHaveLength(1);
+		const planData = planEntries[0]!.data as Record<string, unknown>;
+		const materials = planData.materials as Array<Record<string, unknown>>;
+		expect(materials).toContainEqual(expect.objectContaining({ representation: "recall", entryRefs: ["mem-1"] }));
+		expect(customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE)).toHaveLength(0);
 	});
 
 	it("restores stable system prompt when San recall replaces legacy memory prompt injection", async () => {
@@ -801,19 +889,15 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 		expect(secondQuery).toContain("Current prompt:");
 		expect(secondQuery).toContain("Continue recall quality work");
 
-		const packetEntries = customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE);
-		const finalPacket = packetEntries.at(-1)!.data as Record<string, unknown>;
-		expect(finalPacket.recallRefs).toEqual(["mem-1", "mem-2"]);
-		const layers = finalPacket.layers as Array<Record<string, unknown>>;
-		expect(layers.at(-1)).toMatchObject({
-			name: "retrieved_context",
-			entryRefs: ["mem-1", "mem-2"],
-			stability: "volatile",
-			cachePriority: "low",
-		});
+		const planEntries = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE);
+		const finalPlan = planEntries.at(-1)!.data as Record<string, unknown>;
+		const recallMaterial = (finalPlan.materials as Array<Record<string, unknown>>).find(
+			material => material.representation === "recall",
+		);
+		expect(recallMaterial).toMatchObject({ entryRefs: ["mem-1", "mem-2"] });
 	});
 
-	it("writes a digest for a tool-using turn after injecting ContextPacket", async () => {
+	it("writes a digest for a tool-using turn after injecting ContextPlan", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({
 			responses: [
@@ -860,8 +944,283 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 				: "";
 		expect(toMessageContent).toContain("Final answer after tool");
 
-		expect(customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE)).toHaveLength(1);
-		expect(customMessageEntries(sessionManager, CONTEXT_PACKET_MESSAGE_TYPE)).toHaveLength(1);
+		expect(customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE)).toHaveLength(0);
+		expect(customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).length).toBeGreaterThan(0);
+		expect(customMessageEntries(sessionManager, CONTEXT_PLAN_MESSAGE_TYPE)).toHaveLength(0);
+	});
+
+	it("re-gates tool-loop provider calls against the burst ceiling", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const huge = "Z".repeat(400_000);
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [{ type: "toolCall", id: "call_huge", name: "echo", arguments: { value: "seed" } }],
+				},
+				{ content: ["should not reach second provider call"] },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [echoTool] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"san.contextSteady.qualityWindowTokens": 8_000,
+			"san.contextSteady.burstWindowTokens": 12_000,
+			"san.contextSteady.contextPlan.maxTokens": 2_000,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		// Oversized tool result forces second provider projection past burst ceiling.
+		const largeEcho: AgentTool<typeof echoToolSchema, { value: string }> = {
+			...echoTool,
+			async execute(_toolCallId, params) {
+				const parsed = echoParams(params);
+				return {
+					content: [{ type: "text", text: `echo:${parsed.value}:${huge}` }],
+					details: parsed,
+				};
+			},
+		};
+		agent.setTools([largeEcho]);
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+
+		await session.prompt("tool loop ceiling probe");
+		await session.waitForIdle();
+		// First provider call may happen; the second call after huge tool result must not.
+		expect(mock.calls).toHaveLength(1);
+		const hardPressureAudits = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).filter(entry => {
+			const data = entry.data as { qualityGate?: { outcome?: string; projectedInputTokens?: number } };
+			return data.qualityGate?.outcome === "hard_pressure";
+		});
+		expect(hardPressureAudits.length).toBeGreaterThan(0);
+		const gate = hardPressureAudits.at(-1)!.data as {
+			qualityGate: { projectedInputTokens?: number; projectedInputLimit?: number };
+		};
+		expect((gate.qualityGate.projectedInputTokens ?? 0) > (gate.qualityGate.projectedInputLimit ?? 0)).toBe(true);
+	});
+
+	it("does not double-count stored history when re-gating a legal tool-loop tail", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		// ~700k chars ≈ ~175k tokens — under default 260k control / 320k burst when counted once.
+		const legalHuge = "Y".repeat(700_000);
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [{ type: "toolCall", id: "call_legal", name: "echo", arguments: { value: "seed" } }],
+				},
+				{ content: ["legal tool tail accepted"] },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [echoTool] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"san.contextSteady.qualityWindowTokens": 240_000,
+			"san.contextSteady.burstWindowTokens": 320_000,
+			"san.contextSteady.contextPlan.maxTokens": 3_000,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		const largeEcho: AgentTool<typeof echoToolSchema, { value: string }> = {
+			...echoTool,
+			async execute(_toolCallId, params) {
+				const parsed = echoParams(params);
+				return {
+					content: [{ type: "text", text: `echo:${parsed.value}:${legalHuge}` }],
+					details: parsed,
+				};
+			},
+		};
+		agent.setTools([largeEcho]);
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+
+		await session.prompt("legal tool loop tail probe");
+		await session.waitForIdle();
+
+		// Second provider call must run; double-counting would falsely hard-pressure at ~350k.
+		expect(mock.calls.length).toBe(2);
+		const hardPressureAudits = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).filter(entry => {
+			const data = entry.data as { qualityGate?: { outcome?: string } };
+			return data.qualityGate?.outcome === "hard_pressure";
+		});
+		expect(hardPressureAudits).toHaveLength(0);
+		// Second call context must include the large tool result (counted once, not 2x).
+		const secondPayload = JSON.stringify(mock.calls[1]!.context.messages);
+		expect(secondPayload).toContain("echo:seed:");
+		expect(secondPayload.length).toBeGreaterThan(500_000);
+	});
+
+	it("builds checkpoints only from the active branch", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"san.contextSteady.checkpoint.everyTurns": 1,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		await session.prompt("OFF_BRANCH_SECRET_REQUIREMENT please remember");
+		await session.waitForIdle();
+		const offBranchLeaf = sessionManager.getLeafId();
+		expect(offBranchLeaf).toBeTruthy();
+
+		// Branch from the root-side user entry so the discarded path stays off-branch.
+		const firstUser = sessionManager
+			.getBranch()
+			.find(entry => entry.type === "message" && entry.message.role === "user");
+		expect(firstUser).toBeDefined();
+		const parentId = firstUser!.parentId;
+		if (parentId) sessionManager.branch(parentId);
+		else sessionManager.resetLeaf();
+
+		await session.prompt("active branch request about parser");
+		await session.waitForIdle();
+		await session.prompt("active branch follow-up");
+		await session.waitForIdle();
+
+		const checkpoints = customEntries(sessionManager, CONTEXT_CHECKPOINT_CUSTOM_TYPE);
+		expect(checkpoints.length).toBeGreaterThan(0);
+		const latest = checkpoints.at(-1)!.data as {
+			summary?: { userIntents?: Array<{ text?: string }> };
+		};
+		const intents = (latest.summary?.userIntents ?? []).map(item => item.text ?? "").join("\n");
+		expect(intents).not.toContain("OFF_BRANCH_SECRET_REQUIREMENT");
+		expect(intents).toContain("active branch");
+	});
+
+	it("persists hard-pressure audit and the refused prompt", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["should not run"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"san.contextSteady.qualityWindowTokens": 2_000,
+			"san.contextSteady.burstWindowTokens": 3_000,
+			"san.contextSteady.contextPlan.maxTokens": 500,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		const refused = `HARD_PRESSURE_PROMPT ${"x".repeat(40_000)}`;
+		await expect(session.prompt(refused)).rejects.toThrow(/hard pressure/i);
+		expect(mock.calls).toHaveLength(0);
+
+		const plans = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE);
+		expect(plans.length).toBeGreaterThan(0);
+		const plan = plans.at(-1)!.data as { qualityGate?: { outcome?: string; protectedEntryRefs?: string[] } };
+		expect(plan.qualityGate?.outcome).toBe("hard_pressure");
+		const protectedRefs = plan.qualityGate?.protectedEntryRefs ?? [];
+		expect(protectedRefs.some(ref => !ref.startsWith("pending_"))).toBe(true);
+
+		const userEntries = sessionManager
+			.getBranch()
+			.filter(entry => entry.type === "message" && entry.message.role === "user");
+		expect(userEntries.some(entry => JSON.stringify(entry).includes("HARD_PRESSURE_PROMPT"))).toBe(true);
+		// Same-session agent state must also retain the refused prompt for recovery.
+		expect(JSON.stringify(session.messages).includes("HARD_PRESSURE_PROMPT")).toBe(true);
+	});
+
+	it("keeps refused hard-pressure prompt visible to the next same-session provider call", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [{ content: ["recovered follow-up"] }],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"san.contextSteady.qualityWindowTokens": 2_000,
+			"san.contextSteady.burstWindowTokens": 3_000,
+			"san.contextSteady.contextPlan.maxTokens": 500,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		const marker = "HARD_REFUSED_MARKER";
+		await expect(session.prompt(`${marker} ${"x".repeat(40_000)}`)).rejects.toThrow(/hard pressure/i);
+		expect(JSON.stringify(session.messages)).toContain(marker);
+
+		// Rebuild session settings with a large window so the follow-up can send.
+		// Settings.isolated values may be frozen; dispose and recreate with shared manager.
+		await session.dispose();
+		const mock2 = createMockModel({ responses: [{ content: ["recovered follow-up"] }] });
+		const agent2 = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock2.stream,
+			convertToLlm,
+		});
+		// Seed agent messages from journal so recovery is same-process equivalent to reload.
+		const recoveredSettings = Settings.isolated({
+			...BASE_SETTINGS,
+			"san.contextSteady.qualityWindowTokens": 240_000,
+			"san.contextSteady.burstWindowTokens": 320_000,
+			"san.contextSteady.contextPlan.maxTokens": 3_000,
+		});
+		session = new AgentSession({
+			agent: agent2,
+			sessionManager,
+			settings: recoveredSettings,
+			modelRegistry,
+		});
+		// Sync agent state from branch journal (same-session recovery path after hard pressure).
+		const branchMessages = sessionManager
+			.getBranch()
+			.filter(entry => entry.type === "message")
+			.map(entry => (entry as { message: (typeof session.messages)[number] }).message);
+		agent2.replaceMessages(branchMessages);
+
+		await session.prompt("continue the refused task briefly");
+		await session.waitForIdle();
+
+		expect(mock2.calls.length).toBeGreaterThan(0);
+		const payload = JSON.stringify(mock2.calls.at(-1)!.context.messages);
+		expect(payload).toContain(marker);
+		expect(payload).toContain("continue the refused task briefly");
 	});
 
 	it("applies an approved Brain recall policy through the real session and records its audit", async () => {
@@ -955,11 +1314,10 @@ describe("Context Steady State M2 — AgentSession ContextPacket integration", (
 			outcome: "applied",
 			resultCount: 1,
 		});
-		const packet = customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE).at(-1)?.data as Record<string, unknown>;
-		expect(packet.recallPolicy).toMatchObject({
-			policyVersion: "brain-m6-recall-v1",
-			selectedPolicyIds: [candidate.candidateId],
-			queryTemplateId: "risk-history-v1",
-		});
+		const plan = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).at(-1)?.data as Record<string, unknown>;
+		const recallMaterial = (plan.materials as Array<Record<string, unknown>>).find(
+			material => material.representation === "recall",
+		);
+		expect(recallMaterial).toMatchObject({ entryRefs: ["risk-memory"] });
 	});
 });

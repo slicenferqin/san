@@ -4,7 +4,7 @@
 
 export const TURN_DIGEST_SCHEMA_VERSION = 1;
 export const TURN_DIGEST_CUSTOM_TYPE = "san.turn_digest";
-export const CONTEXT_CHECKPOINT_SCHEMA_VERSION = 1;
+export const CONTEXT_CHECKPOINT_SCHEMA_VERSION = 2;
 export const CONTEXT_CHECKPOINT_CUSTOM_TYPE = "san.context_checkpoint";
 export const CONTEXT_PACKET_SCHEMA_VERSION = 1;
 export const CONTEXT_PACKET_CUSTOM_TYPE = "san.context_packet";
@@ -141,12 +141,22 @@ export interface ContextCheckpointSummaryItem {
 	entryRefs: string[];
 }
 
+export type ContextCheckpointRebaseReason = "checkpoint" | "resume" | "budget_pressure" | "topic_shift";
+
 export interface ContextCheckpoint {
 	schemaVersion: typeof CONTEXT_CHECKPOINT_SCHEMA_VERSION;
 	checkpointId: string;
 	sessionId: string;
+	/** v2 epoch id for bounded ContextPlan rebases. Absent on legacy v1 checkpoints. */
+	epochId?: string;
 	createdAt: string;
 	entryRefs: string[];
+	/** v2 raw source refs covered by the checkpoint. Absent on legacy v1 checkpoints. */
+	coveredSourceEntryRefs?: string[];
+	/** v2 prior checkpoint custom-entry ref when this checkpoint extends one. */
+	previousCheckpointEntryId?: string;
+	/** v2 reason this checkpoint can act as a safe rebase boundary. */
+	rebaseReason?: ContextCheckpointRebaseReason;
 	fromDigestEntryId: string;
 	toDigestEntryId: string;
 	digestCount: number;

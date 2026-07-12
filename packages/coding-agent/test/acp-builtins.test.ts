@@ -10,6 +10,10 @@ import type {
 } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
+	CONTEXT_PLAN_CUSTOM_TYPE,
+	CONTEXT_PLAN_SCHEMA_VERSION,
+} from "@oh-my-pi/pi-coding-agent/context-steady/plan-types";
+import {
 	CONTEXT_PACKET_CUSTOM_TYPE,
 	CONTEXT_PACKET_MESSAGE_TYPE,
 	CONTEXT_PACKET_SCHEMA_VERSION,
@@ -255,6 +259,10 @@ describe("ACP builtin slash commands", () => {
 
 	it("runs the San execution loop instead of only creating a ledger entry", async () => {
 		const { output, runtime } = createRuntime();
+		runtime.sessionManager.appendCustomEntry(CONTEXT_PLAN_CUSTOM_TYPE, { planId: "plan-old" });
+		const latestPlanEntryId = runtime.sessionManager.appendCustomEntry(CONTEXT_PLAN_CUSTOM_TYPE, {
+			planId: "plan-current",
+		});
 		const runSpy = spyOn(sanLoopModule, "runSanLoop").mockResolvedValue({
 			run: {
 				schemaVersion: 1,
@@ -265,6 +273,7 @@ describe("ACP builtin slash commands", () => {
 				objective: "ship v0.2",
 				mode: "team",
 				status: "passed",
+				contextPlanRefs: [latestPlanEntryId],
 				contextPacketRefs: [],
 				assignments: [],
 				workerResults: [],
@@ -291,19 +300,23 @@ describe("ACP builtin slash commands", () => {
 			],
 			reviewEntryIds: ["review-entry"],
 		});
+		try {
+			const result = await executeAcpBuiltinSlashCommand("/san-loop run ship v0.2", runtime);
 
-		const result = await executeAcpBuiltinSlashCommand("/san-loop run ship v0.2", runtime);
-
-		expect(result).toEqual({ consumed: true });
-		expect(runSpy).toHaveBeenCalledTimes(1);
-		expect(runSpy.mock.calls[0]?.[0]).toMatchObject({
-			objective: "ship v0.2",
-			mode: "team",
-			maxRetries: 2,
-			maxTurns: 8,
-		});
-		expect(output[0]).toContain("San execution loop loop-acp finished with status passed.");
-		expect(output[0]).toContain("Final verdict: pass");
+			expect(result).toEqual({ consumed: true });
+			expect(runSpy).toHaveBeenCalledTimes(1);
+			expect(runSpy.mock.calls[0]?.[0]).toMatchObject({
+				objective: "ship v0.2",
+				mode: "team",
+				maxRetries: 2,
+				maxTurns: 8,
+				contextPlanRefs: ["fake-entry-1", latestPlanEntryId],
+			});
+			expect(output[0]).toContain("San execution loop loop-acp finished with status passed.");
+			expect(output[0]).toContain("Final verdict: pass");
+		} finally {
+			runSpy.mockRestore();
+		}
 	});
 
 	it("runs solo, team, and council shortcuts with their fixed modes", async () => {
@@ -344,16 +357,20 @@ describe("ACP builtin slash commands", () => {
 		});
 		runSpy.mockClear();
 
-		for (const mode of ["solo", "team", "council"] as const) {
-			const result = await executeAcpBuiltinSlashCommand(`/${mode} deliver ${mode} objective`, runtime);
-			expect(result).toEqual({ consumed: true });
-		}
+		try {
+			for (const mode of ["solo", "team", "council"] as const) {
+				const result = await executeAcpBuiltinSlashCommand(`/${mode} deliver ${mode} objective`, runtime);
+				expect(result).toEqual({ consumed: true });
+			}
 
-		expect(runSpy.mock.calls.map(([options]) => ({ mode: options.mode, objective: options.objective }))).toEqual([
-			{ mode: "solo", objective: "deliver solo objective" },
-			{ mode: "team", objective: "deliver team objective" },
-			{ mode: "council", objective: "deliver council objective" },
-		]);
+			expect(runSpy.mock.calls.map(([options]) => ({ mode: options.mode, objective: options.objective }))).toEqual([
+				{ mode: "solo", objective: "deliver solo objective" },
+				{ mode: "team", objective: "deliver team objective" },
+				{ mode: "council", objective: "deliver council objective" },
+			]);
+		} finally {
+			runSpy.mockRestore();
+		}
 	});
 
 	it("stops the latest active San execution loop run", async () => {
@@ -1287,7 +1304,61 @@ describe("wave 5 — adapters and polish", () => {
 		expect(text.split("\n").length).toBeGreaterThan(1);
 	});
 
-	it("/context packet: renders San ContextPacket debug entries", async () => {
+	it("/context plan: renders San ContextPlan audit entries", async () => {
+		const { output, fakeSessionManager, runtime } = createRuntime();
+		fakeSessionManager._entries.push({
+			type: "custom",
+			id: "plan-entry",
+			parentId: null,
+			timestamp: "2026-07-12T00:00:00.000Z",
+			customType: CONTEXT_PLAN_CUSTOM_TYPE,
+			data: {
+				schemaVersion: CONTEXT_PLAN_SCHEMA_VERSION,
+				planId: "plan_acp",
+				sessionId: "fake-session-id",
+				epochId: "epoch-1",
+				promptGeneration: 3,
+				createdAt: "2026-07-12T00:00:00.000Z",
+				budget: {
+					contextWindow: 500000,
+					nonMessageTokens: 20000,
+					steadyTarget: 240000,
+					controlMax: 260000,
+					burstCeiling: 320000,
+					selectedInputLimit: 260000,
+					selectedInputMode: "steady",
+					messageBudget: 240000,
+					planTokenBudget: 2000,
+					reserveTokens: 100000,
+					reserveRatio: 0.2,
+				},
+				qualityGate: { outcome: "pass", reasons: [], protectedEntryRefs: ["prompt"], missingEntryRefs: [] },
+				materials: [
+					{
+						materialId: "digest_d1",
+						kind: "turn_digest",
+						representation: "digest",
+						entryRefs: ["digest-1"],
+						tokenEstimate: 220,
+						reason: "recent settled turn digest",
+					},
+				],
+				coverage: [{ replacementMaterialId: "digest_d1", sourceEntryRefs: ["u1"], reason: "digest" }],
+			},
+		});
+
+		const result = await executeAcpBuiltinSlashCommand("/context plan", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		const text = output[0] ?? "";
+		expect(text).toContain("San ContextPlan audit view (1/1 shown)");
+		expect(text).toContain("## ContextPlan plan_acp");
+		expect(text).toContain("- outcome=pass");
+		expect(text).toContain("- digest_d1: digest/turn_digest");
+		expect(text).toContain("covers=u1");
+	});
+
+	it("/context packet: renders legacy San ContextPacket debug entries", async () => {
 		const { output, fakeSessionManager, runtime } = createRuntime();
 		fakeSessionManager._entries.push(
 			{

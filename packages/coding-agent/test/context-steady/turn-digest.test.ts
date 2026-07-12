@@ -34,6 +34,7 @@ import {
 	TURN_DIGEST_CUSTOM_TYPE,
 	TURN_DIGEST_SCHEMA_VERSION,
 } from "../../src/context-steady/types";
+import { SecretObfuscator } from "../../src/secrets/obfuscator";
 
 // Minimal message shapes to avoid pulling in @oh-my-pi/pi-agent-core
 // (which transitively loads @oh-my-pi/pi-natives native modules).
@@ -514,6 +515,47 @@ describe("LLM digest orchestration", () => {
 			tool: "read",
 			entryIds: ["tool-entry"],
 		});
+	});
+
+	test("obfuscates digest side-request transcript and restores returned placeholders before persistence", async () => {
+		const secret = "secret-token-123456";
+		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+		const placeholder = obfuscator.obfuscate(secret);
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockImplementation(async (_model, context) => {
+			const payload = JSON.stringify(context.messages);
+			expect(payload).not.toContain(secret);
+			expect(payload).toContain(placeholder);
+			return assistantWithDigest({
+				userIntent: `Rotate ${placeholder} safely.`,
+				actionsTaken: [`Verified that ${placeholder} stayed redacted in the side request.`],
+				decisions: [],
+				filesTouched: [],
+				factsLearned: [],
+				openQuestions: [],
+				risks: [],
+				nextSteps: [],
+				memoryCandidates: [],
+			});
+		});
+		const source = { sessionId: "s", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 };
+		const sessionManager = createSessionManager();
+
+		await generateDigest(
+			asM([umsg(`Please rotate ${secret}`), amsg("Done.")]),
+			source,
+			sessionManager as never,
+			{} as never,
+			steadySettings(true),
+			{ model: getDigestModel(), apiKey: async () => "test-key", obfuscator },
+		);
+
+		const stored = sessionManager.getEntries()[0]?.data as TurnDigest;
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+		expect(stored.fallback).toBe(false);
+		expect(stored.userIntent).toContain(placeholder);
+		expect(stored.userIntent).not.toContain(secret);
+		expect(stored.actionsTaken[0]).toContain(placeholder);
+		expect(stored.actionsTaken[0]).not.toContain(secret);
 	});
 
 	test("normalizes minor LLM schema drift instead of falling back", async () => {

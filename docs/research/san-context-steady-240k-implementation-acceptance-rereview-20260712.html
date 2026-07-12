@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Second independent acceptance review of the San Context Steady 240K ContextPlan implementation.">
+  <title>San Context Steady 240K · 第二轮实施验收</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg:#f4f1eb; --paper:#fffdf9; --ink:#172033; --muted:#667085; --line:#ddd5ca;
+      --navy:#172033; --blue:#2454a6; --blue-bg:#eef3fc; --green:#176b55; --green-bg:#edf8f3;
+      --amber:#8d5711; --amber-bg:#fff6e5; --red:#9f2f2f; --red-bg:#fff0ee;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--bg); font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+    a { color:var(--blue); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    code { padding:2px 6px; border-radius:6px; background:#eee9e1; font:.92em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    pre { overflow:auto; margin:12px 0 0; padding:15px; border-radius:12px; color:#eef3ff; background:#171c28; font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    .shell { width:min(1140px,calc(100% - 40px)); margin:0 auto; }
+    header { padding:54px 0 40px; color:white; background:var(--navy); }
+    .eyebrow,.label { font-size:12px; font-weight:900; letter-spacing:.11em; text-transform:uppercase; }
+    .eyebrow { color:#abc5ff; }
+    .label { margin-bottom:7px; color:var(--muted); }
+    h1 { max-width:980px; margin:10px 0 16px; font-size:clamp(38px,6vw,66px); line-height:1.03; letter-spacing:-.045em; }
+    h2 { margin:0 0 14px; font-size:clamp(25px,3vw,36px); line-height:1.2; }
+    h3 { margin:0 0 8px; font-size:19px; line-height:1.35; }
+    p { margin:0 0 12px; }
+    ul,ol { margin:8px 0 0; padding-left:22px; }
+    li { margin:5px 0; }
+    .lead { max-width:960px; color:#d9e2f2; font-size:18px; }
+    .verdict { display:inline-flex; margin-top:22px; padding:9px 14px; border:1px solid #ffaaa2; border-radius:999px; background:rgba(159,47,47,.55); font-weight:900; }
+    main section { padding:38px 0; border-bottom:1px solid var(--line); }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:14px; }
+    .card,.finding { padding:18px; border:1px solid var(--line); border-radius:15px; background:var(--paper); }
+    .card.green { border-color:#9dcfbd; background:var(--green-bg); }
+    .card.amber { border-color:#dfbd7d; background:var(--amber-bg); }
+    .card.red { border-color:#e3aaa4; background:var(--red-bg); }
+    .finding { margin-top:16px; padding:20px; }
+    .finding.p0 { border-left:6px solid var(--red); }
+    .finding.p1 { border-left:6px solid var(--amber); }
+    .finding.p2 { border-left:6px solid var(--blue); }
+    .sev0 { color:var(--red); } .sev1 { color:var(--amber); } .sev2 { color:var(--blue); }
+    .evidence { margin-top:10px; padding:12px 14px; border-radius:11px; background:#f0ece5; }
+    .table-wrap { overflow:auto; border-radius:13px; }
+    table { width:100%; border-collapse:collapse; background:var(--paper); }
+    th,td { padding:10px 12px; border:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { background:#ebe6de; font-weight:900; }
+    .status { display:inline-flex; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:900; white-space:nowrap; }
+    .status.no { color:var(--red); background:#f5d7d4; }
+    .status.partial { color:var(--amber); background:#f3e3c5; }
+    .status.yes { color:var(--green); background:#dbeee7; }
+    .callout { padding:18px 20px; border-left:6px solid var(--red); border-radius:13px; background:var(--red-bg); }
+    footer { padding:30px 0 45px; color:var(--muted); }
+    @media (max-width:720px) { .shell { width:min(100% - 24px,1140px); } header { padding-top:38px; } main section { padding:28px 0; } th,td { min-width:150px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="shell">
+      <div class="eyebrow">Second independent acceptance review · 2026-07-12</div>
+      <h1>已从“骨架”推进到“可运行原型”，但仍未达到 240K 重构合同。</h1>
+      <p class="lead">第二次快照已经真正接入 AgentSession，并修复了上一轮指出的空 coverage、重复消息误删、低权限角色和 legacy packet 分类问题。新的阻断点更深：运行时没有给 Quality Gate 提供当前 prompt、验收证据或 token map，完整 provider 输入没有被 240K/320K 约束，fallback digest 仍能删除原文，epoch/rebase 只是字段而不是生命周期，secret placeholder 还会在持久化前被反解。</p>
+      <div class="verdict">NO-GO · 第二轮仍不通过</div>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <div class="shell">
+        <h2>1. 第二次快照与实际进步</h2>
+        <div class="grid">
+          <article class="card"><div class="label">Branch / HEAD</div><h3><code>refactor/context-steady-240k-plan-rewrite</code></h3><p>HEAD 仍为 <code>88d3e50ec</code>；实现全部在未提交工作树。</p></article>
+          <article class="card green"><div class="label">Focused verification</div><h3>145 + 221 tests 通过</h3><p>Context Steady 145 项；相关 AgentSession、Brain、SanLoop、session 和 ACP 221 项。</p></article>
+          <article class="card green"><div class="label">Build quality</div><h3>Bun check 通过</h3><p>Biome、docs index、tsgo 与 <code>git diff --check</code> 均通过。</p></article>
+          <article class="card amber"><div class="label">Acceptance status</div><h3>可运行原型，不是完成态</h3><p>R1/R2/R4 有真实实现；R3 及质量闭环仍未成立。</p></article>
+        </div>
+        <div class="evidence">
+          <strong>上一轮问题中已修复：</strong>AgentSession 已使用 ContextPlan；旧 prune 不再在无 packet 时删除原文；coverage 无 replacement 时 fail-open；重复 timestamp/content 按数量消费；ContextPlan 转为低权限 user role；legacy packet 分类已修正；新增 <code>/context plan</code>。
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <h2>2. R0–R6 重新评估</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>阶段</th><th>当前实现</th><th>仍缺失的出口合同</th><th>结论</th></tr></thead>
+            <tbody>
+              <tr><td>R0</td><td>修复旧 all-digest prune 与重复匹配；增加新合同测试。</td><td>fallback 权限测试反而保护了错误行为；原 P0/P1 未全部转成目标合同。</td><td><span class="status partial">部分完成</span></td></tr>
+              <tr><td>R1</td><td>类型、预算、SourceIndex、tool pair、附件和文件索引已存在。</td><td>运行时不传 current/live/required refs 和 entry token map；完整 provider payload 未计量。</td><td><span class="status partial">部分完成</span></td></tr>
+              <tr><td>R2</td><td>Planner、Quality Gate、coverage validator、materializer 已接通。</td><td>exact/evidence_stub/omitted 没有实际 representation 记录；选择不受 token budget 约束；validator 不验证 material 真正覆盖 source。</td><td><span class="status partial">部分完成</span></td></tr>
+              <tr><td>R3</td><td>Checkpoint v2 增加 epoch/source/rebase 字段。</td><td>没有 bounded epoch、topic-shift/resume/budget rebase、delta retirement、provider-session reset 或 resume 等价证明。</td><td><span class="status no">未完成</span></td></tr>
+              <tr><td>R4</td><td>Provider send、stored estimate 和 context breakdown 使用同一个 plan 对象。</td><td>plan 在 pre-prompt compaction 之后才构建；plan custom message估算为0；Quality Gate 在真实调用中为空；hard pressure 不阻断。</td><td><span class="status partial">部分完成</span></td></tr>
+              <tr><td>R5</td><td>低权限 role、digest 出站 obfuscation、命令和 SanLoop 类型迁移已加入。</td><td>secret 持久化反解；旧 packet dogfood/exports/config 仍 active；examples、changelog、240K 推荐配置未迁移。</td><td><span class="status partial">部分完成</span></td></tr>
+              <tr><td>R6</td><td>聚焦测试与 Bun check 全绿。</td><td>没有 ContextPlan dogfood、20-turn 稳态、full-history A/B、resume/cache 生命周期或真实 240K payload 证据。</td><td><span class="status no">未完成</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <h2>3. 阻断性发现</h2>
+
+        <article class="finding p0">
+          <div class="label sev0">P0 · 240K/320K 预算没有约束真实 provider payload</div>
+          <h3>Quality Gate 在生产调用中没有输入，超出 burst ceiling 仍被审计为 pass。</h3>
+          <p><a href="../../packages/coding-agent/src/session/agent-session.ts">agent-session.ts:7986-8012</a> 构建 plan 时只传 journal、模型窗口和 non-message tokens；没有传 <code>currentPromptEntryRefs</code>、<code>liveTailEntryRefs</code>、<code>baseRequiredEntryRefs</code>、<code>activeToolCallIds</code> 或 <code>tokenEstimateByEntryRef</code>。这些字段除单元测试外没有生产调用者。</p>
+          <p>Planner 只替换已有 digest/checkpoint 覆盖的历史；没有 digest 的原始历史全部保留，也没有计算最终 projected payload 总量。</p>
+          <pre>adversarial probe:
+model window       = 500,000
+steady/control     = 240,000 / 260,000
+burst ceiling      = 320,000
+projected messages = 375,002
+audit outcome      = pass</pre>
+          <p>这意味着系统可以明确超过 320K，却仍报告 steady/pass；核心稳态目标尚未实现。</p>
+        </article>
+
+        <article class="finding p0">
+          <div class="label sev0">P0 · Fallback digest 仍授权删除最近原文</div>
+          <h3>技术方案明确禁止的行为，被新 planner 测试固化成了正确行为。</h3>
+          <p><a href="../../packages/coding-agent/src/context-steady/planner.ts">planner.ts:91-109</a> 不区分 LLM digest 与 <code>fallback=true</code> 的 deterministic digest；两者都会产生 coverage 并删除原始 user/assistant。</p>
+          <pre>fallback digest probe:
+raw user preserved = false
+coverage            = ["u1", "a1"]</pre>
+          <p>而实施方案测试矩阵要求：<strong>fallback 不授权删除最近 user/assistant 决策原文</strong>。现有 <a href="../../packages/coding-agent/test/context-steady/planner.test.ts">planner.test.ts:83-114</a> 使用 <code>fallback=true</code>，却断言旧 raw user/assistant 必须消失。</p>
+        </article>
+
+        <article class="finding p0">
+          <div class="label sev0">P0 · Hard pressure 不会暂停、rebase 或升级模型</div>
+          <h3>Quality Gate 即使得到 hard_pressure，Planner 仍返回可发送 plan，AgentSession 也无处理分支。</h3>
+          <pre>protected current prompt = 400,000 tokens
+quality outcome          = hard_pressure
+materialization          = still proceeds</pre>
+          <p>真实 AgentSession 又没有传 protected refs，因此通常连 hard_pressure 都得不到。实施方案要求超过 burst ceiling 时尝试 safe rebase、evidence stub、compaction/model promotion，仍失败则显式暂停；当前这些动作均未连接。</p>
+        </article>
+
+        <article class="finding p1">
+          <div class="label sev1">P1 · Provider 发送与状态/compaction token 统计仍不一致</div>
+          <h3>ContextPlan custom message 本地估算为 0，转成 provider user message 后才产生真实 token。</h3>
+          <p><a href="../../packages/coding-agent/src/context-steady/planner.ts">planner.ts:192-208</a> 用 <code>estimateTokens(customMessage)</code> 记录 plan token；<a href="../../packages/coding-agent/src/context-steady/materialize.ts">materialize.ts:201-210</a> 的 projected estimate 也对 custom message直接估算。但 <a href="../../packages/coding-agent/src/session/messages.ts">session/messages.ts:791-801</a> 会在真正发送前把它转换成 user message。</p>
+          <pre>empty plan rendered chars = 358
+planner/custom estimate  = 0
+provider role            = user
+provider estimate        = 90</pre>
+          <p>因此 plan payload 不进入状态栏和 pre-compaction 估算，<code>contextPlan.maxTokens</code> 也没有实际 enforce。带 checkpoint、5 个 digest 和 recall 时，偏差会更大。</p>
+        </article>
+
+        <article class="finding p1">
+          <div class="label sev1">P1 · Coverage validator 没有证明 replacement 真正覆盖 source</div>
+          <h3>任意现存 material 都可以“认领”任意现存 entryRef。</h3>
+          <p><a href="../../packages/coding-agent/src/context-steady/coverage.ts">coverage.ts:54-76</a> 只检查 replacement material 存在、source ref 在 index 中；没有验证 <code>coverage.sourceEntryRefs</code> 属于该 material 的 <code>coveredEntryRefs</code>，也没有检查同一 source 的唯一 representation。</p>
+          <pre>material actually covers = ["u1", "a1"]
+audit claims it covers   = ["u2"]
+validator valid          = true
+current prompt preserved = false</pre>
+          <p>这破坏了 C-04/C-05 的核心证明边界。Planner 当前生成的数据通常一致，但 validator 无法阻止未来 drift、损坏 audit 或错误 planner 删除不相关原文。</p>
+        </article>
+
+        <article class="finding p1">
+          <div class="label sev1">P1 · “质量优先” protected set 在运行时基本为空</div>
+          <h3>最近 exact turns、验收条件、当前文件、错误证据和当前 prompt 都没有进入 plan 决策。</h3>
+          <p>SourceIndex 虽然能索引 turn bundle、file mention 和 tool pair，但 Planner 不自动选择最近 3–8 个 exact turns，Quality Gate 也不会自动保护文件/附件/错误/验收标准。AgentSession 没有传 pending prompt 的 synthetic ref。</p>
+          <p>结果是：每个刚 settled 的 turn 一旦生成 digest，下一轮就可能立即删除 raw user/assistant；topic shift 也不会触发 rebase。独立探针中，与当前任务无关的旧安全审查 digest 仍进入新模型比较请求。</p>
+        </article>
+
+        <article class="finding p1">
+          <div class="label sev1">P1 · Epoch/rebase 只有字段，没有生命周期</div>
+          <h3>所有请求永久使用 <code>epoch_${sessionId}</code>，checkpoint 继续线性累积 digest refs。</h3>
+          <p><a href="../../packages/coding-agent/src/session/agent-session.ts">agent-session.ts:7993-8008</a> 每轮写死相同 epoch；checkpoint 调用没有传 epoch/rebase reason。代码中没有 topic shift、resume 或 budget pressure 的 rebase 触发，也没有因 safe rebase 重置 append-only cursor/Responses provider session。</p>
+          <p>Checkpoint v2 字段已经加入，但 <code>entryRefs</code> 与 <code>coveredSourceEntryRefs</code> 仍合并所有历史，尚不能证明 12–20 轮 active union 有界或 resume 前后语义等价。</p>
+        </article>
+
+        <article class="finding p1">
+          <div class="label sev1">P1 · Secret placeholder 在持久化前被反解</div>
+          <h3>出站传输已脱敏，但 journal 中的 TurnDigest 重新出现明文 secret。</h3>
+          <p><a href="../../packages/coding-agent/src/context-steady/digest.ts">digest.ts:285-356</a> 在解析 provider 输出时递归 deobfuscate，然后才 normalize/persist。新增测试也明确要求 persisted <code>userIntent</code> 和 <code>actionsTaken</code> 包含原始 secret。</p>
+          <p>这与实施方案“持久化 digest 保留 placeholder，不做 deobfuscation”及“placeholder 不反解”直接冲突，也绕过了主会话“磁盘只写 placeholder”的安全设计。</p>
+        </article>
+
+        <article class="finding p1">
+          <div class="label sev1">P1 · 最终 dogfood 与配置仍验证旧 ContextPacket</div>
+          <h3>绿色 dogfood 不能作为 ContextPlan 产品证据。</h3>
+          <p><a href="../../packages/coding-agent/src/context-steady/dogfood.ts">context-steady/dogfood.ts</a> 仍调用 <code>buildContextPacket</code> 并要求最终 packet；推荐 YAML 仍使用 <code>contextPacket</code> 且 quality window 为 <code>24000</code>，不是批准的 240K。Changelog 也没有本次迁移条目。</p>
+          <p>因此当前的 dogfood 通过只证明 legacy path，没有证明 20-turn p95、burst 恢复、full-history A/B 或 ContextPlan resume/cache 生命周期。</p>
+        </article>
+
+        <article class="finding p2">
+          <div class="label sev2">P2 · 项目规则与兼容收口</div>
+          <ul>
+            <li><a href="../../packages/coding-agent/src/context-steady/planner.ts">planner.ts:68</a> 使用项目明确禁止的 <code>ReturnType&lt;&gt;</code>。</li>
+            <li>Schema 文案称 <code>qualityWindowTokens=0</code> 表示“无 cap”，预算实现却把 0 解释为 240K 默认值。</li>
+            <li>SanLoop 类型支持 <code>contextPlanRefs</code>，但 slash 启动的 <code>runConfiguredSanLoop</code> 没有把当前 plan refs 传给 run，worker assignment 仍可能拿到空 refs。</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <h2>4. 独立验证记录</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>验证</th><th>结果</th><th>验收含义</th></tr></thead>
+            <tbody>
+              <tr><td><code>bun test packages/coding-agent/test/context-steady</code></td><td><span class="status yes">145 pass</span></td><td>新模块与基本 AgentSession 接线可运行，但关键目标合同覆盖不足。</td></tr>
+              <tr><td>AgentSession promotion、Brain、SanLoop、session、ACP</td><td><span class="status yes">221 pass</span></td><td>相关基线未回归。</td></tr>
+              <tr><td><code>bun run --cwd packages/coding-agent check</code></td><td><span class="status yes">通过</span></td><td>Biome、docs、tsgo 通过。</td></tr>
+              <tr><td>375K 无 digest history</td><td><span class="status no">失败</span></td><td>超过 320K 仍审计为 pass。</td></tr>
+              <tr><td>Fallback authority</td><td><span class="status no">失败</span></td><td>fallback 删除 raw user/assistant。</td></tr>
+              <tr><td>Coverage/material consistency</td><td><span class="status no">失败</span></td><td>错误 replacement 仍通过 validator 并删除当前 prompt。</td></tr>
+              <tr><td>Plan token parity</td><td><span class="status no">失败</span></td><td>本地估算 0，provider 估算 90。</td></tr>
+              <tr><td>Hard-pressure handling</td><td><span class="status no">失败</span></td><td>hard_pressure 仍继续 materialize/send。</td></tr>
+              <tr><td>Secret persistence</td><td><span class="status no">失败</span></td><td>新增测试明确要求持久化明文 secret。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <h2>5. 重新进入第三轮验收前的硬门槛</h2>
+        <ol>
+          <li>让 AgentSession 在 plan preflight 前建立 pending/live synthetic sources，并传完整 protected refs 与逐 entry token estimates。</li>
+          <li>用最终 materialized provider messages 计算完整 input；将 plan user-message token 纳入 send/status/compaction 同一 snapshot。</li>
+          <li>禁止 fallback digest 覆盖最近 exact turns；实现最近 3–8 个 exact turn 的独立保留策略。</li>
+          <li>Coverage validator 校验 coverage 是 runtime material <code>coveredEntryRefs</code> 的合法子集，并强制每个 settled source 唯一 representation。</li>
+          <li>hard_pressure 必须进入显式控制流：safe rebase、stub、compaction/model promotion 或暂停，不得继续静默发送。</li>
+          <li>实现真实 epoch state、topic-shift/resume/budget rebase、delta retirement 和 provider session reset 合同。</li>
+          <li>持久化 digest 保留 secret placeholder；补磁盘/journal 断言，不只检查 provider payload。</li>
+          <li>把 dogfood、recommended YAML、SanLoop run refs、changelog 和 20-turn/A-B 验收全部迁到 ContextPlan。</li>
+        </ol>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <div class="callout">
+          <h2>最终结论：第二轮仍不通过</h2>
+          <p>这次不能再说“只有五个骨架文件”：GPT-5.5 已经完成了一批有价值的真实实现，上一轮多个局部 P0/P1 也确实修复了。但批准方案的核心不是“把 ContextPacket 改名为 ContextPlan 并能注入 digest”，而是<strong>完整 provider 输入可证明地稳定在 240K 控制带、质量证据受保护、超压有明确控制流、epoch/rebase 可审计、秘密不落明文</strong>。</p>
+          <p>当前六项独立探针直接击穿这些核心合同，因此结论保持 NO-GO：不可合入，不可宣称 R0–R6 完成，不应开始产品级 dogfood。</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell">San Context Steady 240K · Second independent implementation acceptance review · snapshot HEAD 88d3e50ec</div>
+  </footer>
+</body>
+</html>

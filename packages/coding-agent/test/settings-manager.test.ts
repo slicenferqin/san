@@ -891,11 +891,11 @@ describe("Settings", () => {
 				expect(settings.get("san.contextSteady.enabled")).toBe(true);
 				expect(settings.get("san.contextSteady.digest.enabled")).toBe(true);
 				expect(settings.get("san.contextSteady.digest.persistFallback")).toBe(true);
-				expect(settings.get("san.contextSteady.qualityWindowTokens")).toBe(24000);
+				expect(settings.get("san.contextSteady.qualityWindowTokens")).toBe(240000);
 				expect(settings.get("san.contextSteady.reserveRatio")).toBe(0.25);
-				expect(settings.get("san.contextSteady.contextPacket.enabled")).toBe(true);
-				expect(settings.get("san.contextSteady.contextPacket.recentDigests")).toBe(5);
-				expect(settings.get("san.contextSteady.contextPacket.maxTokens")).toBe(3000);
+				expect(settings.get("san.contextSteady.contextPlan.enabled")).toBe(true);
+				expect(settings.get("san.contextSteady.contextPlan.recentDigests")).toBe(5);
+				expect(settings.get("san.contextSteady.contextPlan.maxTokens")).toBe(3000);
 				expect(settings.get("san.contextSteady.checkpoint.enabled")).toBe(true);
 				expect(settings.get("san.contextSteady.checkpoint.everyTurns")).toBe(6);
 				expect(settings.get("san.contextSteady.checkpoint.maxTokens")).toBe(12000);

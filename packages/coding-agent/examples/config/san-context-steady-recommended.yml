@@ -16,9 +16,9 @@ san:
       llm:
         enabled: true
         modelRole: pi/smol
-    qualityWindowTokens: 24000
+    qualityWindowTokens: 240000
     reserveRatio: 0.25
-    contextPacket:
+    contextPlan:
       enabled: true
       recentDigests: 5
       maxTokens: 3000

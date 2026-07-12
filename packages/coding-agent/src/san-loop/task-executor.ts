@@ -581,7 +581,8 @@ function parseCommanderResult(run: SanLoopRunSnapshot, mode: SanLoopMode, data: 
 			instructions: commanderAssignmentInstructions(assignmentRecord, objective),
 			acceptanceCriteria: assignmentCriteria.length > 0 ? assignmentCriteria : criteria,
 			checkRefs: checks,
-			contextRefs: run.contextPacketRefs,
+			contextRefs:
+				run.contextPlanRefs && run.contextPlanRefs.length > 0 ? run.contextPlanRefs : run.contextPacketRefs,
 		};
 	});
 	const taskGraph = assignments.map((assignment, _index) =>

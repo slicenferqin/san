@@ -14,11 +14,11 @@ lines.push("");
 lines.push(
 	`Context steady dogfood: ${summary.ok ? "PASS" : "FAIL"} ` +
 		`(${summary.turns} turns, ${summary.digests} digests, ${summary.checkpoints} checkpoints, ` +
-		`${summary.packets} packet, ${summary.injectedMessages} injected message)`,
+		`${summary.plans} plan, ${summary.injectedMessages} injected message)`,
 );
 lines.push(
-	`Final packet ${summary.finalPacketId}: ${summary.finalPacketTokenEstimate}/${summary.finalPacketTokenBudget} tokens; ` +
-		`layers=${summary.finalPacketLayers.join(" -> ")}`,
+	`Final plan ${summary.finalPlanId}: ${summary.finalPlanTokenEstimate}/${summary.finalPlanTokenBudget} tokens; ` +
+		`representations=${summary.finalPlanRepresentations.join(" -> ")}`,
 );
 lines.push("");
 lines.push(summary.reportText);

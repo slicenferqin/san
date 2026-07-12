@@ -6,7 +6,6 @@ import {
 	CONTEXT_PACKET_MESSAGE_TYPE,
 	type ContextCheckpoint,
 	type ContextPacket,
-	TURN_DIGEST_CUSTOM_TYPE,
 	type TurnDigest,
 } from "./types";
 
@@ -90,16 +89,6 @@ function latestPacket(branchEntries: readonly SessionEntry[], packetId: string |
 	return undefined;
 }
 
-function allDigestEntryRefs(branchEntries: readonly SessionEntry[]): string[] {
-	const refs: string[] = [];
-	for (const entry of branchEntries) {
-		if (entry.type !== "custom" || entry.customType !== TURN_DIGEST_CUSTOM_TYPE) continue;
-		if (!isTurnDigest(entry.data)) continue;
-		refs.push(entry.id);
-	}
-	return refs;
-}
-
 function checkpointDigestRefs(branchEntries: readonly SessionEntry[], checkpointRef: string | undefined): string[] {
 	if (!checkpointRef) return [];
 	for (const entry of branchEntries) {
@@ -162,26 +151,25 @@ export function buildContextSteadyPrunedMessages(
 		message => message.role === "custom" && message.customType === CONTEXT_PACKET_MESSAGE_TYPE,
 	);
 	const packet = packetMessage ? latestPacket(branchEntries, packetIdFromMessage(packetMessage)) : undefined;
-	const digestRefs = new Set([
-		...allDigestEntryRefs(branchEntries),
-		...checkpointDigestRefs(branchEntries, packet?.checkpointRef),
-		...(packet?.digestRefs ?? []),
-	]);
+	if (!packet) return [...messages];
+	const digestRefs = new Set([...checkpointDigestRefs(branchEntries, packet.checkpointRef), ...packet.digestRefs]);
 	if (digestRefs.size === 0) return [...messages];
 
 	const coveredEntryIds = digestCoveredEntryIds(branchEntries, digestRefs);
 	if (coveredEntryIds.size === 0) return [...messages];
 
 	const coveredMessageRefs = new WeakSet<AgentMessage>();
-	const coveredMessageKeys = new Set<string>();
-	const coveredCustomMessageKeys = new Set<string>();
+	const coveredMessageKeys = new Map<string, number>();
+	const coveredCustomMessageKeys = new Map<string, number>();
 	for (const entry of branchEntries) {
 		if (!coveredEntryIds.has(entry.id)) continue;
 		if (entry.type === "message") {
 			coveredMessageRefs.add(entry.message);
-			coveredMessageKeys.add(sessionMessageEntryKey(entry));
+			const entryKey = sessionMessageEntryKey(entry);
+			coveredMessageKeys.set(entryKey, (coveredMessageKeys.get(entryKey) ?? 0) + 1);
 		} else if (entry.type === "custom_message" && entry.customType !== CONTEXT_PACKET_MESSAGE_TYPE) {
-			coveredCustomMessageKeys.add(customMessageEntryKey(entry));
+			const entryKey = customMessageEntryKey(entry);
+			coveredCustomMessageKeys.set(entryKey, (coveredCustomMessageKeys.get(entryKey) ?? 0) + 1);
 		}
 	}
 
@@ -190,10 +178,27 @@ export function buildContextSteadyPrunedMessages(
 		const message = messages[index]!;
 		const messageKey = sessionMessageKey(message);
 		const key = customMessageKey(message);
-		const shouldPrune =
-			coveredMessageRefs.has(message) ||
-			(messageKey !== undefined && coveredMessageKeys.has(messageKey)) ||
-			(key !== undefined && coveredCustomMessageKeys.has(key));
+		let shouldPrune = coveredMessageRefs.has(message);
+		if (shouldPrune && messageKey !== undefined) {
+			const remaining = coveredMessageKeys.get(messageKey) ?? 0;
+			if (remaining > 0) {
+				remaining === 1 ? coveredMessageKeys.delete(messageKey) : coveredMessageKeys.set(messageKey, remaining - 1);
+			}
+		}
+		if (!shouldPrune && messageKey !== undefined) {
+			const remaining = coveredMessageKeys.get(messageKey) ?? 0;
+			if (remaining > 0) {
+				shouldPrune = true;
+				remaining === 1 ? coveredMessageKeys.delete(messageKey) : coveredMessageKeys.set(messageKey, remaining - 1);
+			}
+		}
+		if (!shouldPrune && key !== undefined) {
+			const remaining = coveredCustomMessageKeys.get(key) ?? 0;
+			if (remaining > 0) {
+				shouldPrune = true;
+				remaining === 1 ? coveredCustomMessageKeys.delete(key) : coveredCustomMessageKeys.set(key, remaining - 1);
+			}
+		}
 		if (!shouldPrune) {
 			if (pruned) pruned.push(message);
 			continue;

@@ -1,14 +1,12 @@
 import { buildSessionContext } from "../session/session-context";
-import type { CustomEntry, CustomMessageEntry, SessionEntry, SessionMessageEntry } from "../session/session-entries";
-import { buildContextPacketReportText } from "../slash-commands/helpers/context-packet-report";
+import type { CustomEntry, SessionEntry, SessionMessageEntry } from "../session/session-entries";
+import { buildContextPlanReportText } from "../slash-commands/helpers/context-plan-report";
 import { buildContextCheckpoint } from "./checkpoint";
-import { buildContextPacket } from "./packet";
+import { materializeContextPlanMessages } from "./materialize";
+import { type BuiltContextPlan, CONTEXT_PLAN_CUSTOM_TYPE } from "./plan-types";
+import { buildContextPlan } from "./planner";
 import {
 	CONTEXT_CHECKPOINT_CUSTOM_TYPE,
-	CONTEXT_PACKET_CUSTOM_TYPE,
-	CONTEXT_PACKET_MESSAGE_TYPE,
-	type ContextPacket,
-	type ContextPacketSettings,
 	type ContextRecallItem,
 	TURN_DIGEST_CUSTOM_TYPE,
 	TURN_DIGEST_SCHEMA_VERSION,
@@ -19,7 +17,7 @@ export interface ContextSteadyDogfoodOptions {
 	sessionId?: string;
 	turns?: number;
 	recentDigests?: number;
-	packetMaxTokens?: number;
+	planMaxTokens?: number;
 	qualityWindowTokens?: number;
 	reserveRatio?: number;
 	checkpointEveryTurns?: number;
@@ -34,20 +32,22 @@ export interface ContextSteadyDogfoodSummary {
 	turns: number;
 	digests: number;
 	checkpoints: number;
-	packets: number;
+	plans: number;
 	injectedMessages: number;
-	finalPacketId: string;
-	finalPacketLayers: string[];
-	finalPacketDigestRefs: string[];
-	finalPacketCheckpointRef?: string;
-	finalPacketRecallRefs: string[];
-	finalPacketTokenEstimate: number;
-	finalPacketTokenBudget: number;
+	finalPlanId: string;
+	finalPlanRepresentations: string[];
+	finalPlanDigestRefs: string[];
+	finalPlanCheckpointRef?: string;
+	finalPlanRecallRefs: string[];
+	finalPlanTokenEstimate: number;
+	finalPlanTokenBudget: number;
+	materializedMessageCount: number;
+	transcriptMessageCount: number;
 	reportText: string;
 	assertions: Array<{ name: string; ok: boolean; detail: string }>;
 }
 
-const DEFAULT_TURNS = 10;
+const DEFAULT_TURNS = 20;
 const DEFAULT_SESSION_ID = "san-dogfood-session";
 
 function iso(index: number): string {
@@ -133,7 +133,7 @@ function digestEntry(index: number, parentId: string, sessionId: string): Custom
 		nextSteps: [`continue with dogfood turn ${index + 1}`],
 		memoryCandidates: [],
 		tokenStats: { input: 100 + index, output: 20 + index, total: 120 + index * 2 },
-		fallback: true,
+		fallback: false,
 	};
 	return {
 		type: "custom",
@@ -150,25 +150,15 @@ function appendEntry(entries: SessionEntry[], entry: SessionEntry): string {
 	return entry.id;
 }
 
-function packetSettings(options: Required<ContextSteadyDogfoodOptions>): ContextPacketSettings {
-	return {
-		enabled: true,
-		recentDigests: options.recentDigests,
-		maxTokens: options.packetMaxTokens,
-		qualityWindowTokens: options.qualityWindowTokens,
-		reserveRatio: options.reserveRatio,
-	};
-}
-
 function requiredOptions(options: ContextSteadyDogfoodOptions): Required<ContextSteadyDogfoodOptions> {
 	return {
 		sessionId: options.sessionId ?? DEFAULT_SESSION_ID,
 		turns: options.turns ?? DEFAULT_TURNS,
 		recentDigests: options.recentDigests ?? 3,
-		packetMaxTokens: options.packetMaxTokens ?? 2200,
+		planMaxTokens: options.planMaxTokens ?? 2200,
 		qualityWindowTokens: options.qualityWindowTokens ?? 6000,
 		reserveRatio: options.reserveRatio ?? 0.25,
-		checkpointEveryTurns: options.checkpointEveryTurns ?? 4,
+		checkpointEveryTurns: options.checkpointEveryTurns ?? 6,
 		checkpointMaxTokens: options.checkpointMaxTokens ?? 12000,
 		recallItems: options.recallItems ?? [
 			{
@@ -192,26 +182,19 @@ function assertResult(name: string, ok: boolean, detail: string): { name: string
 	return { name, ok, detail };
 }
 
-function finalPacket(entries: readonly SessionEntry[]): ContextPacket | undefined {
+function finalPlan(entries: readonly SessionEntry[]): BuiltContextPlan["audit"] | undefined {
 	for (let index = entries.length - 1; index >= 0; index--) {
 		const entry = entries[index];
-		if (entry?.type !== "custom" || entry.customType !== CONTEXT_PACKET_CUSTOM_TYPE) continue;
-		return entry.data as ContextPacket;
+		if (entry?.type !== "custom" || entry.customType !== CONTEXT_PLAN_CUSTOM_TYPE) continue;
+		return entry.data as BuiltContextPlan["audit"];
 	}
 	return undefined;
 }
 
-function packetEntries(entries: readonly SessionEntry[]): Array<CustomEntry<ContextPacket>> {
+function planEntries(entries: readonly SessionEntry[]): Array<CustomEntry<BuiltContextPlan["audit"]>> {
 	return entries.filter(
-		(entry): entry is CustomEntry<ContextPacket> =>
-			entry.type === "custom" && entry.customType === CONTEXT_PACKET_CUSTOM_TYPE,
-	);
-}
-
-function injectedEntries(entries: readonly SessionEntry[]): Array<CustomMessageEntry<{ packetId: string }>> {
-	return entries.filter(
-		(entry): entry is CustomMessageEntry<{ packetId: string }> =>
-			entry.type === "custom_message" && entry.customType === CONTEXT_PACKET_MESSAGE_TYPE,
+		(entry): entry is CustomEntry<BuiltContextPlan["audit"]> =>
+			entry.type === "custom" && entry.customType === CONTEXT_PLAN_CUSTOM_TYPE,
 	);
 }
 
@@ -229,6 +212,14 @@ function checkpointEntries(entries: readonly SessionEntry[]): SessionEntry[] {
 function messageContainsContent(message: unknown, needle: string): boolean {
 	if (typeof message !== "object" || message === null || !("content" in message)) return false;
 	return JSON.stringify((message as Record<"content", unknown>).content).includes(needle);
+}
+
+function tokenEstimateByEntryRef(entries: readonly SessionEntry[]): Map<string, number> {
+	const estimates = new Map<string, number>();
+	for (const entry of entries) {
+		if (entry.type === "message") estimates.set(entry.id, JSON.stringify(entry.message).length);
+	}
+	return estimates;
 }
 
 export function runContextSteadyDogfood(options: ContextSteadyDogfoodOptions = {}): ContextSteadyDogfoodSummary {
@@ -258,116 +249,130 @@ export function runContextSteadyDogfood(options: ContextSteadyDogfoodOptions = {
 		}
 	}
 
-	const built = buildContextPacket(
+	const built = buildContextPlan({
 		entries,
-		resolved.sessionId,
-		"Continue San context steady dogfood final verification prompt",
-		packetSettings(resolved),
-		{
+		sessionId: resolved.sessionId,
+		requestKey: `${resolved.sessionId}:dogfood-final`,
+		epochId: `epoch_${resolved.sessionId}`,
+		promptGeneration: resolved.turns + 1,
+		settings: {
+			qualityWindowTokens: resolved.qualityWindowTokens,
+			reserveRatio: resolved.reserveRatio,
+			planMaxTokens: resolved.planMaxTokens,
+		},
+		contextWindow: 240000,
+		nonMessageTokens: 20000,
+		baseRequiredEntryRefs: [],
+		currentPromptEntryRefs: [],
+		liveTailEntryRefs: [],
+		tokenEstimateByEntryRef: tokenEstimateByEntryRef(entries),
+		maxDigestMaterials: resolved.recentDigests,
+		rebaseReason: "checkpoint",
+		createdAt: iso(resolved.turns * 3 + 4),
+		recall: {
 			query: "Continue San context steady dogfood final verification prompt",
 			items: [...resolved.recallItems],
 			tokenBudget: resolved.recallMaxTokens,
 		},
-	);
-	if (!built) {
-		throw new Error("Context steady dogfood failed to build a final ContextPacket.");
-	}
+	});
 
 	parentId = appendEntry(entries, {
 		type: "custom",
-		id: "packet-final",
+		id: "plan-final",
 		parentId,
 		timestamp: iso(resolved.turns * 3 + 4),
-		customType: CONTEXT_PACKET_CUSTOM_TYPE,
-		data: built.packet,
-	});
-	appendEntry(entries, {
-		type: "custom_message",
-		id: "packet-final-injected",
-		parentId,
-		timestamp: iso(resolved.turns * 3 + 5),
-		customType: CONTEXT_PACKET_MESSAGE_TYPE,
-		content: built.content,
-		display: false,
-		details: { packetId: built.packet.packetId, digestRefs: built.packet.digestRefs },
-		attribution: "agent",
+		customType: CONTEXT_PLAN_CUSTOM_TYPE,
+		data: built.audit,
 	});
 
 	const digests = digestEntries(entries);
 	const checkpoints = checkpointEntries(entries);
-	const packets = packetEntries(entries);
-	const injected = injectedEntries(entries);
-	const packet = finalPacket(entries);
-	if (!packet) throw new Error("Context steady dogfood did not persist a final ContextPacket.");
+	const plans = planEntries(entries);
+	const plan = finalPlan(entries);
+	if (!plan) throw new Error("Context steady dogfood did not persist a final ContextPlan.");
 
-	const layerNames = packet.layers.map(layer => layer.name);
+	const representations = plan.materials.map(material => material.representation);
+	const digestRefs = plan.materials
+		.filter(material => material.representation === "digest")
+		.flatMap(material => material.entryRefs);
+	const checkpointRef = plan.materials.find(material => material.representation === "checkpoint")?.entryRefs[0];
+	const recallRefs = plan.materials
+		.filter(material => material.representation === "recall")
+		.flatMap(material => material.entryRefs);
 	const llmContext = buildSessionContext(entries);
 	const transcriptContext = buildSessionContext(entries, undefined, undefined, { transcript: true });
-	const llmHasInjectedPacket = llmContext.messages.some(message =>
-		messageContainsContent(message, "<san_context_packet>"),
+	const materializedMessages = materializeContextPlanMessages(llmContext.messages, entries, built);
+	const llmHasPersistedPlan = llmContext.messages.some(message =>
+		messageContainsContent(message, "<san_context_plan>"),
 	);
-	const transcriptHasInjectedPacket = transcriptContext.messages.some(message =>
-		messageContainsContent(message, "<san_context_packet>"),
+	const transcriptHasPersistedPlan = transcriptContext.messages.some(message =>
+		messageContainsContent(message, "<san_context_plan>"),
+	);
+	const materializedHasPlan = materializedMessages.some(message =>
+		messageContainsContent(message, "<san_context_plan>"),
 	);
 
 	const assertions = [
 		assertResult("turn digests", digests.length === resolved.turns, `${digests.length}/${resolved.turns} digests`),
 		assertResult("checkpoint exists", checkpoints.length > 0, `${checkpoints.length} checkpoints`),
-		assertResult("packet persisted", packets.length === 1, `${packets.length} final packet entries`),
-		assertResult("injected message persisted", injected.length === 1, `${injected.length} injected entries`),
+		assertResult("plan persisted", plans.length === 1, `${plans.length} final plan entries`),
 		assertResult(
-			"packet links injected message",
-			injected[0]?.details?.packetId === packet.packetId,
-			`packet=${packet.packetId}, injected=${injected[0]?.details?.packetId ?? "none"}`,
+			"materialized request injects plan",
+			materializedHasPlan,
+			materializedHasPlan ? "provider projection includes ContextPlan" : "provider projection misses ContextPlan",
 		),
 		assertResult(
 			"stable prefix before dynamic layers",
-			layerNames[0] === "stable_checkpoint" && layerNames.at(-1) === "retrieved_context",
-			layerNames.join(" -> "),
+			representations[0] === "checkpoint" && representations.includes("recall"),
+			representations.join(" -> "),
 		),
 		assertResult(
 			"volatile recall layer",
-			packet.layers.some(layer => layer.name === "retrieved_context" && layer.stability === "volatile"),
-			JSON.stringify(packet.layers.find(layer => layer.name === "retrieved_context") ?? null),
+			representations.includes("recall"),
+			JSON.stringify(plan.materials.find(material => material.representation === "recall") ?? null),
 		),
 		assertResult(
-			"packet within budget",
-			packet.tokenEstimate <= packet.tokenBudget,
-			`${packet.tokenEstimate}/${packet.tokenBudget} tokens`,
+			"plan within budget",
+			built.tokenEstimate <= plan.budget.planTokenBudget,
+			`${built.tokenEstimate}/${plan.budget.planTokenBudget} tokens`,
 		),
 		assertResult(
-			"covered digests trimmed",
-			packet.trimDecisions.some(decision => decision.reason === "checkpoint_covered"),
-			JSON.stringify(packet.trimDecisions),
+			"checkpoint covers source",
+			plan.coverage.some(item => item.replacementMaterialId.startsWith("checkpoint_")),
+			JSON.stringify(plan.coverage),
 		),
 		assertResult(
-			"active context hides injected packet",
-			!llmHasInjectedPacket,
-			llmHasInjectedPacket ? "active context includes ContextPacket" : "active context excludes ContextPacket",
+			"active context hides persisted plan",
+			!llmHasPersistedPlan,
+			llmHasPersistedPlan
+				? "active context includes persisted ContextPlan"
+				: "active context excludes persisted ContextPlan",
 		),
 		assertResult(
-			"transcript retains injected packet",
-			transcriptHasInjectedPacket,
-			transcriptHasInjectedPacket ? "transcript includes ContextPacket" : "transcript excludes ContextPacket",
+			"transcript avoids injected plan replay",
+			!transcriptHasPersistedPlan,
+			transcriptHasPersistedPlan ? "transcript includes ContextPlan injection" : "transcript stores audit only",
 		),
 	];
 
-	const reportText = buildContextPacketReportText(entries, { count: 1 });
+	const reportText = buildContextPlanReportText(entries, { count: 1 });
 	return {
 		ok: assertions.every(assertion => assertion.ok),
 		sessionId: resolved.sessionId,
 		turns: resolved.turns,
 		digests: digests.length,
 		checkpoints: checkpoints.length,
-		packets: packets.length,
-		injectedMessages: injected.length,
-		finalPacketId: packet.packetId,
-		finalPacketLayers: layerNames,
-		finalPacketDigestRefs: packet.digestRefs,
-		finalPacketCheckpointRef: packet.checkpointRef,
-		finalPacketRecallRefs: packet.recallRefs,
-		finalPacketTokenEstimate: packet.tokenEstimate,
-		finalPacketTokenBudget: packet.tokenBudget,
+		plans: plans.length,
+		injectedMessages: 0,
+		finalPlanId: plan.planId,
+		finalPlanRepresentations: representations,
+		finalPlanDigestRefs: digestRefs,
+		finalPlanCheckpointRef: checkpointRef,
+		finalPlanRecallRefs: recallRefs,
+		finalPlanTokenEstimate: built.tokenEstimate,
+		finalPlanTokenBudget: plan.budget.planTokenBudget,
+		materializedMessageCount: materializedMessages.length,
+		transcriptMessageCount: transcriptContext.messages.length,
 		reportText,
 		assertions,
 	};

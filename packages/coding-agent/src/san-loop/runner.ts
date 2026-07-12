@@ -74,6 +74,7 @@ export interface RunSanLoopOptions {
 	maxRetries?: number;
 	maxWorkers?: number;
 	maxTurns?: number;
+	contextPlanRefs?: readonly string[];
 	contextPacketRefs?: readonly string[];
 	runId?: string;
 }
@@ -93,7 +94,7 @@ function taskAssignment(run: SanLoopRunSnapshot, task: SanLoopTaskNode): SanLoop
 		instructions: task.description?.trim() || task.title,
 		acceptanceCriteria: task.acceptanceCriteria,
 		checkRefs: task.checkRefs,
-		contextRefs: run.contextPacketRefs,
+		contextRefs: run.contextPlanRefs && run.contextPlanRefs.length > 0 ? run.contextPlanRefs : run.contextPacketRefs,
 	};
 }
 
@@ -174,6 +175,7 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 		runId: options.runId,
 		maxRetries: options.maxRetries ?? policy.maxRetries,
 		initialRemainingTurns: remainingTurns,
+		contextPlanRefs: options.contextPlanRefs ? [...options.contextPlanRefs] : [],
 		contextPacketRefs: options.contextPacketRefs ? [...options.contextPacketRefs] : [],
 	});
 	let run = runCreated.run;

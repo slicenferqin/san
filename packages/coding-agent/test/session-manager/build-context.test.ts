@@ -10,6 +10,7 @@ import type {
 	ThinkingLevelChangeEntry,
 } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import * as snapcompact from "@oh-my-pi/snapcompact";
+import { CONTEXT_PLAN_MESSAGE_TYPE } from "../../src/context-steady/plan-types";
 import { CONTEXT_PACKET_MESSAGE_TYPE } from "../../src/context-steady/types";
 
 function msg(id: string, parentId: string | null, role: "user" | "assistant", text: string): SessionMessageEntry {
@@ -138,6 +139,27 @@ describe("buildSessionContext", () => {
 
 			expect(JSON.stringify(active.messages)).not.toContain("<san_context_packet>");
 			expect(JSON.stringify(transcript.messages)).toContain("<san_context_packet>");
+		});
+
+		it("hides persisted San ContextPlan injections from active context but keeps them in transcripts", () => {
+			const planMessage: CustomMessageEntry = {
+				type: "custom_message",
+				id: "1",
+				parentId: null,
+				timestamp: "2025-01-01T00:00:00Z",
+				customType: CONTEXT_PLAN_MESSAGE_TYPE,
+				content: "<san_context_plan>old plan</san_context_plan>",
+				display: false,
+				details: { planId: "plan_old" },
+				attribution: "agent",
+			};
+			const entries: SessionEntry[] = [planMessage, msg("2", "1", "user", "next prompt")];
+
+			const active = buildSessionContext(entries);
+			const transcript = buildSessionContext(entries, undefined, undefined, { transcript: true });
+
+			expect(JSON.stringify(active.messages)).not.toContain("<san_context_plan>");
+			expect(JSON.stringify(transcript.messages)).toContain("<san_context_plan>");
 		});
 
 		it("simple conversation", () => {

@@ -1,0 +1,82 @@
+import type { ContextPlanQualityGateAudit, ContextPlanQualityGateOptions } from "./plan-types";
+
+function unique(values: readonly string[]): string[] {
+	return [...new Set(values.filter(value => value.length > 0))];
+}
+
+function protectedToolPairRefs(options: ContextPlanQualityGateOptions): string[] {
+	const activeToolCallIds = new Set(options.activeToolCallIds ?? []);
+	const pairs =
+		activeToolCallIds.size > 0
+			? options.sourceIndex.toolPairs.filter(pair => activeToolCallIds.has(pair.toolCallId))
+			: options.sourceIndex.toolPairs.filter(pair => !pair.complete);
+	return pairs.flatMap(pair => pair.entryIds);
+}
+
+function requiredEntryRefs(options: ContextPlanQualityGateOptions): string[] {
+	return unique([
+		...(options.baseRequiredEntryRefs ?? []),
+		...(options.currentPromptEntryRefs ?? []),
+		...(options.liveTailEntryRefs ?? []),
+		...protectedToolPairRefs(options),
+	]);
+}
+
+function tokenEstimate(refs: readonly string[], estimates: ReadonlyMap<string, number> | undefined): number {
+	if (!estimates) return 0;
+	return refs.reduce((sum, ref) => sum + Math.max(0, Math.floor(estimates.get(ref) ?? 0)), 0);
+}
+
+export function evaluateContextPlanQualityGate(options: ContextPlanQualityGateOptions): ContextPlanQualityGateAudit {
+	const sourceEntryIds = new Set(options.sourceIndex.entryIds);
+	const protectedEntryRefs = requiredEntryRefs(options);
+	const missingEntryRefs = protectedEntryRefs.filter(ref => !sourceEntryIds.has(ref));
+	const requiredTokens = tokenEstimate(protectedEntryRefs, options.tokenEstimateByEntryRef);
+	const selectedInputTokens = options.nonMessageTokens + requiredTokens;
+	const projectedInputTokens = options.projectedInputTokens;
+	const reasons: string[] = [];
+
+	if (missingEntryRefs.length > 0) reasons.push("required_entries_missing_from_source_index");
+	if (requiredTokens > options.messageBudget) reasons.push("protected_entries_exceed_message_budget");
+	if (selectedInputTokens > options.controlMax) reasons.push("protected_entries_exceed_control_band");
+	if (selectedInputTokens > options.burstCeiling) reasons.push("protected_entries_exceed_burst_ceiling");
+	if (projectedInputTokens !== undefined && projectedInputTokens > options.controlMax) {
+		reasons.push("projected_input_exceeds_control_band");
+	}
+	if (projectedInputTokens !== undefined && projectedInputTokens > options.burstCeiling) {
+		reasons.push("projected_input_exceeds_burst_ceiling");
+	}
+
+	let outcome: ContextPlanQualityGateAudit["outcome"] = "pass";
+	if (
+		missingEntryRefs.length > 0 ||
+		selectedInputTokens > options.burstCeiling ||
+		(projectedInputTokens !== undefined && projectedInputTokens > options.burstCeiling)
+	) {
+		outcome = "hard_pressure";
+	} else if (
+		requiredTokens > options.messageBudget ||
+		selectedInputTokens > options.controlMax ||
+		(projectedInputTokens !== undefined && projectedInputTokens > options.controlMax)
+	) {
+		outcome = "burst_required";
+	}
+
+	return {
+		outcome,
+		reasons,
+		protectedEntryRefs,
+		missingEntryRefs,
+		...(projectedInputTokens !== undefined
+			? { projectedInputTokens, projectedInputLimit: options.burstCeiling }
+			: {}),
+		...(outcome === "burst_required"
+			? {
+					requiredBurstTokens: Math.max(
+						0,
+						Math.max(selectedInputTokens, projectedInputTokens ?? 0) - options.controlMax,
+					),
+				}
+			: {}),
+	};
+}
