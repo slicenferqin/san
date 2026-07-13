@@ -25,7 +25,7 @@ type TestRoleSelectArgs = [
 	selector?: string,
 	action?: ModelSelectorAction,
 ];
-type TestRoleSelectCallback = (...args: TestRoleSelectArgs) => void;
+type TestRoleSelectCallback = (...args: TestRoleSelectArgs) => void | Promise<void>;
 
 function isSelectedMenuLine(line: string): boolean {
 	const trimmed = line.trimStart();
@@ -96,7 +96,7 @@ function createScopedSelector(
 	models: Model[],
 	settings: Settings,
 	onSelect: TestRoleSelectCallback,
-	options?: { temporaryOnly?: boolean; currentContextTokens?: number },
+	options?: { temporaryOnly?: boolean; currentContextTokens?: number; onCancel?: () => void },
 ): ModelSelectorComponent {
 	const modelRegistry = {
 		getAll: () => models,
@@ -118,7 +118,7 @@ function createScopedSelector(
 			selector?: string,
 			action?: ModelSelectorAction,
 		) => onSelect(model, role, thinkingLevel, selector, action),
-		() => {},
+		options?.onCancel ?? (() => {}),
 		options,
 	);
 }
@@ -273,10 +273,17 @@ describe("ModelSelector role badge thinking display", () => {
 		const small = createContextTestModel("a-small", 4096);
 		const large = createContextTestModel("b-large", 128_000);
 		const selected: string[] = [];
-		const selector = createScopedSelector([small, large], settings, model => selected.push(model.id), {
-			temporaryOnly: true,
-			currentContextTokens: 6000,
-		});
+		const selector = createScopedSelector(
+			[small, large],
+			settings,
+			model => {
+				selected.push(model.id);
+			},
+			{
+				temporaryOnly: true,
+				currentContextTokens: 6000,
+			},
+		);
 		await Bun.sleep(0);
 		installTestTheme();
 
@@ -297,9 +304,50 @@ describe("ModelSelector role badge thinking display", () => {
 		installTestTheme();
 
 		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
-		expect(rendered).toContain("Temporary model selection is session-only");
-		expect(rendered).toContain("Alt+M or /model");
-		expect(rendered).toContain("default/smol/plan/task/slow/custom roles");
+		expect(rendered).toContain("Session model only");
+		expect(rendered).toContain("/model roles");
+	});
+
+	test("keeps provider metadata visible in a 39-column session picker", async () => {
+		installTestTheme();
+		const settings = Settings.isolated({});
+		const model = createContextTestModel("session-model", 128_000);
+		const selector = createScopedSelector([model], settings, () => {}, { temporaryOnly: true });
+		await Bun.sleep(0);
+		installTestTheme();
+
+		const rendered = normalizeRenderedText(selector.render(39).join("\n"));
+		expect(rendered).toContain("test/session-model");
+	});
+
+	test("ignores repeated Enter and Escape while a session switch is pending", async () => {
+		installTestTheme();
+		const settings = Settings.isolated({});
+		const model = createContextTestModel("session-model", 128_000);
+		const selected = vi.fn();
+		const cancelled = vi.fn();
+		const gate = Promise.withResolvers<void>();
+		const selector = createScopedSelector(
+			[model],
+			settings,
+			async () => {
+				selected();
+				await gate.promise;
+			},
+			{ temporaryOnly: true, onCancel: cancelled },
+		);
+		await Bun.sleep(0);
+		installTestTheme();
+
+		selector.handleInput("\n");
+		selector.handleInput("\x1b");
+		selector.handleInput("\n");
+		expect(selected).toHaveBeenCalledTimes(1);
+		expect(cancelled).not.toHaveBeenCalled();
+
+		gate.resolve();
+		await gate.promise;
+		await Promise.resolve();
 	});
 
 	test("opens over-context default role actions for global configuration", async () => {

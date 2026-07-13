@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added optional masked rendering to the single-line `Input` component while preserving the submitted value.
+
 ## [16.3.14] - 2026-07-09
 
 ### Fixed

@@ -7,16 +7,19 @@ import {
 
 function createRuntime() {
 	const showProviderSetup = vi.fn(async () => {});
+	const showConnectSelector = vi.fn(async () => {});
 	const showWarning = vi.fn();
 	const setText = vi.fn();
 	return {
 		showProviderSetup,
+		showConnectSelector,
 		showWarning,
 		setText,
 		runtime: {
 			ctx: {
 				editor: { setText } as unknown as InteractiveModeContext["editor"],
 				showProviderSetup,
+				showConnectSelector,
 				showWarning,
 			} as unknown as InteractiveModeContext,
 			handleBackgroundCommand: () => {},
@@ -40,24 +43,26 @@ describe("/setup slash command", () => {
 		expect(harness.setText).toHaveBeenCalledWith("");
 	});
 
-	it("opens provider setup for /setup providers", async () => {
+	it("forwards /setup providers to the unified connect selector", async () => {
 		const harness = createRuntime();
 
 		const handled = await executeBuiltinSlashCommand("/setup providers", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.showProviderSetup).toHaveBeenCalledTimes(1);
+		expect(harness.showConnectSelector).toHaveBeenCalledTimes(1);
+		expect(harness.showProviderSetup).not.toHaveBeenCalled();
 		expect(harness.showWarning).not.toHaveBeenCalled();
 		expect(harness.setText).toHaveBeenCalledWith("");
 	});
 
-	it("opens provider setup through the /providers alias", async () => {
+	it("forwards the /providers alias to the unified connect selector", async () => {
 		const harness = createRuntime();
 
 		const handled = await executeBuiltinSlashCommand("/providers", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.showProviderSetup).toHaveBeenCalledTimes(1);
+		expect(harness.showConnectSelector).toHaveBeenCalledTimes(1);
+		expect(harness.showProviderSetup).not.toHaveBeenCalled();
 		expect(harness.setText).toHaveBeenCalledWith("");
 	});
 

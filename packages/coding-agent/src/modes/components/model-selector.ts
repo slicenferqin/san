@@ -14,7 +14,9 @@ import {
 	type Tab,
 	TabBar,
 	Text,
+	TruncatedText,
 	type TUI,
+	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
 import { formatNumber } from "@oh-my-pi/pi-utils";
@@ -30,7 +32,7 @@ import {
 	getConfiguredThinkingLevelMetadata,
 	parseConfiguredThinkingLevel,
 } from "../../thinking";
-import { getTabBarTheme } from "../shared";
+import { getTabBarTheme, sanitizeStatusText } from "../shared";
 import { DynamicBorder } from "./dynamic-border";
 
 function makeInvertedBadge(label: string, color: ThemeColor): string {
@@ -98,7 +100,7 @@ type RoleSelectCallback = (
 	thinkingLevel?: ConfiguredThinkingLevel,
 	selector?: string,
 	action?: ModelSelectorAction,
-) => void;
+) => void | Promise<void>;
 type CancelCallback = () => void;
 interface MenuRoleAction {
 	label: string;
@@ -118,20 +120,21 @@ const STATIC_PROVIDER_TABS: ProviderTabState[] = [{ id: ALL_TAB, label: ALL_TAB 
 const MODEL_TAB_REFRESH_DEBOUNCE_MS = 120;
 
 function formatProviderTabLabel(providerId: string): string {
-	return providerId.replace(/[-_]+/g, " ").toUpperCase();
+	return sanitizeStatusText(providerId).replace(/[-_]+/g, " ").toUpperCase();
 }
 
 function createProviderTab(providerId: string): ProviderTabState {
 	return { id: providerId, label: formatProviderTabLabel(providerId), providerId };
 }
-const TEMPORARY_MODEL_PICKER_HINT =
-	"Temporary model selection is session-only. Use Alt+M or /model for role models (default/smol/plan/task/slow/custom roles).";
+const SESSION_MODEL_PICKER_HINT =
+	"Session model only. Enter selects and closes. Use /model roles for default/smol/plan/task bindings.";
+const ROLE_MODEL_PICKER_HINT = "Role assignment mode. Enter opens role/thinking menu. Session switch: /model or Alt+M.";
 
 /**
  * Component that renders a model selector with provider tabs and context menu.
- * - Tab/Arrow Left/Right: Switch between provider tabs
+ * - Tab/Arrow Left/Right: Switch between provider tabs (role mode; optional in session mode)
  * - Arrow Up/Down: Navigate model list
- * - Enter: Open context menu to select action
+ * - Enter: session/direct mode selects immediately; role mode opens action menu
  * - Escape: Close menu or selector
  */
 export class ModelSelectorComponent extends Container {
@@ -153,8 +156,13 @@ export class ModelSelectorComponent extends Container {
 	#scopedModels: ReadonlyArray<ScopedModelItem>;
 	#temporaryOnly: boolean;
 	#directSelect: boolean;
+	#hideProviderTabs: boolean;
+	#providerFilter: string | undefined;
 	#pickerHint: string | undefined;
 	#currentContextTokens: number;
+	#terminalColumns: number;
+	#disposed = false;
+	#selectionPending = false;
 	#listLineOffset = 0;
 	#listStartIndex = 0;
 	#listVisibleCount = 0;
@@ -186,9 +194,14 @@ export class ModelSelectorComponent extends Container {
 		options?: {
 			temporaryOnly?: boolean;
 			directSelect?: boolean;
+			/** Hide provider tab bar; provider stays on each model row / detail. */
+			hideProviderTabs?: boolean;
+			/** Limit the list to one provider (after /connect). */
+			providerFilter?: string;
 			pickerHint?: string;
 			initialSearchInput?: string;
 			currentContextTokens?: number;
+			terminalColumns?: number;
 		},
 	) {
 		super();
@@ -201,7 +214,10 @@ export class ModelSelectorComponent extends Container {
 		this.#onCancelCallback = onCancel;
 		this.#temporaryOnly = options?.temporaryOnly ?? false;
 		this.#directSelect = options?.directSelect ?? false;
+		this.#hideProviderTabs = options?.hideProviderTabs ?? (this.#temporaryOnly || this.#directSelect);
+		this.#providerFilter = options?.providerFilter?.trim() || undefined;
 		this.#pickerHint = options?.pickerHint;
+		this.#terminalColumns = options?.terminalColumns ?? process.stdout.columns ?? 80;
 		const currentContextTokens = options?.currentContextTokens ?? 0;
 		this.#currentContextTokens =
 			Number.isFinite(currentContextTokens) && currentContextTokens > 0 ? Math.floor(currentContextTokens) : 0;
@@ -221,16 +237,16 @@ export class ModelSelectorComponent extends Container {
 		const hintText =
 			scopedModels.length > 0
 				? "Showing models from --models scope"
-				: "Only showing models with configured API keys (see README for details)";
-		this.addChild(new Text(theme.fg("warning", hintText), 0, 0));
+				: this.#providerFilter
+					? `Showing models for ${this.#providerFilter}`
+					: "Only showing models with configured API keys";
+		this.addChild(new TruncatedText(theme.fg("warning", sanitizeStatusText(hintText))));
 		this.addChild(new Spacer(1));
-		if (this.#temporaryOnly) {
-			this.addChild(new Text(theme.fg("muted", TEMPORARY_MODEL_PICKER_HINT), 0, 0));
-			this.addChild(new Spacer(1));
-		} else if (this.#directSelect && this.#pickerHint) {
-			this.addChild(new Text(theme.fg("muted", this.#pickerHint), 0, 0));
-			this.addChild(new Spacer(1));
-		}
+		const modeHint =
+			this.#pickerHint ??
+			(this.#temporaryOnly || this.#directSelect ? SESSION_MODEL_PICKER_HINT : ROLE_MODEL_PICKER_HINT);
+		this.addChild(new TruncatedText(theme.fg("muted", sanitizeStatusText(modeHint))));
+		this.addChild(new Spacer(1));
 
 		// Create header container for tab bar
 		this.#headerContainer = new Container();
@@ -244,10 +260,10 @@ export class ModelSelectorComponent extends Container {
 			this.#searchInput.setValue(initialSearchInput);
 		}
 		this.#searchInput.onSubmit = () => {
-			// Enter on search input opens menu if we have an enabled selection
-			if (this.#getSelectedItem()) {
-				this.#openMenu();
-			}
+			const selected = this.#getSelectedItem();
+			if (!selected || this.#isItemDisabled(selected)) return;
+			if (this.#temporaryOnly || this.#directSelect) this.#handleSelect(selected, null);
+			else this.#openMenu();
 		};
 		this.addChild(this.#searchInput);
 
@@ -278,12 +294,17 @@ export class ModelSelectorComponent extends Container {
 		if (this.#scopedModels.length === 0) {
 			this.#modelRegistry
 				.refresh("offline")
-				.then(() => this.#syncFromRegistryState())
+				.then(() => {
+					if (!this.#disposed) this.#syncFromRegistryState();
+				})
 				.catch(error => {
+					if (this.#disposed) return;
 					this.#errorMessage = error instanceof Error ? error.message : String(error);
 					this.#updateList();
 				})
-				.finally(() => this.#tui.requestRender());
+				.finally(() => {
+					if (!this.#disposed) this.#tui.requestRender();
+				});
 		}
 	}
 
@@ -474,6 +495,7 @@ export class ModelSelectorComponent extends Container {
 	 * models must not yank the user's selection out from under a pending Enter.
 	 */
 	#syncFromRegistryState(): void {
+		if (this.#disposed) return;
 		const selectedKey = this.#getSelectedItem()?.selector;
 		this.#loadModelsFromCurrentRegistryState();
 		this.#buildProviderTabs();
@@ -490,6 +512,16 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	#buildProviderTabs(): void {
+		if (this.#hideProviderTabs) {
+			if (this.#providerFilter) {
+				this.#providers = [createProviderTab(this.#providerFilter)];
+				this.#activeTabIndex = 0;
+			} else {
+				this.#providers = STATIC_PROVIDER_TABS;
+				this.#activeTabIndex = 0;
+			}
+			return;
+		}
 		const activeTabId = this.#getActiveTab().id;
 		const providerSet = new Set<string>();
 		for (const item of this.#allModels) {
@@ -521,10 +553,11 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	#startRefreshSpinner(): void {
-		if (this.#refreshSpinnerInterval) {
+		if (this.#disposed || this.#refreshSpinnerInterval) {
 			return;
 		}
 		this.#refreshSpinnerInterval = setInterval(() => {
+			if (this.#disposed) return;
 			const frameCount = theme.spinnerFrames.length;
 			if (frameCount > 0) {
 				this.#refreshSpinnerFrame = (this.#refreshSpinnerFrame + 1) % frameCount;
@@ -567,6 +600,7 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	#scheduleSelectedProviderRefresh(): void {
+		if (this.#disposed) return;
 		const providerId = this.#getActiveProviderId();
 		if (this.#scopedModels.length > 0 || !providerId) {
 			return;
@@ -577,6 +611,7 @@ export class ModelSelectorComponent extends Container {
 		this.#setProviderRefreshing(providerId, true);
 		const timer = setTimeout(() => {
 			this.#scheduledProviderRefreshes.delete(providerId);
+			if (this.#disposed) return;
 			void this.#refreshProviderInBackground(providerId);
 		}, MODEL_TAB_REFRESH_DEBOUNCE_MS);
 		this.#scheduledProviderRefreshes.set(providerId, timer);
@@ -585,23 +620,39 @@ export class ModelSelectorComponent extends Container {
 	async #refreshProviderInBackground(providerId: string): Promise<void> {
 		try {
 			await this.#modelRegistry.refreshProvider(providerId, "online");
+			if (this.#disposed) return;
 			// Provider refresh already updated the registry snapshot. Re-reading it
 			// here must stay purely in-memory — do not call modelRegistry.refresh()
 			// again or tab switches will pay an extra whole-registry reload after the
 			// network round-trip completes.
 			this.#syncFromRegistryState();
 		} catch (error) {
+			if (this.#disposed) return;
 			this.#errorMessage = error instanceof Error ? error.message : String(error);
 			this.#updateList();
 		} finally {
-			this.#setProviderRefreshing(providerId, false);
-			this.#updateTabBar();
-			this.#tui.requestRender();
+			if (!this.#disposed) {
+				this.#setProviderRefreshing(providerId, false);
+				this.#updateTabBar();
+				this.#tui.requestRender();
+			}
 		}
 	}
 
 	#updateTabBar(): void {
 		this.#headerContainer.clear();
+		this.#tabBar = null;
+		if (this.#hideProviderTabs) {
+			const refreshStatusText = this.#getActiveProviderRefreshStatusText();
+			if (refreshStatusText) {
+				this.#headerContainer.addChild(new Text(refreshStatusText, 0, 0));
+			} else if (this.#providerFilter) {
+				this.#headerContainer.addChild(
+					new TruncatedText(theme.fg("dim", `  Provider: ${sanitizeStatusText(this.#providerFilter)}`)),
+				);
+			}
+			return;
+		}
 
 		const tabs: Tab[] = this.#providers.map(provider => ({ id: provider.id, label: provider.label }));
 		const tabBar = new TabBar("Models", tabs, getTabBarTheme(), this.#activeTabIndex);
@@ -711,7 +762,7 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	#filterModels(query: string): void {
-		const activeProviderId = this.#getActiveProviderId();
+		const activeProviderId = this.#providerFilter ?? this.#getActiveProviderId();
 
 		const baseModels = activeProviderId
 			? this.#allModels.filter(m => m.provider === activeProviderId)
@@ -776,7 +827,7 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	#getProviderEmptyStateMessage(): string | undefined {
-		const activeProviderId = this.#getActiveProviderId();
+		const activeProviderId = this.#providerFilter ?? this.#getActiveProviderId();
 		if (!activeProviderId || this.#searchInput.getValue().trim()) {
 			return undefined;
 		}
@@ -807,10 +858,12 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	#updateList(): void {
+		if (this.#disposed) return;
 		this.#listContainer.clear();
 		const visibleItems = this.#filteredModels;
 
-		const maxVisible = 10;
+		const terminalRows = this.#tui.terminal?.rows ?? 0;
+		const maxVisible = terminalRows > 0 ? Math.max(3, Math.min(10, terminalRows - 16)) : 10;
 		const startIndex = Math.max(
 			0,
 			Math.min(this.#selectedIndex - Math.floor(maxVisible / 2), visibleItems.length - maxVisible),
@@ -819,7 +872,10 @@ export class ModelSelectorComponent extends Container {
 		this.#listStartIndex = startIndex;
 		this.#listVisibleCount = Math.max(0, endIndex - startIndex);
 
-		const showProvider = this.#getActiveTabId() === ALL_TAB;
+		// Session/direct path always shows provider as row metadata. Role mode
+		// keeps provider prefix on the ALL tab only.
+		const showProvider = this.#hideProviderTabs || this.#getActiveTabId() === ALL_TAB;
+		const narrow = this.#terminalColumns < 60;
 
 		const rows: string[] = [];
 		// Show visible slice of filtered models
@@ -832,47 +888,42 @@ export class ModelSelectorComponent extends Container {
 			const disabledSuffix = this.#formatContextLimitSuffix(item.model);
 
 			// Build role badges. Solid badges are configured; outlined badges are auto-selected defaults.
+			// Hide secondary capability badges on narrow terminals; full id is in detail.
 			const roleBadgeTokens: string[] = [];
-			for (const role of MODEL_ROLE_IDS) {
-				const { tag, color, hidden } = getRoleInfo(role, this.#settings);
-				if (hidden) continue;
-				const assigned = this.#roles[role];
-				if (!tag || !assigned || !modelsAreEqual(assigned.model, item.model)) continue;
+			if (!narrow && !this.#temporaryOnly && !this.#directSelect) {
+				for (const role of MODEL_ROLE_IDS) {
+					const { tag, color, hidden } = getRoleInfo(role, this.#settings);
+					if (hidden) continue;
+					const assigned = this.#roles[role];
+					if (!tag || !assigned || !modelsAreEqual(assigned.model, item.model)) continue;
 
-				roleBadgeTokens.push(makeRoleBadgeToken(tag, color ?? "success", assigned));
-			}
-			// Custom role badges
-			for (const [role, assigned] of Object.entries(this.#roles)) {
-				if (role in MODEL_ROLES || !assigned || !modelsAreEqual(assigned.model, item.model)) continue;
-				const roleInfo = getRoleInfo(role, this.#settings);
-				const badgeLabel = roleInfo.tag ?? roleInfo.name;
-				roleBadgeTokens.push(makeRoleBadgeToken(badgeLabel, roleInfo.color ?? "muted", assigned));
+					roleBadgeTokens.push(makeRoleBadgeToken(tag, color ?? "success", assigned));
+				}
+				// Custom role badges
+				for (const [role, assigned] of Object.entries(this.#roles)) {
+					if (role in MODEL_ROLES || !assigned || !modelsAreEqual(assigned.model, item.model)) continue;
+					const roleInfo = getRoleInfo(role, this.#settings);
+					const badgeLabel = roleInfo.tag ?? roleInfo.name;
+					roleBadgeTokens.push(makeRoleBadgeToken(badgeLabel, roleInfo.color ?? "muted", assigned));
+				}
 			}
 			const badgeText = roleBadgeTokens.length > 0 ? ` ${roleBadgeTokens.join(" ")}` : "";
 
 			let line = "";
-			if (isSelected) {
-				const prefix = theme.fg("accent", `${theme.nav.cursor} `);
-				if (showProvider) {
-					const providerPrefix = theme.fg("dim", `${item.provider}/`);
-					line = `${prefix}${providerPrefix}${theme.fg("accent", item.id)}${badgeText}${disabledSuffix}`;
-				} else {
-					line = `${prefix}${theme.fg("accent", item.id)}${badgeText}${disabledSuffix}`;
-				}
+			const prefix = isSelected ? theme.fg("accent", `${theme.nav.cursor} `) : "  ";
+			const safeId = sanitizeStatusText(item.id);
+			const idText = isSelected ? theme.fg("accent", safeId) : safeId;
+			if (showProvider) {
+				const providerPrefix = theme.fg("dim", `${sanitizeStatusText(item.provider)}/`);
+				line = `${prefix}${providerPrefix}${idText}${badgeText}${disabledSuffix}`;
 			} else {
-				const prefix = "  ";
-				if (showProvider) {
-					const providerPrefix = theme.fg("dim", `${item.provider}/`);
-					line = `${prefix}${providerPrefix}${item.id}${badgeText}${disabledSuffix}`;
-				} else {
-					line = `${prefix}${item.id}${badgeText}${disabledSuffix}`;
-				}
+				line = `${prefix}${idText}${badgeText}${disabledSuffix}`;
 			}
 
 			if (isDisabled) {
 				line = theme.fg("dim", Bun.stripANSI(line));
 			}
-			rows.push(line);
+			rows.push(truncateToWidth(line, Math.max(1, this.#terminalColumns)));
 		}
 
 		if (rows.length > 0) {
@@ -888,7 +939,7 @@ export class ModelSelectorComponent extends Container {
 
 		// Show error message or "no results" if empty
 		if (this.#errorMessage) {
-			const errorLines = String(this.#errorMessage).split("\n");
+			const errorLines = sanitizeStatusText(String(this.#errorMessage)).split("\n");
 			for (const line of errorLines) {
 				this.#listContainer.addChild(new Text(theme.fg("error", line), 0, 0));
 			}
@@ -914,9 +965,27 @@ export class ModelSelectorComponent extends Container {
 						` — current context ${formatNumber(this.#currentContextTokens).toLowerCase()} > ${formatNumber(selected.model.contextWindow ?? 0).toLowerCase()} limit`,
 					)
 				: "";
-			this.#listContainer.addChild(
-				new Text(theme.fg("muted", `  Model Name: ${selected.model.name}`) + limitWarning, 0, 0),
-			);
+			const fullId = `${sanitizeStatusText(selected.provider)}/${sanitizeStatusText(selected.id)}`;
+			this.#listContainer.addChild(new TruncatedText(theme.fg("muted", `  ${fullId}`) + limitWarning));
+			if (this.#terminalColumns >= 60 && selected.model.name && selected.model.name !== selected.id) {
+				this.#listContainer.addChild(
+					new TruncatedText(theme.fg("dim", `  ${sanitizeStatusText(selected.model.name)}`)),
+				);
+			}
+			if (this.#terminalColumns >= 60) {
+				const caps: string[] = [];
+				if (selected.model.contextWindow) {
+					caps.push(`${formatNumber(selected.model.contextWindow).toLowerCase()} ctx`);
+				}
+				if (selected.model.maxTokens) {
+					caps.push(`${formatNumber(selected.model.maxTokens).toLowerCase()} out`);
+				}
+				if (selected.model.reasoning) caps.push("thinking");
+				if (selected.model.input?.includes("image")) caps.push("vision");
+				if (caps.length > 0) {
+					this.#listContainer.addChild(new Text(theme.fg("dim", `  ${caps.join(" · ")}`), 0, 0));
+				}
+			}
 		}
 	}
 	#getResolvedRoleThinkingLevel(
@@ -1089,9 +1158,14 @@ export class ModelSelectorComponent extends Container {
 	 * lands so routed mouse events can be hit-tested against it.
 	 */
 	override render(width: number): readonly string[] {
+		const nextWidth = Math.max(1, width);
+		if (nextWidth !== this.#terminalColumns) {
+			this.#terminalColumns = nextWidth;
+			this.#updateList();
+		}
 		const lines: string[] = [];
 		for (const child of this.children) {
-			const childLines = child.render(Math.max(1, width));
+			const childLines = child.render(nextWidth);
 			if (child === this.#listContainer) {
 				this.#listLineOffset = lines.length;
 			}
@@ -1100,8 +1174,19 @@ export class ModelSelectorComponent extends Container {
 		return lines;
 	}
 
+	override dispose(): void {
+		if (this.#disposed) return;
+		this.#disposed = true;
+		for (const timer of this.#scheduledProviderRefreshes.values()) clearTimeout(timer);
+		this.#scheduledProviderRefreshes.clear();
+		this.#refreshingProviders.clear();
+		if (this.#refreshSpinnerInterval) clearInterval(this.#refreshSpinnerInterval);
+		this.#refreshSpinnerInterval = undefined;
+		super.dispose();
+	}
+
 	routeMouse(event: SgrMouseEvent, line: number, _col: number): void {
-		if (this.#isMenuOpen) return;
+		if (this.#isMenuOpen || this.#selectionPending) return;
 
 		if (event.wheel !== null) {
 			this.#moveSelection(event.wheel);
@@ -1134,6 +1219,7 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	handleInput(keyData: string): void {
+		if (this.#selectionPending) return;
 		if (this.#isMenuOpen) {
 			this.#handleMenuInput(keyData);
 			return;
@@ -1250,12 +1336,12 @@ export class ModelSelectorComponent extends Container {
 		}
 		// For temporary role, don't save to settings - just notify caller
 		if (role === null) {
-			this.#onSelectCallback(item.model, null, undefined, item.selector, action);
+			void this.#selectDirect(item, action);
 			return;
 		}
 
 		if (action === "retryFallback") {
-			this.#onSelectCallback(item.model, role, undefined, item.selector, action);
+			void this.#onSelectCallback(item.model, role, undefined, item.selector, action);
 			return;
 		}
 
@@ -1265,10 +1351,28 @@ export class ModelSelectorComponent extends Container {
 		this.#roles[role] = { model: item.model, thinkingLevel: selectedThinkingLevel, autoSelected: false };
 
 		// Notify caller (for updating agent state if needed)
-		this.#onSelectCallback(item.model, role, selectedThinkingLevel, item.selector, action);
+		void this.#onSelectCallback(item.model, role, selectedThinkingLevel, item.selector, action);
 
 		// Update list to show new badges
 		this.#updateList();
+	}
+
+	async #selectDirect(item: ModelItem, action: ModelSelectorAction): Promise<void> {
+		if (this.#selectionPending || this.#disposed) return;
+		this.#selectionPending = true;
+		try {
+			await this.#onSelectCallback(item.model, null, undefined, item.selector, action);
+		} catch (error) {
+			if (!this.#disposed) {
+				this.#errorMessage = error instanceof Error ? error.message : String(error);
+				this.#updateList();
+			}
+		} finally {
+			if (!this.#disposed) {
+				this.#selectionPending = false;
+				this.#tui.requestRender();
+			}
+		}
 	}
 
 	getSearchInput(): Input {

@@ -5,6 +5,7 @@
 ### Added
 
 - Added OpenAI-compatible request support for explicit `max` and `ultra` reasoning efforts advertised by custom models, including provider-error fallback from unsupported `ultra` to `max`.
+- Added `AuthStorage.upsertLoginApiKey()` so interactive API-key entry can persist a distinct login-sourced key without replace-all wiping OAuth or sibling API-key accounts for the same provider, including through a remote auth broker.
 
 ## [16.3.15] - 2026-07-09
 

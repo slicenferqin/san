@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -21,7 +22,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	let authStorage: AuthStorage;
 	let registry: ModelRegistry;
 
-	const sourceIds = ["ext://atomic", "ext://runtime", "ext://oauth"];
+	const sourceIds = ["ext://atomic", "ext://runtime", "ext://oauth", "ext://stored-auth"];
 
 	// Stub transport: reject every request so refresh("online") drives the full
 	// online discovery path with deterministic, instant failures instead of real
@@ -136,6 +137,98 @@ describe("ModelRegistry runtime provider registration", () => {
 
 		const afterAnthropicCount = registry.getAll().filter(model => model.provider === "anthropic").length;
 		expect(afterAnthropicCount).toBe(beforeAnthropicCount);
+	});
+
+	test("registerProvider accepts custom models authenticated through AuthStorage", async () => {
+		await authStorage.upsertLoginApiKey("stored-auth-provider", "stored-api-key");
+
+		registry.registerProvider(
+			"stored-auth-provider",
+			{
+				baseUrl: "https://runtime.example.com/v1",
+				api: "openai-completions",
+				models: [baseModel],
+			},
+			"ext://stored-auth",
+		);
+
+		expect(registry.find("stored-auth-provider", "runtime-model")).toBeDefined();
+		expect(registry.getAvailable().some(model => model.provider === "stored-auth-provider")).toBe(true);
+	});
+
+	test("validateProviderApiKey rejects failed live discovery without persisting the key", async () => {
+		await expect(registry.validateProviderApiKey("openai", "invalid-key")).rejects.toThrow(
+			"Provider openai returned no models",
+		);
+		expect(authStorage.listStoredCredentials("openai")).toEqual([]);
+	});
+
+	test("runtime provider validation probes the candidate key instead of stored auth", async () => {
+		const observedKeys: Array<string | undefined> = [];
+		await authStorage.upsertLoginApiKey("runtime-provider", "stored-good-key");
+		registry.registerProvider(
+			"runtime-provider",
+			{
+				baseUrl: "https://runtime.example.com/v1",
+				api: "openai-completions",
+				fetchDynamicModels: async apiKey => {
+					observedKeys.push(apiKey);
+					return apiKey === "stored-good-key" ? [baseModel] : [];
+				},
+			},
+			"ext://runtime",
+		);
+
+		await expect(registry.validateProviderApiKey("runtime-provider", "candidate-bad-key")).rejects.toThrow(
+			"Provider runtime-provider returned no models",
+		);
+		expect(observedKeys).toEqual(["candidate-bad-key"]);
+		expect(
+			authStorage
+				.listStoredCredentials("runtime-provider")
+				.some(row => row.credential.type === "api_key" && row.credential.key === "candidate-bad-key"),
+		).toBe(false);
+	});
+
+	test("runtime discovery applies auth headers without persisting them to the model cache", async () => {
+		const secret = "runtime-cache-secret";
+		registry.registerProvider(
+			"runtime-provider",
+			{
+				baseUrl: "https://runtime.example.com/v1",
+				apiKey: secret,
+				authHeader: true,
+				api: "openai-completions",
+				fetchDynamicModels: async () => [baseModel],
+			},
+			"ext://runtime",
+		);
+
+		await registry.refreshRuntimeProviders("online");
+
+		expect(registry.find("runtime-provider", "runtime-model")?.headers?.Authorization).toBe(`Bearer ${secret}`);
+		const db = new Database(path.join(tempDir, "models.db"), { readonly: true });
+		try {
+			const rows = db.query<{ models: string }, []>("SELECT models FROM model_cache").all();
+			expect(rows.some(row => row.models.includes(secret))).toBe(false);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("connection validation requires positive dynamic discovery", async () => {
+		const emptyRegistry = new ModelRegistry(authStorage, path.join(tempDir, "empty-models.yml"), {
+			fetch: async () =>
+				new Response(JSON.stringify({ data: [] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+		});
+		await expect(emptyRegistry.validateProviderApiKey("openai", "candidate-key")).rejects.toThrow(
+			"Provider openai returned no models",
+		);
+		expect(emptyRegistry.canValidateProviderConnection("google")).toBe(true);
+		expect(emptyRegistry.canValidateProviderConnection("firepass")).toBe(false);
 	});
 
 	test("registerProvider applies headers-only overrides to existing provider models across refresh", async () => {

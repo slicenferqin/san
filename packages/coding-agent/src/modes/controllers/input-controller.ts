@@ -417,12 +417,16 @@ export class InputController {
 			"app.model.selectTemporary",
 			this.ctx.keybindings.getKeys("app.model.selectTemporary"),
 		);
-		this.ctx.editor.onSelectModelTemporary = () => this.ctx.showModelSelector({ temporaryOnly: true });
+		// Alt+P and Alt+M both open the session-only model picker. Role assignment
+		// is `/model roles` only — progressive disclosure for simple users.
+		this.ctx.editor.onSelectModelTemporary = () =>
+			this.ctx.showModelSelector({ temporaryOnly: true, directSelect: true, hideProviderTabs: true });
 
 		// Global debug handler on TUI (works regardless of focus)
 		this.ctx.ui.onDebug = () => this.ctx.showDebugSelector();
 		this.ctx.editor.setActionKeys("app.model.select", this.ctx.keybindings.getKeys("app.model.select"));
-		this.ctx.editor.onSelectModel = () => this.ctx.showModelSelector();
+		this.ctx.editor.onSelectModel = () =>
+			this.ctx.showModelSelector({ temporaryOnly: true, directSelect: true, hideProviderTabs: true });
 		this.ctx.editor.setActionKeys("app.history.search", this.ctx.keybindings.getKeys("app.history.search"));
 		this.ctx.editor.onHistorySearch = () => this.ctx.showHistorySearch();
 		this.ctx.editor.setActionKeys("app.thinking.toggle", this.ctx.keybindings.getKeys("app.thinking.toggle"));
@@ -587,6 +591,19 @@ export class InputController {
 			showStatus: message => this.ctx.showStatus(message),
 		});
 		this.ctx.ui.addInputListener(data => (this.#enhancedPaste?.handleInput(data) ? { consume: true } : undefined));
+		this.ctx.ui.addInputListener(data => {
+			const focused = this.ctx.ui.getFocused();
+			if (
+				!focused ||
+				focused === this.ctx.editor ||
+				!hasPasteText(focused) ||
+				!this.ctx.keybindings.matches(data, "app.clipboard.pasteImage")
+			) {
+				return undefined;
+			}
+			void this.#pasteClipboardTextInto(focused);
+			return { consume: true };
+		});
 		this.ctx.ui.addStartListener(() => this.#enhancedPaste?.enable());
 	}
 
@@ -1500,6 +1517,20 @@ export class InputController {
 		} catch {
 			this.ctx.showStatus("Failed to read clipboard");
 			return false;
+		}
+	}
+
+	async #pasteClipboardTextInto(target: PasteTarget): Promise<void> {
+		try {
+			const text = await this.clipboard.readText();
+			if (!text) {
+				this.ctx.showStatus("Clipboard has no text");
+				return;
+			}
+			target.pasteText(text);
+			this.ctx.ui.requestRender();
+		} catch {
+			this.ctx.showStatus("Failed to read clipboard");
 		}
 	}
 

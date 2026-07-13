@@ -1,10 +1,19 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { Model } from "@oh-my-pi/pi-ai";
 import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai";
+import { LoginCancelledError } from "@oh-my-pi/pi-ai/error";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
+import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
 import { Input, Loader, Spacer, setTuiTight, Text } from "@oh-my-pi/pi-tui";
-import { getAgentDbPath, getAgentDir, getProjectDir, normalizePathForComparison } from "@oh-my-pi/pi-utils";
+import {
+	getAgentDbPath,
+	getAgentDir,
+	getProjectDir,
+	normalizePathForComparison,
+	wrapFetchForExtraCa,
+} from "@oh-my-pi/pi-utils";
 import {
 	type AdvisorConfigScope,
 	discoverAdvisorConfigs,
@@ -12,8 +21,14 @@ import {
 	resolveAdvisorConfigEditPath,
 	saveWatchdogConfigFile,
 } from "../../advisor";
+import { discoverModelsByProviderType, normalizeOpenAIModelsListBaseUrl } from "../../config/model-discovery";
 import { formatModelSelectorValue, resolveAdvisorRoleSelection } from "../../config/model-resolver";
 import { getRoleInfo } from "../../config/model-roles";
+import {
+	removeCustomProviderConfig,
+	validateCustomProviderConfigDestination,
+	writeCustomProviderConfig,
+} from "../../config/models-config-writer";
 import { settings } from "../../config/settings";
 import { disableProvider, enableProvider } from "../../discovery";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
@@ -24,6 +39,7 @@ import {
 	getPluginsCacheDir,
 	MarketplaceManager,
 } from "../../extensibility/plugins/marketplace";
+import { sanitizeStatusText } from "../../modes/shared";
 import {
 	getAvailableThemes,
 	getSymbolTheme,
@@ -62,6 +78,12 @@ import { type AdvisorConfigDeps, AdvisorConfigOverlayComponent } from "../compon
 import { AgentDashboard } from "../components/agent-dashboard";
 import { AgentHubOverlayComponent } from "../components/agent-hub";
 import { AssistantMessageComponent } from "../components/assistant-message";
+import {
+	buildConnectProviderRows,
+	type ConnectProviderKind,
+	type ConnectSelectAction,
+	ConnectSelectorComponent,
+} from "../components/connect-selector";
 import { CopySelectorComponent } from "../components/copy-selector";
 import { ExtensionDashboard } from "../components/extensions";
 import { HistorySearchComponent } from "../components/history-search";
@@ -115,16 +137,38 @@ export class SelectorController {
 	 * @param create Factory that receives a `done` callback and returns the component and focus target
 	 */
 	showSelector(create: (done: () => void) => { component: Component; focus: Component }): void {
+		let component: Component | undefined;
 		const done = () => {
+			component?.dispose?.();
+			if (component && this.ctx.editorContainer.children[0] !== component) return;
 			this.ctx.editorContainer.clear();
 			this.ctx.editorContainer.addChild(this.ctx.editor);
 			this.ctx.ui.setFocus(this.ctx.editor);
 		};
-		const { component, focus } = create(done);
+		const created = create(done);
+		component = created.component;
+		const displaced = this.ctx.editorContainer.children[0];
+		if (displaced && displaced !== this.ctx.editor && displaced !== created.component) displaced.dispose?.();
 		this.ctx.editorContainer.clear();
-		this.ctx.editorContainer.addChild(component);
-		this.ctx.ui.setFocus(focus);
+		this.ctx.editorContainer.addChild(created.component);
+		this.ctx.ui.setFocus(created.focus);
 		this.ctx.ui.requestRender();
+	}
+
+	#editorAreaIsIdle(): boolean {
+		return this.ctx.editorContainer.children[0] === this.ctx.editor;
+	}
+
+	async #reopenConnectIfIdle(): Promise<void> {
+		if (this.#editorAreaIsIdle()) await this.showConnectSelector();
+	}
+
+	#safeErrorMessage(error: unknown, secrets: readonly string[] = []): string {
+		let message = error instanceof Error ? error.message : String(error);
+		for (const secret of secrets) {
+			if (secret) message = message.replaceAll(secret, "[redacted]");
+		}
+		return sanitizeStatusText(message) || "Unknown error";
 	}
 
 	showSettingsSelector(): void {
@@ -584,8 +628,38 @@ export class SelectorController {
 		}
 	}
 
-	showModelSelector(options?: { temporaryOnly?: boolean }): void {
+	/**
+	 * Session model picker (default `/model`, Alt+M, `/switch`).
+	 * Enter selects the model for this session only and closes.
+	 */
+	showModelSelector(options?: {
+		temporaryOnly?: boolean;
+		roleMode?: boolean;
+		providerFilter?: string;
+		directSelect?: boolean;
+		hideProviderTabs?: boolean;
+		pickerHint?: string;
+		onCancel?: () => void;
+		terminalColumns?: number;
+	}): void {
+		// Only auto-route to /connect when the session can report available models
+		// and the list is empty. Test harnesses and role mode skip this gate.
+		if (!options?.roleMode && typeof this.ctx.session.getAvailableModels === "function") {
+			const available = this.ctx.session.getAvailableModels();
+			if (available.length === 0) {
+				if (this.ctx.session.modelRegistry.getAvailable().length > 0) {
+					this.ctx.showWarning("No models match the current --models or enabled-model scope.");
+					return;
+				}
+				this.ctx.showStatus("No models available. Connect a provider first.");
+				void this.showConnectSelector();
+				return;
+			}
+		}
+
 		const currentContextTokens = this.ctx.session.getContextUsage()?.tokens ?? 0;
+		const roleMode = options?.roleMode === true;
+		const sessionSelect = !roleMode;
 		this.showSelector(done => {
 			const selector = new ModelSelectorComponent(
 				this.ctx.ui,
@@ -593,16 +667,16 @@ export class SelectorController {
 				this.ctx.settings,
 				this.ctx.session.modelRegistry,
 				this.ctx.session.scopedModels,
-				async (model, role, thinkingLevel, selector, action) => {
+				async (model, role, thinkingLevel, selectorValue, action) => {
 					// `auto` is session-global: never baked into a per-role model value
 					// (it can't round-trip through `model:<level>`). Apply it to the session
 					// separately and persist via `defaultThinkingLevel`.
 					const isAuto = thinkingLevel === AUTO_THINKING;
 					const concreteThinking = isAuto ? undefined : thinkingLevel;
-					const selectorValue = selector ?? `${model.provider}/${model.id}`;
+					const modelSelector = selectorValue ?? `${model.provider}/${model.id}`;
 					try {
 						if (action === "retryFallback" && role !== null) {
-							const fallbackSelector = formatModelSelectorValue(selectorValue, concreteThinking);
+							const fallbackSelector = formatModelSelectorValue(modelSelector, concreteThinking);
 							const fallbackChains = this.ctx.settings.get("retry.fallbackChains");
 							const chain = Array.isArray(fallbackChains[role]) ? fallbackChains[role] : [];
 							this.ctx.settings.set("retry.fallbackChains", {
@@ -615,22 +689,25 @@ export class SelectorController {
 							return;
 						}
 						if (role === null) {
-							// Temporary: update agent state but don't persist the model to settings
+							// Session-only: update agent state but don't persist modelRoles
+							const previousConfigured = this.ctx.session.configuredThinkingLevel();
+							const previousConcrete = this.ctx.session.thinkingLevel;
 							await this.ctx.session.setModelTemporary(model);
-							if (isAuto) {
-								this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
-							}
+							const effortNote = this.#applySessionEffortAfterModelChange(
+								model,
+								previousConfigured,
+								previousConcrete,
+							);
 							this.ctx.statusLine.invalidate();
 							this.ctx.updateEditorBorderColor();
-							const roleSelectorHint = this.ctx.keybindings.getKeys("app.model.select")[0] ?? "Alt+M";
 							this.ctx.showStatus(
-								`Session-only model: ${selector ?? model.id}. Use ${roleSelectorHint} or /model for roles.`,
+								`Model: ${modelSelector}${effortNote ? ` · ${effortNote}` : ""}. Roles: /model roles.`,
 							);
 							done();
 							this.ctx.ui.requestRender();
 						} else if (role === "default") {
 							const { switched } = await this.ctx.session.setModel(model, role, {
-								selector,
+								selector: selectorValue,
 								thinkingLevel: concreteThinking,
 								persist: true,
 								currentContextTokens,
@@ -648,20 +725,20 @@ export class SelectorController {
 								this.ctx.statusLine.invalidate();
 								this.ctx.updateEditorBorderColor();
 							}
-							this.ctx.showStatus(`Default model: ${selector ?? model.id}`);
+							this.ctx.showStatus(`Default model: ${modelSelector}`);
 							// Don't call done() - selector stays open for role assignment
 						} else {
 							// Other roles (smol, slow): just update settings, not current model
 							this.ctx.settings.setModelRole(
 								role,
-								formatModelSelectorValue(selector ?? `${model.provider}/${model.id}`, concreteThinking),
+								formatModelSelectorValue(selectorValue ?? `${model.provider}/${model.id}`, concreteThinking),
 							);
 							if (isAuto) {
 								this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
 							}
 							const roleInfo = getRoleInfo(role, settings);
 							const roleLabel = roleInfo?.name ?? role;
-							this.ctx.showStatus(`${roleLabel} model: ${selector ?? model.id}`);
+							this.ctx.showStatus(`${roleLabel} model: ${modelSelector}`);
 							// Don't call done() - selector stays open
 						}
 					} catch (error) {
@@ -670,12 +747,471 @@ export class SelectorController {
 				},
 				() => {
 					done();
+					options?.onCancel?.();
 					this.ctx.ui.requestRender();
 				},
-				{ ...options, currentContextTokens },
+				{
+					temporaryOnly: sessionSelect || options?.temporaryOnly === true,
+					directSelect: sessionSelect || options?.directSelect === true,
+					hideProviderTabs: sessionSelect || options?.hideProviderTabs === true,
+					providerFilter: options?.providerFilter,
+					pickerHint: options?.pickerHint,
+					currentContextTokens,
+					terminalColumns: options?.terminalColumns,
+				},
 			);
 			return { component: selector, focus: selector };
 		});
+	}
+
+	/**
+	 * Expert role assignment picker (`/model roles`). Keeps the legacy
+	 * model → role → thinking flow and can persist modelRoles.
+	 */
+	showModelRoleSelector(): void {
+		this.showModelSelector({ roleMode: true });
+	}
+
+	/**
+	 * Unified provider connect surface (`/connect`).
+	 */
+	async showConnectSelector(): Promise<void> {
+		const registry = this.ctx.session.modelRegistry;
+		const authStorage = registry.authStorage;
+		const rows = buildConnectProviderRows(authStorage, registry);
+		this.showSelector(done => {
+			const selector = new ConnectSelectorComponent(
+				rows,
+				action => {
+					done();
+					void this.#handleConnectAction(action);
+				},
+				() => {
+					done();
+					this.ctx.ui.requestRender();
+				},
+				{ terminalColumns: process.stdout.columns ?? 80 },
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
+	#applySessionEffortAfterModelChange(
+		model: Model,
+		previousConfigured: ConfiguredThinkingLevel | undefined,
+		previousConcrete: ThinkingLevel | undefined,
+	): string | undefined {
+		// setModelTemporary already reapplied default/clamp. If the previous
+		// concrete effort is unsupported, surface a non-blocking Auto note.
+		if (previousConfigured === AUTO_THINKING) {
+			this.ctx.session.setThinkingLevel(AUTO_THINKING);
+			return undefined;
+		}
+		if (previousConcrete === ThinkingLevel.Off) {
+			this.ctx.session.setThinkingLevel(ThinkingLevel.Off);
+			return undefined;
+		}
+		if (!model.reasoning) {
+			if (previousConcrete && previousConcrete !== ThinkingLevel.Inherit) {
+				this.ctx.session.setThinkingLevel(AUTO_THINKING);
+				return "thinking reset to Auto (model has no controllable effort)";
+			}
+			return undefined;
+		}
+		const supported = getSupportedEfforts(model);
+		if (previousConcrete && previousConcrete !== ThinkingLevel.Inherit && supported.includes(previousConcrete)) {
+			this.ctx.session.setThinkingLevel(previousConcrete);
+			return undefined;
+		}
+		if (previousConcrete && previousConcrete !== ThinkingLevel.Inherit && !supported.includes(previousConcrete)) {
+			this.ctx.session.setThinkingLevel(AUTO_THINKING);
+			return "thinking reset to Auto (previous effort unsupported)";
+		}
+		return undefined;
+	}
+
+	async #handleConnectAction(action: ConnectSelectAction): Promise<void> {
+		if (action.type === "openModels") {
+			this.#showConnectedProviderModels(action.providerId, `Models for ${action.providerId}`);
+			return;
+		}
+		if (action.type === "refresh") {
+			await this.#finishProviderConnection(action.providerId, `Refreshed ${action.providerId}`);
+			return;
+		}
+		if (action.type === "manage") {
+			await this.#handleManageProvider(action);
+			return;
+		}
+		if (action.type === "configureExternally") {
+			this.ctx.showWarning(`${action.providerId} uses external environment or platform credentials.`);
+			await this.#reopenConnectIfIdle();
+			return;
+		}
+		if (action.type === "addCustom") {
+			await this.#handleAddCustomProvider();
+			return;
+		}
+		const selectedKind = await this.#chooseProviderConnectionKind(action);
+		if (!selectedKind) {
+			await this.#reopenConnectIfIdle();
+			return;
+		}
+		let connected = false;
+		if (selectedKind === "login") {
+			connected = await this.#handleOAuthLogin(action.authProviderId, action.providerId);
+		} else if (selectedKind === "api_key" || selectedKind === "custom") {
+			connected = await this.#handleApiKeyConnect(action.providerId);
+		} else if (selectedKind === "keyless") {
+			connected = true;
+		}
+		if (!connected) {
+			await this.#reopenConnectIfIdle();
+			return;
+		}
+		await this.#finishProviderConnection(action.providerId, `Connected ${action.providerId}`);
+	}
+
+	async #chooseProviderConnectionKind(
+		action: Extract<ConnectSelectAction, { type: "connect" | "manage" }>,
+	): Promise<ConnectProviderKind | undefined> {
+		if (action.kind === "keyless" && action.supportsLogin) return "login";
+		if (action.kind !== "login" || !action.allowManualApiKey) return action.kind;
+		const signIn = "Sign in (recommended)";
+		const apiKey = "Enter API key";
+		const selected = await this.ctx.showHookSelector(`Connect ${action.providerId}`, [
+			{ label: signIn, description: "Use the provider login flow" },
+			{ label: apiKey, description: "Store a validated API key in AuthStorage" },
+		]);
+		if (selected === signIn) return "login";
+		if (selected === apiKey) return "api_key";
+		return undefined;
+	}
+
+	async #finishProviderConnection(providerId: string, label: string): Promise<void> {
+		try {
+			await this.ctx.session.modelRegistry.refreshProvider(providerId, "online");
+		} catch (error) {
+			this.ctx.showError(`Could not refresh ${providerId}: ${this.#safeErrorMessage(error)}`);
+			await this.#reopenConnectIfIdle();
+			return;
+		}
+		const registryModels = this.ctx.session.modelRegistry
+			.getAvailable()
+			.filter(model => model.provider === providerId);
+		if (registryModels.length === 0) {
+			this.ctx.showWarning(`${providerId} has no available models. Check its endpoint and credentials.`);
+			await this.#reopenConnectIfIdle();
+			return;
+		}
+		const sessionModels = this.ctx.session.getAvailableModels().filter(model => model.provider === providerId);
+		if (sessionModels.length === 0) {
+			this.ctx.showWarning(`${providerId} is connected, but its models are excluded by the current model scope.`);
+			await this.#reopenConnectIfIdle();
+			return;
+		}
+		this.#showConnectedProviderModels(providerId, label);
+	}
+
+	async #handleManageProvider(action: Extract<ConnectSelectAction, { type: "manage" }>): Promise<void> {
+		const viewModels = "View models";
+		const verify = "Verify connection";
+		const reconnect = "Reconnect / add credential";
+		const removeCredential = "Remove stored credential";
+		const removeProvider = "Remove provider configuration";
+		const back = "Back";
+		const storedCredentials = this.ctx.session.modelRegistry.authStorage.listStoredCredentials(action.providerId);
+		const options = [
+			...(action.modelCount > 0
+				? [{ label: viewModels, description: `${action.modelCount} available models` }]
+				: []),
+			...(action.verifiable ? [{ label: verify, description: "Validate positive live model discovery" }] : []),
+			...(action.supportsLogin || action.kind === "api_key" || action.kind === "custom"
+				? [{ label: reconnect, description: "Keep existing accounts and add refreshed credentials" }]
+				: []),
+			...(action.removableConfig
+				? [{ label: removeProvider, description: "Remove models.yml entry and stored credentials" }]
+				: storedCredentials.length > 0
+					? [{ label: removeCredential, description: `${storedCredentials.length} stored credential(s)` }]
+					: []),
+			back,
+		];
+		const selected = await this.ctx.showHookSelector(`Manage ${action.providerId}`, options);
+		if (selected === viewModels) {
+			if (!this.ctx.session.getAvailableModels().some(model => model.provider === action.providerId)) {
+				this.ctx.showWarning(
+					`${action.providerId} is connected, but its models are excluded by the current model scope.`,
+				);
+				await this.#reopenConnectIfIdle();
+				return;
+			}
+			this.#showConnectedProviderModels(action.providerId, `Models for ${action.providerId}`);
+			return;
+		}
+		if (selected === verify) {
+			try {
+				const count = await this.ctx.session.modelRegistry.validateProviderConnection(action.providerId);
+				await this.ctx.session.modelRegistry.refreshProvider(action.providerId, "online");
+				this.ctx.showStatus(`${action.providerId} verified · ${count} models`);
+			} catch (error) {
+				this.ctx.showError(`Could not verify ${action.providerId}: ${this.#safeErrorMessage(error)}`);
+			}
+			await this.#reopenConnectIfIdle();
+			return;
+		}
+		if (selected === reconnect) {
+			const kind = await this.#chooseProviderConnectionKind(action);
+			if (!kind) {
+				await this.#reopenConnectIfIdle();
+				return;
+			}
+			const connected =
+				kind === "login"
+					? await this.#handleOAuthLogin(action.authProviderId, action.providerId)
+					: await this.#handleApiKeyConnect(action.providerId);
+			if (connected) await this.#finishProviderConnection(action.providerId, `Reconnected ${action.providerId}`);
+			else await this.#reopenConnectIfIdle();
+			return;
+		}
+		if (selected === removeProvider) {
+			await this.#handleCustomProviderRemoval(action.providerId);
+			return;
+		}
+		if (selected === removeCredential) {
+			await this.#handleConnectCredentialRemoval(action.providerId);
+			return;
+		}
+		await this.#reopenConnectIfIdle();
+	}
+
+	async #handleConnectCredentialRemoval(providerId: string): Promise<void> {
+		const authStorage = this.ctx.session.modelRegistry.authStorage;
+		const accounts = toLogoutAccounts(providerId, authStorage.listStoredCredentials(providerId), {
+			activeIdentity: authStorage.getOAuthAccountIdentity(providerId, this.ctx.session.sessionId),
+			activeApiKey: authStorage.getCredentialOrigin(providerId)?.kind === "api_key",
+		});
+		if (accounts.length === 0) {
+			this.ctx.showWarning(`${providerId} has no removable stored credentials.`);
+			await this.#reopenConnectIfIdle();
+			return;
+		}
+		const options = accounts.map((account, index) => ({
+			label: `${index + 1}. ${account.label}`,
+			description: account.detail,
+		}));
+		const selected = await this.ctx.showHookSelector(`Remove ${providerId} credential`, options);
+		const index = selected ? Number.parseInt(selected.split(".", 1)[0] ?? "", 10) - 1 : -1;
+		const account = accounts[index];
+		if (!account) {
+			await this.#reopenConnectIfIdle();
+			return;
+		}
+		const confirmed = await this.ctx.showHookConfirm(
+			"Remove credential",
+			`Remove ${account.label} from ${providerId}?`,
+		);
+		if (confirmed) await this.#handleCredentialLogout(providerId, account);
+		await this.#reopenConnectIfIdle();
+	}
+
+	async #handleCustomProviderRemoval(providerId: string): Promise<void> {
+		const confirmed = await this.ctx.showHookConfirm(
+			"Remove provider",
+			`Remove ${providerId} from models.yml and delete its stored credentials?`,
+		);
+		if (!confirmed) {
+			await this.#reopenConnectIfIdle();
+			return;
+		}
+		try {
+			const result = await removeCustomProviderConfig(providerId);
+			const authStorage = this.ctx.session.modelRegistry.authStorage;
+			if (authStorage.listStoredCredentials(providerId).length > 0) await authStorage.remove(providerId);
+			await this.ctx.session.modelRegistry.refresh("offline");
+			this.ctx.showStatus(`Removed ${providerId} from ${shortenPath(result.path)}.`);
+		} catch (error) {
+			this.ctx.showError(`Could not remove ${providerId}: ${this.#safeErrorMessage(error)}`);
+		}
+		await this.#reopenConnectIfIdle();
+	}
+
+	#showConnectedProviderModels(providerId: string, label: string): void {
+		if (!this.#editorAreaIsIdle()) {
+			this.ctx.showStatus(`${label}. Use /model to select it when the current prompt closes.`);
+			return;
+		}
+		this.showModelSelector({
+			temporaryOnly: true,
+			directSelect: true,
+			hideProviderTabs: true,
+			providerFilter: providerId,
+			pickerHint: `${label} · pick a session model`,
+			onCancel: () => void this.#reopenConnectIfIdle(),
+		});
+	}
+
+	async #handleApiKeyConnect(providerId: string): Promise<boolean> {
+		const apiKey = await this.#promptLine(`API key for ${providerId}:`, { secret: true });
+		if (apiKey === undefined) {
+			this.ctx.showStatus("Provider connection cancelled.");
+			return false;
+		}
+		if (!apiKey.trim()) {
+			this.ctx.showWarning("API key cannot be empty.");
+			return false;
+		}
+		const normalizedApiKey = apiKey.trim();
+		try {
+			await this.ctx.session.modelRegistry.validateProviderApiKey(providerId, normalizedApiKey);
+			await this.ctx.session.modelRegistry.authStorage.upsertLoginApiKey(providerId, normalizedApiKey);
+			return true;
+		} catch (error) {
+			this.ctx.showError(`Could not connect ${providerId}: ${this.#safeErrorMessage(error, [normalizedApiKey])}`);
+			return false;
+		}
+	}
+
+	async #handleAddCustomProvider(): Promise<void> {
+		const name = await this.#promptLine("Custom provider id (e.g. my-proxy):");
+		if (!name?.trim()) {
+			this.ctx.showStatus("Custom provider cancelled.");
+			await this.#reopenConnectIfIdle();
+			return;
+		}
+		const providerId = name.trim().toLowerCase();
+		const baseUrl = await this.#promptLine("Base URL (OpenAI-compatible, e.g. https://host/v1):");
+		if (!baseUrl?.trim()) {
+			this.ctx.showStatus("Custom provider cancelled.");
+			await this.#reopenConnectIfIdle();
+			return;
+		}
+		const apiKey = await this.#promptLine("API key (optional for a keyless endpoint):", { secret: true });
+		if (apiKey === undefined) {
+			this.ctx.showStatus("Custom provider cancelled.");
+			await this.#reopenConnectIfIdle();
+			return;
+		}
+		const normalizedBaseUrl = normalizeOpenAIModelsListBaseUrl(baseUrl.trim());
+		const normalizedApiKey = apiKey.trim();
+		const authStorage = this.ctx.session.modelRegistry.authStorage;
+		if (authStorage.listStoredCredentials(providerId).length > 0) {
+			this.ctx.showError(`Custom provider failed: credentials already exist for provider id "${providerId}".`);
+			await this.#reopenConnectIfIdle();
+			return;
+		}
+		const providerConfig = {
+			name: providerId,
+			baseUrl: normalizedBaseUrl,
+			api: "openai-completions" as const,
+			auth: normalizedApiKey ? ("apiKey" as const) : ("none" as const),
+			discovery: { type: "openai-models-list" as const },
+		};
+
+		try {
+			await validateCustomProviderConfigDestination(providerConfig);
+			const discovered = await discoverModelsByProviderType(
+				{
+					provider: providerId,
+					baseUrl: normalizedBaseUrl,
+					api: "openai-completions",
+					discovery: { type: "openai-models-list" },
+				},
+				{
+					fetch: wrapFetchForExtraCa(fetch),
+					getBearerApiKeyResolver: async () => normalizedApiKey || undefined,
+				},
+			);
+			if (discovered.length === 0) {
+				throw new Error("the endpoint returned no models");
+			}
+			const writeResult = await writeCustomProviderConfig(providerConfig);
+			if (normalizedApiKey) {
+				try {
+					await authStorage.upsertLoginApiKey(providerId, normalizedApiKey);
+				} catch (error) {
+					this.ctx.showWarning(
+						`Provider ${providerId} was saved to ${shortenPath(writeResult.path)}, but its API key could not be stored: ${this.#safeErrorMessage(error, [normalizedApiKey])}`,
+					);
+					await this.#reopenConnectIfIdle();
+					return;
+				}
+			}
+			try {
+				await this.ctx.session.modelRegistry.refresh();
+				await this.ctx.session.modelRegistry.refreshProvider(providerId, "online");
+				const availableModels = this.ctx.session.modelRegistry
+					.getAvailable()
+					.filter(model => model.provider === providerId);
+				if (availableModels.length === 0) throw new Error("no models loaded into the registry");
+			} catch (error) {
+				this.ctx.showWarning(
+					`Provider ${providerId} was saved, but its models could not be loaded: ${this.#safeErrorMessage(error, [normalizedApiKey])}`,
+				);
+				await this.#reopenConnectIfIdle();
+				return;
+			}
+			if (!this.ctx.session.getAvailableModels().some(model => model.provider === providerId)) {
+				this.ctx.showWarning(`${providerId} is connected, but its models are excluded by the current model scope.`);
+				await this.#reopenConnectIfIdle();
+				return;
+			}
+			const block = new TranscriptBlock();
+			block.addChild(
+				new Text(
+					theme.fg(
+						"success",
+						`${theme.status.success} Custom provider ${providerId} saved to ${shortenPath(writeResult.path)}`,
+					),
+					1,
+					0,
+				),
+			);
+			block.addChild(
+				new Text(
+					theme.fg(
+						"dim",
+						normalizedApiKey ? "API key stored in AuthStorage (not models.yml)." : "Keyless endpoint configured.",
+					),
+					1,
+					0,
+				),
+			);
+			this.ctx.present(block);
+			this.#showConnectedProviderModels(providerId, `Provider ${providerId}`);
+		} catch (error) {
+			this.ctx.showError(`Custom provider failed: ${this.#safeErrorMessage(error, [normalizedApiKey])}`);
+			await this.#reopenConnectIfIdle();
+		}
+	}
+
+	#promptLine(message: string, options?: { secret?: boolean }): Promise<string | undefined> {
+		const { promise, resolve } = Promise.withResolvers<string | undefined>();
+		let settled = false;
+		let input: Input | undefined;
+		const finish = (value: string | undefined): void => {
+			if (settled) return;
+			settled = true;
+			if (input && this.ctx.editorContainer.children[0] === input) {
+				this.ctx.editorContainer.clear();
+				this.ctx.editorContainer.addChild(this.ctx.editor);
+				this.ctx.ui.setFocus(this.ctx.editor);
+			}
+			resolve(value);
+		};
+		const promptBlock = new TranscriptBlock();
+		promptBlock.addChild(new Text(theme.fg("warning", message), 1, 0));
+		this.ctx.present(promptBlock);
+		input = new Input();
+		if (options?.secret) input.setMaskCharacter("*");
+		input.onSubmit = () => {
+			finish(input.getValue());
+		};
+		input.onEscape = () => finish(undefined);
+		this.ctx.editorContainer.clear();
+		this.ctx.editorContainer.addChild(input);
+		this.ctx.ui.setFocus(input);
+		this.ctx.ui.requestRender();
+		return promise;
 	}
 
 	async showPluginSelector(mode: "install" | "uninstall" = "install"): Promise<void> {
@@ -1122,12 +1658,20 @@ export class SelectorController {
 		await this.showSessionSelector();
 	}
 
-	async #handleOAuthLogin(providerId: string): Promise<void> {
+	async #handleOAuthLogin(providerId: string, modelProviderId = providerId): Promise<boolean> {
 		this.ctx.showStatus(`Logging in to ${providerId}…`);
 		const manualInput = this.ctx.oauthManualInput;
 		const useManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(providerId);
+		const abortController = new AbortController();
+		const originalOnEscape = this.ctx.editor.onEscape;
+		const cancelLogin = () => abortController.abort(new LoginCancelledError());
+		this.ctx.editor.onEscape = cancelLogin;
 		try {
 			await this.ctx.session.modelRegistry.authStorage.login(providerId as OAuthProvider, {
+				signal: abortController.signal,
+				validateApiKey: this.ctx.session.modelRegistry.canValidateProviderConnection(modelProviderId)
+					? apiKey => this.ctx.session.modelRegistry.validateProviderApiKey(modelProviderId, apiKey)
+					: undefined,
 				onAuth: (info: { url: string; launchUrl?: string; instructions?: string }) => {
 					const block = new TranscriptBlock();
 					// Full URL first: works from any machine, including SSH boxes
@@ -1152,30 +1696,16 @@ export class SelectorController {
 					this.ctx.present(block);
 					this.ctx.openInBrowser(info.url);
 				},
-				onPrompt: async (prompt: { message: string; placeholder?: string }) => {
-					const promptBlock = new TranscriptBlock();
-					promptBlock.addChild(new Text(theme.fg("warning", prompt.message), 1, 0));
-					if (prompt.placeholder) {
-						promptBlock.addChild(new Text(theme.fg("dim", prompt.placeholder), 1, 0));
-					}
-					this.ctx.present(promptBlock);
-					const { promise, resolve } = Promise.withResolvers<string>();
-					const codeInput = new Input();
-					codeInput.onSubmit = () => {
-						const code = codeInput.getValue();
-						this.ctx.editorContainer.clear();
-						this.ctx.editorContainer.addChild(this.ctx.editor);
-						this.ctx.ui.setFocus(this.ctx.editor);
-						resolve(code);
-					};
-					this.ctx.editorContainer.clear();
-					this.ctx.editorContainer.addChild(codeInput);
-					this.ctx.ui.setFocus(codeInput);
-					this.ctx.ui.requestRender();
-					return promise;
+				onPrompt: async (prompt: { message: string; placeholder?: string; allowEmpty?: boolean }) => {
+					const promptText = prompt.placeholder ? `${prompt.message} (${prompt.placeholder})` : prompt.message;
+					const secret = /(?:api\s*key|access\s*token|secret|bearer)/i.test(promptText);
+					const value = await this.#promptLine(promptText, { secret });
+					if (value === undefined) throw new LoginCancelledError();
+					if (!prompt.allowEmpty && !value.trim()) throw new LoginCancelledError("Login input was empty");
+					return value;
 				},
 				onProgress: (message: string) => {
-					this.ctx.present(new Text(theme.fg("dim", message), 1, 0));
+					this.ctx.present(new Text(theme.fg("dim", sanitizeStatusText(message)), 1, 0));
 				},
 				onManualCodeInput: useManualInput ? () => manualInput.waitForInput(providerId) : undefined,
 			});
@@ -1184,11 +1714,18 @@ export class SelectorController {
 			block.addChild(
 				new Text(theme.fg("success", `${theme.status.success} Successfully logged in to ${providerId}`), 1, 0),
 			);
-			block.addChild(new Text(theme.fg("dim", `Credentials saved to ${getAgentDbPath()}`), 1, 0));
+			block.addChild(new Text(theme.fg("dim", `Credentials saved to ${shortenPath(getAgentDbPath())}`), 1, 0));
 			this.ctx.present(block);
+			return true;
 		} catch (error: unknown) {
-			this.ctx.showError(`Login failed: ${error instanceof Error ? error.message : String(error)}`);
+			if (abortController.signal.aborted || error instanceof LoginCancelledError) {
+				this.ctx.showStatus("Login cancelled.");
+			} else {
+				this.ctx.showError(`Login failed: ${this.#safeErrorMessage(error)}`);
+			}
+			return false;
 		} finally {
+			if (this.ctx.editor.onEscape === cancelLogin) this.ctx.editor.onEscape = originalOnEscape;
 			if (useManualInput) {
 				manualInput.clear(`Manual OAuth input cleared for ${providerId}`);
 			}

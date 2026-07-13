@@ -425,11 +425,12 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		aliases: ["providers"],
 		description: "Open provider setup",
 		allowArgs: true,
-		subcommands: [{ name: "providers", description: "Configure sign-in and web search providers" }],
+		subcommands: [{ name: "providers", description: "Manage model providers" }],
 		handleTui: async (command, runtime) => {
 			const args = command.args.trim().toLowerCase();
-			const opensProviders = args === "" || args === "providers";
-			if (opensProviders) {
+			if ((command.name === "providers" && args === "") || args === "providers") {
+				await runtime.ctx.showConnectSelector();
+			} else if (args === "") {
 				await runtime.ctx.showProviderSetup();
 			} else {
 				runtime.ctx.showWarning(`Usage: /${command.name} [providers]`);
@@ -525,6 +526,8 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		aliases: ["models"],
 		description: "Switch model for this session",
 		acpDescription: "Show current model selection",
+		allowArgs: true,
+		subcommands: [{ name: "roles", description: "Assign model roles (default/smol/plan/task/…)" }],
 		getTuiAutocompleteDescription: runtime => {
 			const model = runtime.ctx.session.model;
 			return model ? `Model: ${model.provider}/${model.id}` : "Model: none selected";
@@ -532,6 +535,9 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		handle: async (command, runtime) => {
 			if (command.args) {
 				const modelId = command.args.trim();
+				if (modelId === "roles") {
+					return usage("Role assignment is available in the interactive TUI via /model roles.", runtime);
+				}
 				const availableModels = runtime.session.getAvailableModels?.() ?? [];
 				const match = availableModels.find(
 					model => model.id === modelId || `${model.provider}/${model.id}` === modelId,
@@ -559,20 +565,52 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			);
 			return commandConsumed();
 		},
-		handleTui: (_command, runtime) => {
-			runtime.ctx.showModelSelector();
+		handleTui: (command, runtime) => {
+			const args = command.args.trim().toLowerCase();
+			if (args === "roles") {
+				runtime.ctx.showModelRoleSelector();
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			if (args) {
+				runtime.ctx.showWarning("Usage: /model [roles]");
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			// Session-only direct select (Enter switches and closes).
+			runtime.ctx.showModelSelector({ temporaryOnly: true, directSelect: true, hideProviderTabs: true });
 			runtime.ctx.editor.setText("");
 		},
 	},
 	{
 		name: "switch",
-		description: "Switch model for this session (same as alt+p)",
+		description: "Switch model for this session (same as /model)",
 		getTuiAutocompleteDescription: runtime => {
 			const model = runtime.ctx.session.model;
 			return model ? `Model: ${model.provider}/${model.id}` : "Model: none selected";
 		},
+		handle: async (_command, runtime) => {
+			const model = runtime.session.model;
+			await runtime.output(
+				model ? `Current model: ${model.provider}/${model.id}` : "No model is currently selected.",
+			);
+			return commandConsumed();
+		},
 		handleTui: (_command, runtime) => {
-			runtime.ctx.showModelSelector({ temporaryOnly: true });
+			runtime.ctx.showModelSelector({ temporaryOnly: true, directSelect: true, hideProviderTabs: true });
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "connect",
+		description: "Connect or manage model providers",
+		getTuiAutocompleteDescription: () => "Connect: providers, API keys, local endpoints",
+		handle: async (_command, runtime) => {
+			await runtime.output("Provider connection requires the interactive TUI. Run `san` and use /connect.");
+			return commandConsumed();
+		},
+		handleTui: (_command, runtime) => {
+			void runtime.ctx.showConnectSelector();
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -1660,7 +1698,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "login",
-		description: "Login with OAuth provider",
+		description: "Connect a model provider or submit an OAuth callback",
 		inlineHint: "[provider|redirect URL]",
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime =>
@@ -1706,13 +1744,13 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 
-			void runtime.ctx.showOAuthSelector("login");
+			void runtime.ctx.showConnectSelector();
 			runtime.ctx.editor.setText("");
 		},
 	},
 	{
 		name: "logout",
-		description: "Logout from OAuth provider",
+		description: "Remove model-provider credentials",
 		inlineHint: "[provider]",
 		allowArgs: true,
 		handleTui: (command, runtime) => {
@@ -1728,7 +1766,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				runtime.ctx.editor.setText("");
 				return;
 			}
-			void runtime.ctx.showOAuthSelector("logout");
+			void runtime.ctx.showConnectSelector();
 			runtime.ctx.editor.setText("");
 		},
 	},

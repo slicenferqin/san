@@ -4096,8 +4096,25 @@ export class InteractiveMode implements InteractiveModeContext {
 		void this.#selectorController.showAgentsDashboard();
 	}
 
-	showModelSelector(options?: { temporaryOnly?: boolean }): void {
+	showModelSelector(options?: {
+		temporaryOnly?: boolean;
+		roleMode?: boolean;
+		providerFilter?: string;
+		directSelect?: boolean;
+		hideProviderTabs?: boolean;
+		pickerHint?: string;
+		onCancel?: () => void;
+		terminalColumns?: number;
+	}): void {
 		this.#selectorController.showModelSelector(options);
+	}
+
+	showModelRoleSelector(): void {
+		this.#selectorController.showModelRoleSelector();
+	}
+
+	showConnectSelector(): Promise<void> {
+		return this.#selectorController.showConnectSelector();
 	}
 
 	showPluginSelector(mode?: "install" | "uninstall"): void {

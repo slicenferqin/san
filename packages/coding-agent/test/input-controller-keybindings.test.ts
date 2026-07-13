@@ -148,6 +148,9 @@ async function createContext() {
 			getKeys(action: string) {
 				return keyMap[action] ? [...keyMap[action]] : [];
 			},
+			matches(data: string, action: string) {
+				return action === "app.clipboard.pasteImage" && data === "\x16";
+			},
 		} as InteractiveModeContext["keybindings"],
 		locallySubmittedUserSignatures: new Set<string>(),
 		isKnownSlashCommand: () => false,
@@ -246,9 +249,30 @@ describe("InputController keybinding setup", () => {
 		editor.onSelectModelTemporary?.();
 		editor.onSelectModel?.();
 
-		expect(spies.showModelSelector).toHaveBeenNthCalledWith(1, { temporaryOnly: true });
-		expect(spies.showModelSelector).toHaveBeenNthCalledWith(2);
+		const sessionPicker = { temporaryOnly: true, directSelect: true, hideProviderTabs: true };
+		expect(spies.showModelSelector).toHaveBeenNthCalledWith(1, sessionPicker);
+		expect(spies.showModelSelector).toHaveBeenNthCalledWith(2, sessionPicker);
 		expect(spies.resetDisplay).toHaveBeenCalledTimes(1);
+	});
+
+	it("routes the clipboard paste key to a focused modal input", async () => {
+		const { InputController, ctx, setFocused, spies } = await createContext();
+		const pasteText = vi.fn();
+		setFocused({ pasteText });
+		const controller = new InputController(ctx, {
+			readImage: vi.fn(async () => null),
+			readText: vi.fn(async () => "sk-modal-key"),
+			readMacFileUrls: vi.fn(async () => []),
+		});
+		controller.setupKeyHandlers();
+
+		const listeners = registeredInputListeners(spies.addInputListener);
+		expect(dispatchInput(listeners, "\x16")).toEqual({ consume: true });
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(pasteText).toHaveBeenCalledWith("sk-modal-key");
+		expect(spies.requestRender).toHaveBeenCalled();
 	});
 
 	it("does not mark pasted shell prompts as Python mode while editing", async () => {

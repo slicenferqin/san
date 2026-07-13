@@ -2,9 +2,20 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Changed TUI `/model`, `/models`, Alt+M, and `/switch` to session-only direct select: Enter switches the current session model and closes, without role/thinking/scope menus. Provider is row metadata; ordinary paths no longer require horizontal provider tabs. Unsupported previous thinking effort falls back to Auto with a non-blocking status note. Empty model lists route to `/connect`.
+
 ### Added
 
 - Added `max` and `ultra` thinking selectors, CLI/configuration support, distinct status-line symbols, extended thinking budgets, literal `:max` model-id compatibility, and highest-advertised-tier `ultrathink` behavior.
+- Added `/connect` as the unified model-provider management surface (OAuth, API key, keyless/local). Connected providers sort first with auth origin and available model counts; successful connect refreshes that provider and opens a provider-filtered session model picker. Custom endpoints persist via a comment-preserving, locked, atomic `models.yml` path patch and store secrets only in AuthStorage (`auth: apiKey` without plaintext keys in YAML).
+- Added comment-preserving YAML path patch helpers and a safe `models.yml` writer for custom providers (no API key material in YAML, logs, or errors).
+- Added `/model roles` expert entry for the legacy role/thinking assignment picker.
+
+### Changed
+
+- Changed custom provider validation so `models.yml` may declare `auth: apiKey` without embedding the secret (keys live in AuthStorage).
 
 - Added ContextPlan request lifecycle hardening for 240K steady: per-provider-call hard-ceiling re-gate (including tool loops), branch-isolated checkpoints, fallback digests that never gain raw coverage via checkpoints, hard-pressure audit+prompt persistence with same-session agent-state recovery, shared plan snapshots for send/status/compaction, bounded semantic required sets, natural + explicit topic-shift relevance, atomic material-level wire caps, stable epoch IDs, SanLoop branch-only plan refs, `burstWindowTokens` settings, real AgentSession multi-turn dogfood, and session-prepared digest side-request transport.
 - Added ContextPlan-backed San context steady runtime wiring with low-authority provider injection, fail-closed coverage validation, v2 checkpoint audit fields, `/context plan` reporting, and deterministic ContextPlan dogfood coverage while retaining legacy ContextPacket reports for old sessions.

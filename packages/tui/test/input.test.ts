@@ -90,6 +90,20 @@ describe("Input component", () => {
 		expect(input.getValue()).toBe(`Hola${nbsp}|mundo`);
 	});
 
+	it("masks secrets without changing the submitted value", () => {
+		const input = setupAtEnd("sk-secret-value");
+		let submitted: string | undefined;
+		input.onSubmit = value => {
+			submitted = value;
+		};
+		input.setMaskCharacter("*");
+		const rendered = Bun.stripANSI(input.render(40)[0] ?? "").replaceAll(CURSOR_MARKER, "");
+		expect(rendered).not.toContain("secret");
+		expect(rendered).toContain("***************");
+		input.handleInput("\n");
+		expect(submitted).toBe("sk-secret-value");
+	});
+
 	it("keeps common joiners inside words", () => {
 		{
 			const text = "co-operate l’été";

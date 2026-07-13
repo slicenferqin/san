@@ -432,6 +432,47 @@ describe("OpenRouter model discovery", () => {
 });
 
 describe("model cache spec round trip", () => {
+	it("deletes v8 cache rows that may contain discovery bearer headers", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-model-cache-v8-"));
+		const dbPath = path.join(tempDir, "models.db");
+		const secret = "legacy-discovery-bearer";
+		const model = buildModel(
+			completionsSpec({
+				provider: "legacy-secret-cache",
+				headers: { Authorization: `Bearer ${secret}` },
+			}),
+		);
+		try {
+			writeModelCache("legacy-secret-cache", Date.now(), [model], true, "", dbPath);
+			const seed = new Database(dbPath);
+			try {
+				seed.run("UPDATE model_cache SET version = 8 WHERE provider_id = ?", ["legacy-secret-cache"]);
+			} finally {
+				seed.close();
+			}
+
+			const offline = await resolveProviderModels<"openai-completions">(
+				{
+					providerId: "legacy-secret-cache",
+					staticModels: [],
+					cacheDbPath: dbPath,
+				},
+				"offline",
+			);
+			expect(offline.models).toEqual([]);
+
+			const inspect = new Database(dbPath, { readonly: true });
+			try {
+				const rows = inspect.query<{ models: string }, []>("SELECT models FROM model_cache").all();
+				expect(rows.some(row => row.models.includes(secret))).toBe(false);
+			} finally {
+				inspect.close();
+			}
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
 	it("persists sparse specs and rebuilds resolved models on cache reads", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-model-cache-"));
 		const dbPath = path.join(tempDir, "models.db");

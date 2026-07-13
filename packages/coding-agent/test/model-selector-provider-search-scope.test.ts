@@ -66,7 +66,7 @@ function createSelector(models: Model[], onSelect: (model: Model) => void): Sele
 		[],
 		model => onSelect(model),
 		() => {},
-		{ temporaryOnly: true },
+		{ temporaryOnly: true, hideProviderTabs: false },
 	);
 	refreshGate.resolve();
 	// Chain past the constructor's `.then().catch().finally()` hops so the

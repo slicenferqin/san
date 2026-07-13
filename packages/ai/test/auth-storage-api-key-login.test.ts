@@ -203,4 +203,69 @@ describe("AuthStorage api-key login upsert", () => {
 		expect(await authStorage.getApiKey("opencode-go", "session-opencode-go-login")).toBe("new-opencode-key");
 		expect(await authStorage.peekApiKey("opencode-go")).toBe("new-opencode-key");
 	});
+
+	it("upsertLoginApiKey does not delete OAuth accounts for the same provider", async () => {
+		if (!store || !authStorage || !dbPath) throw new Error("test setup failed");
+
+		store.saveOAuth("openai", {
+			refresh: "refresh-token-oauth-1",
+			access: "access-token-oauth-1",
+			expires: Date.now() + 60_000,
+			email: "user@example.com",
+			accountId: "acct-1",
+		});
+		expect(store.listAuthCredentials("openai").some(row => row.credential.type === "oauth")).toBe(true);
+
+		await authStorage.upsertLoginApiKey("openai", "sk-login-api-key-1");
+
+		const credentials = store.listAuthCredentials("openai");
+		expect(credentials.some(row => row.credential.type === "oauth")).toBe(true);
+		expect(credentials.some(row => row.credential.type === "api_key")).toBe(true);
+		const apiKeyRow = credentials.find(row => row.credential.type === "api_key");
+		expect(apiKeyRow?.credential.type).toBe("api_key");
+		if (apiKeyRow?.credential.type === "api_key") {
+			expect(apiKeyRow.credential.key).toBe("sk-login-api-key-1");
+			expect(apiKeyRow.credential.source).toBe("login");
+		}
+		expect(countCredentialRowsByDisabledState(dbPath, "openai", true)).toBe(0);
+	});
+
+	it("validates API-key login results before persistence", async () => {
+		if (!store || !authStorage) throw new Error("test setup failed");
+		loginKagiSpy.mockResolvedValueOnce("rejected-login-key");
+
+		await expect(
+			authStorage.login("kagi", {
+				onAuth: () => {},
+				onPrompt: async () => "",
+				validateApiKey: async () => {
+					throw new Error("invalid credential");
+				},
+			}),
+		).rejects.toThrow("invalid credential");
+		expect(store.listAuthCredentials("kagi")).toEqual([]);
+	});
+
+	it("redacts rejected API keys from validation errors", async () => {
+		if (!store || !authStorage) throw new Error("test setup failed");
+		const secret = "rejected-login-key";
+		loginKagiSpy.mockResolvedValueOnce(secret);
+
+		let message = "";
+		try {
+			await authStorage.login("kagi", {
+				onAuth: () => {},
+				onPrompt: async () => "",
+				validateApiKey: async apiKey => {
+					throw new Error(`Provider rejected ${apiKey}`);
+				},
+			});
+		} catch (error) {
+			message = error instanceof Error ? error.message : String(error);
+		}
+
+		expect(message).toBe("Provider rejected [redacted]");
+		expect(message).not.toContain(secret);
+		expect(store.listAuthCredentials("kagi")).toEqual([]);
+	});
 });

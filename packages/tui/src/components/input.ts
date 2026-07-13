@@ -28,6 +28,7 @@ export class Input implements Component, Focusable {
 	#value: string = "";
 	#cursor: number = 0; // Cursor position in the value
 	#useTerminalCursor = false;
+	#maskCharacter: string | undefined;
 	/** Rendered before the editable area; set to "" for chrome-less embedding. */
 	prompt = "> ";
 	onSubmit?: (value: string) => void;
@@ -62,6 +63,11 @@ export class Input implements Component, Focusable {
 
 	getUseTerminalCursor(): boolean {
 		return this.#useTerminalCursor;
+	}
+
+	/** Mask the rendered value while preserving the underlying input bytes. */
+	setMaskCharacter(maskCharacter: string | undefined): void {
+		this.#maskCharacter = maskCharacter ? ([...segmenter.segment(maskCharacter)][0]?.segment ?? "*") : undefined;
 	}
 
 	handleInput(data: string): void {
@@ -415,9 +421,17 @@ export class Input implements Component, Focusable {
 			return [prompt];
 		}
 
-		const cursorIndex = this.#cursor;
+		const sourceCursorIndex = this.#cursor;
 		// Ensure we always have a grapheme to invert at the cursor (space at end).
-		const displayValue = cursorIndex >= this.#value.length ? `${this.#value} ` : this.#value;
+		const sourceDisplayValue = sourceCursorIndex >= this.#value.length ? `${this.#value} ` : this.#value;
+		const displayValue = this.#maskCharacter
+			? [...segmenter.segment(sourceDisplayValue)]
+					.map(segment => (segment.index < this.#value.length ? this.#maskCharacter : " "))
+					.join("")
+			: sourceDisplayValue;
+		const cursorIndex = this.#maskCharacter
+			? [...segmenter.segment(this.#value.slice(0, sourceCursorIndex))].length * this.#maskCharacter.length
+			: sourceCursorIndex;
 
 		const totalCols = visibleWidth(displayValue);
 		const cursorCols = visibleWidth(displayValue.slice(0, cursorIndex));

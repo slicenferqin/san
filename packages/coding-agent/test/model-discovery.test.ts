@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -76,6 +77,16 @@ describe("ModelRegistry runtime discovery", () => {
 
 	function getModelsForProvider(registry: ModelRegistry, provider: string) {
 		return registry.getAll().filter(m => m.provider === provider);
+	}
+
+	function expectModelCacheNotToContain(secret: string): void {
+		const db = new Database(cacheDbPath, { readonly: true });
+		try {
+			const rows = db.query("SELECT models FROM model_cache").all() as Array<{ models: string }>;
+			expect(rows.some(row => row.models.includes(secret))).toBe(false);
+		} finally {
+			db.close();
+		}
 	}
 
 	function withEnv(name: "OLLAMA_BASE_URL" | "OLLAMA_CONTEXT_LENGTH" | "OLLAMA_HOST", value: string | undefined) {
@@ -881,6 +892,8 @@ describe("ModelRegistry runtime discovery", () => {
 		await registry.refresh();
 		const llamaModels = getModelsForProvider(registry, "llama.cpp");
 		expect(llamaModels.some(m => m.id === "llama-3.2:3b")).toBe(true);
+		expect(llamaModels.every(model => model.headers?.Authorization === undefined)).toBe(true);
+		expectModelCacheNotToContain("test-llama-key");
 		const apiKey = await registry.getApiKey(llamaModels[0]);
 		expect(apiKey).toBe("test-llama-key");
 		expect(apiKey).not.toBe(kNoAuth);
@@ -1681,6 +1694,74 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(fallback?.contextWindow).toBe(128000);
 	});
 
+	test("authenticated discovery uses but never caches the bearer", async () => {
+		const secret = "sk-auth-storage-only";
+		writeRawModelsJson({
+			"private-proxy": {
+				baseUrl: "https://private.example/v1",
+				api: "openai-completions",
+				auth: "apiKey",
+				discovery: { type: "openai-models-list" },
+			},
+		});
+		await authStorage.upsertLoginApiKey("private-proxy", secret);
+		const fetchMock: FetchImpl = async (input, init) => {
+			const url = String(input);
+			if (url !== "https://private.example/v1/models") throw new Error(`Unexpected URL: ${url}`);
+			const headers = new Headers(init?.headers);
+			expect(headers.get("Authorization")).toBe(`Bearer ${secret}`);
+			return new Response(JSON.stringify({ data: [{ id: "private-model" }] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh("online");
+
+		const model = registry.find("private-proxy", "private-model");
+		expect(model?.headers?.Authorization).toBeUndefined();
+		expectModelCacheNotToContain(secret);
+	});
+
+	test("cached configured discovery restores non-secret provider headers at runtime", () => {
+		writeRawModelsJson({
+			"header-proxy": {
+				baseUrl: "https://headers.example/v1",
+				api: "openai-completions",
+				auth: "none",
+				headers: { "X-Gateway-Tenant": "team-a" },
+				discovery: { type: "openai-models-list" },
+			},
+		});
+		writeModelCache(
+			"header-proxy:openai-models-list-context-v2",
+			Date.now(),
+			[
+				buildModel({
+					id: "cached-model",
+					name: "Cached Model",
+					api: "openai-completions",
+					provider: "header-proxy",
+					baseUrl: "https://headers.example/v1",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 128_000,
+					maxTokens: 16_384,
+				}),
+			],
+			true,
+			"",
+			cacheDbPath,
+		);
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+
+		expect(registry.find("header-proxy", "cached-model")?.headers).toEqual({
+			"X-Gateway-Tenant": "team-a",
+		});
+	});
+
 	test("openai-models-list discovery enriches thin /v1/models payloads from the bundled reference catalog", async () => {
 		writeRawModelsJson({
 			"openai-test": {
@@ -1731,16 +1812,19 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("proxy discovery honors API-reported context_length and endpoint routing", async () => {
+		const secret = "proxy-discovery-key";
 		writeRawModelsJson({
 			"proxy-test": {
 				baseUrl: "http://127.0.0.1:9998",
-				auth: "none",
+				auth: "apiKey",
 				discovery: { type: "proxy" },
 			},
 		});
-		const fetchMock: FetchImpl = async input => {
+		await authStorage.upsertLoginApiKey("proxy-test", secret);
+		const fetchMock: FetchImpl = async (input, init) => {
 			const url = String(input);
 			if (url === "http://127.0.0.1:9998/v1/models") {
+				expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${secret}`);
 				return new Response(
 					JSON.stringify({
 						data: [
@@ -1759,9 +1843,12 @@ describe("ModelRegistry runtime discovery", () => {
 		const anthropic = registry.getAll().find(m => m.provider === "proxy-test" && m.id === "anthropic-model");
 		expect(anthropic?.api).toBe("anthropic-messages");
 		expect(anthropic?.contextWindow).toBe(200000);
+		expect(anthropic?.headers?.Authorization).toBeUndefined();
 		const openai = registry.getAll().find(m => m.provider === "proxy-test" && m.id === "openai-model");
 		expect(openai?.api).toBe("openai-completions");
 		expect(openai?.contextWindow).toBe(65536);
+		expect(openai?.headers?.Authorization).toBeUndefined();
+		expectModelCacheNotToContain(secret);
 		// A non-positive upstream context_length must be rejected by the guard and
 		// fall through to the bundled reference (absent here) then the default,
 		// never pinning the model at a broken `0` window.
@@ -1770,17 +1857,20 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("litellm discovery maps rich model metadata and keeps runtime /v1 baseUrl", async () => {
+		const secret = "litellm-discovery-key";
 		writeRawModelsJson({
 			"litellm-test": {
 				baseUrl: "http://127.0.0.1:4000",
 				api: "openai-completions",
-				auth: "none",
+				auth: "apiKey",
 				discovery: { type: "litellm" },
 			},
 		});
-		const fetchMock: FetchImpl = async input => {
+		await authStorage.upsertLoginApiKey("litellm-test", secret);
+		const fetchMock: FetchImpl = async (input, init) => {
 			const url = String(input);
 			if (url === "http://127.0.0.1:4000/model_group/info") {
+				expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${secret}`);
 				return Response.json({
 					data: [
 						{
@@ -1805,6 +1895,8 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(model?.maxTokens).toBe(16_384);
 		expect(model?.input).toEqual(["text", "image"]);
 		expect(model?.reasoning).toBe(true);
+		expect(model?.headers?.Authorization).toBeUndefined();
+		expectModelCacheNotToContain(secret);
 	});
 
 	test("litellm discovery enriches configured proxy models with bundled references", async () => {

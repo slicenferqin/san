@@ -352,7 +352,18 @@ export interface InteractiveModeContext {
 	showHistorySearch(): void;
 	showExtensionsDashboard(): void;
 	showAgentsDashboard(): void;
-	showModelSelector(options?: { temporaryOnly?: boolean }): void;
+	showModelSelector(options?: {
+		temporaryOnly?: boolean;
+		roleMode?: boolean;
+		providerFilter?: string;
+		directSelect?: boolean;
+		hideProviderTabs?: boolean;
+		pickerHint?: string;
+		onCancel?: () => void;
+		terminalColumns?: number;
+	}): void;
+	showModelRoleSelector(): void;
+	showConnectSelector(): Promise<void>;
 	showPluginSelector(mode?: "install" | "uninstall"): void;
 	showUserMessageSelector(): void;
 	showCopySelector(): void;

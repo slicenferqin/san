@@ -1779,6 +1779,11 @@ export class AuthStorage {
 
 	/**
 	 * Set credential for a provider.
+	 *
+	 * WARNING: this is replace-all for the provider. A single API-key credential
+	 * will soft-delete unmatched OAuth and other API-key rows. Prefer
+	 * {@link upsertLoginApiKey} for interactive API-key entry so OAuth accounts
+	 * on the same provider survive.
 	 */
 	async set(provider: string, credential: AuthCredentialEntry): Promise<void> {
 		const normalized = Array.isArray(credential) ? credential : [credential];
@@ -1789,6 +1794,29 @@ export class AuthStorage {
 		this.#setStoredCredentials(
 			provider,
 			stored.map(record => ({ id: record.id, credential: record.credential })),
+		);
+		this.#resetProviderAssignments(provider);
+	}
+
+	/**
+	 * Upsert a login-sourced API key without removing OAuth accounts or other
+	 * distinct API keys for the same provider.
+	 *
+	 * Same key bytes reuse the existing row; a different key appends a new
+	 * api_key credential. OAuth rows are never touched.
+	 */
+	async upsertLoginApiKey(provider: string, apiKey: string): Promise<void> {
+		const key = apiKey.trim();
+		if (!key) {
+			throw new AIError.ConfigurationError("API key must not be empty");
+		}
+		const newCredential: ApiKeyCredential = { type: "api_key", key, source: "login" };
+		const stored = this.#store.upsertAuthCredentialRemote
+			? await this.#store.upsertAuthCredentialRemote(provider, newCredential)
+			: this.#store.upsertAuthCredentialForProvider(provider, newCredential);
+		this.#setStoredCredentials(
+			provider,
+			stored.map(entry => ({ id: entry.id, credential: entry.credential })),
 		);
 		this.#resetProviderAssignments(provider);
 	}
@@ -2040,6 +2068,8 @@ export class AuthStorage {
 			onAuth: (info: OAuthAuthInfo) => void;
 			/** onPrompt is required for some providers (github-copilot, openai-codex) */
 			onPrompt: (prompt: { message: string; placeholder?: string }) => Promise<string>;
+			/** Validate string-returning API-key login results before persistence. */
+			validateApiKey?: (apiKey: string) => Promise<void>;
 		},
 	): Promise<void> {
 		// Only paste-code providers (fixed non-loopback redirect, e.g. GitLab Duo
@@ -2070,6 +2100,12 @@ export class AuthStorage {
 			// Some flows (e.g. ollama) return "" to signal that no key was entered.
 			if (!result) {
 				return;
+			}
+			try {
+				await ctrl.validateApiKey?.(result);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				throw new AIError.ConfigurationError(message.replaceAll(result, "[redacted]"));
 			}
 			const newCredential: ApiKeyCredential = { type: "api_key", key: result, source: "login" };
 			const stored = this.#store.upsertAuthCredentialRemote

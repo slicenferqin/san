@@ -743,6 +743,7 @@ export class ModelRegistry {
 	#customProviderApiKeys: Map<string, string> = new Map();
 	#keylessProviders: Set<string> = new Set();
 	#discoverableProviders: DiscoveryProviderConfig[] = [];
+	#configuredProviders: Set<string> = new Set();
 	#customModelOverlays: CustomModelOverlay[] = [];
 	#providerOverrides: Map<string, ProviderOverride> = new Map();
 	#modelOverrides: Map<string, Map<string, ModelOverride>> = new Map();
@@ -764,7 +765,14 @@ export class ModelRegistry {
 	#runtimeProviderSourceByName: Map<string, string> = new Map();
 	// Runtime model managers registered by extensions via fetchDynamicModels.
 	// Keyed by provider name; use the same SQLite cache path as builtins.
-	#runtimeModelManagers: Map<string, { options: ModelManagerOptions<Api>; sourceId: string }> = new Map();
+	#runtimeModelManagers: Map<
+		string,
+		{
+			options: ModelManagerOptions<Api>;
+			sourceId: string;
+			fetchModels: (apiKey: string | undefined) => Promise<readonly ModelSpec<Api>[]>;
+		}
+	> = new Map();
 	#fetch: FetchImpl;
 
 	#resolveCommandBackedApiKey(provider: string): CommandApiKeyResolution {
@@ -855,6 +863,72 @@ export class ModelRegistry {
 			}
 		}
 		await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]));
+	}
+
+	canValidateProviderConnection(providerId: string): boolean {
+		if (this.#discoverableProviders.some(provider => provider.provider === providerId)) return true;
+		const descriptor = PROVIDER_DESCRIPTORS.find(provider => provider.providerId === providerId);
+		if (descriptor) {
+			const baseUrl =
+				this.#runtimeProviderOverrides.get(providerId)?.baseUrl ??
+				this.#providerOverrides.get(providerId)?.baseUrl ??
+				this.getProviderBaseUrl(providerId);
+			return Boolean(
+				descriptor.createModelManagerOptions({
+					apiKey: "validation-capability-probe",
+					baseUrl,
+					fetch: this.#fetch,
+				}).fetchDynamicModels,
+			);
+		}
+		return Boolean(this.#runtimeModelManagers.get(providerId)?.options.fetchDynamicModels);
+	}
+
+	async #validateProviderDiscovery(providerId: string, apiKey?: string): Promise<number> {
+		const configured = this.#discoverableProviders.find(provider => provider.provider === providerId);
+		if (configured) {
+			const context = apiKey
+				? { fetch: this.#fetch, getBearerApiKeyResolver: async () => apiKey }
+				: this.#discoveryContext();
+			const models = await discoverModelsByProviderType(configured, context);
+			if (models.length === 0) throw new Error(`Provider ${providerId} returned no models`);
+			return models.length;
+		}
+
+		const descriptor = PROVIDER_DESCRIPTORS.find(provider => provider.providerId === providerId);
+		const runtimeManager = this.#runtimeModelManagers.get(providerId);
+		const runtimeOptions = runtimeManager?.options;
+		if (!descriptor && !runtimeOptions?.fetchDynamicModels) {
+			throw new Error(`Provider ${providerId} does not support automatic connection validation`);
+		}
+		const baseUrl =
+			this.#runtimeProviderOverrides.get(providerId)?.baseUrl ??
+			this.#providerOverrides.get(providerId)?.baseUrl ??
+			this.getProviderBaseUrl(providerId);
+		const storedKey = apiKey ?? (await this.#peekApiKeyForProvider(providerId));
+		let models: readonly ModelSpec<Api>[] | null | undefined;
+		if (descriptor) {
+			const options = descriptor.createModelManagerOptions({
+				apiKey: isDiscoveryBearerApiKey(storedKey) ? storedKey : undefined,
+				baseUrl,
+				fetch: this.#fetch,
+			});
+			models = await options.fetchDynamicModels?.();
+		} else {
+			models = await runtimeManager?.fetchModels(isDiscoveryBearerApiKey(storedKey) ? storedKey : undefined);
+		}
+		if (!models || models.length === 0) throw new Error(`Provider ${providerId} returned no models`);
+		return models.length;
+	}
+
+	/** Validate a candidate API key against positive live discovery without persisting it. */
+	async validateProviderApiKey(providerId: string, apiKey: string): Promise<void> {
+		await this.#validateProviderDiscovery(providerId, apiKey);
+	}
+
+	/** Validate currently configured auth against positive live discovery. */
+	async validateProviderConnection(providerId: string): Promise<number> {
+		return this.#validateProviderDiscovery(providerId);
 	}
 
 	/**
@@ -981,6 +1055,7 @@ export class ModelRegistry {
 		this.#configError = configError;
 		this.#keylessProviders = keylessProviders;
 		this.#discoverableProviders = discoverableProviders;
+		this.#configuredProviders = configuredProviders;
 		this.#customModelOverlays = customModels;
 		this.#providerOverrides = overrides;
 		this.#modelOverrides = modelOverrides;
@@ -1143,16 +1218,18 @@ export class ModelRegistry {
 				continue;
 			}
 			const configStale = this.#isDiscoveryCacheOlderThanModelsConfig(cache.updatedAt);
-			const models = this.#applyProviderModelOverrides(
-				providerConfig.provider,
-				this.#normalizeDiscoverableModels(
-					providerConfig,
-					this.#applyProviderCompat(
-						providerConfig.compat,
-						cache.models.map(model => buildModel(model)),
-					),
+			const normalized = this.#normalizeDiscoverableModels(
+				providerConfig,
+				this.#applyProviderCompat(
+					providerConfig.compat,
+					cache.models.map(model => buildModel(model)),
 				),
 			);
+			const providerOverride = this.#providerOverrides.get(providerConfig.provider);
+			const withTransport = providerOverride
+				? normalized.map(model => this.#applyProviderTransportOverride(model, providerOverride))
+				: normalized;
+			const models = this.#applyProviderModelOverrides(providerConfig.provider, withTransport);
 			cachedModels.push(...models);
 			this.#providerDiscoveryStates.set(providerConfig.provider, {
 				provider: providerConfig.provider,
@@ -1975,6 +2052,14 @@ export class ModelRegistry {
 			.map(provider => provider.provider);
 	}
 
+	isProviderKeyless(provider: string): boolean {
+		return this.#keylessProviders.has(provider);
+	}
+
+	isProviderConfigured(provider: string): boolean {
+		return this.#configuredProviders.has(provider);
+	}
+
 	getProviderDiscoveryState(provider: string): ProviderDiscoveryState | undefined {
 		return this.#providerDiscoveryStates.get(provider);
 	}
@@ -2132,6 +2217,7 @@ export class ModelRegistry {
 				apiKey: config.apiKey,
 				api: config.api,
 				oauthConfigured: Boolean(config.oauth),
+				authConfigured: this.authStorage.hasAuth(providerName),
 				models: (config.models ?? []) as ProviderValidationModel[],
 			},
 			"runtime-register",
@@ -2235,10 +2321,29 @@ export class ModelRegistry {
 			const fetcher = config.fetchDynamicModels;
 			const providerBaseUrl = config.baseUrl ?? "";
 			const providerApi = config.api;
-			const providerHeaders = config.headers;
-			const providerApiKey = config.apiKey;
-			const providerAuthHeader = config.authHeader;
 			const providerCompat = config.compat;
+			const fetchModels = async (apiKey: string | undefined): Promise<readonly ModelSpec<Api>[]> => {
+				const modelDefs = await withRuntimeDynamicModelsTimeout(RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS, () =>
+					fetcher(apiKey),
+				);
+				const results: Model<Api>[] = [];
+				for (const modelDef of modelDefs) {
+					const overlay = buildCustomModelOverlay(
+						providerName,
+						modelDef.baseUrl ?? providerBaseUrl,
+						modelDef.api ?? providerApi,
+						undefined,
+						undefined,
+						undefined,
+						providerCompat,
+						undefined,
+						config.remoteCompaction,
+						modelDef as CustomModelDefinitionLike,
+					);
+					if (overlay) results.push(finalizeCustomModel(overlay, { useDefaults: true }));
+				}
+				return results.map(toModelSpec);
+			};
 			const managerOptions: ModelManagerOptions<Api> = {
 				providerId: providerName as Parameters<typeof createModelManager>[0]["providerId"],
 				staticModels: [],
@@ -2248,29 +2353,14 @@ export class ModelRegistry {
 				fetchDynamicModels: async () => {
 					const apiKey = await this.#peekApiKeyForProvider(providerName);
 					const resolvedKey = isAuthenticated(apiKey) ? apiKey : undefined;
-					const modelDefs = await withRuntimeDynamicModelsTimeout(RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS, () =>
-						fetcher(resolvedKey),
-					);
-					const results: Model<Api>[] = [];
-					for (const modelDef of modelDefs) {
-						const overlay = buildCustomModelOverlay(
-							providerName,
-							modelDef.baseUrl ?? providerBaseUrl,
-							modelDef.api ?? providerApi,
-							providerHeaders,
-							providerApiKey,
-							providerAuthHeader,
-							providerCompat,
-							undefined,
-							config.remoteCompaction,
-							modelDef as CustomModelDefinitionLike,
-						);
-						if (overlay) results.push(finalizeCustomModel(overlay, { useDefaults: true }));
-					}
-					return results.map(toModelSpec);
+					return fetchModels(resolvedKey);
 				},
 			};
-			this.#runtimeModelManagers.set(providerName, { options: managerOptions, sourceId: sourceId ?? "" });
+			this.#runtimeModelManagers.set(providerName, {
+				options: managerOptions,
+				sourceId: sourceId ?? "",
+				fetchModels,
+			});
 			// Discovery is driven by refreshRuntimeProviders() after the drain — not
 			// here, so registration has no network side effect and callers can await.
 		}

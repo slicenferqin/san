@@ -102,7 +102,8 @@ describe("selector setting side effects", () => {
 			selector = result.component as typeof selector;
 		};
 
-		controller.showModelSelector();
+		// Retry-fallback assignment lives in the expert role picker.
+		controller.showModelRoleSelector();
 		if (!selector) throw new Error("Expected model selector to be shown");
 		selector.handleInput("\n");
 		for (let attempt = 0; attempt < 20; attempt++) {

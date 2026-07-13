@@ -704,6 +704,41 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		clientStorage.close();
 	});
 
+	test("client upsertLoginApiKey preserves OAuth through the broker", async () => {
+		serverStore!.saveOAuth("kagi", {
+			access: "oauth-access",
+			refresh: "oauth-refresh",
+			expires: Date.now() + 120_000,
+			accountId: "acct-kagi",
+			email: "user@example.com",
+		});
+		await serverStorage!.reload();
+
+		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
+		const initialResult = await brokerClient.fetchSnapshot();
+		if (initialResult.status !== 200) throw new Error("expected snapshot");
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			initialSnapshot: initialResult.snapshot,
+		});
+		const clientStorage = new AuthStorage(remoteStore);
+		await clientStorage.reload();
+
+		await clientStorage.upsertLoginApiKey("kagi", "new-login-key");
+
+		const serverCredentials = serverStore!.listAuthCredentials("kagi");
+		expect(serverCredentials.map(entry => entry.credential.type).sort()).toEqual(["api_key", "oauth"]);
+		const apiKey = serverCredentials.find(entry => entry.credential.type === "api_key")?.credential;
+		expect(apiKey).toEqual({ type: "api_key", key: "new-login-key", source: "login" });
+		expect(
+			clientStorage
+				.listStoredCredentials("kagi")
+				.map(entry => entry.credential.type)
+				.sort(),
+		).toEqual(["api_key", "oauth"]);
+		clientStorage.close();
+	});
+
 	test("client AuthStorage.remove disables every broker-side credential for the provider (logout)", async () => {
 		serverStore!.saveApiKey("kagi", "k1");
 		serverStore!.saveOAuth("kagi", {

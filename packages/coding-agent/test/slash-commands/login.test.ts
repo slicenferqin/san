@@ -9,6 +9,7 @@ type RuntimeHarness = {
 	getWarning: () => string | undefined;
 	getSelectorMode: () => "login" | "logout" | undefined;
 	getSelectorProvider: () => string | undefined;
+	getConnectCalls: () => number;
 };
 
 const createRuntimeHarness = (manualInput: OAuthManualInputManager): RuntimeHarness => {
@@ -16,6 +17,7 @@ const createRuntimeHarness = (manualInput: OAuthManualInputManager): RuntimeHarn
 	let warningMessage: string | undefined;
 	let selectorMode: "login" | "logout" | undefined;
 	let selectorProvider: string | undefined;
+	let connectCalls = 0;
 	const ctx = {
 		oauthManualInput: manualInput,
 		editor: {
@@ -31,6 +33,9 @@ const createRuntimeHarness = (manualInput: OAuthManualInputManager): RuntimeHarn
 			selectorMode = mode;
 			selectorProvider = providerId;
 		},
+		showConnectSelector: async () => {
+			connectCalls += 1;
+		},
 	} as InteractiveModeContext;
 
 	return {
@@ -41,6 +46,7 @@ const createRuntimeHarness = (manualInput: OAuthManualInputManager): RuntimeHarn
 		getWarning: () => warningMessage,
 		getSelectorMode: () => selectorMode,
 		getSelectorProvider: () => selectorProvider,
+		getConnectCalls: () => connectCalls,
 	};
 };
 
@@ -59,14 +65,15 @@ describe("/login slash command", () => {
 		expect(await pending).toBe(callbackUrl);
 	});
 
-	it("opens selector when no args are provided", async () => {
+	it("forwards no-argument login to the unified connect selector", async () => {
 		const manualInput = new OAuthManualInputManager();
 		const harness = createRuntimeHarness(manualInput);
 
 		const handled = await executeBuiltinSlashCommand("/login", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.getSelectorMode()).toBe("login");
+		expect(harness.getSelectorMode()).toBeUndefined();
+		expect(harness.getConnectCalls()).toBe(1);
 	});
 
 	it("routes /login kagi to direct provider login", async () => {
@@ -100,5 +107,15 @@ describe("/login slash command", () => {
 		expect(handled).toBe(true);
 		expect(harness.getSelectorMode()).toBeUndefined();
 		expect(harness.getWarning()).toBe("No OAuth login is waiting for a manual callback.");
+	});
+});
+
+describe("/logout slash command", () => {
+	it("forwards no-argument logout to the unified connect selector", async () => {
+		const harness = createRuntimeHarness(new OAuthManualInputManager());
+		const handled = await executeBuiltinSlashCommand("/logout", harness.runtime);
+		expect(handled).toBe(true);
+		expect(harness.getSelectorMode()).toBeUndefined();
+		expect(harness.getConnectCalls()).toBe(1);
 	});
 });

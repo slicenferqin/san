@@ -18,25 +18,33 @@ function createRuntime() {
 }
 
 describe("/model slash command", () => {
-	it("opens the model setup picker for role and thinking assignment", async () => {
+	it("opens the session-only direct model picker", async () => {
 		const harness = createRuntime();
 
 		const handled = await executeBuiltinSlashCommand("/model", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.showModelSelector.mock.calls).toEqual([[]]);
+		expect(harness.showModelSelector).toHaveBeenCalledWith({
+			temporaryOnly: true,
+			directSelect: true,
+			hideProviderTabs: true,
+		});
 		expect(harness.setText).toHaveBeenCalledWith("");
 	});
 });
 
 describe("/switch slash command", () => {
-	it("opens the temporary model selector (mirrors alt+p)", async () => {
+	it("opens the same session-only model selector as /model", async () => {
 		const harness = createRuntime();
 
 		const handled = await executeBuiltinSlashCommand("/switch", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.showModelSelector).toHaveBeenCalledWith({ temporaryOnly: true });
+		expect(harness.showModelSelector).toHaveBeenCalledWith({
+			temporaryOnly: true,
+			directSelect: true,
+			hideProviderTabs: true,
+		});
 		expect(harness.setText).toHaveBeenCalledWith("");
 	});
 });

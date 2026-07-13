@@ -28,6 +28,7 @@ export interface ProviderValidationConfig {
 	api?: Api;
 	auth?: ProviderAuthMode;
 	oauthConfigured?: boolean;
+	authConfigured?: boolean;
 	discovery?: ProviderDiscovery;
 	compat?: ModelSpec<Api>["compat"];
 	remoteCompaction?: unknown;
@@ -67,15 +68,19 @@ export function validateProviderConfiguration(
 		if (!config.baseUrl) {
 			throw new Error(`Provider ${providerName}: "baseUrl" is required when defining custom models.`);
 		}
+		// models.yml may declare auth: apiKey without embedding the secret; keys
+		// live in AuthStorage. Runtime register still requires a concrete key or
+		// oauth unless auth is none.
 		const requiresAuth =
 			mode === "runtime-register"
-				? !config.apiKey && !config.oauthConfigured
-				: !config.apiKey && (config.auth ?? "apiKey") !== "none";
+				? !config.apiKey &&
+					!config.oauthConfigured &&
+					!config.authConfigured &&
+					(config.auth ?? "apiKey") !== "none"
+				: false;
 		if (requiresAuth) {
 			throw new Error(
-				mode === "runtime-register"
-					? `Provider ${providerName}: "apiKey" or "oauth" is required when defining models.`
-					: `Provider ${providerName}: "apiKey" is required when defining custom models unless auth is "none".`,
+				`Provider ${providerName}: "apiKey" or "oauth" is required when defining models, or set auth: "none".`,
 			);
 		}
 	}
