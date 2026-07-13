@@ -1,5 +1,7 @@
-import { beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
+import * as modelDiscovery from "@oh-my-pi/pi-coding-agent/config/model-discovery";
+import * as modelsConfigWriter from "@oh-my-pi/pi-coding-agent/config/models-config-writer";
 import { ConnectSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/connect-selector";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
@@ -10,21 +12,45 @@ beforeAll(async () => {
 	await initTheme();
 });
 
-function createHarness(options: { connected: boolean; validateError?: Error }) {
+afterEach(() => {
+	vi.restoreAllMocks();
+});
+
+function createHarness(options: {
+	connected: boolean;
+	validateError?: Error;
+	upsertLoginApiKeyError?: Error;
+	refreshProviderError?: Error;
+}) {
 	const editorContainer = new Container();
 	const editor = new Text("editor", 0, 0);
 	editorContainer.addChild(editor);
-	const upsertLoginApiKey = vi.fn(async () => {});
-	const validateProviderApiKey = vi.fn(async () => {
+	const upsertLoginApiKey = vi.fn(async (_provider: string, _apiKey: string) => {
+		if (options.upsertLoginApiKeyError) throw options.upsertLoginApiKeyError;
+	});
+	const validateProviderApiKey = vi.fn(async (_provider: string, _apiKey: string) => {
 		if (options.validateError) throw options.validateError;
 	});
+	const remove = vi.fn(async (_provider: string) => true);
+	const refresh = vi.fn(async (_strategy?: string) => {});
+	const refreshProvider = vi.fn(async (_provider: string, _strategy?: string) => {
+		if (options.refreshProviderError) throw options.refreshProviderError;
+	});
 	const openAiModel = { provider: "openai", id: "gpt-test" } as Model;
+	const storedCredentials: Array<{ id: string }> = [];
 	const authStorage = {
 		hasAuth: (provider: string) => options.connected && provider === "openai",
 		getCredentialOrigin: (provider: string) =>
 			options.connected && provider === "openai" ? { kind: "api_key" as const } : undefined,
-		listStoredCredentials: () => [],
-		upsertLoginApiKey,
+		listStoredCredentials: (provider?: string) => {
+			void provider;
+			return storedCredentials;
+		},
+		upsertLoginApiKey: async (provider: string, apiKey: string) => {
+			await upsertLoginApiKey(provider, apiKey);
+			storedCredentials.push({ id: "login-key" });
+		},
+		remove,
 	};
 	const modelRegistry = {
 		authStorage,
@@ -36,9 +62,14 @@ function createHarness(options: { connected: boolean; validateError?: Error }) {
 		canValidateProviderConnection: () => true,
 		validateProviderApiKey,
 		validateProviderConnection: vi.fn(async () => 1),
+		refresh,
+		refreshProvider,
 	};
 	const showHookSelector = vi.fn(async () => "Back");
 	const showError = vi.fn();
+	const showWarning = vi.fn();
+	const showStatus = vi.fn();
+	const present = vi.fn();
 	const ctx = {
 		editorContainer,
 		editor,
@@ -54,19 +85,43 @@ function createHarness(options: { connected: boolean; validateError?: Error }) {
 		},
 		showHookSelector,
 		showHookConfirm: vi.fn(async () => false),
-		showStatus: vi.fn(),
-		showWarning: vi.fn(),
+		showStatus,
+		showWarning,
 		showError,
-		present: vi.fn(),
+		present,
 	} as unknown as InteractiveModeContext;
 	return {
 		controller: new SelectorController(ctx),
 		editorContainer,
 		showHookSelector,
 		showError,
+		showWarning,
+		showStatus,
+		present,
 		upsertLoginApiKey,
 		validateProviderApiKey,
+		remove,
+		refresh,
+		refreshProvider,
+		authStorage,
 	};
+}
+
+async function waitForInput(editorContainer: Container): Promise<Input> {
+	for (let attempt = 0; attempt < 20; attempt++) {
+		const child = editorContainer.children[0];
+		if (child instanceof Input) return child;
+		await Promise.resolve();
+	}
+	throw new Error("Expected a focused Input prompt");
+}
+
+async function fillPrompt(editorContainer: Container, value: string): Promise<void> {
+	const input = await waitForInput(editorContainer);
+	input.pasteText(value);
+	input.handleInput("\n");
+	await Promise.resolve();
+	await Promise.resolve();
 }
 
 describe("SelectorController provider connect flow", () => {
@@ -96,15 +151,61 @@ describe("SelectorController provider connect flow", () => {
 		for (const char of "openai") selector.handleInput(char);
 		selector.handleInput("\n");
 		await Promise.resolve();
-		const input = harness.editorContainer.children[0];
-		expect(input).toBeInstanceOf(Input);
-		(input as Input).pasteText("bad-key");
-		(input as Input).handleInput("\n");
+		const input = await waitForInput(harness.editorContainer);
+		input.pasteText("bad-key");
+		input.handleInput("\n");
 		await Promise.resolve();
 		await Promise.resolve();
 
 		expect(harness.validateProviderApiKey).toHaveBeenCalledWith("openai", "bad-key");
 		expect(harness.upsertLoginApiKey).not.toHaveBeenCalled();
 		expect(harness.showError).toHaveBeenCalledWith("Could not connect openai: invalid credential");
+	});
+
+	it("rolls back a newly written custom provider when key persistence fails", async () => {
+		const harness = createHarness({
+			connected: false,
+			upsertLoginApiKeyError: new Error("auth store unavailable"),
+		});
+		vi.spyOn(modelDiscovery, "discoverModelsByProviderType").mockResolvedValue([
+			{ id: "proxy-model", provider: "team-proxy" } as never,
+		]);
+		const writeSpy = vi.spyOn(modelsConfigWriter, "writeCustomProviderConfig").mockResolvedValue({
+			path: "/tmp/models.yml",
+			changed: true,
+			persisted: true,
+		});
+		const removeConfigSpy = vi.spyOn(modelsConfigWriter, "removeCustomProviderConfig").mockResolvedValue({
+			path: "/tmp/models.yml",
+			changed: true,
+			removed: true,
+		});
+		vi.spyOn(modelsConfigWriter, "validateCustomProviderConfigDestination").mockResolvedValue(undefined);
+
+		await harness.controller.showConnectSelector();
+		const selector = harness.editorContainer.children[0] as ConnectSelectorComponent;
+		// Filter to the always-available custom action (no provider names match "custom").
+		for (const char of "custom") selector.handleInput(char);
+		selector.handleInput("\n");
+		await Promise.resolve();
+		await Promise.resolve();
+
+		await fillPrompt(harness.editorContainer, "team-proxy");
+		await fillPrompt(harness.editorContainer, "https://proxy.example/v1");
+		await fillPrompt(harness.editorContainer, "sk-test-secret");
+		// Allow the async setup + rollback chain to settle.
+		for (let i = 0; i < 10; i++) await Promise.resolve();
+
+		expect(writeSpy).toHaveBeenCalledWith(
+			expect.objectContaining({ name: "team-proxy", baseUrl: "https://proxy.example/v1" }),
+		);
+		expect(harness.upsertLoginApiKey).toHaveBeenCalledWith("team-proxy", "sk-test-secret");
+		// Key store failed before any credential row was created; only models.yml is rolled back.
+		expect(removeConfigSpy).toHaveBeenCalledWith("team-proxy");
+		expect(harness.remove).not.toHaveBeenCalled();
+		expect(harness.refresh).toHaveBeenCalled();
+		expect(harness.showError).toHaveBeenCalledWith(
+			expect.stringContaining("Custom provider failed: auth store unavailable"),
+		);
 	});
 });

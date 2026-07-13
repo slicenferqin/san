@@ -1766,7 +1766,9 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				runtime.ctx.editor.setText("");
 				return;
 			}
-			void runtime.ctx.showConnectSelector();
+			// Credential removal stays on the dedicated logout surface; provider
+			// connect/manage remains /connect (or /login with no args).
+			void runtime.ctx.showOAuthSelector("logout");
 			runtime.ctx.editor.setText("");
 		},
 	},

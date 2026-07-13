@@ -16,6 +16,8 @@
 ### Changed
 
 - Changed custom provider validation so `models.yml` may declare `auth: apiKey` without embedding the secret (keys live in AuthStorage).
+- Restored no-argument `/logout` to the dedicated credential-removal selector (provider connect remains `/connect` / `/login`).
+- Custom provider setup now rolls back the newly written `models.yml` entry and any login credential when key storage or first registry load fails, avoiding half-configured providers.
 
 - Added ContextPlan request lifecycle hardening for 240K steady: per-provider-call hard-ceiling re-gate (including tool loops), branch-isolated checkpoints, fallback digests that never gain raw coverage via checkpoints, hard-pressure audit+prompt persistence with same-session agent-state recovery, shared plan snapshots for send/status/compaction, bounded semantic required sets, natural + explicit topic-shift relevance, atomic material-level wire caps, stable epoch IDs, SanLoop branch-only plan refs, `burstWindowTokens` settings, real AgentSession multi-turn dogfood, and session-prepared digest side-request transport.
 - Added ContextPlan-backed San context steady runtime wiring with low-authority provider injection, fail-closed coverage validation, v2 checkpoint audit fields, `/context plan` reporting, and deterministic ContextPlan dogfood coverage while retaining legacy ContextPacket reports for old sessions.

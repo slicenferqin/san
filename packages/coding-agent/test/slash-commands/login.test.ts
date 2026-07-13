@@ -111,11 +111,12 @@ describe("/login slash command", () => {
 });
 
 describe("/logout slash command", () => {
-	it("forwards no-argument logout to the unified connect selector", async () => {
+	it("forwards no-argument logout to the dedicated logout selector", async () => {
 		const harness = createRuntimeHarness(new OAuthManualInputManager());
 		const handled = await executeBuiltinSlashCommand("/logout", harness.runtime);
 		expect(handled).toBe(true);
-		expect(harness.getSelectorMode()).toBeUndefined();
-		expect(harness.getConnectCalls()).toBe(1);
+		expect(harness.getSelectorMode()).toBe("logout");
+		expect(harness.getSelectorProvider()).toBeUndefined();
+		expect(harness.getConnectCalls()).toBe(0);
 	});
 });

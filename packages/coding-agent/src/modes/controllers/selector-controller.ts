@@ -1107,6 +1107,7 @@ export class SelectorController {
 			discovery: { type: "openai-models-list" as const },
 		};
 
+		let wroteProviderConfig = false;
 		try {
 			await validateCustomProviderConfigDestination(providerConfig);
 			const discovered = await discoverModelsByProviderType(
@@ -1125,32 +1126,18 @@ export class SelectorController {
 				throw new Error("the endpoint returned no models");
 			}
 			const writeResult = await writeCustomProviderConfig(providerConfig);
+			wroteProviderConfig = true;
 			if (normalizedApiKey) {
-				try {
-					await authStorage.upsertLoginApiKey(providerId, normalizedApiKey);
-				} catch (error) {
-					this.ctx.showWarning(
-						`Provider ${providerId} was saved to ${shortenPath(writeResult.path)}, but its API key could not be stored: ${this.#safeErrorMessage(error, [normalizedApiKey])}`,
-					);
-					await this.#reopenConnectIfIdle();
-					return;
-				}
+				await authStorage.upsertLoginApiKey(providerId, normalizedApiKey);
 			}
-			try {
-				await this.ctx.session.modelRegistry.refresh();
-				await this.ctx.session.modelRegistry.refreshProvider(providerId, "online");
-				const availableModels = this.ctx.session.modelRegistry
-					.getAvailable()
-					.filter(model => model.provider === providerId);
-				if (availableModels.length === 0) throw new Error("no models loaded into the registry");
-			} catch (error) {
-				this.ctx.showWarning(
-					`Provider ${providerId} was saved, but its models could not be loaded: ${this.#safeErrorMessage(error, [normalizedApiKey])}`,
-				);
-				await this.#reopenConnectIfIdle();
-				return;
-			}
+			await this.ctx.session.modelRegistry.refresh();
+			await this.ctx.session.modelRegistry.refreshProvider(providerId, "online");
+			const availableModels = this.ctx.session.modelRegistry
+				.getAvailable()
+				.filter(model => model.provider === providerId);
+			if (availableModels.length === 0) throw new Error("no models loaded into the registry");
 			if (!this.ctx.session.getAvailableModels().some(model => model.provider === providerId)) {
+				// Config + credentials are valid; scope exclusion is not a setup failure.
 				this.ctx.showWarning(`${providerId} is connected, but its models are excluded by the current model scope.`);
 				await this.#reopenConnectIfIdle();
 				return;
@@ -1179,8 +1166,37 @@ export class SelectorController {
 			this.ctx.present(block);
 			this.#showConnectedProviderModels(providerId, `Provider ${providerId}`);
 		} catch (error) {
+			if (wroteProviderConfig) {
+				await this.#rollbackCustomProviderSetup(providerId);
+			}
 			this.ctx.showError(`Custom provider failed: ${this.#safeErrorMessage(error, [normalizedApiKey])}`);
 			await this.#reopenConnectIfIdle();
+		}
+	}
+
+	/**
+	 * Best-effort compensation when a newly written custom provider never becomes
+	 * usable (key store or first registry load fails). Leaves no half-written
+	 * models.yml entry or login credential behind.
+	 */
+	async #rollbackCustomProviderSetup(providerId: string): Promise<void> {
+		const authStorage = this.ctx.session.modelRegistry.authStorage;
+		try {
+			await removeCustomProviderConfig(providerId);
+		} catch {
+			// Destination may already be gone or invalid; keep cleaning credentials.
+		}
+		try {
+			if (authStorage.listStoredCredentials(providerId).length > 0) {
+				await authStorage.remove(providerId);
+			}
+		} catch {
+			// Ignore credential cleanup failure after the primary error is shown.
+		}
+		try {
+			await this.ctx.session.modelRegistry.refresh("offline");
+		} catch {
+			// Offline refresh is best-effort during rollback.
 		}
 	}
 
