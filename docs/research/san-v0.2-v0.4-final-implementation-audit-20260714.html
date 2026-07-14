@@ -1,0 +1,1824 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="San v0.2、v0.3、v0.4 需求与最终实现的独立代码、安全和验收审计。"
+    />
+    <title>San v0.2-v0.4 最终实现审计</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --canvas: #f3f5f7;
+        --paper: #ffffff;
+        --ink: #17212b;
+        --muted: #5b6672;
+        --line: #d5dce3;
+        --line-strong: #aab6c2;
+        --header: #15212b;
+        --header-soft: #263846;
+        --blue: #255f8f;
+        --blue-soft: #eaf2f8;
+        --red: #a62b24;
+        --red-soft: #fbeceb;
+        --amber: #8b570b;
+        --amber-soft: #fff3dc;
+        --green: #17654d;
+        --green-soft: #e8f5ef;
+        --charcoal: #28333d;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--canvas);
+        font-family:
+          "IBM Plex Sans",
+          "Source Han Sans SC",
+          "Noto Sans CJK SC",
+          "PingFang SC",
+          sans-serif;
+        font-size: 15px;
+        line-height: 1.68;
+        letter-spacing: 0;
+      }
+
+      a {
+        color: var(--blue);
+        text-decoration-thickness: 1px;
+        text-underline-offset: 3px;
+      }
+
+      a:hover {
+        color: #17476e;
+      }
+
+      code,
+      pre {
+        font-family:
+          "IBM Plex Mono",
+          "SFMono-Regular",
+          Menlo,
+          Consolas,
+          monospace;
+      }
+
+      code {
+        padding: 2px 5px;
+        border-radius: 4px;
+        background: #e9edf1;
+        font-size: 0.9em;
+        overflow-wrap: anywhere;
+      }
+
+      pre {
+        overflow: auto;
+        margin: 14px 0 0;
+        padding: 16px 18px;
+        border: 1px solid #394957;
+        border-radius: 4px;
+        color: #edf4f8;
+        background: #18232c;
+        font-size: 12px;
+        line-height: 1.58;
+        white-space: pre-wrap;
+      }
+
+      .page {
+        width: min(1240px, calc(100% - 48px));
+        margin: 0 auto;
+      }
+
+      .masthead {
+        color: #f7fafc;
+        background: var(--header);
+        border-bottom: 8px solid #b53b31;
+      }
+
+      .masthead-inner {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 280px;
+        gap: 48px;
+        align-items: end;
+        padding: 54px 0 46px;
+      }
+
+      .kicker,
+      .section-kicker,
+      .metric-label,
+      .finding-id {
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      .kicker {
+        color: #9fc4df;
+      }
+
+      h1,
+      h2,
+      h3,
+      h4 {
+        font-family:
+          "Iowan Old Style",
+          "Source Han Serif SC",
+          "Noto Serif CJK SC",
+          serif;
+        letter-spacing: 0;
+      }
+
+      h1 {
+        max-width: 900px;
+        margin: 10px 0 15px;
+        font-size: 46px;
+        line-height: 1.12;
+        font-weight: 800;
+      }
+
+      h2 {
+        margin: 0 0 16px;
+        font-size: 29px;
+        line-height: 1.22;
+      }
+
+      h3 {
+        margin: 0 0 8px;
+        font-size: 19px;
+        line-height: 1.35;
+      }
+
+      h4 {
+        margin: 18px 0 6px;
+        font-size: 16px;
+        line-height: 1.4;
+      }
+
+      p {
+        margin: 0 0 12px;
+      }
+
+      ul,
+      ol {
+        margin: 8px 0 0;
+        padding-left: 22px;
+      }
+
+      li {
+        margin: 5px 0;
+      }
+
+      .lede {
+        max-width: 940px;
+        margin: 0;
+        color: #d7e1e8;
+        font-size: 17px;
+      }
+
+      .headline-verdict {
+        display: inline-flex;
+        margin-top: 22px;
+        padding: 8px 13px;
+        border: 1px solid #e18c85;
+        border-radius: 4px;
+        color: #fff;
+        background: #852c28;
+        font-weight: 900;
+      }
+
+      .snapshot {
+        padding-left: 22px;
+        border-left: 1px solid #526572;
+      }
+
+      .snapshot dl {
+        margin: 0;
+      }
+
+      .snapshot div {
+        padding: 10px 0;
+        border-bottom: 1px solid #344854;
+      }
+
+      .snapshot dt {
+        color: #9fb0bb;
+        font-size: 11px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      .snapshot dd {
+        margin: 2px 0 0;
+        color: #fff;
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .snapshot code {
+        color: #fff;
+        background: #263845;
+      }
+
+      .toc-band {
+        background: #e8edf1;
+        border-bottom: 1px solid var(--line-strong);
+      }
+
+      .toc {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 20px;
+        padding: 14px 0;
+      }
+
+      .toc a {
+        color: var(--charcoal);
+        font-size: 13px;
+        font-weight: 750;
+        text-decoration: none;
+      }
+
+      main section {
+        padding: 40px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .section-kicker {
+        margin-bottom: 4px;
+        color: var(--blue);
+      }
+
+      .section-intro {
+        max-width: 980px;
+        color: var(--muted);
+      }
+
+      .metric-grid,
+      .version-grid,
+      .evidence-grid {
+        display: grid;
+        gap: 14px;
+      }
+
+      .metric-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        margin-top: 20px;
+      }
+
+      .version-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin-top: 18px;
+      }
+
+      .evidence-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        margin-top: 18px;
+      }
+
+      .metric,
+      .version-card,
+      .evidence-card {
+        padding: 17px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: var(--paper);
+      }
+
+      .metric-value {
+        display: block;
+        margin: 3px 0 1px;
+        font-family: "Iowan Old Style", "Source Han Serif SC", serif;
+        font-size: 27px;
+        font-weight: 850;
+        line-height: 1.1;
+      }
+
+      .metric-label {
+        color: var(--muted);
+      }
+
+      .metric-note {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .version-card {
+        border-top: 5px solid var(--amber);
+      }
+
+      .version-card.red {
+        border-top-color: var(--red);
+      }
+
+      .version-card h3 {
+        font-size: 22px;
+      }
+
+      .version-card .status {
+        margin-bottom: 10px;
+      }
+
+      .status {
+        display: inline-flex;
+        align-items: center;
+        min-height: 23px;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 850;
+        white-space: nowrap;
+      }
+
+      .status.pass {
+        color: var(--green);
+        background: var(--green-soft);
+      }
+
+      .status.partial {
+        color: var(--amber);
+        background: var(--amber-soft);
+      }
+
+      .status.fail,
+      .status.p0 {
+        color: var(--red);
+        background: var(--red-soft);
+      }
+
+      .status.info {
+        color: var(--blue);
+        background: var(--blue-soft);
+      }
+
+      .callout {
+        margin-top: 18px;
+        padding: 17px 19px;
+        border: 1px solid #dca09c;
+        border-left: 6px solid var(--red);
+        border-radius: 4px;
+        background: var(--red-soft);
+      }
+
+      .callout.amber {
+        border-color: #d8b16d;
+        border-left-color: var(--amber);
+        background: var(--amber-soft);
+      }
+
+      .callout.green {
+        border-color: #8dc4ad;
+        border-left-color: var(--green);
+        background: var(--green-soft);
+      }
+
+      .callout h3 {
+        margin-bottom: 5px;
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+        margin-top: 18px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: var(--paper);
+      }
+
+      table {
+        width: 100%;
+        min-width: 760px;
+        border-collapse: collapse;
+        background: var(--paper);
+      }
+
+      caption {
+        padding: 12px 14px;
+        color: var(--muted);
+        font-size: 13px;
+        text-align: left;
+        caption-side: bottom;
+      }
+
+      th,
+      td {
+        padding: 11px 12px;
+        border-right: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th:last-child,
+      td:last-child {
+        border-right: 0;
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+
+      th {
+        color: #26333e;
+        background: #e7ecf0;
+        font-size: 13px;
+        font-weight: 850;
+      }
+
+      tbody tr:hover {
+        background: #f8fafb;
+      }
+
+      .finding-group {
+        margin-top: 24px;
+      }
+
+      .finding-group-title {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+
+      .finding {
+        margin-top: 12px;
+        padding: 18px 20px;
+        border: 1px solid var(--line);
+        border-left: 6px solid var(--amber);
+        border-radius: 4px;
+        background: var(--paper);
+      }
+
+      .finding.p0 {
+        border-left-color: var(--red);
+      }
+
+      .finding.p2 {
+        border-left-color: var(--blue);
+      }
+
+      .finding-id {
+        margin-bottom: 5px;
+        color: var(--amber);
+      }
+
+      .finding.p0 .finding-id {
+        color: var(--red);
+      }
+
+      .finding.p2 .finding-id {
+        color: var(--blue);
+      }
+
+      .finding p:last-child,
+      .callout p:last-child,
+      .version-card p:last-child,
+      .evidence-card p:last-child {
+        margin-bottom: 0;
+      }
+
+      .evidence-line {
+        margin-top: 9px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0;
+        margin-top: 18px;
+        border: 1px solid var(--line-strong);
+        border-radius: 4px;
+        background: var(--paper);
+      }
+
+      .flow-step {
+        position: relative;
+        min-height: 152px;
+        padding: 17px 18px;
+        border-right: 1px solid var(--line);
+      }
+
+      .flow-step:last-child {
+        border-right: 0;
+      }
+
+      .flow-index {
+        display: inline-flex;
+        width: 26px;
+        height: 26px;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 9px;
+        border-radius: 50%;
+        color: #fff;
+        background: var(--header-soft);
+        font-weight: 850;
+      }
+
+      .gate-list {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 18px;
+      }
+
+      .gate {
+        padding: 15px 17px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: var(--paper);
+      }
+
+      .gate strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+
+      .small {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      footer {
+        padding: 30px 0 44px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      @media (max-width: 900px) {
+        .masthead-inner {
+          grid-template-columns: 1fr;
+          gap: 28px;
+        }
+
+        .snapshot {
+          padding-left: 0;
+          border-left: 0;
+          border-top: 1px solid #526572;
+        }
+
+        .metric-grid,
+        .version-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .flow {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .flow-step:nth-child(2) {
+          border-right: 0;
+        }
+
+        .flow-step:nth-child(-n + 2) {
+          border-bottom: 1px solid var(--line);
+        }
+      }
+
+      @media (max-width: 640px) {
+        .page {
+          width: min(100% - 24px, 1240px);
+        }
+
+        .masthead-inner {
+          padding: 38px 0 34px;
+        }
+
+        h1 {
+          font-size: 34px;
+        }
+
+        h2 {
+          font-size: 25px;
+        }
+
+        main section {
+          padding: 31px 0;
+        }
+
+        .metric-grid,
+        .version-grid,
+        .evidence-grid,
+        .gate-list,
+        .flow {
+          grid-template-columns: 1fr;
+        }
+
+        .flow-step,
+        .flow-step:nth-child(2) {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .flow-step:last-child {
+          border-bottom: 0;
+        }
+      }
+
+      @media print {
+        body {
+          color: #000;
+          background: #fff;
+          font-size: 11px;
+        }
+
+        .page {
+          width: 100%;
+        }
+
+        .masthead {
+          color: #000;
+          background: #fff;
+          border-top: 5px solid #000;
+          border-bottom: 2px solid #000;
+        }
+
+        .masthead-inner {
+          padding: 24px 0;
+        }
+
+        .kicker,
+        .lede,
+        .snapshot dt,
+        .snapshot dd {
+          color: #000;
+        }
+
+        .headline-verdict {
+          color: #000;
+          background: #fff;
+          border-color: #000;
+        }
+
+        .toc-band {
+          display: none;
+        }
+
+        main section {
+          padding: 22px 0;
+          break-inside: auto;
+        }
+
+        .finding,
+        .version-card,
+        .evidence-card,
+        .gate,
+        .flow-step,
+        tr {
+          break-inside: avoid;
+        }
+
+        a {
+          color: #000;
+          text-decoration: none;
+        }
+
+        pre {
+          color: #000;
+          background: #fff;
+          border-color: #666;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="page masthead-inner">
+        <div>
+          <div class="kicker">Final implementation audit · 2026-07-14</div>
+          <h1>San v0.2-v0.4 最终实现审计</h1>
+          <p class="lede">
+            需求文档描述的是成熟执行闭环、可审计 Brain 和受控 Workflow；当前代码实现了大量可复用机制，但关键状态机、权限、身份、持久恢复、预算与交付合同仍有可复现缺口。绿色测试证明已有路径可运行，不等于需求闭环成立。
+          </p>
+          <div class="headline-verdict">NO-GO · 不扩大 rollout，不接受“工程核心完整通过”口径</div>
+        </div>
+        <aside class="snapshot" aria-label="审计快照">
+          <dl>
+            <div>
+              <dt>Branch</dt>
+              <dd>feature/provider-connect-model-ux</dd>
+            </div>
+            <div>
+              <dt>Snapshot</dt>
+              <dd><code>2616dd4ac</code></dd>
+            </div>
+            <div>
+              <dt>Scope</dt>
+              <dd>v0.2 / v0.3 / v0.4</dd>
+            </div>
+            <div>
+              <dt>Focused tests</dt>
+              <dd>266 pass · 0 fail</dd>
+            </div>
+            <div>
+              <dt>Package check</dt>
+              <dd>PASS · 2209 files</dd>
+            </div>
+          </dl>
+        </aside>
+      </div>
+    </header>
+
+    <nav class="toc-band" aria-label="报告目录">
+      <div class="page toc">
+        <a href="#summary">执行摘要</a>
+        <a href="#method">范围与方法</a>
+        <a href="#overview">三版本总览</a>
+        <a href="#v02">v0.2 覆盖</a>
+        <a href="#v03">v0.3 覆盖</a>
+        <a href="#v04">v0.4 覆盖</a>
+        <a href="#findings">严重 Findings</a>
+        <a href="#security">安全审计</a>
+        <a href="#drift">跨版本漂移</a>
+        <a href="#retain">保留能力</a>
+        <a href="#roadmap">修复路线</a>
+        <a href="#verification">验证与限制</a>
+        <a href="#appendix">附录</a>
+      </div>
+    </nav>
+
+    <main>
+      <section id="summary">
+        <div class="page">
+          <div class="section-kicker">01 · Executive summary</div>
+          <h2>结论不是“未实现”，而是“实现存在，但关键合同不成立”</h2>
+          <p class="section-intro">
+            三个版本都不是空壳。v0.2 有真实多角色 executor 与 append-only ledger；v0.3 有 Candidate、Decision、activation、projection 和 debug read model；v0.4 有两种产品合同、精确审批指纹、受限解释器与隔离补丁审阅。问题在于这些能力尚未组成需求承诺的端到端闭环，而且若干失败路径会给出错误终态或突破安全边界。
+          </p>
+
+          <div class="metric-grid">
+            <div class="metric">
+              <span class="metric-label">Release decision</span>
+              <span class="metric-value" style="color: var(--red)">NO-GO</span>
+              <span class="metric-note">三版本均不满足扩大 rollout 门禁</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">P0 findings</span>
+              <span class="metric-value">9</span>
+              <span class="metric-note">状态正确性、身份隔离、恢复、预算与交付</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">P1 findings</span>
+              <span class="metric-value">15</span>
+              <span class="metric-note">需求链路、隐私分类、事务与验收证据</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Runtime counterexamples</span>
+              <span class="metric-value">6</span>
+              <span class="metric-note">4 个 v0.2、1 个 replay、1 个 loop closure</span>
+            </div>
+          </div>
+
+          <div class="version-grid">
+            <article class="version-card red">
+              <span class="status fail">v0.2 · NOT ACCEPTED</span>
+              <h3>可运行实验骨架</h3>
+              <p>
+                多角色顺序执行和持久记录已存在，但 stop 不取消 child、失败 Worker 可被 Supervisor 覆盖、Oracle 能提前 finalize、retry 与 DAG 合同失真。它尚不是需求定义的成熟执行闭环。
+              </p>
+            </article>
+            <article class="version-card red">
+              <span class="status fail">v0.3 · NOT ACCEPTED</span>
+              <h3>机制完整度高，产品闭环不完整</h3>
+              <p>
+                显式审批、activation 与 projection 值得保留；但 Brain 的“低权威”内容被映射为 provider developer role，scope identity 未按冻结合同实现，默认 capture 路径几乎不产出候选，recall 隔离 fail-open。
+              </p>
+            </article>
+            <article class="version-card red">
+              <span class="status fail">v0.4 · CONTRACT CANDIDATE</span>
+              <h3>默认关闭的原型</h3>
+              <p>
+                产品范围和审批边界清晰，但 run 只在内存、replay 未绑定输入、total-token 预算并非硬限制、结果是 at-most-once 交付，写入路径仍有 TOCTOU。不能视为工程核心完成。
+              </p>
+            </article>
+          </div>
+
+          <div class="callout">
+            <h3>Rollout 判定</h3>
+            <p>
+              保持 San Brain、Context Steady、Managed Workflow、Ad-hoc Workflow 与 isolated write 默认关闭；停止扩大内部 opt-in。此前文档中的“所有 P0/P1 门禁通过”“工程核心完整通过”“P1-P5 已完成”等表述，需要降级为“已有实现与测试基线，最终需求验收未通过”。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="method">
+        <div class="page">
+          <div class="section-kicker">02 · Scope and method</div>
+          <h2>以冻结需求定义目标，以生产代码与运行时反例定义事实</h2>
+          <p class="section-intro">
+            本报告同时检查需求 gap、实现漂移、正确性、安全性、代码风格、简洁性与维护性。审计对象冻结在当前分支 HEAD；没有把未跟踪的其他研究文档纳入本报告变更。
+          </p>
+
+          <div class="evidence-grid">
+            <article class="evidence-card">
+              <h3>需求基线</h3>
+              <p>
+                v0.2 以<a href="./san-v0.2-requirements-plan.html">需求与实施计划</a>及<a href="./san-v0.2-technical-design.html">技术方案</a>为基线；v0.3 以<a href="./san-v0.3-p0-design-freeze-20260710.html">P0 冻结合同</a>为最高权威；v0.4 以<a href="./san-v0.4-dynamic-workflows-proposal-20260711.html">Dynamic Workflows 提案</a>为基线。
+              </p>
+            </article>
+            <article class="evidence-card">
+              <h3>实际实现</h3>
+              <p>
+                逐条追踪生产入口、状态机、ledger、task-agent bridge、scope resolver、memory backend、restricted interpreter、delivery 与 token report。实现报告仅作为历史声明，不覆盖代码事实。
+              </p>
+            </article>
+            <article class="evidence-card">
+              <h3>验证方式</h3>
+              <p>
+                复跑 40 个聚焦测试文件，执行 coding-agent 包级 check，并通过只读运行时 probe 验证失败 Worker、retry=0、Oracle、并发 stop、replay 调度和 <code>for (let)</code> closure 行为。
+              </p>
+            </article>
+            <article class="evidence-card">
+              <h3>判定规则</h3>
+              <p>
+                <span class="status pass">满足</span>表示生产路径与失败路径均兑现合同；<span class="status partial">部分</span>表示机制存在但关键边界缺失；<span class="status fail">不满足</span>表示核心验收项可被反例推翻。单元测试全绿不会自动提升合同状态。
+              </p>
+            </article>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>证据优先级</th>
+                  <th>用途</th>
+                  <th>本报告处理方式</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>1. 冻结需求 / 验收合同</td>
+                  <td>定义“应该是什么”</td>
+                  <td>不以较晚实现说明悄然缩小原需求。</td>
+                </tr>
+                <tr>
+                  <td>2. 生产代码与真实入口</td>
+                  <td>定义“现在是什么”</td>
+                  <td>从 slash/session 入口追到实际 child、provider、ledger 与副作用。</td>
+                </tr>
+                <tr>
+                  <td>3. 运行时反例</td>
+                  <td>推翻不成立的不变量</td>
+                  <td>一条可重复反例足以否定“hard”“exactly-once”“终态不可逆”等强合同。</td>
+                </tr>
+                <tr>
+                  <td>4. 测试与 dogfood</td>
+                  <td>说明已覆盖行为</td>
+                  <td>只有走真实默认产品路径且断言外部合同，才可作为验收证据。</td>
+                </tr>
+                <tr>
+                  <td>5. 实施 / handoff 报告</td>
+                  <td>记录历史声明</td>
+                  <td>与上述证据冲突时，结论降级而不是反向解释代码。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="overview">
+        <div class="page">
+          <div class="section-kicker">03 · Portfolio overview</div>
+          <h2>三版本需求-实现总览</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>版本</th>
+                  <th>原始承诺</th>
+                  <th>已落地</th>
+                  <th>决定性缺口</th>
+                  <th>最终判定</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>v0.2</strong></td>
+                  <td>可交付的多角色执行闭环：DAG、严格角色边界、Checks gate、retry、abort/resume、硬预算、ledger 与真实 dogfood。</td>
+                  <td>结构化 run/event/review、三角色加 Oracle、并发 Worker、真实 task-agent bridge、slash 入口、确定性 verifier。</td>
+                  <td>终态可被迟到 child 覆盖；失败与依赖不阻断 pass；Checks 未进入生产 gate；resume 实为 blocked；预算只数角色调用。</td>
+                  <td><span class="status fail">NOT MET</span></td>
+                </tr>
+                <tr>
+                  <td><strong>v0.3</strong></td>
+                  <td>JSONL 权威、SQLite 可重建、稳定 scope identity、150ms capture 边界、低权威注入、显式 projection、隔离 recall 与可审计 dogfood。</td>
+                  <td>Candidate/Decision、materialized store、activation selector、projection outbox/reconcile、recall planner、debug 与默认关闭。</td>
+                  <td>custom Brain message 成为 developer role；repo/project identity 用原始路径；默认 digest 无候选；敏感度硬编码 normal；SQLite 不做全量重建；recall legacy fail-open。</td>
+                  <td><span class="status fail">NOT MET</span></td>
+                </tr>
+                <tr>
+                  <td><strong>v0.4</strong></td>
+                  <td>两种 Workflow、精确审批、安全 runtime、可恢复确定性执行、硬预算、受控写入、一次结果交付、真实 Skill 对照。</td>
+                  <td>两种 kind、审批指纹、静态解析、受限解释器、能力交集、隔离 patch review、token report schema 与默认关闭。</td>
+                  <td>run 和 completed calls 不持久；replay key 不含输入；token cap 在花费后检查；delivery 无 payload/ack；TOCTOU；真实 benchmark 缺失。</td>
+                  <td><span class="status fail">NOT MET</span></td>
+                </tr>
+              </tbody>
+              <caption>“已落地”列用于识别可保留资产，不代表该版本可以发布。</caption>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="v02">
+        <div class="page">
+          <div class="section-kicker">04 · San v0.2</div>
+          <h2>成熟执行闭环覆盖矩阵</h2>
+          <p class="section-intro">
+            基线明确要求 v0.2 不能停在 prompt workflow 或三角色 Demo。当前实现完成了“能跑一遍”的主干，但失败语义、角色 authority、停止与恢复均未达到成熟闭环标准。
+          </p>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>里程碑</th>
+                  <th>需求验收</th>
+                  <th>实现证据</th>
+                  <th>Gap / 漂移</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>M1 / P1</strong><br />Ledger 与结构化合同</td>
+                  <td>单 agent workflow 也能完整记录状态、证据与 verdict，权威状态可重建。</td>
+                  <td><a href="../../packages/coding-agent/src/san-loop/ledger.ts">ledger.ts:200-427</a> 提供 snapshot、event、review 与 rebuild。</td>
+                  <td>snapshot 与 event 两次 append 非原子；重建采用“最后 snapshot 胜出”；嵌套对象验证较浅，无法证明事件与 snapshot 一致。</td>
+                  <td><span class="status partial">PARTIAL</span></td>
+                </tr>
+                <tr>
+                  <td><strong>M2 / P2</strong><br />角色与 ContextPacket</td>
+                  <td>Commander、Worker、Supervisor 工具硬隔离，每个角色只见必要上下文。</td>
+                  <td>四个 bundled agent 和真实 subprocess bridge 已接入；Commander 可获得 role context。</td>
+                  <td>角色工具集仍由通用 task agent 体系决定，不是 strict capability boundary；Worker/Supervisor/Oracle 未消费 role packet；超预算只标记 <code>trimmed=1</code>，内容不裁剪。</td>
+                  <td><span class="status fail">NOT MET</span></td>
+                </tr>
+                <tr>
+                  <td><strong>M3 / P3</strong><br />San Checks 与 Gate</td>
+                  <td>项目 check 可发现、进入 plan 与 Worker，并由 Supervisor 基于真实证据 gate。</td>
+                  <td><a href="../../packages/coding-agent/src/san-loop/checks.ts">checks.ts</a> 支持 discovery、selection 与 render。</td>
+                  <td>生产源码无调用者；settings、Commander planning、Worker prompt 与 Supervisor gate 均未消费 discovered checks。测试只证明 helper。</td>
+                  <td><span class="status fail">NOT MET</span></td>
+                </tr>
+                <tr>
+                  <td><strong>M4 / P4</strong><br />Orchestrator</td>
+                  <td>DAG、并发、retry、abort/resume、硬预算与自动收敛到 pass/blocked。</td>
+                  <td><a href="../../packages/coding-agent/src/san-loop/runner.ts">runner.ts</a>、<a href="../../packages/coding-agent/src/san-loop/orchestrator.ts">orchestrator.ts</a> 与 slash 入口已存在。</td>
+                  <td>失败 Worker、依赖、retryable、maxRetries=0、Oracle authority、并发 stop、异常恢复与真实 token/cost 均违反合同。</td>
+                  <td><span class="status fail">NOT MET</span></td>
+                </tr>
+                <tr>
+                  <td><strong>M5 / P5</strong><br />Dogfood 与发布</td>
+                  <td>5-8 个交付任务、确定性失败场景、上下文/预算/中止均形成发布证据。</td>
+                  <td>确定性 dogfood、GSAR/真实 provider 报告和 10-task acceptance rerun 已产出。</td>
+                  <td>verifier 手工调用 helper 模拟 recovery/abort，没有并发 child；成功报告未覆盖本审计反例，真实任务也不能替代状态机不变量。</td>
+                  <td><span class="status fail">NOT MET</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="callout amber">
+            <h3>v0.2 最终定性</h3>
+            <p>
+              它可以继续作为多角色执行实验架构，但不应叫“成熟执行闭环”。在状态机修复前，即使真实模型 10/10 terminal，也可能只是错误终态被稳定记录。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="v03">
+        <div class="page">
+          <div class="section-kicker">05 · San v0.3</div>
+          <h2>M1-M6 Brain Runtime 覆盖矩阵</h2>
+          <p class="section-intro">
+            v0.3 的局部工程完成度高于 v0.2，但冻结合同特别强调“状态权威、scope identity、低权威注入、150ms 边界与可重建性”。这些不是附加优化，而是 Brain 能否安全改变行为的前置条件。
+          </p>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>里程碑</th>
+                  <th>冻结合同</th>
+                  <th>已实现</th>
+                  <th>关键缺口</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>M1</strong><br />Ledger + Store</td>
+                  <td>JSONL 为权威源；SQLite 可从全部 session 权威记录重建。</td>
+                  <td>Candidate/Decision custom entries、SQLite schema/migration、幂等 insert 与 materialized state。</td>
+                  <td><code>syncSessionEntries()</code> 只同步当前 session 传入 entries；删除 SQLite 后没有全 session JSONL 扫描与 rebuild 流程。</td>
+                  <td><span class="status partial">PARTIAL</span></td>
+                </tr>
+                <tr>
+                  <td><strong>M2</strong><br />Digest → Capture</td>
+                  <td>settled digest 后 capture；下一 prompt 最多等待 150ms，超时跳过。</td>
+                  <td>capture 与 digest 串联，fallback 可保证流程不抛错。</td>
+                  <td>默认 LLM digest 关闭，fallback <code>memoryCandidates=[]</code>；下一 prompt 的 recovery wait 没有 150ms 上限，可能等待完整 digest timeout。</td>
+                  <td><span class="status fail">NOT MET</span></td>
+                </tr>
+                <tr>
+                  <td><strong>M3</strong><br />Decision + Materialize</td>
+                  <td>显式 approve/discard/undo/supersede、revision 与 conflict 可审计。</td>
+                  <td>Decision application、revision、consolidation、active state 和 projection plan 已实现。</td>
+                  <td>输入候选全部硬编码 <code>sensitivity: normal</code>；repo/project scope key 仍使用原始路径，缺少冻结合同要求的稳定 hash、UUID、realpath 与 alias migration。</td>
+                  <td><span class="status partial">PARTIAL</span></td>
+                </tr>
+                <tr>
+                  <td><strong>M4</strong><br />Activation</td>
+                  <td>批准后低权威、typed render、role/scope/relevance filter，并统一 Brain + Context + San Loop 总预算。</td>
+                  <td>selector、conflict suppression、token cap、activation audit 与 global injection planner。</td>
+                  <td>Brain custom message 被 provider 转成 developer role；planner 候选没有 ContextPlan；XML 中写“low authority”不能抵消消息 role authority。</td>
+                  <td><span class="status fail">NOT MET</span></td>
+                </tr>
+                <tr>
+                  <td><strong>M5</strong><br />Projection</td>
+                  <td>Memory、Managed Skill、Check suggestion、Recall policy 通过 outbox/reconcile 投影并安全撤销。</td>
+                  <td>projection plan、target adapters、applying/compensating、CAS undo、timeout 与一次通知。</td>
+                  <td>extractor 只产 profile、workflow suggestion、failure risk rule；不会自然产出 managed skill/check/recall policy。backend 不消费 <code>scopeKeys</code>，normalizer 对无 scope 结果 fail-open。</td>
+                  <td><span class="status partial">PARTIAL</span></td>
+                </tr>
+                <tr>
+                  <td><strong>M6</strong><br />Dogfood + Rollout</td>
+                  <td>真实产品路径证明 precision、安全、backend、投影与无 secret leak，再扩大 opt-in。</td>
+                  <td>14-turn deterministic verifier、四 backend matrix、debug/report 与默认关闭。</td>
+                  <td>dogfood 手工构造带候选 digest、recall/skill/check candidate 与状态，绕过默认 capture 和真实 scope resolver；不能证明报告宣称的 P0/P1 门禁。</td>
+                  <td><span class="status fail">NOT MET</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="callout">
+            <h3>v0.3 rollout 结论需回撤</h3>
+            <p>
+              <a href="./san-v0.3-m6-dogfood-report-20260711.html">M6 报告</a>中的“扩大内部 opt-in”和“所有 P0/P1 门禁通过”与当前生产路径不符。保持默认关闭是正确的，但还不足以允许扩大试用；先修 prompt authority、identity、candidate 生产与 recall 隔离。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="v04">
+        <div class="page">
+          <div class="section-kicker">06 · San v0.4</div>
+          <h2>W0-W5 Dynamic Workflows 覆盖矩阵</h2>
+          <p class="section-intro">
+            v0.4 对产品范围做了正确收敛：只有 Managed SOP 与逐次批准的 Ad-hoc。当前风险主要不在产品定义，而在对“可恢复、确定性、硬预算、一次交付、受控写入”等强工程术语的兑现。
+          </p>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>阶段</th>
+                  <th>提案验收</th>
+                  <th>已实现</th>
+                  <th>关键缺口</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>W0</strong><br />合同冻结</td>
+                  <td>仅两种 kind；批准绑定 source、args、scope、权限、预算与版本。</td>
+                  <td>kind union、source parser、approval key hash、Managed/Ad-hoc store。</td>
+                  <td>运行身份与 Ad-hoc task identity 后续实现偏离；事件没有保存完整可恢复 run envelope。</td>
+                  <td><span class="status partial">MOSTLY MET</span></td>
+                </tr>
+                <tr>
+                  <td><strong>W1</strong><br />安全 Runtime</td>
+                  <td>确定性、可恢复、硬 Agent/token/time 限制，暂停恢复不重做 completed call。</td>
+                  <td>静态 parse、restricted AST interpreter、Agent/concurrency/time/step limits、pause/cancel。</td>
+                  <td>run/completed calls 仅内存；call ID 不含输入；并发顺序可交换 cache；total-token 在花费后校验；<code>for (let)</code> closure 错误。</td>
+                  <td><span class="status fail">NOT MET</span></td>
+                </tr>
+                <tr>
+                  <td><strong>W2</strong><br />Managed SOP</td>
+                  <td>发布、批准、撤销、显式运行、暂停恢复、稳定节点图与结果一次交付。</td>
+                  <td>发现/发布/批准/撤销/显式启动、状态命令与确定性 dogfood。</td>
+                  <td>session identity 变化直接 cancel 并销毁 manager；ledger 不能恢复；deliver 在 UI 输出前记账，断连后结果永久丢失。</td>
+                  <td><span class="status fail">NOT MET</span></td>
+                </tr>
+                <tr>
+                  <td><strong>W3</strong><br />Ad-hoc</td>
+                  <td>逐草稿批准、绑定真实 task、一次消费、拒绝/过期零执行并删除敏感 payload。</td>
+                  <td>双步骤 approve、source/args/scope/expiry hash、consume 与默认关闭。</td>
+                  <td><code>taskRef</code> 实为 session ID；状态变更、event append 与 payload delete 分属事务，crash 可残留一次性内容或产生不一致。</td>
+                  <td><span class="status partial">PARTIAL</span></td>
+                </tr>
+                <tr>
+                  <td><strong>W4</strong><br />受控写入</td>
+                  <td>隔离执行、完整 patch 审阅、批准后 CAS apply、未知副作用可判断。</td>
+                  <td>isolated <code>apply=false</code>、artifact tamper check、baseline hash、review token、reverse verification。</td>
+                  <td>baseline check、<code>canApply</code> 与 apply 之间无 repo lock/逐文件 preimage CAS；path-scope canonical check 与工具 I/O 分离，存在 symlink check/use 竞态。</td>
+                  <td><span class="status partial">PARTIAL</span></td>
+                </tr>
+                <tr>
+                  <td><strong>W5</strong><br />Dogfood + Rollout</td>
+                  <td>至少 5 SOP × 5 真实 Skill/Managed 对照，token 降幅、质量与一次通过率达到门禁。</td>
+                  <td>严格样本 schema、pairing、阈值、确定性 25 Managed + 10 Ad-hoc verifier。</td>
+                  <td>数据字段由调用者提供，未从 ledger/session/artifact 验 provenance；dogfood 使用固定假 usage，当前正确结果仍是 <code>insufficient_data</code>。</td>
+                  <td><span class="status fail">NOT MET</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="callout amber">
+            <h3>v0.4 最终定性</h3>
+            <p>
+              可保留“默认关闭的合同候选/原型”，不可保留<a href="./san-v0.4-workflows-implementation-report-20260711.html">实施报告</a>中的“工程核心完整通过”。提案自身已诚实标记真实 token 数据不足，但实现报告低估了 recovery、replay、budget 与 delivery 的基础合同缺口。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="findings">
+        <div class="page">
+          <div class="section-kicker">07 · Findings by severity</div>
+          <h2>严重度排序 Findings</h2>
+          <p class="section-intro">
+            P0 表示会导致错误终态、权限/隔离突破、不可恢复损失或强预算合同失效，必须在任何 rollout 前关闭。P1 表示需求闭环和发布证据不足。P2 是会持续放大缺陷概率的维护性与观测性问题。
+          </p>
+
+          <div class="finding-group">
+            <div class="finding-group-title">
+              <span class="status p0">P0</span>
+              <h3>必须阻断 rollout 的 9 项问题</h3>
+            </div>
+
+            <article class="finding p0">
+              <div class="finding-id">P0-01 · v0.2 · Abort is not cancellation</div>
+              <h3><code>/san-loop stop</code> 只追加 aborted snapshot，不能取消正在运行的 child；迟到结果可把终态改回 passed。</h3>
+              <p>
+                slash 命令在<a href="../../packages/coding-agent/src/slash-commands/builtin-registry.ts">builtin-registry.ts:227-238</a>仅调用 ledger helper；runner 的 child promise 没有共享 run registry、AbortController 或终态 CAS。<a href="../../packages/coding-agent/src/san-loop/ledger.ts">ledger.ts:333-352</a>写入 aborted 后，原 runner 仍继续写 worker/finalized。
+              </p>
+              <p class="evidence-line">反例：函数返回与最终 ledger 均为 <code>passed</code>，事件仍包含 <code>aborted → worker_completed → finalized</code>。</p>
+            </article>
+
+            <article class="finding p0">
+              <div class="finding-id">P0-02 · v0.2 · Invalid state machine authority</div>
+              <h3>失败 Worker、DAG 依赖和 Oracle second opinion 都没有被正确约束，仍可形成 passed/finalized。</h3>
+              <p>
+                <a href="../../packages/coding-agent/src/san-loop/runner.ts">runner.ts:220-287</a>记录所有 Worker 后无失败汇总或依赖调度，直接调用 review。Oracle 也走正式 <code>applySanLoopReview()</code>，其 pass 先生成 <code>finalized</code>；非 pass 则在 Supervisor 前提前退出。<a href="../../packages/coding-agent/src/san-loop/orchestrator.ts">orchestrator.ts:326-375</a>没有按 reviewer 区分 authority。
+              </p>
+              <p class="evidence-line">反例：<code>{status:"passed", workerStatus:"failed"}</code>；Oracle pass 后 Supervisor blocked，ledger 已含一次 finalized。</p>
+            </article>
+
+            <article class="finding p0">
+              <div class="finding-id">P0-03 · v0.3 · Prompt authority inversion</div>
+              <h3>声明为“低权威”的 Brain 状态在 provider 请求中实际是 developer role，高于当前 user prompt。</h3>
+              <p>
+                <a href="../../packages/coding-agent/src/session/agent-session.ts">agent-session.ts:7942-8000</a>创建 <code>role: custom</code> 的 Brain prelude；<a href="../../packages/agent/src/compaction/messages.ts">messages.ts:162-176</a>将所有 custom/hook message 转为 provider <code>developer</code>。当前用户消息在 <code>agent-session.ts:7919-7922</code>明确为 user role。内容里的 XML 标签或“low authority”文字不能改变 provider 的角色优先级。
+              </p>
+            </article>
+
+            <article class="finding p0">
+              <div class="finding-id">P0-04 · v0.3 · Scope isolation is fail-open</div>
+              <h3>scope identity 未实现冻结合同，recall 还会接受没有 scope 的 legacy item。</h3>
+              <p>
+                <a href="../../packages/coding-agent/src/session/agent-session.ts">agent-session.ts:8770-8777</a>中的 <code>user:local</code> 与 session key 符合冻结合同，但 project 直接使用 cwd、repo 直接使用绝对路径，没有 remote/common-dir hash、realpath identity、持久 UUID 或 alias migration。<a href="../../packages/coding-agent/src/context-steady/recall.ts">recall.ts:90-119</a>仅在 item 自带 scope 时过滤；无 scope 结果默认通过，Hindsight/Mnemopi search 也未消费传入的 <code>scopeKeys</code>。</p>
+            </article>
+
+            <article class="finding p0">
+              <div class="finding-id">P0-05 · v0.4 · No durable run recovery</div>
+              <h3>Workflow run、runtime、completed calls 与结果 payload 都只在内存，重启或 session 切换无法恢复。</h3>
+              <p>
+                <a href="../../packages/coding-agent/src/workflows/manager.ts">manager.ts:164-181</a>以 <code>#runs</code> Map 持有执行；<a href="../../packages/coding-agent/src/slash-commands/helpers/workflows.ts">workflows.ts:36-80</a>在 identity 变化时 cancel、close 并删除 manager。<a href="../../packages/coding-agent/src/workflows/ledger.ts">ledger.ts:15-173</a>只重建 status、delivery 与 write state，没有 source、args、budget、result payload 或 completed call value，无法 resume。
+              </p>
+            </article>
+
+            <article class="finding p0">
+              <div class="finding-id">P0-06 · v0.4 · Replay identity is not input-bound</div>
+              <h3>call ID 只绑定 sourceHash、callsite 与到达顺序，cache hit 不校验 prompt/input hash。</h3>
+              <p>
+                <a href="../../packages/coding-agent/src/workflows/runtime/interpreter.ts">interpreter.ts:445-506</a>以 invocation counter 生成 ID，并直接返回 <code>#completedCalls</code>。并发分支调度顺序变化时，同一 callsite 的两个不同 prompt 可交换历史结果。只读 probe 已复现，违反确定性重放的基本前提。
+              </p>
+            </article>
+
+            <article class="finding p0">
+              <div class="finding-id">P0-07 · v0.4 · Hard token budget is post-facto</div>
+              <h3>所谓 total-token 硬预算被下传为 child 输出上限，真实输入 token 已花费后才检查。</h3>
+              <p>
+                runtime 在<a href="../../packages/coding-agent/src/workflows/runtime/interpreter.ts">interpreter.ts:517-556</a>将剩余额度放入 request；bridge 在<a href="../../packages/coding-agent/src/workflows/agent-bridge.ts">agent-bridge.ts:133-181</a>转为 <code>hardTokenLimit</code>；task executor 又在<a href="../../packages/coding-agent/src/task/executor.ts">executor.ts:2230</a>把它作为 <code>maxOutputTokens</code>。总 usage 只在 child 返回后比较，超支结果在计入 workflow budget 前被拒绝，账本反而少记真实花费。
+              </p>
+            </article>
+
+            <article class="finding p0">
+              <div class="finding-id">P0-08 · v0.4 · Result delivery is at-most-once</div>
+              <h3><code>result_delivered</code> 在 UI output 前写入，输出失败后无法重放，也没有 payload 可恢复。</h3>
+              <p>
+                <a href="../../packages/coding-agent/src/workflows/manager.ts">manager.ts:456-476</a>先 append delivery event 再返回值；observer 在<a href="../../packages/coding-agent/src/slash-commands/helpers/workflows.ts">workflows.ts:84-95</a>之后才调用异步 <code>output()</code>。断连、renderer 失败或进程崩溃都会永久丢结果。ledger 只保存 result hash，不保存 payload 或消费方 ack。
+              </p>
+            </article>
+
+            <article class="finding p0">
+              <div class="finding-id">P0-09 · v0.4 · Write and path TOCTOU</div>
+              <h3>批准后的写入与工具路径授权都存在 check/use 时间窗。</h3>
+              <p>
+                <a href="../../packages/coding-agent/src/workflows/delivery.ts">delivery.ts:318-370</a>在 baseline hash、<code>canApplyText</code> 与真实 apply 之间没有 repo lock 或逐文件 preimage CAS。<a href="../../packages/coding-agent/src/tools/path-scope.ts">path-scope.ts:34-84</a>同步 realpath 检查发生在工具 I/O 前；<a href="../../packages/agent/src/agent-loop.ts">agent-loop.ts:2021-2048</a>随后才执行 tool，symlink 可在窗口内改变目标。
+              </p>
+            </article>
+          </div>
+
+          <div class="finding-group">
+            <div class="finding-group-title">
+              <span class="status partial">P1</span>
+              <h3>阻断需求验收的 15 项问题</h3>
+            </div>
+
+            <article class="finding">
+              <div class="finding-id">P1-01 · v0.2 · Retry contract</div>
+              <h3><code>needs_fix + retryable=false</code> 仍进入 retry；<code>maxRetries=0</code> 被默认正整数归一化与状态逻辑绕过。</h3>
+              <p><a href="../../packages/coding-agent/src/san-loop/orchestrator.ts">orchestrator.ts:326-343</a>对所有非 pass/blocked/out_of_scope 且未 exhausted 的报告选择 retrying，而不要求 retryable；runner 的 <code>positiveInteger()</code> 也不允许 0 turn 语义。</p>
+            </article>
+
+            <article class="finding">
+              <div class="finding-id">P1-02 · v0.2 · Checks are orphaned</div>
+              <h3>San Checks 完成 discovery/render 后没有生产消费者。</h3>
+              <p>全仓只有 helper 与 tests 引用 <code>discover/select/renderSanLoopChecks</code>；配置中的 enabled/includeBuiltins/projectDir 对实际 loop 结果无影响。</p>
+            </article>
+
+            <article class="finding">
+              <div class="finding-id">P1-03 · v0.2 · Role context and capability boundary</div>
+              <h3>角色工具与上下文只是约定，不是可证明的最小权限。</h3>
+              <p>task executor 只为 Commander 拼接 conversation context；Worker/Supervisor/Oracle prompt 主要接收完整 run JSON，role packet 未注入。<a href="../../packages/coding-agent/src/san-loop/context.ts">context.ts:117-174</a>只打超限标记，不做 material 裁剪。</p>
+            </article>
+
+            <article class="finding">
+              <div class="finding-id">P1-04 · v0.2 · Exception and recovery semantics</div>
+              <h3>executor 抛异常会留下 active run；启动恢复只是把它改成 blocked，不恢复工作。</h3>
+              <p><a href="../../packages/coding-agent/src/san-loop/runner.ts">runner.ts:166-290</a>没有 try/finally terminalization；<a href="../../packages/coding-agent/src/session/agent-session.ts">agent-session.ts:8780-8785</a>只对最新 active snapshot 调 <code>recoverSanLoopRun()</code>，该 helper 实际写 blocked。</p>
+            </article>
+
+            <article class="finding">
+              <div class="finding-id">P1-05 · v0.2 · Budget, mode and config drift</div>
+              <h3>预算只数 Commander/Worker/reviewer 调用；<code>solo</code> 仍是三角色；多个设置无消费者且 CLI/SDK 默认不同。</h3>
+              <p>没有 provider request、input/output token、cost 或 wall-time 记账。<a href="../../packages/coding-agent/src/san-loop/orchestrator.ts">orchestrator.ts:81-103</a>的 solo 仍允许 2 workers；schema 默认 workers/turns 与 runner policy 不同，reserveRatio、Oracle enabledInModes、Checks settings 未进入实际 policy。</p>
+            </article>
+
+            <article class="finding">
+              <div class="finding-id">P1-06 · v0.2 · Dogfood proves helpers, not lifecycle</div>
+              <h3>deterministic verifier 手工调用 abort/recovery helper，无法覆盖真实 child 并发与 stop 竞争。</h3>
+              <p><a href="../../packages/coding-agent/src/san-loop/dogfood.ts">dogfood.ts:214-360</a>的 recovery/abort 场景不启动 runner；“council runs oracle before supervisor”甚至把 Oracle 产生 finalized 当作成功条件。</p>
+            </article>
+
+            <article class="finding">
+              <div class="finding-id">P1-07 · v0.3 · Default capture path is nearly empty</div>
+              <h3>默认配置关闭 LLM digest，而 fallback 明确返回空 <code>memoryCandidates</code>。</h3>
+              <p><a href="../../packages/coding-agent/src/config/settings-schema.ts">settings-schema.ts:2653-2669</a>默认 <code>digest.llm.enabled=false</code>；<a href="../../packages/coding-agent/src/context-steady/fallback.ts">fallback.ts:254-294</a>设置 <code>memoryCandidates: []</code>。extractor 主要遍历该数组，因此正常偏好/事实/决策不会进入 Brain inbox。</p>
+            </article>
+
+            <article class="finding">
+              <div class="finding-id">P1-08 · v0.3 · Sensitivity classification is absent</div>
+              <h3>所有自动候选被硬编码为 <code>sensitivity: normal</code>。</h3>
+              <p><a href="../../packages/coding-agent/src/brain/extract.ts">extract.ts:76-199</a>的 profile、workflow 与 failure candidate 都不识别 secret/sensitive。后续 activation/projection 再严格，也是在错误标签上做选择。</p>
+            </article>
+
+            <article class="finding">
+              <div class="finding-id">P1-09 · v0.3 · SQLite cannot be rebuilt globally</div>
+              <h3>权威源与 materialized store 的灾难恢复承诺不完整。</h3>
+              <p><a href="../../packages/coding-agent/src/brain/store.ts">store.ts:378-411</a>只同步调用者传入的一组 session entries；生产入口传入当前 session branch/entries。没有枚举 agentDir 下所有 session JSONL、alias migration 或完整重建命令。</p>
+            </article>
+
+            <article class="finding">
+              <div class="finding-id">P1-10 · v0.3 · 150ms capture boundary is not enforced</div>
+              <h3>下一 prompt 会等待所有 post-prompt tasks，而非只等待 150ms。</h3>
+              <p><a href="../../packages/coding-agent/src/session/agent-session.ts">agent-session.ts:4643-4675</a>循环等待 task promise；digest/capture 在 <code>agent-session.ts:4250-4425</code>内部可等待 30s timeout。冻结合同要求超 150ms 本轮跳过。</p>
+            </article>
+
+            <article class="finding">
+              <div class="finding-id">P1-11 · v0.3 · Incomplete product candidate and budget wiring</div>
+              <h3>投影能力存在，但生产 extractor 不会产生主要 action；全局 injection planner 也没有 ContextPlan 候选。</h3>
+              <p><a href="../../packages/coding-agent/src/brain/extract.ts">extract.ts:184-208</a>只形成有限三类候选；<a href="../../packages/coding-agent/src/session/agent-session.ts">agent-session.ts:7959-7976</a>只把 San Loop 与 Brain 放入 global plan，冻结合同要求的 Brain + Context + San Loop 统一裁剪没有完成。</p>
+            </article>
+
+            <article class="finding">
+              <div class="finding-id">P1-12 · v0.3 · Dogfood bypasses the default path</div>
+              <h3>M6 verifier 手工构造 memory candidate、recall policy、managed skill 与 check candidate。</h3>
+              <p><a href="../../packages/coding-agent/src/brain/dogfood.ts">dogfood.ts:115-190</a>直接创建带候选 digest 和任意 experience candidate；这些 fixture 适合测下游状态机，但不能证明生产 extraction、classification、scope resolution 与 prompt authority。</p>
+            </article>
+
+            <article class="finding">
+              <div class="finding-id">P1-13 · v0.4 · Ad-hoc task identity is session identity</div>
+              <h3>同一 session 内多个用户任务共享审批 taskRef。</h3>
+              <p><a href="../../packages/coding-agent/src/slash-commands/helpers/workflows.ts">workflows.ts:109-119</a>把 <code>sessionManager.getSessionId()</code> 传为 <code>taskRef</code>。这扩大了一次性审批的信任域，与提案的“当前任务”绑定不符。</p>
+            </article>
+
+            <article class="finding">
+              <div class="finding-id">P1-14 · v0.4 · Loop lexical semantics</div>
+              <h3><code>for (let i...)</code> 复用单个 environment，closure 全看到最终值。</h3>
+              <p><a href="../../packages/coding-agent/src/workflows/runtime/interpreter.ts">interpreter.ts:855-869</a>只在 loop 外创建一次 Environment。probe 中三个 closure 都返回 <code>item-3</code>，这会破坏动态 fan-out prompt 和 replay identity。</p>
+            </article>
+
+            <article class="finding">
+              <div class="finding-id">P1-15 · v0.4 · Transaction and benchmark provenance gaps</div>
+              <h3>Ad-hoc 清理跨事务；token report 只校验调用者提供字段的内部一致性。</h3>
+              <p><a href="../../packages/coding-agent/src/workflows/manager.ts">manager.ts:241-257, 334-335, 363-386</a>把状态、event 与 delete 分开；crash 可能残留敏感 source/args。<a href="../../packages/coding-agent/src/workflows/token-report.ts">token-report.ts:105-153, 221-248</a>不读取 ledger/session/artifact 验证字段 provenance。</p>
+            </article>
+          </div>
+
+          <div class="finding-group">
+            <div class="finding-group-title">
+              <span class="status info">P2</span>
+              <h3>维护性与可观测性风险</h3>
+            </div>
+
+            <article class="finding p2">
+              <div class="finding-id">P2-01 · v0.2 · Oversized executor and permissive parsing</div>
+              <h3><code>task-executor.ts</code> 约 1029 行，混合 prompt 组装、subprocess、容错解析和业务 policy。</h3>
+              <p>provider 返回被宽松字段别名与 fallback 接受，缺少清晰的 schema-fail boundary；部分 prompt 仍在代码字符串中构造，增加审计和演进成本。</p>
+            </article>
+
+            <article class="finding p2">
+              <div class="finding-id">P2-02 · v0.2 · Ledger atomicity and validation</div>
+              <h3>snapshot/event/review 分散 append，schema guard 只验证顶层字段。</h3>
+              <p>崩溃可能留下 snapshot 无 event 或 review 无 transition；重建没有显式标出这种不一致，错误状态容易被“最后 snapshot”掩盖。</p>
+            </article>
+
+            <article class="finding p2">
+              <div class="finding-id">P2-03 · v0.2 · Status observability</div>
+              <h3>报告表面不足以识别 orphan child、错误 reviewer authority 与实际 provider 成本。</h3>
+              <p>当前 status/report 主要呈现最后状态和少量计数，缺少 child PID/agent ID、cancel ack、per-request usage、DAG readiness 与 terminal revision。</p>
+            </article>
+
+            <article class="finding p2">
+              <div class="finding-id">P2-04 · Cross-version · Duplicated lifecycle primitives</div>
+              <h3>三个版本分别实现 ledger、状态机、预算、恢复与 projection/delivery，没有共享不变量。</h3>
+              <p>San Loop、Brain、Workflow 对“terminal、resume、idempotency、scope、budget、delivery”各自定义，导致同类 bug 以不同形式重复出现。</p>
+            </article>
+
+            <article class="finding p2">
+              <div class="finding-id">P2-05 · Cross-version · Claims outpace evidence</div>
+              <h3>确定性 fixture 的绿色结果被提升为生产路径与发布级结论。</h3>
+              <p>v0.2 handoff、v0.3 M6 与 v0.4 implementation report 都包含正确的局部证据，但完成口径没有持续绑定原始验收条款和反例集合。</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="security">
+        <div class="page">
+          <div class="section-kicker">08 · Security audit</div>
+          <h2>安全边界矩阵</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>边界</th>
+                  <th>预期安全属性</th>
+                  <th>当前事实</th>
+                  <th>风险</th>
+                  <th>判定</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Prompt authority</td>
+                  <td>Brain 只能作为低权威、可忽略的历史状态。</td>
+                  <td>custom message 被转换为 provider developer role。</td>
+                  <td>持久经历可覆盖或操纵当前用户意图，形成跨 turn prompt injection 放大器。</td>
+                  <td><span class="status p0">P0</span></td>
+                </tr>
+                <tr>
+                  <td>Capability boundary</td>
+                  <td>角色/Workflow/会话/Agent 权限取交集。</td>
+                  <td>v0.4 bridge 的交集设计较好；v0.2 角色主要依赖 agent 定义与 prompt 约定。</td>
+                  <td>v0.2 不能证明 Commander/Worker/Supervisor 的最小权限；v0.4 此项可保留。</td>
+                  <td><span class="status partial">MIXED</span></td>
+                </tr>
+                <tr>
+                  <td>Scope isolation</td>
+                  <td>稳定、规范化、不可混淆的 user/project/repo/task identity。</td>
+                  <td>repo/project 原始路径、session-as-task、scope-less recall fail-open；<code>user:local</code> 本身符合 agentDir 隔离合同。</td>
+                  <td>跨 worktree/repo/task 污染，移动目录后 identity 漂移，legacy memory 越域召回。</td>
+                  <td><span class="status p0">P0</span></td>
+                </tr>
+                <tr>
+                  <td>TOCTOU</td>
+                  <td>授权检查与副作用原子绑定。</td>
+                  <td>patch baseline/check/apply 和 path realpath/tool I/O 分离。</td>
+                  <td>审阅后工作树或 symlink 目标变化，最终写入超出批准内容/范围。</td>
+                  <td><span class="status p0">P0</span></td>
+                </tr>
+                <tr>
+                  <td>Resource exhaustion</td>
+                  <td>Agent、总 token、时间、并发均为硬限制且真实计费。</td>
+                  <td>v0.2 只数 turn；v0.4 输出上限代替总 token，超支后才发现且漏记。</td>
+                  <td>成本失控、误报“within budget”、并发任务争抢额度。</td>
+                  <td><span class="status p0">P0</span></td>
+                </tr>
+                <tr>
+                  <td>Confidentiality</td>
+                  <td>secret/sensitive 默认不激活、不投影、短期 payload 终态删除。</td>
+                  <td>Brain sensitivity 全为 normal；Ad-hoc 删除跨事务；debug 有部分脱敏。</td>
+                  <td>秘密进入长期 Brain/projection，或 rejected/expired 一次性 source 在 crash 后残留。</td>
+                  <td><span class="status partial">P1</span></td>
+                </tr>
+                <tr>
+                  <td>Durable delivery</td>
+                  <td>完成结果在消费方 ack 前可重放，且最多确认一次。</td>
+                  <td>先记 delivered，再做 UI output；ledger 只有 hash。</td>
+                  <td>断连造成不可恢复的数据丢失；无法区分已展示与仅已标记。</td>
+                  <td><span class="status p0">P0</span></td>
+                </tr>
+                <tr>
+                  <td>Approval integrity</td>
+                  <td>未批准零执行，批准精确绑定边界。</td>
+                  <td>v0.4 source/args/scope/permission/limit 指纹较完整，启动前验证严格。</td>
+                  <td>task identity 粒度仍需修复；审批内容本身的 fingerprint 机制可保留。</td>
+                  <td><span class="status pass">STRONG BASE</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="drift">
+        <div class="page">
+          <div class="section-kicker">09 · Cross-version drift</div>
+          <h2>跨版本设计漂移</h2>
+          <div class="flow" aria-label="跨版本重复问题链">
+            <article class="flow-step">
+              <div class="flow-index">1</div>
+              <h3>身份混用</h3>
+              <p>session、task、project、repo path 与 user 被当作可互换 key，导致批准、记忆和恢复边界不稳定。</p>
+            </article>
+            <article class="flow-step">
+              <div class="flow-index">2</div>
+              <h3>状态机重复</h3>
+              <p>每个版本独立实现 terminal、retry、resume、idempotency 与 ledger，缺少共享的不可逆终态和 CAS 规则。</p>
+            </article>
+            <article class="flow-step">
+              <div class="flow-index">3</div>
+              <h3>预算名实不符</h3>
+              <p>turn、output limit、reported usage 被称为 total hard budget，却没有统一 provider request/token/cost accounting。</p>
+            </article>
+            <article class="flow-step">
+              <div class="flow-index">4</div>
+              <h3>自构造验收</h3>
+              <p>dogfood 直接构造理想 digest、candidate、usage、abort/recovery，绕过最容易出错的真实入口与默认配置。</p>
+            </article>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>漂移主题</th>
+                  <th>v0.2</th>
+                  <th>v0.3</th>
+                  <th>v0.4</th>
+                  <th>统一方向</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>权威状态</td>
+                  <td>最后 snapshot 胜出</td>
+                  <td>JSONL + SQLite materialization</td>
+                  <td>session events + 内存 run</td>
+                  <td>统一 append-only command/event envelope、revision CAS 与可验证 rebuild。</td>
+                </tr>
+                <tr>
+                  <td>身份</td>
+                  <td>sessionId/runId</td>
+                  <td>user key 合规；project/repo 使用原始路径</td>
+                  <td>sessionId 充当 taskRef</td>
+                  <td>单一 identity resolver：user UUID、repo remote/common-dir hash、worktree、project UUID、task UUID。</td>
+                </tr>
+                <tr>
+                  <td>预算</td>
+                  <td>角色调用数</td>
+                  <td>各 injection 层局部 token cap</td>
+                  <td>child output cap + 返回后 usage</td>
+                  <td>统一预算账本，记录预留、实际 input/output/cache/cost、超支与释放。</td>
+                </tr>
+                <tr>
+                  <td>恢复</td>
+                  <td>启动时 active → blocked</td>
+                  <td>projection 有局部 reconcile</td>
+                  <td>session switch 取消并丢 manager</td>
+                  <td>durable run envelope、可重放节点结果、side-effect receipt 与 resume policy。</td>
+                </tr>
+                <tr>
+                  <td>完成口径</td>
+                  <td>terminal/dogfood 通过</td>
+                  <td>手工 14-turn 通过</td>
+                  <td>固定 usage dogfood 通过</td>
+                  <td>每条需求绑定 production-path test、反例集、真实 provider 样本和残余风险。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="retain">
+        <div class="page">
+          <div class="section-kicker">10 · Assets worth retaining</div>
+          <h2>已经实现且值得保留的能力</h2>
+          <p class="section-intro">
+            NO-GO 不等于推倒重来。以下模块形成了可靠基础，修复应围绕它们加固合同，而不是另起第四套框架。
+          </p>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>版本</th>
+                  <th>值得保留</th>
+                  <th>保留条件</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>v0.2</strong></td>
+                  <td>结构化 LoopPlan/Assignment/WorkerResult/Review；真实 task-agent bridge；并发 Worker helper；ContextPlan refs；slash/report 基础。</td>
+                  <td>重写终态 authority、cancel registry、DAG readiness 与 retry gate；Checks 进入同一生产 pipeline。</td>
+                </tr>
+                <tr>
+                  <td><strong>v0.3</strong></td>
+                  <td>Candidate/Decision 分离；显式批准；revision/conflict/consolidation；typed activation selection；projection reconcile/CAS undo；debug 脱敏；默认关闭。</td>
+                  <td>修复 provider role、identity、sensitivity、全量 rebuild 与真实 candidate production 后再允许 activation/projection。</td>
+                </tr>
+                <tr>
+                  <td><strong>v0.4</strong></td>
+                  <td>仅两种 kind；approval fingerprint；未批准零执行；静态 restricted interpreter；能力交集；isolated patch review；诚实的 <code>insufficient_data</code>；默认关闭。</td>
+                  <td>增加 durable execution、input-bound replay、真实 hard budget、ack delivery 与原子写入后，才可称内部试用候选。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="roadmap">
+        <div class="page">
+          <div class="section-kicker">11 · Remediation roadmap</div>
+          <h2>分阶段修复路线与退出门禁</h2>
+
+          <div class="flow" aria-label="修复路线">
+            <article class="flow-step">
+              <div class="flow-index">0</div>
+              <h3>冻结口径</h3>
+              <p>保持全部开关默认关闭；回撤完成/扩大 opt-in 声明；把本报告 P0 变成 release blockers。</p>
+            </article>
+            <article class="flow-step">
+              <div class="flow-index">1</div>
+              <h3>关闭 P0</h3>
+              <p>先修 terminal/cancel、prompt role、identity isolation、durable replay、token accounting、delivery ack 与 TOCTOU。</p>
+            </article>
+            <article class="flow-step">
+              <div class="flow-index">2</div>
+              <h3>闭合需求链</h3>
+              <p>接通 Checks、per-role context、candidate classification、全 session rebuild、projection producers 与 task identity。</p>
+            </article>
+            <article class="flow-step">
+              <div class="flow-index">3</div>
+              <h3>真实验收</h3>
+              <p>重跑反例、restart/crash、外部 provider 与 Skill/Managed 对照；最后再做有限 internal opt-in 决策。</p>
+            </article>
+          </div>
+
+          <h3 style="margin-top: 26px">Stage 1 建议实现顺序</h3>
+          <ol>
+            <li><strong>统一 identity resolver：</strong>先定义稳定 user/project/repo/worktree/task key 和 migration；Brain、Workflow 与 San Loop 共用。</li>
+            <li><strong>统一 durable run/event 核心：</strong>命令 envelope、revision、terminal CAS、cancel intent/ack、completed call value、side-effect receipt 与 rebuild validator。</li>
+            <li><strong>修 v0.2 authority：</strong>只有 Supervisor 可 finalize；Oracle 作为 evidence；任何 failed/blocked dependency 阻断 review pass；stop 传播 AbortSignal 并等待 ack。</li>
+            <li><strong>修 v0.3 authority 与隐私：</strong>Brain 作为真正低权威 untrusted context；无 scope 结果 fail-closed；secret/sensitive classifier 在 capture 前执行。</li>
+            <li><strong>修 v0.4 replay/budget/delivery：</strong>call key 包含 canonical input hash；持久 completed value；provider 前预留 input/output budget；结果 payload 持久到消费方 ack。</li>
+              <li><strong>消除 TOCTOU：</strong>repo-scoped lock + per-file preimage hash；工具在 open descriptor/dirfd 或等效 host-owned 原子边界内完成 path authorization 与 I/O。</li>
+          </ol>
+
+          <div class="gate-list">
+            <article class="gate">
+              <strong>Gate A · 状态正确性</strong>
+              v0.2 四个反例全部转为预期终态；terminal revision 不可被迟到 actor 覆盖；异常不留 active orphan。
+            </article>
+            <article class="gate">
+              <strong>Gate B · 权限与隔离</strong>
+              Brain provider role 低于当前 user；跨 repo/worktree/task 与 scope-less recall 测试全部 fail-closed；角色/Workflow 能力交集可观测。
+            </article>
+            <article class="gate">
+              <strong>Gate C · Durable execution</strong>
+              在每个节点、delivery 与 patch apply 边界 kill/restart，恢复后不重做 completed call、不丢结果、不重复副作用。
+            </article>
+            <article class="gate">
+              <strong>Gate D · 硬预算</strong>
+              provider 实际 input/output/cache usage 与账本一致；任何请求都不能使 approved total 超支；超支费用也必须记账。
+            </article>
+            <article class="gate">
+              <strong>Gate E · Production-path dogfood</strong>
+              使用默认有效配置，从真实用户 prompt 进入 digest/capture/activation/projection，不允许手工注入 candidate 或固定 usage。
+            </article>
+            <article class="gate">
+              <strong>Gate F · 发布证据</strong>
+              聚焦、包级、完整 suite、smoke、真实 provider 与 5 SOP × 5 paired benchmark 全部有可追溯 artifact；残余风险明确记录。
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="verification">
+        <div class="page">
+          <div class="section-kicker">12 · Verification and limits</div>
+          <h2>本次验证结果与边界</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>验证</th>
+                  <th>结果</th>
+                  <th>能证明什么</th>
+                  <th>不能证明什么</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>40 个 San/Brain/Workflow/Agent 聚焦测试文件</td>
+                  <td><span class="status pass">266 pass · 0 fail</span><br />1101 assertions</td>
+                  <td>现有单元/集成合同在当前快照下保持绿色。</td>
+                  <td>未覆盖的并发、重启、默认产品路径和强安全属性仍可失败。</td>
+                </tr>
+                <tr>
+                  <td><code>bun run --cwd packages/coding-agent check</code></td>
+                  <td><span class="status pass">PASS</span><br />2209 files</td>
+                  <td>Biome、docs index 与 tsgo 在审计前快照通过。</td>
+                  <td>静态检查不验证状态机语义、provider role、真实 token 或 crash consistency。</td>
+                </tr>
+                <tr>
+                  <td>报告 HTML / links / responsive viewport</td>
+                  <td><span class="status pass">PASS</span><br />83 hrefs · 13 ids</td>
+                  <td>HTMLRewriter 完整解析；所有本地链接存在；1440px 与 390px viewport 均无页面级横向溢出。</td>
+                  <td>视觉检查不能替代报告内代码事实的独立复核。</td>
+                </tr>
+                <tr>
+                  <td>v0.2 runtime probes</td>
+                  <td><span class="status fail">4 counterexamples reproduced</span></td>
+                  <td>直接推翻 Worker failure、retry=0、Oracle authority 与 stop terminality 合同。</td>
+                  <td>不是外部模型质量 benchmark。</td>
+                </tr>
+                <tr>
+                  <td>v0.4 runtime probes</td>
+                  <td><span class="status fail">Replay swap + closure bug</span></td>
+                  <td>解释器在调度变化和 lexical loop 上不确定/不符合 JavaScript 语义。</td>
+                  <td>未进行进程级 crash/restart，因为代码已无可恢复 payload。</td>
+                </tr>
+                <tr>
+                  <td>完整仓库测试</td>
+                  <td><span class="status partial">NOT RUN</span></td>
+                  <td>无。</td>
+                  <td>不能宣称全仓无回归。</td>
+                </tr>
+                <tr>
+                  <td>CLI smoke / compiled binary</td>
+                  <td><span class="status partial">NOT RUN</span></td>
+                  <td>无。</td>
+                  <td>不能证明打包入口与 worker host 行为。</td>
+                </tr>
+                <tr>
+                  <td>真实外部 provider 与 Skill-vs-Managed benchmark</td>
+                  <td><span class="status partial">NOT RUN / INSUFFICIENT DATA</span></td>
+                  <td>报告器正确拒绝把 deterministic usage 当 rollout 数据。</td>
+                  <td>不能宣称 token 降幅、质量无回退、成本受控。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <pre>env HOME=/private/tmp/san-v024-audit-home bun test \
+  packages/coding-agent/test/san-loop \
+  packages/coding-agent/test/brain \
+  packages/coding-agent/test/workflows \
+  packages/coding-agent/test/context-steady/agent-session-m2.test.ts \
+  packages/coding-agent/test/context-steady/recall.test.ts \
+  packages/coding-agent/test/slash-commands/brain.test.ts \
+  packages/coding-agent/test/modes/workflow.test.ts \
+  packages/coding-agent/test/task/executor-pass-through.test.ts \
+  packages/agent/test/agent.test.ts
+
+bun run --cwd packages/coding-agent check</pre>
+          <p class="small">
+            受限执行环境下首次测试已完成 266 pass / 0 fail，但 logger 写入用户 HOME 被沙箱拒绝并产生测试外错误；以上隔离 HOME 命令随后以 266 pass / 0 fail、1101 assertions 干净退出，未修改产品代码。
+          </p>
+
+          <div class="callout amber">
+            <h3>测试绿色与需求闭环是两个命题</h3>
+            <p>
+              266 个测试全部通过说明“已有断言没有回归”；本报告的运行时反例说明“关键需求没有被这些断言覆盖”。验收需要同时满足正向场景、失败路径、并发/重启与安全不变量，不能用测试数量替代需求 traceability。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="appendix">
+        <div class="page">
+          <div class="section-kicker">13 · Appendix</div>
+          <h2>运行时反例与关键源码索引</h2>
+
+          <h3>v0.2 四个反例</h3>
+          <pre>{"status":"passed","workerStatus":"failed","supervisors":1}
+{"status":"blocked","retryCount":2,"maxRetries":0,"reviews":2}
+{"status":"blocked","reviews":["oracle:pass","supervisor:blocked"]}
+{"returned":"passed","ledger":"passed","events":["run_created","plan_created","assignment_created","aborted","worker_completed","finalized"]}</pre>
+
+          <h3 style="margin-top: 24px">v0.4 两个解释器反例</h3>
+          <pre>Replay probe:
+  same sourceHash + same callsite + changed parallel scheduling
+  => completed call cache can return the other prompt's prior value
+
+Loop closure probe:
+  for (let i = 0; i &lt; 3; i++) closures.push(() =&gt; `item-${i}`)
+  => ["item-3", "item-3", "item-3"]</pre>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>主题</th>
+                  <th>关键源码</th>
+                  <th>关注区间</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>v0.2 loop/state</td>
+                  <td><a href="../../packages/coding-agent/src/san-loop/runner.ts">runner.ts</a> · <a href="../../packages/coding-agent/src/san-loop/orchestrator.ts">orchestrator.ts</a> · <a href="../../packages/coding-agent/src/san-loop/ledger.ts">ledger.ts</a></td>
+                  <td>runner 166-290；orchestrator 282-376；ledger 273-427</td>
+                </tr>
+                <tr>
+                  <td>v0.2 agent/check/context</td>
+                  <td><a href="../../packages/coding-agent/src/san-loop/task-executor.ts">task-executor.ts</a> · <a href="../../packages/coding-agent/src/san-loop/checks.ts">checks.ts</a> · <a href="../../packages/coding-agent/src/san-loop/context.ts">context.ts</a></td>
+                  <td>executor 430-1029；checks 123-216；context 117-182</td>
+                </tr>
+                <tr>
+                  <td>v0.3 prompt/scope</td>
+                  <td><a href="../../packages/coding-agent/src/session/agent-session.ts">agent-session.ts</a> · <a href="../../packages/agent/src/compaction/messages.ts">messages.ts</a></td>
+                  <td>session 7909-8000, 8730-8777；messages 162-176</td>
+                </tr>
+                <tr>
+                  <td>v0.3 capture/store/recall</td>
+                  <td><a href="../../packages/coding-agent/src/brain/extract.ts">extract.ts</a> · <a href="../../packages/coding-agent/src/brain/store.ts">store.ts</a> · <a href="../../packages/coding-agent/src/context-steady/fallback.ts">fallback.ts</a> · <a href="../../packages/coding-agent/src/context-steady/recall.ts">recall.ts</a></td>
+                  <td>extract 76-208；store 378-411；fallback 254-294；recall 90-119</td>
+                </tr>
+                <tr>
+                  <td>v0.4 manager/ledger</td>
+                  <td><a href="../../packages/coding-agent/src/workflows/manager.ts">manager.ts</a> · <a href="../../packages/coding-agent/src/workflows/ledger.ts">ledger.ts</a></td>
+                  <td>manager 164-181, 241-476, 553-815；ledger 15-173</td>
+                </tr>
+                <tr>
+                  <td>v0.4 runtime/budget</td>
+                  <td><a href="../../packages/coding-agent/src/workflows/runtime/interpreter.ts">interpreter.ts</a> · <a href="../../packages/coding-agent/src/workflows/agent-bridge.ts">agent-bridge.ts</a> · <a href="../../packages/coding-agent/src/task/executor.ts">task/executor.ts</a></td>
+                  <td>interpreter 434-615, 855-885；bridge 99-188；executor 1942-2230</td>
+                </tr>
+                <tr>
+                  <td>v0.4 write/scope</td>
+                  <td><a href="../../packages/coding-agent/src/workflows/delivery.ts">delivery.ts</a> · <a href="../../packages/coding-agent/src/tools/path-scope.ts">path-scope.ts</a> · <a href="../../packages/agent/src/agent-loop.ts">agent-loop.ts</a></td>
+                  <td>delivery 291-390；scope 34-215；agent-loop 2021-2048</td>
+                </tr>
+                <tr>
+                  <td>v0.4 rollout evidence</td>
+                  <td><a href="../../packages/coding-agent/src/workflows/token-report.ts">token-report.ts</a> · <a href="../../packages/coding-agent/src/workflows/dogfood.ts">dogfood.ts</a></td>
+                  <td>token report 105-372；dogfood 190-381</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="callout" style="margin-top: 24px">
+            <h3>最终审计意见</h3>
+            <p>
+              当前最合理的工程策略不是继续增加新 San 版本，而是冻结 feature expansion，提取共享 identity、durable state、budget、capability 与 delivery 基础设施，先把本报告 9 个 P0 变成不可回归的生产合同。只有 P0 清零、P1 需求链闭合并完成真实外部验收后，才能重新讨论 v0.2-v0.4 的版本完成状态与 rollout。
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="page">
+        San v0.2-v0.4 final implementation audit · 2026-07-14 · snapshot <code>2616dd4ac</code> · branch <code>feature/provider-connect-model-ux</code>
+      </div>
+    </footer>
+  </body>
+</html>
