@@ -219,6 +219,25 @@ const mockCodexOverlapModels: Model<"anthropic-messages">[] = [
 	}),
 ];
 
+const mockMaxCapableModels: Model<"anthropic-messages">[] = [
+	buildModel({
+		id: "claude-opus-4-7",
+		name: "Claude Opus 4.7",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: true,
+		thinking: {
+			mode: "anthropic-adaptive",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+		},
+		input: ["text", "image"],
+		cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+		contextWindow: 200000,
+		maxTokens: 32000,
+	}),
+];
+
 const openaiGpt55Models: Model<Api>[] = [
 	buildModel({
 		id: "gpt-5.5",
@@ -627,6 +646,7 @@ describe("resolveModelRoleValue", () => {
 
 		expect(result.model?.provider).toBe("openai-codex");
 		expect(result.model?.id).toBe("gpt-5.3-codex");
+		// Role-value resolution clamps: gpt-5.3-codex's ladder tops out at xhigh.
 		expect(result.thinkingLevel).toBe(Effort.XHigh);
 		expect(result.explicitThinkingLevel).toBe(true);
 	});
@@ -685,6 +705,15 @@ describe("resolveModelRoleValue", () => {
 		expect(result.model?.provider).toBe("anthropic");
 		expect(result.model?.id).toBe("claude-sonnet-4-5");
 		expect(result.thinkingLevel).toBe(Effort.High);
+		expect(result.explicitThinkingLevel).toBe(true);
+	});
+
+	test("passes max through unclamped when the model ladder includes it", () => {
+		const result = resolveModelRoleValue("anthropic/claude-opus-4-7:max", mockMaxCapableModels);
+
+		expect(result.model?.provider).toBe("anthropic");
+		expect(result.model?.id).toBe("claude-opus-4-7");
+		expect(result.thinkingLevel).toBe(Effort.Max);
 		expect(result.explicitThinkingLevel).toBe(true);
 	});
 
@@ -1088,8 +1117,21 @@ describe("resolveModelScope", () => {
 		const scoped = await resolveModelScope(["openai-codex/*:max"], registry);
 
 		expect(scoped).toHaveLength(2);
+		// Scoped levels clamp per model: max on an xhigh-ceiling ladder resolves to xhigh.
 		expect(scoped.map(entry => entry.thinkingLevel)).toEqual([Effort.XHigh, Effort.XHigh]);
 		expect(scoped.every(entry => entry.explicitThinkingLevel)).toBe(true);
+	});
+
+	test("keeps max on glob scopes when the model ladder includes it", async () => {
+		const registry = {
+			getAvailable: () => mockMaxCapableModels,
+		};
+
+		const scoped = await resolveModelScope(["anthropic/*:max"], registry);
+
+		expect(scoped).toHaveLength(1);
+		expect(scoped[0].thinkingLevel).toBe(Effort.Max);
+		expect(scoped[0].explicitThinkingLevel).toBe(true);
 	});
 
 	test("preserves literal :max in scoped-model globs", async () => {
@@ -1168,9 +1210,17 @@ describe("parseModelString", () => {
 
 		test("preserves literal max model ids when the caller can prove they exist", () => {
 			const result = parseModelString("nanogpt/coding-router:max", {
+
 				isLiteralModelId: (provider, id) => provider === "nanogpt" && id === "coding-router:max",
 			});
 			expect(result).toEqual({ provider: "nanogpt", id: "coding-router:max" });
+		});
+
+		test("leaves :max attached to the model id unless the caller opts in via allowMaxSuffix", () => {
+			// Without allowMaxSuffix, the strict suffix parser must not silently
+			// reinterpret a literal `:max` id as a thinking suffix.
+			const result = parseModelString("anthropic/claude-sonnet-4-5:max");
+			expect(result).toEqual({ provider: "anthropic", id: "claude-sonnet-4-5:max" });
 		});
 
 		test("leaves :auto attached to the model id unless the caller opts in via allowAutoAlias", () => {

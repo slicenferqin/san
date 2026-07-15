@@ -7,13 +7,12 @@ import { Effort } from "@oh-my-pi/pi-ai";
 import { parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
 import { parseAgentFields } from "../discovery/helpers";
 import designerMd from "../prompts/agents/designer.md" with { type: "text" };
-import exploreMd from "../prompts/agents/explore.md" with { type: "text" };
 // Embed agent markdown files at build time
 import agentFrontmatterTemplate from "../prompts/agents/frontmatter.md" with { type: "text" };
 import librarianMd from "../prompts/agents/librarian.md" with { type: "text" };
-
 import planMd from "../prompts/agents/plan.md" with { type: "text" };
 import reviewerMd from "../prompts/agents/reviewer.md" with { type: "text" };
+import scoutMd from "../prompts/agents/scout.md" with { type: "text" };
 import sanCommanderMd from "../prompts/agents/san-commander.md" with { type: "text" };
 import sanOracleMd from "../prompts/agents/san-oracle.md" with { type: "text" };
 import sanSupervisorMd from "../prompts/agents/san-supervisor.md" with { type: "text" };
@@ -45,7 +44,7 @@ function buildAgentContent(def: EmbeddedAgentDef): string {
 }
 
 const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
-	{ fileName: "explore.md", template: exploreMd },
+	{ fileName: "scout.md", template: scoutMd },
 	{ fileName: "plan.md", template: planMd },
 	{ fileName: "designer.md", template: designerMd },
 	{ fileName: "reviewer.md", template: reviewerMd },

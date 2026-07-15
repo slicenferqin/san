@@ -79,6 +79,7 @@ export interface ScopedModel {
 }
 
 interface ThinkingSuffixOptions {
+
 	allowAutoAlias?: boolean;
 }
 
@@ -92,6 +93,7 @@ const MODEL_PATTERN_THINKING_SUFFIX_OPTIONS: ThinkingSuffixOptions = { allowAuto
 
 function parseThinkingSuffix(value: string, options?: ThinkingSuffixOptions): ConfiguredThinkingLevel | undefined {
 	const level = parseThinkingLevel(value);
+	if (level === ThinkingLevel.Max) return options?.allowMaxSuffix === true ? level : undefined;
 	if (level !== undefined) return level;
 	if (options?.allowAutoAlias === true && value === AUTO_THINKING) return AUTO_THINKING;
 	return undefined;

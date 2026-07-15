@@ -223,9 +223,13 @@ export function clampAutoThinkingEffort(model: Model | undefined, effort: Effort
 /**
  * The provisional concrete level shown while `auto` is configured but before a
  * turn has been classified. Prefers the model's `defaultLevel`, otherwise High,
- * clamped into the auto range. Returns `undefined` for non-reasoning models.
+ * clamped into the auto range. Auto never provisions {@link Effort.Max} (the
+ * classifier ceiling is XHigh; only an explicit user request reaches Max), so a
+ * `defaultLevel` of `max` is capped at XHigh before clamping. Returns
+ * `undefined` for non-reasoning models.
  */
 export function resolveProvisionalAutoLevel(model: Model | undefined): Effort | undefined {
 	if (!model?.reasoning) return undefined;
-	return clampAutoThinkingEffort(model, model.thinking?.defaultLevel ?? Effort.High);
+	const preferred = model.thinking?.defaultLevel ?? Effort.High;
+	return clampAutoThinkingEffort(model, preferred === Effort.Max ? Effort.XHigh : preferred);
 }

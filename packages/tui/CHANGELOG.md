@@ -5,6 +5,11 @@
 ### Added
 
 - Added optional masked rendering to the single-line `Input` component while preserving the submitted value.
+## [16.4.0] - 2026-07-10
+
+### Fixed
+
+- Fixed terminal flickering during session resume, replacement, or resizing on terminals that do not support synchronized output.
 
 ## [16.3.14] - 2026-07-09
 

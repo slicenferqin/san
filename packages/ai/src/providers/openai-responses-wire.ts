@@ -6317,6 +6317,7 @@ export interface Reasoning {
 	 *   support `none`.
 	 * - The `gpt-5-pro` model defaults to (and only supports) `high` reasoning effort.
 	 * - `xhigh` is supported for all models after `gpt-5.1-codex-max`.
+	 * - `max` is supported for `gpt-5.6` and later models.
 	 */
 	effort?: ReasoningEffort | null;
 	/**
@@ -6359,6 +6360,7 @@ export interface Reasoning {
  *   support `none`.
  * - The `gpt-5-pro` model defaults to (and only supports) `high` reasoning effort.
  * - `xhigh` is supported for all models after `gpt-5.1-codex-max`.
+ * - `max` is supported for `gpt-5.6` and later models.
  */
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | null;
 /**

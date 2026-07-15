@@ -1069,6 +1069,7 @@ const themeColorsSchema = type({
 	thinkingMedium: "string | number",
 	thinkingHigh: "string | number",
 	thinkingXhigh: "string | number",
+	"thinkingMax?": "string | number",
 	bashMode: "string | number",
 	pythonMode: "string | number",
 	statusLineBg: "string | number",
@@ -1173,6 +1174,7 @@ export type ThemeColor =
 	| "thinkingMedium"
 	| "thinkingHigh"
 	| "thinkingXhigh"
+	| "thinkingMax"
 	| "bashMode"
 	| "pythonMode"
 	| "statusLineSep"
@@ -1235,6 +1237,7 @@ const THEME_COLOR_RECORD = {
 	thinkingMedium: true,
 	thinkingHigh: true,
 	thinkingXhigh: true,
+	thinkingMax: true,
 	bashMode: true,
 	pythonMode: true,
 	statusLineSep: true,
@@ -1687,7 +1690,7 @@ export class Theme {
 				return (str: string) => this.fg("thinkingXhigh", str);
 			case "max":
 			case "ultra":
-				return (str: string) => this.fg("thinkingXhigh", str);
+				return (str: string) => this.fg(this.#fgColors.thinkingMax ? "thinkingMax" : "thinkingXhigh", str);
 			default:
 				return (str: string) => this.fg("thinkingOff", str);
 		}
