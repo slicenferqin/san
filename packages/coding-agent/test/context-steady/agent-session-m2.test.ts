@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import type { ProviderSessionState } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
@@ -23,6 +24,7 @@ import type {
 	MemoryBackendOperationContext,
 	MemoryBackendSearchOptions,
 } from "@oh-my-pi/pi-coding-agent/memory-backend/types";
+import { computeNonMessageTokens } from "@oh-my-pi/pi-coding-agent/modes/utils/context-usage";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -1084,6 +1086,144 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		const secondPayload = JSON.stringify(mock.calls[1]!.context.messages);
 		expect(secondPayload).toContain("echo:seed:");
 		expect(secondPayload.length).toBeGreaterThan(500_000);
+	});
+
+	it("refreshes the projected audit when a legal tool-loop tail grows inside the control band", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const toolPayload = "Q".repeat(20_000);
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [{ type: "toolCall", id: "call_control", name: "echo", arguments: { value: "seed" } }],
+				},
+				{ content: ["control-band tool tail accepted"] },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [echoTool] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"san.contextSteady.qualityWindowTokens": 8_000,
+			"san.contextSteady.burstWindowTokens": 12_000,
+			"san.contextSteady.contextPlan.maxTokens": 2_000,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		const controlEcho: AgentTool<typeof echoToolSchema, { value: string }> = {
+			...echoTool,
+			async execute(_toolCallId, params) {
+				const parsed = echoParams(params);
+				return {
+					content: [{ type: "text", text: `echo:${parsed.value}:${toolPayload}` }],
+					details: parsed,
+				};
+			},
+		};
+		agent.setTools([controlEcho]);
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+
+		await session.prompt("control-band tool tail probe");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(2);
+		const plan = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).at(-1)?.data as ContextPlanAudit;
+		const secondProviderTokens =
+			computeNonMessageTokens(session) +
+			mock.calls[1]!.context.messages.reduce(
+				(sum, message) => sum + estimateTokens(message as unknown as AgentMessage),
+				0,
+			);
+
+		expect(secondProviderTokens).toBeGreaterThan(0);
+		expect(secondProviderTokens).toBeLessThanOrEqual(plan.qualityGate.projectedInputLimit ?? 0);
+		expect(secondProviderTokens).toBe(plan.qualityGate.projectedInputTokens ?? -1);
+	});
+
+	it("rebuilds the active plan after pre-prompt compaction rewrites history", async () => {
+		const bundledModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const model = { ...bundledModel, contextWindow: 100_000, maxTokens: 16_000 };
+		const mock = createMockModel({ responses: [{ content: ["pre-prompt rewrite accepted"] }] });
+		const seedText = "seed-context ".repeat(3_000);
+		const seedUser: AgentMessage = {
+			role: "user",
+			content: [{ type: "text", text: seedText }],
+			timestamp: Date.now() - 2,
+		};
+		const seedAssistant: AgentMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "seed completed" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 3_000,
+				output: 100,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 3_100,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now() - 1,
+		};
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [seedUser, seedAssistant] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendMessage(seedUser);
+		sessionManager.appendMessage(seedAssistant);
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"compaction.enabled": true,
+			"compaction.strategy": "context-full",
+			"compaction.autoContinue": false,
+			"compaction.thresholdTokens": 1_000,
+			"compaction.thresholdPercent": -1,
+			"compaction.keepRecentTokens": 1,
+			"contextPromotion.enabled": false,
+			"san.contextSteady.qualityWindowTokens": 20_000,
+			"san.contextSteady.burstWindowTokens": 30_000,
+			"san.contextSteady.contextPlan.maxTokens": 2_000,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+			summary: "PRE_PROMPT_COMPACTION_MARKER",
+			shortSummary: undefined,
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: preparation.tokensBefore,
+			details: {},
+		}));
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		await session.prompt("continue after context maintenance");
+		await session.waitForIdle();
+
+		expect(compactSpy).toHaveBeenCalledTimes(1);
+		expect(mock.calls).toHaveLength(1);
+		const providerPayload = JSON.stringify(mock.calls[0]!.context.messages);
+		expect(providerPayload).toContain("PRE_PROMPT_COMPACTION_MARKER");
+		const plan = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).at(-1)?.data as ContextPlanAudit;
+		const providerTokens =
+			computeNonMessageTokens(session) +
+			mock.calls[0]!.context.messages.reduce(
+				(sum, message) => sum + estimateTokens(message as unknown as AgentMessage),
+				0,
+			);
+		expect(plan.qualityGate.projectedInputTokens).toBe(providerTokens);
 	});
 
 	it("builds checkpoints only from the active branch", async () => {

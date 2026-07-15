@@ -110,16 +110,11 @@ describe("session model effort picker", () => {
 			getProviderDiscoveryState: () => undefined,
 		} as unknown as ModelRegistry;
 		const ui = { requestRender: vi.fn() } as unknown as TUI;
-		const selector = new ModelSelectorComponent(
-			ui,
-			model,
-			Settings.isolated({}),
-			registry,
-			[],
-			onSelect,
-			() => {},
-			{ temporaryOnly: true, directSelect: true, hideProviderTabs: true },
-		);
+		const selector = new ModelSelectorComponent(ui, model, Settings.isolated({}), registry, [], onSelect, () => {}, {
+			temporaryOnly: true,
+			directSelect: true,
+			hideProviderTabs: true,
+		});
 		await Promise.resolve();
 
 		selector.handleInput("\n");

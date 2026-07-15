@@ -414,4 +414,99 @@ describe("San loop runner", () => {
 		expect(ledger.events.map(event => event.data.type).slice(-2)).toEqual(["abort_requested", "aborted"]);
 		expect(ledger.latestRun?.data.status).toBe("aborted");
 	});
+
+	test("aborts and drains sibling Workers before recording an executor failure", async () => {
+		const session = SessionManager.inMemory();
+		const bothStarted = Promise.withResolvers<void>();
+		let started = 0;
+		let siblingAborted = false;
+		let lateSideEffect = false;
+		const executor: SanLoopAgentExecutor = {
+			async commander() {
+				return { plan: { taskGraph: [taskNode("fails"), taskNode("sibling")] } };
+			},
+			async worker(invocation) {
+				started++;
+				if (started === 2) bothStarted.resolve();
+				await bothStarted.promise;
+				if (invocation.assignment.objective === "Implement fails") throw new Error("first Worker failed");
+				const signal = invocation.signal;
+				if (!signal) throw new Error("Expected a Worker cancellation signal.");
+				const pending = Promise.withResolvers<SanLoopWorkerResultInput>();
+				let settled = false;
+				signal.addEventListener(
+					"abort",
+					() => {
+						settled = true;
+						siblingAborted = true;
+						pending.reject(signal.reason);
+					},
+					{ once: true },
+				);
+				void Bun.sleep(40).then(() => {
+					if (settled) return;
+					settled = true;
+					lateSideEffect = true;
+					pending.resolve({
+						assignmentId: invocation.assignment.assignmentId,
+						status: "completed",
+						summary: "Sibling completed after the run failed.",
+					});
+				});
+				return pending.promise;
+			},
+			async supervisor() {
+				return { reviewer: "supervisor", verdict: "pass" };
+			},
+		};
+
+		await expect(
+			runSanLoop({
+				sessionManager: session,
+				objective: "Converge concurrent failures",
+				runId: "loop_runner_sibling_abort",
+				maxWorkers: 2,
+				executor,
+			}),
+		).rejects.toThrow("first Worker failed");
+		await Bun.sleep(60);
+
+		expect(siblingAborted).toBe(true);
+		expect(lateSideEffect).toBe(false);
+		expect(findLatestSanLoopRun(session.getEntries(), "loop_runner_sibling_abort")?.data.status).toBe("failed");
+	});
+
+	test("normalizes invalid SDK worker and retry limits to mode defaults", async () => {
+		const session = SessionManager.inMemory();
+		let workerCalls = 0;
+		const executor: SanLoopAgentExecutor = {
+			async commander() {
+				return { plan: { taskGraph: [taskNode("normalize")] } };
+			},
+			async worker(invocation) {
+				workerCalls++;
+				return {
+					assignmentId: invocation.assignment.assignmentId,
+					status: "completed",
+					summary: "Normalized limits still execute the assignment.",
+				};
+			},
+			async supervisor() {
+				return { reviewer: "supervisor", verdict: "pass" };
+			},
+		};
+
+		const result = await runSanLoop({
+			sessionManager: session,
+			objective: "Normalize SDK limits",
+			runId: "loop_runner_normalized_limits",
+			maxWorkers: Number.NaN,
+			maxRetries: Number.NaN,
+			executor,
+		});
+
+		expect(result.run.status).toBe("passed");
+		expect(result.run.maxRetries).toBe(2);
+		expect(workerCalls).toBe(1);
+	});
 });

@@ -211,7 +211,11 @@ import {
 import { appendContextCheckpoint, buildContextCheckpoint } from "../context-steady/checkpoint";
 import { generateDigest as generateContextSteadyDigest } from "../context-steady/digest";
 import { generateFallbackDigest } from "../context-steady/fallback";
-import { estimateContextPlanProjectedTokens, materializeContextPlanMessages } from "../context-steady/materialize";
+import {
+	estimateContextPlanProjectedTokens,
+	materializeContextPlanMessages,
+	renderContextPlanContent,
+} from "../context-steady/materialize";
 import { type BuiltContextPlan, CONTEXT_PLAN_CUSTOM_TYPE } from "../context-steady/plan-types";
 import { type BuildContextPlanOptions, buildContextPlan } from "../context-steady/planner";
 import { buildContextSteadyRecallQuery, normalizeContextSteadyRecallItems } from "../context-steady/recall";
@@ -274,7 +278,7 @@ import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slas
 import { GoalRuntime } from "../goals/runtime";
 import type { Goal, GoalModeState } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
-import { resolveRuntimeScopeIdentity } from "../identity";
+import { type RuntimeScopeIdentity, resolveRuntimeScopeIdentity } from "../identity";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
 import { IrcBus, type IrcMessage } from "../irc/bus";
 import { resolveMemoryBackend } from "../memory-backend";
@@ -595,6 +599,11 @@ const UNEXPECTED_STOP_TIMEOUT_MS = 4000;
 const SAN_BRAIN_CAPTURE_BOUNDARY_MS = 150;
 const EMPTY_STOP_MAX_RETRIES = 3;
 const RETRY_BACKOFF_MAX_DELAY_MS = 8_000;
+
+interface SanBrainCaptureScopes {
+	userScope: SanBrainScope;
+	fallbackScope: SanBrainScope;
+}
 /**
  * Budget for callers on the user-visible `/quit` / `/exit` shutdown path that
  * want to cap how long they wait for `MnemopiSessionState.dispose()` to finish
@@ -1898,6 +1907,7 @@ export class AgentSession {
 	 * logical turn (original user prompt + all continuations). */
 	#contextSteadyOriginalPreTurnLeafId: string | null = null;
 	#contextSteadyOriginalPreTurnLeafCaptured = false;
+	#sanBrainIdentityCache: { key: string; promise: Promise<RuntimeScopeIdentity> } | undefined;
 	// Bumped whenever the pending in-flight snapshot is set/cleared. The
 	// status-line context memo includes this so clearing the snapshot on
 	// turn-end/abort invalidates the cache even though the message list is
@@ -4375,6 +4385,7 @@ export class AgentSession {
 						: undefined;
 
 				if (brainCaptureEnabled && performance.now() < brainCaptureDeadline) {
+					const scopes = await this.#resolveSanBrainCaptureScopes();
 					const digest =
 						digestResult?.digest ??
 						generateFallbackDigest(
@@ -4394,7 +4405,8 @@ export class AgentSession {
 								: "message_span_fallback",
 							maxCandidates: settings.get("san.brain.capture.maxCandidatesPerTurn") as number,
 							minConfidence: settings.get("san.brain.capture.minConfidence") as number,
-							fallbackScope: { kind: "session", key: this.sessionId, resolverVersion: 1 },
+							userScope: scopes.userScope,
+							fallbackScope: scopes.fallbackScope,
 						});
 						logger.debug("San Brain capture persisted", {
 							sessionId: this.sessionId,
@@ -4404,7 +4416,10 @@ export class AgentSession {
 						});
 					} catch (error) {
 						const message = error instanceof Error ? error.message : String(error);
-						logger.warn("Failed to capture San Brain candidates", { error: message, sessionId: this.sessionId });
+						logger.warn("Failed to capture San Brain candidates", {
+							error: message,
+							sessionId: this.sessionId,
+						});
 						try {
 							recordSanBrainCaptureError(sessionManager, {
 								sessionId: this.sessionId,
@@ -8032,7 +8047,17 @@ export class AgentSession {
 	}
 
 	#contextSteadyActivePlan(): BuiltContextPlan | undefined {
-		return this.#contextSteadyRequestPlan ?? this.#contextSteadyLastPlan;
+		const plan = this.#contextSteadyRequestPlan ?? this.#contextSteadyLastPlan;
+		return plan && !this.#contextSteadyPlanInputsChanged(plan) ? plan : undefined;
+	}
+
+	#contextSteadyPlanInputsChanged(plan: BuiltContextPlan): boolean {
+		const sourceEntryIds = new Set(plan.sourceIndex.entryIds);
+		if (this.sessionManager.getBranch().some(entry => entry.type === "compaction" && !sourceEntryIds.has(entry.id))) {
+			return true;
+		}
+		if (plan.audit.budget.contextWindow !== (this.model?.contextWindow ?? 0)) return true;
+		return plan.audit.budget.nonMessageTokens !== computeNonMessageTokens(this);
 	}
 
 	/**
@@ -8260,9 +8285,56 @@ export class AgentSession {
 
 	/**
 	 * Tool-loop re-gate: rebuild plan from current branch + live messages when
-	 * projected full input would cross control/burst bands. Freezes old-history
-	 * selection from the request-start plan when still under ceiling.
+	 * projected full input would cross control/burst bands or the plan's inputs
+	 * changed. Freezes old-history selection from the request-start plan only
+	 * while the source history and non-message context are unchanged.
 	 */
+	#refreshContextSteadyPlanProjection(
+		messages: readonly AgentMessage[],
+		branchEntries: readonly SessionEntry[],
+		plan: BuiltContextPlan,
+		projectedInputTokens: number,
+	): BuiltContextPlan | undefined {
+		if (plan.audit.qualityGate.projectedInputTokens === projectedInputTokens) return plan;
+		let current = plan;
+		let projected = projectedInputTokens;
+		for (let attempt = 0; attempt < 4; attempt++) {
+			const audit = {
+				...current.audit,
+				qualityGate: {
+					...current.audit.qualityGate,
+					projectedInputTokens: projected,
+					projectedInputLimit: current.audit.budget.burstCeiling,
+				},
+			};
+			const renderedContent = renderContextPlanContent({ audit, materials: current.materials });
+			const message: AgentMessage = {
+				...current.message,
+				content: renderedContent,
+			};
+			const next: BuiltContextPlan = {
+				...current,
+				audit,
+				renderedContent,
+				message,
+				tokenEstimate: estimateTokens({
+					role: "user",
+					content: renderedContent,
+					attribution: "agent",
+					timestamp: message.timestamp,
+				}),
+			};
+			const finalProjection = this.#estimateMaterializedProjectedInputTokens(messages, branchEntries, next, "full");
+			current = next;
+			if (finalProjection === projected) return current;
+			projected = finalProjection;
+		}
+		// Do not publish a plan whose rendered projection did not converge. The
+		// caller falls through to the full rebuild, which has the same fail-closed
+		// behavior as the request-start fixed-point builder.
+		return undefined;
+	}
+
 	#refreshContextSteadyPlanForProviderCall(messages: readonly AgentMessage[]): BuiltContextPlan | undefined {
 		const existing = this.#contextSteadyRequestPlan;
 		if (!existing) return undefined;
@@ -8270,11 +8342,22 @@ export class AgentSession {
 		// Tool-loop: `messages` is already the full transformed provider context.
 		const projected = this.#estimateMaterializedProjectedInputTokens(messages, branchEntries, existing, "full");
 		const controlMax = existing.audit.budget.controlMax;
-		if (projected <= controlMax) {
-			// Still within control band — keep frozen historical materials, only re-materialize.
-			return existing;
+		const nonMessageTokens = computeNonMessageTokens(this);
+		if (!this.#contextSteadyPlanInputsChanged(existing) && projected <= controlMax) {
+			// Keep frozen historical materials, but refresh the projection for the
+			// live tool tail so the audit and rendered plan stay truthful.
+			const refreshed = this.#refreshContextSteadyPlanProjection(messages, branchEntries, existing, projected);
+			if (refreshed) {
+				const refreshedProjected = refreshed.audit.qualityGate.projectedInputTokens ?? projected;
+				if (refreshedProjected <= controlMax) {
+					this.#contextSteadyRequestPlan = refreshed;
+					this.#contextSteadyLastPlan = refreshed;
+					return refreshed;
+				}
+			}
 		}
-		// Crossed control band or approaching hard ceiling: rebuild with live tail for accurate gate.
+		// Crossed control band, or a model/history/non-message input changed: rebuild
+		// with the live tail for an accurate gate and material selection.
 		const liveText = this.#contextSteadyLatestUserText(messages) ?? "";
 		// Synchronous rebuild path (no recall) so transformContext stays non-async beyond current await.
 		const pendingEntries = this.#contextSteadyPendingEntries(
@@ -8300,7 +8383,7 @@ export class AgentSession {
 				burstWindowTokens: this.#contextSteadyBurstWindowTokens(),
 			},
 			contextWindow: this.model?.contextWindow ?? 0,
-			nonMessageTokens: computeNonMessageTokens(this),
+			nonMessageTokens,
 			maxDigestMaterials: this.#contextSteadyRecentDigests(),
 			baseRequiredEntryRefs: this.#contextSteadySemanticRequiredEntryRefs(
 				planningEntries,
@@ -8782,12 +8865,40 @@ export class AgentSession {
 		}
 	}
 
-	async #resolveSanBrainScopes(cwd = path.resolve(this.settings.getCwd())): Promise<SanBrainScope[]> {
-		const identity = await resolveRuntimeScopeIdentity({
-			agentDir: this.settings.getAgentDir(),
-			cwd,
-			sessionId: this.sessionId,
+	#resolveSanBrainIdentity(cwd = path.resolve(this.sessionManager.getCwd())): Promise<RuntimeScopeIdentity> {
+		const agentDir = this.settings.getAgentDir();
+		const key = `${agentDir}\0${cwd}\0${this.sessionId}`;
+		if (this.#sanBrainIdentityCache?.key === key) return this.#sanBrainIdentityCache.promise;
+		const promise = resolveRuntimeScopeIdentity({ agentDir, cwd, sessionId: this.sessionId });
+		const cached = { key, promise };
+		this.#sanBrainIdentityCache = cached;
+		void promise.catch(() => {
+			if (this.#sanBrainIdentityCache === cached) this.#sanBrainIdentityCache = undefined;
 		});
+		return promise;
+	}
+
+	async #resolveSanBrainCaptureScopes(): Promise<SanBrainCaptureScopes> {
+		try {
+			const identity = await this.#resolveSanBrainIdentity();
+			return {
+				userScope: { kind: "user", key: identity.userKey, resolverVersion: 1 },
+				fallbackScope: { kind: "project", key: identity.projectKey, resolverVersion: 1 },
+			};
+		} catch (error) {
+			logger.warn("Failed to resolve stable San Brain capture scope; using session scope", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionId: this.sessionId,
+			});
+			return {
+				userScope: { kind: "user", key: "user:local", resolverVersion: 1 },
+				fallbackScope: { kind: "session", key: this.sessionId, resolverVersion: 1 },
+			};
+		}
+	}
+
+	async #resolveSanBrainScopes(cwd = path.resolve(this.sessionManager.getCwd())): Promise<SanBrainScope[]> {
+		const identity = await this.#resolveSanBrainIdentity(cwd);
 		return [
 			{ kind: "user", key: identity.userKey, resolverVersion: 1 },
 			{ kind: "session", key: identity.sessionKey, resolverVersion: 1 },
@@ -9185,7 +9296,9 @@ export class AgentSession {
 				// post-prompt recovery so TurnDigest settledLeafId is not the plan entry.
 				if (this.#contextSteadyRequestPlan) {
 					this.#contextSteadyRequestPlan = this.#remapContextSteadyPlanPendingRefs(this.#contextSteadyRequestPlan);
-					this.#contextSteadyLastPlan = this.#contextSteadyRequestPlan;
+					this.#contextSteadyLastPlan = this.#contextSteadyPlanInputsChanged(this.#contextSteadyRequestPlan)
+						? undefined
+						: this.#contextSteadyRequestPlan;
 				}
 				this.#setPendingContextSnapshot(undefined);
 			}
@@ -11314,6 +11427,9 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.buildDisplaySessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
+			// The active request plan may remain available for the next provider
+			// call to detect the rewrite, but the idle snapshot is no longer valid.
+			this.#contextSteadyLastPlan = undefined;
 			// Compaction discarded the conversation history that carried the approved
 			// plan reference. Clear the sent-flag so #buildPlanReferenceMessage re-reads
 			// the plan from disk and re-injects it on the next turn (issue #1246).
@@ -14249,6 +14365,10 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.buildDisplaySessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
+			// Keep the in-flight request plan so the next provider transform can
+			// detect the new compaction entry and rebuild against the rewritten branch.
+			// The idle snapshot must not continue to describe the discarded history.
+			this.#contextSteadyLastPlan = undefined;
 			// Compaction discarded the conversation history that carried the approved
 			// plan reference. Clear the sent-flag so #buildPlanReferenceMessage re-reads
 			// the plan from disk and re-injects it on the next turn (issue #1246).

@@ -270,6 +270,7 @@ export class RestrictedWorkflowRuntime {
 	#maxCollectionSize: number;
 	#startedAt: number;
 	#now: () => number;
+	#durationExhaustedAtStart: boolean;
 	#currentPhase = "workflow";
 	#phases: string[] = [];
 	#logs: string[] = [];
@@ -290,7 +291,9 @@ export class RestrictedWorkflowRuntime {
 		this.#control = options.control ?? new WorkflowRuntimeControl();
 		this.#externalSignal = options.signal;
 		const initialStartedAt = options.initialStartedAt ?? this.#now();
-		const remainingDurationMs = Math.max(1, options.limits.durationMs - Math.max(0, this.#now() - initialStartedAt));
+		const elapsedBeforeStart = Math.max(0, this.#now() - initialStartedAt);
+		this.#durationExhaustedAtStart = elapsedBeforeStart >= options.limits.durationMs;
+		const remainingDurationMs = Math.max(1, options.limits.durationMs - elapsedBeforeStart);
 		this.#deadlineSignal = AbortSignal.timeout(remainingDurationMs);
 		const signals = [this.#control.signal, this.#deadlineSignal, this.#fatalController.signal];
 		if (options.signal) signals.push(options.signal);
@@ -318,6 +321,10 @@ export class RestrictedWorkflowRuntime {
 	}
 
 	async execute(): Promise<WorkflowRuntimeResult> {
+		if (this.#durationExhaustedAtStart) {
+			throw new WorkflowRuntimeError("time_limit", `Workflow exceeded its ${this.#limits.durationMs}ms time limit`);
+		}
+		if (this.#signal.aborted) throw this.#signalError();
 		const parsed = parseWorkflowSource(this.#sourceText);
 		if (parsed.violations.length > 0) {
 			throw new WorkflowRuntimeError("permission_denied", parsed.violations.join("; "));

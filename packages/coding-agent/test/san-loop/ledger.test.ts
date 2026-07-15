@@ -93,6 +93,55 @@ describe("San loop ledger", () => {
 		expect(ledger.events.map(event => event.data.eventId)).toEqual(["evt_1", "evt_2"]);
 	});
 
+	test("keeps the highest revision when a stale snapshot is appended later", () => {
+		const session = SessionManager.inMemory();
+		const initial = createSanLoopRunSnapshot({
+			sessionId: "session-1",
+			objective: "Keep ledger monotonic",
+			runId: "loop_revision",
+			createdAt: "2026-07-01T00:00:00.000Z",
+		});
+		const newest = {
+			...updateSanLoopRunSnapshot(initial, {
+				status: "passed",
+				updatedAt: "2026-07-01T00:03:00.000Z",
+				finalVerdict: "pass",
+			}),
+			revision: 3,
+		};
+		const stale = {
+			...updateSanLoopRunSnapshot(initial, {
+				status: "working",
+				updatedAt: "2026-07-01T00:02:00.000Z",
+			}),
+			revision: 2,
+		};
+		appendSanLoopRunSnapshot(session, initial);
+		appendSanLoopRunSnapshot(session, newest);
+		appendSanLoopRunSnapshot(session, stale);
+
+		expect(findLatestSanLoopRun(session.getEntries(), initial.runId)?.data).toMatchObject({
+			revision: 3,
+			status: "passed",
+			finalVerdict: "pass",
+		});
+	});
+
+	test("rejects reusing a run id from a terminal historical run", () => {
+		const session = SessionManager.inMemory();
+		recordSanLoopRunCreated(session, {
+			objective: "First lifecycle",
+			runId: "loop_duplicate",
+		});
+
+		expect(() =>
+			recordSanLoopRunCreated(session, {
+				objective: "Second lifecycle",
+				runId: "loop_duplicate",
+			}),
+		).toThrow("run id already exists");
+	});
+
 	test("records orchestrator transitions as run snapshots plus events", () => {
 		const session = SessionManager.inMemory();
 		const initial = createSanLoopRunSnapshot({

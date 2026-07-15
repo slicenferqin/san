@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San v0.5 任务路由与模型策略规划</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1d2733;
+      --muted: #607080;
+      --line: #d9e1e8;
+      --soft: #f4f7fa;
+      --blue: #1f5f8b;
+      --blue-soft: #eaf3f9;
+      --green: #2e6d52;
+      --amber: #8b5d1f;
+      --red: #9b3e3e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #eef2f5;
+      color: var(--ink);
+      font: 15px/1.72 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", sans-serif;
+    }
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 48px 28px 72px;
+    }
+    article {
+      background: #fff;
+      border: 1px solid var(--line);
+      box-shadow: 0 12px 34px rgba(29, 39, 51, .07);
+      padding: 48px 58px 64px;
+    }
+    h1, h2, h3 { line-height: 1.25; letter-spacing: -.02em; }
+    h1 { margin: 0 0 12px; font-size: 38px; }
+    h2 { margin: 48px 0 16px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 25px; }
+    h3 { margin: 26px 0 8px; font-size: 18px; }
+    p { margin: 10px 0 16px; }
+    .kicker { color: var(--blue); font-size: 12px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+    .lede { max-width: 850px; color: #344452; font-size: 19px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0 32px; }
+    .tag { border: 1px solid #bfd3e1; border-radius: 999px; color: var(--blue); background: var(--blue-soft); padding: 4px 10px; font-size: 12px; }
+    .callout { margin: 24px 0; padding: 18px 20px; border-left: 4px solid var(--blue); background: var(--blue-soft); }
+    .callout strong { display: block; margin-bottom: 4px; }
+    .decision { display: grid; grid-template-columns: 125px 1fr; gap: 12px 22px; margin: 20px 0; }
+    .decision dt { color: var(--blue); font-weight: 700; }
+    .decision dd { margin: 0; }
+    table { width: 100%; border-collapse: collapse; margin: 18px 0 24px; }
+    th, td { padding: 11px 12px; border: 1px solid var(--line); vertical-align: top; text-align: left; }
+    th { background: var(--soft); color: #344452; font-weight: 700; }
+    code { padding: 1px 4px; border-radius: 3px; background: #f0f3f5; font: 0.92em ui-monospace, SFMono-Regular, Menlo, monospace; }
+    pre { overflow-x: auto; margin: 16px 0 22px; padding: 17px 19px; background: #18232d; color: #e8eef3; border-radius: 5px; font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    ul, ol { padding-left: 24px; }
+    li { margin: 5px 0; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 20px 0; }
+    .card { padding: 17px; border: 1px solid var(--line); background: #fbfcfd; }
+    .card .label { color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .08em; }
+    .card h3 { margin: 6px 0; }
+    .phase { display: grid; grid-template-columns: 110px 1fr; gap: 14px 22px; padding: 15px 0; border-bottom: 1px solid var(--line); }
+    .phase-id { color: var(--blue); font-weight: 700; }
+    .phase p { margin: 0; }
+    .small { color: var(--muted); font-size: 13px; }
+    footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+    @media (max-width: 760px) {
+      main { padding: 0; }
+      article { padding: 30px 22px 44px; }
+      h1 { font-size: 30px; }
+      .grid { grid-template-columns: 1fr; }
+      .decision, .phase { grid-template-columns: 1fr; gap: 4px; }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <article>
+      <div class="kicker">San Research / 2026-07-15</div>
+      <h1>v0.5 任务路由与模型策略规划</h1>
+      <p class="lede">让 San 根据任务的认知复杂度、上下文规模、操作风险和证据要求选择最低安全配置，并在执行中根据可观察证据升级策略。v0.5 是 0.1–0.4 稳定之后的储备版本，不参与当前基础版本的验收。</p>
+      <div class="meta">
+        <span class="tag">状态：方案储备</span>
+        <span class="tag">默认关闭自动路由</span>
+        <span class="tag">前置：v0.1–v0.4 验收通过</span>
+        <span class="tag">目标：可解释的渐进升级</span>
+      </div>
+
+      <div class="callout">
+        <strong>核心决策</strong>
+        v0.5 不追求一次性准确判断“任务难度”，而是实现“保守初始路由、有限升级、不能静默降级、每次决策可解释”的运行时策略。模型选择不能替代权限、审批、检查和恢复机制。
+      </div>
+
+      <h2>1. 版本边界</h2>
+      <dl class="decision">
+        <dt>纳入</dt>
+        <dd>任务预检、结构化 TaskProfile、确定性路由策略、角色模型解析、执行中升级、成本与延迟预算、路由审计和评估数据。</dd>
+        <dt>不纳入</dt>
+        <dd>通用 AGI 式难度判断、每个 token 动态换模型、自动生成新的 Workflow 类型、Brain 使用独立 LLM、未经审批的高风险副作用。</dd>
+        <dt>前置依赖</dt>
+        <dd>ContextPlan 能稳定提供不同模型所需的上下文；San Loop 和 Workflow 的终态、预算、权限、恢复、交付契约已经可验证；Brain 默认保持低权限和可审查。</dd>
+      </dl>
+
+      <h2>2. 为什么不能只做一个 easy / hard 分类器</h2>
+      <p>任务复杂度不是单一维度。一个“读取文件”的请求可能因为包含密钥或生产配置而具有高风险；一个架构设计请求可能不修改任何文件，却要求高强度推理和证据组织。路由需要关注最低安全配置，而不是抽象的智力评分。</p>
+      <table>
+        <thead><tr><th>维度</th><th>含义</th><th>可观察信号</th></tr></thead>
+        <tbody>
+          <tr><td>认知复杂度</td><td>需要多少推理、权衡和跨文件理解</td><td>设计、审计、故障归因、需求歧义</td></tr>
+          <tr><td>上下文负载</td><td>需要多大的项目工作集</td><td>文件数量、依赖范围、历史和工具尾部</td></tr>
+          <tr><td>操作风险</td><td>错误的实际影响</td><td>只读、修改、删除、发布、外部系统</td></tr>
+          <tr><td>可逆性</td><td>失败后能否安全恢复</td><td>补丁、提交、迁移、不可逆命令</td></tr>
+          <tr><td>不确定性</td><td>任务是否可能在执行中改变形态</td><td>用户描述不清、失败重试、范围扩大</td></tr>
+          <tr><td>证据要求</td><td>完成结论需要什么证明</td><td>无证明、测试、审查、审批、交付确认</td></tr>
+        </tbody>
+      </table>
+
+      <h2>3. 目标运行时架构</h2>
+      <pre>用户任务
+  │
+  ├─ Preflight：任务文本 + 最小仓库/会话状态 + 权限与预算
+  │
+  ├─ TaskProfile：意图、风险、范围、可逆性、不确定性、证据要求
+  │
+  ├─ RoutePolicy：计算最低模型、effort、工具能力、模式和预算
+  │
+  ├─ Execution：solo / team / council 或 Workflow 执行
+  │       │
+  │       └─ 观察证据：测试失败、范围扩大、超时、重复修复、证据不足
+  │
+  ├─ Escalation：只允许向更高能力或更高约束升级
+  │
+  └─ Result：结果、证据、实际模型、成本、升级原因和交付状态</pre>
+      <p>模型路由属于控制平面，具体 Agent、San Loop 和 Workflow 属于执行平面。控制平面只决定最低安全配置，不直接绕过执行平面的权限和终态规则。</p>
+
+      <h2>4. TaskProfile 契约</h2>
+      <p>第一版不要求分类器完全理解任务，只要求输出可校验、可持久化、可回放的结构化结果。未知值必须显式表示为 <code>unknown</code>，不能被静默当作低风险。</p>
+      <pre>{
+  "intent": "chat | read | search | edit | test | plan | audit | release",
+  "risk": "low | medium | high | unknown",
+  "scope": "turn | file | module | repo | external",
+  "reversibility": "reversible | recoverable | irreversible | unknown",
+  "uncertainty": "low | medium | high | unknown",
+  "evidence": "none | tests | review | approval | delivery_ack",
+  "toolNeeds": ["read", "search", "edit", "shell", "workflow"],
+  "budgetClass": "small | normal | large",
+  "signals": ["cross_file_dependency", "write_path", "test_failure"],
+  "confidence": 0.0,
+  "source": "rule | triage_model | user_override"
+}</pre>
+      <p class="small">TaskProfile 是路由输入，不是对用户任务的最终结论。执行中允许追加信号并触发升级，但不得覆盖原始任务和用户明确的约束。</p>
+
+      <h2>5. 初始路由层级</h2>
+      <div class="grid">
+        <section class="card"><div class="label">R0 / DIRECT</div><h3>无模型或轻量响应</h3><p>问候、静态帮助、明确的只读信息、确定性格式化。无写权限，无复杂工具链。</p></section>
+        <section class="card"><div class="label">R1 / FAST</div><h3>快速通道</h3><p>文件搜索、简单读取、单文件解释、低风险查询。使用 smol/fast 角色和小预算。</p></section>
+        <section class="card"><div class="label">R2 / CODE</div><h3>编码通道</h3><p>普通代码修改、测试修复、局部重构。使用性价比高且具备编码能力的 task/default 角色。</p></section>
+        <section class="card"><div class="label">R3 / DEEP</div><h3>深度推理通道</h3><p>方案设计、跨模块分析、审计、复杂故障定位。使用 slow/plan/advisor 等强角色，并要求明确证据。</p></section>
+        <section class="card"><div class="label">R4 / CONTROLLED</div><h3>受控执行通道</h3><p>迁移、删除、发布、外部系统操作。强模型只是必要条件，还必须进入 Workflow、审批和交付确认。</p></section>
+        <section class="card"><div class="label">ESCALATE</div><h3>不确定升级</h3><p>无法确定风险时提升约束或请求确认，不把未知状态自动降成 R0/R1。</p></section>
+      </div>
+
+      <h2>6. 路由策略与升级规则</h2>
+      <h3>6.1 先确定安全下限，再选择模型</h3>
+      <p>路由结果至少包含模型角色、effort、工具能力、最大 token、最大 wall-clock、执行模式和是否需要审批。模型解析必须使用精确的 <code>provider/id</code>，不允许持久配置静默模糊匹配。</p>
+      <table>
+        <thead><tr><th>场景</th><th>默认路线</th><th>最低证据</th><th>不可省略的约束</th></tr></thead>
+        <tbody>
+          <tr><td>简单问候</td><td>R0/R1</td><td>无</td><td>不启动复杂上下文或多 Agent</td></tr>
+          <tr><td>文件查询/读取</td><td>R1</td><td>路径和读取结果</td><td>只读能力；发现跨模块问题再升级</td></tr>
+          <tr><td>局部编码</td><td>R2</td><td>差异 + 定向测试</td><td>修改范围、工具权限和预算受限</td></tr>
+          <tr><td>方案/审计</td><td>R3</td><td>引用、检查或审查记录</td><td>ContextPlan；必要时 team/council</td></tr>
+          <tr><td>生产副作用</td><td>R4</td><td>审批 + 结果交付确认</td><td>Workflow 隔离、可恢复、不可绕过</td></tr>
+        </tbody>
+      </table>
+
+      <h3>6.2 只允许有证据的向上升级</h3>
+      <ul>
+        <li>测试失败、类型检查失败或 lint 失败；</li>
+        <li>修改范围超过初始文件/模块边界；</li>
+        <li>连续重复修复、工具失败或 provider 输出无效；</li>
+        <li>需要读取新的历史、依赖或跨模块上下文；</li>
+        <li>任务从只读变成写入，或从可逆变成不可逆；</li>
+        <li>模型无法满足证据要求，或用户目标仍然存在高不确定性。</li>
+      </ul>
+      <p>同一 turn 内不做无界模型振荡；升级在 turn、phase 或 role 边界发生。除非用户明确覆盖，否则不自动降级到更弱模型。每次升级必须记录触发信号、原路线、新路线和新增预算。</p>
+
+      <h2>7. 与现有 San 版本的关系</h2>
+      <table>
+        <thead><tr><th>基础版本</th><th>v0.5 的消费方式</th><th>前置要求</th></tr></thead>
+        <tbody>
+          <tr><td>v0.1 Context Steady</td><td>为不同路线提供一致的上下文工作集和 token 预算</td><td>计划、provider wire、压缩、tool loop 的行为一致</td></tr>
+          <tr><td>v0.2 San Loop</td><td>根据风险选择 solo/team/council，并绑定 commander/worker/supervisor/oracle</td><td>终态、取消、检查、预算、恢复可靠</td></tr>
+          <tr><td>v0.3 Brain</td><td>只提供低权限、作用域明确的记忆候选和 recall</td><td>捕获、分类、审查、撤销和作用域隔离可靠</td></tr>
+          <tr><td>v0.4 Workflow</td><td>承接 R4 的审批、执行、写入、恢复和交付</td><td>重放、硬预算、写入隔离和 delivery ack 可靠</td></tr>
+        </tbody>
+      </table>
+      <p>v0.5 不应该再创建一套独立的 run、budget 或 capability 状态。它只消费各基础版本已经稳定的契约。</p>
+
+      <h2>8. 模型角色治理</h2>
+      <p>普通用户只需要选择当前模型；自动路由使用现有角色的正式继承表。角色策略和当前会话模型必须分开，显式 artifact model 仍然可以覆盖默认路由，但最终解析结果必须展示在日志、审批和诊断中。</p>
+      <table>
+        <thead><tr><th>角色</th><th>用途</th><th>v0.5 约束</th></tr></thead>
+        <tbody>
+          <tr><td><code>smol</code></td><td>预检、简单查询、digest 等低成本工作</td><td>不能执行高风险写操作</td></tr>
+          <tr><td><code>default/task</code></td><td>普通会话和编码执行</td><td>遵守 task profile 的工具与预算边界</td></tr>
+          <tr><td><code>slow/plan</code></td><td>复杂计划、深度分析和审计</td><td>要求更完整的上下文和证据输出</td></tr>
+          <tr><td><code>advisor</code></td><td>监督、复核和风险判断</td><td>输出建议或检查结论，不直接获得额外写权限</td></tr>
+          <tr><td><code>oracle</code></td><td>高风险场景的独立意见</td><td>保持 advisory；不能单独改变终态</td></tr>
+        </tbody>
+      </table>
+
+      <h2>9. 实施阶段</h2>
+      <div class="phase"><div class="phase-id">P0 / CONTRACT</div><div><strong>冻结 TaskProfile、RouteDecision 和 EscalationEvent</strong><p>建立 fixture、版本字段、未知值语义、审计字段和与 0.1–0.4 的兼容边界。此阶段不改变默认运行行为。</p></div></div>
+      <div class="phase"><div class="phase-id">P1 / RULES</div><div><strong>确定性规则路由</strong><p>先覆盖明显的 chat/read/search/edit/plan/audit/release，使用现有模型角色和 effort 解析。规则必须能在没有 LLM 的情况下运行。</p></div></div>
+      <div class="phase"><div class="phase-id">P2 / ESCALATION</div><div><strong>基于证据的向上升级</strong><p>把测试失败、范围扩大、工具失败、上下文不足、预算压力和副作用变化接入统一升级器；先不做自动降级。</p></div></div>
+      <div class="phase"><div class="phase-id">P3 / EXPERIENCE</div><div><strong>展示和诊断</strong><p>在状态、日志和审批界面显示初始路线、最终模型、effort、预算、升级原因和证据缺口。普通用户不需要管理角色图。</p></div></div>
+      <div class="phase"><div class="phase-id">P4 / DOGFOOD</div><div><strong>受控自动化</strong><p>使用固定任务集比较人工路由、确定性路由和自动升级，记录质量、成本、延迟、错误率和过度升级率。只有数据稳定后才考虑默认开启。</p></div></div>
+
+      <h2>10. 验收门禁</h2>
+      <div class="grid">
+        <section class="card"><div class="label">SAFETY</div><h3>不能错误放权</h3><p>R0/R1 不能获得高风险工具；R4 不能绕过 Workflow、审批和交付确认。</p></section>
+        <section class="card"><div class="label">QUALITY</div><h3>不能静默降级</h3><p>不确定、失败或证据不足时，必须升级、暂停或明确报告不足。</p></section>
+        <section class="card"><div class="label">ECONOMICS</div><h3>成本可解释</h3><p>记录预算、实际 usage、升级次数、耗时和 fallback；不能只统计内部估算。</p></section>
+        <section class="card"><div class="label">REPLAY</div><h3>决策可回放</h3><p>相同 TaskProfile、策略版本和输入条件应得到可解释且可比较的路由结果。</p></section>
+        <section class="card"><div class="label">REGRESSION</div><h3>不破坏基础版本</h3><p>0.5 开关关闭时，0.1–0.4 的既有行为和验收路径保持不变。</p></section>
+        <section class="card"><div class="label">EVIDENCE</div><h3>基准而非印象</h3><p>至少使用固定任务集、多轮重复和真实 provider 记录，不能用单次 dogfood 宣布成功。</p></section>
+      </div>
+
+      <h2>11. 主要风险与暂定决策</h2>
+      <table>
+        <thead><tr><th>风险</th><th>暂定决策</th></tr></thead>
+        <tbody>
+          <tr><td>分类器误判简单任务</td><td>规则优先；不确定时保守升级，不让轻量模型获得超出能力的权限。</td></tr>
+          <tr><td>分类器误判复杂任务</td><td>用执行中证据升级；测试失败和范围扩大必须成为硬触发器。</td></tr>
+          <tr><td>模型在不同 provider 上能力不一致</td><td>按 capability 和 effort 解析，不按模型名称或价格推断能力。</td></tr>
+          <tr><td>频繁切换造成延迟和上下文损耗</td><td>只在 phase/role 边界切换，并保留统一 ContextPlan 和路由事件。</td></tr>
+          <tr><td>自动路由掩盖用户意图</td><td>保留 user override；显式模型、模式和 Workflow 设置优先于自动策略。</td></tr>
+          <tr><td>过早默认开启</td><td>先运行 review-only/diagnostic-only，经过固定 benchmark 后再开放默认自动升级。</td></tr>
+        </tbody>
+      </table>
+
+      <h2>12. 结论</h2>
+      <p>San v0.5 的核心不是“再加一个聪明的 Agent”，而是建立一个可控制的路由器：它知道自己的判断可能不可靠，能从低成本配置开始，能根据证据升级，能把预算和权限一起升级，并且能解释最终为什么使用了某个模型。</p>
+      <p>这份规划在 0.1–0.4 稳定前只作为研究和验收储备，不改变当前版本实现边界。近期工程重点仍然是 Context Steady 的真实验收和基础运行时契约收敛。</p>
+
+      <footer>
+        关联实现：<code>packages/coding-agent/src/context-steady</code>、<code>packages/coding-agent/src/san-loop</code>、<code>packages/coding-agent/src/brain</code>、<code>packages/coding-agent/src/workflows</code>。<br>
+        关联方案：San 模型路由与角色配置治理方案（2026-07-13）。
+      </footer>
+    </article>
+  </main>
+</body>
+</html>

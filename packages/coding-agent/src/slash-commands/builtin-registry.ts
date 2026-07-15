@@ -148,6 +148,13 @@ function formatSanLoopRunResult(result: RunSanLoopResult): string {
 	].join("\n");
 }
 
+const SAN_LOOP_DISABLED_MESSAGE =
+	"San v0.2 execution loop is disabled. Enable san.executionLoop.enabled before starting a run.";
+
+function sanLoopEnabled(settingsSource: Settings): boolean {
+	return settingsSource.get("san.executionLoop.enabled") === true;
+}
+
 function sanLoopMaxTurnsForMode(settingsSource: Settings, mode: SanLoopMode): number {
 	switch (mode) {
 		case "solo":
@@ -174,6 +181,7 @@ async function runConfiguredSanLoop(options: {
 	sessionManager: SessionManager;
 	cwd: string;
 }): Promise<RunSanLoopResult> {
+	if (!sanLoopEnabled(options.settings)) throw new Error(SAN_LOOP_DISABLED_MESSAGE);
 	const checks = options.settings.get("san.executionLoop.checks.enabled")
 		? await discoverSanLoopChecks({
 				cwd: options.cwd,
@@ -212,6 +220,10 @@ function createSanLoopModeShortcut(mode: SanLoopMode): SlashCommandSpec {
 				await runtime.output(usageText);
 				return commandConsumed();
 			}
+			if (!sanLoopEnabled(runtime.settings)) {
+				await runtime.output(SAN_LOOP_DISABLED_MESSAGE);
+				return commandConsumed();
+			}
 			const result = await runConfiguredSanLoop({
 				mode,
 				objective,
@@ -227,6 +239,11 @@ function createSanLoopModeShortcut(mode: SanLoopMode): SlashCommandSpec {
 			const objective = command.args.trim();
 			if (!objective) {
 				runtime.ctx.showStatus(usageText);
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			if (!sanLoopEnabled(runtime.ctx.settings)) {
+				runtime.ctx.showStatus(SAN_LOOP_DISABLED_MESSAGE, { dim: false });
 				runtime.ctx.editor.setText("");
 				return;
 			}
@@ -1693,6 +1710,10 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			const parsed = parseSanLoopArgs(command.args);
 			if ("error" in parsed) return usage(parsed.error, runtime);
 			if (parsed.action === "run") {
+				if (!sanLoopEnabled(runtime.settings)) {
+					await runtime.output(SAN_LOOP_DISABLED_MESSAGE);
+					return commandConsumed();
+				}
 				const mode = parsed.mode ?? runtime.settings.get("san.executionLoop.defaultMode");
 				const result = await runConfiguredSanLoop({
 					mode,
@@ -1722,6 +1743,11 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 			if (parsed.action === "run") {
+				if (!sanLoopEnabled(runtime.ctx.settings)) {
+					runtime.ctx.showStatus(SAN_LOOP_DISABLED_MESSAGE, { dim: false });
+					runtime.ctx.editor.setText("");
+					return;
+				}
 				runtime.ctx.showStatus("Running San execution loop...", { dim: false });
 				try {
 					const mode = parsed.mode ?? runtime.ctx.settings.get("san.executionLoop.defaultMode");

@@ -16,6 +16,7 @@ import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { CustomEntry, SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { resolveRuntimeScopeIdentity } from "../../src/identity";
 
 const failureToolSchema = z.object({ reason: z.string() });
 
@@ -60,19 +61,24 @@ async function createHarness(contextSteadyEnabled: boolean): Promise<Harness> {
 		responses: [failureCall("focused verification failed"), { content: ["Done"], stopReason: "stop" }],
 	});
 	const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
-	const settings = Settings.isolated({
-		"compaction.enabled": false,
-		"retry.enabled": false,
-		"todo.enabled": false,
-		"todo.reminders": false,
-		"san.contextSteady.enabled": contextSteadyEnabled,
-		"san.contextSteady.digest.enabled": true,
-		"san.contextSteady.digest.persistFallback": true,
-		"san.contextSteady.digest.llm.enabled": false,
-		"san.brain.enabled": true,
-		"san.brain.capture.enabled": true,
-		"san.brain.capture.maxCandidatesPerTurn": 5,
-		"san.brain.capture.minConfidence": 0.72,
+	const settings = await Settings.loadIsolated({
+		cwd: tempDir.path(),
+		agentDir: tempDir.path(),
+		inMemory: true,
+		overrides: {
+			"compaction.enabled": false,
+			"retry.enabled": false,
+			"todo.enabled": false,
+			"todo.reminders": false,
+			"san.contextSteady.enabled": contextSteadyEnabled,
+			"san.contextSteady.digest.enabled": true,
+			"san.contextSteady.digest.persistFallback": true,
+			"san.contextSteady.digest.llm.enabled": false,
+			"san.brain.enabled": true,
+			"san.brain.capture.enabled": true,
+			"san.brain.capture.maxCandidatesPerTurn": 5,
+			"san.brain.capture.minConfidence": 0.72,
+		},
 	});
 	settings.setModelRole("default", `${mock.provider}/${mock.id}`);
 	authStorage.setRuntimeApiKey(mock.provider, "test-key");
@@ -107,7 +113,7 @@ afterEach(async () => {
 
 describe("San Brain M2 AgentSession capture lifecycle", () => {
 	it("persists the digest before its candidates and drains capture before prompt resolves", async () => {
-		const { session, sessionManager } = await createHarness(true);
+		const { session, sessionManager, tempDir } = await createHarness(true);
 
 		await session.prompt("Run the failure probe and finish.");
 
@@ -123,6 +129,12 @@ describe("San Brain M2 AgentSession capture lifecycle", () => {
 
 		const candidate = candidateEntry?.data as SanBrainExperienceCandidate;
 		expect(candidate.type).toBe("failure_posture");
+		const identity = await resolveRuntimeScopeIdentity({
+			agentDir: tempDir.path(),
+			cwd: sessionManager.getCwd(),
+			sessionId: sessionManager.getSessionId(),
+		});
+		expect(candidate.scope).toEqual({ kind: "project", key: identity.projectKey, resolverVersion: 1 });
 		expect(candidate.evidence[0]).toMatchObject({
 			sourceMode: "turn_digest",
 			digestEntryIds: [digestEntry?.id],
@@ -130,7 +142,7 @@ describe("San Brain M2 AgentSession capture lifecycle", () => {
 	});
 
 	it("captures from a deterministic message-span fallback without persisting a digest", async () => {
-		const { session, sessionManager } = await createHarness(false);
+		const { session, sessionManager, tempDir } = await createHarness(false);
 
 		await session.prompt("Run the failure probe and finish.");
 
@@ -139,6 +151,12 @@ describe("San Brain M2 AgentSession capture lifecycle", () => {
 		const candidateEntry = entries.find(entry => entry.customType === BRAIN_EXPERIENCE_CANDIDATE_CUSTOM_TYPE);
 		expect(candidateEntry).toBeDefined();
 		const candidate = candidateEntry?.data as SanBrainExperienceCandidate;
+		const identity = await resolveRuntimeScopeIdentity({
+			agentDir: tempDir.path(),
+			cwd: sessionManager.getCwd(),
+			sessionId: sessionManager.getSessionId(),
+		});
+		expect(candidate.scope).toEqual({ kind: "project", key: identity.projectKey, resolverVersion: 1 });
 		expect(candidate.evidence[0]).toMatchObject({
 			sourceMode: "message_span_fallback",
 			digestEntryIds: [],

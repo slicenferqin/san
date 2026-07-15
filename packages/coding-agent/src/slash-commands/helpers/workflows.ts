@@ -97,8 +97,9 @@ function observeRun(
 ): void {
 	void handle.completion
 		.then(async () => {
-			await output(service.deliverCompletedRun(handle.runId));
-			service.acknowledgeCompletedRunDelivery(handle.runId);
+			const prepared = service.prepareCompletedRunDelivery(handle.runId);
+			await output(prepared.text);
+			if (prepared.receipt) service.acknowledgeDeliveryReceipt(prepared.receipt);
 		})
 		.catch(async error => {
 			await output(`Workflow ${handle.runId} completion error: ${sanitizeError(error)}`);
@@ -119,7 +120,7 @@ export async function handleWorkflowCommand(
 	const state = workflowSession(runtime);
 	state.policy.allowIsolatedWrite = runtime.settings.get("san.workflows.allowIsolatedWrite");
 	try {
-		const text = await state.service.execute(command.name === "workflows" ? "list" : command.args, {
+		const prepared = await state.service.prepareCommandOutput(command.name === "workflows" ? "list" : command.args, {
 			cwd: runtime.cwd,
 			taskRef: workflowTaskRef(runtime),
 			allowIsolatedWrite: state.policy.allowIsolatedWrite,
@@ -128,8 +129,8 @@ export async function handleWorkflowCommand(
 			generateManagedDescriptor: sop => runtime.session.generateManagedSopWorkflowDraft(sop),
 			observeRun: handle => observeRun(handle, state.service, runtime.output),
 		});
-		await runtime.output(text);
-		state.service.acknowledgePreparedDeliveries();
+		await runtime.output(prepared.text);
+		state.service.acknowledgeDeliveryReceipts(prepared.deliveryReceipts);
 	} catch (error) {
 		await runtime.output(`Workflow error: ${sanitizeError(error)}`);
 	}
