@@ -10,6 +10,7 @@ export * from "./extract";
 export * from "./ledger";
 export * from "./projection";
 export * from "./projection-plan";
+export * from "./rebuild";
 export * from "./recall";
 export * from "./render";
 export * from "./runtime-policy";

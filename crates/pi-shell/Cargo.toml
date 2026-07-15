@@ -2,11 +2,11 @@
 name = "pi-shell"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license = "MIT AND Apache-2.0"
 authors.workspace = true
 repository.workspace = true
-# Portions of the minimizer adapt MIT-licensed algorithms from rtk-ai/rtk.
-# See NOTICE at this crate root (packaged on publish).
+# Portions of the minimizer adapt Apache-2.0-licensed RTK components and
+# MIT-licensed snip components. See the crate-root NOTICE and license files.
 
 [lints]
 workspace = true

@@ -127,8 +127,10 @@ function createProviderTab(providerId: string): ProviderTabState {
 	return { id: providerId, label: formatProviderTabLabel(providerId), providerId };
 }
 const SESSION_MODEL_PICKER_HINT =
-	"Session model only. Enter selects and closes. Use /model roles for default/smol/plan/task bindings.";
+	"Session model. Enter selects; thinking models open effort next. Esc cancels. /model roles for bindings. /effort or Shift+Tab later.";
 const ROLE_MODEL_PICKER_HINT = "Role assignment mode. Enter opens role/thinking menu. Session switch: /model or Alt+M.";
+const SESSION_THINKING_PICKER_HINT =
+	"Session effort for this model. Enter confirms. Esc returns to models. Later: /effort or Shift+Tab.";
 
 /**
  * Component that renders a model selector with provider tabs and context menu.
@@ -177,11 +179,12 @@ export class ModelSelectorComponent extends Container {
 	#refreshSpinnerFrame: number = 0;
 	#refreshSpinnerInterval?: Timer;
 
-	// Context menu state
+	// Context menu state. Session mode reuses the thinking step after a model pick.
 	#isMenuOpen: boolean = false;
 	#menuSelectedIndex: number = 0;
-	#menuStep: "role" | "thinking" = "role";
+	#menuStep: "role" | "thinking" | "sessionThinking" = "role";
 	#menuSelectedRole: string | null = null;
+	#sessionThinkingModel: ModelItem | undefined;
 
 	constructor(
 		tui: TUI,
@@ -262,7 +265,7 @@ export class ModelSelectorComponent extends Container {
 		this.#searchInput.onSubmit = () => {
 			const selected = this.#getSelectedItem();
 			if (!selected || this.#isItemDisabled(selected)) return;
-			if (this.#temporaryOnly || this.#directSelect) this.#handleSelect(selected, null);
+			if (this.#temporaryOnly || this.#directSelect) this.#beginSessionSelect(selected);
 			else this.#openMenu();
 		};
 		this.addChild(this.#searchInput);
@@ -1005,6 +1008,10 @@ export class ModelSelectorComponent extends Container {
 		return [ThinkingLevel.Inherit, ThinkingLevel.Off, AUTO_THINKING, ...getSupportedEfforts(model)];
 	}
 
+	#getSessionThinkingLevelsForModel(model: Model): ReadonlyArray<ConfiguredThinkingLevel> {
+		return [ThinkingLevel.Off, AUTO_THINKING, ...getSupportedEfforts(model)];
+	}
+
 	#getCurrentRoleThinkingLevel(role: string): ConfiguredThinkingLevel {
 		return this.#roles[role]?.thinkingLevel ?? ThinkingLevel.Inherit;
 	}
@@ -1040,6 +1047,7 @@ export class ModelSelectorComponent extends Container {
 		this.#isMenuOpen = true;
 		this.#menuStep = "role";
 		this.#menuSelectedRole = null;
+		this.#sessionThinkingModel = undefined;
 		this.#menuSelectedIndex = this.#coerceMenuSelectedIndex(0);
 		// Collapse the model list while the action/thinking menu is open so the
 		// menu owns the full viewport instead of stacking below a now-irrelevant
@@ -1048,10 +1056,33 @@ export class ModelSelectorComponent extends Container {
 		this.#updateMenu();
 	}
 
+	#beginSessionSelect(item: ModelItem): void {
+		if (this.#isItemDisabled(item)) return;
+		if (!item.model.reasoning) {
+			this.#handleSelect(item, null);
+			return;
+		}
+		this.#isMenuOpen = true;
+		this.#menuStep = "sessionThinking";
+		this.#menuSelectedRole = null;
+		this.#sessionThinkingModel = item;
+		const options = this.#getSessionThinkingLevelsForModel(item.model);
+		const preferred =
+			parseConfiguredThinkingLevel(this.#settings.get("defaultThinkingLevel")) ??
+			item.model.thinking?.defaultLevel ??
+			AUTO_THINKING;
+		const foundIndex = options.indexOf(preferred);
+		this.#menuSelectedIndex = foundIndex >= 0 ? foundIndex : options.indexOf(AUTO_THINKING);
+		if (this.#menuSelectedIndex < 0) this.#menuSelectedIndex = 0;
+		this.#listContainer.clear();
+		this.#updateMenu();
+	}
+
 	#closeMenu(): void {
 		this.#isMenuOpen = false;
 		this.#menuStep = "role";
 		this.#menuSelectedRole = null;
+		this.#sessionThinkingModel = undefined;
 		this.#menuContainer.clear();
 		// Restore the model list that #openMenu collapsed.
 		this.#updateList();
@@ -1060,16 +1091,25 @@ export class ModelSelectorComponent extends Container {
 	#updateMenu(): void {
 		this.#menuContainer.clear();
 
-		const selectedItem = this.#getSelectedItem();
+		const isSessionThinking = this.#menuStep === "sessionThinking";
+		const selectedItem = isSessionThinking ? this.#sessionThinkingModel : this.#getSelectedItem();
 		if (!selectedItem) return;
 
-		const showingThinking = this.#menuStep === "thinking" && this.#menuSelectedRole !== null;
-		const thinkingOptions = showingThinking ? this.#getThinkingLevelsForModel(selectedItem.model) : [];
+		const showingThinking = isSessionThinking || (this.#menuStep === "thinking" && this.#menuSelectedRole !== null);
+		const thinkingOptions = showingThinking
+			? isSessionThinking
+				? this.#getSessionThinkingLevelsForModel(selectedItem.model)
+				: this.#getThinkingLevelsForModel(selectedItem.model)
+			: [];
 		const optionLines = showingThinking
 			? thinkingOptions.map((thinkingLevel, index) => {
 					const prefix = index === this.#menuSelectedIndex ? `  ${theme.nav.cursor} ` : "    ";
-					const label = getConfiguredThinkingLevelMetadata(thinkingLevel).label;
-					return `${prefix}${label}`;
+					const meta = getConfiguredThinkingLevelMetadata(thinkingLevel);
+					const detail =
+						thinkingLevel === ThinkingLevel.Inherit
+							? meta.label
+							: `${meta.label}${meta.description ? ` — ${meta.description}` : ""}`;
+					return `${prefix}${detail}`;
 				})
 			: this.#menuRoleActions.map((action, index) => {
 					const prefix = index === this.#menuSelectedIndex ? `  ${theme.nav.cursor} ` : "    ";
@@ -1077,11 +1117,16 @@ export class ModelSelectorComponent extends Container {
 				});
 
 		const selectedRoleName = this.#menuSelectedRole ? getRoleInfo(this.#menuSelectedRole, this.#settings).name : "";
-		const headerText =
-			showingThinking && this.#menuSelectedRole
+		const headerText = isSessionThinking
+			? `  Effort for session: ${selectedItem.id}`
+			: showingThinking && this.#menuSelectedRole
 				? `  Thinking for: ${selectedRoleName} (${selectedItem.id})`
 				: `  Action for: ${selectedItem.id}`;
-		const hintText = showingThinking ? "  Enter: confirm  Esc: back" : "  Enter: continue  Esc: cancel";
+		const hintText = isSessionThinking
+			? "  Enter: confirm  Esc: back to models"
+			: showingThinking
+				? "  Enter: confirm  Esc: back"
+				: "  Enter: continue  Esc: cancel";
 		// Window the option list so a long action/thinking menu scrolls inside the
 		// viewport instead of running off the bottom of the screen.
 		const maxVisible = this.#getMenuVisibleCount(optionLines.length);
@@ -1100,7 +1145,12 @@ export class ModelSelectorComponent extends Container {
 
 		this.#menuContainer.addChild(new Spacer(1));
 		this.#menuContainer.addChild(new Text(theme.fg("border", theme.boxRound.horizontal.repeat(menuWidth)), 0, 0));
-		if (showingThinking && this.#menuSelectedRole) {
+		if (isSessionThinking) {
+			this.#menuContainer.addChild(
+				new Text(theme.fg("text", `  Effort for session: ${theme.bold(selectedItem.id)}`), 0, 0),
+			);
+			this.#menuContainer.addChild(new Text(theme.fg("dim", `  ${SESSION_THINKING_PICKER_HINT}`), 0, 0));
+		} else if (showingThinking && this.#menuSelectedRole) {
 			this.#menuContainer.addChild(
 				new Text(
 					theme.fg("text", `  Thinking for: ${theme.bold(selectedRoleName)} (${theme.bold(selectedItem.id)})`),
@@ -1211,7 +1261,7 @@ export class ModelSelectorComponent extends Container {
 		if (event.leftClick) {
 			this.#selectedIndex = index;
 			if (this.#temporaryOnly || this.#directSelect) {
-				this.#handleSelect(item, null);
+				this.#beginSessionSelect(item);
 			} else {
 				this.#openMenu();
 			}
@@ -1242,13 +1292,12 @@ export class ModelSelectorComponent extends Container {
 			return;
 		}
 
-		// Enter - open context menu or select directly in temporary/direct-select mode
+		// Enter - open context menu or begin session select (effort step when reasoning)
 		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			const selectedItem = this.#getSelectedItem();
 			if (selectedItem && !this.#isItemDisabled(selectedItem)) {
 				if (this.#temporaryOnly || this.#directSelect) {
-					// In temporary/direct-select mode, skip menu and select directly
-					this.#handleSelect(selectedItem, null);
+					this.#beginSessionSelect(selectedItem);
 				} else {
 					this.#openMenu();
 				}
@@ -1267,13 +1316,16 @@ export class ModelSelectorComponent extends Container {
 		this.#filterModels(this.#searchInput.getValue());
 	}
 	#handleMenuInput(keyData: string): void {
-		const selectedItem = this.#getSelectedItem();
+		const isSessionThinking = this.#menuStep === "sessionThinking";
+		const selectedItem = isSessionThinking ? this.#sessionThinkingModel : this.#getSelectedItem();
 		if (!selectedItem || this.#isItemDisabled(selectedItem)) return;
 
 		const optionCount =
-			this.#menuStep === "thinking" && this.#menuSelectedRole !== null
-				? this.#getThinkingLevelsForModel(selectedItem.model).length
-				: this.#menuRoleActions.length;
+			this.#menuStep === "sessionThinking"
+				? this.#getSessionThinkingLevelsForModel(selectedItem.model).length
+				: this.#menuStep === "thinking" && this.#menuSelectedRole !== null
+					? this.#getThinkingLevelsForModel(selectedItem.model).length
+					: this.#menuRoleActions.length;
 		if (optionCount === 0) return;
 
 		if (matchesSelectUp(keyData)) {
@@ -1287,6 +1339,14 @@ export class ModelSelectorComponent extends Container {
 		}
 
 		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
+			if (this.#menuStep === "sessionThinking") {
+				const thinkingOptions = this.#getSessionThinkingLevelsForModel(selectedItem.model);
+				const thinkingLevel = thinkingOptions[this.#menuSelectedIndex];
+				if (!thinkingLevel) return;
+				this.#handleSelect(selectedItem, null, thinkingLevel);
+				this.#closeMenu();
+				return;
+			}
 			if (this.#menuStep === "role") {
 				const action = this.#menuRoleActions[this.#menuSelectedIndex];
 				if (!action) return;
@@ -1312,6 +1372,10 @@ export class ModelSelectorComponent extends Container {
 		}
 
 		if (getKeybindings().matches(keyData, "tui.select.cancel")) {
+			if (this.#menuStep === "sessionThinking") {
+				this.#closeMenu();
+				return;
+			}
 			if (this.#menuStep === "thinking" && this.#menuSelectedRole !== null) {
 				this.#menuStep = "role";
 				const roleIndex = this.#menuRoleActions.findIndex(action => action.role === this.#menuSelectedRole);
@@ -1336,7 +1400,7 @@ export class ModelSelectorComponent extends Container {
 		}
 		// For temporary role, don't save to settings - just notify caller
 		if (role === null) {
-			void this.#selectDirect(item, action);
+			void this.#selectDirect(item, thinkingLevel, action);
 			return;
 		}
 
@@ -1357,11 +1421,15 @@ export class ModelSelectorComponent extends Container {
 		this.#updateList();
 	}
 
-	async #selectDirect(item: ModelItem, action: ModelSelectorAction): Promise<void> {
+	async #selectDirect(
+		item: ModelItem,
+		thinkingLevel: ConfiguredThinkingLevel | undefined,
+		action: ModelSelectorAction,
+	): Promise<void> {
 		if (this.#selectionPending || this.#disposed) return;
 		this.#selectionPending = true;
 		try {
-			await this.#onSelectCallback(item.model, null, undefined, item.selector, action);
+			await this.#onSelectCallback(item.model, null, thinkingLevel, item.selector, action);
 		} catch (error) {
 			if (!this.#disposed) {
 				this.#errorMessage = error instanceof Error ? error.message : String(error);

@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { rebaseToolPathScopeForIsolation } from "../../src/task/isolation-runner";
-import { assertToolArgumentsWithinPathScope } from "../../src/tools/path-scope";
+import { assertToolArgumentsWithinPathScope, authorizeToolArgumentsWithinPathScope } from "../../src/tools/path-scope";
 
 const tempDirs: string[] = [];
 
@@ -69,6 +69,26 @@ describe("Workflow tool path scope", () => {
 		expect(() => assertScoped(scope, "glob", { path: "linked-outside/**/*.txt" })).toThrow(
 			"path resolves outside the approved directory",
 		);
+	});
+
+	it("binds execution to the authorized canonical target when a symlink is replaced", async () => {
+		const { outside, scope } = await fixture();
+		const target = path.join(scope, "target");
+		const linked = path.join(scope, "linked");
+		await Bun.write(path.join(target, "value.txt"), "inside\n");
+		await fs.symlink(target, linked);
+		const authorized = authorizeToolArgumentsWithinPathScope({
+			args: { path: "linked/value.txt" },
+			toolName: "read",
+			cwd: scope,
+			scopeRoot: scope,
+		});
+
+		await fs.unlink(linked);
+		await fs.symlink(outside, linked);
+
+		expect(authorized.path).toBe(path.join(await fs.realpath(target), "value.txt"));
+		expect(await Bun.file(String(authorized.path)).text()).toBe("inside\n");
 	});
 
 	it("rejects URL, internal-resource and attachment aliases from filesystem tools", async () => {

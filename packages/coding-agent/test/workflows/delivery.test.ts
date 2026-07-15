@@ -163,6 +163,7 @@ return await agent("prepare one isolated change");`;
 		expect(applied).toContain("Applied Workflow patch");
 		expect(applied).toContain("write-ready");
 		expect(await Bun.file(path.join(repo, "tracked.txt")).text()).toBe("new\n");
+		service.acknowledgePreparedDeliveries();
 		expect(() => manager.deliverResult(handle.runId)).toThrow("already delivered");
 		await expect(service.execute("apply-write workflow-write-review-1", context)).rejects.toThrow("invalid or stale");
 

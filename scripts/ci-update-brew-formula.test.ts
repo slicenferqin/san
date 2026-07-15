@@ -11,6 +11,10 @@ const SUMS = {
 describe("renderFormula", () => {
 	const formula = renderFormula("15.12.1", SUMS);
 
+	it("declares the combined source and native-component licenses", () => {
+		expect(formula).toContain('license all_of: ["MIT", "Apache-2.0"]');
+	});
+
 	// Regression: bare-binary URLs must opt out of Homebrew's UnpackStrategy.
 	// Without `using: :nounzip` the default CurlDownloadStrategy nests the file
 	// outside the staging CWD, `Dir["san-*"].first` returns `nil`, and

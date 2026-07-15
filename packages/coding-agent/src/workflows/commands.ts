@@ -213,6 +213,7 @@ export class WorkflowCommandService {
 	#challengeIdFactory: () => string;
 	#home: string;
 	#challenges = new Map<string, ApprovalChallenge>();
+	#preparedDeliveries = new Map<string, string>();
 
 	constructor(options: WorkflowCommandServiceOptions) {
 		this.#store = options.store;
@@ -300,10 +301,22 @@ export class WorkflowCommandService {
 				].join("\n"),
 			);
 		}
-		const result = this.#manager.deliverResult(runId);
+		const delivery = this.#manager.prepareResultDelivery(runId);
+		this.#preparedDeliveries.set(runId, delivery.deliveryId);
 		return this.#sanitize(
-			[`Workflow ${run.runId} completed.`, "Result:", JSON.stringify(result, null, 2)].join("\n"),
+			[`Workflow ${run.runId} completed.`, "Result:", JSON.stringify(delivery.result, null, 2)].join("\n"),
 		);
+	}
+
+	acknowledgeCompletedRunDelivery(runId: string): void {
+		const deliveryId = this.#preparedDeliveries.get(runId);
+		if (!deliveryId) return;
+		this.#manager.acknowledgeResultDelivery(runId, deliveryId);
+		this.#preparedDeliveries.delete(runId);
+	}
+
+	acknowledgePreparedDeliveries(): void {
+		for (const runId of [...this.#preparedDeliveries.keys()]) this.acknowledgeCompletedRunDelivery(runId);
 	}
 
 	async #list(context: WorkflowCommandContext): Promise<string> {

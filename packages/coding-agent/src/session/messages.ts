@@ -20,6 +20,7 @@ import type {
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { prompt } from "@oh-my-pi/pi-utils";
+import { BRAIN_STATE_MESSAGE_TYPE } from "../brain/activation";
 import { CONTEXT_PLAN_MESSAGE_TYPE } from "../context-steady/plan-types";
 import userInterjectionTemplate from "../prompts/steering/user-interjection.md" with { type: "text" };
 
@@ -790,7 +791,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 			}
 			case "custom": {
 				if (!isCustomMessageContent(m.content)) return [];
-				if (m.customType === CONTEXT_PLAN_MESSAGE_TYPE) {
+				if (m.customType === CONTEXT_PLAN_MESSAGE_TYPE || m.customType === BRAIN_STATE_MESSAGE_TYPE) {
 					return [
 						{
 							role: "user",

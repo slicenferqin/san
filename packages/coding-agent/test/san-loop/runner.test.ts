@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { rebuildSanLoopLedger, runSanLoop, type SanLoopAgentExecutor, type SanLoopTaskNode } from "../../src/san-loop";
+import {
+	cancelRunningSanLoop,
+	findLatestSanLoopRun,
+	rebuildSanLoopLedger,
+	requestSanLoopAbort,
+	runSanLoop,
+	type SanLoopAgentExecutor,
+	type SanLoopTaskNode,
+	type SanLoopWorkerResultInput,
+} from "../../src/san-loop";
 import { SessionManager } from "../../src/session/session-manager";
 
 function taskNode(id: string): SanLoopTaskNode {
@@ -276,7 +285,133 @@ describe("San loop runner", () => {
 		expect(supervisorSawOracle).toBe(true);
 		expect(result.reviewEntryIds).toHaveLength(2);
 		expect(result.transitions.map(transition => transition.event.actor)).toContain("oracle");
+		expect(result.transitions.filter(transition => transition.event.type === "finalized")).toHaveLength(1);
+		expect(result.transitions.find(transition => transition.event.actor === "oracle")?.event.type).toBe(
+			"review_completed",
+		);
 		const ledger = rebuildSanLoopLedger(session.getEntries());
 		expect(ledger.reviews.map(review => review.data.reviewer)).toEqual(["oracle", "supervisor"]);
+	});
+
+	test("blocks dependent assignments and never invokes Supervisor after a Worker failure", async () => {
+		const session = SessionManager.inMemory();
+		const workerCalls: string[] = [];
+		let supervisorCalls = 0;
+		const first = taskNode("first");
+		const second = { ...taskNode("second"), dependsOn: ["first"] };
+		const executor: SanLoopAgentExecutor = {
+			async commander() {
+				return { plan: { taskGraph: [first, second] } };
+			},
+			async worker(invocation) {
+				workerCalls.push(invocation.assignment.objective);
+				return {
+					assignmentId: invocation.assignment.assignmentId,
+					status: "failed",
+					summary: "The first dependency failed.",
+				};
+			},
+			async supervisor() {
+				supervisorCalls += 1;
+				return { reviewer: "supervisor", verdict: "pass" };
+			},
+		};
+
+		const result = await runSanLoop({
+			sessionManager: session,
+			objective: "Respect DAG failures",
+			runId: "loop_runner_worker_failure",
+			executor,
+		});
+
+		expect(result.run.status).toBe("failed");
+		expect(result.run.finalVerdict).toBe("blocked");
+		expect(workerCalls).toEqual(["Implement first"]);
+		expect(supervisorCalls).toBe(0);
+		expect(result.transitions.map(transition => transition.event.type)).not.toContain("finalized");
+	});
+
+	test("does not retry a non-retryable needs_fix verdict when maxRetries is zero", async () => {
+		const session = SessionManager.inMemory();
+		let commanderCalls = 0;
+		const executor: SanLoopAgentExecutor = {
+			async commander() {
+				commanderCalls += 1;
+				return { plan: { taskGraph: [taskNode("no-retry")] } };
+			},
+			async worker(invocation) {
+				return {
+					assignmentId: invocation.assignment.assignmentId,
+					status: "completed",
+					summary: "Worker completed the attempt.",
+				};
+			},
+			async supervisor() {
+				return { reviewer: "supervisor", verdict: "needs_fix", retryable: false };
+			},
+		};
+
+		const result = await runSanLoop({
+			sessionManager: session,
+			objective: "Honor retry policy",
+			runId: "loop_runner_no_retry",
+			maxRetries: 0,
+			executor,
+		});
+
+		expect(result.run.status).toBe("failed");
+		expect(result.run.retryCount).toBe(0);
+		expect(commanderCalls).toBe(1);
+		expect(result.transitions.map(transition => transition.event.type)).not.toContain("retry_requested");
+	});
+
+	test("propagates cancellation to a running Worker and acknowledges aborted as the final state", async () => {
+		const session = SessionManager.inMemory();
+		const started = Promise.withResolvers<void>();
+		const cancelled = Promise.withResolvers<void>();
+		const executor: SanLoopAgentExecutor = {
+			async commander() {
+				return { plan: { taskGraph: [taskNode("cancel")] } };
+			},
+			worker(invocation) {
+				started.resolve();
+				const signal = invocation.signal;
+				if (!signal) throw new Error("Expected active San loop Worker signal.");
+				const result = Promise.withResolvers<SanLoopWorkerResultInput>();
+				signal.addEventListener(
+					"abort",
+					() => {
+						cancelled.resolve();
+						result.reject(signal.reason);
+					},
+					{ once: true },
+				);
+				return result.promise;
+			},
+			async supervisor() {
+				return { reviewer: "supervisor", verdict: "pass" };
+			},
+		};
+		const running = runSanLoop({
+			sessionManager: session,
+			objective: "Cancel live child",
+			runId: "loop_runner_cancel",
+			executor,
+		});
+		await started.promise;
+		const active = findLatestSanLoopRun(session.getEntries(), "loop_runner_cancel");
+		if (!active) throw new Error("Expected active San loop run before cancellation.");
+		requestSanLoopAbort(session, active.data);
+		const completion = cancelRunningSanLoop(active.data.runId);
+		if (!completion) throw new Error("Expected cancellation registry entry for active San loop run.");
+		await completion;
+
+		const result = await running;
+		await cancelled.promise;
+		expect(result.run.status).toBe("aborted");
+		expect(result.transitions.map(transition => transition.event.type).slice(-1)).toEqual(["aborted"]);
+		const ledger = rebuildSanLoopLedger(session.getEntries());
+		expect(ledger.events.map(event => event.data.type).slice(-2)).toEqual(["abort_requested", "aborted"]);
+		expect(ledger.latestRun?.data.status).toBe("aborted");
 	});
 });

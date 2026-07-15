@@ -511,6 +511,7 @@ const WORKFLOW_EVENT_TYPES: ReadonlySet<WorkflowEventType> = new Set([
 	"run_blocked",
 	"run_completed",
 	"run_failed",
+	"result_delivery_prepared",
 	"result_delivered",
 ]);
 

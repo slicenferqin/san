@@ -69,7 +69,7 @@ export function renderFormula(version: string, sums: Record<string, string>): st
   desc "${DESC}"
   homepage "${HOMEPAGE}"
   version "${version}"
-  license "MIT"
+  license all_of: ["MIT", "Apache-2.0"]
 
   on_macos do
     on_arm do

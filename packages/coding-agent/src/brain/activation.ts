@@ -89,7 +89,8 @@ export interface BuiltSanBrainStatePrelude {
 
 export interface SanBrainInjectionCandidate {
 	source: SanBrainInjectionSource;
-	content: string;
+	content?: string;
+	tokenEstimate?: number;
 }
 
 export interface SanBrainInjectionPlan {
@@ -546,7 +547,10 @@ export function planSanBrainGlobalInjection(
 	for (const candidate of [...candidates].sort(
 		(left, right) => sourcePriority(right.source) - sourcePriority(left.source),
 	)) {
-		const sourceTokens = estimateSanBrainInjectionTokens(candidate.content);
+		const sourceTokens =
+			candidate.tokenEstimate === undefined
+				? estimateSanBrainInjectionTokens(candidate.content ?? "")
+				: clampNonNegativeInteger(candidate.tokenEstimate);
 		const included = tokenEstimate + sourceTokens <= tokenBudget;
 		sourceBudgets.push({
 			source: candidate.source,

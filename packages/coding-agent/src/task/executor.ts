@@ -2228,6 +2228,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				strictToolNames: options.strictToolNames,
 				toolPathScope: options.toolPathScope,
 				maxOutputTokens: hardTokenLimit > 0 ? hardTokenLimit : undefined,
+				maxTotalTokens: hardTokenLimit > 0 ? hardTokenLimit : undefined,
 				systemPrompt: defaultPrompt => {
 					const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
 						agent: agent.systemPrompt,

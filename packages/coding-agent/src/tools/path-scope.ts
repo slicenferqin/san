@@ -57,7 +57,7 @@ function canonicalizeExistingPrefix(candidate: string, toolName: string): string
 	}
 }
 
-function assertLocalPath(rawPath: string, options: ToolPathScopeOptions, scope: ResolvedPathScope): void {
+function canonicalLocalPath(rawPath: string, options: ToolPathScopeOptions, scope: ResolvedPathScope): string {
 	const candidate = rawPath.trim();
 	if (!candidate) throw scopeError(options.toolName, "path must not be empty");
 	if (candidate.includes("\0")) throw scopeError(options.toolName, "path contains an invalid character");
@@ -81,6 +81,7 @@ function assertLocalPath(rawPath: string, options: ToolPathScopeOptions, scope: 
 	if (!isWithin(scope.canonicalRoot, canonical)) {
 		throw scopeError(options.toolName, "path resolves outside the approved directory");
 	}
+	return canonical;
 }
 
 function splitTopLevelPathCandidates(input: string): string[] {
@@ -118,9 +119,20 @@ function searchBasePath(toolName: string, rawPath: string): string {
 
 function assertSearchPath(rawPath: string, options: ToolPathScopeOptions, scope: ResolvedPathScope): void {
 	for (const candidate of splitTopLevelPathCandidates(rawPath)) {
-		assertLocalPath(candidate, options, scope);
-		assertLocalPath(searchBasePath(options.toolName, candidate), options, scope);
+		canonicalLocalPath(candidate, options, scope);
+		canonicalLocalPath(searchBasePath(options.toolName, candidate), options, scope);
 	}
+}
+
+function canonicalSearchPath(rawPath: string, options: ToolPathScopeOptions, scope: ResolvedPathScope): string {
+	const parsed = options.toolName === "glob" ? parseFindPattern(rawPath) : parseSearchPath(rawPath);
+	const basePath = canonicalLocalPath(parsed.basePath, options, scope);
+	if (options.toolName === "glob") {
+		const find = parseFindPattern(rawPath);
+		return find.hasGlob ? path.join(basePath, find.globPattern) : basePath;
+	}
+	const search = parseSearchPath(rawPath);
+	return search.glob ? path.join(basePath, search.glob) : basePath;
 }
 
 function requiredString(args: Record<string, unknown>, key: string, toolName: string): string {
@@ -129,7 +141,7 @@ function requiredString(args: Record<string, unknown>, key: string, toolName: st
 	return value;
 }
 
-function assertEditInput(input: string, options: ToolPathScopeOptions, scope: ResolvedPathScope): void {
+function canonicalEditInput(input: string, options: ToolPathScopeOptions, scope: ResolvedPathScope): string {
 	const paths: string[] = [];
 	for (const line of input.split(/\r?\n/)) {
 		const applyPatch = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/.exec(line.trim());
@@ -140,29 +152,51 @@ function assertEditInput(input: string, options: ToolPathScopeOptions, scope: Re
 		if (hashline?.[1]) paths.push(hashline[1]);
 	}
 	if (paths.length === 0) throw scopeError(options.toolName, "edit input does not expose a verifiable file path");
-	for (const filePath of paths) assertLocalPath(filePath, options, scope);
+	for (const filePath of paths) canonicalLocalPath(filePath, options, scope);
+	return input
+		.split(/(\r?\n)/)
+		.map(line => {
+			const applyPatch = /^(\s*\*\*\* (?:Add|Update|Delete) File:\s*)(.+?)(\s*)$/.exec(line);
+			if (applyPatch?.[2]) {
+				return `${applyPatch[1]}${canonicalLocalPath(applyPatch[2].trim(), options, scope)}${applyPatch[3]}`;
+			}
+			const move = /^(\s*\*\* Move to:\s*)(.+?)(\s*)$/.exec(line);
+			if (move?.[2]) return `${move[1]}${canonicalLocalPath(move[2].trim(), options, scope)}${move[3]}`;
+			const hashline = /^(\s*\[)([^#\r\n]+)((?:#[0-9a-fA-F]{4})?\].*)$/.exec(line);
+			if (hashline?.[2]) {
+				return `${hashline[1]}${canonicalLocalPath(hashline[2], options, scope)}${hashline[3]}`;
+			}
+			return line;
+		})
+		.join("");
 }
 
-function assertEditPaths(options: ToolPathScopeOptions, scope: ResolvedPathScope): void {
-	const pathValue = options.args.path;
-	if (typeof pathValue === "string") assertLocalPath(pathValue, options, scope);
-	const edits = options.args.edits;
+function canonicalEditPaths(
+	options: ToolPathScopeOptions,
+	scope: ResolvedPathScope,
+	args: Record<string, unknown>,
+): void {
+	const pathValue = args.path;
+	if (typeof pathValue === "string") args.path = canonicalLocalPath(pathValue, options, scope);
+	const edits = args.edits;
 	if (Array.isArray(edits)) {
-		for (const edit of edits) {
-			if (!edit || typeof edit !== "object" || Array.isArray(edit)) continue;
-			const rename = (edit as Record<string, unknown>).rename;
-			if (typeof rename === "string") assertLocalPath(rename, options, scope);
-		}
+		args.edits = edits.map(edit => {
+			if (!edit || typeof edit !== "object" || Array.isArray(edit)) return edit;
+			const cloned = { ...(edit as Record<string, unknown>) };
+			const rename = cloned.rename;
+			if (typeof rename === "string") cloned.rename = canonicalLocalPath(rename, options, scope);
+			return cloned;
+		});
 	}
-	const input = options.args.input;
-	if (typeof input === "string") assertEditInput(input, options, scope);
+	const input = args.input;
+	if (typeof input === "string") args.input = canonicalEditInput(input, options, scope);
 	if (typeof pathValue !== "string" && typeof input !== "string") {
 		throw scopeError(options.toolName, "edit call does not expose a verifiable file path");
 	}
 }
 
-/** Enforce a host-owned filesystem root on strict programmatic tool calls. */
-export function assertToolArgumentsWithinPathScope(options: ToolPathScopeOptions): void {
+/** 严格工具调用在授权后改用规范绝对路径，避免后续跟随已被替换的符号链接。 */
+export function authorizeToolArgumentsWithinPathScope(options: ToolPathScopeOptions): Record<string, unknown> {
 	if (!path.isAbsolute(options.scopeRoot)) {
 		throw scopeError(options.toolName, "approved scope must be an absolute directory");
 	}
@@ -178,16 +212,18 @@ export function assertToolArgumentsWithinPathScope(options: ToolPathScopeOptions
 	const canonicalCwd = canonicalizeExistingPrefix(options.cwd, options.toolName);
 	if (!isWithin(scope.canonicalRoot, canonicalCwd))
 		throw scopeError(options.toolName, "working directory is outside the approved scope");
+	const args = structuredClone(options.args);
 
-	if (PATHLESS_SCOPED_TOOLS.has(options.toolName)) return;
+	if (PATHLESS_SCOPED_TOOLS.has(options.toolName)) return args;
 	if (DIRECT_PATH_TOOLS.has(options.toolName)) {
-		const rawPath = requiredString(options.args, "path", options.toolName);
-		const filePath = options.toolName === "read" ? splitPathAndSel(rawPath).path : rawPath;
-		assertLocalPath(filePath, options, scope);
-		return;
+		const rawPath = requiredString(args, "path", options.toolName);
+		const split = options.toolName === "read" ? splitPathAndSel(rawPath) : { path: rawPath };
+		const canonical = canonicalLocalPath(split.path, options, scope);
+		args.path = split.sel ? `${canonical}:${split.sel}` : canonical;
+		return args;
 	}
 	if (SEARCH_PATH_TOOLS.has(options.toolName)) {
-		const pathValue = options.args.path;
+		const pathValue = args.path;
 		if (
 			pathValue !== undefined &&
 			typeof pathValue !== "string" &&
@@ -196,20 +232,33 @@ export function assertToolArgumentsWithinPathScope(options: ToolPathScopeOptions
 			throw scopeError(options.toolName, "path must be a string or string array");
 		}
 		const inputs = toPathList(pathValue as string | string[] | undefined);
-		for (const input of inputs.length > 0 ? inputs : ["."]) assertSearchPath(input, options, scope);
-		return;
+		const authorized: string[] = [];
+		for (const input of inputs.length > 0 ? inputs : ["."]) {
+			assertSearchPath(input, options, scope);
+			const candidates = splitTopLevelPathCandidates(input);
+			const atomic = candidates.length > 1 ? candidates.slice(1) : candidates;
+			authorized.push(...atomic.map(candidate => canonicalSearchPath(candidate, options, scope)));
+		}
+		args.path = authorized.length === 1 && !Array.isArray(pathValue) ? authorized[0] : authorized;
+		return args;
 	}
 	if (options.toolName === "ast_edit") {
-		const paths = options.args.paths;
+		const paths = args.paths;
 		if (!Array.isArray(paths) || paths.length === 0 || paths.some(item => typeof item !== "string")) {
 			throw scopeError(options.toolName, "paths must be a non-empty string array");
 		}
 		for (const input of paths as string[]) assertSearchPath(input, options, scope);
-		return;
+		args.paths = (paths as string[]).map(input => canonicalSearchPath(input, options, scope));
+		return args;
 	}
 	if (options.toolName === "edit" || options.toolName === "apply_patch") {
-		assertEditPaths(options, scope);
-		return;
+		canonicalEditPaths(options, scope, args);
+		return args;
 	}
 	throw scopeError(options.toolName, "tool has no approved path-scope adapter");
+}
+
+/** 仅校验工具参数；生产执行应使用 authorizeToolArgumentsWithinPathScope 返回的参数。 */
+export function assertToolArgumentsWithinPathScope(options: ToolPathScopeOptions): void {
+	authorizeToolArgumentsWithinPathScope(options);
 }

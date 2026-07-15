@@ -27,7 +27,7 @@ describe("San loop orchestrator", () => {
 		expect(defaultSanLoopModePolicy("solo")).toEqual({
 			mode: "solo",
 			maxRetries: 1,
-			maxWorkers: 2,
+			maxWorkers: 1,
 			remainingTurns: 4,
 			requireOracle: false,
 		});

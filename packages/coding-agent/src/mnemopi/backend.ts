@@ -8,6 +8,7 @@ import type { DiagnosticSummary } from "@oh-my-pi/pi-mnemopi/diagnose";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleSelection } from "../config/model-resolver";
+import { filterMemorySearchItemsByScope } from "../memory-backend/scope";
 import type {
 	MemoryBackend,
 	MemoryBackendSaveInput,
@@ -222,11 +223,11 @@ export const mnemopiBackend: MemoryBackend = {
 			return { backend: "mnemopi", query, count: 0, items: [], message: "Search aborted." };
 		}
 		const limit = clampLimit(options?.limit);
-		const results = (await primary.recallResultsScoped(query)).slice(0, limit);
+		const results = await primary.recallResultsScoped(query);
 		if (options?.signal?.aborted) {
 			return { backend: "mnemopi", query, count: 0, items: [], message: "Search aborted." };
 		}
-		const items: MemoryBackendSearchItem[] = results.map(result => ({
+		const mappedItems: MemoryBackendSearchItem[] = results.map(result => ({
 			id: result.id,
 			content: result.content,
 			source: result.source ?? undefined,
@@ -235,6 +236,7 @@ export const mnemopiBackend: MemoryBackend = {
 			memoryType: mnemopiRecallMemoryType(result),
 			scope: mnemopiRecallScope(result),
 		}));
+		const items = filterMemorySearchItemsByScope(mappedItems, options).slice(0, limit);
 		return { backend: "mnemopi", query, count: items.length, items };
 	},
 

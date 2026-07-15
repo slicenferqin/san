@@ -247,4 +247,5 @@ San 现在是独立仓库：[`slicenferqin/san`](https://github.com/slicenferqin
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+San 原创代码使用 [MIT License](LICENSE)。原生 shell minimizer 包含 Apache-2.0 与 MIT
+许可的第三方改编组件，详见 [`crates/pi-shell/NOTICE`](crates/pi-shell/NOTICE)。

@@ -3,6 +3,9 @@ import * as fs from "node:fs/promises";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { extractMessages } from "../hindsight/transcript";
 import commanderTaskTemplate from "../prompts/san-loop/commander-task.md" with { type: "text" };
+import oracleTaskTemplate from "../prompts/san-loop/oracle-task.md" with { type: "text" };
+import supervisorTaskTemplate from "../prompts/san-loop/supervisor-task.md" with { type: "text" };
+import workerTaskTemplate from "../prompts/san-loop/worker-task.md" with { type: "text" };
 
 import type { AgentSession } from "../session/agent-session";
 import type { SessionManager } from "../session/session-manager";
@@ -10,11 +13,14 @@ import { getBundledAgent } from "../task/agents";
 import { runSubprocess, type YieldItem } from "../task/executor";
 import type { AgentDefinition, SingleResult } from "../task/types";
 import type { EventBus } from "../utils/event-bus";
+import { renderSanLoopChecks } from "./checks";
+import { buildSanLoopRoleContext } from "./context";
 import type { SanLoopReviewInput, SanLoopWorkerResultInput } from "./orchestrator";
 import type {
 	SanLoopAgentExecutor,
 	SanLoopCommanderInvocation,
 	SanLoopCommanderResult,
+	SanLoopExecutorUsage,
 	SanLoopSupervisorInvocation,
 	SanLoopWorkerInvocation,
 } from "./runner";
@@ -44,6 +50,13 @@ interface TaskExecutorSession {
 }
 
 type SanLoopRoleName = "commander" | "worker" | "supervisor" | "oracle";
+
+const SAN_LOOP_ROLE_TOOLS: Record<SanLoopRoleName, readonly string[]> = {
+	commander: ["read", "grep", "glob", "yield"],
+	worker: ["read", "grep", "glob", "write", "edit", "bash", "yield"],
+	supervisor: ["read", "grep", "glob", "bash", "yield"],
+	oracle: ["read", "grep", "glob", "yield"],
+};
 
 export interface SanLoopTaskAgentExecutorOptions {
 	session: TaskExecutorSession;
@@ -477,7 +490,11 @@ function renderCommanderConversationContext(sessionManager: SessionManager, toke
 	return selected.join("\n\n") || "none";
 }
 
-function buildCommanderTask(invocation: SanLoopCommanderInvocation, conversationContext: string): string {
+function buildCommanderTask(
+	invocation: SanLoopCommanderInvocation,
+	conversationContext: string,
+	roleContext: string,
+): string {
 	const latestReview = invocation.latestReview
 		? JSON.stringify(
 				{
@@ -497,47 +514,49 @@ function buildCommanderTask(invocation: SanLoopCommanderInvocation, conversation
 		latest_review: latestReview,
 		conversation_context: conversationContext,
 		objective: invocation.run.objective,
+		role_context: roleContext,
+		checks: renderSanLoopChecks(invocation.checks ?? []),
 	});
 }
 
-function buildWorkerTask(invocation: SanLoopWorkerInvocation): string {
+function buildWorkerTask(invocation: SanLoopWorkerInvocation, roleContext: string): string {
 	const assignment = invocation.assignment;
-	return [
-		"Execute this San v0.2 worker assignment.",
-		`Run ID: ${invocation.run.runId}`,
-		`Mode: ${invocation.mode}`,
-		`Assignment ID: ${assignment.assignmentId}`,
-		`Objective: ${assignment.objective}`,
-		`Instructions: ${assignment.instructions}`,
-		`Acceptance criteria:\n${assignment.acceptanceCriteria.map(item => `- ${item}`).join("\n") || "- none"}`,
-		`Checks:\n${assignment.checkRefs.map(item => `- ${item}`).join("\n") || "- none"}`,
-		"Make the required code/doc changes, run focused verification, and yield structured evidence.",
-	].join("\n");
+	return prompt.render(workerTaskTemplate, {
+		run_id: invocation.run.runId,
+		mode: invocation.mode,
+		assignment_id: assignment.assignmentId,
+		objective: assignment.objective,
+		instructions: assignment.instructions,
+		acceptance_criteria: assignment.acceptanceCriteria.map(item => `- ${item}`).join("\n") || "- none",
+		check_refs: assignment.checkRefs.map(item => `- ${item}`).join("\n") || "- none",
+		checks: renderSanLoopChecks(invocation.checks ?? []),
+		role_context: roleContext,
+	});
 }
 
-function buildSupervisorTask(invocation: SanLoopSupervisorInvocation): string {
-	return [
-		"Review this San v0.2 execution-loop batch as a quality gate.",
-		`Run ID: ${invocation.run.runId}`,
-		`Mode: ${invocation.mode}`,
-		`Objective: ${invocation.run.objective}`,
-		`Assignments:\n${JSON.stringify(invocation.assignments, null, 2)}`,
-		`Worker results:\n${JSON.stringify(invocation.workerResults, null, 2)}`,
-		`Oracle review:\n${invocation.oracleReview ? JSON.stringify(invocation.oracleReview, null, 2) : "none"}`,
-		"Run relevant read-only validation if useful. Yield pass only when the acceptance criteria and checks are satisfied.",
-	].join("\n");
+function buildSupervisorTask(invocation: SanLoopSupervisorInvocation, roleContext: string): string {
+	return prompt.render(supervisorTaskTemplate, {
+		run_id: invocation.run.runId,
+		mode: invocation.mode,
+		objective: invocation.run.objective,
+		assignments: JSON.stringify(invocation.assignments, null, 2),
+		worker_results: JSON.stringify(invocation.workerResults, null, 2),
+		oracle_review: invocation.oracleReview ? JSON.stringify(invocation.oracleReview, null, 2) : "none",
+		checks: renderSanLoopChecks(invocation.checks ?? []),
+		role_context: roleContext,
+	});
 }
 
-function buildOracleTask(invocation: SanLoopSupervisorInvocation): string {
-	return [
-		"Give a second opinion for this San v0.2 council execution-loop gate.",
-		`Run ID: ${invocation.run.runId}`,
-		`Mode: ${invocation.mode}`,
-		`Objective: ${invocation.run.objective}`,
-		`Assignments:\n${JSON.stringify(invocation.assignments, null, 2)}`,
-		`Worker results:\n${JSON.stringify(invocation.workerResults, null, 2)}`,
-		"Read the evidence, state uncertainty, and yield opinion/confidence/evidence/recommendation.",
-	].join("\n");
+function buildOracleTask(invocation: SanLoopSupervisorInvocation, roleContext: string): string {
+	return prompt.render(oracleTaskTemplate, {
+		run_id: invocation.run.runId,
+		mode: invocation.mode,
+		objective: invocation.run.objective,
+		assignments: JSON.stringify(invocation.assignments, null, 2),
+		worker_results: JSON.stringify(invocation.workerResults, null, 2),
+		checks: renderSanLoopChecks(invocation.checks ?? []),
+		role_context: roleContext,
+	});
 }
 
 function parseCommanderResult(run: SanLoopRunSnapshot, mode: SanLoopMode, data: unknown): SanLoopCommanderResult {
@@ -869,6 +888,27 @@ function normalizeRoleModelOverride(value: unknown): string | undefined {
 }
 
 export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutorOptions): SanLoopAgentExecutor {
+	const accumulatedUsage: SanLoopExecutorUsage = {
+		inputTokens: 0,
+		outputTokens: 0,
+		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
+		totalTokens: 0,
+		cost: 0,
+		durationMs: 0,
+		providerRequests: 0,
+	};
+	const recordUsage = (result: SingleResult): SingleResult => {
+		accumulatedUsage.inputTokens += result.usage?.input ?? 0;
+		accumulatedUsage.outputTokens += result.usage?.output ?? 0;
+		accumulatedUsage.cacheReadTokens += result.usage?.cacheRead ?? 0;
+		accumulatedUsage.cacheWriteTokens += result.usage?.cacheWrite ?? 0;
+		accumulatedUsage.totalTokens += result.usage?.totalTokens ?? result.tokens;
+		accumulatedUsage.cost += result.usage?.cost.total ?? 0;
+		accumulatedUsage.durationMs += result.durationMs;
+		accumulatedUsage.providerRequests += result.requests;
+		return result;
+	};
 	const getAgent = (name: string): AgentDefinition => {
 		const agent = getBundledAgent(name);
 		if (!agent) throw new Error(`Bundled San agent not found: ${name}`);
@@ -877,21 +917,36 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 	const modelOverrideForRole = (role: SanLoopRoleName): string | undefined =>
 		normalizeRoleModelOverride(options.session.settings.get(`san.executionLoop.roles.${role}.modelRole`));
 	const commanderContextTokenBudget = options.session.settings.get("san.executionLoop.roleContext.tokenBudget");
+	const roleContextSettings = {
+		tokenBudget: commanderContextTokenBudget,
+		maxEvents: options.session.settings.get("san.executionLoop.roleContext.maxEvents"),
+		maxDecisions: options.session.settings.get("san.executionLoop.roleContext.maxDecisions"),
+	};
 	const commanderConversationContext = (): string =>
 		renderCommanderConversationContext(options.session.sessionManager, commanderContextTokenBudget);
+	const roleContext = (role: SanLoopRoleName, runId: string, assignmentId?: string): string =>
+		buildSanLoopRoleContext(options.session.sessionManager.getBranch(), {
+			role,
+			runId,
+			assignmentId,
+			settings: roleContextSettings,
+		})?.content ?? "none";
 	const runAgent = async (
 		agentName: string,
 		role: SanLoopRoleName,
 		task: string,
 		index: number,
 		id: string,
+		signal?: AbortSignal,
 	): Promise<SingleResult> => {
 		const artifactsDir = options.session.sessionManager.getArtifactsDir() ?? undefined;
 		if (artifactsDir) await fs.mkdir(artifactsDir, { recursive: true });
+		const combinedSignal =
+			options.signal && signal ? AbortSignal.any([options.signal, signal]) : (options.signal ?? signal);
 		const runOnce = (): Promise<SingleResult> =>
 			runSubprocess({
 				cwd: options.cwd,
-				agent: getAgent(agentName),
+				agent: { ...getAgent(agentName), tools: [...SAN_LOOP_ROLE_TOOLS[role]] },
 				task,
 				index,
 				id: safeArtifactId(id),
@@ -901,7 +956,7 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 				sessionFile: options.session.sessionFile,
 				artifactsDir,
 				eventBus: options.eventBus,
-				signal: options.signal,
+				signal: combinedSignal,
 				parentToolCallId: options.parentToolCallId,
 				modelOverride: modelOverrideForRole(role),
 				parentActiveModelPattern: undefined,
@@ -912,20 +967,27 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 				parentAgentId: options.session.getAgentId?.() ?? "Main",
 				keepAlive: false,
 				enableLsp: true,
+				strictToolNames: true,
 			});
-		const result = await runOnce();
+		const result = recordUsage(await runOnce());
 		if (!shouldRetryTransientSubagentFailure(role, result)) return result;
-		return runOnce();
+		return recordUsage(await runOnce());
 	};
 
 	return {
+		usage: () => ({ ...accumulatedUsage }),
 		async commander(invocation) {
 			const result = await runAgent(
 				"san-commander",
 				"commander",
-				buildCommanderTask(invocation, commanderConversationContext()),
+				buildCommanderTask(
+					invocation,
+					commanderConversationContext(),
+					roleContext("commander", invocation.run.runId),
+				),
 				0,
 				`${invocation.run.runId}_commander`,
+				invocation.signal,
 			);
 			const data = latestYieldData(result);
 			if (result.exitCode !== 0 || data === undefined) {
@@ -945,9 +1007,13 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 			const result = await runAgent(
 				"san-worker",
 				"worker",
-				buildWorkerTask(invocation),
+				buildWorkerTask(
+					invocation,
+					roleContext("worker", invocation.run.runId, invocation.assignment.assignmentId),
+				),
 				1,
 				invocation.assignment.assignmentId,
+				invocation.signal,
 			);
 			const data = latestYieldData(result);
 			if (result.exitCode !== 0 || data === undefined) {
@@ -967,9 +1033,10 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 			const result = await runAgent(
 				"san-supervisor",
 				"supervisor",
-				buildSupervisorTask(invocation),
+				buildSupervisorTask(invocation, roleContext("supervisor", invocation.run.runId)),
 				2,
 				`${invocation.run.runId}_supervisor`,
+				invocation.signal,
 			);
 			const data = latestYieldData(result);
 			if (result.exitCode !== 0 || data === undefined) {
@@ -998,9 +1065,10 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 			const result = await runAgent(
 				"san-oracle",
 				"oracle",
-				buildOracleTask(invocation),
+				buildOracleTask(invocation, roleContext("oracle", invocation.run.runId)),
 				3,
 				`${invocation.run.runId}_oracle`,
+				invocation.signal,
 			);
 			const data = latestYieldData(result);
 			if (result.exitCode !== 0 || data === undefined) {

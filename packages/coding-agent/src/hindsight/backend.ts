@@ -10,6 +10,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { logger } from "@oh-my-pi/pi-utils";
 import { onHindsightScopeChanged, type Settings } from "../config/settings";
+import { filterMemorySearchItemsByScope } from "../memory-backend/scope";
 import type { MemoryBackend, MemoryBackendSearchItem, MemoryBackendStartOptions } from "../memory-backend/types";
 import type { AgentSession } from "../session/agent-session";
 import { type BankScope, computeBankScope } from "./bank";
@@ -162,7 +163,10 @@ export const hindsightBackend: MemoryBackend = {
 		if (options?.signal?.aborted) {
 			return { backend: "hindsight", query, count: 0, items: [], message: "Search aborted." };
 		}
-		const items = (response.results ?? []).slice(0, clampSearchLimit(options?.limit)).map(hindsightSearchItem);
+		const items = filterMemorySearchItemsByScope((response.results ?? []).map(hindsightSearchItem), options).slice(
+			0,
+			clampSearchLimit(options?.limit),
+		);
 		return { backend: "hindsight", query, count: items.length, items };
 	},
 

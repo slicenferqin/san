@@ -1,0 +1,1139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San 模型路由与角色配置治理方案</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f5f6f3;
+      --surface: #ffffff;
+      --ink: #18201e;
+      --muted: #5d6864;
+      --faint: #84908b;
+      --line: #d5dcd8;
+      --line-strong: #aeb9b4;
+      --forest: #17624e;
+      --forest-soft: #e1efe9;
+      --blue: #315d78;
+      --blue-soft: #e7eff4;
+      --amber: #9a6414;
+      --amber-soft: #f7ecd8;
+      --brick: #a33f35;
+      --brick-soft: #f5e2df;
+      --graphite: #293330;
+      --code: #111815;
+      --shadow: 0 14px 38px rgba(24, 32, 30, 0.07);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      font-size: 16px;
+      line-height: 1.72;
+      letter-spacing: 0;
+    }
+
+    h1, h2, h3, h4 {
+      margin-top: 0;
+      letter-spacing: 0;
+      line-height: 1.22;
+      text-wrap: balance;
+    }
+
+    h1 {
+      max-width: 900px;
+      margin-bottom: 22px;
+      font-family: "Iowan Old Style", "Songti SC", "STSong", Georgia, serif;
+      font-size: 54px;
+      font-weight: 600;
+    }
+
+    h2 { margin-bottom: 16px; font-size: 34px; }
+    h3 { margin-bottom: 9px; font-size: 20px; }
+    h4 { margin-bottom: 7px; font-size: 15px; }
+    p { margin: 9px 0; text-wrap: pretty; }
+    a { color: var(--forest); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    strong { color: var(--ink); }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 3px;
+      background: #e9eeeb;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.9em;
+      overflow-wrap: anywhere;
+    }
+
+    pre {
+      margin: 0;
+      overflow: auto;
+      border: 1px solid #39443f;
+      border-radius: 4px;
+      background: var(--code);
+      color: #edf5f1;
+      padding: 20px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      white-space: pre;
+    }
+
+    pre code { padding: 0; background: transparent; color: inherit; font-size: inherit; }
+    .shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid rgba(213, 220, 216, 0.9);
+      background: rgba(245, 246, 243, 0.95);
+      backdrop-filter: blur(14px);
+    }
+
+    .topbar-inner {
+      display: flex;
+      min-height: 58px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    .wordmark {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 13px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .wordmark span { color: var(--forest); }
+    nav { display: flex; gap: 17px; overflow-x: auto; white-space: nowrap; }
+    nav a { color: var(--muted); font-size: 13px; text-decoration: none; }
+    nav a:hover { color: var(--ink); }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.18fr) minmax(340px, 0.82fr);
+      gap: 54px;
+      align-items: center;
+      min-height: 610px;
+      padding: 66px 0 58px;
+    }
+
+    .eyebrow {
+      margin-bottom: 14px;
+      color: var(--forest);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .hero-copy { max-width: 780px; color: var(--muted); font-size: 19px; }
+    .hero-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 25px; color: var(--faint); font-size: 13px; }
+
+    .decision-panel {
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      padding: 26px;
+    }
+
+    .panel-label, .section-kicker, .node-label, .metric-label, .scope-rank, .phase-id {
+      color: var(--faint);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .decision-statement {
+      margin: 23px 0 26px;
+      font-family: "Iowan Old Style", "Songti SC", Georgia, serif;
+      font-size: 29px;
+      line-height: 1.38;
+    }
+
+    .decision-list { margin: 0; padding: 0; list-style: none; }
+    .decision-list li { display: grid; grid-template-columns: 34px 1fr; gap: 12px; border-top: 1px solid var(--line); padding: 13px 0; }
+    .decision-list b { color: var(--forest); font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; }
+    .decision-list span { color: var(--muted); font-size: 14px; }
+
+    .band { border-top: 1px solid var(--line); }
+    .band.alt { background: var(--surface); }
+    .section { padding: 72px 0; }
+    .section-kicker { margin-bottom: 12px; color: var(--forest); }
+    .section-lead { max-width: 860px; color: var(--muted); font-size: 18px; }
+
+    .verdict {
+      display: grid;
+      grid-template-columns: 150px 1fr;
+      gap: 30px;
+      margin-top: 36px;
+      border-top: 2px solid var(--forest);
+      border-bottom: 1px solid var(--line);
+      padding: 25px 0;
+    }
+
+    .verdict-label { color: var(--forest); font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; font-weight: 800; }
+    .verdict blockquote { margin: 0; font-family: "Iowan Old Style", "Songti SC", Georgia, serif; font-size: 29px; line-height: 1.45; }
+
+    .risk-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      margin-top: 36px;
+      border-top: 1px solid var(--line-strong);
+      border-bottom: 1px solid var(--line-strong);
+    }
+
+    .risk-item { min-height: 245px; padding: 24px 26px 24px 0; }
+    .risk-item + .risk-item { border-left: 1px solid var(--line); padding-left: 26px; }
+    .risk-item .index { color: var(--brick); font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; }
+    .risk-item h3 { margin-top: 30px; }
+    .risk-item p { color: var(--muted); font-size: 14px; }
+
+    .evidence-list { margin-top: 34px; border: 1px solid var(--line-strong); background: var(--surface); }
+    .evidence-row { display: grid; grid-template-columns: 210px 1fr; gap: 20px; border-top: 1px solid var(--line); padding: 16px 18px; }
+    .evidence-row:first-child { border-top: 0; }
+    .evidence-row b { font-size: 14px; }
+    .evidence-row span { color: var(--muted); font-size: 13px; }
+
+    .architecture {
+      display: grid;
+      grid-template-columns: 1fr 44px 1fr 44px 1fr;
+      align-items: stretch;
+      margin-top: 38px;
+    }
+
+    .arch-node { min-height: 250px; border: 1px solid var(--line-strong); background: var(--surface); padding: 24px; }
+    .arch-node.policy { border: 2px solid var(--forest); background: #fbfffd; }
+    .arch-node h3 { margin-top: 26px; }
+    .arch-node p { color: var(--muted); font-size: 14px; }
+    .arch-node ul { margin: 18px 0 0; padding-left: 19px; color: var(--muted); font-size: 13px; }
+    .arch-arrow { display: grid; place-items: center; color: var(--faint); font-size: 22px; }
+
+    .invariant-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      margin-top: 34px;
+      border: 1px solid var(--line-strong);
+    }
+
+    .invariant { min-height: 175px; padding: 20px; }
+    .invariant + .invariant { border-left: 1px solid var(--line); }
+    .invariant b { display: block; margin: 20px 0 8px; }
+    .invariant p { color: var(--muted); font-size: 13px; }
+
+    .role-groups { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 36px; }
+    .role-group { border-top: 3px solid var(--blue); padding-top: 18px; }
+    .role-group.san { border-color: var(--forest); }
+    .role-row { display: grid; grid-template-columns: 118px 1fr 118px; gap: 14px; border-top: 1px solid var(--line); padding: 13px 0; }
+    .role-row:first-of-type { border-top: 0; }
+    .role-id { color: var(--ink); font-family: "SFMono-Regular", Consolas, monospace; font-size: 13px; font-weight: 700; }
+    .role-purpose { color: var(--muted); font-size: 13px; }
+    .role-default { color: var(--forest); font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; text-align: right; }
+
+    .scope-stack { margin-top: 38px; border: 1px solid var(--line-strong); background: var(--surface); }
+    .scope-row { display: grid; grid-template-columns: 72px 150px 1fr 170px; gap: 18px; align-items: center; min-height: 70px; border-top: 1px solid var(--line); padding: 12px 18px; }
+    .scope-row:first-child { border-top: 0; }
+    .scope-row.active { background: var(--forest-soft); }
+    .scope-row.readonly { background: var(--amber-soft); }
+    .scope-name { font-weight: 800; }
+    .scope-desc { color: var(--muted); font-size: 13px; }
+    .scope-target { color: var(--faint); font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; text-align: right; overflow-wrap: anywhere; }
+
+    .contract-layout { display: grid; grid-template-columns: 0.88fr 1.12fr; gap: 34px; margin-top: 38px; }
+    .contract-notes { border-top: 1px solid var(--line-strong); }
+    .contract-note { display: grid; grid-template-columns: 68px 1fr; gap: 14px; border-bottom: 1px solid var(--line); padding: 15px 0; }
+    .contract-note b { color: var(--forest); font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; }
+    .contract-note p { margin: 0; color: var(--muted); font-size: 13px; }
+
+    .policy-table { width: 100%; margin-top: 34px; border-collapse: collapse; background: var(--surface); }
+    .policy-table th, .policy-table td { border: 1px solid var(--line); padding: 12px 14px; text-align: left; vertical-align: top; }
+    .policy-table th { background: #edf1ef; font-size: 13px; }
+    .policy-table td { font-size: 13px; }
+    .status-ok { color: var(--forest); font-weight: 800; }
+    .status-warn { color: var(--amber); font-weight: 800; }
+    .status-stop { color: var(--brick); font-weight: 800; }
+
+    .terminal {
+      margin-top: 36px;
+      border: 1px solid #303b36;
+      background: #111815;
+      color: #dfe9e4;
+      box-shadow: var(--shadow);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 13px;
+    }
+
+    .terminal-head { display: flex; justify-content: space-between; gap: 20px; border-bottom: 1px solid #303b36; padding: 12px 16px; color: #8fa49a; }
+    .terminal-body { padding: 16px; overflow-x: auto; }
+    .terminal-line { display: grid; grid-template-columns: 120px 280px 100px 1fr; gap: 14px; min-width: 820px; border-top: 1px solid #25302b; padding: 9px 0; }
+    .terminal-line:first-child { border-top: 0; }
+    .terminal-line.selected { color: #ffffff; background: #1b2e27; }
+    .terminal-line .role { color: #8ed1b4; }
+    .terminal-line .source { color: #e4bf79; }
+    .terminal-line .caps { color: #93acbc; }
+
+    .journey { display: grid; grid-template-columns: repeat(5, 1fr); margin-top: 24px; border-top: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); }
+    .journey-step { min-height: 180px; padding: 20px 18px; }
+    .journey-step + .journey-step { border-left: 1px solid var(--line); }
+    .journey-step b { display: block; margin: 26px 0 8px; }
+    .journey-step p { color: var(--muted); font-size: 13px; }
+
+    .callout { margin-top: 28px; border-left: 5px solid var(--amber); background: var(--amber-soft); padding: 18px 20px; }
+    .callout.danger { border-color: var(--brick); background: var(--brick-soft); }
+    .callout.info { border-color: var(--blue); background: var(--blue-soft); }
+    .callout p { color: var(--muted); }
+
+    .consumer-table { width: 100%; margin-top: 34px; border-collapse: collapse; background: var(--surface); }
+    .consumer-table th, .consumer-table td { border-bottom: 1px solid var(--line); padding: 13px 14px; text-align: left; vertical-align: top; }
+    .consumer-table th { border-top: 1px solid var(--line-strong); border-bottom-color: var(--line-strong); background: #edf1ef; font-size: 13px; }
+    .consumer-table td { font-size: 13px; }
+    .consumer-table tr:last-child td { border-bottom-color: var(--line-strong); }
+
+    .breaker {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      margin-top: 34px;
+      border: 1px solid var(--line-strong);
+    }
+
+    .breaker-state { min-height: 190px; padding: 20px; }
+    .breaker-state + .breaker-state { border-left: 1px solid var(--line); }
+    .breaker-state h3 { margin-top: 24px; }
+    .breaker-state p { color: var(--muted); font-size: 13px; }
+    .breaker-state.closed { background: var(--forest-soft); }
+    .breaker-state.degraded { background: var(--amber-soft); }
+    .breaker-state.open { background: var(--brick-soft); }
+    .breaker-state.probe { background: var(--blue-soft); }
+
+    .config-compare { display: grid; grid-template-columns: 1fr 46px 1fr; align-items: stretch; margin-top: 38px; }
+    .config-side h3 { margin-bottom: 12px; }
+    .config-arrow { display: grid; place-items: center; color: var(--forest); font-size: 24px; }
+    .config-note { margin-top: 10px; color: var(--muted); font-size: 13px; }
+
+    .roadmap { display: grid; grid-template-columns: repeat(5, 1fr); margin-top: 38px; border-top: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); }
+    .phase { min-height: 280px; padding: 22px 18px; }
+    .phase + .phase { border-left: 1px solid var(--line); }
+    .phase h3 { margin-top: 30px; font-size: 18px; }
+    .phase p { color: var(--muted); font-size: 13px; }
+    .phase ul { padding-left: 17px; color: var(--muted); font-size: 12px; }
+
+    .acceptance { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 36px; border: 1px solid var(--line-strong); }
+    .accept-col { padding: 23px; }
+    .accept-col + .accept-col { border-left: 1px solid var(--line); }
+    .accept-col ul { margin: 16px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+    .accept-col li { margin: 9px 0; }
+
+    .decision-board { display: grid; grid-template-columns: 1fr 1fr; margin-top: 36px; border-top: 1px solid var(--line-strong); }
+    .decision-title { margin-top: 38px; }
+    .decision-item { display: grid; grid-template-columns: 80px 1fr; gap: 16px; min-height: 142px; border-bottom: 1px solid var(--line); padding: 20px 22px 20px 0; }
+    .decision-item:nth-child(even) { border-left: 1px solid var(--line); padding-left: 22px; }
+    .decision-item .id { color: var(--forest); font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; }
+    .decision-item p { color: var(--muted); font-size: 13px; }
+
+    .sources { margin-top: 32px; border-top: 1px solid var(--line-strong); }
+    .source-row { display: grid; grid-template-columns: 54px 1fr; gap: 14px; border-bottom: 1px solid var(--line); padding: 13px 0; }
+    .source-row b { color: var(--faint); font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; }
+    .source-row code { font-size: 12px; }
+
+    .finale { background: var(--graphite); color: #f2f6f4; padding: 76px 0 84px; }
+    .finale h2 { max-width: 900px; color: #ffffff; font-family: "Iowan Old Style", "Songti SC", Georgia, serif; font-size: 45px; }
+    .finale p { max-width: 860px; color: #bbc7c2; font-size: 18px; }
+    .finale .formula { margin-top: 32px; border-top: 1px solid #58645f; border-bottom: 1px solid #58645f; padding: 20px 0; color: #ffffff; font-family: "SFMono-Regular", Consolas, monospace; font-size: 18px; }
+    .doc-footer { padding: 24px 0 40px; color: var(--faint); font-size: 12px; }
+
+    @media (max-width: 980px) {
+      .hero { grid-template-columns: 1fr; min-height: auto; }
+      .architecture { grid-template-columns: 1fr; gap: 10px; }
+      .arch-arrow { min-height: 26px; transform: rotate(90deg); }
+      .invariant-grid { grid-template-columns: 1fr 1fr; }
+      .invariant:nth-child(3) { border-left: 0; border-top: 1px solid var(--line); }
+      .invariant:nth-child(4) { border-top: 1px solid var(--line); }
+      .contract-layout { grid-template-columns: 1fr; }
+      .journey { grid-template-columns: repeat(3, 1fr); }
+      .journey-step:nth-child(4) { border-left: 0; border-top: 1px solid var(--line); }
+      .journey-step:nth-child(5) { border-top: 1px solid var(--line); }
+      .roadmap { grid-template-columns: repeat(3, 1fr); }
+      .phase:nth-child(4) { border-left: 0; border-top: 1px solid var(--line); }
+      .phase:nth-child(5) { border-top: 1px solid var(--line); }
+    }
+
+    @media (max-width: 720px) {
+      .shell { width: min(100% - 28px, 1180px); }
+      nav { display: none; }
+      h1 { font-size: 38px; }
+      h2 { font-size: 28px; }
+      .hero { padding: 48px 0; gap: 34px; }
+      .section { padding: 56px 0; }
+      .risk-grid, .role-groups, .acceptance, .decision-board { grid-template-columns: 1fr; }
+      .risk-item + .risk-item, .accept-col + .accept-col, .decision-item:nth-child(even) { border-left: 0; padding-left: 0; }
+      .risk-item + .risk-item { border-top: 1px solid var(--line); }
+      .verdict, .evidence-row { grid-template-columns: 1fr; gap: 8px; }
+      .role-row { grid-template-columns: 96px 1fr; }
+      .role-default { grid-column: 2; text-align: left; }
+      .scope-row { grid-template-columns: 48px 1fr; gap: 8px; }
+      .scope-desc, .scope-target { grid-column: 2; text-align: left; }
+      .invariant-grid, .breaker, .journey, .roadmap { grid-template-columns: 1fr; }
+      .invariant + .invariant, .breaker-state + .breaker-state, .journey-step + .journey-step, .phase + .phase { border-left: 0; border-top: 1px solid var(--line); }
+      .config-compare { grid-template-columns: 1fr; gap: 10px; }
+      .config-arrow { min-height: 34px; transform: rotate(90deg); }
+      .policy-table, .consumer-table { display: block; overflow-x: auto; }
+      .finale h2 { font-size: 34px; }
+    }
+
+    @media print {
+      .topbar { position: static; }
+      body { background: #ffffff; }
+      .band, .finale, .decision-panel, .terminal { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="shell topbar-inner">
+      <div class="wordmark">SAN <span>/ MODEL ROUTING</span></div>
+      <nav aria-label="文档章节">
+        <a href="#diagnosis">诊断</a>
+        <a href="#architecture">架构</a>
+        <a href="#roles">角色</a>
+        <a href="#scope">作用域</a>
+        <a href="#experience">交互</a>
+        <a href="#migration">迁移</a>
+        <a href="#delivery">实施</a>
+      </nav>
+    </div>
+  </div>
+
+  <header class="shell hero">
+    <div>
+      <div class="eyebrow">治理提案 · 讨论稿 03 · 2026-07-13</div>
+      <h1>先连接服务商，再选择模型；把路由复杂性留在系统内部。</h1>
+      <p class="hero-copy">
+        San 底层已经把模型标识为 <code>provider/model</code>，也有 provider 配置、认证存储、模型发现和 provider tab；但产品入口分散在
+        <code>/setup</code>、<code>/login</code>、<code>/logout</code>、环境变量、<code>models.yml</code> 与 <code>/model</code>。
+        本方案把普通用户心智模型收口为<strong><code>/connect</code> 管服务商，<code>/model</code> 管当前模型</strong>，角色路由和作用域治理只在高级设置出现。
+      </p>
+      <div class="hero-meta">
+        <span>主张：Connect → Model → Work</span>
+        <span>兼容：保留现有 selector 语法</span>
+        <span>范围：provider 连接与模型路由体验</span>
+        <span>不改：认证存储、模型目录与角色运行职责</span>
+      </div>
+    </div>
+
+    <aside class="decision-panel" aria-label="方案结论">
+      <div class="panel-label">RECOMMENDATION</div>
+      <div class="decision-statement">两个日常入口，<br>一次确认切换，<br>高级能力不挡路。</div>
+      <ol class="decision-list">
+        <li><b>01</b><span><code>/connect</code> 统一 OAuth、API key、本地服务和自定义 endpoint。</span></li>
+        <li><b>02</b><span><code>/model</code> 只列已连接服务商的模型，Enter 立即切换。</span></li>
+        <li><b>03</b><span>没有可用模型时，<code>/model</code> 自动引导到连接流程。</span></li>
+        <li><b>04</b><span>角色、fallback、scope 与高级 effort 不进入普通选择主路径。</span></li>
+      </ol>
+    </aside>
+  </header>
+
+  <main>
+    <section class="band alt" id="diagnosis">
+      <div class="shell section">
+        <div class="section-kicker">01 / 现状诊断</div>
+        <h2>底层有 provider，产品层却没有统一的“连接服务商”。</h2>
+        <p class="section-lead">
+          数据模型是清楚的：<code>models.yml</code> 以 provider 为顶层，<code>ModelRegistry</code> 以认证状态筛出 available models，模型主键是 <code>provider/id</code>，当前 picker 也按 provider 建 tab。缺的是一个完整产品流程：添加凭据、验证连接、发现模型、选择当前模型现在由多个命令和配置文件共同承担。
+        </p>
+
+        <div class="verdict">
+          <div class="verdict-label">核心结论</div>
+          <blockquote>普通用户只需要回答两个问题：我连接了谁？我现在用哪个模型？其他问题都不应阻塞开始对话。</blockquote>
+        </div>
+
+        <div class="risk-grid">
+          <article class="risk-item">
+            <div class="index">ROOT CAUSE 01</div>
+            <h3>连接入口碎片化</h3>
+            <p><code>/login</code> 只覆盖 OAuth；<code>/setup</code> 又把模型登录和 web search 放在同一个 providers 场景；API key、base URL 和自定义 provider 主要依赖环境变量或手写 <code>models.yml</code>。</p>
+          </article>
+          <article class="risk-item">
+            <div class="index">ROOT CAUSE 02</div>
+            <h3>模型确认路径过深</h3>
+            <p>现有 TUI picker 选择模型后还要选择十余个 role action，再选择 thinking。日常“换当前模型”与“编辑长期角色路由”被放进同一个菜单，Enter 不是最终确认。</p>
+          </article>
+          <article class="risk-item">
+            <div class="index">ROOT CAUSE 03</div>
+            <h3>高级配置仍缺治理</h3>
+            <p>角色写入作用域不明确，持久 selector 又会经过 exact、Bedrock profile、retired variant、fuzzy 与 substring 解析。复杂性确实存在，但它应进入高级诊断，而不是进入普通模型切换。</p>
+          </article>
+        </div>
+
+        <div class="evidence-list" aria-label="代码证据">
+          <div class="evidence-row"><b>Provider schema</b><span><code>models-config-schema.ts:260-293</code> 已有 provider 级 baseUrl、apiKey、api、auth、discovery、models 和 modelOverrides。</span></div>
+          <div class="evidence-row"><b>Available models</b><span><code>model-registry.ts:1917-1944</code> 按 disabledProviders、keyless 和 AuthStorage 认证状态过滤可用模型。</span></div>
+          <div class="evidence-row"><b>当前连接入口</b><span><code>/setup</code> 打开 OAuth Sign in + Web search 场景；<code>/login</code> 与 <code>/logout</code> 只操作 OAuth provider，没有统一 API-key/custom-endpoint 表单。</span></div>
+          <div class="evidence-row"><b>凭据能力</b><span><code>AuthStorage</code> 已能持久保存 API key 或 OAuth credential，并能逐账号列出/删除；但 <code>set()</code> 是 provider 整组替换，统一 TUI 需要安全的 API-key upsert，不能覆盖已有 OAuth 账号。</span></div>
+          <div class="evidence-row"><b>层级合并</b><span><code>settings.ts</code> 按 global → project → config overlay → runtime override 合并，合并后不再保留字段来源。</span></div>
+          <div class="evidence-row"><b>全局写入</b><span><code>settings.ts:693-709</code> 从 global role map 读取并调用 <code>set("modelRoles", ...)</code>，没有 project/session scope 参数。</span></div>
+          <div class="evidence-row"><b>Override 双写</b><span>若 runtime override 已包含该 role，现有 <code>setModelRole()</code> 还会同步改写 override；目标 scope API 必须移除这种隐式联动。</span></div>
+          <div class="evidence-row"><b>模型优先交互</b><span><code>model-selector.ts:967-1015, 1159-1225</code> 先选模型，再进入 role action 和 thinking 两层菜单；仅 temporary/direct-select 模式会 Enter 后直接完成。</span></div>
+          <div class="evidence-row"><b>功能字段</b><span><code>settings-schema.ts:2669, 2786-2789</code> 另设 digest 与 commander/worker/supervisor/oracle 的 modelRole。</span></div>
+          <div class="evidence-row"><b>匹配顺序</b><span><code>model-resolver.ts:594-715</code> 实际依次执行 exact provider/id、exact bare id、Bedrock profile、retired variant、provider-scoped fuzzy 与 substring matching。</span></div>
+          <div class="evidence-row"><b>推理优先级</b><span><code>task/executor.ts:2102-2145</code> 使用 <code>thinkingLevel ?? resolvedThinkingLevel</code>，agent frontmatter 可以覆盖 selector 上显式选择的 effort。</span></div>
+        </div>
+
+        <div class="callout danger">
+          <strong>还有一个前置一致性问题。</strong>
+          <p>Capability provider 按高优先级在前返回，但 project settings 当前按返回顺序逐个 deep merge，后合并的低优先级来源可能覆盖前面的原生 <code>.san</code> 来源。模型作用域治理必须先固定 provider merge 方向，否则“项目级”本身没有稳定含义。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="architecture">
+      <div class="shell section">
+        <div class="section-kicker">02 / 目标架构</div>
+        <h2>把连接与目录、路由策略、单次调用拆成三层。</h2>
+        <p class="section-lead">普通 TUI 只直接操作第一层的连接和第三层的当前模型。中间的角色策略仍然存在，但只服务自动路由与高级设置，不进入每次选择的确认链。</p>
+
+        <div class="architecture" aria-label="三层模型治理架构">
+          <article class="arch-node">
+            <div class="node-label">PLANE A / CONNECTION + CATALOG</div>
+            <h3>服务商连接与模型目录</h3>
+            <p>回答“连接了谁、有哪些模型、是否可用”。</p>
+            <ul>
+              <li><code>/connect</code>、认证方法与连接状态</li>
+              <li>provider、base URL、模型发现</li>
+              <li>context window、max output</li>
+              <li>text/image、tools、reasoning</li>
+              <li>凭据留在 AuthStorage，非秘密配置留在 models.yml</li>
+            </ul>
+          </article>
+          <div class="arch-arrow" aria-hidden="true">→</div>
+          <article class="arch-node policy">
+            <div class="node-label">PLANE B / POLICY</div>
+            <h3>角色路由策略</h3>
+            <p>回答“这个工作角色应该用谁”，是唯一持久模型绑定面。</p>
+            <ul>
+              <li><code>modelRoles</code> 用户 / 项目作用域</li>
+              <li>角色继承与 ordered fallback</li>
+              <li>显式 thinking effort</li>
+              <li>来源、解析与兼容性状态</li>
+            </ul>
+          </article>
+          <div class="arch-arrow" aria-hidden="true">→</div>
+          <article class="arch-node">
+            <div class="node-label">PLANE C / INVOCATION</div>
+            <h3>会话与调用覆盖</h3>
+            <p>回答“这一次是否例外”，不回写长期策略。</p>
+            <ul>
+              <li><code>/switch</code> 当前会话模型</li>
+              <li>session role override</li>
+              <li>CLI / RPC / ACP 显式参数</li>
+              <li>workflow / agent 调用 override</li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="invariant-grid">
+          <article class="invariant"><span class="metric-label">INVARIANT 01</span><b>日常只有两个入口</b><p><code>/connect</code> 管 provider，<code>/model</code> 管 current model；角色默认继承并自动路由。</p></article>
+          <article class="invariant"><span class="metric-label">INVARIANT 02</span><b>解析必须可解释</b><p>每次解析同时返回 requested、resolved、source、effort、fallback index 和状态。</p></article>
+          <article class="invariant"><span class="metric-label">INVARIANT 03</span><b>搜索可以模糊，保存必须精确</b><p>交互搜索保留 fuzzy；用户确认后只保存 canonical <code>provider/id</code>。</p></article>
+          <article class="invariant"><span class="metric-label">INVARIANT 04</span><b>覆盖必须自动失效</b><p>session/invocation 覆盖不得静默写入用户或项目配置。</p></article>
+        </div>
+
+        <div class="contract-layout">
+          <div>
+            <h3>建议的运行时解析结果</h3>
+            <pre><code>interface ResolvedModelRole {
+  role: string;
+  requested: string;
+  resolved?: string;
+  thinking?: ConfiguredThinkingLevel;
+  source: ModelRoleSource;
+  sourcePath?: string;
+  fallbackIndex?: number;
+  status:
+    | "exact"
+    | "alias"
+    | "legacy_fuzzy"
+    | "unavailable"
+    | "incompatible"
+    | "unresolved";
+  shadowed: ModelRoleSource[];
+}</code></pre>
+          </div>
+          <div class="contract-notes">
+            <div class="contract-note"><b>WHY 01</b><p><code>requested</code> 与 <code>resolved</code> 分开，才能发现 selector 漂移和 provider 模糊命中。</p></div>
+            <div class="contract-note"><b>WHY 02</b><p><code>source</code> 与 <code>shadowed</code> 让 UI 在写入前后都能说明哪一层真正生效。</p></div>
+            <div class="contract-note"><b>WHY 03</b><p><code>status</code> 让消费者使用同一套 fail-fast、warn 或 fallback 策略，不再各自猜测。</p></div>
+            <div class="contract-note"><b>WHY 04</b><p>on-disk 第一阶段继续使用现有字符串与逗号 fallback 语法，先统一行为，不同时做破坏性 schema 重写。</p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="band alt" id="roles">
+      <div class="shell section">
+        <div class="section-kicker">03 / 角色体系</div>
+        <h2>代码当前有 10 个通用角色，但普通用户不需要看到“角色”。</h2>
+        <p class="section-lead">当前内置角色是 default、smol、slow、vision、plan、designer、commit、tiny、task、advisor；digest 与 Execution Loop 又有 5 个独立模型入口。这里正式选择方案 B：<strong>不新增公开 ModelRole，并把已有角色从普通 <code>/model</code> 完全移出</strong>。功能仍固定消费现有角色。</p>
+
+        <div class="role-groups">
+          <section class="role-group" aria-label="默认用户模型通道">
+            <h3>默认用户只看到当前模型</h3>
+            <div class="role-row"><span class="role-id">Current</span><span class="role-purpose">当前会话正在使用的模型</span><span class="role-default">/model</span></div>
+            <div class="role-row"><span class="role-id">Provider</span><span class="role-purpose">作为模型元数据展示，不要求先选 tab</span><span class="role-default">read-only</span></div>
+            <div class="role-row"><span class="role-id">Thinking</span><span class="role-purpose">状态栏显示，Shift+Tab 独立调整</span><span class="role-default">non-blocking</span></div>
+            <div class="role-row"><span class="role-id">Routing</span><span class="role-purpose">角色自动继承；只在高级设置编辑</span><span class="role-default">automatic</span></div>
+          </section>
+
+          <section class="role-group san" aria-label="功能消费者映射">
+            <h3>功能固定消费现有角色</h3>
+            <div class="role-row"><span class="role-id">digest</span><span class="role-purpose">消费 smol</span><span class="role-default">pi/smol</span></div>
+            <div class="role-row"><span class="role-id">commander</span><span class="role-purpose">消费 slow</span><span class="role-default">pi/slow</span></div>
+            <div class="role-row"><span class="role-id">worker</span><span class="role-purpose">消费 task</span><span class="role-default">pi/task</span></div>
+            <div class="role-row"><span class="role-id">supervisor</span><span class="role-purpose">消费 advisor</span><span class="role-default">pi/advisor</span></div>
+            <div class="role-row"><span class="role-id">oracle</span><span class="role-purpose">消费 plan</span><span class="role-default">pi/plan</span></div>
+            <div class="role-row"><span class="role-id">workflow</span><span class="role-purpose">无显式 override 时消费 default</span><span class="role-default">pi/default</span></div>
+          </section>
+        </div>
+
+        <div class="verdict">
+          <div class="verdict-label">单服务商路径</div>
+          <blockquote><code>/connect</code> 填入地址和 key，自动发现模型；选择一个模型，完成。没有 role、scope 或 effort 的强制追问。</blockquote>
+        </div>
+
+        <div class="callout info">
+          <strong>角色继承需要成为正式图，但整张图不应出现在普通模型界面。</strong>
+          <p>建议由 <code>RoleDefinition</code> 声明 label、lane、inherits、requirements 与 consumers，并在启动时做循环检测。普通模式完全不渲染 lane；<code>/settings → Models → Routing</code> 和专家直达命令才展示 Main/Fast/Deep/Vision、现有 10 个 role id、来源和覆盖关系。</p>
+        </div>
+
+        <table class="policy-table">
+          <thead><tr><th>现有角色</th><th>目标解析顺序</th><th>高级设置通道</th></tr></thead>
+          <tbody>
+            <tr><td>default</td><td>显式配置 → startup/catalog selection</td><td>Main</td></tr>
+            <tr><td>smol</td><td>显式配置 → default → 现有 smol priority chain</td><td>Fast</td></tr>
+            <tr><td>slow</td><td>显式配置 → default → 现有 slow priority chain</td><td>Deep</td></tr>
+            <tr><td>vision</td><td>显式配置 → available image-capable model → unavailable</td><td>Vision</td></tr>
+            <tr><td>plan</td><td>显式配置 → slow → 现有 plan priority chain</td><td>Deep</td></tr>
+            <tr><td>designer</td><td>显式配置 → default → 现有 designer priority chain</td><td>Main</td></tr>
+            <tr><td>commit</td><td>显式配置 → smol</td><td>Fast</td></tr>
+            <tr><td>tiny</td><td>显式配置 → smol</td><td>Fast</td></tr>
+            <tr><td>task</td><td>显式配置 → default → 现有 task priority chain</td><td>Main</td></tr>
+            <tr><td>advisor</td><td>显式配置 → slow</td><td>Deep</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout">
+          <strong>这张表是 P1 目标契约，不是现状抄录。</strong>
+          <p>当前只有 smol、slow、designer 会在部分路径优先继承 default，tiny/advisor 复用的是 priority list，plan/task 也有自己的默认链。目标图为单模型用户补齐最终 fallback，并让 Deep/Fast 通道可预测；这一行为变化需要 changelog 和 role-resolution 回归测试。</p>
+        </div>
+
+        <div class="contract-layout">
+          <div>
+            <h3>正式角色图契约</h3>
+            <pre><code>type ModelLane =
+  | "main"
+  | "fast"
+  | "deep"
+  | "vision";
+
+interface RoleDefinition {
+  id: ModelRole; // existing 10 only
+  lane: ModelLane;
+  inherits?: ModelRole;
+  priorityFallback?: string;
+  requirements: ModelRequirements;
+}</code></pre>
+          </div>
+          <div>
+            <h3>功能消费者常量</h3>
+            <pre><code>const FUNCTION_MODEL_ROLE = {
+  digest: "smol",
+  commander: "slow",
+  worker: "task",
+  supervisor: "advisor",
+  oracle: "plan",
+  workflow: "default",
+} as const satisfies
+  Record&lt;FunctionConsumer, ModelRole&gt;;</code></pre>
+          </div>
+        </div>
+
+        <div class="callout">
+          <strong><code>pi/&lt;role&gt;</code> 是保留的历史兼容别名。</strong>
+          <p>品牌已经迁移为 San，但 selector 继续使用现有 <code>pi/</code> 前缀，不新增 <code>san/</code> 平行语法。自定义 <code>modelRoles</code> key 继续作为高级能力保留；本阶段不承诺为自定义 key 新增 <code>pi/custom</code> alias。</p>
+        </div>
+
+        <table class="policy-table">
+          <thead><tr><th>角色要求</th><th>硬校验</th><th>软提示</th><th>交互行为</th></tr></thead>
+          <tbody>
+            <tr><td>vision</td><td>必须支持 image input</td><td>context / output 容量</td><td>不兼容模型禁选</td></tr>
+            <tr><td>task / worker / commander / supervisor / oracle</td><td>必须支持 tools</td><td>reasoning 与推荐 effort</td><td>不支持 tools 禁选；无 reasoning 可警告</td></tr>
+            <tr><td>digest</td><td>当前实现要求 tools 或结构化输出能力</td><td>响应速度、超时与 side-request 健康</td><td>不健康时允许 fallback digest，不阻塞主流程</td></tr>
+            <tr><td>default</td><td>当前会话临时切换时必须容纳现有上下文</td><td>最大输出、vision、tools</td><td>项目/用户绑定可保存；会话切换超限时阻止</td></tr>
+            <tr><td>slow / plan / advisor</td><td>无额外硬条件</td><td>不支持 thinking effort 时提示能力降级</td><td>只展示模型实际支持的 effort</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="band" id="scope">
+      <div class="shell section">
+        <div class="section-kicker">04 / 作用域与优先级</div>
+        <h2>简单切换不问作用域，长期策略只在高级设置里写。</h2>
+        <p class="section-lead"><code>/model</code> 永远只切换当前会话，Enter 不弹出 scope 菜单。用户进入 Models 设置并主动选择“设为默认”时，才询问“当前项目”或“所有项目”；高级路由写入显示最终生效层与被遮蔽层。</p>
+
+        <div class="scope-stack" aria-label="模型角色作用域优先级">
+          <div class="scope-row"><span class="scope-rank">00</span><span class="scope-name">Built-in</span><span class="scope-desc">角色默认继承图和 catalog priority chain。</span><span class="scope-target">code defaults</span></div>
+          <div class="scope-row"><span class="scope-rank">10</span><span class="scope-name">User</span><span class="scope-desc">跨项目的个人默认模型角色。</span><span class="scope-target">~/.san/agent/config.yml</span></div>
+          <div class="scope-row active"><span class="scope-rank">20</span><span class="scope-name">Project</span><span class="scope-desc">团队共享、随仓库版本控制的角色策略。</span><span class="scope-target">.san/config.yml</span></div>
+          <div class="scope-row readonly"><span class="scope-rank">30</span><span class="scope-name">Launch overlay</span><span class="scope-desc">通过 <code>--config</code> 注入的启动策略。UI 中只读，避免改错源。</span><span class="scope-target">explicit overlay path</span></div>
+          <div class="scope-row"><span class="scope-rank">40</span><span class="scope-name">Session</span><span class="scope-desc">当前会话角色覆盖，写入新的 custom journal entry，resume 后继续有效。</span><span class="scope-target">san.model_role_override</span></div>
+          <div class="scope-row"><span class="scope-rank">50</span><span class="scope-name">Invocation</span><span class="scope-desc">CLI、RPC、ACP、agent 或 workflow 对单次调用的显式覆盖。</span><span class="scope-target">in memory / audit event</span></div>
+        </div>
+
+        <div class="contract-layout">
+          <div class="contract-notes">
+            <div class="contract-note"><b>NEW API</b><p><code>ModelRoleAssignmentStore</code> 是新增服务，替代 UI 对 <code>Settings.setModelRole()</code> 的直接调用。迁移期后者仅作为 deprecated user-scope wrapper，最终移除，不形成双写路径。</p></div>
+            <div class="contract-note"><b>CLEAR</b><p>清除某层 assignment 后，UI 立即显示下一层继承值，而不是显示空白。</p></div>
+            <div class="contract-note"><b>YAML</b><p>用户级和项目级写入使用 comment-preserving YAML document patch、文件锁与原子替换，只修改 <code>modelRoles.&lt;role&gt;</code>。</p></div>
+            <div class="contract-note"><b>SESSION</b><p>现有 <code>model_change</code> 继续只记录活动模型变化；非活动角色覆盖使用新的 <code>san.model_role_override</code> custom entry。</p></div>
+            <div class="contract-note"><b>OVERRIDE</b><p>Launch/runtime overrides 保持只读。写 user/project 不再同步修改 <code>#overrides</code>，而是返回“已写入但被遮蔽”；<code>overrideModelRoles()</code> 仅保留给启动参数与测试。</p></div>
+          </div>
+          <div>
+            <h3>建议的作用域 API</h3>
+            <pre><code>type WritableModelRoleScope =
+  | "user"
+  | "project"
+  | "session";
+
+// NEW: replaces UI calls to Settings.setModelRole().
+interface ModelRoleAssignmentStore {
+  inspect(role: string): ModelRoleResolution;
+  assign(
+    role: string,
+    binding: string,
+    scope: WritableModelRoleScope,
+  ): Promise&lt;ModelRoleWriteResult&gt;;
+  clear(
+    role: string,
+    scope: WritableModelRoleScope,
+  ): Promise&lt;ModelRoleWriteResult&gt;;
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="contract-layout">
+          <div>
+            <h3>新的 session custom entry</h3>
+            <pre><code>const MODEL_ROLE_OVERRIDE_CUSTOM_TYPE =
+  "san.model_role_override";
+
+interface SessionModelRoleOverrideV1 {
+  version: 1;
+  role: string; // built-in or existing custom role key
+  binding: string | null; // null clears this scope
+}</code></pre>
+          </div>
+          <div class="contract-notes">
+            <div class="contract-note"><b>WHY</b><p><code>model_change</code> 会影响活动模型恢复、role cycle 和 cache-reset 解释；用它记录非活动角色写入会混淆现有契约。</p></div>
+            <div class="contract-note"><b>RESUME</b><p>按当前 branch 从 root 到 leaf 折叠每个 role 的最新 custom entry，天然支持 rewind 与 branch。</p></div>
+            <div class="contract-note"><b>COMPAT</b><p>旧 session 没有该 entry，等价于没有 session role override；旧版本会忽略 custom entry，因此不需要重写历史 JSONL。</p></div>
+          </div>
+        </div>
+
+        <div class="callout danger">
+          <strong>Comment-preserving YAML writer 是 project scope 和自定义 endpoint 上线的硬门禁。</strong>
+          <p>现状使用 <code>YAML.stringify</code> 整文件写回，会丢注释并重排内容。P0/P1 必须先提供基于 YAML Document/CST 的 path patch、文件锁、原子替换和最小 diff 测试；若采用现有 <code>yaml</code> package，应声明为直接依赖，不能依赖传递安装。门禁未通过前，高级路由不得写 <code>.san/config.yml</code>，<code>/connect → Custom endpoint</code> 也不得写用户级 <code>models.yml</code>。API key 永远写 AuthStorage，不写 YAML。仍不新增平行配置源。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="band alt" id="resolution">
+      <div class="shell section">
+        <div class="section-kicker">05 / 解析与推理强度</div>
+        <h2>搜索允许模糊，持久策略禁止静默模糊。</h2>
+        <p class="section-lead">现有 fuzzy engine 对交互搜索很有价值，不应删除。需要改变的是它在持久配置中的地位：旧值可以兼容解析，但必须带警告；新写入必须 canonical。</p>
+
+        <div class="evidence-list" aria-label="现有模型解析完整链路">
+          <div class="evidence-row"><b>1. Exact provider/id</b><span>包含 variant alias 与 OpenRouter routed/date fallback。</span></div>
+          <div class="evidence-row"><b>2. Exact bare id</b><span>出现多个 provider 候选时进入 preference ranking。</span></div>
+          <div class="evidence-row"><b>3. Bedrock profile</b><span>解析 Bedrock inference profile model id；当前代码位于 retired variant 之前。</span></div>
+          <div class="evidence-row"><b>4. Retired variant</b><span>将已折叠的 effort-tier 旧模型 id 映射到逻辑模型。</span></div>
+          <div class="evidence-row"><b>5. Provider fuzzy</b><span>仅在已识别 provider 内 fuzzy match。</span></div>
+          <div class="evidence-row"><b>6. Substring</b><span>按 alias 优先、否则最新 dated id 选择。</span></div>
+          <div class="evidence-row"><b>Candidate ranking</b><span>歧义候选依次参考 model usage、<code>modelProviderOrder</code>、provider usage 与 catalog order。</span></div>
+          <div class="evidence-row"><b>Outer grammar</b><span><code>:effort</code>、ordered fallback 与 <code>@upstream</code> routing 在匹配引擎外层继续处理。</span></div>
+        </div>
+
+        <table class="policy-table">
+          <thead><tr><th>输入类型</th><th>保存策略</th><th>运行策略</th><th>状态</th></tr></thead>
+          <tbody>
+            <tr><td>UI 选择具体模型</td><td>保存精确 <code>provider/id[:effort]</code></td><td>直接 exact resolve</td><td class="status-ok">exact</td></tr>
+            <tr><td>角色继承 <code>pi/slow</code></td><td>保留 alias</td><td>展开角色图并记录路径</td><td class="status-ok">alias</td></tr>
+            <tr><td>ordered fallback</td><td>保留现有逗号列表；UI 逐项编辑</td><td>按顺序选择首个 available + compatible</td><td class="status-ok">exact chain</td></tr>
+            <tr><td>旧 fuzzy selector</td><td>读取兼容，下一次确认时 canonicalize</td><td>解析并显式显示 requested → resolved</td><td class="status-warn">legacy_fuzzy</td></tr>
+            <tr><td>多义或不存在 selector</td><td>拒绝新写入</td><td>关键角色 fail fast；side role 立即 fallback</td><td class="status-stop">unresolved</td></tr>
+            <tr><td>不支持所选 effort</td><td>UI 不提供该选项；手写配置报诊断</td><td>不得静默 clamp 到另一档</td><td class="status-stop">incompatible</td></tr>
+          </tbody>
+        </table>
+
+        <div class="verdict">
+          <div class="verdict-label">目标 EFFORT 规则</div>
+          <blockquote>单次调用显式 effort &gt; role selector 显式 effort &gt; agent frontmatter 默认 effort &gt; model metadata 默认 effort。显式用户选择不能再被 prompt frontmatter 覆盖。</blockquote>
+        </div>
+
+        <div class="callout">
+          <strong>这是行为修复，不是现状描述。</strong>
+          <p>当前 subagent 执行使用 <code>thinkingLevel ?? resolvedThinkingLevel</code>，frontmatter 可以压过 role selector。调整优先级需要进入 coding-agent changelog，并覆盖普通 subagent、四个 Execution Loop agent、显式/继承/不支持 effort 的回归场景。</p>
+        </div>
+
+        <div class="callout info">
+          <strong>保留现有正交能力。</strong>
+          <p>自定义 role key 继续工作；auth 检查和 retry fallback 不并入 role inheritance；模糊候选仍保留 usage 与 <code>modelProviderOrder</code> 偏好。当前 picker 中只有选择 <code>default</code> 会同时切换 live session model，其他角色只更新 settings，这个差异会在新 UI 中显式展示。</p>
+        </div>
+
+        <div class="callout info">
+          <strong>增加一条可机器消费的诊断命令。</strong>
+          <p><code>san models doctor --json</code> 输出每个角色的 requested、resolved、source、capabilities、auth、fallback 与 warning；普通 <code>/model</code> 不读取角色菜单，高级 Models 设置和 <code>/model roles</code> 专家直达才展开完整诊断。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="experience">
+      <div class="shell section">
+        <div class="section-kicker">06 / 产品交互</div>
+        <h2>终端交互完全可行，前提是一个页面只做一件事。</h2>
+        <p class="section-lead">借鉴 OpenCode 的清晰边界，但复用 San 已有的 AuthStorage、ModelRegistry 和动态发现能力：<code>/connect</code> 处理 provider，<code>/model</code> 处理 current model。两个页面都支持直接搜索，普通操作最多一次下钻、一次确认。</p>
+
+        <div class="callout danger">
+          <strong>这是明确接受的 breaking TUI UX。</strong>
+          <p>现状中，TUI <code>/model</code> 是 model → role → thinking 的多层菜单，选择 default 还会持久化全局；<code>/switch</code> 才是 session-only。目标版本把 TUI <code>/model</code> 和 Alt+M 都改为“一次 Enter 切换当前会话模型并关闭”。角色编辑迁到 Models 设置；<code>/model roles</code> 只保留为专家直达命令，不在普通空命令流程里露出。该变化必须写入 <code>Breaking Changes</code>。</p>
+        </div>
+
+        <div class="terminal" aria-label="建议的服务商连接面板示意">
+          <div class="terminal-head"><span>CONNECT</span><span>model providers · type to search</span></div>
+          <div class="terminal-body">
+            <div class="terminal-line selected"><span class="role">› OpenAI Codex</span><span>Connected · ChatGPT OAuth</span><span class="source">14 MODELS</span><span class="caps">Enter to manage</span></div>
+            <div class="terminal-line"><span class="role">  Anthropic</span><span>Connected · env key</span><span class="source">11 MODELS</span><span class="caps">source remains read-only</span></div>
+            <div class="terminal-line"><span class="role">  OpenRouter</span><span>Not connected</span><span class="source">API KEY</span><span class="caps">OAuth or key when supported</span></div>
+            <div class="terminal-line"><span class="role">  Custom endpoint…</span><span>Add an OpenAI-compatible URL</span><span class="source">ADVANCED</span><span class="caps">discover models after validation</span></div>
+          </div>
+        </div>
+
+        <div class="terminal" aria-label="建议的模型选择面板示意">
+          <div class="terminal-head"><span>MODEL</span><span>connected models · current session</span></div>
+          <div class="terminal-body">
+            <div class="terminal-line selected"><span class="role">› GPT 5.6 Sol</span><span>openai-codex/gpt-5.6-sol</span><span class="source">RECENT</span><span class="caps">500K · tools · vision</span></div>
+            <div class="terminal-line"><span class="role">  Claude Opus 4.8</span><span>anthropic/claude-opus-4-8</span><span class="source">ANTHROPIC</span><span class="caps">200K · tools · vision</span></div>
+            <div class="terminal-line"><span class="role">  GPT 5.5</span><span>openai-codex/gpt-5.5</span><span class="source">OPENAI</span><span class="caps">400K · tools · vision</span></div>
+            <div class="terminal-line"><span class="role">  Kimi K2.5</span><span>openrouter/moonshotai/kimi-k2.5</span><span class="source">OPENROUTER</span><span class="caps">256K · tools</span></div>
+          </div>
+        </div>
+
+        <table class="policy-table">
+          <thead><tr><th>界面</th><th>首屏</th><th>Enter 行为</th><th>不放在这里的内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>/connect</code></td><td>已连接置顶，其余 provider 可搜索；每行显示认证来源、健康和 model count</td><td>未连接：选 OAuth/API key/keyless；已连接：验证、重连、移除或查看模型</td><td>web search provider、角色、模型 effort、项目 scope</td></tr>
+            <tr><td><code>/model</code></td><td>只显示已连接 provider 的模型；recent/recommended 在前，provider 是每行元数据</td><td>校验当前上下文容量，切换当前会话模型，关闭 picker</td><td>role action、持久 scope、fallback、第二层 thinking 确认</td></tr>
+            <tr><td>Models 设置</td><td>Default model、Automatic routing、Advanced routing</td><td>编辑长期策略时才询问 user/project scope</td><td>凭据明文和 OAuth 流程</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout info">
+          <strong>空状态直接串起两步，但不合并两个概念。</strong>
+          <p>当没有可用模型时，<code>/model</code> 直接打开 <code>/connect</code>；连接成功并刷新目录后，自动进入只显示该 provider 的模型列表。只有一个模型时预选它，仍由用户按一次 Enter 确认。Esc 可逐层返回，不把 provider 表单和模型列表堆在同一屏。</p>
+        </div>
+
+        <div class="callout">
+          <strong>Custom endpoint 是高级连接方法，不是另一套模型系统。</strong>
+          <p>默认只询问显示名、base URL 和可选 API key，先探测 OpenAI-compatible model list；无法判断协议时才展开 api/discovery 高级字段。非秘密 provider 元数据写用户级 <code>models.yml</code>，key 写 AuthStorage。项目级 endpoint 与手工 model override 继续走高级配置和 YAML writer 门禁。</p>
+        </div>
+
+        <div class="callout danger">
+          <strong>凭据写入与 custom-provider 校验必须先改合同。</strong>
+          <p><code>AuthStorage.set()</code> 会替换一个 provider 的全部凭据；<code>/connect</code> 需要新增按类型 upsert/replace API，或在替换前明确确认，绝不能因添加 key 静默删除多个 OAuth 账号。与此同时，<code>validateProviderConfiguration()</code> 当前定义 custom models 时要求内联 <code>apiKey</code>；目标版本必须允许 <code>auth: apiKey</code> 仅声明认证模式，并在运行时通过 AuthStorage 判定 availability，否则“key 不进 YAML”无法成立。</p>
+        </div>
+
+        <div class="journey" aria-label="简单模型配置流程">
+          <article class="journey-step"><span class="phase-id">STEP 01</span><b><code>/connect</code></b><p>搜索并选择 provider；已连接项置顶，环境变量来源只读展示。</p></article>
+          <article class="journey-step"><span class="phase-id">STEP 02</span><b>选择认证方法</b><p>有 OAuth 就优先推荐；否则粘贴 API key。本地服务允许 no-auth。</p></article>
+          <article class="journey-step"><span class="phase-id">STEP 03</span><b>验证并发现</b><p>凭据遮罩显示；验证成功后刷新该 provider 的模型目录。</p></article>
+          <article class="journey-step"><span class="phase-id">STEP 04</span><b><code>/model</code></b><p>显示该 provider 的模型，或搜索所有已连接模型；provider 不再要求横向切 tab。</p></article>
+          <article class="journey-step"><span class="phase-id">STEP 05</span><b>Enter 开始</b><p>一次确认切换当前会话。effort 保留有效值，否则回到 Auto 并非阻塞提示。</p></article>
+        </div>
+
+        <div class="role-groups">
+          <section class="role-group">
+            <h3>普通命令面只有两个入口</h3>
+            <div class="role-row"><span class="role-id">/connect</span><span class="role-purpose">连接、验证、重连或移除 model provider</span><span class="role-default">providers</span></div>
+            <div class="role-row"><span class="role-id">/model</span><span class="role-purpose">选择当前会话模型</span><span class="role-default">models</span></div>
+            <div class="role-row"><span class="role-id">/models</span><span class="role-purpose">保留为 /model 的自然别名</span><span class="role-default">alias</span></div>
+            <div class="role-row"><span class="role-id">/settings</span><span class="role-purpose">默认模型与高级路由</span><span class="role-default">persistent</span></div>
+          </section>
+          <section class="role-group san">
+            <h3>兼容入口与快捷键</h3>
+            <div class="role-row"><span class="role-id">Alt+M</span><span class="role-purpose">打开与 /model 相同的直接选择器</span><span class="role-default">primary</span></div>
+            <div class="role-row"><span class="role-id">Shift+Tab</span><span class="role-purpose">独立循环当前 thinking level</span><span class="role-default">existing</span></div>
+            <div class="role-row"><span class="role-id">/switch</span><span class="role-purpose">兼容别名；语义与 /model 一致</span><span class="role-default">deprecated</span></div>
+            <div class="role-row"><span class="role-id">/login /logout</span><span class="role-purpose">兼容直达 /connect 的 OAuth 操作</span><span class="role-default">legacy</span></div>
+          </section>
+        </div>
+
+        <div class="callout info">
+          <strong>按 80×24 设计，并保证 40 列仍可操作。</strong>
+          <p>窄终端隐藏 capability 列，把完整 provider/id 放到选中项下方；所有文本按显示宽度截断。列表随 viewport 滚动，异步发现只更新状态行，不重排当前高亮；键盘只要求方向键、输入搜索、Enter 和 Esc，鼠标是增强而不是前提。普通路径不出现横向 provider tab、嵌套卡片或三级菜单。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="band alt" id="consumers">
+      <div class="shell section">
+        <div class="section-kicker">07 / 消费者收口</div>
+        <h2>功能只消费角色；artifact 可以覆盖，但必须显式。</h2>
+        <p class="section-lead">不应把 workflow 和 agent frontmatter 的显式 model 全部删除。它们属于可复现 artifact 的 invocation override。要删除的是功能 settings 中与 <code>modelRoles</code> 重复的长期模型入口。</p>
+
+        <table class="consumer-table">
+          <thead><tr><th>消费者</th><th>当前入口</th><th>目标入口</th><th>兼容迁移</th></tr></thead>
+          <tbody>
+            <tr><td>主会话</td><td><code>modelRoles.default</code> + session model</td><td>保持；明确区分 role binding 与 active model</td><td>无需迁移</td></tr>
+            <tr><td>Context Steady digest</td><td><code>san.contextSteady.digest.llm.modelRole</code></td><td>固定消费 <code>pi/smol</code></td><td>兼容期旧字段作为 legacy invocation override；doctor 建议迁到 smol</td></tr>
+            <tr><td>Execution commander</td><td><code>san.executionLoop.roles.commander.modelRole</code></td><td>固定消费 <code>pi/slow</code></td><td>兼容期旧字段优先；无冲突时迁到 slow</td></tr>
+            <tr><td>Execution worker</td><td><code>san.executionLoop.roles.worker.modelRole</code></td><td>固定消费 <code>pi/task</code></td><td>兼容期旧字段优先；无冲突时迁到 task</td></tr>
+            <tr><td>Execution supervisor</td><td><code>san.executionLoop.roles.supervisor.modelRole</code></td><td>固定消费 <code>pi/advisor</code></td><td>兼容期旧字段优先；无冲突时迁到 advisor</td></tr>
+            <tr><td>Execution oracle</td><td><code>san.executionLoop.roles.oracle.modelRole</code></td><td>固定消费 <code>pi/plan</code></td><td>兼容期旧字段优先；无冲突时迁到 plan</td></tr>
+            <tr><td>普通 subagent</td><td>settings override → frontmatter → active model</td><td>保持 invocation override；统一 effort precedence</td><td>行为修正需 changelog</td></tr>
+            <tr><td>Workflow agent</td><td>script <code>model</code> → eval agent bridge</td><td>无显式 model 时消费 <code>pi/default</code>；显式值作为 invocation override</td><td>审批页展示最终解析模型</td></tr>
+            <tr><td>Brain</td><td>无独立 LLM 模型，消费 TurnDigest</td><td>保持无模型入口</td><td>避免把 Brain activation role 与 model role 混淆</td></tr>
+            <tr><td>Mnemopi / STT / TTS 本地模型</td><td>独立本地或远端服务配置</td><td>暂不纳入 chat model roles</td><td>列为明确非目标</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout">
+          <strong>第一阶段不要删除旧字段。</strong>
+          <p>这些是已经落盘的公开配置。采用“legacy invocation override 优先、doctor 提示迁入目标现有 role、示例与 UI 只写 <code>modelRoles</code>”的退场策略；至少跨一个明确发布周期后再移除 schema。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="reliability">
+      <div class="shell section">
+        <div class="section-kicker">08 / 失败治理</div>
+        <h2>模型路由正确，不代表每轮都值得等 30 秒。</h2>
+        <p class="section-lead">这次体验问题由显式开启的 digest LLM side request 暴露。<code>san.contextSteady.digest.llm.enabled</code> 默认是 false；只有开启后才会发起该请求。角色面板解决“选谁”，还需要统一 side-request 的失败策略，避免认证、余额、禁止访问或持续超时在每轮重复阻塞。</p>
+
+        <div class="breaker" aria-label="side request 熔断状态">
+          <article class="breaker-state closed"><span class="phase-id">CLOSED</span><h3>正常</h3><p>按角色解析并调用，记录 resolved model、耗时和结果。</p></article>
+          <article class="breaker-state degraded"><span class="phase-id">DEGRADED</span><h3>退化</h3><p>首次 transient error 后有限重试；不得在一个 turn 内无限叠加 timeout。</p></article>
+          <article class="breaker-state open"><span class="phase-id">OPEN</span><h3>熔断</h3><p>余额不足、401/403、模型不可用立即打开；后续 turn 直接走确定性 fallback。</p></article>
+          <article class="breaker-state probe"><span class="phase-id">HALF OPEN</span><h3>探测</h3><p>冷却后只允许一次探测；成功关闭，失败继续熔断。</p></article>
+        </div>
+
+        <table class="policy-table">
+          <thead><tr><th>错误类型</th><th>策略</th><th>用户可见结果</th></tr></thead>
+          <tbody>
+            <tr><td>selector unresolved / incompatible / 无认证</td><td>请求前 fail fast</td><td>role health 显示红色；side role 立即 fallback</td></tr>
+            <tr><td>余额不足、401、403、明确模型下线</td><td>不重试，session 级熔断</td><td>只提示一次具体原因</td></tr>
+            <tr><td>网络中断、503、短暂 stream close</td><td>有限重试后熔断</td><td>显示 degraded，不重复阻塞每轮</td></tr>
+            <tr><td>timeout</td><td>角色级 bounded timeout；达到阈值后熔断</td><td>fallback 继续，保留诊断事件</td></tr>
+            <tr><td>结构化输出不合法</td><td>有限重试；随后 deterministic fallback</td><td>不把功能失败伪装成 Brain MCP 错误</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout danger">
+          <strong>对当前仓库的即时建议。</strong>
+          <p>仅对当前这类已开启 LLM digest 的项目：在统一治理落地前，先将 <code>san.contextSteady.digest.llm.enabled</code> 设为 false，使用 deterministic fallback；或者把 digest 改到一个已验证可用、响应快的模型。未开启 LLM digest 的用户不受该 30 秒路径影响。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="band alt" id="migration">
+      <div class="shell section">
+        <div class="section-kicker">09 / 当前配置迁移</div>
+        <h2>先消除歧义，再让功能槽位自动继承。</h2>
+        <p class="section-lead">简单用户与 San 自托管 dogfood 不是同一种配置复杂度。普通 <code>/model</code> 不写长期角色；只有用户在 Models 设置里明确“设为默认”时才落盘 default。下面的多模型对比明确属于 advanced/dogfood 形态。示例不包含 provider key；<code>models.yml</code> 保持独立。</p>
+
+        <div class="contract-layout">
+          <div>
+            <h3>Simple 用户主动设为默认后的完整配置</h3>
+            <pre><code>modelRoles:
+  default: my-provider/my-model:high</code></pre>
+          </div>
+          <div class="contract-notes">
+            <div class="contract-note"><b>MAIN</b><p>只配置一个主模型；task、smol、slow、plan、advisor 等按正式继承表解析。</p></div>
+            <div class="contract-note"><b>OPTIONAL</b><p>只有用户明确选择 Fast、Deep、Vision 或高级角色覆盖时，才增加其他 key。</p></div>
+          </div>
+        </div>
+
+        <div class="config-compare">
+          <section class="config-side">
+            <h3>当前 advanced/dogfood 片段</h3>
+            <pre><code>modelRoles:
+  default: asxs/gpt-5.5
+  smol: claude-code/claude-opus-4-8
+  slow: claude-code/claude-opus-4-8
+  plan: asxs/gpt-5.5:xhigh
+  advisor: claude-code/claude-opus-4-8
+  task: deepseek/deepseek-v4-pro
+
+san:
+  contextSteady:
+    digest:
+      llm:
+        modelRole: claude-code/claude-opus-4-8
+  executionLoop:
+    roles:
+      commander:
+        modelRole: claude-code/claude-opus-4-8
+      worker:
+        modelRole: deepseek/deepseek-v4-pro</code></pre>
+            <p class="config-note"><code>asxs/gpt-5.5</code> 当前不是目录中的精确模型，存在 legacy fuzzy 落点。</p>
+          </section>
+          <div class="config-arrow" aria-hidden="true">→</div>
+          <section class="config-side">
+            <h3>目标 advanced/dogfood 片段</h3>
+            <pre><code>modelRoles:
+  default: asxs/gpt-5.6-sol:xhigh
+  smol: claude-code/claude-opus-4-8
+  slow: claude-code/claude-opus-4-8
+  plan: asxs/gpt-5.6-sol:xhigh
+  task: deepseek/deepseek-v4-pro
+
+# 未配置的内部槽位自动继承：
+# digest -> smol
+# commander -> slow
+# worker -> task
+# supervisor -> advisor
+# oracle -> plan
+
+san:
+  contextSteady:
+    digest:
+      llm:
+        enabled: false
+  executionLoop:
+    # roles.*.modelRole retired</code></pre>
+            <p class="config-note">这里只保留真正不同的 Main、Fast、Deep、Plan 和 Task 模型。功能消费者固定映射到这些现有角色，不再提供另一套长期模型入口。</p>
+          </section>
+        </div>
+
+        <div class="callout info">
+          <strong>迁移必须保守。</strong>
+          <p>旧功能字段在兼容期作为 legacy invocation override，优先于其目标角色；doctor 只有在目标角色未配置或解析结果等价时才自动迁移。若旧 commander 与 slow 等配置语义冲突，必须提示用户手动选择，不能静默改写共享角色。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="delivery">
+      <div class="shell section">
+        <div class="section-kicker">10 / 实施顺序</div>
+        <h2>按可验证的契约拆成五个阶段。</h2>
+        <p class="section-lead">不要先重画 selector，再补底层语义。UI 必须建立在来源可追踪、解析可解释、消费者已统一的服务上。</p>
+
+        <div class="roadmap">
+          <article class="phase"><span class="phase-id">P0 / PREREQUISITES</span><h3>固定层级与写入安全</h3><p>先让 project source precedence、凭据边界和 YAML patch 都可预测。</p><ul><li>修正 settings provider merge 顺序</li><li>AuthStorage typed upsert</li><li>custom auth validation 解耦 inline key</li><li>config.yml + models.yml writer</li><li>冲突与最小 diff 测试</li></ul></article>
+          <article class="phase"><span class="phase-id">P1 / CONTRACT</span><h3>统一解析与作用域</h3><p>建立正式继承表、来源与新写入服务。</p><ul><li>现有 10 role graph</li><li>ResolvedModelRole</li><li>ModelRoleAssignmentStore</li><li>session custom entry</li></ul></article>
+          <article class="phase"><span class="phase-id">P2 / CONSUMERS</span><h3>收口消费者</h3><p>功能模块固定消费现有角色。</p><ul><li>digest → smol</li><li>execution → slow/task/advisor/plan</li><li>effort precedence 修复</li><li>legacy adapter + doctor</li></ul></article>
+          <article class="phase"><span class="phase-id">P3 / EXPERIENCE</span><h3>统一 /connect 与 /model</h3><p>先连接 provider，再用一次 Enter 切换当前模型。</p><ul><li>built-in OAuth + API key</li><li>custom endpoint discovery</li><li>empty-state handoff</li><li>80×24 / 40-column probes</li><li>breaking UX + changelog</li></ul></article>
+          <article class="phase"><span class="phase-id">P4 / RELIABILITY</span><h3>运行时治理</h3><p>阻止 side request 重复卡顿。</p><ul><li>role health</li><li>circuit breaker</li><li>deduped diagnostics</li><li>deprecated field removal gate</li></ul></article>
+        </div>
+
+        <div class="acceptance">
+          <section class="accept-col">
+            <h3>配置契约</h3>
+            <ul>
+              <li>API key 只写 AuthStorage；日志、状态和 YAML 都不出现明文。</li>
+              <li>新增 API key 不会静默覆盖同 provider 的 OAuth 或其他账号。</li>
+              <li>自定义 endpoint 的非秘密元数据写用户 models.yml，并保持注释。</li>
+              <li>用户、项目、session 三层可分别 assign 和 clear。</li>
+              <li>每次读取返回 effective source 和 shadowed sources。</li>
+              <li>新持久 selector 必须 exact 或合法 role alias。</li>
+            </ul>
+          </section>
+          <section class="accept-col">
+            <h3>运行契约</h3>
+            <ul>
+              <li>digest 与 Execution Loop 只经现有 smol/slow/task/advisor/plan 角色解析。</li>
+              <li>selector 显式 effort 能抵达实际请求。</li>
+              <li>unavailable/incompatible 在网络请求前暴露。</li>
+              <li>LLM digest 开启时，非重试错误不会在每个 turn 重复等待 30 秒。</li>
+            </ul>
+          </section>
+          <section class="accept-col">
+            <h3>体验契约</h3>
+            <ul>
+              <li><code>/connect</code> 同时覆盖 OAuth、API key、keyless 和 custom endpoint。</li>
+              <li><code>/model</code> 只处理当前模型，Enter 切换并关闭，不弹 role/effort/scope。</li>
+              <li>单 provider、单 model 在连接后只需一次确认即可开始使用。</li>
+              <li>无可用模型时自动从 /model 进入 /connect，再返回过滤后的模型列表。</li>
+              <li>40 列终端仍可完成连接和选择，80×24 不出现横向滚动依赖。</li>
+              <li>TUI、CLI、RPC、ACP 对“持久”和“临时”的定义一致。</li>
+            </ul>
+          </section>
+        </div>
+
+        <h3 class="decision-title">冻结决策</h3>
+        <div class="decision-board">
+          <article class="decision-item"><span class="id">D-01</span><div><h3>保留现有字符串语法</h3><p>第一阶段不引入结构化 binding schema，降低迁移面；在运行时解析为强类型对象。</p></div></article>
+          <article class="decision-item"><span class="id">D-02</span><div><h3>不新增公开 ModelRole</h3><p>digest 与 Execution Loop 固定消费现有角色。普通 <code>/model</code> 不展示任何角色；Models 高级设置才展开 lane 和现有 10 个角色。</p></div></article>
+          <article class="decision-item"><span class="id">D-03</span><div><h3>新增 session custom entry</h3><p>保留 <code>model_change</code> 的活动模型语义；非活动角色覆盖写 <code>san.model_role_override</code>，旧 session 无需迁移。</p></div></article>
+          <article class="decision-item"><span class="id">D-04</span><div><h3>普通用户冻结为 /connect + /model</h3><p><code>/connect</code> 管 model provider；TUI <code>/model</code> 与 Alt+M 都是 session-first 一次确认。<code>/setup providers</code>、<code>/login</code>、<code>/logout</code> 和 <code>/switch</code> 保留兼容转发。</p></div></article>
+          <article class="decision-item"><span class="id">D-05</span><div><h3>YAML writer 是硬门禁</h3><p>继续使用 <code>.san/config.yml</code> 和用户 <code>models.yml</code>；comment-preserving patch 未通过前，不开放 project scope 写入或 custom endpoint 持久化。API key 只进 AuthStorage。</p></div></article>
+          <article class="decision-item"><span class="id">D-06</span><div><h3>先兼容，再移除</h3><p>旧功能 modelRole 有真实持久化用户，必须经过 deprecation 周期；冲突配置不自动迁移。</p></div></article>
+          <article class="decision-item"><span class="id">D-07</span><div><h3>连接面只管理 chat model provider</h3><p>Web search 回到 Settings；STT、TTS、embedding、本地 tiny runtime 等不同协议模型不进入 <code>/connect</code> 或 chat model roles。</p></div></article>
+          <article class="decision-item"><span class="id">D-08</span><div><h3>显式 artifact override 保留</h3><p>workflow 和 agent artifact 仍可固定模型，但必须在审批、日志和诊断中显示。</p></div></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="band alt" id="evidence">
+      <div class="shell section">
+        <div class="section-kicker">11 / 代码落点</div>
+        <h2>建议改动边界与测试边界。</h2>
+        <p class="section-lead">以下是实现时的主要代码所有权，不代表必须在一个提交内同时修改。</p>
+
+        <div class="sources">
+          <div class="source-row"><b>01</b><span><code>packages/coding-agent/src/config/model-roles.ts</code>：角色定义、分组、默认继承与 capability requirements。</span></div>
+          <div class="source-row"><b>02</b><span><code>packages/coding-agent/src/config/model-resolver.ts</code>：exact/fuzzy 分类、canonicalization、role graph 与 effort precedence。</span></div>
+          <div class="source-row"><b>03</b><span><code>packages/coding-agent/src/config/settings.ts</code>：modelRoles layer provenance、scope-aware read/write 与 project settings precedence。</span></div>
+          <div class="source-row"><b>04</b><span><code>packages/coding-agent/src/modes/components/model-selector.ts</code>：去掉普通路径的 role/thinking menu，改为 MRU 优先、provider 元数据和 Enter direct-select。</span></div>
+          <div class="source-row"><b>05</b><span><code>packages/coding-agent/src/modes/components/oauth-selector.ts</code> 与 <code>modes/setup-wizard/scenes/sign-in.ts</code>：复用 OAuth 流程，不再作为完整 provider 管理器。</span></div>
+          <div class="source-row"><b>06</b><span><code>packages/coding-agent/src/modes/components/provider-connection-selector.ts</code>：新增统一连接列表、认证方法、健康状态、模型数和 custom endpoint 表单。</span></div>
+          <div class="source-row"><b>07</b><span><code>packages/coding-agent/src/modes/controllers/selector-controller.ts</code>：编排 connect → refresh → filtered model handoff，并把角色写入改走 assignment service。</span></div>
+          <div class="source-row"><b>08</b><span><code>packages/ai/src/auth-storage.ts</code> 与 <code>config/model-registry.ts</code>：复用 API-key/OAuth 持久化、认证来源、available filter 和 provider refresh。</span></div>
+          <div class="source-row"><b>09</b><span><code>packages/coding-agent/src/slash-commands/builtin-registry.ts</code>：新增 <code>/connect</code>，统一 <code>/model</code>，保留 legacy alias 转发。</span></div>
+          <div class="source-row"><b>10</b><span><code>packages/coding-agent/src/context-steady/digest.ts</code> 与 <code>session/agent-session.ts</code>：消费 pi/smol、role health 与 fallback。</span></div>
+          <div class="source-row"><b>11</b><span><code>packages/coding-agent/src/san-loop/task-executor.ts</code>：固定映射 slow、task、advisor、plan。</span></div>
+          <div class="source-row"><b>12</b><span><code>packages/coding-agent/src/task/executor.ts</code>：统一 model 与 thinking override precedence。</span></div>
+          <div class="source-row"><b>13</b><span><code>packages/coding-agent/test/settings-manager.test.ts</code>：层级来源、作用域写入、遮蔽和 YAML 最小变更。</span></div>
+          <div class="source-row"><b>14</b><span><code>packages/coding-agent/test/model-resolver.test.ts</code>：exact、legacy fuzzy、alias graph、fallback 与 incompatible 状态。</span></div>
+          <div class="source-row"><b>15</b><span><code>packages/coding-agent/test/model-selector-role-badge-thinking.test.ts</code> 与新增 provider connection tests：direct-select、空状态 handoff、凭据来源、窄终端和异步 refresh 稳定性。</span></div>
+          <div class="source-row"><b>16</b><span><code>packages/coding-agent/test/context-steady/agent-session-production-path.test.ts</code> 与 <code>test/san-loop/agents.test.ts</code>：真实消费者路由契约。</span></div>
+          <div class="source-row"><b>17</b><span><code>packages/coding-agent/test/session-manager/build-context.test.ts</code>：model_change 保持不变；新的 session role override 按 branch 折叠且旧 session 兼容。</span></div>
+        </div>
+
+        <div class="callout info">
+          <strong>测试原则。</strong>
+          <p>优先验证用户可观察契约：写入哪个文件、最终消费哪个模型、effort 是否到达请求、错误是否重复阻塞。不要通过读取源码文本断言实现细节。</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <section class="finale">
+    <div class="shell">
+      <h2>普通用户只需连接服务商、选择模型，然后开始工作。</h2>
+      <p><code>/connect</code> 建立可用模型集合，<code>/model</code> 一次确认切换当前模型；角色继承、scope、fallback 和诊断继续在高级设置里发挥作用。San 可以保留强路由能力，但不能把内部拓扑变成每个用户的必修课。</p>
+      <div class="formula">provider connection → available models → current model; advanced routing stays optional</div>
+    </div>
+  </section>
+
+  <footer class="shell doc-footer">
+    San model routing governance proposal · revision 03 · 2026-07-13 · no code or runtime configuration changed
+  </footer>
+</body>
+</html>

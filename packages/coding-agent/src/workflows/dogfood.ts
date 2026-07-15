@@ -326,7 +326,7 @@ export async function runWorkflowDeterministicDogfood(): Promise<WorkflowDogfood
 					run.invalidTransitionEventIds.length === 0 &&
 					run.duplicateDeliveryEventIds.length === 0,
 			);
-		const tokenReport = buildWorkflowTokenReport([]);
+		const tokenReport = await buildWorkflowTokenReport([]);
 		const checks: WorkflowDogfoodCheck[] = [
 			{ name: "five_managed_sops", ok: DOGFOOD_SOPS.length === 5, detail: `${DOGFOOD_SOPS.length} SOPs` },
 			{

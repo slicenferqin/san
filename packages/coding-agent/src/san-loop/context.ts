@@ -114,6 +114,21 @@ function estimateRoleContextTokens(content: string): number {
 	});
 }
 
+function fitRoleContextToBudget(content: string, tokenBudget: number): { content: string; trimmed: boolean } {
+	if (estimateRoleContextTokens(content) <= tokenBudget) return { content, trimmed: false };
+	const closing = "</san_execution_loop_context>";
+	const body = content.endsWith(closing) ? content.slice(0, -closing.length) : content;
+	const suffix = `\n[role context omitted at ${tokenBudget}-token boundary]\n${closing}`;
+	let lower = 0;
+	let upper = body.length;
+	while (lower < upper) {
+		const middle = Math.ceil((lower + upper) / 2);
+		if (estimateRoleContextTokens(`${body.slice(0, middle)}${suffix}`) <= tokenBudget) lower = middle;
+		else upper = middle - 1;
+	}
+	return { content: `${body.slice(0, lower)}${suffix}`, trimmed: true };
+}
+
 export function buildSanLoopRoleContext(
 	entries: readonly SessionEntry[],
 	options: BuildSanLoopRoleContextOptions,
@@ -142,7 +157,7 @@ export function buildSanLoopRoleContext(
 	const decisions = run.decisions.slice(-maxDecisions);
 	const sourceContextPlanRefs = [...new Set([...(run.contextPlanRefs ?? []), ...latestContextPlanRefs(entries)])];
 	const sourceContextPacketRefs = [...new Set([...run.contextPacketRefs, ...latestContextPacketRefs(entries)])];
-	const content = renderRoleContext({
+	const rendered = renderRoleContext({
 		role: options.role,
 		run,
 		assignment,
@@ -152,6 +167,8 @@ export function buildSanLoopRoleContext(
 		sourceContextPlanRefs,
 		sourceContextPacketRefs,
 	});
+	const fitted = fitRoleContextToBudget(rendered, tokenBudget);
+	const content = fitted.content;
 	const tokenEstimate = estimateRoleContextTokens(content);
 	const packet: SanLoopRoleContextPacketDebug = {
 		schemaVersion: SAN_LOOP_SCHEMA_VERSION,
@@ -169,7 +186,7 @@ export function buildSanLoopRoleContext(
 		],
 		tokenEstimate,
 		tokenBudget,
-		trimmed: tokenEstimate > tokenBudget ? 1 : 0,
+		trimmed: fitted.trimmed ? 1 : 0,
 	};
 	return { packet, content, run, assignment };
 }

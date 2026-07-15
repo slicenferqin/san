@@ -1,9 +1,92 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
 	buildWorkflowTokenReport,
+	type WorkflowBenchmarkEvidenceManifest,
 	type WorkflowBenchmarkMode,
 	type WorkflowBenchmarkSample,
 } from "../../src/workflows/token-report";
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
+});
+
+function digestText(value: string): string {
+	return new Bun.CryptoHasher("sha256").update(value).digest("hex");
+}
+
+async function writeArtifact(root: string, name: string, value: object): Promise<{ ref: string; hash: string }> {
+	const text = JSON.stringify(value);
+	const ref = path.join(root, name);
+	await Bun.write(ref, text);
+	return { ref, hash: digestText(text) };
+}
+
+async function evidenceFor(samples: readonly WorkflowBenchmarkSample[]): Promise<string[]> {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "san-workflow-token-evidence-"));
+	tempDirs.push(root);
+	return Promise.all(
+		samples.map(async sample => {
+			const providerRequests = Array.from({ length: sample.agentCount }, (_, index) => ({
+				agentRef: `${sample.sampleId}-agent-${index + 1}`,
+				totalTokens:
+					Math.floor(sample.orchestrationTokens / sample.agentCount) +
+					(index < sample.orchestrationTokens % sample.agentCount ? 1 : 0),
+			}));
+			const ledger = await writeArtifact(root, `${sample.sampleId}-ledger.json`, {
+				runRef: sample.runRef,
+				sourceHash: sample.sourceHash,
+				providerRequests,
+				...(sample.mode === "managed"
+					? {
+							approvedTokenLimit: sample.approvedTokenLimit,
+							approvalBoundary: sample.approvalBoundary,
+							nodeGraph: [{ nodeId: `${sample.sampleId}-node`, inputHash: sample.nodeGraphHash }],
+						}
+					: {}),
+			});
+			const session = await writeArtifact(root, `${sample.sampleId}-session.json`, {
+				sessionRef: sample.sessionRef,
+				model: sample.model,
+				settingsHash: sample.settingsHash,
+				measuredAt: sample.measuredAt,
+				usageBeforeTokens: 100,
+				usageAfterTokens: 100 + sample.totalTokens,
+				mainContextBeforeTokens: 50,
+				mainContextAfterTokens: 50 + sample.mainContextGrowthTokens,
+			});
+			const result = await writeArtifact(root, `${sample.sampleId}-result.json`, {
+				fixtureHash: sample.fixtureHash,
+				qualityRubricRef: sample.qualityRubricRef,
+				qualityScore: sample.qualityScore,
+				firstPass: sample.firstPass,
+			});
+			const manifest: WorkflowBenchmarkEvidenceManifest = {
+				schemaVersion: 1,
+				sampleId: sample.sampleId,
+				sopId: sample.sopId,
+				run: sample.run,
+				mode: sample.mode,
+				fixtureHash: sample.fixtureHash,
+				sourceHash: sample.sourceHash,
+				repositoryCommit: sample.repositoryCommit,
+				ledgerRef: path.basename(ledger.ref),
+				ledgerHash: ledger.hash,
+				sessionRef: path.basename(session.ref),
+				sessionHash: session.hash,
+				resultRef: path.basename(result.ref),
+				resultHash: result.hash,
+			};
+			const evidence = path.join(root, `${sample.sampleId}-evidence.json`);
+			await Bun.write(evidence, JSON.stringify(manifest));
+			return evidence;
+		}),
+	);
+}
 
 function samplesForSop(sopId: string): WorkflowBenchmarkSample[] {
 	const samples: WorkflowBenchmarkSample[] = [];
@@ -45,10 +128,10 @@ function samplesForSop(sopId: string): WorkflowBenchmarkSample[] {
 }
 
 describe("Workflow token report", () => {
-	test("passes only after five comparable SOPs meet token, context, quality and budget gates", () => {
+	test("passes only after five comparable SOPs meet token, context, quality and budget gates", async () => {
 		const samples = ["release", "audit", "triage", "migration", "docs"].flatMap(samplesForSop);
 
-		const report = buildWorkflowTokenReport(samples);
+		const report = await buildWorkflowTokenReport(await evidenceFor(samples));
 
 		expect(report.status).toBe("passed");
 		expect(report.sopCount).toBe(5);
@@ -57,8 +140,8 @@ describe("Workflow token report", () => {
 		expect(report.gates.every(gate => gate.passed)).toBe(true);
 	});
 
-	test("reports insufficient data instead of claiming savings from a small sample", () => {
-		const report = buildWorkflowTokenReport(samplesForSop("release"));
+	test("reports insufficient data instead of claiming savings from a small sample", async () => {
+		const report = await buildWorkflowTokenReport(await evidenceFor(samplesForSop("release")));
 
 		expect(report.status).toBe("insufficient_data");
 		expect(report.gates.find(gate => gate.name === "sample_coverage")).toMatchObject({
@@ -68,7 +151,7 @@ describe("Workflow token report", () => {
 		});
 	});
 
-	test("fails rollout when quality regresses or a Managed run exceeds its approved budget", () => {
+	test("fails rollout when quality regresses or a Managed run exceeds its approved budget", async () => {
 		const samples = ["release", "audit", "triage", "migration", "docs"].flatMap(samplesForSop);
 		const changed = samples.map(sample =>
 			sample.mode === "managed"
@@ -80,62 +163,69 @@ describe("Workflow token report", () => {
 				: sample,
 		);
 
-		const report = buildWorkflowTokenReport(changed);
+		const report = await buildWorkflowTokenReport(await evidenceFor(changed));
 
 		expect(report.status).toBe("failed");
 		expect(report.gates.find(gate => gate.name === "quality_no_regression")?.passed).toBe(false);
 		expect(report.gates.find(gate => gate.name === "managed_within_budget")?.passed).toBe(false);
 	});
 
-	test("rejects duplicate or invalid evidence before aggregation", () => {
+	test("rejects duplicate or invalid evidence before aggregation", async () => {
 		const sample = samplesForSop("release")[0]!;
-		expect(() => buildWorkflowTokenReport([sample, sample])).toThrow("Duplicate Workflow benchmark sampleId");
-		expect(() => buildWorkflowTokenReport([{ ...sample, qualityScore: 1.1 }])).toThrow(
+		await expect(buildWorkflowTokenReport(await evidenceFor([sample, sample]))).rejects.toThrow(
+			"Duplicate Workflow benchmark sampleId",
+		);
+		await expect(buildWorkflowTokenReport(await evidenceFor([{ ...sample, qualityScore: 1.1 }]))).rejects.toThrow(
 			"qualityScore must be between 0 and 1",
 		);
 	});
 
-	test("rejects duplicate run evidence even when sample ids differ", () => {
+	test("rejects duplicate run evidence even when sample ids differ", async () => {
 		const sample = samplesForSop("release").find(item => item.mode === "managed");
 		if (!sample) throw new Error("Expected a Managed sample");
-		expect(() => buildWorkflowTokenReport([sample, { ...sample, sampleId: "forged-copy" }])).toThrow(
-			"Duplicate Workflow benchmark run",
-		);
+		await expect(
+			buildWorkflowTokenReport(await evidenceFor([sample, { ...sample, sampleId: "forged-copy" }])),
+		).rejects.toThrow("Duplicate Workflow benchmark run");
 	});
 
-	test("rejects unpaired Skill or Managed evidence instead of letting it affect rollout medians", () => {
+	test("rejects unpaired Skill or Managed evidence instead of letting it affect rollout medians", async () => {
 		const samples = ["release", "audit", "triage", "migration", "docs"]
 			.flatMap(samplesForSop)
 			.map(sample => (sample.mode === "managed" ? { ...sample, run: sample.run + 10 } : sample));
 
-		expect(() => buildWorkflowTokenReport(samples)).toThrow("must include both Skill and Managed evidence");
+		await expect(buildWorkflowTokenReport(await evidenceFor(samples))).rejects.toThrow(
+			"must include both Skill and Managed evidence",
+		);
 	});
 
-	test("rejects mismatched model or fixture provenance inside a comparison pair", () => {
+	test("rejects mismatched model or fixture provenance inside a comparison pair", async () => {
 		const samples = samplesForSop("release").map(sample =>
 			sample.mode === "managed" && sample.run === 1 ? { ...sample, model: "different/model" } : sample,
 		);
 
-		expect(() => buildWorkflowTokenReport(samples)).toThrow("mismatched model");
+		await expect(buildWorkflowTokenReport(await evidenceFor(samples))).rejects.toThrow("mismatched model");
 	});
 
-	test("requires unique execution and evidence references", () => {
+	test("requires unique execution references and rejects tampered artifacts", async () => {
 		const samples = samplesForSop("release");
 		const skill = samples.find(sample => sample.mode === "skill" && sample.run === 1);
 		const managed = samples.find(sample => sample.mode === "managed" && sample.run === 1);
 		if (!skill || !managed) throw new Error("Expected one benchmark pair");
 
-		expect(() =>
+		await expect(
 			buildWorkflowTokenReport(
-				samples.map(sample =>
-					sample === managed ? { ...sample, sessionRef: skill.sessionRef, runRef: skill.runRef } : sample,
+				await evidenceFor(
+					samples.map(sample =>
+						sample === managed ? { ...sample, sessionRef: skill.sessionRef, runRef: skill.runRef } : sample,
+					),
 				),
 			),
-		).toThrow("Duplicate Workflow benchmark execution reference");
-		expect(() =>
-			buildWorkflowTokenReport(
-				samples.map(sample => (sample === managed ? { ...sample, evidenceRef: skill.evidenceRef } : sample)),
-			),
-		).toThrow("Duplicate Workflow benchmark evidenceRef");
+		).rejects.toThrow("Duplicate Workflow benchmark execution reference");
+
+		const [evidence] = await evidenceFor([skill]);
+		if (!evidence) throw new Error("Expected benchmark evidence path");
+		const manifest = (await Bun.file(evidence).json()) as WorkflowBenchmarkEvidenceManifest;
+		await Bun.write(path.resolve(path.dirname(evidence), manifest.resultRef), "{}\n");
+		await expect(buildWorkflowTokenReport([evidence])).rejects.toThrow("result hash mismatch");
 	});
 });

@@ -54,6 +54,7 @@ function runSnapshot(): SanLoopRunSnapshot {
 	const now = "2026-07-02T00:00:00.000Z";
 	return {
 		schemaVersion: SAN_LOOP_SCHEMA_VERSION,
+		revision: 0,
 		runId: "loop_role_models",
 		sessionId: "session-role-models",
 		objective: "Verify role model routing",

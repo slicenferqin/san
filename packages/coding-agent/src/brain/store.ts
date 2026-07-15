@@ -353,6 +353,16 @@ export class SanBrainStore {
 		this.#db.close();
 	}
 
+	resetMaterializedState(): void {
+		const reset = this.#db.transaction(() => {
+			this.#db.run("DELETE FROM projections");
+			this.#db.run("DELETE FROM active_states");
+			this.#db.run("DELETE FROM decisions");
+			this.#db.run("DELETE FROM candidates");
+		});
+		reset();
+	}
+
 	#migrate(): void {
 		const currentVersion = this.schemaVersion;
 		if (currentVersion > BRAIN_DB_SCHEMA_VERSION) {

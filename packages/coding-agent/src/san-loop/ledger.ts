@@ -19,6 +19,7 @@ import {
 
 interface AppendCustomEntrySessionManager {
 	appendCustomEntry(customType: string, data?: unknown): string;
+	getEntries?: () => readonly SessionEntry[];
 	getSessionId?: () => string;
 }
 
@@ -106,6 +107,7 @@ function isSanLoopStatus(value: unknown): value is SanLoopStatus {
 		value === "working" ||
 		value === "reviewing" ||
 		value === "retrying" ||
+		value === "aborting" ||
 		value === "blocked" ||
 		value === "passed" ||
 		value === "failed" ||
@@ -122,13 +124,15 @@ function normalizeRunSnapshotMode(run: SanLoopRunSnapshot): SanLoopRunSnapshot {
 	const record = run as SanLoopRunSnapshot & { contextPlanRefs?: unknown; contextPacketRefs?: unknown };
 	const contextPlanRefs = stringArray(record.contextPlanRefs);
 	const contextPacketRefs = stringArray(record.contextPacketRefs);
-	return { ...run, mode, contextPlanRefs, contextPacketRefs };
+	const revision = Number.isInteger(run.revision) && run.revision >= 0 ? run.revision : 0;
+	return { ...run, revision, mode, contextPlanRefs, contextPacketRefs };
 }
 
 export function isSanLoopRunSnapshot(value: unknown): value is SanLoopRunSnapshot {
 	if (!isRecord(value)) return false;
 	return (
 		value.schemaVersion === SAN_LOOP_SCHEMA_VERSION &&
+		(value.revision === undefined || (Number.isInteger(value.revision) && (value.revision as number) >= 0)) &&
 		hasString(value, "runId") &&
 		hasString(value, "sessionId") &&
 		hasString(value, "createdAt") &&
@@ -201,6 +205,7 @@ export function createSanLoopRunSnapshot(options: CreateSanLoopRunOptions): SanL
 	const initialRemainingTurns = clampNonNegativeInteger(options.initialRemainingTurns);
 	return {
 		schemaVersion: SAN_LOOP_SCHEMA_VERSION,
+		revision: 0,
 		runId: options.runId ?? newId("loop"),
 		sessionId: options.sessionId,
 		createdAt,
@@ -313,8 +318,21 @@ export function recordSanLoopTransition(
 		data?: Record<string, unknown>;
 	} = {},
 ): RecordSanLoopTransitionResult {
-	const runEntryId = appendSanLoopRunSnapshot(sessionManager, transition.run);
-	const event = createSanLoopEvent(transition.run, transition.eventType, transition.eventSummary, {
+	const entries = sessionManager.getEntries?.();
+	const latest = entries ? findLatestSanLoopRun(entries, transition.run.runId) : undefined;
+	if (latest && latest.data.revision !== transition.run.revision) {
+		throw new Error(
+			`Cannot record San loop transition ${transition.eventType} for ${transition.run.runId}: expected revision ${transition.run.revision}, current revision is ${latest.data.revision}.`,
+		);
+	}
+	if (latest && isSanLoopTerminalStatus(latest.data.status)) {
+		throw new Error(
+			`Cannot record San loop transition ${transition.eventType} for ${transition.run.runId}: run is already terminal with status ${latest.data.status}.`,
+		);
+	}
+	const run = { ...transition.run, revision: transition.run.revision + 1 };
+	const runEntryId = appendSanLoopRunSnapshot(sessionManager, run);
+	const event = createSanLoopEvent(run, transition.eventType, transition.eventSummary, {
 		actor: options.actor,
 		refs: options.refs ? [runEntryId, ...options.refs] : [runEntryId],
 		data: {
@@ -323,11 +341,58 @@ export function recordSanLoopTransition(
 		},
 	});
 	const eventEntryId = appendSanLoopEvent(sessionManager, event);
-	return { run: transition.run, runEntryId, event, eventEntryId };
+	return { run, runEntryId, event, eventEntryId };
 }
 
 export function isSanLoopTerminalStatus(status: SanLoopStatus): boolean {
 	return status === "passed" || status === "failed" || status === "blocked" || status === "aborted";
+}
+
+export function requestSanLoopAbort(
+	sessionManager: AppendCustomEntrySessionManager,
+	run: SanLoopRunSnapshot,
+	options: { reason?: string; createdAt?: string } = {},
+): AbortSanLoopRunResult {
+	const aborting = updateSanLoopRunSnapshot(run, {
+		status: "aborting",
+		updatedAt: options.createdAt,
+		finalVerdict: run.finalVerdict,
+	});
+	const transition: SanLoopTransition = {
+		run: aborting,
+		eventType: "abort_requested",
+		eventSummary: options.reason?.trim() || "Operator requested San execution loop cancellation.",
+		retryExhausted: false,
+	};
+	return recordSanLoopTransition(sessionManager, transition, {
+		actor: "commander",
+		data: { previousStatus: run.status },
+	});
+}
+
+export function acknowledgeSanLoopAbort(
+	sessionManager: AppendCustomEntrySessionManager,
+	run: SanLoopRunSnapshot,
+	options: { reason?: string; createdAt?: string } = {},
+): AbortSanLoopRunResult {
+	if (run.status !== "aborting") {
+		throw new Error(`Cannot acknowledge San loop cancellation for ${run.runId}: current status is ${run.status}.`);
+	}
+	const aborted = updateSanLoopRunSnapshot(run, {
+		status: "aborted",
+		updatedAt: options.createdAt,
+		finalVerdict: run.finalVerdict,
+	});
+	const transition: SanLoopTransition = {
+		run: aborted,
+		eventType: "aborted",
+		eventSummary: options.reason?.trim() || "Running San agents acknowledged cancellation.",
+		retryExhausted: false,
+	};
+	return recordSanLoopTransition(sessionManager, transition, {
+		actor: "commander",
+		data: { previousStatus: run.status, cancellationAcknowledged: true },
+	});
 }
 
 export function abortSanLoopRun(
@@ -335,21 +400,32 @@ export function abortSanLoopRun(
 	run: SanLoopRunSnapshot,
 	options: { reason?: string; createdAt?: string } = {},
 ): AbortSanLoopRunResult {
+	const entries = sessionManager.getEntries?.();
+	const latest = entries ? findLatestSanLoopRun(entries, run.runId) : undefined;
+	if (latest && latest.data.revision !== run.revision) {
+		throw new Error(
+			`Cannot abort San execution loop ${run.runId}: expected revision ${run.revision}, current revision is ${latest.data.revision}.`,
+		);
+	}
+	if (latest && isSanLoopTerminalStatus(latest.data.status)) {
+		throw new Error(`Cannot abort San execution loop ${run.runId}: run is already ${latest.data.status}.`);
+	}
 	const aborted = updateSanLoopRunSnapshot(run, {
 		status: "aborted",
 		updatedAt: options.createdAt,
 		finalVerdict: run.finalVerdict,
 	});
-	const runEntryId = appendSanLoopRunSnapshot(sessionManager, aborted);
+	const persisted = { ...aborted, revision: run.revision + 1 };
+	const runEntryId = appendSanLoopRunSnapshot(sessionManager, persisted);
 	const reason = options.reason?.trim() || "Operator stopped the San execution loop.";
-	const event = createSanLoopEvent(aborted, "aborted", reason, {
+	const event = createSanLoopEvent(persisted, "aborted", reason, {
 		createdAt: options.createdAt,
 		actor: "commander",
 		refs: [runEntryId],
 		data: { previousStatus: run.status },
 	});
 	const eventEntryId = appendSanLoopEvent(sessionManager, event);
-	return { run: aborted, runEntryId, event, eventEntryId };
+	return { run: persisted, runEntryId, event, eventEntryId };
 }
 
 export function recoverSanLoopRun(
@@ -357,23 +433,34 @@ export function recoverSanLoopRun(
 	run: SanLoopRunSnapshot,
 	options: { reason?: string; createdAt?: string } = {},
 ): RecordSanLoopRunResult {
+	const entries = sessionManager.getEntries?.();
+	const latest = entries ? findLatestSanLoopRun(entries, run.runId) : undefined;
+	if (latest && latest.data.revision !== run.revision) {
+		throw new Error(
+			`Cannot recover San execution loop ${run.runId}: expected revision ${run.revision}, current revision is ${latest.data.revision}.`,
+		);
+	}
+	if (latest && isSanLoopTerminalStatus(latest.data.status)) {
+		throw new Error(`Cannot recover San execution loop ${run.runId}: run is already ${latest.data.status}.`);
+	}
 	const recovered = updateSanLoopRunSnapshot(run, {
 		status: "blocked",
 		updatedAt: options.createdAt,
 		finalVerdict: run.finalVerdict,
 	});
-	const runEntryId = appendSanLoopRunSnapshot(sessionManager, recovered);
+	const persisted = { ...recovered, revision: run.revision + 1 };
+	const runEntryId = appendSanLoopRunSnapshot(sessionManager, persisted);
 	const reason =
 		options.reason?.trim() ||
 		"Recovered active San execution loop from persisted session without a running child process.";
-	const event = createSanLoopEvent(recovered, "recovered", reason, {
+	const event = createSanLoopEvent(persisted, "recovered", reason, {
 		createdAt: options.createdAt,
 		actor: "commander",
 		refs: [runEntryId],
 		data: { previousStatus: run.status },
 	});
 	const eventEntryId = appendSanLoopEvent(sessionManager, event);
-	return { run: recovered, runEntryId, event, eventEntryId };
+	return { run: persisted, runEntryId, event, eventEntryId };
 }
 
 function customEntryRef<T>(entry: SessionEntry, data: T): SanLoopEntryRef<T> {

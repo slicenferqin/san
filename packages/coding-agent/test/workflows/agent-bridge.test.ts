@@ -47,6 +47,7 @@ function request(overrides: Partial<WorkflowAgentRequest> = {}): WorkflowAgentRe
 	return {
 		callId: "call-1",
 		nodeId: "node-1",
+		inputHash: "input-1",
 		phase: "inspect",
 		scopeKey: process.cwd(),
 		prompt: "Inspect the repository",

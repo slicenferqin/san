@@ -11,6 +11,7 @@ export interface SanBrainProjectionPlan {
 }
 
 function experienceProjectionTarget(candidate: SanBrainExperienceCandidate): SanBrainProjectionTarget | undefined {
+	if (candidate.sensitivity !== "normal") return undefined;
 	if (
 		candidate.type === "skill_candidate" &&
 		candidate.action.kind === "skill_reference" &&

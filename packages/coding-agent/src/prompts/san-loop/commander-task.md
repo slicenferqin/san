@@ -13,6 +13,12 @@ Recent parent conversation:
 Current objective:
 {{objective}}
 
+Bounded role context:
+{{role_context}}
+
+Applicable San checks:
+{{checks}}
+
 Planning contract:
 - Treat the objective as intent; it MAY be shorthand.
 - Resolve references such as "continue", "M4", and "that change" from the parent conversation.

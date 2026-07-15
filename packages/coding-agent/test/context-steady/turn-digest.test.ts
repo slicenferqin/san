@@ -221,6 +221,20 @@ describe("fallback digest", () => {
 		expect(d.fallback).toBe(true);
 	});
 
+	test("extracts durable preference, decision, and fact candidates without an LLM digest", () => {
+		const d = generateFallbackDigest(
+			asM([
+				umsg("Always publish research notes as HTML."),
+				amsg("We decided to keep the existing API.\nVerified the parser accepts the fixture."),
+			]),
+			{ sessionId: "s1", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 },
+			"turn-memory",
+			"s1",
+		);
+
+		expect(d.memoryCandidates.map(candidate => candidate.type)).toEqual(["preference", "decision", "project_fact"]);
+	});
+
 	test("generates unique turn IDs", () => {
 		expect(generateTurnId()).not.toBe(generateTurnId());
 	});

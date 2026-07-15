@@ -125,4 +125,26 @@ describe("San loop role context", () => {
 	test("returns null when no loop run exists", () => {
 		expect(buildSanLoopRoleContext([], { role: "commander" })).toBeNull();
 	});
+
+	test("trims rendered role material to the configured token boundary", () => {
+		const session = SessionManager.inMemory();
+		appendSanLoopRunSnapshot(
+			session,
+			createSanLoopRunSnapshot({
+				sessionId: "session-trim",
+				objective: `Ship bounded role context ${"evidence ".repeat(500)}`,
+				runId: "loop-trim",
+			}),
+		);
+
+		const built = buildSanLoopRoleContext(session.getEntries(), {
+			role: "supervisor",
+			runId: "loop-trim",
+			settings: { tokenBudget: 80 },
+		});
+
+		expect(built?.packet.trimmed).toBe(1);
+		expect(built?.packet.tokenEstimate).toBeLessThanOrEqual(80);
+		expect(built?.content).toEndWith("</san_execution_loop_context>");
+	});
 });

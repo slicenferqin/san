@@ -1,15 +1,9 @@
 import type { SessionEntry } from "../session/session-entries";
 import { SessionManager } from "../session/session-manager";
 import { buildSanLoopReportText } from "../slash-commands/helpers/san-loop-report";
-import {
-	abortSanLoopRun,
-	appendSanLoopRunSnapshot,
-	createSanLoopRunSnapshot,
-	rebuildSanLoopLedger,
-	recoverSanLoopRun,
-} from "./ledger";
+import { appendSanLoopRunSnapshot, createSanLoopRunSnapshot, rebuildSanLoopLedger, recoverSanLoopRun } from "./ledger";
 import { defaultSanLoopModePolicy } from "./orchestrator";
-import { runSanLoop, type SanLoopAgentExecutor } from "./runner";
+import { cancelRunningSanLoop, runSanLoop, type SanLoopAgentExecutor } from "./runner";
 import type { SanLoopMode, SanLoopReviewVerdict, SanLoopStatus, SanLoopTaskNode } from "./types";
 
 export interface SanLoopDogfoodOptions {
@@ -270,14 +264,40 @@ export async function runSanLoopDogfood(options: SanLoopDogfoodOptions = {}): Pr
 	appendSanLoopRunSnapshot(session, activeRun);
 	recoverSanLoopRun(session, activeRun, { reason: "Dogfood recovered active run without a child process." });
 
-	const abortRun = createSanLoopRunSnapshot({
-		sessionId,
+	const workerStarted = Promise.withResolvers<void>();
+	const workerAbortObserved = Promise.withResolvers<void>();
+	const abortExecutor = makeExecutor({
+		taskId: "operator-abort",
+		taskTitle: "operator abort implementation",
+		reviews: ["pass"],
+	});
+	abortExecutor.worker = async invocation => {
+		workerStarted.resolve();
+		if (!invocation.signal) throw new Error("San dogfood cancellation worker did not receive an AbortSignal.");
+		const interrupted = Promise.withResolvers<never>();
+		invocation.signal.addEventListener(
+			"abort",
+			() => {
+				workerAbortObserved.resolve();
+				interrupted.reject(invocation.signal?.reason ?? new Error("San dogfood worker aborted."));
+			},
+			{ once: true },
+		);
+		return await interrupted.promise;
+	};
+	const abortRun = runSanLoop({
+		sessionManager: session,
 		objective: "Dogfood operator abort",
 		mode: "solo",
 		runId: "loop_dogfood_aborted",
+		executor: abortExecutor,
 	});
-	appendSanLoopRunSnapshot(session, abortRun);
-	abortSanLoopRun(session, abortRun, { reason: "Dogfood operator stopped the loop." });
+	await workerStarted.promise;
+	const abortCompletion = cancelRunningSanLoop("loop_dogfood_aborted");
+	if (!abortCompletion) throw new Error("San dogfood could not find its active cancellation run.");
+	await abortRun;
+	await abortCompletion;
+	await workerAbortObserved.promise;
 
 	const entries = session.getEntries();
 	const scenarios = [
@@ -304,9 +324,10 @@ export async function runSanLoopDogfood(options: SanLoopDogfoodOptions = {}): Pr
 			`${scenarios[1]?.status ?? "missing"} retry=${scenarios[1]?.retryCount ?? -1}`,
 		),
 		assertResult(
-			"council mode runs oracle before supervisor",
+			"council mode keeps Oracle advisory and lets Supervisor own terminal authority",
 			defaultSanLoopModePolicy("council").requireOracle &&
-				scenarios[2]?.events.includes("finalized") &&
+				!scenarios[2]?.events.includes("finalized") &&
+				scenarios[2]?.events.filter(event => event === "review_completed").length === 2 &&
 				scenarios[2]?.reviews === 2,
 			`requireOracle=${defaultSanLoopModePolicy("council").requireOracle}, reviews=${scenarios[2]?.reviews ?? -1}`,
 		),

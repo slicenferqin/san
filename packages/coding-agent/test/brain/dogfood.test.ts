@@ -22,9 +22,9 @@ describe("San Brain M6 dogfood", () => {
 			maxNotificationsPerProjection: 1,
 			projectionOrphans: 0,
 			maxProjectionAttempts: 1,
-			maxCandidatesPerTurn: 1,
 			secretLeaks: 0,
 		});
+		expect(summary.metrics.maxCandidatesPerTurn).toBeLessThanOrEqual(5);
 		expect(summary.metrics.maxActivationTokens).toBeLessThanOrEqual(1200);
 		expect(summary.metrics.latency.maxMs).toBeLessThanOrEqual(10_000);
 		expect(summary.reportText).toContain("turns=14");

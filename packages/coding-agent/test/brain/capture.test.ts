@@ -86,6 +86,7 @@ const acceptedReview: SanLoopReviewReport = {
 
 const acceptedRun: SanLoopRunSnapshot = {
 	schemaVersion: 1,
+	revision: 0,
 	runId: "run-1",
 	sessionId: "session-1",
 	createdAt: "2026-07-10T09:59:00.000Z",
@@ -140,6 +141,29 @@ function sourceEntries(): SessionEntry[] {
 }
 
 describe("San Brain deterministic capture", () => {
+	it("suppresses secrets and keeps sensitive candidates review-only", () => {
+		const result = extractSanBrainCandidates({
+			digest: {
+				...digest,
+				memoryCandidates: [
+					{ type: "preference", content: "api_key=sk-1234567890abcdefghijkl", importance: 0.99 },
+					{ type: "project_fact", content: "Release owner: owner@example.com", importance: 0.9 },
+				],
+				toolEvidence: [],
+			},
+			entries: sourceEntries(),
+			sourceMode: "turn_digest",
+			maxCandidates: 10,
+			minConfidence: 0.8,
+		});
+
+		expect(result.profileCandidates).toHaveLength(1);
+		expect(result.profileCandidates[0]).toMatchObject({
+			value: "Release owner: owner@example.com",
+			sensitivity: "sensitive",
+		});
+	});
+
 	it("extracts bounded review-only candidates with accepted San Loop provenance", () => {
 		const result = extractSanBrainCandidates({
 			digest,
@@ -191,8 +215,15 @@ describe("San Brain deterministic capture", () => {
 		const first = captureSanBrainTurn(sessionManager, options);
 		const second = captureSanBrainTurn(sessionManager, options);
 
-		expect(first).toMatchObject({ profileCandidates: 2, experienceCandidates: 2 });
+		expect(first).toMatchObject({ profileCandidates: 2, experienceCandidates: 5 });
 		expect(second).toEqual({ profileCandidates: 0, experienceCandidates: 0, entryIds: [] });
+		expect(
+			entries.flatMap(entry =>
+				entry.type === "custom" && entry.customType === BRAIN_EXPERIENCE_CANDIDATE_CUSTOM_TYPE
+					? [(entry.data as { type: string }).type]
+					: [],
+			),
+		).toEqual(["workflow_pattern", "skill_candidate", "failure_posture", "check_candidate", "recall"]);
 		expect(
 			entries.filter(entry => entry.type === "custom" && entry.customType === BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE),
 		).toHaveLength(2);
@@ -200,6 +231,6 @@ describe("San Brain deterministic capture", () => {
 			entries.filter(
 				entry => entry.type === "custom" && entry.customType === BRAIN_EXPERIENCE_CANDIDATE_CUSTOM_TYPE,
 			),
-		).toHaveLength(2);
+		).toHaveLength(5);
 	});
 });

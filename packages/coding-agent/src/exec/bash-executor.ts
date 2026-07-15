@@ -5,6 +5,7 @@
  */
 import { ExponentialYield } from "@oh-my-pi/pi-agent-core/utils/yield";
 import { executeShell, type MinimizerOptions, Shell, type ShellRunResult } from "@oh-my-pi/pi-natives";
+import { logger } from "@oh-my-pi/pi-utils";
 import { isExecutable, type ShellConfig } from "@oh-my-pi/pi-utils/procmgr";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { OutputSink } from "../session/streaming-output";
@@ -33,7 +34,9 @@ export interface BashExecutorOptions {
 	 * the caller a chance to persist the lossless original capture (typically
 	 * via the session's `ArtifactManager`). The returned id is spliced into
 	 * the sink output as `artifact://<id>` so the agent can retrieve the raw
-	 * bytes. Return `undefined` to skip the footer.
+	 * bytes. The minimized output is applied only when this callback returns an
+	 * artifact id. If persistence is unavailable or fails, the executor retains
+	 * the normal raw-output path instead of exposing an unrecoverable lossy view.
 	 */
 	onMinimizedSave?: (
 		originalText: string,
@@ -404,23 +407,30 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 			};
 		}
 
-		// When the native minimizer rewrote the output, swap the sink's accumulated
-		// raw stream for the minimized text, persist the original as a session
-		// artifact, and splice an `artifact://<id>` footer into the visible text so
-		// the agent can retrieve the raw bytes losslessly.
+		// Apply a lossy minimized view only after the original capture has been
+		// persisted successfully. Until then the sink retains the normal raw-output
+		// path, including its existing truncation and output-artifact behavior.
 		const minimized = winner.result.minimized;
-		if (minimized && minimized.text !== minimized.originalText) {
-			sink.replace(minimized.text);
-			if (options?.onMinimizedSave) {
-				const artifactId = await options.onMinimizedSave(minimized.originalText, {
+		if (minimized && minimized.text !== minimized.originalText && options?.onMinimizedSave) {
+			let artifactId: string | undefined;
+			try {
+				artifactId = await options.onMinimizedSave(minimized.originalText, {
 					filter: minimized.filter,
 					inputBytes: minimized.inputBytes,
 					outputBytes: minimized.outputBytes,
 				});
-				if (artifactId) {
-					const sep = minimized.text.endsWith("\n") ? "" : "\n";
-					sink.push(`${sep}[raw output: artifact://${artifactId}]\n`);
-				}
+			} catch (error) {
+				logger.warn("Failed to save Bash minimizer original output; returning raw output", {
+					filter: minimized.filter,
+					inputBytes: minimized.inputBytes,
+					outputBytes: minimized.outputBytes,
+					error,
+				});
+			}
+			if (artifactId) {
+				sink.replace(minimized.text);
+				const sep = minimized.text.endsWith("\n") ? "" : "\n";
+				sink.push(`${sep}[raw output: artifact://${artifactId}]\n`);
 			}
 		}
 

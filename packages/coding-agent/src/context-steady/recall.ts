@@ -100,7 +100,7 @@ export function normalizeContextSteadyRecallItems(
 	const normalized: ContextRecallItem[] = [];
 	for (const item of items) {
 		if (item.memoryType && memoryTypes.size > 0 && !memoryTypes.has(item.memoryType)) continue;
-		if (item.scope && scopeKeys.size > 0 && !scopeKeys.has(item.scope)) continue;
+		if (scopeKeys.size > 0 && (!item.scope || !scopeKeys.has(item.scope))) continue;
 		const content = normalizeWhitespace(item.content);
 		if (!content) continue;
 		const key = recallItemKey({ ...item, content });

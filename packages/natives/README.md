@@ -67,14 +67,23 @@ native/                  # Core loader files and local/CI native build outputs
 npm/<platform>-<arch>/   # Generated at publish time, not committed
   package.json           # @oh-my-pi/pi-natives-<platform>-<arch>
   *.node                 # Only that platform's addon binary or x64 ISA variants
+  NOTICE                 # Third-party attribution shipped with the binary
+  LICENSE-*              # MIT and Apache-2.0 license texts
 src/                     # TypeScript wrappers and generated declarations source
   native.ts
   index.ts
 ```
 
-The published core package contains only the JS loader, declarations, README,
-and `package.json`. Release publishing generates one leaf package per supported
+The published core package contains the JS loader, declarations, README,
+license/notice files, and `package.json`. Release publishing generates one leaf package per supported
 `os`/`cpu` pair and injects those leaves into the core manifest as pinned
 `optionalDependencies`, so package managers install only the host platform's
 native addon. x64 leaves include every built ISA variant, and the loader keeps
 choosing between `baseline` and `modern` at runtime.
+
+## License
+
+Original package code is MIT-licensed. The compiled shell minimizer contains
+modified RTK components under Apache-2.0 and snip components under MIT. See
+[`NOTICE`](NOTICE), [`LICENSE-MIT`](LICENSE-MIT), and
+[`LICENSE-APACHE-2.0`](LICENSE-APACHE-2.0).

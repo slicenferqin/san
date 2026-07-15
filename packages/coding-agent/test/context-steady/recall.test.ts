@@ -86,7 +86,7 @@ describe("Context steady recall quality helpers", () => {
 		]);
 	});
 
-	test("filters typed recall metadata without rejecting backend-scoped legacy items", () => {
+	test("fails closed for unscoped and mismatched recall items when scope isolation is active", () => {
 		const items = normalizeContextSteadyRecallItems(
 			[
 				{ id: "repo-risk", content: "Release retry failed", memoryType: "episodic", scope: "repo:/repo" },
@@ -104,7 +104,6 @@ describe("Context steady recall quality helpers", () => {
 				memoryType: "episodic",
 				scope: "repo:/repo",
 			},
-			{ id: "legacy", content: "Bank-scoped legacy memory" },
 		]);
 	});
 

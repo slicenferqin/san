@@ -5,7 +5,7 @@
   "type": "module",
   "homepage": "https://github.com/slicenferqin/san",
   "author": "Can Boluk",
-  "license": "MIT",
+  "license": "MIT AND Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/slicenferqin/san.git",
@@ -56,6 +56,9 @@
     "src",
     "native",
     "README.md",
+    "NOTICE",
+    "LICENSE-MIT",
+    "LICENSE-APACHE-2.0",
     "CHANGELOG.md"
   ],
   "exports": {

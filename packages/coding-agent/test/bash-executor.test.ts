@@ -6,7 +6,7 @@ import { resetSettingsForTest, Settings, type ShellMinimizerSettings } from "@oh
 import { buildMinimizerOptions, executeBash } from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
 import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
 import * as shellSnapshot from "@oh-my-pi/pi-coding-agent/utils/shell-snapshot";
-import type { Shell } from "@oh-my-pi/pi-natives";
+import type { Shell, ShellRunResult } from "@oh-my-pi/pi-natives";
 import * as piNatives from "@oh-my-pi/pi-natives";
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 
@@ -45,6 +45,25 @@ function configureBashUserShell(homeDir: string): boolean {
 		prefix: undefined,
 	});
 	return true;
+}
+
+function mockMinimizedShellRun(originalText: string, minimizedText: string): void {
+	const result: ShellRunResult = {
+		exitCode: 0,
+		cancelled: false,
+		timedOut: false,
+		minimized: {
+			filter: "git",
+			text: minimizedText,
+			originalText,
+			inputBytes: Buffer.byteLength(originalText),
+			outputBytes: Buffer.byteLength(minimizedText),
+		},
+	};
+	vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((_options, onChunk) => {
+		onChunk?.(null, originalText);
+		return Promise.resolve(result);
+	});
 }
 
 /** Resolve once `predicate()` holds or `deadlineMs` passes, polling every 2ms. */
@@ -126,6 +145,49 @@ describe("executeBash", () => {
 			legacyFilters: true,
 		});
 	});
+
+	it("shows minimized output only after saving a lossless original artifact", async () => {
+		const originalText = "On branch main\nChanges not staged for commit:\n\tmodified: README.md\n";
+		const minimizedText = "branch main\nstaged 0, unstaged 1, untracked 0\nM README.md\n";
+		mockMinimizedShellRun(originalText, minimizedText);
+		const onMinimizedSave = vi.fn(async () => "42");
+
+		const result = await executeBash("git status", {
+			cwd: tempDir,
+			timeout: 5000,
+			sessionKey: `minimizer-save:async:${Date.now()}`,
+			onMinimizedSave,
+		});
+
+		expect(result.output).toBe(`${minimizedText}[raw output: artifact://42]\n`);
+		expect(onMinimizedSave).toHaveBeenCalledWith(originalText, {
+			filter: "git",
+			inputBytes: Buffer.byteLength(originalText),
+			outputBytes: Buffer.byteLength(minimizedText),
+		});
+	});
+
+	it("retains raw output when saving the minimizer artifact fails", async () => {
+		const originalText = "On branch main\nChanges not staged for commit:\n\tmodified: README.md\n";
+		const minimizedText = "branch main\nstaged 0, unstaged 1, untracked 0\nM README.md\n";
+		mockMinimizedShellRun(originalText, minimizedText);
+		const onMinimizedSave = vi.fn(async () => {
+			throw new Error("disk full");
+		});
+
+		const result = await executeBash("git status", {
+			cwd: tempDir,
+			timeout: 5000,
+			sessionKey: `minimizer-fallback:async:${Date.now()}`,
+			onMinimizedSave,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe(originalText);
+		expect(result.output).not.toContain(minimizedText);
+		expect(result.output).not.toContain("artifact://");
+	});
+
 	it("returns non-zero exit codes without cancellation", async () => {
 		const result = await executeBash("exit 7", { cwd: tempDir, timeout: 5000 });
 		expect(result.exitCode).toBe(7);

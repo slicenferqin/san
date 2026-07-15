@@ -1,4 +1,60 @@
+import * as path from "node:path";
+
 export type WorkflowBenchmarkMode = "skill" | "managed";
+
+export interface WorkflowBenchmarkEvidenceManifest {
+	schemaVersion: 1;
+	sampleId: string;
+	sopId: string;
+	run: number;
+	mode: WorkflowBenchmarkMode;
+	fixtureHash: string;
+	sourceHash: string;
+	repositoryCommit: string;
+	ledgerRef: string;
+	ledgerHash: string;
+	sessionRef: string;
+	sessionHash: string;
+	resultRef: string;
+	resultHash: string;
+}
+
+export interface WorkflowBenchmarkProviderRequestEvidence {
+	agentRef: string;
+	totalTokens: number;
+}
+
+export interface WorkflowBenchmarkLedgerEvidence {
+	runRef: string;
+	sourceHash: string;
+	providerRequests: WorkflowBenchmarkProviderRequestEvidence[];
+	approvedTokenLimit?: number;
+	approvalBoundary?: string;
+	nodeGraph?: WorkflowBenchmarkNodeEvidence[];
+}
+
+export interface WorkflowBenchmarkNodeEvidence {
+	nodeId: string;
+	inputHash: string;
+}
+
+export interface WorkflowBenchmarkSessionEvidence {
+	sessionRef: string;
+	model: string;
+	settingsHash: string;
+	measuredAt: string;
+	usageBeforeTokens: number;
+	usageAfterTokens: number;
+	mainContextBeforeTokens: number;
+	mainContextAfterTokens: number;
+}
+
+export interface WorkflowBenchmarkResultEvidence {
+	fixtureHash: string;
+	qualityRubricRef: string;
+	qualityScore: number;
+	firstPass: boolean;
+}
 
 export interface WorkflowBenchmarkSample {
 	sampleId: string;
@@ -92,6 +148,235 @@ export const DEFAULT_WORKFLOW_TOKEN_THRESHOLDS: Readonly<WorkflowTokenReportThre
 
 function assertNonEmpty(value: string, label: string): void {
 	if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must not be empty.`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function requiredString(value: unknown, label: string): string {
+	if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must not be empty.`);
+	return value;
+}
+
+function nonNegativeInteger(value: unknown, label: string): number {
+	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+		throw new Error(`${label} must be a non-negative safe integer.`);
+	}
+	return value;
+}
+
+function positiveInteger(value: unknown, label: string): number {
+	const parsed = nonNegativeInteger(value, label);
+	if (parsed === 0) throw new Error(`${label} must be a positive integer.`);
+	return parsed;
+}
+
+function digestBytes(value: Uint8Array): string {
+	return new Bun.CryptoHasher("sha256").update(value).digest("hex");
+}
+
+function digestValue(value: object): string {
+	return new Bun.CryptoHasher("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+async function readHashedJson(ref: string, expectedHash: string, label: string): Promise<unknown> {
+	let bytes: Uint8Array;
+	try {
+		bytes = new Uint8Array(await Bun.file(ref).arrayBuffer());
+	} catch (error) {
+		throw new Error(
+			`${label} could not be read from ${ref}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+	const actualHash = digestBytes(bytes);
+	if (actualHash !== expectedHash) {
+		throw new Error(`${label} hash mismatch for ${ref}: ${actualHash} != ${expectedHash}`);
+	}
+	try {
+		return JSON.parse(new TextDecoder().decode(bytes));
+	} catch (error) {
+		throw new Error(
+			`${label} contains invalid JSON at ${ref}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+}
+
+function parseEvidenceManifest(value: unknown, evidenceRef: string): WorkflowBenchmarkEvidenceManifest {
+	if (!isRecord(value)) throw new Error(`Workflow benchmark evidence ${evidenceRef} must be an object.`);
+	if (value.schemaVersion !== 1)
+		throw new Error(`Workflow benchmark evidence ${evidenceRef} has an unsupported schema.`);
+	const mode = value.mode;
+	if (mode !== "skill" && mode !== "managed") {
+		throw new Error(`Workflow benchmark evidence ${evidenceRef} mode must be skill or managed.`);
+	}
+	return {
+		schemaVersion: 1,
+		sampleId: requiredString(value.sampleId, "Workflow benchmark evidence sampleId"),
+		sopId: requiredString(value.sopId, "Workflow benchmark evidence sopId"),
+		run: positiveInteger(value.run, "Workflow benchmark evidence run"),
+		mode,
+		fixtureHash: requiredString(value.fixtureHash, "Workflow benchmark evidence fixtureHash"),
+		sourceHash: requiredString(value.sourceHash, "Workflow benchmark evidence sourceHash"),
+		repositoryCommit: requiredString(value.repositoryCommit, "Workflow benchmark evidence repositoryCommit"),
+		ledgerRef: requiredString(value.ledgerRef, "Workflow benchmark evidence ledgerRef"),
+		ledgerHash: requiredString(value.ledgerHash, "Workflow benchmark evidence ledgerHash"),
+		sessionRef: requiredString(value.sessionRef, "Workflow benchmark evidence sessionRef"),
+		sessionHash: requiredString(value.sessionHash, "Workflow benchmark evidence sessionHash"),
+		resultRef: requiredString(value.resultRef, "Workflow benchmark evidence resultRef"),
+		resultHash: requiredString(value.resultHash, "Workflow benchmark evidence resultHash"),
+	};
+}
+
+function parseLedgerEvidence(value: unknown, label: string): WorkflowBenchmarkLedgerEvidence {
+	if (!isRecord(value) || !Array.isArray(value.providerRequests)) throw new Error(`${label} is invalid.`);
+	const providerRequests = value.providerRequests.map((request, index) => {
+		if (!isRecord(request)) throw new Error(`${label} providerRequests[${index}] is invalid.`);
+		return {
+			agentRef: requiredString(request.agentRef, `${label} providerRequests[${index}].agentRef`),
+			totalTokens: nonNegativeInteger(request.totalTokens, `${label} providerRequests[${index}].totalTokens`),
+		};
+	});
+	let nodeGraph: WorkflowBenchmarkNodeEvidence[] | undefined;
+	if (value.nodeGraph !== undefined) {
+		if (!Array.isArray(value.nodeGraph)) throw new Error(`${label} nodeGraph is invalid.`);
+		nodeGraph = value.nodeGraph.map((node, index) => {
+			if (!isRecord(node)) throw new Error(`${label} nodeGraph[${index}] is invalid.`);
+			return {
+				nodeId: requiredString(node.nodeId, `${label} nodeGraph[${index}].nodeId`),
+				inputHash: requiredString(node.inputHash, `${label} nodeGraph[${index}].inputHash`),
+			};
+		});
+	}
+	return {
+		runRef: requiredString(value.runRef, `${label} runRef`),
+		sourceHash: requiredString(value.sourceHash, `${label} sourceHash`),
+		providerRequests,
+		...(value.approvedTokenLimit === undefined
+			? {}
+			: { approvedTokenLimit: positiveInteger(value.approvedTokenLimit, `${label} approvedTokenLimit`) }),
+		...(value.approvalBoundary === undefined
+			? {}
+			: { approvalBoundary: requiredString(value.approvalBoundary, `${label} approvalBoundary`) }),
+		...(nodeGraph ? { nodeGraph } : {}),
+	};
+}
+
+function parseSessionEvidence(value: unknown, label: string): WorkflowBenchmarkSessionEvidence {
+	if (!isRecord(value)) throw new Error(`${label} is invalid.`);
+	return {
+		sessionRef: requiredString(value.sessionRef, `${label} sessionRef`),
+		model: requiredString(value.model, `${label} model`),
+		settingsHash: requiredString(value.settingsHash, `${label} settingsHash`),
+		measuredAt: requiredString(value.measuredAt, `${label} measuredAt`),
+		usageBeforeTokens: nonNegativeInteger(value.usageBeforeTokens, `${label} usageBeforeTokens`),
+		usageAfterTokens: nonNegativeInteger(value.usageAfterTokens, `${label} usageAfterTokens`),
+		mainContextBeforeTokens: nonNegativeInteger(value.mainContextBeforeTokens, `${label} mainContextBeforeTokens`),
+		mainContextAfterTokens: nonNegativeInteger(value.mainContextAfterTokens, `${label} mainContextAfterTokens`),
+	};
+}
+
+function parseResultEvidence(value: unknown, label: string): WorkflowBenchmarkResultEvidence {
+	if (!isRecord(value)) throw new Error(`${label} is invalid.`);
+	const qualityScore = value.qualityScore;
+	if (typeof qualityScore !== "number" || !Number.isFinite(qualityScore) || qualityScore < 0 || qualityScore > 1) {
+		throw new Error(`${label} qualityScore must be between 0 and 1.`);
+	}
+	if (typeof value.firstPass !== "boolean") throw new Error(`${label} firstPass must be a boolean.`);
+	return {
+		fixtureHash: requiredString(value.fixtureHash, `${label} fixtureHash`),
+		qualityRubricRef: requiredString(value.qualityRubricRef, `${label} qualityRubricRef`),
+		qualityScore,
+		firstPass: value.firstPass,
+	};
+}
+
+async function loadWorkflowBenchmarkSample(evidenceRef: string): Promise<WorkflowBenchmarkSample> {
+	const resolvedEvidenceRef = path.resolve(evidenceRef);
+	let manifestValue: unknown;
+	try {
+		manifestValue = await Bun.file(resolvedEvidenceRef).json();
+	} catch (error) {
+		throw new Error(
+			`Workflow benchmark evidence could not be read from ${resolvedEvidenceRef}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+	const manifest = parseEvidenceManifest(manifestValue, resolvedEvidenceRef);
+	const resolveArtifact = (ref: string) => path.resolve(path.dirname(resolvedEvidenceRef), ref);
+	const ledger = parseLedgerEvidence(
+		await readHashedJson(resolveArtifact(manifest.ledgerRef), manifest.ledgerHash, "Workflow benchmark ledger"),
+		"Workflow benchmark ledger",
+	);
+	const session = parseSessionEvidence(
+		await readHashedJson(resolveArtifact(manifest.sessionRef), manifest.sessionHash, "Workflow benchmark session"),
+		"Workflow benchmark session",
+	);
+	const result = parseResultEvidence(
+		await readHashedJson(resolveArtifact(manifest.resultRef), manifest.resultHash, "Workflow benchmark result"),
+		"Workflow benchmark result",
+	);
+	if (ledger.sourceHash !== manifest.sourceHash) {
+		throw new Error(`Workflow benchmark evidence ${manifest.sampleId} sourceHash does not match its ledger.`);
+	}
+	if (result.fixtureHash !== manifest.fixtureHash) {
+		throw new Error(
+			`Workflow benchmark evidence ${manifest.sampleId} fixtureHash does not match its result artifact.`,
+		);
+	}
+	if (session.usageAfterTokens < session.usageBeforeTokens) {
+		throw new Error(`Workflow benchmark evidence ${manifest.sampleId} session usage decreased.`);
+	}
+	if (session.mainContextAfterTokens < session.mainContextBeforeTokens) {
+		throw new Error(`Workflow benchmark evidence ${manifest.sampleId} main context usage decreased.`);
+	}
+	const totalTokens = session.usageAfterTokens - session.usageBeforeTokens;
+	const orchestrationTokens = ledger.providerRequests.reduce((total, request) => total + request.totalTokens, 0);
+	if (orchestrationTokens > totalTokens) {
+		throw new Error(`Workflow benchmark evidence ${manifest.sampleId} provider usage exceeds session usage.`);
+	}
+	if (manifest.mode === "managed" && (!ledger.approvedTokenLimit || !ledger.approvalBoundary || !ledger.nodeGraph)) {
+		throw new Error(
+			`Managed Workflow benchmark evidence ${manifest.sampleId} lacks approval or node graph provenance.`,
+		);
+	}
+	const sample: WorkflowBenchmarkSample = {
+		sampleId: manifest.sampleId,
+		sopId: manifest.sopId,
+		run: manifest.run,
+		mode: manifest.mode,
+		fixtureHash: manifest.fixtureHash,
+		sourceHash: manifest.sourceHash,
+		repositoryCommit: manifest.repositoryCommit,
+		model: session.model,
+		settingsHash: session.settingsHash,
+		sessionRef: session.sessionRef,
+		runRef: ledger.runRef,
+		measuredAt: session.measuredAt,
+		evidenceRef: resolvedEvidenceRef,
+		qualityRubricRef: result.qualityRubricRef,
+		resultArtifactHash: manifest.resultHash,
+		agentCount: new Set(ledger.providerRequests.map(request => request.agentRef)).size,
+		orchestrationTokens,
+		mainContextGrowthTokens: session.mainContextAfterTokens - session.mainContextBeforeTokens,
+		totalTokens,
+		qualityScore: result.qualityScore,
+		firstPass: result.firstPass,
+		...(manifest.mode === "managed"
+			? {
+					approvedTokenLimit: ledger.approvedTokenLimit,
+					approvalBoundary: ledger.approvalBoundary,
+					nodeGraphHash: digestValue(ledger.nodeGraph ?? []),
+				}
+			: {}),
+	};
+	assertSample(sample);
+	return sample;
+}
+
+export async function loadWorkflowBenchmarkSamples(
+	evidenceRefs: readonly string[],
+): Promise<WorkflowBenchmarkSample[]> {
+	return Promise.all(evidenceRefs.map(loadWorkflowBenchmarkSample));
 }
 
 function assertCanonicalTimestamp(value: string, label: string): void {
@@ -218,7 +503,7 @@ function validateThresholds(thresholds: WorkflowTokenReportThresholds): void {
 	}
 }
 
-export function buildWorkflowTokenReport(
+function aggregateWorkflowTokenReport(
 	samples: readonly WorkflowBenchmarkSample[],
 	thresholds: WorkflowTokenReportThresholds = DEFAULT_WORKFLOW_TOKEN_THRESHOLDS,
 ): WorkflowTokenReport {
@@ -369,4 +654,12 @@ export function buildWorkflowTokenReport(
 		contextGrowthReduction,
 		gates,
 	};
+}
+
+export async function buildWorkflowTokenReport(
+	evidenceRefs: readonly string[],
+	thresholds: WorkflowTokenReportThresholds = DEFAULT_WORKFLOW_TOKEN_THRESHOLDS,
+): Promise<WorkflowTokenReport> {
+	const samples = await loadWorkflowBenchmarkSamples(evidenceRefs);
+	return aggregateWorkflowTokenReport(samples, thresholds);
 }

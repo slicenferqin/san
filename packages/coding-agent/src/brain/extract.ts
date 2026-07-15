@@ -8,9 +8,29 @@ import type {
 	SanBrainProfileCandidate,
 	SanBrainProfileCandidateType,
 	SanBrainScope,
+	SanBrainSensitivity,
 } from "./types";
 
 const FAILURE_PATTERN = /\b(error|failed|failure|timed out|timeout)\b|错误|失败|超时/iu;
+const SECRET_PATTERNS: readonly RegExp[] = [
+	/-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----/u,
+	/\bAKIA[0-9A-Z]{16}\b/u,
+	/\b(?:ghp|github_pat|glpat|xox[baprs])-[-A-Za-z0-9_]{12,}\b/u,
+	/\bsk-[A-Za-z0-9_-]{16,}\b/u,
+	/\b(?:api[_-]?key|client[_-]?secret|password|private[_-]?key|secret|token)\b\s*[:=]\s*["']?[^\s"']{8,}/iu,
+];
+const SENSITIVE_PATTERNS: readonly RegExp[] = [
+	/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/iu,
+	/\b(?:\+?\d[\d ()-]{7,}\d)\b/u,
+	/\b(?:passport|social security|ssn|medical|diagnosis|salary|bank account|credit card)\b/iu,
+	/(护照|身份证|手机号|家庭住址|病历|诊断|薪资|银行账户|银行卡)/u,
+];
+
+export function classifySanBrainSensitivity(value: string): SanBrainSensitivity {
+	if (SECRET_PATTERNS.some(pattern => pattern.test(value))) return "secret";
+	if (SENSITIVE_PATTERNS.some(pattern => pattern.test(value))) return "sensitive";
+	return "normal";
+}
 
 export interface SanBrainExtractOptions {
 	digest: TurnDigest;
@@ -78,8 +98,9 @@ function createProfileCandidate(
 	options: SanBrainExtractOptions,
 ): SanBrainProfileCandidate | undefined {
 	const value = normalizedText(memory.content);
+	const sensitivity = classifySanBrainSensitivity(value);
 	const confidence = clampProbability(memory.importance);
-	if (!value || confidence < options.minConfidence) return undefined;
+	if (!value || sensitivity === "secret" || confidence < options.minConfidence) return undefined;
 	const scope = profileScope(memory, options);
 	const type = profileType(memory);
 	const subject = topic(value);
@@ -102,7 +123,7 @@ function createProfileCandidate(
 		confidence,
 		importance: confidence,
 		independentEvidenceCount: evidence.loopRefs.length > 0 ? 2 : 1,
-		sensitivity: "normal",
+		sensitivity,
 		evidence: [evidence],
 		createdAt: options.digest.createdAt,
 	};
@@ -114,8 +135,9 @@ function createWorkflowCandidate(
 ): SanBrainExperienceCandidate | undefined {
 	if (memory.type !== "workflow") return undefined;
 	const content = normalizedText(memory.content);
+	const sensitivity = classifySanBrainSensitivity(content);
 	const confidence = clampProbability(memory.importance);
-	if (!content || confidence < options.minConfidence) return undefined;
+	if (!content || sensitivity === "secret" || confidence < options.minConfidence) return undefined;
 	const scope = options.fallbackScope ?? {
 		kind: "session",
 		key: options.digest.sessionId,
@@ -139,7 +161,50 @@ function createWorkflowCandidate(
 		repeatCount: 1,
 		confidence,
 		impact: "low",
-		sensitivity: "normal",
+		sensitivity,
+		evidence: [buildSanBrainEvidenceRef(options)],
+		createdAt: options.digest.createdAt,
+	};
+}
+
+function createWorkflowSkillCandidate(
+	memory: TurnDigestMemoryCandidate,
+	options: SanBrainExtractOptions,
+): SanBrainExperienceCandidate | undefined {
+	if (memory.type !== "workflow") return undefined;
+	const content = normalizedText(memory.content);
+	const sensitivity = classifySanBrainSensitivity(content);
+	const confidence = clampProbability(memory.importance);
+	if (!content || sensitivity === "secret" || confidence < options.minConfidence) return undefined;
+	const scope = options.fallbackScope ?? {
+		kind: "session",
+		key: options.digest.sessionId,
+		resolverVersion: 1,
+	};
+	const skillName = `captured-workflow-${stableHash(content)}`;
+	const claimKey = `experience:${scope.kind}:${stableHash(scope.key)}:skill:${skillName}`;
+	const dedupeKey = `${claimKey}:${stableHash(content)}`;
+	return {
+		schemaVersion: 1,
+		candidateId: `brain_experience_${stableHash(`${options.digest.source.fromEntryId}\0${dedupeKey}`)}`,
+		scope,
+		type: "skill_candidate",
+		selector: {},
+		action: {
+			kind: "skill_reference",
+			skillName,
+			description: content.slice(0, 160),
+			body: content,
+			action: "create",
+		},
+		taskTags: [],
+		claimKey,
+		dedupeKey,
+		conflictKey: claimKey,
+		repeatCount: 1,
+		confidence,
+		impact: "low",
+		sensitivity,
 		evidence: [buildSanBrainEvidenceRef(options)],
 		createdAt: options.digest.createdAt,
 	};
@@ -156,6 +221,8 @@ function createToolFailureCandidates(options: SanBrainExtractOptions): SanBrainE
 		const summary = normalizedText(tool.summary);
 		if (!FAILURE_PATTERN.test(summary)) continue;
 		const requiredCheck = summary.slice(0, 240);
+		const sensitivity = classifySanBrainSensitivity(requiredCheck);
+		if (sensitivity === "secret") continue;
 		const riskClass = `tool:${tool.tool}`;
 		const claimKey = `experience:${scope.kind}:${stableHash(scope.key)}:failure:${stableHash(riskClass)}`;
 		const dedupeKey = `${claimKey}:${stableHash(requiredCheck)}`;
@@ -164,7 +231,7 @@ function createToolFailureCandidates(options: SanBrainExtractOptions): SanBrainE
 			candidateId: `brain_experience_${stableHash(`${options.digest.source.fromEntryId}\0${dedupeKey}`)}`,
 			scope,
 			type: "failure_posture",
-			selector: { commands: [tool.tool], riskClasses: [riskClass] },
+			selector: { commands: [tool.tool] },
 			action: { kind: "risk_rule", riskClass, requiredCheck },
 			taskTags: [tool.tool],
 			claimKey,
@@ -173,7 +240,53 @@ function createToolFailureCandidates(options: SanBrainExtractOptions): SanBrainE
 			repeatCount: 1,
 			confidence: 0.85,
 			impact: "medium",
-			sensitivity: "normal",
+			sensitivity,
+			evidence: [buildSanBrainEvidenceRef(options)],
+			createdAt: options.digest.createdAt,
+		});
+		const checkId =
+			`tool-${tool.tool.replace(/[^a-z0-9-]+/gi, "-").toLowerCase()}-${stableHash(requiredCheck)}`.slice(0, 64);
+		const checkClaimKey = `experience:${scope.kind}:${stableHash(scope.key)}:check:${checkId}`;
+		candidates.push({
+			schemaVersion: 1,
+			candidateId: `brain_experience_${stableHash(`${options.digest.source.fromEntryId}\0${checkClaimKey}`)}`,
+			scope,
+			type: "check_candidate",
+			selector: { commands: [tool.tool] },
+			action: {
+				kind: "check_suggestion",
+				checkId,
+				title: `Verify ${tool.tool} failures`,
+				severity: "error",
+				body: requiredCheck,
+			},
+			taskTags: [tool.tool],
+			claimKey: checkClaimKey,
+			dedupeKey: `${checkClaimKey}:${stableHash(requiredCheck)}`,
+			conflictKey: checkClaimKey,
+			repeatCount: 1,
+			confidence: 0.85,
+			impact: "medium",
+			sensitivity,
+			evidence: [buildSanBrainEvidenceRef(options)],
+			createdAt: options.digest.createdAt,
+		});
+		const recallClaimKey = `experience:${scope.kind}:${stableHash(scope.key)}:recall:${stableHash(riskClass)}`;
+		candidates.push({
+			schemaVersion: 1,
+			candidateId: `brain_experience_${stableHash(`${options.digest.source.fromEntryId}\0${recallClaimKey}`)}`,
+			scope,
+			type: "recall",
+			selector: { commands: [tool.tool] },
+			action: { kind: "recall_policy", queryTemplateId: "risk-history-v1" },
+			taskTags: [tool.tool],
+			claimKey: recallClaimKey,
+			dedupeKey: `${recallClaimKey}:risk-history-v1`,
+			conflictKey: recallClaimKey,
+			repeatCount: 1,
+			confidence: 0.85,
+			impact: "medium",
+			sensitivity,
 			evidence: [buildSanBrainEvidenceRef(options)],
 			createdAt: options.digest.createdAt,
 		});
@@ -193,8 +306,10 @@ export function extractSanBrainCandidates(options: SanBrainExtractOptions): SanB
 	};
 
 	for (const memory of options.digest.memoryCandidates) {
-		if (memory.type === "workflow") add(createWorkflowCandidate(memory, options));
-		else add(createProfileCandidate(memory, options));
+		if (memory.type === "workflow") {
+			add(createWorkflowCandidate(memory, options));
+			add(createWorkflowSkillCandidate(memory, options));
+		} else add(createProfileCandidate(memory, options));
 	}
 	for (const candidate of createToolFailureCandidates(options)) add(candidate);
 

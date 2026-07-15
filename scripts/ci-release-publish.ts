@@ -205,6 +205,9 @@ export async function prepareNativeCorePackage(pkgDir: string, write: boolean): 
 		"native/loader-state.d.ts",
 		"native/embedded-addon.js",
 		"README.md",
+		"NOTICE",
+		"LICENSE-MIT",
+		"LICENSE-APACHE-2.0",
 	];
 	if (write) await Bun.write(manifestPath, `${JSON.stringify(manifest, null, "\t")}\n`);
 	return manifest;

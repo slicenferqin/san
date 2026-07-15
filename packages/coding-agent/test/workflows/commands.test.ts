@@ -190,6 +190,7 @@ describe("Workflow command service", () => {
 		expect((await handle.completion).status).toBe("completed");
 		expect(harness.getCalls()).toBe(1);
 		expect(harness.service.deliverCompletedRun(handle.runId)).toContain("audit main");
+		harness.service.acknowledgeCompletedRunDelivery(handle.runId);
 		expect(() => harness.service.deliverCompletedRun(handle.runId)).toThrow("already delivered");
 	});
 

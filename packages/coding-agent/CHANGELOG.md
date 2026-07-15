@@ -4,11 +4,12 @@
 
 ### Breaking Changes
 
-- Changed TUI `/model`, `/models`, Alt+M, and `/switch` to session-only direct select: Enter switches the current session model and closes, without role/thinking/scope menus. Provider is row metadata; ordinary paths no longer require horizontal provider tabs. Unsupported previous thinking effort falls back to Auto with a non-blocking status note. Empty model lists route to `/connect`.
+- Changed TUI `/model`, `/models`, Alt+M, and `/switch` so session model select opens an effort step for reasoning models before closing. Non-reasoning models still select immediately. Status notes mention `/effort` and Shift+Tab. Role assignment remains `/model roles`.
 
 ### Added
 
 - Added `max` and `ultra` thinking selectors, CLI/configuration support, distinct status-line symbols, extended thinking budgets, literal `:max` model-id compatibility, and highest-advertised-tier `ultrathink` behavior.
+- Added `/effort` (`/thinking` alias) to set or show session thinking effort (`off|minimal|low|medium|high|xhigh|max|ultra|auto|status`).
 - Added `/connect` as the unified model-provider management surface (OAuth, API key, keyless/local). Connected providers sort first with auth origin and available model counts; successful connect refreshes that provider and opens a provider-filtered session model picker. Custom endpoints persist via a comment-preserving, locked, atomic `models.yml` path patch and store secrets only in AuthStorage (`auth: apiKey` without plaintext keys in YAML).
 - Added comment-preserving YAML path patch helpers and a safe `models.yml` writer for custom providers (no API key material in YAML, logs, or errors).
 - Added `/model roles` expert entry for the legacy role/thinking assignment picker.
@@ -55,6 +56,8 @@
 
 ### Fixed
 
+- Fixed shell minimization exposing unrecoverable lossy output when saving the original capture failed: minimized text is now applied only after a raw artifact is persisted, and persistence errors retain the normal raw Bash result with a specific warning.
+- Fixed the final San v0.2-v0.4 rollout blockers: execution-loop cancellation and terminal authority, scoped low-authority Brain activation and rebuild, durable input-bound Workflow replay and acknowledged delivery, hard token preflight, canonical path/write CAS boundaries, and artifact-backed benchmark provenance.
 - Fixed ContextPlan user-boundary hard pressure to attempt model promotion and configured context maintenance before refusing the prompt, and aligned ContextPlan status/compaction estimates with the converted provider-wire snapshot.
 - Fixed ContextPlan hard pressure, tool-loop burst overflow and double-count estimates, discarded-branch checkpoint pollution, fallback-through-checkpoint raw deletion, wire clamp that truncated covering replacements, same-session hard-pressure recovery, natural topic shift without marker phrases, pending audit refs, and digest `toEntryId` pollution by plan audit appends.
 

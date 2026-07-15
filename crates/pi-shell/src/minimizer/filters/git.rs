@@ -308,14 +308,12 @@ fn condense_status(input: &str) -> String {
 			in_staged = false;
 			continue;
 		}
-		if parse_long_status_line(trimmed, in_staged, in_untracked, &mut summary) {
+		if !in_untracked && parse_long_status_line(trimmed, in_staged, &mut summary) {
 			continue;
 		}
-		if !trimmed.starts_with('(')
-			&& !trimmed.ends_with(':')
-			&& !trimmed.starts_with("use ")
-			&& !trimmed.starts_with("no changes added")
-			&& in_untracked
+		if in_untracked
+			&& (line.starts_with(' ') || line.starts_with('\t'))
+			&& !trimmed.starts_with('(')
 		{
 			summary.untracked += 1;
 			push_status_path(&mut summary, "??", trimmed);
@@ -415,12 +413,7 @@ fn is_short_status(status: &str) -> bool {
 		.all(|byte| matches!(byte, b' ' | b'M' | b'A' | b'D' | b'R' | b'C' | b'U' | b'?' | b'!'))
 }
 
-fn parse_long_status_line(
-	line: &str,
-	in_staged: bool,
-	in_untracked: bool,
-	summary: &mut StatusSummary,
-) -> bool {
+fn parse_long_status_line(line: &str, in_staged: bool, summary: &mut StatusSummary) -> bool {
 	// `modified:`/`deleted:` are staged or unstaged depending on the active
 	// section; `new file:`/`renamed:` only appear staged. The unmerged-path
 	// forms are always conflicts regardless of section.
@@ -448,11 +441,6 @@ fn parse_long_status_line(
 			push_status_path(summary, label, path.trim());
 			return true;
 		}
-	}
-	if in_untracked && !line.starts_with('(') && !line.ends_with(':') {
-		summary.untracked += 1;
-		push_status_path(summary, "??", line);
-		return true;
 	}
 	false
 }

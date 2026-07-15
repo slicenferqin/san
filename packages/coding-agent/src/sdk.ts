@@ -193,7 +193,7 @@ import { normalizeToolName, normalizeToolNames } from "./tools/builtin-names";
 import { ToolContextStore } from "./tools/context";
 import { getImageGenTools } from "./tools/image-gen";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
-import { assertToolArgumentsWithinPathScope } from "./tools/path-scope";
+import { authorizeToolArgumentsWithinPathScope } from "./tools/path-scope";
 import { queueResolveHandler } from "./tools/resolve";
 import { ttsTool } from "./tools/tts";
 import { resolveActiveRepoContext } from "./utils/active-repo-context";
@@ -515,6 +515,8 @@ export interface CreateAgentSessionOptions {
 	toolPathScope?: string;
 	/** Hard provider output cap for every request in an approved programmatic child. */
 	maxOutputTokens?: number;
+	/** 已审批程序化子任务的输入与输出累计硬上限。 */
+	maxTotalTokens?: number;
 
 	/** Output schema for structured completion (subagents) */
 	outputSchema?: unknown;
@@ -1638,7 +1640,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			allocateOutputArtifact: async toolType => {
 				try {
 					return await sessionManager.allocateArtifactPath(toolType);
-				} catch {
+				} catch (error) {
+					logger.warn("Failed to allocate tool output artifact", { toolType, error });
 					return {};
 				}
 			},
@@ -2730,9 +2733,26 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			thinkingBudgets: settings.getGroup("thinkingBudgets"),
 			maxTokens: options.maxOutputTokens,
 			maxTokensResolver:
-				options.maxOutputTokens === undefined
+				options.maxOutputTokens === undefined && options.maxTotalTokens === undefined
 					? undefined
-					: () => Math.max(1, options.maxOutputTokens! - strictUsageTokens),
+					: () => {
+							const outputRemaining =
+								options.maxOutputTokens === undefined
+									? Number.POSITIVE_INFINITY
+									: options.maxOutputTokens - strictUsageTokens;
+							const estimatedInputTokens = session?.getContextUsage()?.tokens ?? 0;
+							const totalRemaining =
+								options.maxTotalTokens === undefined
+									? Number.POSITIVE_INFINITY
+									: options.maxTotalTokens - strictUsageTokens - estimatedInputTokens;
+							const remaining = Math.floor(Math.min(outputRemaining, totalRemaining));
+							if (remaining < 1) {
+								throw new Error(
+									`Hard total token budget exhausted before provider request (${strictUsageTokens} used, ${estimatedInputTokens} estimated input, ${options.maxTotalTokens ?? options.maxOutputTokens} limit)`,
+								);
+							}
+							return remaining;
+						},
 			temperature: settings.get("temperature") >= 0 ? settings.get("temperature") : undefined,
 			topP: settings.get("topP") >= 0 ? settings.get("topP") : undefined,
 			topK: settings.get("topK") >= 0 ? settings.get("topK") : undefined,
@@ -2769,7 +2789,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					result = deobfuscateToolArguments(obfuscator, result);
 				}
 				if (options.toolPathScope) {
-					assertToolArgumentsWithinPathScope({
+					result = authorizeToolArgumentsWithinPathScope({
 						args: result,
 						toolName,
 						cwd,
@@ -2790,7 +2810,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					: undefined
 				: undefined,
 		});
-		if (options.maxOutputTokens !== undefined) {
+		if (options.maxOutputTokens !== undefined || options.maxTotalTokens !== undefined) {
 			agent.subscribe(event => {
 				if (event.type !== "message_end" || event.message.role !== "assistant") return;
 				strictUsageTokens += event.message.usage.totalTokens;

@@ -18,7 +18,11 @@ import type { SanBrainExperienceCandidate } from "@oh-my-pi/pi-coding-agent/brai
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as memoryBackend from "@oh-my-pi/pi-coding-agent/memory-backend";
-import type { MemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/types";
+import type {
+	MemoryBackend,
+	MemoryBackendOperationContext,
+	MemoryBackendSearchOptions,
+} from "@oh-my-pi/pi-coding-agent/memory-backend/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -672,20 +676,23 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 			streamFn: mockModel.stream,
 			convertToLlm,
 		});
-		const search = vi.fn(async () => ({
-			backend: "mnemopi" as const,
-			query: "Recall San project decisions",
-			count: 1,
-			items: [
-				{
-					id: "mem-1",
-					content: "San project decision: keep planning documents in HTML",
-					source: "mnemopi",
-					timestamp: "2026-06-30T00:00:00.000Z",
-					score: 0.92,
-				},
-			],
-		}));
+		const search = vi.fn(
+			async (_context: MemoryBackendOperationContext, _query: string, options?: MemoryBackendSearchOptions) => ({
+				backend: "mnemopi" as const,
+				query: "Recall San project decisions",
+				count: 1,
+				items: [
+					{
+						id: "mem-1",
+						content: "San project decision: keep planning documents in HTML",
+						source: "mnemopi",
+						timestamp: "2026-06-30T00:00:00.000Z",
+						score: 0.92,
+						scope: options?.scopeKeys?.[0],
+					},
+				],
+			}),
+		);
 		const fakeBackend: MemoryBackend = {
 			id: "mnemopi",
 			async start() {},
@@ -752,18 +759,21 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 			streamFn: mockModel.stream,
 			convertToLlm,
 		});
-		const search = vi.fn(async () => ({
-			backend: "mnemopi" as const,
-			query: "Second prompt",
-			count: 1,
-			items: [
-				{
-					id: "mem-1",
-					content: "San recall belongs in the volatile ContextPacket layer",
-					source: "mnemopi",
-				},
-			],
-		}));
+		const search = vi.fn(
+			async (_context: MemoryBackendOperationContext, _query: string, options?: MemoryBackendSearchOptions) => ({
+				backend: "mnemopi" as const,
+				query: "Second prompt",
+				count: 1,
+				items: [
+					{
+						id: "mem-1",
+						content: "San recall belongs in the volatile ContextPacket layer",
+						source: "mnemopi",
+						scope: options?.scopeKeys?.[0],
+					},
+				],
+			}),
+		);
 		const fakeBackend: MemoryBackend = {
 			id: "mnemopi",
 			async start() {},
@@ -823,34 +833,40 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 			streamFn: mockModel.stream,
 			convertToLlm,
 		});
-		const search = vi.fn(async (_context, query: string) => ({
-			backend: "mnemopi" as const,
-			query,
-			count: 3,
-			items: [
-				{
-					id: "mem-1",
-					content: "San recall should use recent digest context",
-					source: "mnemopi",
-					score: 0.95,
-				},
-				{
-					id: "mem-1",
-					content: "San recall should use recent digest context",
-					source: "mnemopi",
-					score: 0.4,
-				},
-				{
-					content: "   ",
-					source: "mnemopi",
-				},
-				{
-					id: "mem-2",
-					content: "Stable checkpoint content must stay before recall",
-					source: "mnemopi",
-				},
-			],
-		}));
+		const search = vi.fn(
+			async (_context: MemoryBackendOperationContext, query: string, options?: MemoryBackendSearchOptions) => ({
+				backend: "mnemopi" as const,
+				query,
+				count: 3,
+				items: [
+					{
+						id: "mem-1",
+						content: "San recall should use recent digest context",
+						source: "mnemopi",
+						score: 0.95,
+						scope: options?.scopeKeys?.[0],
+					},
+					{
+						id: "mem-1",
+						content: "San recall should use recent digest context",
+						source: "mnemopi",
+						score: 0.4,
+						scope: options?.scopeKeys?.[0],
+					},
+					{
+						content: "   ",
+						source: "mnemopi",
+						scope: options?.scopeKeys?.[0],
+					},
+					{
+						id: "mem-2",
+						content: "Stable checkpoint content must stay before recall",
+						source: "mnemopi",
+						scope: options?.scopeKeys?.[0],
+					},
+				],
+			}),
+		);
 		const fakeBackend: MemoryBackend = {
 			id: "mnemopi",
 			async start() {},

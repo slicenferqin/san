@@ -33,16 +33,25 @@ function sanitizeError(error: unknown): string {
 		.join("\n");
 }
 
+function workflowTaskRef(runtime: SlashCommandRuntime): string {
+	const userEntry = runtime.sessionManager
+		.getBranch()
+		.findLast(entry => entry.type === "message" && entry.message.role === "user" && !entry.message.synthetic);
+	return userEntry
+		? `${runtime.sessionManager.getSessionId()}:user:${userEntry.id}`
+		: `${runtime.sessionManager.getSessionId()}:root`;
+}
+
 function workflowSession(runtime: SlashCommandRuntime): WorkflowSessionRuntime {
 	const key = runtime.sessionManager;
 	const existing = WORKFLOW_SESSIONS.get(key);
 	const sessionId = runtime.sessionManager.getSessionId();
 	if (existing?.sessionId === sessionId) return existing;
 	if (existing) {
-		existing.manager.cancelLiveRuns("Workflow cancelled because the user switched sessions");
+		existing.manager.suspendLiveRuns("Workflow suspended because the user switched sessions");
 		existing.unregisterIdentityListener();
-		existing.store.close();
 		WORKFLOW_SESSIONS.delete(key);
+		void existing.manager.waitForLiveRunsToSettle().then(() => existing.store.close());
 	}
 
 	const policy = { allowIsolatedWrite: runtime.settings.get("san.workflows.allowIsolatedWrite") };
@@ -72,10 +81,10 @@ function workflowSession(runtime: SlashCommandRuntime): WorkflowSessionRuntime {
 	};
 	state.unregisterIdentityListener = runtime.sessionManager.onSessionIdentityChanged(change => {
 		if (change.previousSessionId !== state.sessionId) return;
-		state.manager.cancelLiveRuns("Workflow cancelled because the user switched sessions");
+		state.manager.suspendLiveRuns("Workflow suspended because the user switched sessions");
 		WORKFLOW_SESSIONS.delete(key);
 		state.unregisterIdentityListener();
-		state.store.close();
+		void state.manager.waitForLiveRunsToSettle().then(() => state.store.close());
 	});
 	WORKFLOW_SESSIONS.set(key, state);
 	return state;
@@ -89,6 +98,7 @@ function observeRun(
 	void handle.completion
 		.then(async () => {
 			await output(service.deliverCompletedRun(handle.runId));
+			service.acknowledgeCompletedRunDelivery(handle.runId);
 		})
 		.catch(async error => {
 			await output(`Workflow ${handle.runId} completion error: ${sanitizeError(error)}`);
@@ -111,7 +121,7 @@ export async function handleWorkflowCommand(
 	try {
 		const text = await state.service.execute(command.name === "workflows" ? "list" : command.args, {
 			cwd: runtime.cwd,
-			taskRef: runtime.sessionManager.getSessionId(),
+			taskRef: workflowTaskRef(runtime),
 			allowIsolatedWrite: state.policy.allowIsolatedWrite,
 			allowAdHoc: runtime.settings.get("san.workflows.adHocEnabled"),
 			generateAdHocDescriptor: objective => runtime.session.generateAdHocWorkflowDraft(objective),
@@ -119,6 +129,7 @@ export async function handleWorkflowCommand(
 			observeRun: handle => observeRun(handle, state.service, runtime.output),
 		});
 		await runtime.output(text);
+		state.service.acknowledgePreparedDeliveries();
 	} catch (error) {
 		await runtime.output(`Workflow error: ${sanitizeError(error)}`);
 	}

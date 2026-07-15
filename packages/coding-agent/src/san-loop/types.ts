@@ -34,6 +34,7 @@ export type SanLoopStatus =
 	| "working"
 	| "reviewing"
 	| "retrying"
+	| "aborting"
 	| "blocked"
 	| "passed"
 	| "failed"
@@ -54,8 +55,10 @@ export type SanLoopEventType =
 	| "worker_completed"
 	| "review_completed"
 	| "retry_requested"
+	| "abort_requested"
 	| "blocked"
 	| "aborted"
+	| "failed"
 	| "finalized"
 	| "recovered";
 
@@ -151,12 +154,18 @@ export interface SanLoopBudgetSnapshot {
 	state: SanLoopStatus;
 	inputTokens?: number;
 	outputTokens?: number;
+	cacheReadTokens?: number;
+	cacheWriteTokens?: number;
+	totalTokens?: number;
 	cost?: number;
+	durationMs?: number;
+	providerRequests?: number;
 	remainingTurns?: number;
 }
 
 export interface SanLoopRunSnapshot {
 	schemaVersion: typeof SAN_LOOP_SCHEMA_VERSION;
+	revision: number;
 	runId: string;
 	sessionId: string;
 	createdAt: string;

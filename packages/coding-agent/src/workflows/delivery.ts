@@ -30,6 +30,7 @@ export class WorkflowWriteDeliveryError extends Error {
 export interface WorkflowWriteArtifactRecord {
 	metadata: WorkflowWriteArtifact;
 	candidate: WorkflowWriteArtifactCandidate;
+	preimages?: Record<string, string | null>;
 	reviewToken?: string;
 }
 
@@ -46,6 +47,22 @@ export interface WorkflowWriteApplyResult {
 	artifact: WorkflowWriteArtifact;
 	nextBaseline: WorktreeBaseline;
 	hadChanges: boolean;
+}
+
+const WORKFLOW_APPLY_LOCKS = new Map<string, Promise<void>>();
+
+async function withWorkflowApplyLock<T>(repoRoot: string, action: () => Promise<T>): Promise<T> {
+	const previous = WORKFLOW_APPLY_LOCKS.get(repoRoot) ?? Promise.resolve();
+	const release = Promise.withResolvers<void>();
+	const tail = previous.then(() => release.promise);
+	WORKFLOW_APPLY_LOCKS.set(repoRoot, tail);
+	await previous;
+	try {
+		return await action();
+	} finally {
+		release.resolve();
+		if (WORKFLOW_APPLY_LOCKS.get(repoRoot) === tail) WORKFLOW_APPLY_LOCKS.delete(repoRoot);
+	}
 }
 
 function digestText(value: string): string {
@@ -183,6 +200,60 @@ function assertPatchSafe(patchText: string, candidate: WorkflowWriteArtifactCand
 	}
 }
 
+async function capturePatchPreimages(
+	patchText: string,
+	candidate: WorkflowWriteArtifactCandidate,
+): Promise<Record<string, string | null>> {
+	const repoRoot = await fs.realpath(candidate.repoRoot);
+	const scopeRoot = await fs.realpath(candidate.scopeKey);
+	if (!isWithin(repoRoot, scopeRoot)) {
+		throw new WorkflowWriteDeliveryError("scope_violation", "Workflow write scope is outside its repository.");
+	}
+	const preimages: Record<string, string | null> = Object.create(null) as Record<string, string | null>;
+	for (const relativePath of patchPaths(patchText)) {
+		const target = path.resolve(repoRoot, relativePath);
+		if (!isWithin(scopeRoot, target)) {
+			throw new WorkflowWriteDeliveryError(
+				"scope_violation",
+				`Workflow patch path ${relativePath} escaped its scope.`,
+			);
+		}
+		try {
+			const stat = await fs.lstat(target);
+			if (!stat.isFile() || stat.isSymbolicLink()) {
+				throw new WorkflowWriteDeliveryError(
+					"scope_violation",
+					`Workflow patch target ${relativePath} is not a regular file.`,
+				);
+			}
+			preimages[relativePath] = digestText(await Bun.file(target).text());
+		} catch (error) {
+			if (error instanceof WorkflowWriteDeliveryError) throw error;
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+				preimages[relativePath] = null;
+				continue;
+			}
+			throw new WorkflowWriteDeliveryError(
+				"scope_violation",
+				`Workflow patch target ${relativePath} cannot be verified.`,
+			);
+		}
+	}
+	return preimages;
+}
+
+function samePreimages(
+	left: Readonly<Record<string, string | null>>,
+	right: Readonly<Record<string, string | null>>,
+): boolean {
+	const leftKeys = Object.keys(left).sort();
+	const rightKeys = Object.keys(right).sort();
+	return (
+		leftKeys.length === rightKeys.length &&
+		leftKeys.every((key, index) => key === rightKeys[index] && left[key] === right[key])
+	);
+}
+
 async function readVerifiedPatch(record: WorkflowWriteArtifactRecord): Promise<string> {
 	const { candidate, metadata } = record;
 	if (!path.isAbsolute(candidate.artifactRoot) || !path.isAbsolute(candidate.patchPath)) {
@@ -300,6 +371,7 @@ export async function reviewWorkflowWriteArtifact(
 		);
 	}
 	const patchText = await readVerifiedPatch(record);
+	record.preimages = await capturePatchPreimages(patchText, record.candidate);
 	const reviewToken = tokenFactory();
 	if (!reviewToken.trim()) throw new WorkflowWriteDeliveryError("invalid_review", "Workflow review token is empty.");
 	record.reviewToken = reviewToken;
@@ -322,6 +394,25 @@ export async function applyWorkflowWriteArtifact(options: {
 	appliedAt: string;
 	onApplyStarted: () => void;
 }): Promise<WorkflowWriteApplyResult> {
+	let repoRoot: string;
+	try {
+		repoRoot = await fs.realpath(options.record.candidate.repoRoot);
+	} catch {
+		throw new WorkflowWriteDeliveryError("scope_violation", "Workflow repository path cannot be verified.");
+	}
+	return withWorkflowApplyLock(repoRoot, () => applyWorkflowWriteArtifactLocked(options, repoRoot));
+}
+
+async function applyWorkflowWriteArtifactLocked(
+	options: {
+		record: WorkflowWriteArtifactRecord;
+		reviewToken: string;
+		expectedBaseline: WorktreeBaseline;
+		appliedAt: string;
+		onApplyStarted: () => void;
+	},
+	lockedRepoRoot: string,
+): Promise<WorkflowWriteApplyResult> {
 	const { record } = options;
 	if (record.metadata.status !== "reviewed") {
 		throw new WorkflowWriteDeliveryError(
@@ -332,7 +423,23 @@ export async function applyWorkflowWriteArtifact(options: {
 	if (!record.reviewToken || record.reviewToken !== options.reviewToken) {
 		throw new WorkflowWriteDeliveryError("invalid_review", "Workflow patch review token is invalid or stale.");
 	}
+	let currentRepoRoot: string;
+	let currentScope: string;
+	try {
+		[currentRepoRoot, currentScope] = await Promise.all([
+			fs.realpath(record.candidate.repoRoot),
+			fs.realpath(record.candidate.scopeKey),
+		]);
+	} catch {
+		throw new WorkflowWriteDeliveryError("scope_violation", "Workflow write scope cannot be verified.");
+	}
+	if (currentRepoRoot !== lockedRepoRoot || !isWithin(currentRepoRoot, currentScope)) {
+		throw new WorkflowWriteDeliveryError("scope_violation", "Workflow write scope changed after approval.");
+	}
 	const patchText = await readVerifiedPatch(record);
+	if (!record.preimages) {
+		throw new WorkflowWriteDeliveryError("invalid_review", "Workflow patch review has no file preimage receipt.");
+	}
 	const currentBaseline = await captureBaseline(record.candidate.repoRoot);
 	if (workflowBaselineHash(currentBaseline) !== workflowBaselineHash(options.expectedBaseline)) {
 		throw new WorkflowWriteDeliveryError(
@@ -340,10 +447,24 @@ export async function applyWorkflowWriteArtifact(options: {
 			"The working tree changed after Workflow patch review; the patch was not applied.",
 		);
 	}
+	const currentPreimages = await capturePatchPreimages(patchText, record.candidate);
+	if (!samePreimages(record.preimages, currentPreimages)) {
+		throw new WorkflowWriteDeliveryError(
+			"baseline_changed",
+			"A Workflow patch target changed after review; the patch was not applied.",
+		);
+	}
 	if (!(await git.patch.canApplyText(record.candidate.repoRoot, patchText))) {
 		throw new WorkflowWriteDeliveryError(
 			"patch_conflict",
 			"Workflow patch no longer applies cleanly to the reviewed baseline.",
+		);
+	}
+	const preApplyImages = await capturePatchPreimages(patchText, record.candidate);
+	if (!samePreimages(currentPreimages, preApplyImages)) {
+		throw new WorkflowWriteDeliveryError(
+			"baseline_changed",
+			"A Workflow patch target changed during apply validation; the patch was not applied.",
 		);
 	}
 	options.onApplyStarted();

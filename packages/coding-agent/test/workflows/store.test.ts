@@ -121,7 +121,7 @@ describe("WorkflowStore Managed versions", () => {
 		const workflow = managedWorkflow();
 		const first = createStore(dbPath);
 
-		expect(first.schemaVersion).toBe(1);
+		expect(first.schemaVersion).toBe(2);
 		expect(first.findManagedApproval(workflow)).toBeUndefined();
 		expect(first.publishManagedVersion(workflow, new Date("2026-07-11T00:00:00.000Z"))).toMatchObject({
 			workflow: { kind: "managed", sourceHash: workflow.sourceHash },
@@ -271,7 +271,7 @@ describe("WorkflowStore corruption boundaries", () => {
 		db.run("PRAGMA user_version = 99");
 		db.close();
 
-		expect(() => createStore(dbPath)).toThrow("Workflow database schema 99 is newer than supported version 1");
+		expect(() => createStore(dbPath)).toThrow("Workflow database schema 99 is newer than supported version 2");
 	});
 
 	it("validates persisted JSON and hashes again when durable state is read", () => {

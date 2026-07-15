@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { type AutocompleteItem, Spacer } from "@oh-my-pi/pi-tui";
 import { APP_NAME, getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
@@ -14,6 +15,7 @@ import {
 	buildSanBrainMutationResultText,
 	buildSanBrainProfileReportText,
 	buildSanBrainProjectionReportText,
+	rebuildSanBrainStore,
 	resolveSanBrainRuntimePolicy,
 	runSanBrainProjections,
 	SanBrainStore,
@@ -45,10 +47,14 @@ import type { InteractiveModeContext } from "../modes/types";
 import { extractLastCodeBlock, extractLastCommand } from "../modes/utils/copy-targets";
 import {
 	abortSanLoopRun,
+	cancelRunningSanLoop,
 	createSanLoopTaskAgentExecutor,
+	discoverSanLoopChecks,
 	findLatestSanLoopRun,
+	isSanLoopRunning,
 	isSanLoopTerminalStatus,
 	type RunSanLoopResult,
+	requestSanLoopAbort,
 	runSanLoop,
 	type SanLoopMode,
 } from "../san-loop";
@@ -58,6 +64,7 @@ import type { SessionEntry } from "../session/session-entries";
 import { resolveResumableSession } from "../session/session-listing";
 import type { SessionManager } from "../session/session-manager";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
+import { CLI_THINKING_LEVELS, getConfiguredThinkingLevelMetadata, parseConfiguredThinkingLevel } from "../thinking";
 import { expandTilde, resolveToCwd } from "../tools/path-utils";
 import { urlHyperlinkAlways } from "../tui";
 import { getChangelogPath, parseChangelog } from "../utils/changelog";
@@ -108,6 +115,16 @@ function refreshStatusLine(ctx: InteractiveModeContext): void {
 function formatFastModeStatus(session: AgentSession): string {
 	return session.isFastModeEnabled() ? "on" : "off";
 }
+function formatEffortStatus(session: AgentSession): string {
+	if (!session.model?.reasoning) return "unavailable (model has no controllable effort)";
+	const configured = session.configuredThinkingLevel();
+	if (!configured || configured === ThinkingLevel.Inherit) return "unset";
+	return getConfiguredThinkingLevelMetadata(configured).label;
+}
+
+function formatEffortUsage(): string {
+	return `Usage: /effort [${CLI_THINKING_LEVELS.join("|")}|status]`;
+}
 
 const AUTOCOMPLETE_DETAIL_LIMIT = 48;
 
@@ -157,6 +174,13 @@ async function runConfiguredSanLoop(options: {
 	sessionManager: SessionManager;
 	cwd: string;
 }): Promise<RunSanLoopResult> {
+	const checks = options.settings.get("san.executionLoop.checks.enabled")
+		? await discoverSanLoopChecks({
+				cwd: options.cwd,
+				includeBuiltins: options.settings.get("san.executionLoop.checks.includeBuiltins"),
+				projectDir: options.settings.get("san.executionLoop.checks.projectDir"),
+			})
+		: [];
 	return runSanLoop({
 		sessionManager: options.sessionManager,
 		objective: options.objective,
@@ -165,6 +189,7 @@ async function runConfiguredSanLoop(options: {
 		maxWorkers: options.settings.get("san.executionLoop.maxWorkers"),
 		maxTurns: sanLoopMaxTurnsForMode(options.settings, options.mode),
 		contextPlanRefs: latestContextPlanRefs(options.sessionManager.getBranch()),
+		checks,
 		executor: createSanLoopTaskAgentExecutor({
 			session: options.session,
 			cwd: options.cwd,
@@ -224,15 +249,26 @@ function createSanLoopModeShortcut(mode: SanLoopMode): SlashCommandSpec {
 	};
 }
 
-function stopSanLoop(
+async function stopSanLoop(
 	entries: readonly SessionEntry[],
-	sessionManager: { appendCustomEntry(customType: string, data?: unknown): string },
+	sessionManager: {
+		appendCustomEntry(customType: string, data?: unknown): string;
+		getEntries(): readonly SessionEntry[];
+	},
 	runId?: string,
-): string {
+): Promise<string> {
 	const run = findLatestSanLoopRun(entries, runId);
 	if (!run) return runId ? `No San execution loop run found for ${runId}.` : "No San execution loop runs found.";
 	if (isSanLoopTerminalStatus(run.data.status)) {
 		return `San execution loop ${run.data.runId} is already ${run.data.status}.`;
+	}
+	if (isSanLoopRunning(run.data.runId)) {
+		requestSanLoopAbort(sessionManager, run.data);
+		const completion = cancelRunningSanLoop(run.data.runId);
+		if (completion) await completion;
+		const stopped = findLatestSanLoopRun(sessionManager.getEntries(), run.data.runId);
+		if (!stopped) throw new Error(`San execution loop ${run.data.runId} disappeared after cancellation.`);
+		return `San execution loop ${stopped.data.runId} stopped with status ${stopped.data.status}.`;
 	}
 	const aborted = abortSanLoopRun(sessionManager, run.data);
 	return `San execution loop ${aborted.run.runId} stopped with status aborted.`;
@@ -680,6 +716,71 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 			runtime.ctx.showStatus("Usage: /fast [on|off|status]");
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "effort",
+		aliases: ["thinking"],
+		description: "Set thinking effort for this session",
+		acpDescription: "Set or show thinking effort",
+		acpInputHint: "[off|minimal|low|medium|high|xhigh|max|ultra|auto|status]",
+		subcommands: [
+			{ name: "status", description: "Show current effort" },
+			{ name: "off", description: "Disable thinking" },
+			{ name: "auto", description: "Auto-detect effort per prompt" },
+			{ name: "minimal", description: "Minimal effort" },
+			{ name: "low", description: "Low effort" },
+			{ name: "medium", description: "Medium effort" },
+			{ name: "high", description: "High effort" },
+			{ name: "xhigh", description: "Extra-high effort" },
+			{ name: "max", description: "Max effort" },
+			{ name: "ultra", description: "Ultra effort" },
+		],
+		allowArgs: true,
+		getTuiAutocompleteDescription: runtime => `Effort: ${formatEffortStatus(runtime.ctx.session)}`,
+		handle: async (command, runtime) => {
+			const arg = command.args.trim().toLowerCase();
+			if (!arg || arg === "status") {
+				await runtime.output(`Effort is ${formatEffortStatus(runtime.session)}.`);
+				return commandConsumed();
+			}
+			if (!runtime.session.model?.reasoning) {
+				await runtime.output("Current model does not support controllable thinking effort.");
+				return commandConsumed();
+			}
+			const level = parseConfiguredThinkingLevel(arg);
+			if (!level || level === ThinkingLevel.Inherit) {
+				return usage(formatEffortUsage(), runtime);
+			}
+			runtime.session.setThinkingLevel(level);
+			await runtime.output(`Effort set to ${getConfiguredThinkingLevelMetadata(level).label}.`);
+			return commandConsumed();
+		},
+		handleTui: (command, runtime) => {
+			const arg = command.args.trim().toLowerCase();
+			if (!arg || arg === "status") {
+				runtime.ctx.showStatus(`Effort is ${formatEffortStatus(runtime.ctx.session)}.`);
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			if (!runtime.ctx.session.model?.reasoning) {
+				runtime.ctx.showStatus("Current model does not support controllable thinking effort.");
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			const level = parseConfiguredThinkingLevel(arg);
+			if (!level || level === ThinkingLevel.Inherit) {
+				runtime.ctx.showStatus(formatEffortUsage());
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			runtime.ctx.session.setThinkingLevel(level);
+			refreshStatusLine(runtime.ctx);
+			runtime.ctx.updateEditorBorderColor();
+			runtime.ctx.showStatus(
+				`Effort set to ${getConfiguredThinkingLevelMetadata(level).label}. Shift+Tab cycles levels.`,
+			);
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -1457,7 +1558,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "brain",
 		description: "Inspect and review San Brain candidates and active state",
 		acpDescription: "Inspect or review San Brain state",
-		acpInputHint: "[inbox|profile|explain|debug|approve|discard|undo|consolidate|project]",
+		acpInputHint: "[inbox|profile|explain|debug|approve|discard|undo|consolidate|project|rebuild]",
 		allowArgs: true,
 		subcommands: [
 			{ name: "inbox", description: "List pending Brain candidates" },
@@ -1469,6 +1570,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "undo", description: "Undo the current approve decision", usage: "<id>" },
 			{ name: "consolidate", description: "Inspect duplicate and conflicting candidates" },
 			{ name: "project", description: "Run or retry pending Brain projections" },
+			{ name: "rebuild", description: "Rebuild Brain state from every session ledger" },
 		],
 		handle: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
@@ -1483,10 +1585,11 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				"undo",
 				"consolidate",
 				"project",
+				"rebuild",
 			];
 			if (!supported.includes(action)) {
 				return usage(
-					"Usage: /brain [inbox|profile|explain <id>|debug [pending|failed|blocked|all]|approve <id>|discard <id>|undo <id>|consolidate|project]",
+					"Usage: /brain [inbox|profile|explain <id>|debug [pending|failed|blocked|all]|approve <id>|discard <id>|undo <id>|consolidate|project|rebuild]",
 					runtime,
 				);
 			}
@@ -1494,7 +1597,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			if (idAction && (!rest.trim() || /\s/.test(rest.trim()))) {
 				return usage(`Usage: /brain ${action} <id>`, runtime);
 			}
-			if ((action === "consolidate" || action === "project") && rest.trim()) {
+			if ((action === "consolidate" || action === "project" || action === "rebuild") && rest.trim()) {
 				return usage(`Usage: /brain ${action}`, runtime);
 			}
 			if (action === "debug" && rest.trim() && !["pending", "failed", "blocked", "all"].includes(rest.trim())) {
@@ -1509,7 +1612,12 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			const store = SanBrainStore.open(runtime.settings.getAgentDir());
 			try {
 				store.syncSessionEntries(runtime.sessionManager.getSessionId(), runtime.sessionManager.getEntries());
-				if (action === "project") {
+				if (action === "rebuild") {
+					const rebuilt = await rebuildSanBrainStore(store, runtime.settings.getAgentDir());
+					await runtime.output(
+						`San Brain rebuilt from ${rebuilt.sessionsScanned} sessions (${rebuilt.sessionsWithBrainState} with Brain state): ${rebuilt.candidatesAdded} candidates, ${rebuilt.decisionsAdded} decisions.`,
+					);
+				} else if (action === "project") {
 					const projectionResult = await runSanBrainProjections({
 						store,
 						sessionManager: runtime.sessionManager,
@@ -1599,7 +1707,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			}
 			if (parsed.action === "stop") {
 				await runtime.output(
-					stopSanLoop(runtime.sessionManager.getEntries(), runtime.sessionManager, parsed.runId),
+					await stopSanLoop(runtime.sessionManager.getEntries(), runtime.sessionManager, parsed.runId),
 				);
 				return commandConsumed();
 			}
@@ -1634,7 +1742,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			}
 			if (parsed.action === "stop") {
 				runtime.ctx.showStatus(
-					stopSanLoop(
+					await stopSanLoop(
 						runtime.ctx.session.sessionManager.getEntries(),
 						runtime.ctx.session.sessionManager,
 						parsed.runId,

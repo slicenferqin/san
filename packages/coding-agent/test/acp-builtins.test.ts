@@ -34,9 +34,12 @@ interface FakeAcpBuiltinSession {
 	_todoPhases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }>;
 	_switchedTo: string | undefined;
 	_movedFromEmptySessionFile: string | undefined;
+	thinkingLevel: string | undefined;
 	toggleFastMode(): boolean;
 	setFastMode(enabled: boolean): boolean;
 	isFastModeEnabled(): boolean;
+	configuredThinkingLevel(): string | undefined;
+	setThinkingLevel(level: string | undefined): void;
 	setForcedToolChoice(toolName: string): void;
 	fetchUsageReports?: () => Promise<unknown>;
 	getAsyncJobSnapshot: (opts?: { recentLimit?: number }) => { running: unknown[]; recent: unknown[] } | null;
@@ -45,7 +48,7 @@ interface FakeAcpBuiltinSession {
 	getLastAssistantText: () => string | undefined;
 	messages: unknown[];
 	settings: Settings;
-	model: { provider: string; id: string } | undefined;
+	model: { provider: string; id: string; reasoning?: boolean } | undefined;
 	newSession(opts?: { drop?: boolean; parentSession?: string }): Promise<boolean>;
 	switchSession(sessionPath: string): Promise<boolean>;
 	markMovedFromEmptySessionFile(sessionFile: string): void;
@@ -101,6 +104,7 @@ function createRuntime() {
 		_todoPhases: [],
 		_switchedTo: undefined,
 		_movedFromEmptySessionFile: undefined,
+		thinkingLevel: "high",
 		toggleFastMode() {
 			this.fastMode = !this.fastMode;
 			return this.fastMode;
@@ -111,6 +115,12 @@ function createRuntime() {
 		},
 		isFastModeEnabled() {
 			return this.fastMode;
+		},
+		configuredThinkingLevel() {
+			return this.thinkingLevel;
+		},
+		setThinkingLevel(level: string | undefined) {
+			this.thinkingLevel = level;
 		},
 		setForcedToolChoice(toolName: string) {
 			this.forcedToolChoice = toolName;
@@ -257,6 +267,28 @@ describe("ACP builtin slash commands", () => {
 		expect(output).toEqual(["Fast mode is off."]);
 	});
 
+	it("sets and reports session effort via /effort", async () => {
+		const { output, runtime, session } = createRuntime();
+		session.model = { provider: "test", id: "reasoning-model", reasoning: true };
+		session.thinkingLevel = "high";
+
+		const statusResult = await executeAcpBuiltinSlashCommand("/effort status", runtime);
+		expect(statusResult).toEqual({ consumed: true });
+		expect(output).toEqual(["Effort is high."]);
+
+		output.length = 0;
+		const setResult = await executeAcpBuiltinSlashCommand("/effort medium", runtime);
+		expect(setResult).toEqual({ consumed: true });
+		expect(output).toEqual(["Effort set to medium."]);
+		expect(session.thinkingLevel).toBe("medium");
+
+		output.length = 0;
+		session.model = { provider: "test", id: "plain", reasoning: false };
+		const unavailable = await executeAcpBuiltinSlashCommand("/effort high", runtime);
+		expect(unavailable).toEqual({ consumed: true });
+		expect(output).toEqual(["Current model does not support controllable thinking effort."]);
+	});
+
 	it("runs the San execution loop instead of only creating a ledger entry", async () => {
 		const { output, runtime } = createRuntime();
 		runtime.sessionManager.appendCustomEntry(CONTEXT_PLAN_CUSTOM_TYPE, { planId: "plan-old" });
@@ -266,6 +298,7 @@ describe("ACP builtin slash commands", () => {
 		const runSpy = spyOn(sanLoopModule, "runSanLoop").mockResolvedValue({
 			run: {
 				schemaVersion: 1,
+				revision: 0,
 				runId: "loop-acp",
 				sessionId: "fake-session-id",
 				createdAt: "2026-07-01T00:00:00.000Z",
@@ -326,6 +359,7 @@ describe("ACP builtin slash commands", () => {
 			const now = "2026-07-01T00:00:00.000Z";
 			const run: sanLoopModule.SanLoopRunSnapshot = {
 				schemaVersion: sanLoopModule.SAN_LOOP_SCHEMA_VERSION,
+				revision: 0,
 				runId: `loop-${mode}`,
 				sessionId: "fake-session-id",
 				createdAt: now,
@@ -377,6 +411,7 @@ describe("ACP builtin slash commands", () => {
 		const { fakeSessionManager, output, runtime } = createRuntime();
 		const run: sanLoopModule.SanLoopRunSnapshot = {
 			schemaVersion: sanLoopModule.SAN_LOOP_SCHEMA_VERSION,
+			revision: 0,
 			runId: "loop-stop",
 			sessionId: "fake-session-id",
 			createdAt: "2026-07-01T00:00:00.000Z",
@@ -413,6 +448,7 @@ describe("ACP builtin slash commands", () => {
 		const { fakeSessionManager, output, runtime } = createRuntime();
 		fakeSessionManager.appendCustomEntry(sanLoopModule.SAN_LOOP_RUN_CUSTOM_TYPE, {
 			schemaVersion: sanLoopModule.SAN_LOOP_SCHEMA_VERSION,
+			revision: 0,
 			runId: "loop-done",
 			sessionId: "fake-session-id",
 			createdAt: "2026-07-01T00:00:00.000Z",

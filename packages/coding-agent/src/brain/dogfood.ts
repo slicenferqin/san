@@ -30,6 +30,7 @@ import type {
 	SanBrainScope,
 	SanBrainTriggerSelector,
 } from "./types";
+import { isSanBrainExperienceCandidate } from "./types";
 
 const DOGFOOD_POLICY_VERSION = "brain-m6-dogfood-v1";
 const MAX_CANDIDATES_PER_TURN = 5;
@@ -475,23 +476,35 @@ export async function runSanBrainDogfood(options: SanBrainDogfoodOptions = {}): 
 			`selected=${turn5Activation.activation.selectedRules.length}, skipped=${turn5Activation.activation.skippedRules.length}`,
 		);
 
-		const recallCandidate = experienceCandidate({
-			id: "brain-dogfood-recall-policy",
-			type: "recall",
-			action: { kind: "recall_policy", queryTemplateId: "risk-history-v1" },
-			selector: { roles: ["primary"], taskFamilies: ["release"] },
-			scope: repoScope,
-			turn: 6,
+		const recallDigest = {
+			...digest(manager.getSessionId(), 6, "Review bash release failures before retrying."),
+			userIntent: "Review the bash release failure.",
+			memoryCandidates: [],
+			toolEvidence: [{ tool: "bash", summary: "bash failed during release validation" }],
+		};
+		const recallDigestEntryId = manager.appendCustomEntry(TURN_DIGEST_CUSTOM_TYPE, recallDigest);
+		const recallCapture = captureSanBrainTurn(manager, {
+			digest: recallDigest,
+			digestEntryId: recallDigestEntryId,
+			sourceMode: "turn_digest",
+			maxCandidates: MAX_CANDIDATES_PER_TURN,
+			minConfidence: 0.72,
+			userScope,
+			fallbackScope: repoScope,
 		});
-		appendSanBrainExperienceCandidate(manager, recallCandidate);
 		store.syncSessionEntries(manager.getSessionId(), manager.getEntries());
-		candidateCounts.push(1);
+		candidateCounts.push(recallCapture.profileCandidates + recallCapture.experienceCandidates);
 		candidateTurns.add(6);
+		const recallCandidate = store
+			.listCandidates(100)
+			.map(record => record.candidate)
+			.find(candidate => isSanBrainExperienceCandidate(candidate) && candidate.action.kind === "recall_policy");
+		if (!recallCandidate) throw new Error("Dogfood production capture did not create a recall policy candidate.");
 		const pendingRecallPlan = buildSanBrainRecallPlan(store.listActiveStates(100), {
 			role: "primary",
 			scopes,
-			promptText: "Review the release failure.",
-			baseQuery: "Review the release failure.",
+			promptText: "Review the bash release failure.",
+			baseQuery: "Review the bash release failure.",
 			maxItems: 3,
 			tokenBudget: 1000,
 			minConfidence: 0.75,
@@ -522,8 +535,8 @@ export async function runSanBrainDogfood(options: SanBrainDogfoodOptions = {}): 
 		const turn7Recall = buildSanBrainRecallPlan(store.listActiveStates(100), {
 			role: "primary",
 			scopes,
-			promptText: "Review the release failure and required recovery checks.",
-			baseQuery: "Current prompt:\nReview the release failure and required recovery checks.",
+			promptText: "Review the bash release failure and required recovery checks.",
+			baseQuery: "Current prompt:\nReview the bash release failure and required recovery checks.",
 			maxItems: 3,
 			tokenBudget: 1000,
 			minConfidence: 0.75,
@@ -614,22 +627,46 @@ export async function runSanBrainDogfood(options: SanBrainDogfoodOptions = {}): 
 			`query=${turn8Recall.query ?? "none"}, selected=${turn8Recall.selectedPolicyIds.length}`,
 		);
 
-		const skillCandidate = experienceCandidate({
-			id: "brain-dogfood-managed-skill",
-			type: "skill_candidate",
-			action: {
-				kind: "skill_reference",
-				skillName: "brain-dogfood-release",
-				description: "Deterministic M6 managed-skill projection.",
-				body: "# Release Dogfood\n\nRun the approved release checks.",
-			},
-			scope: repoScope,
-			turn: 9,
+		const skillDigest = {
+			...digest(manager.getSessionId(), 9, "Run the approved release checks before publishing."),
+			memoryCandidates: [
+				{
+					type: "workflow" as const,
+					content: "Run the approved release checks before publishing.",
+					importance: 0.94,
+				},
+			],
+			toolEvidence: [],
+		};
+		const skillDigestEntryId = manager.appendCustomEntry(TURN_DIGEST_CUSTOM_TYPE, skillDigest);
+		const skillCapture = captureSanBrainTurn(manager, {
+			digest: skillDigest,
+			digestEntryId: skillDigestEntryId,
+			sourceMode: "turn_digest",
+			maxCandidates: MAX_CANDIDATES_PER_TURN,
+			minConfidence: 0.72,
+			userScope,
+			fallbackScope: repoScope,
 		});
-		appendSanBrainExperienceCandidate(manager, skillCandidate);
 		store.syncSessionEntries(manager.getSessionId(), manager.getEntries());
-		candidateCounts.push(1);
+		candidateCounts.push(skillCapture.profileCandidates + skillCapture.experienceCandidates);
 		candidateTurns.add(9);
+		const skillCandidate = store
+			.listCandidates(100)
+			.map(record => record.candidate)
+			.find(
+				candidate =>
+					candidate.createdAt === fixedAt(9) &&
+					isSanBrainExperienceCandidate(candidate) &&
+					candidate.action.kind === "skill_reference",
+			);
+		if (
+			!skillCandidate ||
+			!isSanBrainExperienceCandidate(skillCandidate) ||
+			skillCandidate.action.kind !== "skill_reference"
+		) {
+			throw new Error("Dogfood production capture did not create a managed skill candidate.");
+		}
 		applySanBrainMutation(store, manager, {
 			action: "approve",
 			id: skillCandidate.candidateId,
@@ -637,7 +674,7 @@ export async function runSanBrainDogfood(options: SanBrainDogfoodOptions = {}): 
 		});
 		const skillRun = await runProjections(context);
 		projectionTurns.add(9);
-		const skillFile = path.join(getManagedSkillsDir(agentDir), "brain-dogfood-release", "SKILL.md");
+		const skillFile = path.join(getManagedSkillsDir(agentDir), skillCandidate.action.skillName, "SKILL.md");
 		const skillContent = await Bun.file(skillFile).text();
 		const repeatedSkillRun = await runProjections(context);
 		const repeatedSkillContent = await Bun.file(skillFile).text();
@@ -654,23 +691,40 @@ export async function runSanBrainDogfood(options: SanBrainDogfoodOptions = {}): 
 			`first=${skillRun.applied}, second=${repeatedSkillRun.applied}, attempt=${skillProjection?.attemptCount}`,
 		);
 
-		const checkCandidate = experienceCandidate({
-			id: "brain-dogfood-check",
-			type: "check_candidate",
-			action: {
-				kind: "check_suggestion",
-				checkId: "m6-projection-check",
-				title: "M6 Projection Check",
-				severity: "error",
-				body: "Run the deterministic projection verifier before rollout.",
-			},
-			scope: repoScope,
-			turn: 10,
+		const checkDigest = {
+			...digest(manager.getSessionId(), 10, "Verify release-check failures before rollout."),
+			memoryCandidates: [],
+			toolEvidence: [{ tool: "release-check", summary: "release-check failed before rollout" }],
+		};
+		const checkDigestEntryId = manager.appendCustomEntry(TURN_DIGEST_CUSTOM_TYPE, checkDigest);
+		const checkCapture = captureSanBrainTurn(manager, {
+			digest: checkDigest,
+			digestEntryId: checkDigestEntryId,
+			sourceMode: "turn_digest",
+			maxCandidates: MAX_CANDIDATES_PER_TURN,
+			minConfidence: 0.72,
+			userScope,
+			fallbackScope: repoScope,
 		});
-		appendSanBrainExperienceCandidate(manager, checkCandidate);
 		store.syncSessionEntries(manager.getSessionId(), manager.getEntries());
-		candidateCounts.push(1);
+		candidateCounts.push(checkCapture.profileCandidates + checkCapture.experienceCandidates);
 		candidateTurns.add(10);
+		const checkCandidate = store
+			.listCandidates(100)
+			.map(record => record.candidate)
+			.find(
+				candidate =>
+					candidate.createdAt === fixedAt(10) &&
+					isSanBrainExperienceCandidate(candidate) &&
+					candidate.action.kind === "check_suggestion",
+			);
+		if (
+			!checkCandidate ||
+			!isSanBrainExperienceCandidate(checkCandidate) ||
+			checkCandidate.action.kind !== "check_suggestion"
+		) {
+			throw new Error("Dogfood production capture did not create a check candidate.");
+		}
 		applySanBrainMutation(store, manager, {
 			action: "approve",
 			id: checkCandidate.candidateId,
@@ -678,7 +732,7 @@ export async function runSanBrainDogfood(options: SanBrainDogfoodOptions = {}): 
 		});
 		const checkRun = await runProjections(context);
 		projectionTurns.add(10);
-		const checkFile = path.join(agentDir, "brain", "check-suggestions", "m6-projection-check.md");
+		const checkFile = path.join(agentDir, "brain", "check-suggestions", `${checkCandidate.action.checkId}.md`);
 		const checkContent = await Bun.file(checkFile).text();
 		const checkProjection = store.explain(checkCandidate.candidateId)?.projections.at(-1);
 		const checkHash = Bun.hash(checkContent).toString(36);
@@ -686,7 +740,7 @@ export async function runSanBrainDogfood(options: SanBrainDogfoodOptions = {}): 
 			10,
 			"typed check suggestion is reconcilable",
 			checkRun.applied === 1 &&
-				checkContent.includes("name: m6-projection-check") &&
+				checkContent.includes(`name: ${checkCandidate.action.checkId}`) &&
 				checkContent.includes("severity: error") &&
 				checkProjection?.afterHash === checkHash,
 			`applied=${checkRun.applied}, afterHash=${checkProjection?.afterHash ?? "none"}`,

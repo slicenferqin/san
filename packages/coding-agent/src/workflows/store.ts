@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { WorktreeBaseline } from "../task/worktree";
 import {
 	approvalMatches,
 	createAdHocApprovalKey,
@@ -8,6 +9,7 @@ import {
 	createWorkflowApproval,
 	hashWorkflowApprovalKey,
 } from "./approval";
+import type { WorkflowWriteArtifactRecord } from "./delivery";
 import { canonicalWorkflowJson, workflowSourceHash, workflowValueHash } from "./fingerprint";
 import { isWorkflowJsonValue, normalizeWorkflowMeta, WORKFLOW_HARD_LIMITS, type WorkflowMetaInput } from "./schema";
 import { parseWorkflowSource } from "./source-parser";
@@ -17,13 +19,16 @@ import type {
 	AdHocWorkflowDraft,
 	ManagedWorkflow,
 	ManagedWorkflowApprovalKey,
+	WorkflowAgentResult,
 	WorkflowApprovalKey,
 	WorkflowApprovalRecord,
 	WorkflowJsonValue,
+	WorkflowPermissionManifest,
+	WorkflowRun,
 	WorkflowWriteMode,
 } from "./types";
 
-const WORKFLOW_STORE_SCHEMA_VERSION = 1;
+const WORKFLOW_STORE_SCHEMA_VERSION = 2;
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 500;
 
@@ -85,6 +90,17 @@ CREATE INDEX IF NOT EXISTS approvals_managed_idx
 	ON approvals(managed_version_id, revoked_at);
 CREATE INDEX IF NOT EXISTS approvals_active_idx
 	ON approvals(workflow_kind, revoked_at, consumed_at, approved_at DESC);
+
+CREATE TABLE IF NOT EXISTS run_checkpoints (
+	run_id TEXT PRIMARY KEY,
+	session_id TEXT NOT NULL,
+	status TEXT NOT NULL,
+	updated_at TEXT NOT NULL,
+	payload_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS run_checkpoints_session_idx
+	ON run_checkpoints(session_id, updated_at DESC);
 `;
 
 interface SchemaVersionDbRow {
@@ -127,6 +143,35 @@ interface ApprovalDbRow {
 	consumed_at: string | null;
 	managed_version_id: number | null;
 	ad_hoc_draft_id: string | null;
+}
+
+interface RunCheckpointDbRow {
+	run_id: string;
+	session_id: string;
+	status: string;
+	updated_at: string;
+	payload_json: string;
+}
+
+export interface WorkflowCompletedCallCheckpoint {
+	callId: string;
+	inputHash: string;
+	result: WorkflowAgentResult;
+}
+
+/** 重启后重放运行或交付结果所需的宿主持久化私有状态。 */
+export interface WorkflowRunCheckpoint {
+	sessionId: string;
+	run: WorkflowRun;
+	sequence: number;
+	sourceText: string;
+	args?: WorkflowJsonValue;
+	permissions: WorkflowPermissionManifest;
+	completedCalls: WorkflowCompletedCallCheckpoint[];
+	writeRecords: WorkflowWriteArtifactRecord[];
+	writeBaseline?: WorktreeBaseline;
+	expectedWriteBaseline?: WorktreeBaseline;
+	writeRepoRoot?: string;
 }
 
 export interface ManagedWorkflowVersionRecord {
@@ -172,6 +217,167 @@ export class WorkflowStoreConflictError extends WorkflowStoreError {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+	return value === undefined || typeof value === "string";
+}
+
+function isRepoBaseline(value: unknown): value is WorktreeBaseline["root"] {
+	return (
+		isRecord(value) &&
+		typeof value.repoRoot === "string" &&
+		typeof value.headCommit === "string" &&
+		typeof value.staged === "string" &&
+		typeof value.unstaged === "string" &&
+		Array.isArray(value.untracked) &&
+		value.untracked.every(item => typeof item === "string") &&
+		typeof value.untrackedPatch === "string"
+	);
+}
+
+function isWorktreeBaseline(value: unknown): value is WorktreeBaseline {
+	return (
+		isRecord(value) &&
+		isRepoBaseline(value.root) &&
+		Array.isArray(value.nested) &&
+		value.nested.every(
+			item => isRecord(item) && typeof item.relativePath === "string" && isRepoBaseline(item.baseline),
+		)
+	);
+}
+
+function isWorkflowPermissionManifest(value: unknown): value is WorkflowPermissionManifest {
+	return (
+		isRecord(value) &&
+		(value.writeMode === "read_only" || value.writeMode === "isolated_write") &&
+		Array.isArray(value.tools) &&
+		value.tools.every(tool => typeof tool === "string" && tool.length > 0)
+	);
+}
+
+function isWorkflowAgentResult(value: unknown): value is WorkflowAgentResult {
+	if (
+		!isRecord(value) ||
+		typeof value.agentId !== "string" ||
+		!isWorkflowJsonValue(value.value) ||
+		typeof value.text !== "string" ||
+		typeof value.durationMs !== "number" ||
+		!Number.isFinite(value.durationMs) ||
+		value.durationMs < 0 ||
+		!isOptionalString(value.patchPath) ||
+		!isOptionalString(value.branchName) ||
+		(value.changesApplied !== undefined && value.changesApplied !== null && typeof value.changesApplied !== "boolean")
+	) {
+		return false;
+	}
+	if (value.usage !== undefined) {
+		if (!isRecord(value.usage) || !isNonNegativeInteger(value.usage.totalTokens)) return false;
+	}
+	if (value.writeArtifact !== undefined) {
+		if (
+			!isRecord(value.writeArtifact) ||
+			typeof value.writeArtifact.repoRoot !== "string" ||
+			typeof value.writeArtifact.artifactRoot !== "string" ||
+			typeof value.writeArtifact.patchPath !== "string" ||
+			typeof value.writeArtifact.scopeKey !== "string" ||
+			!isWorktreeBaseline(value.writeArtifact.baseline) ||
+			!Array.isArray(value.writeArtifact.nestedPatches)
+		) {
+			return false;
+		}
+	}
+	return true;
+}
+
+function isWorkflowRun(value: unknown): value is WorkflowRun {
+	if (!isRecord(value) || !isRecord(value.budget)) return false;
+	const status = value.status;
+	const deliveryState = value.deliveryState;
+	return (
+		typeof value.runId === "string" &&
+		(value.workflowKind === "managed" || value.workflowKind === "ad_hoc") &&
+		typeof value.workflowName === "string" &&
+		isOptionalString(value.workflowVersion) &&
+		typeof value.sourceHash === "string" &&
+		typeof value.argsHash === "string" &&
+		typeof value.approvalRef === "string" &&
+		typeof value.scopeKey === "string" &&
+		(status === "pending" ||
+			status === "approved" ||
+			status === "running" ||
+			status === "paused" ||
+			status === "completed" ||
+			status === "failed" ||
+			status === "cancelled" ||
+			status === "blocked") &&
+		(deliveryState === "pending" ||
+			deliveryState === "delivering" ||
+			deliveryState === "delivered" ||
+			deliveryState === "blocked") &&
+		isOptionalString(value.deliveryId) &&
+		typeof value.currentPhase === "string" &&
+		Array.isArray(value.nodes) &&
+		Array.isArray(value.writeArtifacts) &&
+		typeof value.createdAt === "string" &&
+		typeof value.updatedAt === "string" &&
+		(value.result === undefined || isWorkflowJsonValue(value.result)) &&
+		isOptionalString(value.error) &&
+		isNonNegativeInteger(value.budget.agentsStarted) &&
+		isNonNegativeInteger(value.budget.agentsCompleted) &&
+		isNonNegativeInteger(value.budget.tokensUsed) &&
+		typeof value.budget.startedAt === "string" &&
+		isNonNegativeInteger(value.budget.elapsedMs) &&
+		isRecord(value.budget.limits)
+	);
+}
+
+function isWorkflowWriteArtifactRecord(value: unknown): value is WorkflowWriteArtifactRecord {
+	return (
+		isRecord(value) &&
+		isRecord(value.metadata) &&
+		isRecord(value.candidate) &&
+		typeof value.metadata.artifactId === "string" &&
+		typeof value.candidate.repoRoot === "string" &&
+		typeof value.candidate.artifactRoot === "string" &&
+		typeof value.candidate.patchPath === "string" &&
+		typeof value.candidate.scopeKey === "string" &&
+		isWorktreeBaseline(value.candidate.baseline) &&
+		Array.isArray(value.candidate.nestedPatches) &&
+		(value.preimages === undefined ||
+			(isRecord(value.preimages) &&
+				Object.values(value.preimages).every(item => item === null || typeof item === "string"))) &&
+		isOptionalString(value.reviewToken)
+	);
+}
+
+function isWorkflowRunCheckpoint(value: unknown): value is WorkflowRunCheckpoint {
+	return (
+		isRecord(value) &&
+		typeof value.sessionId === "string" &&
+		isWorkflowRun(value.run) &&
+		isNonNegativeInteger(value.sequence) &&
+		typeof value.sourceText === "string" &&
+		(value.args === undefined || isWorkflowJsonValue(value.args)) &&
+		isWorkflowPermissionManifest(value.permissions) &&
+		Array.isArray(value.completedCalls) &&
+		value.completedCalls.every(
+			call =>
+				isRecord(call) &&
+				typeof call.callId === "string" &&
+				typeof call.inputHash === "string" &&
+				isWorkflowAgentResult(call.result),
+		) &&
+		Array.isArray(value.writeRecords) &&
+		value.writeRecords.every(isWorkflowWriteArtifactRecord) &&
+		(value.writeBaseline === undefined || isWorktreeBaseline(value.writeBaseline)) &&
+		(value.expectedWriteBaseline === undefined || isWorktreeBaseline(value.expectedWriteBaseline)) &&
+		isOptionalString(value.writeRepoRoot)
+	);
 }
 
 function nonEmptyString(value: unknown, label: string): string {
@@ -471,6 +677,26 @@ function adHocDraftRecord(row: AdHocDraftDbRow): AdHocWorkflowDraft {
 	return { ...draft, status: row.status };
 }
 
+function runCheckpointRecord(row: RunCheckpointDbRow): WorkflowRunCheckpoint {
+	const value = parseJson(row.payload_json, `Workflow run checkpoint ${row.run_id}`);
+	if (!isWorkflowRunCheckpoint(value)) {
+		throw new WorkflowStoreError(`Workflow run checkpoint ${row.run_id} has an invalid payload.`);
+	}
+	if (
+		value.sessionId !== row.session_id ||
+		value.run.runId !== row.run_id ||
+		value.run.status !== row.status ||
+		value.run.updatedAt !== row.updated_at
+	) {
+		throw new WorkflowStoreError(`Workflow run checkpoint ${row.run_id} database index is corrupt.`);
+	}
+	const sourceText = nonEmptyString(value.sourceText, `Workflow run checkpoint ${row.run_id} sourceText`);
+	if (value.run.sourceHash !== workflowSourceHash(sourceText)) {
+		throw new WorkflowStoreError(`Workflow run checkpoint ${row.run_id} source hash is corrupt.`);
+	}
+	return structuredClone(value);
+}
+
 export function getWorkflowStoreDbPath(agentDir: string): string {
 	return path.join(agentDir, "workflows", "workflows.sqlite");
 }
@@ -505,6 +731,52 @@ export class WorkflowStore {
 
 	close(): void {
 		this.#db.close();
+	}
+
+	saveRunCheckpoint(checkpoint: WorkflowRunCheckpoint): void {
+		if (!checkpoint.sessionId.trim()) throw new WorkflowStoreError("Workflow run checkpoint session id is empty.");
+		if (checkpoint.run.sourceHash !== workflowSourceHash(checkpoint.sourceText)) {
+			throw new WorkflowStoreError(`Workflow run ${checkpoint.run.runId} source hash changed before checkpointing.`);
+		}
+		if (checkpoint.run.argsHash !== workflowValueHash(checkpoint.args ?? null)) {
+			throw new WorkflowStoreError(
+				`Workflow run ${checkpoint.run.runId} argument hash changed before checkpointing.`,
+			);
+		}
+		for (const call of checkpoint.completedCalls) {
+			if (!call.callId.trim() || !call.inputHash.trim()) {
+				throw new WorkflowStoreError(`Workflow run ${checkpoint.run.runId} contains an invalid completed call.`);
+			}
+		}
+		const payload = JSON.stringify(checkpoint);
+		this.#db
+			.prepare(
+				`INSERT INTO run_checkpoints (run_id, session_id, status, updated_at, payload_json)
+				 VALUES (?, ?, ?, ?, ?)
+				 ON CONFLICT(run_id) DO UPDATE SET
+					session_id = excluded.session_id,
+					status = excluded.status,
+					updated_at = excluded.updated_at,
+					payload_json = excluded.payload_json`,
+			)
+			.run(checkpoint.run.runId, checkpoint.sessionId, checkpoint.run.status, checkpoint.run.updatedAt, payload);
+	}
+
+	getRunCheckpoint(runId: string): WorkflowRunCheckpoint | undefined {
+		const row = this.#db
+			.query("SELECT run_id, session_id, status, updated_at, payload_json FROM run_checkpoints WHERE run_id = ?")
+			.get(runId) as RunCheckpointDbRow | null;
+		return row ? runCheckpointRecord(row) : undefined;
+	}
+
+	listRunCheckpoints(sessionId: string): WorkflowRunCheckpoint[] {
+		const rows = this.#db
+			.query(
+				`SELECT run_id, session_id, status, updated_at, payload_json
+				 FROM run_checkpoints WHERE session_id = ? ORDER BY updated_at ASC, run_id ASC`,
+			)
+			.all(sessionId) as RunCheckpointDbRow[];
+		return rows.map(runCheckpointRecord);
 	}
 
 	#migrate(): void {
@@ -772,6 +1044,15 @@ export class WorkflowStore {
 		return reject();
 	}
 
+	rejectAdHocDraftAndDelete(draftId: string, now = new Date()): AdHocWorkflowDraft {
+		const rejectAndDelete = this.#db.transaction(() => {
+			const rejected = this.rejectAdHocDraft(draftId, now);
+			this.deleteAdHocDraft(draftId, ["rejected"]);
+			return rejected;
+		});
+		return rejectAndDelete();
+	}
+
 	expireAdHocDrafts(now = new Date()): number {
 		const expiresAt = nowTimestamp(now);
 		const expire = this.#db.transaction(() => {
@@ -789,6 +1070,15 @@ export class WorkflowStore {
 		const expiredAt = nowTimestamp(now);
 		if (!this.#expireAdHocDraft(draftId, expiredAt)) return undefined;
 		return adHocDraftRecord(this.#requiredAdHocDraftRow(draftId));
+	}
+
+	expireAdHocDraftAndDelete(draftId: string, now = new Date()): AdHocWorkflowDraft | undefined {
+		const expireAndDelete = this.#db.transaction(() => {
+			const expired = this.expireAdHocDraft(draftId, now);
+			if (expired) this.deleteAdHocDraft(draftId, ["expired"]);
+			return expired;
+		});
+		return expireAndDelete();
 	}
 
 	approveAdHocDraft(draftInput: AdHocWorkflowDraft, now = new Date()): WorkflowApprovalRecord {
@@ -879,6 +1169,19 @@ export class WorkflowStore {
 			return approvalRecord(consumed);
 		});
 		return consume();
+	}
+
+	consumeAdHocApprovalAndDeleteDraft(
+		draftInput: AdHocWorkflowDraft,
+		approvalId: string,
+		now = new Date(),
+	): WorkflowApprovalRecord {
+		const consumeAndDelete = this.#db.transaction(() => {
+			const consumed = this.consumeAdHocApproval(draftInput, approvalId, now);
+			this.deleteAdHocDraft(draftInput.draftId, ["consumed"]);
+			return consumed;
+		});
+		return consumeAndDelete();
 	}
 
 	getApproval(approvalId: string): WorkflowApprovalRecord | undefined {

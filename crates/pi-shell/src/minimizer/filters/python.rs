@@ -1,9 +1,9 @@
 //! Python test, type-check, and lint output filters.
 //!
-//! Ported from rtk-ai/rtk@878af7de99e0ba71da2e8fd996f6b52a1836e06c
-//! Path: `src/cmds/python/pytest_cmd.rs`
-//! License: MIT (compatible with workspace MIT). See `NOTICE` at
-//! the `pi-shell` crate root.
+//! Portions adapted from rtk-ai/rtk@878af7de99e0ba71da2e8fd996f6b52a1836e06c
+//! (`src/cmds/python/pytest_cmd.rs`) under Apache-2.0 and modified for
+//! pi-shell's in-process minimizer. See the crate-root `NOTICE` and
+//! `LICENSE-APACHE-2.0` for complete attribution and license terms.
 //!
 //! The pytest state machine (`filter_pytest`, `pytest_success`,
 //! `is_pytest_*`, `looks_like_pytest_summary_part`) adapts the

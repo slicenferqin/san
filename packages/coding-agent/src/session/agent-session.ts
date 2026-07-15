@@ -177,11 +177,11 @@ import {
 	runSanBrainProjections,
 	type SanBrainActivation,
 	type SanBrainActiveStateRecord,
+	type SanBrainInjectionCandidate,
 	type SanBrainScope,
 	SanBrainStore,
 } from "../brain";
 import { reset as resetCapabilities } from "../capability";
-import { findRepoRoot } from "../capability/fs";
 import type { Rule } from "../capability/rule";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { ModelRegistry } from "../config/model-registry";
@@ -274,6 +274,7 @@ import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slas
 import { GoalRuntime } from "../goals/runtime";
 import type { Goal, GoalModeState } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
+import { resolveRuntimeScopeIdentity } from "../identity";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
 import { IrcBus, type IrcMessage } from "../irc/bus";
 import { resolveMemoryBackend } from "../memory-backend";
@@ -591,6 +592,7 @@ export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
 
 const UNEXPECTED_STOP_MAX_RETRIES = 3;
 const UNEXPECTED_STOP_TIMEOUT_MS = 4000;
+const SAN_BRAIN_CAPTURE_BOUNDARY_MS = 150;
 const EMPTY_STOP_MAX_RETRIES = 3;
 const RETRY_BACKOFF_MAX_DELAY_MS = 8_000;
 /**
@@ -1879,6 +1881,7 @@ export class AgentSession {
 		  }
 		| undefined = undefined;
 	#contextSteadyRequestPlan: BuiltContextPlan | undefined = undefined;
+	#contextSteadyGlobalInjectionAllowed = true;
 	/** Survives turn end so idle status/compaction can share the last plan snapshot. */
 	#contextSteadyLastPlan: BuiltContextPlan | undefined = undefined;
 	#contextSteadyLastRebaseCheckpointEntryId: string | undefined;
@@ -4275,6 +4278,7 @@ export class AgentSession {
 		};
 
 		return (async () => {
+			const brainCaptureDeadline = performance.now() + SAN_BRAIN_CAPTURE_BOUNDARY_MS;
 			try {
 				const contextSteadyEnabled = settings.get("san.contextSteady.enabled") as boolean;
 				const digestEnabled = settings.get("san.contextSteady.digest.enabled") as boolean;
@@ -4328,12 +4332,15 @@ export class AgentSession {
 					toEntryId,
 					promptGeneration: this.#promptGeneration,
 				};
+				const configuredDigestTimeoutMs = (settings.get("san.contextSteady.digest.timeoutMs") as number) ?? 30000;
 				const steadySettings = {
 					enabled: contextSteadyEnabled,
 					digest: {
 						enabled: digestEnabled,
 						persistFallback,
-						timeoutMs: (settings.get("san.contextSteady.digest.timeoutMs") as number) ?? 30000,
+						timeoutMs: brainCaptureEnabled
+							? Math.min(configuredDigestTimeoutMs, SAN_BRAIN_CAPTURE_BOUNDARY_MS)
+							: configuredDigestTimeoutMs,
 						llm: {
 							enabled: settings.get("san.contextSteady.digest.llm.enabled") as boolean,
 							modelRole: settings.get("san.contextSteady.digest.llm.modelRole") as string,
@@ -4367,7 +4374,7 @@ export class AgentSession {
 							)
 						: undefined;
 
-				if (brainCaptureEnabled) {
+				if (brainCaptureEnabled && performance.now() < brainCaptureDeadline) {
 					const digest =
 						digestResult?.digest ??
 						generateFallbackDigest(
@@ -7934,6 +7941,7 @@ export class AgentSession {
 			preludeMessages.push(eagerTaskPrelude);
 		}
 		const sanLoopPrelude = options?.synthetic ? undefined : this.#buildSanLoopCommanderPrelude();
+		this.#contextSteadyGlobalInjectionAllowed = true;
 		const brainPolicy = resolveSanBrainRuntimePolicy(this.settings);
 		const brainActivationEnabled = !options?.synthetic && brainPolicy.activationEnabled;
 		if (!options?.synthetic && brainPolicy.projectionEnabled) {
@@ -7956,20 +7964,26 @@ export class AgentSession {
 						timestamp: Date.now(),
 					}
 				: undefined;
-			const injectionCandidates: Array<{
-				source: "san_loop" | "brain" | "context_packet";
-				content: string;
-			}> = [];
+			const injectionCandidates: SanBrainInjectionCandidate[] = [];
 			if (sanLoopPrelude && typeof sanLoopPrelude.content === "string") {
 				injectionCandidates.push({ source: "san_loop", content: sanLoopPrelude.content });
 			}
 			if (brainStateMessage && typeof brainStateMessage.content === "string") {
 				injectionCandidates.push({ source: "brain", content: brainStateMessage.content });
 			}
+			const contextPlanReservedTokens =
+				this.settings.get("san.contextSteady.enabled") === true && this.#contextSteadyPlanEnabled()
+					? this.#contextSteadyPlanMaxTokens()
+					: 0;
+			if (contextPlanReservedTokens > 0) {
+				injectionCandidates.push({ source: "context_packet", tokenEstimate: contextPlanReservedTokens });
+			}
 			const injectionPlan = planSanBrainGlobalInjection(
 				injectionCandidates,
 				this.settings.get("san.brain.activation.globalMaxTokens") as number,
 			);
+			this.#contextSteadyGlobalInjectionAllowed =
+				contextPlanReservedTokens === 0 || injectionPlan.includedSources.includes("context_packet");
 			for (const source of injectionPlan.includedSources) {
 				if (source === "san_loop" && sanLoopPrelude) preludeMessages.push(sanLoopPrelude);
 				if (source === "brain" && brainStateMessage) preludeMessages.push(brainStateMessage);
@@ -8100,6 +8114,7 @@ export class AgentSession {
 	): Promise<BuiltContextPlan | undefined> {
 		if (this.settings.get("san.contextSteady.enabled") !== true) return undefined;
 		if (!this.#contextSteadyPlanEnabled()) return undefined;
+		if (!this.#contextSteadyGlobalInjectionAllowed) return undefined;
 		const persistAudit = options?.persistAudit !== false;
 		const throwOnHardPressure = options?.throwOnHardPressure !== false;
 		const recall = options?.liveTailOnly ? undefined : await this.#buildContextSteadyRecallLayer(expandedText);
@@ -8768,12 +8783,18 @@ export class AgentSession {
 	}
 
 	async #resolveSanBrainScopes(cwd = path.resolve(this.settings.getCwd())): Promise<SanBrainScope[]> {
-		const repoRoot = await findRepoRoot(cwd);
+		const identity = await resolveRuntimeScopeIdentity({
+			agentDir: this.settings.getAgentDir(),
+			cwd,
+			sessionId: this.sessionId,
+		});
 		return [
-			{ kind: "user", key: "user:local", resolverVersion: 1 },
-			{ kind: "session", key: this.sessionId, resolverVersion: 1 },
-			{ kind: "project", key: cwd, resolverVersion: 1 },
-			...(repoRoot ? [{ kind: "repo" as const, key: path.resolve(repoRoot), resolverVersion: 1 as const }] : []),
+			{ kind: "user", key: identity.userKey, resolverVersion: 1 },
+			{ kind: "session", key: identity.sessionKey, resolverVersion: 1 },
+			{ kind: "project", key: identity.projectKey, resolverVersion: 1 },
+			...(identity.repoKey ? [{ kind: "repo" as const, key: identity.repoKey, resolverVersion: 1 as const }] : []),
+			...identity.legacyProjectKeys.map(key => ({ kind: "project" as const, key, resolverVersion: 1 as const })),
+			...identity.legacyRepoKeys.map(key => ({ kind: "repo" as const, key, resolverVersion: 1 as const })),
 		];
 	}
 
@@ -15373,11 +15394,7 @@ export class AgentSession {
 	// =========================================================================
 
 	async #saveBashOriginalArtifact(originalText: string): Promise<string | undefined> {
-		try {
-			return await this.sessionManager.saveArtifact(originalText, "bash-original");
-		} catch {
-			return undefined;
-		}
+		return this.sessionManager.saveArtifact(originalText, "bash-original");
 	}
 
 	/**

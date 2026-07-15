@@ -150,6 +150,14 @@ export function rebuildWorkflowLedger(entries: readonly SessionEntry[]): Workflo
 				}
 			}
 		}
+		if (entry.data.type === "result_delivery_prepared") {
+			if (run.status !== "completed" || run.deliveryState !== "pending") {
+				run.deliveryState = "blocked";
+				run.invalidTransitionEventIds.push(entry.data.eventId);
+			} else {
+				run.deliveryState = "delivering";
+			}
+		}
 		if (entry.data.type === "result_delivered") {
 			if (run.deliveryState === "delivered") run.duplicateDeliveryEventIds.push(entry.data.eventId);
 			const unresolvedWrites = [...run.writeArtifacts.values()].some(
@@ -158,8 +166,10 @@ export function rebuildWorkflowLedger(entries: readonly SessionEntry[]): Workflo
 			if (run.status !== "completed" || unresolvedWrites) {
 				run.deliveryState = "blocked";
 				run.invalidTransitionEventIds.push(entry.data.eventId);
-			} else if (run.deliveryState !== "blocked") {
+			} else if (run.deliveryState === "pending" || run.deliveryState === "delivering") {
 				run.deliveryState = "delivered";
+			} else if (run.deliveryState !== "blocked") {
+				run.invalidTransitionEventIds.push(entry.data.eventId);
 			}
 		}
 	}

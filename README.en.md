@@ -247,4 +247,6 @@ This README focuses on San-specific work and current acceptance-ready capabiliti
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+San's original code is licensed under the [MIT License](LICENSE). The native shell minimizer
+contains adapted third-party components under Apache-2.0 and MIT; see
+[`crates/pi-shell/NOTICE`](crates/pi-shell/NOTICE).

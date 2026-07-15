@@ -18,7 +18,12 @@ import { WorkflowRuntimeControl } from "./runtime/control";
 import { RestrictedWorkflowRuntime, WorkflowRuntimeError, type WorkflowRuntimeHooks } from "./runtime/interpreter";
 import { assertWorkflowArgs, isWorkflowJsonValue } from "./schema";
 import { type ParsedWorkflowSource, parseWorkflowSource } from "./source-parser";
-import type { ManagedWorkflowVersionRecord, WorkflowStore } from "./store";
+import type {
+	ManagedWorkflowVersionRecord,
+	WorkflowCompletedCallCheckpoint,
+	WorkflowRunCheckpoint,
+	WorkflowStore,
+} from "./store";
 import type {
 	AdHocWorkflowDraft,
 	ManagedWorkflow,
@@ -103,12 +108,23 @@ export interface WorkflowWriteDecision {
 	artifact: WorkflowWriteArtifact;
 }
 
+export interface WorkflowResultDelivery {
+	deliveryId: string;
+	result: WorkflowJsonValue;
+}
+
 interface WorkflowExecution {
 	run: WorkflowRun;
+	sessionId: string;
 	sequence: number;
+	sourceText: string;
+	args?: WorkflowJsonValue;
+	permissions: WorkflowPermissionManifest;
+	completedCalls: Map<string, WorkflowCompletedCallCheckpoint>;
 	control: WorkflowRuntimeControl;
 	runtime?: RestrictedWorkflowRuntime;
 	completion?: Promise<WorkflowRun>;
+	detached?: boolean;
 	writeRecords: Map<string, WorkflowWriteArtifactRecord>;
 	writeBaseline?: WorktreeBaseline;
 	expectedWriteBaseline?: WorktreeBaseline;
@@ -178,6 +194,7 @@ export class WorkflowManager {
 		this.#idFactory = options.idFactory ?? (kind => `workflow-${kind}-${Snowflake.next()}`);
 		this.#writeReviewTokenFactory =
 			options.writeReviewTokenFactory ?? (() => `workflow-write-${crypto.randomUUID()}`);
+		this.#restoreCheckpoints();
 	}
 
 	publishManagedVersion(workflow: ManagedWorkflow): ManagedWorkflowVersionRecord {
@@ -241,19 +258,15 @@ export class WorkflowManager {
 	rejectAdHocDraft(draftId: string, replacementDraftId?: string): AdHocWorkflowDraft {
 		const before = this.#store.getAdHocDraft(draftId);
 		if (before) this.cleanupExpiredAdHocDrafts(before.taskRef, before.scopeKey);
-		const rejected = this.#store.rejectAdHocDraft(draftId, this.#now());
-		try {
-			if (before?.status !== "rejected") {
-				this.#appendLifecycleEvent("draft_rejected", {
-					draftId: rejected.draftId,
-					taskRef: rejected.taskRef,
-					name: rejected.name,
-					sourceHash: rejected.sourceHash,
-					...(replacementDraftId ? { replacementDraftId } : {}),
-				});
-			}
-		} finally {
-			this.#store.deleteAdHocDraft(draftId, ["rejected"]);
+		const rejected = this.#store.rejectAdHocDraftAndDelete(draftId, this.#now());
+		if (before?.status !== "rejected") {
+			this.#appendLifecycleEvent("draft_rejected", {
+				draftId: rejected.draftId,
+				taskRef: rejected.taskRef,
+				name: rejected.name,
+				sourceHash: rejected.sourceHash,
+				...(replacementDraftId ? { replacementDraftId } : {}),
+			});
 		}
 		return rejected;
 	}
@@ -331,8 +344,7 @@ export class WorkflowManager {
 			scopeKey: draft.scopeKey,
 			permissions: structuredClone(draft.permissions),
 		});
-		const consumed = this.#store.consumeAdHocApproval(draft, approval.approvalId, startedAt);
-		this.#store.deleteAdHocDraft(draft.draftId, ["consumed"]);
+		const consumed = this.#store.consumeAdHocApprovalAndDeleteDraft(draft, approval.approvalId, startedAt);
 		return this.#startExecution({
 			runId,
 			workflowKind: "ad_hoc",
@@ -370,20 +382,16 @@ export class WorkflowManager {
 					Date.parse(draft.expiresAt) <= now.getTime(),
 			);
 		for (const draft of expired) {
-			const changed = this.#store.expireAdHocDraft(draft.draftId, now);
+			const changed = this.#store.expireAdHocDraftAndDelete(draft.draftId, now);
 			if (!changed) continue;
-			try {
-				this.#appendLifecycleEvent("draft_expired", {
-					draftId: changed.draftId,
-					taskRef: changed.taskRef,
-					name: changed.name,
-					sourceHash: changed.sourceHash,
-					argsHash: changed.argsHash,
-					scopeKey: changed.scopeKey,
-				});
-			} finally {
-				this.#store.deleteAdHocDraft(changed.draftId, ["expired"]);
-			}
+			this.#appendLifecycleEvent("draft_expired", {
+				draftId: changed.draftId,
+				taskRef: changed.taskRef,
+				name: changed.name,
+				sourceHash: changed.sourceHash,
+				argsHash: changed.argsHash,
+				scopeKey: changed.scopeKey,
+			});
 		}
 		return expired.length;
 	}
@@ -401,6 +409,34 @@ export class WorkflowManager {
 			if (this.cancel(execution.run.runId, reason)) cancelled++;
 		}
 		return cancelled;
+	}
+
+	/** 会话身份变化后，将活动任务持久化为可恢复状态且不再写入旧会话。 */
+	suspendLiveRuns(reason = "Workflow suspended because its owning session changed"): number {
+		let suspended = 0;
+		for (const execution of this.#runs.values()) {
+			if (
+				execution.run.status !== "approved" &&
+				execution.run.status !== "running" &&
+				execution.run.status !== "paused"
+			)
+				continue;
+			execution.detached = true;
+			execution.run.status = "paused";
+			execution.run.error = reason;
+			execution.run.updatedAt = this.#validNow().toISOString();
+			this.#refreshElapsed(execution.run);
+			this.#saveCheckpoint(execution);
+			execution.control.cancel(new Error(reason));
+			suspended++;
+		}
+		return suspended;
+	}
+
+	async waitForLiveRunsToSettle(): Promise<void> {
+		await Promise.allSettled(
+			[...this.#runs.values()].flatMap(execution => (execution.completion ? [execution.completion] : [])),
+		);
 	}
 
 	completion(runId: string): Promise<WorkflowRun> {
@@ -421,6 +457,7 @@ export class WorkflowManager {
 		const execution = this.#runs.get(runId);
 		if (execution?.run.status !== "paused" || !execution.control.resume()) return false;
 		execution.run.status = "running";
+		delete execution.run.error;
 		this.#appendRunEvent(execution, "run_resumed", {});
 		return true;
 	}
@@ -453,14 +490,16 @@ export class WorkflowManager {
 		return true;
 	}
 
-	/** Returns the final value exactly once and records delivery in the append-only session ledger. */
-	deliverResult(runId: string): WorkflowJsonValue {
+	prepareResultDelivery(runId: string): WorkflowResultDelivery {
 		const execution = this.#requiredExecution(runId);
 		if (execution.run.status !== "completed" || execution.run.result === undefined) {
 			throw new WorkflowManagerConflictError(`Workflow run ${runId} has no completed result to deliver.`);
 		}
-		if (execution.run.deliveryState !== "pending") {
+		if (execution.run.deliveryState === "delivered") {
 			throw new WorkflowManagerConflictError(`Workflow run ${runId} result was already delivered.`);
+		}
+		if (execution.run.deliveryState === "blocked") {
+			throw new WorkflowManagerConflictError(`Workflow run ${runId} result delivery is blocked.`);
 		}
 		const unresolved = execution.run.writeArtifacts.filter(
 			artifact => artifact.status !== "applied" && artifact.status !== "rejected",
@@ -471,9 +510,41 @@ export class WorkflowManager {
 			);
 		}
 		const result = structuredClone(execution.run.result);
-		this.#appendRunEvent(execution, "result_delivered", { resultHash: workflowValueHash(result) });
+		const deliveryId =
+			execution.run.deliveryId ??
+			`workflow-delivery-${workflowValueHash({ runId, resultHash: workflowValueHash(result) }).slice(0, 32)}`;
+		if (execution.run.deliveryState === "pending") {
+			execution.run.deliveryState = "delivering";
+			execution.run.deliveryId = deliveryId;
+			this.#appendRunEvent(execution, "result_delivery_prepared", {
+				deliveryId,
+				resultHash: workflowValueHash(result),
+			});
+		}
+		return { deliveryId, result };
+	}
+
+	acknowledgeResultDelivery(runId: string, deliveryId: string): void {
+		const execution = this.#requiredExecution(runId);
+		if (execution.run.deliveryState === "delivered") {
+			if (execution.run.deliveryId === deliveryId) return;
+			throw new WorkflowManagerConflictError(`Workflow run ${runId} result was already delivered.`);
+		}
+		if (execution.run.deliveryState !== "delivering" || execution.run.deliveryId !== deliveryId) {
+			throw new WorkflowManagerConflictError(`Workflow run ${runId} has no matching prepared delivery.`);
+		}
 		execution.run.deliveryState = "delivered";
-		return result;
+		this.#appendRunEvent(execution, "result_delivered", {
+			deliveryId,
+			resultHash: workflowValueHash(execution.run.result ?? null),
+		});
+	}
+
+	/** 同步消费者在方法成功返回时确认交付。 */
+	deliverResult(runId: string): WorkflowJsonValue {
+		const delivery = this.prepareResultDelivery(runId);
+		this.acknowledgeResultDelivery(runId, delivery.deliveryId);
+		return delivery.result;
 	}
 
 	async reviewWriteArtifact(artifactId: string): Promise<WorkflowWriteReviewHandle> {
@@ -578,7 +649,17 @@ export class WorkflowManager {
 			updatedAt: startedAt,
 		};
 		const control = new WorkflowRuntimeControl();
-		const execution: WorkflowExecution = { run, sequence: 0, control, writeRecords: new Map() };
+		const execution: WorkflowExecution = {
+			run,
+			sessionId: this.#sessionManager.getSessionId(),
+			sequence: 0,
+			sourceText: options.sourceText,
+			...(options.args === undefined ? {} : { args: structuredClone(options.args) }),
+			permissions: structuredClone(options.permissions),
+			completedCalls: new Map(),
+			control,
+			writeRecords: new Map(),
+		};
 		const hooks = this.#runtimeHooks(execution);
 		const runtime = new RestrictedWorkflowRuntime({
 			sourceText: options.sourceText,
@@ -594,6 +675,7 @@ export class WorkflowManager {
 			now: () => this.#now().getTime(),
 		});
 		execution.runtime = runtime;
+		this.#runs.set(run.runId, execution);
 		this.#appendRunEvent(execution, "run_approved", {
 			approvalRef: options.approval.approvalId,
 			approvalBoundary: options.approval.keyHash,
@@ -602,7 +684,6 @@ export class WorkflowManager {
 		});
 		run.status = "running";
 		this.#appendRunEvent(execution, "run_started", {});
-		this.#runs.set(run.runId, execution);
 		const completion = this.#execute(execution);
 		execution.completion = completion;
 		return { runId: run.runId, completion };
@@ -611,25 +692,29 @@ export class WorkflowManager {
 	#runtimeHooks(execution: WorkflowExecution): WorkflowRuntimeHooks {
 		return {
 			onPhase: (title: string) => {
+				if (execution.detached) return;
 				execution.run.currentPhase = title;
 				this.#appendRunEvent(execution, "phase_started", { phase: title });
 			},
 			onAgentScheduled: (request: WorkflowAgentRequest) => {
-				const node: WorkflowNode = {
-					nodeId: request.nodeId,
-					callId: request.callId,
-					phase: request.phase,
-					attempt: 1,
-					inputHash: workflowValueHash({
-						prompt: request.prompt,
-						agent: request.agent ?? null,
-						model: request.model ?? null,
-						label: request.label ?? null,
-						schema: request.schema ?? null,
-					}),
-					status: "scheduled",
-				};
-				execution.run.nodes.push(node);
+				if (execution.detached) return;
+				let node = execution.run.nodes.find(candidate => candidate.callId === request.callId);
+				if (node) {
+					node.attempt++;
+					node.phase = request.phase;
+					node.status = "scheduled";
+					delete node.error;
+				} else {
+					node = {
+						nodeId: request.nodeId,
+						callId: request.callId,
+						phase: request.phase,
+						attempt: 1,
+						inputHash: request.inputHash,
+						status: "scheduled",
+					};
+					execution.run.nodes.push(node);
+				}
 				execution.run.budget.agentsStarted++;
 				this.#appendRunEvent(execution, "node_scheduled", {
 					nodeId: node.nodeId,
@@ -639,6 +724,7 @@ export class WorkflowManager {
 				});
 			},
 			onAgentStarted: (request: WorkflowAgentRequest) => {
+				if (execution.detached) return;
 				const node = this.#requiredNode(execution.run, request.callId);
 				node.status = "running";
 				node.startedAt = this.#validNow().toISOString();
@@ -649,6 +735,7 @@ export class WorkflowManager {
 				});
 			},
 			onAgentResult: async (request: WorkflowAgentRequest, result: WorkflowAgentResult) => {
+				if (execution.detached) return;
 				if (request.writeMode === "isolated_write" && !result.writeArtifact) {
 					throw new WorkflowManagerError("Isolated Workflow agent returned no write artifact for review.");
 				}
@@ -695,9 +782,11 @@ export class WorkflowManager {
 				});
 			},
 			onTokensUsed: (tokensUsed: number) => {
+				if (execution.detached) return;
 				execution.run.budget.tokensUsed = tokensUsed;
 			},
 			onAgentCompleted: (request: WorkflowAgentRequest, result: WorkflowAgentResult) => {
+				if (execution.detached) return;
 				const node = this.#requiredNode(execution.run, request.callId);
 				node.status = "completed";
 				node.agentRef = result.agentId;
@@ -707,6 +796,11 @@ export class WorkflowManager {
 				node.usage = result.usage;
 				node.committedAt = this.#validNow().toISOString();
 				execution.run.budget.agentsCompleted++;
+				execution.completedCalls.set(request.callId, {
+					callId: request.callId,
+					inputHash: request.inputHash,
+					result: structuredClone(result),
+				});
 				this.#appendRunEvent(execution, "agent_completed", {
 					nodeId: node.nodeId,
 					callId: node.callId,
@@ -721,6 +815,7 @@ export class WorkflowManager {
 				});
 			},
 			onAgentFailed: (request: WorkflowAgentRequest, error: unknown) => {
+				if (execution.detached) return;
 				const node = this.#requiredNode(execution.run, request.callId);
 				node.status =
 					execution.run.status === "cancelled"
@@ -756,6 +851,10 @@ export class WorkflowManager {
 			if (!execution.runtime)
 				throw new WorkflowManagerError(`Workflow run ${execution.run.runId} did not initialize.`);
 			const result = await execution.runtime.execute();
+			if (execution.detached) {
+				this.#saveCheckpoint(execution);
+				return cloneRun(execution.run);
+			}
 			if (terminal(execution.run.status)) return cloneRun(execution.run);
 			execution.run.result = result.value;
 			execution.run.budget = structuredClone(result.budget);
@@ -765,6 +864,10 @@ export class WorkflowManager {
 			});
 		} catch (error) {
 			this.#refreshElapsed(execution.run);
+			if (execution.detached) {
+				this.#saveCheckpoint(execution);
+				return cloneRun(execution.run);
+			}
 			if (terminal(execution.run.status)) return cloneRun(execution.run);
 			const message = errorMessage(error);
 			execution.run.error = message;
@@ -795,7 +898,7 @@ export class WorkflowManager {
 	}
 
 	#appendRunEvent(
-		execution: Pick<WorkflowExecution, "run" | "sequence">,
+		execution: WorkflowExecution,
 		type: WorkflowEventType,
 		payload: Record<string, WorkflowJsonValue | undefined>,
 	): void {
@@ -808,10 +911,89 @@ export class WorkflowManager {
 			timestamp,
 			payload: eventPayload(payload),
 		};
-		appendWorkflowEvent(this.#sessionManager, event);
 		execution.sequence++;
 		execution.run.updatedAt = timestamp;
 		this.#refreshElapsed(execution.run);
+		this.#saveCheckpoint(execution);
+		appendWorkflowEvent(this.#sessionManager, event);
+	}
+
+	#saveCheckpoint(execution: WorkflowExecution): void {
+		const checkpoint: WorkflowRunCheckpoint = {
+			sessionId: execution.sessionId,
+			run: cloneRun(execution.run),
+			sequence: execution.sequence,
+			sourceText: execution.sourceText,
+			...(execution.args === undefined ? {} : { args: structuredClone(execution.args) }),
+			permissions: structuredClone(execution.permissions),
+			completedCalls: [...execution.completedCalls.values()].map(call => structuredClone(call)),
+			writeRecords: [...execution.writeRecords.values()].map(record => structuredClone(record)),
+			...(execution.writeBaseline ? { writeBaseline: structuredClone(execution.writeBaseline) } : {}),
+			...(execution.expectedWriteBaseline
+				? { expectedWriteBaseline: structuredClone(execution.expectedWriteBaseline) }
+				: {}),
+			...(execution.writeRepoRoot ? { writeRepoRoot: execution.writeRepoRoot } : {}),
+		};
+		this.#store.saveRunCheckpoint(checkpoint);
+	}
+
+	#restoreCheckpoints(): void {
+		const sessionId = this.#sessionManager.getSessionId();
+		for (const checkpoint of this.#store.listRunCheckpoints(sessionId)) {
+			const control = new WorkflowRuntimeControl();
+			const execution: WorkflowExecution = {
+				run: cloneRun(checkpoint.run),
+				sessionId,
+				sequence: checkpoint.sequence,
+				sourceText: checkpoint.sourceText,
+				...(checkpoint.args === undefined ? {} : { args: structuredClone(checkpoint.args) }),
+				permissions: structuredClone(checkpoint.permissions),
+				completedCalls: new Map(checkpoint.completedCalls.map(call => [call.callId, structuredClone(call)])),
+				control,
+				writeRecords: new Map(
+					checkpoint.writeRecords.map(record => [record.metadata.artifactId, structuredClone(record)]),
+				),
+				...(checkpoint.writeBaseline ? { writeBaseline: structuredClone(checkpoint.writeBaseline) } : {}),
+				...(checkpoint.expectedWriteBaseline
+					? { expectedWriteBaseline: structuredClone(checkpoint.expectedWriteBaseline) }
+					: {}),
+				...(checkpoint.writeRepoRoot ? { writeRepoRoot: checkpoint.writeRepoRoot } : {}),
+			};
+			this.#runs.set(execution.run.runId, execution);
+			if (terminal(execution.run.status)) {
+				execution.completion = Promise.resolve(cloneRun(execution.run));
+				continue;
+			}
+			const bridge = this.#bridgeFactory({
+				runId: execution.run.runId,
+				workflowKind: execution.run.workflowKind,
+				workflowName: execution.run.workflowName,
+				sourceHash: execution.run.sourceHash,
+				scopeKey: execution.run.scopeKey,
+				permissions: structuredClone(execution.permissions),
+			});
+			const hooks = this.#runtimeHooks(execution);
+			execution.runtime = new RestrictedWorkflowRuntime({
+				sourceText: execution.sourceText,
+				sourceHash: execution.run.sourceHash,
+				scopeKey: execution.run.scopeKey,
+				args: execution.args,
+				bridge,
+				permissions: structuredClone(execution.permissions),
+				limits: structuredClone(execution.run.budget.limits),
+				control,
+				hooks,
+				completedCalls: new Map(checkpoint.completedCalls.map(call => [call.callId, structuredClone(call.result)])),
+				initialAgentsStarted: execution.run.budget.agentsStarted,
+				initialAgentsCompleted: execution.run.budget.agentsCompleted,
+				initialTokensUsed: execution.run.budget.tokensUsed,
+				initialStartedAt: Date.parse(execution.run.budget.startedAt),
+				now: () => this.#now().getTime(),
+			});
+			if (execution.run.status === "paused") control.pause();
+			else execution.run.status = "running";
+			execution.completion = this.#execute(execution);
+		}
 	}
 
 	#assertSourceSafe(sourceText: string): ParsedWorkflowSource {

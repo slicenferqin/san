@@ -259,6 +259,22 @@ export function generateFallbackDigest(
 	model?: string,
 ): TurnDigest {
 	const tools = collectTools(msgs);
+	const intent = userIntent(msgs);
+	const decisions = collectAllDecisions(msgs);
+	const factsLearned = collectAssistantLineMatches(msgs, [
+		/\b(evidence|found|observed|confirmed|verified|result|shows|means)\b/i,
+		/(证据|发现|观察到|确认|验证|结果|说明|表明)/u,
+	]);
+	const memoryCandidates: TurnDigest["memoryCandidates"] = [];
+	if (/\b(?:prefer|always|never|must|should)\b|(?:偏好|统一|始终|永远|不要|禁止|必须)/iu.test(intent)) {
+		memoryCandidates.push({ content: intent, type: "preference", importance: 0.8 });
+	}
+	for (const decision of decisions.slice(0, 6)) {
+		memoryCandidates.push({ content: decision, type: "decision", importance: 0.75 });
+	}
+	for (const fact of factsLearned.slice(0, 6)) {
+		memoryCandidates.push({ content: fact, type: "project_fact", importance: 0.7 });
+	}
 
 	return {
 		schemaVersion: TURN_DIGEST_SCHEMA_VERSION,
@@ -267,15 +283,12 @@ export function generateFallbackDigest(
 		createdAt: new Date().toISOString(),
 		model: model ?? extractModel(msgs),
 		source,
-		userIntent: userIntent(msgs),
+		userIntent: intent,
 		actionsTaken: tools.map(t => t.summary),
-		decisions: collectAllDecisions(msgs),
+		decisions,
 		filesTouched: collectFiles(msgs),
 		toolEvidence: tools,
-		factsLearned: collectAssistantLineMatches(msgs, [
-			/\b(evidence|found|observed|confirmed|verified|result|shows|means)\b/i,
-			/(证据|发现|观察到|确认|验证|结果|说明|表明)/u,
-		]),
+		factsLearned,
 		openQuestions: collectAssistantLineMatches(msgs, [
 			/\b(open question|unknown|unclear|not covered|still need|needs follow-up)\b/i,
 			/(未覆盖|不确定|还需要|待确认|待验证|开放问题)/u,
@@ -288,7 +301,7 @@ export function generateFallbackDigest(
 			/\b(next step|next|should|need to|follow[- ]?up|todo)\b/i,
 			/(下一步|后续|应该|需要|待办|继续)/u,
 		]),
-		memoryCandidates: [],
+		memoryCandidates,
 		tokenStats: tokenStats(msgs),
 		fallback: true,
 	};

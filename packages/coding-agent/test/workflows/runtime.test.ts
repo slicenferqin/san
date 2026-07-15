@@ -53,6 +53,7 @@ function runtime(
 		control?: WorkflowRuntimeControl;
 		completedCalls?: ReadonlyMap<string, WorkflowAgentResult>;
 		initialAgentsStarted?: number;
+		initialAgentsCompleted?: number;
 		initialTokensUsed?: number;
 		maxSteps?: number;
 		maxCollectionSize?: number;
@@ -68,6 +69,7 @@ function runtime(
 		control: options.control,
 		completedCalls: options.completedCalls,
 		initialAgentsStarted: options.initialAgentsStarted,
+		initialAgentsCompleted: options.initialAgentsCompleted,
 		initialTokensUsed: options.initialTokensUsed,
 		maxSteps: options.maxSteps,
 		maxCollectionSize: options.maxCollectionSize,
@@ -237,7 +239,7 @@ return await agent("a");`;
 				hooks: { onTokensUsed: tokens => observedTokens.push(tokens) },
 			}).execute(),
 		).rejects.toMatchObject({ code: "token_limit" });
-		expect(observedTokens).toEqual([]);
+		expect(observedTokens).toEqual([101]);
 	});
 
 	it("rejects unsafe structured-output schemas before any agent starts", async () => {
@@ -287,6 +289,54 @@ return await agent("inspect");`;
 		expect(resumed.budget).toMatchObject({ agentsStarted: 1, tokensUsed: 25 });
 	});
 
+	it("binds replay identities to call inputs when parallel item order changes", async () => {
+		const sourceText = `export const meta = { name: "input-replay", description: "Input-bound replay" };
+return await pipeline(args.items, async item => agent(item));`;
+		const first = await new RestrictedWorkflowRuntime({
+			sourceText,
+			sourceHash: workflowSourceHash(sourceText),
+			scopeKey: process.cwd(),
+			args: { items: ["alpha", "beta"] },
+			bridge: { run: async request => result(request, `${request.prompt}-result`) },
+			permissions: { writeMode: readOnlyPermissions.writeMode, tools: [...readOnlyPermissions.tools] },
+			limits: limits(),
+		}).execute();
+		let resumedCalls = 0;
+		const resumed = await new RestrictedWorkflowRuntime({
+			sourceText,
+			sourceHash: workflowSourceHash(sourceText),
+			scopeKey: process.cwd(),
+			args: { items: ["beta", "alpha"] },
+			bridge: {
+				run: async request => {
+					resumedCalls++;
+					return result(request, "unexpected");
+				},
+			},
+			permissions: { writeMode: readOnlyPermissions.writeMode, tools: [...readOnlyPermissions.tools] },
+			limits: limits(),
+			completedCalls: first.completedCalls,
+			initialAgentsStarted: first.budget.agentsStarted,
+			initialAgentsCompleted: first.budget.agentsCompleted,
+			initialTokensUsed: first.budget.tokensUsed,
+		}).execute();
+
+		expect(resumedCalls).toBe(0);
+		expect(resumed.value).toEqual(["beta-result", "alpha-result"]);
+	});
+
+	it("captures a distinct lexical binding for every loop-created callback", async () => {
+		const sourceText = `export const meta = { name: "loop-closures", description: "Loop closure bindings" };
+const calls = [];
+for (let index = 0; index < 3; index++) calls.push(() => agent(String(index)));
+return await parallel(calls);`;
+		const executed = await runtime(sourceText, {
+			run: async request => result(request, request.prompt),
+		}).execute();
+
+		expect(executed.value).toEqual(["0", "1", "2"]);
+	});
+
 	it("keeps approved arguments and committed agent results immutable outside the interpreter", async () => {
 		const sourceText = `export const meta = { name: "host-isolation", description: "Host value isolation" };
 args.local = "changed";
@@ -325,6 +375,7 @@ return await agent("inspect");`;
 				{
 					callId: "unused",
 					nodeId: "unused",
+					inputHash: "unused",
 					phase: "workflow",
 					prompt: "unused",
 					allowedTools: [],

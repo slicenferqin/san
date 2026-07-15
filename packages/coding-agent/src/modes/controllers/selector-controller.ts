@@ -61,7 +61,7 @@ import {
 	type ResetUsageAccount,
 	toResetUsageAccounts,
 } from "../../slash-commands/helpers/reset-usage";
-import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../thinking";
+import { AUTO_THINKING, type ConfiguredThinkingLevel, getConfiguredThinkingLevelMetadata } from "../../thinking";
 import {
 	isImageProviderPreference,
 	isSearchProviderId,
@@ -692,16 +692,19 @@ export class SelectorController {
 							// Session-only: update agent state but don't persist modelRoles
 							const previousConfigured = this.ctx.session.configuredThinkingLevel();
 							const previousConcrete = this.ctx.session.thinkingLevel;
-							await this.ctx.session.setModelTemporary(model);
-							const effortNote = this.#applySessionEffortAfterModelChange(
-								model,
-								previousConfigured,
-								previousConcrete,
-							);
+							await this.ctx.session.setModelTemporary(model, thinkingLevel);
+							const effortNote =
+								thinkingLevel === undefined
+									? this.#applySessionEffortAfterModelChange(model, previousConfigured, previousConcrete)
+									: undefined;
+							const configured = this.ctx.session.configuredThinkingLevel();
+							const effortLabel = configured ? getConfiguredThinkingLevelMetadata(configured).label : undefined;
 							this.ctx.statusLine.invalidate();
 							this.ctx.updateEditorBorderColor();
+							const effortPart = effortLabel ? ` · effort ${effortLabel}` : "";
+							const notePart = effortNote ? ` · ${effortNote}` : "";
 							this.ctx.showStatus(
-								`Model: ${modelSelector}${effortNote ? ` · ${effortNote}` : ""}. Roles: /model roles.`,
+								`Model: ${modelSelector}${effortPart}${notePart}. /effort or Shift+Tab to change. Roles: /model roles.`,
 							);
 							done();
 							this.ctx.ui.requestRender();

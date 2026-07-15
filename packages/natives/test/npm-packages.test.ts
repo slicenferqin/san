@@ -22,6 +22,10 @@ describe("generated native npm leaf packages", () => {
 		expect(addonFiles).toContain(manifest.main.slice("./".length));
 		expect(manifest.files).toContain("*.node");
 		expect(manifest.files).toContain("README.md");
+		expect(manifest.files).toContain("NOTICE");
+		expect(manifest.files).toContain("LICENSE-MIT");
+		expect(manifest.files).toContain("LICENSE-APACHE-2.0");
+		expect(manifest.license).toBe("MIT AND Apache-2.0");
 		expect("exports" in manifest).toBe(false);
 	});
 
@@ -48,6 +52,9 @@ describe("generated native npm leaf packages", () => {
 		try {
 			await fs.mkdir(path.join(packageDir, "native"));
 			await Bun.write(path.join(packageDir, "package.json"), JSON.stringify({ version: "15.5.15" }));
+			await Bun.write(path.join(packageDir, "NOTICE"), "third-party notice\n");
+			await Bun.write(path.join(packageDir, "LICENSE-MIT"), "MIT license\n");
+			await Bun.write(path.join(packageDir, "LICENSE-APACHE-2.0"), "Apache license\n");
 			const addonFiles = [
 				"pi_natives.linux-x64-baseline.node",
 				"pi_natives.linux-x64-modern.node",
@@ -75,6 +82,12 @@ describe("generated native npm leaf packages", () => {
 			);
 			const manifest = await Bun.file(path.join(packageDir, "npm/linux-x64/package.json")).json();
 			expect(manifest.main).toBe("./pi_natives.linux-x64-baseline.node");
+			expect(manifest.license).toBe("MIT AND Apache-2.0");
+			expect(await Bun.file(path.join(packageDir, "npm/linux-x64/NOTICE")).text()).toBe("third-party notice\n");
+			expect(await Bun.file(path.join(packageDir, "npm/linux-x64/LICENSE-MIT")).text()).toBe("MIT license\n");
+			expect(await Bun.file(path.join(packageDir, "npm/linux-x64/LICENSE-APACHE-2.0")).text()).toBe(
+				"Apache license\n",
+			);
 			expect("exports" in manifest).toBe(false);
 		} finally {
 			await fs.rm(packageDir, { recursive: true, force: true });

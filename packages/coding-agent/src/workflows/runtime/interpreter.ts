@@ -72,7 +72,7 @@ export interface WorkflowRuntimeHooks {
 	onAgentStarted?(request: WorkflowAgentRequest): void;
 	/** Receives a result only after it fits the node's reserved hard-token allocation. */
 	onAgentResult?(request: WorkflowAgentRequest, result: WorkflowAgentResult): void | Promise<void>;
-	/** Reports aggregate committed usage, which never exceeds the approved hard limit. */
+	/** 报告观测到的累计用量，包括 provider 在闭锁终止前上报的超额用量。 */
 	onTokensUsed?(tokensUsed: number): void;
 	onAgentCompleted?(request: WorkflowAgentRequest, result: WorkflowAgentResult): void;
 	onAgentFailed?(request: WorkflowAgentRequest, error: unknown): void;
@@ -92,7 +92,9 @@ export interface WorkflowRuntimeOptions {
 	hooks?: WorkflowRuntimeHooks;
 	completedCalls?: ReadonlyMap<string, WorkflowAgentResult>;
 	initialAgentsStarted?: number;
+	initialAgentsCompleted?: number;
 	initialTokensUsed?: number;
+	initialStartedAt?: number;
 	maxSteps?: number;
 	maxCollectionSize?: number;
 	now?: () => number;
@@ -112,6 +114,12 @@ class Environment {
 
 	constructor(parent?: Environment) {
 		this.#parent = parent;
+	}
+
+	fork(): Environment {
+		const environment = new Environment(this.#parent);
+		for (const [name, value] of this.#values) environment.#values.set(name, value);
+		return environment;
 	}
 
 	declare(name: string, value: unknown): void {
@@ -251,10 +259,10 @@ export class RestrictedWorkflowRuntime {
 	#signal: AbortSignal;
 	#hooks: WorkflowRuntimeHooks;
 	#completedCalls: Map<string, WorkflowAgentResult>;
-	#callCounters = new Map<number, number>();
+	#callCounters = new Map<string, number>();
 	#semaphore: Semaphore;
 	#agentsStarted: number;
-	#agentsCompleted = 0;
+	#agentsCompleted: number;
 	#tokensUsed: number;
 	#tokenLane = new AsyncLocalStorage<TokenLane>();
 	#steps = 0;
@@ -278,9 +286,12 @@ export class RestrictedWorkflowRuntime {
 		this.#bridge = options.bridge;
 		this.#permissions = options.permissions;
 		this.#limits = options.limits;
+		this.#now = options.now ?? Date.now;
 		this.#control = options.control ?? new WorkflowRuntimeControl();
 		this.#externalSignal = options.signal;
-		this.#deadlineSignal = AbortSignal.timeout(options.limits.durationMs);
+		const initialStartedAt = options.initialStartedAt ?? this.#now();
+		const remainingDurationMs = Math.max(1, options.limits.durationMs - Math.max(0, this.#now() - initialStartedAt));
+		this.#deadlineSignal = AbortSignal.timeout(remainingDurationMs);
 		const signals = [this.#control.signal, this.#deadlineSignal, this.#fatalController.signal];
 		if (options.signal) signals.push(options.signal);
 		this.#signal = AbortSignal.any(signals);
@@ -288,11 +299,11 @@ export class RestrictedWorkflowRuntime {
 		this.#completedCalls = new Map(options.completedCalls ?? []);
 		this.#semaphore = new Semaphore(options.limits.concurrency);
 		this.#agentsStarted = options.initialAgentsStarted ?? 0;
+		this.#agentsCompleted = options.initialAgentsCompleted ?? 0;
 		this.#tokensUsed = options.initialTokensUsed ?? 0;
 		this.#maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
 		this.#maxCollectionSize = options.maxCollectionSize ?? DEFAULT_MAX_COLLECTION_SIZE;
-		this.#now = options.now ?? Date.now;
-		this.#startedAt = this.#now();
+		this.#startedAt = initialStartedAt;
 	}
 
 	get control(): WorkflowRuntimeControl {
@@ -442,10 +453,11 @@ export class RestrictedWorkflowRuntime {
 		};
 	}
 
-	#nextCallIdentity(callsite: number): { callId: string; nodeId: string } {
-		const invocation = this.#callCounters.get(callsite) ?? 0;
-		this.#callCounters.set(callsite, invocation + 1);
-		const digest = workflowValueHash({ sourceHash: this.#sourceHash, callsite, invocation });
+	#nextCallIdentity(callsite: number, inputHash: string): { callId: string; nodeId: string } {
+		const counterKey = `${callsite}:${inputHash}`;
+		const invocation = this.#callCounters.get(counterKey) ?? 0;
+		this.#callCounters.set(counterKey, invocation + 1);
+		const digest = workflowValueHash({ sourceHash: this.#sourceHash, callsite, inputHash, invocation });
 		return { callId: `workflow-call-${digest.slice(0, 32)}`, nodeId: `workflow-node-${digest}` };
 	}
 
@@ -497,7 +509,17 @@ export class RestrictedWorkflowRuntime {
 				);
 			}
 		}
-		const identity = this.#nextCallIdentity(callsite);
+		const inputHash = workflowValueHash({
+			prompt,
+			agent: agent ?? null,
+			model: model ?? null,
+			label: label ?? null,
+			schema: schema ?? null,
+			scopeKey: this.#scopeKey,
+			allowedTools: [...this.#permissions.tools].sort(),
+			writeMode: this.#permissions.writeMode,
+		});
+		const identity = this.#nextCallIdentity(callsite, inputHash);
 		const cached = this.#completedCalls.get(identity.callId);
 		if (cached) {
 			assertAgentResult(cached);
@@ -523,6 +545,7 @@ export class RestrictedWorkflowRuntime {
 			this.#nodeControllers.set(identity.nodeId, nodeController);
 			request = {
 				...identity,
+				inputHash,
 				phase: this.#currentPhase,
 				scopeKey: this.#scopeKey,
 				prompt,
@@ -542,6 +565,9 @@ export class RestrictedWorkflowRuntime {
 			assertAgentResult(result);
 			const actualTokens = usageTokens(result);
 			if (actualTokens > availableTokens) {
+				if (lane) lane.used += actualTokens;
+				this.#tokensUsed += actualTokens;
+				this.#hooks.onTokensUsed?.(this.#tokensUsed);
 				throw this.#setFatal(
 					"token_limit",
 					`Workflow agent exceeded its ${availableTokens}-token allocation from the approved ${this.#limits.tokenLimit}-token budget`,
@@ -862,10 +888,13 @@ export class RestrictedWorkflowRuntime {
 		} else if (statement.init) {
 			await this.#evaluate(statement.init, loopEnvironment);
 		}
-		while (!statement.test || (await this.#evaluate(statement.test, loopEnvironment))) {
-			const broken = await this.#executeLoopBody(statement.body, loopEnvironment);
+		let iterationEnvironment = loopEnvironment;
+		while (!statement.test || (await this.#evaluate(statement.test, iterationEnvironment))) {
+			const bodyEnvironment = iterationEnvironment.fork();
+			const broken = await this.#executeLoopBody(statement.body, bodyEnvironment);
 			if (broken) break;
-			if (statement.update) await this.#evaluate(statement.update, loopEnvironment);
+			iterationEnvironment = bodyEnvironment.fork();
+			if (statement.update) await this.#evaluate(statement.update, iterationEnvironment);
 		}
 	}
 
@@ -877,8 +906,8 @@ export class RestrictedWorkflowRuntime {
 		const right = await this.#evaluate(statement.right, environment);
 		const values = Array.isArray(right) ? right : typeof right === "string" ? [...right] : undefined;
 		if (!values) throw new WorkflowRuntimeError("script_error", "for...of expects an array or string");
-		const loopEnvironment = new Environment(environment);
 		for (const value of values) {
+			const loopEnvironment = new Environment(environment);
 			await this.#assignLoopLeft(statement.left, value, loopEnvironment);
 			if (await this.#executeLoopBody(statement.body, loopEnvironment)) break;
 		}
@@ -892,8 +921,8 @@ export class RestrictedWorkflowRuntime {
 		if (!isPlainObject(right) && !Array.isArray(right)) {
 			throw new WorkflowRuntimeError("script_error", "for...in expects an object or array");
 		}
-		const loopEnvironment = new Environment(environment);
 		for (const key of Object.keys(right)) {
+			const loopEnvironment = new Environment(environment);
 			await this.#assignLoopLeft(statement.left, key, loopEnvironment);
 			if (await this.#executeLoopBody(statement.body, loopEnvironment)) break;
 		}

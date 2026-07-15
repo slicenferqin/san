@@ -202,6 +202,7 @@ describe("WorkflowManager Managed runs", () => {
 			"agent_completed",
 			"node_committed",
 			"run_completed",
+			"result_delivery_prepared",
 			"result_delivered",
 		]);
 		expect(run).toMatchObject({
@@ -233,6 +234,36 @@ describe("WorkflowManager Managed runs", () => {
 		expect(rebuildWorkflowLedger(session.getEntries()).runs.size).toBe(0);
 	});
 
+	it("replays a prepared result delivery until the consumer acknowledges output", async () => {
+		const { manager, session } = managerHarness({
+			run: async request => agentResult(request, "durable-result"),
+		});
+		const workflow = managedWorkflow();
+		manager.publishManagedVersion(workflow);
+		manager.approveManagedVersion(workflow);
+		const handle = manager.startManaged({
+			name: "release-audit",
+			version: "1",
+			scopeKey: "/repo",
+			args: { branch: "main" },
+		});
+		await handle.completion;
+		const prepared = manager.prepareResultDelivery(handle.runId);
+		expect(manager.getRun(handle.runId)?.deliveryState).toBe("delivering");
+
+		let id = 0;
+		const restored = new WorkflowManager({
+			store: requiredStore(),
+			sessionManager: session,
+			bridgeFactory: () => ({ run: async request => agentResult(request, "unexpected") }),
+			idFactory: kind => `delivery-${kind}-${++id}`,
+		});
+		const replayed = restored.prepareResultDelivery(handle.runId);
+		expect(replayed).toEqual(prepared);
+		restored.acknowledgeResultDelivery(handle.runId, replayed.deliveryId);
+		expect(restored.getRun(handle.runId)?.deliveryState).toBe("delivered");
+	});
+
 	it("fails without committing provider usage above the hard token allocation", async () => {
 		const { manager } = managerHarness({
 			run: async request => ({ ...agentResult(request), usage: usage(request.remainingTokenBudget + 1) }),
@@ -250,7 +281,7 @@ describe("WorkflowManager Managed runs", () => {
 
 		expect(failed).toMatchObject({
 			status: "failed",
-			budget: { agentsStarted: 1, agentsCompleted: 0, tokensUsed: 0 },
+			budget: { agentsStarted: 1, agentsCompleted: 0, tokensUsed: 1_001 },
 		});
 		expect(failed.error).toContain("token allocation");
 	});
@@ -450,6 +481,65 @@ describe("WorkflowManager live controls", () => {
 		expect((await handle.completion).status).toBe("cancelled");
 		expect(manager.cancelLiveRuns()).toBe(0);
 		expect(rebuildWorkflowLedger(session.getEntries()).runs.get(handle.runId)?.status).toBe("cancelled");
+	});
+
+	it("resumes a durable checkpoint after its owning session runtime is rebuilt", async () => {
+		const secondStarted = Promise.withResolvers<void>();
+		const prompts: string[] = [];
+		const firstBridge: WorkflowAgentBridge = {
+			run: async request => {
+				prompts.push(request.prompt);
+				if (request.prompt === "first") return agentResult(request);
+				secondStarted.resolve();
+				const aborted = Promise.withResolvers<WorkflowAgentResult>();
+				const onAbort = () => aborted.reject(request.signal.reason);
+				request.signal.addEventListener("abort", onAbort, { once: true });
+				try {
+					return await aborted.promise;
+				} finally {
+					request.signal.removeEventListener("abort", onAbort);
+				}
+			},
+		};
+		const { manager, session } = managerHarness(firstBridge);
+		const workflow = managedWorkflow(
+			'const first = await agent("first"); const second = await agent("second"); return [first, second];',
+		);
+		manager.publishManagedVersion(workflow);
+		manager.approveManagedVersion(workflow);
+		const handle = manager.startManaged({
+			name: "release-audit",
+			version: "1",
+			scopeKey: "/repo",
+			args: { branch: "main" },
+		});
+		await secondStarted.promise;
+
+		expect(manager.suspendLiveRuns()).toBe(1);
+		expect((await handle.completion).status).toBe("paused");
+
+		let id = 0;
+		const restored = new WorkflowManager({
+			store: requiredStore(),
+			sessionManager: session,
+			bridgeFactory: () => ({
+				run: async request => {
+					prompts.push(request.prompt);
+					return agentResult(request);
+				},
+			}),
+			idFactory: kind => `restored-${kind}-${++id}`,
+		});
+		expect(restored.getRun(handle.runId)?.status).toBe("paused");
+		expect(restored.resume(handle.runId)).toBe(true);
+		const completed = await restored.completion(handle.runId);
+
+		expect(completed).toMatchObject({
+			status: "completed",
+			result: ["first", "second"],
+			budget: { agentsStarted: 3, agentsCompleted: 2, tokensUsed: 24 },
+		});
+		expect(prompts).toEqual(["first", "second", "second"]);
 	});
 
 	it("pauses before the next node and resumes without repeating the completed node", async () => {

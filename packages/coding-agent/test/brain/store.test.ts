@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { rebuildSanBrainStore } from "@oh-my-pi/pi-coding-agent/brain/rebuild";
 import { SanBrainStore } from "@oh-my-pi/pi-coding-agent/brain/store";
 import {
 	BRAIN_DECISION_CUSTOM_TYPE,
@@ -90,6 +91,57 @@ afterEach(async () => {
 });
 
 describe("SanBrainStore", () => {
+	it("rebuilds materialized state from every persisted session ledger", async () => {
+		if (!tempDir) throw new Error("Test temp directory is not initialized.");
+		const store = createStore(tempDir.join("brain.sqlite"));
+		store.syncSessionEntries("stale-session", [
+			entry("stale-entry", BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE, profile({ candidateId: "stale-profile" })),
+		]);
+		const sessionHeader = (id: string) => ({
+			type: "session" as const,
+			version: 3,
+			id,
+			timestamp: "2026-07-10T10:00:00.000Z",
+			cwd: tempDir!.path(),
+		});
+		await Bun.write(
+			tempDir.join("sessions", "project-a", "one.jsonl"),
+			`${[
+				sessionHeader("session-one"),
+				entry("profile-entry", BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE, profile()),
+				entry("decision-entry", BRAIN_DECISION_CUSTOM_TYPE, decision()),
+			]
+				.map(value => JSON.stringify(value))
+				.join("\n")}\n`,
+		);
+		await Bun.write(
+			tempDir.join("sessions", "project-b", "two.jsonl"),
+			`${[
+				sessionHeader("session-two"),
+				entry(
+					"profile-entry-two",
+					BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE,
+					profile({ candidateId: "profile-2", dedupeKey: "delivery:format:markdown", value: "Markdown" }),
+				),
+			]
+				.map(value => JSON.stringify(value))
+				.join("\n")}\n`,
+		);
+
+		const rebuilt = await rebuildSanBrainStore(store, tempDir.path());
+
+		expect(rebuilt).toMatchObject({
+			sessionsScanned: 2,
+			sessionsWithBrainState: 2,
+			candidatesAdded: 2,
+			decisionsAdded: 1,
+			decisionsApplied: 1,
+		});
+		expect(store.getCandidate("stale-profile")).toBeUndefined();
+		expect(store.listActiveStates()).toMatchObject([{ candidate: { candidateId: "profile-1" } }]);
+		expect(store.listPendingCandidates()).toMatchObject([{ candidate: { candidateId: "profile-2" } }]);
+	});
+
 	it("rebuilds active state from the immutable ledger and remains idempotent after resume", () => {
 		if (!tempDir) throw new Error("Test temp directory is not initialized.");
 		const dbPath = tempDir.join("brain.sqlite");

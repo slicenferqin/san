@@ -115,6 +115,27 @@ afterEach(async () => {
 });
 
 describe("San Brain M4 AgentSession activation", () => {
+	it("applies the shared global budget to Brain and the production ContextPlan", async () => {
+		const { session, sessionManager, mock } = await createHarness();
+		session.settings.override("san.contextSteady.enabled", true);
+		session.settings.override("san.contextSteady.contextPlan.enabled", true);
+		session.settings.override("san.contextSteady.contextPlan.maxTokens", 1000);
+		session.settings.override("san.brain.activation.globalMaxTokens", 1000);
+
+		await session.prompt("Prepare the release summary.");
+
+		const providerPayload = JSON.stringify(mock.calls[0]?.context.messages ?? []);
+		expect(providerPayload).toContain("<san_brain_state");
+		expect(providerPayload).not.toContain("<san_context_plan>");
+		const activation = listSanBrainLedgerEntries(sessionManager.getEntries()).activations[0]?.data;
+		expect(activation?.sourceBudgets).toContainEqual({
+			source: "context_packet",
+			tokenEstimate: 1000,
+			included: false,
+			reason: "global_token_budget",
+		});
+	});
+
 	it("injects approved state only on the next real user turn and records its audit", async () => {
 		const { session, sessionManager, mock } = await createHarness();
 
@@ -130,6 +151,12 @@ describe("San Brain M4 AgentSession activation", () => {
 		);
 		expect(stateIndex).toBeGreaterThanOrEqual(0);
 		expect(userIndex).toBeGreaterThan(stateIndex);
+		expect(providerMessages[stateIndex]?.role).toBe("user");
+		expect(
+			providerMessages.some(
+				message => message.role === "developer" && JSON.stringify(message).includes("<san_brain_state"),
+			),
+		).toBe(false);
 
 		const ledger = listSanBrainLedgerEntries(sessionManager.getEntries());
 		expect(ledger.activations).toHaveLength(1);

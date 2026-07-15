@@ -82,7 +82,7 @@ const DEFAULT_POLICIES: Record<SanLoopMode, SanLoopModePolicy> = {
 	solo: {
 		mode: "solo",
 		maxRetries: 1,
-		maxWorkers: 2,
+		maxWorkers: 1,
 		remainingTurns: 4,
 		requireOracle: false,
 	},
@@ -162,6 +162,19 @@ function updateAssignmentStatus(
 	return assignments.map(assignment =>
 		assignment.assignmentId === assignmentId ? { ...assignment, status } : { ...assignment },
 	);
+}
+
+function updateTaskStatuses(
+	plan: SanLoopPlan | undefined,
+	taskNodeIds: readonly string[],
+	status: SanLoopTaskNode["status"],
+): SanLoopPlan | undefined {
+	if (!plan) return undefined;
+	const selected = new Set(taskNodeIds);
+	return {
+		...plan,
+		taskGraph: plan.taskGraph.map(task => (selected.has(task.id) ? { ...task, status } : { ...task })),
+	};
 }
 
 export function defaultSanLoopModePolicy(mode: SanLoopMode | LegacySanLoopMode): SanLoopModePolicy {
@@ -288,17 +301,21 @@ export function recordSanLoopWorkerResult(
 	const result = createSanLoopWorkerResult(run, { ...input, createdAt: input.createdAt ?? createdAt });
 	const assignmentStatus: SanLoopWorkerAssignment["status"] =
 		result.status === "completed" ? "completed" : result.status === "blocked" ? "blocked" : "failed";
-	const nextStatus: SanLoopStatus = result.status === "completed" ? "reviewing" : result.status;
+	const taskStatus: SanLoopTaskNode["status"] =
+		result.status === "completed" ? "completed" : result.status === "blocked" ? "blocked" : "failed";
+	const nextStatus: SanLoopStatus = result.status === "completed" ? "reviewing" : "working";
+	const assignment = run.assignments.find(candidate => candidate.assignmentId === input.assignmentId);
 	return {
 		run: {
 			...run,
 			updatedAt: createdAt,
 			status: nextStatus,
+			plan: updateTaskStatuses(run.plan, assignment?.taskNodeIds ?? [], taskStatus),
 			assignments: updateAssignmentStatus(run.assignments, result.assignmentId, assignmentStatus),
 			workerResults: [...run.workerResults, result],
 			budget: appendBudget(run, nextStatus, createdAt),
 		},
-		eventType: result.status === "completed" ? "worker_completed" : "blocked",
+		eventType: result.status === "completed" ? "worker_completed" : result.status === "failed" ? "failed" : "blocked",
 		eventSummary: `Worker ${result.assignmentId} ${result.status}: ${result.summary}`,
 		retryExhausted: false,
 	};
@@ -330,6 +347,27 @@ export function applySanLoopReview(
 ): SanLoopTransition {
 	const createdAt = options.createdAt ?? nowIso();
 	const report = createSanLoopReviewReport(run, { ...input, createdAt: input.createdAt ?? createdAt });
+	if (report.reviewer === "oracle") {
+		return {
+			run: {
+				...run,
+				updatedAt: createdAt,
+				status: "reviewing",
+				reviewReports: [...run.reviewReports, report],
+				budget: appendBudget(run, "reviewing", createdAt),
+				decisions: appendDecision(run, {
+					createdAt,
+					actor: "oracle",
+					decision: `Oracle evidence: ${report.verdict}`,
+					rationale: "Oracle reports are advisory evidence; only the Supervisor may finalize a run.",
+					nextAction: "supervisor_gate",
+				}),
+			},
+			eventType: "review_completed",
+			eventSummary: `oracle advisory review ${report.verdict}; awaiting supervisor gate.`,
+			retryExhausted: false,
+		};
+	}
 	const retryableNeedsFix = report.verdict === "needs_fix" && report.retryable;
 	const retryExhausted = retryableNeedsFix && run.retryCount >= run.maxRetries;
 	const nextStatus: SanLoopStatus =
@@ -337,7 +375,7 @@ export function applySanLoopReview(
 			? "passed"
 			: report.verdict === "blocked" || report.verdict === "out_of_scope"
 				? "blocked"
-				: retryExhausted
+				: !retryableNeedsFix || retryExhausted
 					? "failed"
 					: "retrying";
 	const retryCount = nextStatus === "retrying" ? run.retryCount + 1 : run.retryCount;
@@ -370,7 +408,13 @@ export function applySanLoopReview(
 			}),
 		},
 		eventType:
-			nextStatus === "retrying" ? "retry_requested" : nextStatus === "passed" ? "finalized" : "review_completed",
+			nextStatus === "retrying"
+				? "retry_requested"
+				: nextStatus === "passed"
+					? "finalized"
+					: nextStatus === "failed"
+						? "failed"
+						: "review_completed",
 		eventSummary: `${report.reviewer} review ${report.verdict}; next status ${nextStatus}.`,
 		retryExhausted,
 	};

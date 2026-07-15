@@ -714,6 +714,10 @@ jobs:
               tag_name: ${{ needs.release_metadata.outputs.release-tag }}
               files: |
                  packages/coding-agent/binaries/san-*
+                 LICENSE
+                 crates/pi-shell/NOTICE
+                 crates/pi-shell/LICENSE-APACHE-2.0
+                 crates/pi-shell/LICENSE-MIT
               body_path: release-notes.md
               generate_release_notes: true
 

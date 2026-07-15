@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San 内置 RTK 能力评估</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f4f5f2;
+      --surface: #ffffff;
+      --ink: #17201d;
+      --muted: #5d6965;
+      --line: #d2d9d5;
+      --line-strong: #aab6b0;
+      --green: #12624b;
+      --green-soft: #e3f0ea;
+      --amber: #95600e;
+      --amber-soft: #f8ecd6;
+      --red: #9f3e34;
+      --red-soft: #f6e3df;
+      --blue: #315e79;
+      --blue-soft: #e7eff4;
+      --code: #111814;
+      --shadow: 0 14px 38px rgba(23, 32, 29, 0.07);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      font-size: 16px;
+      line-height: 1.72;
+    }
+    a { color: var(--green); text-underline-offset: 3px; }
+    h1, h2, h3 { margin-top: 0; line-height: 1.25; text-wrap: balance; }
+    h1 {
+      max-width: 920px;
+      margin-bottom: 20px;
+      font-family: "Iowan Old Style", "Songti SC", STSong, Georgia, serif;
+      font-size: clamp(42px, 6vw, 68px);
+      font-weight: 600;
+    }
+    h2 { margin-bottom: 15px; font-size: clamp(28px, 4vw, 38px); }
+    h3 { margin-bottom: 8px; font-size: 19px; }
+    p { margin: 9px 0; text-wrap: pretty; }
+    code {
+      border-radius: 3px;
+      background: #e8edea;
+      padding: 2px 5px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.9em;
+      overflow-wrap: anywhere;
+    }
+    pre {
+      overflow: auto;
+      margin: 15px 0 0;
+      border: 1px solid #39443f;
+      border-radius: 5px;
+      background: var(--code);
+      color: #edf5f1;
+      padding: 18px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    pre code { background: transparent; padding: 0; color: inherit; }
+    .shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      border-bottom: 1px solid rgba(210, 217, 213, 0.92);
+      background: rgba(244, 245, 242, 0.95);
+      backdrop-filter: blur(12px);
+    }
+    .topbar .shell {
+      display: flex;
+      min-height: 56px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    .wordmark { font: 800 13px "SFMono-Regular", Consolas, monospace; }
+    .wordmark span { color: var(--green); }
+    nav { display: flex; gap: 17px; overflow-x: auto; white-space: nowrap; }
+    nav a { color: var(--muted); font-size: 13px; text-decoration: none; }
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(330px, 0.8fr);
+      gap: 50px;
+      align-items: center;
+      min-height: 610px;
+      padding: 72px 0 62px;
+    }
+    .eyebrow, .kicker, .label, .rank {
+      color: var(--green);
+      font: 800 11px "SFMono-Regular", Consolas, monospace;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .hero-copy { max-width: 800px; color: var(--muted); font-size: 19px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 26px; color: #7c8984; font-size: 13px; }
+    .decision {
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      padding: 26px;
+    }
+    .decision-main {
+      margin: 22px 0 25px;
+      font-family: "Iowan Old Style", "Songti SC", Georgia, serif;
+      font-size: 30px;
+      line-height: 1.38;
+    }
+    .decision ul { margin: 0; padding: 0; list-style: none; }
+    .decision li { border-top: 1px solid var(--line); padding: 12px 0; color: var(--muted); font-size: 14px; }
+    .decision b { display: inline-block; min-width: 58px; color: var(--green); font-family: "SFMono-Regular", monospace; }
+    .band { border-top: 1px solid var(--line); }
+    .band.alt { background: var(--surface); }
+    .section { padding: 72px 0; }
+    .lead { max-width: 880px; color: var(--muted); font-size: 18px; }
+    .verdict {
+      display: grid;
+      grid-template-columns: 150px 1fr;
+      gap: 28px;
+      margin-top: 34px;
+      border-top: 2px solid var(--green);
+      border-bottom: 1px solid var(--line);
+      padding: 24px 0;
+    }
+    .verdict blockquote {
+      margin: 0;
+      font-family: "Iowan Old Style", "Songti SC", Georgia, serif;
+      font-size: 29px;
+      line-height: 1.45;
+    }
+    .facts, .risk-grid, .steps {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      margin-top: 34px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+    }
+    .fact, .risk, .step { min-height: 190px; padding: 22px; }
+    .fact + .fact, .risk + .risk, .step + .step { border-left: 1px solid var(--line); }
+    .fact strong { display: block; margin: 18px 0 6px; font-size: 27px; }
+    .fact p, .risk p, .step p { color: var(--muted); font-size: 13px; }
+    .risk { min-height: 250px; }
+    .risk .rank { color: var(--red); }
+    .risk h3, .step h3 { margin-top: 24px; }
+    .architecture {
+      display: grid;
+      grid-template-columns: 1fr 44px 1fr 44px 1fr;
+      align-items: stretch;
+      margin-top: 36px;
+    }
+    .node { min-height: 270px; border: 1px solid var(--line-strong); background: var(--surface); padding: 23px; }
+    .node.primary { border: 2px solid var(--green); background: #fbfffd; }
+    .node h3 { margin-top: 25px; }
+    .node p, .node li { color: var(--muted); font-size: 13px; }
+    .node ul { padding-left: 18px; }
+    .arrow { display: grid; place-items: center; color: #82908a; font-size: 23px; }
+    .callout {
+      margin-top: 30px;
+      border-left: 4px solid var(--green);
+      background: var(--green-soft);
+      padding: 18px 20px;
+    }
+    .callout.warn { border-color: var(--amber); background: var(--amber-soft); }
+    .callout.danger { border-color: var(--red); background: var(--red-soft); }
+    .table-wrap { overflow-x: auto; margin-top: 32px; border: 1px solid var(--line-strong); background: var(--surface); }
+    table { width: 100%; border-collapse: collapse; min-width: 820px; }
+    th, td { border-bottom: 1px solid var(--line); padding: 13px 15px; text-align: left; vertical-align: top; }
+    th { background: #eef2ef; font-size: 12px; }
+    td { color: var(--muted); font-size: 13px; }
+    tr:last-child td { border-bottom: 0; }
+    td strong { color: var(--ink); }
+    .yes { color: var(--green); font-weight: 700; }
+    .no { color: var(--red); font-weight: 700; }
+    .partial { color: var(--amber); font-weight: 700; }
+    .evidence { margin-top: 32px; border: 1px solid var(--line-strong); background: var(--surface); }
+    .evidence-row { display: grid; grid-template-columns: 225px 1fr; gap: 20px; border-top: 1px solid var(--line); padding: 15px 17px; }
+    .evidence-row:first-child { border-top: 0; }
+    .evidence-row b { font-size: 13px; }
+    .evidence-row span { color: var(--muted); font-size: 13px; }
+    .step { min-height: 265px; }
+    .step .rank { color: var(--blue); }
+    .checklist { columns: 2; column-gap: 38px; margin-top: 28px; padding-left: 20px; }
+    .checklist li { break-inside: avoid; margin-bottom: 10px; color: var(--muted); }
+    footer { border-top: 1px solid var(--line); padding: 34px 0 46px; color: #75817c; font-size: 12px; }
+
+    @media (max-width: 900px) {
+      .hero { grid-template-columns: 1fr; min-height: auto; }
+      .facts, .risk-grid, .steps { grid-template-columns: 1fr; }
+      .fact + .fact, .risk + .risk, .step + .step { border-top: 1px solid var(--line); border-left: 0; }
+      .architecture { grid-template-columns: 1fr; }
+      .arrow { min-height: 44px; transform: rotate(90deg); }
+      .verdict { grid-template-columns: 1fr; }
+      .evidence-row { grid-template-columns: 1fr; gap: 4px; }
+      .checklist { columns: 1; }
+    }
+    @media print {
+      .topbar { position: static; }
+      .section { padding: 36px 0; }
+      .hero { min-height: auto; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="shell">
+      <div class="wordmark"><span>SAN</span> / RTK EVALUATION</div>
+      <nav aria-label="文档导航">
+        <a href="#decision">结论</a>
+        <a href="#current">现状</a>
+        <a href="#architecture">架构</a>
+        <a href="#benchmark">实测</a>
+        <a href="#risks">风险</a>
+        <a href="#roadmap">路线</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="shell hero">
+      <div>
+        <div class="eyebrow">Architecture review · 2026-07-13</div>
+        <h1>San 不需要再“内置 RTK”</h1>
+        <p class="hero-copy">
+          当前仓库已经把 RTK / snip 一类的确定性输出过滤器移植进 <code>pi-shell</code> 原生执行层，
+          并通过 <code>shellMinimizer.enabled = true</code> 默认开启。准确的后续任务不是引入外部
+          <code>rtk</code> 二进制，而是把这套隐藏能力补齐安全闭环、可观测性和产品入口。
+        </p>
+        <div class="meta">
+          <span>San HEAD: <code>2f6f7db58326</code></span>
+          <span>RTK snapshot: <code>5d32d0736f68</code> / <code>0.42.4</code></span>
+          <span>范围：代码审阅、只读运行探针、差异 benchmark</span>
+        </div>
+      </div>
+      <aside class="decision" aria-label="决策摘要">
+        <div class="label">Decision</div>
+        <div class="decision-main">保留 San-native minimizer；拒绝把外部 RTK 放进运行链路。</div>
+        <ul>
+          <li><b>GO</b> 产品化现有 <code>pi-shell minimizer</code></li>
+          <li><b>NO-GO</b> vendoring / 自动安装 / 运行外部 RTK</li>
+          <li><b>BLOCK</b> 先修许可证标注与原文恢复失败路径</li>
+          <li><b>USE</b> RTK 仅作开发期对照、fixture 来源和规则参考</li>
+        </ul>
+      </aside>
+    </section>
+
+    <section id="decision" class="band alt">
+      <div class="shell section">
+        <div class="kicker">01 / Executive decision</div>
+        <h2>这是“正式化已有能力”，不是新增第三方依赖</h2>
+        <p class="lead">
+          San 当前实现比外部代理更适合自身架构：审批、cwd/env、持久 shell、取消、超时、退出码、流式预览和
+          <code>artifact://</code> 都仍由 San 掌控；过滤发生在命令完成后的原始 capture 上，不需要用 hook
+          把模型生成的命令改写成另一条命令。
+        </p>
+        <div class="verdict">
+          <div class="label">一句话结论</div>
+          <blockquote>现有方向是对的，但尚未达到“可证明无损、可量化收益、许可证闭环”的正式产品标准。</blockquote>
+        </div>
+        <div class="facts">
+          <article class="fact">
+            <div class="label">Runtime</div>
+            <strong>默认开启</strong>
+            <p>本机 <code>san config get shellMinimizer.enabled</code> 返回 <code>true</code>；用户配置没有覆盖默认值。</p>
+          </article>
+          <article class="fact">
+            <div class="label">Coverage assets</div>
+            <strong>24 + 67</strong>
+            <p>23 个 Rust filter 实现模块（另有 1 个 dispatcher）、67 个声明式 TOML filter；另有约 760 个 minimizer 相关 Rust 测试与 168 个 TOML inline case。</p>
+          </article>
+          <article class="fact">
+            <div class="label">History</div>
+            <strong>已移植 RTK</strong>
+            <p>仓库在 2026-06-12 已合入 <code>feat/minimizer-rtk-snip-port</code>，不是仅有一个预留接口。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="current" class="band">
+      <div class="shell section">
+        <div class="kicker">02 / Current implementation</div>
+        <h2>当前能力已经完整穿过 Bash 主执行链</h2>
+        <p class="lead">
+          <code>BashTool</code> 把 minimizer 配置传入 native <code>Shell</code>。命令退出后，native 结果同时提供压缩文本、原文、filter 名和输入/输出字节数；
+          TypeScript 层用压缩文本替换模型可见结果，并把原文存为 <code>bash-original</code> artifact。
+        </p>
+
+        <div class="evidence">
+          <div class="evidence-row">
+            <b>默认与配置面</b>
+            <span><a href="../../packages/coding-agent/src/config/settings-schema.ts">settings-schema.ts</a>：<code>enabled</code> 默认 true，并已有 <code>only</code>、<code>except</code>、<code>maxCaptureBytes</code>、<code>sourceOutlineLevel</code>、<code>legacyFilters</code>。</span>
+          </div>
+          <div class="evidence-row">
+            <b>Bash 接入</b>
+            <span><a href="../../packages/coding-agent/src/exec/bash-executor.ts">bash-executor.ts</a>：构造 native options，命令完成后用 <code>sink.replace(minimized.text)</code>，再追加原文 artifact 引用。</span>
+          </div>
+          <div class="evidence-row">
+            <b>原文保存</b>
+            <span><a href="../../packages/coding-agent/src/tools/bash.ts">bash.ts</a>：<code>saveBashOriginalArtifact()</code> 分配 <code>bash-original</code> 并写入原始文本。</span>
+          </div>
+          <div class="evidence-row">
+            <b>原生引擎</b>
+            <span><a href="../../crates/pi-shell/src/minimizer/engine.rs">engine.rs</a>：命令识别、过滤分发、panic fail-open、capture 上限、pipeline overlay 和 safe-chain 路由。</span>
+          </div>
+          <div class="evidence-row">
+            <b>过滤覆盖</b>
+            <span><a href="../../crates/pi-shell/src/minimizer/filters/mod.rs">filters/mod.rs</a>：git、cargo、bun、go、JVM、Python、Node tests、Docker/K8s、GitHub/GitLab、lint、包管理器、文件列表、云命令等。</span>
+          </div>
+          <div class="evidence-row">
+            <b>测试门槛</b>
+            <span><a href="../../crates/pi-shell/tests/minimizer_fixtures.rs">minimizer_fixtures.rs</a>：大于等于 500 B 的 fixture 要求输出不超过原文 40%，小样本要求精确 snapshot。</span>
+          </div>
+        </div>
+
+        <div class="callout">
+          <strong>本机已实际命中，不是“代码存在但没编进 addon”。</strong>
+          <p>通过当前 <code>san</code> launcher 调用 <code>executeBash("git status")</code>，得到的是 San minimizer 的重排输出；当前 native addon 已包含这套实现。</p>
+        </div>
+
+        <h3 style="margin-top: 36px">当前有效配置</h3>
+        <pre><code>shellMinimizer:
+  enabled: true
+  settingsPath: null
+  only: []
+  except: []
+  maxCaptureBytes: 4194304
+  sourceOutlineLevel: default
+  legacyFilters: null</code></pre>
+      </div>
+    </section>
+
+    <section id="architecture" class="band alt">
+      <div class="shell section">
+        <div class="kicker">03 / Architecture fit</div>
+        <h2>内嵌过滤器比外部命令代理更适合 San</h2>
+        <p class="lead">
+          RTK 官方模式是 hook 改写命令，再由独立 RTK 进程执行目标命令并过滤输出。官方架构强调退出码透传、过滤失败回退原文和原始输出可见；
+          San 已经在自己的执行器里实现同类不变量，因此再套一层代理只会制造双执行面与双过滤面。
+        </p>
+
+        <div class="architecture" aria-label="San native minimizer 数据流">
+          <article class="node">
+            <div class="label">Policy boundary</div>
+            <h3>San BashTool</h3>
+            <ul>
+              <li>审批与高危命令识别</li>
+              <li>cwd / env / internal URL</li>
+              <li>超时、取消、后台任务</li>
+              <li>PTY 与 client-terminal 分流</li>
+            </ul>
+          </article>
+          <div class="arrow" aria-hidden="true">→</div>
+          <article class="node primary">
+            <div class="label">Native execution</div>
+            <h3>pi-shell + minimizer</h3>
+            <ul>
+              <li>执行原始命令</li>
+              <li>捕获完整 stdout / stderr</li>
+              <li>按命令族确定性过滤</li>
+              <li>不支持、管道、超限时 fail-open</li>
+            </ul>
+          </article>
+          <div class="arrow" aria-hidden="true">→</div>
+          <article class="node">
+            <div class="label">Result boundary</div>
+            <h3>OutputSink + artifact</h3>
+            <ul>
+              <li>模型看到压缩结果</li>
+              <li>原文保存为 <code>artifact://</code></li>
+              <li>保留退出码与结果状态</li>
+              <li>继续使用 San 的截断与 TUI</li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>维度</th><th>外部 RTK 运行时</th><th>San-native minimizer</th><th>判断</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>命令接入</td><td>hook / plugin 把 <code>git status</code> 改成 <code>rtk git status</code></td><td>原命令进入 San 已有 Bash 执行器</td><td><strong>San-native 更可审计</strong></td></tr>
+              <tr><td>审批与安全</td><td>新增一个可执行代理层，需重新证明参数与副作用等价</td><td>沿用现有审批、路径和高危规则</td><td><strong>San-native 风险更低</strong></td></tr>
+              <tr><td>取消 / 超时 / shell 状态</td><td>要跨 RTK 子进程和目标子进程传播</td><td>由 native Shell 与现有生命周期统一管理</td><td><strong>San-native 更一致</strong></td></tr>
+              <tr><td>原文恢复</td><td>RTK tee / 本地路径，与 San artifact 系统分离</td><td>可直接落 <code>artifact://</code></td><td><strong>San-native 更适配</strong></td></tr>
+              <tr><td>发布</td><td>额外 binary、PATH、跨平台打包、版本同步</td><td>随现有 native addon 发布</td><td><strong>San-native 更简单</strong></td></tr>
+              <tr><td>规则新鲜度</td><td>直接跟随 RTK release</td><td>需挑选并移植上游规则</td><td><span class="partial">外部 RTK 占优</span></td></tr>
+              <tr><td>统计分析</td><td>内置 history DB、gain、discover、telemetry</td><td>已有原生字节元数据，但尚未接入 session stats</td><td><span class="partial">San 需要补齐</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout warn">
+          <strong>不要同时启用两套。</strong>
+          <p>若 San 内部 minimizer 已开启，再通过 hook 改写到外部 RTK，会出现双重过滤、原文归属不清、退出与取消链路变长，并让结果错误难以定位。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="benchmark" class="band">
+      <div class="shell section">
+        <div class="kicker">04 / Local benchmark</div>
+        <h2>当前 San 已有实际压缩收益，但不能照搬“60–90%”营销数字</h2>
+        <p class="lead">
+          下表使用同一个当前工作树，分别运行原生命令、RTK <code>0.42.4</code> 和 San 当前 native minimizer；统计 UTF-8 字节，不是假装成模型 tokenizer。
+          这只是三条只读命令的局部探针，用于确认功能与比较输出形态，不代表真实会话分布。
+        </p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>命令</th><th>原始</th><th>RTK 0.42.4</th><th>San 当前</th><th>观察</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>git status</code></td><td>2,641 B</td><td>2,069 B<br>节省 21.7%</td><td>2,139 B<br>节省 19.0%</td><td>脏文件很多，路径本身不可省；两者都远低于上游示例值。</td>
+              </tr>
+              <tr>
+                <td><code>git log -n 30</code></td><td>10,170 B</td><td>6,141 B<br>节省 39.6%</td><td>5,504 B<br>节省 45.9%</td><td>San 在该样本更紧凑，仍保留标题与部分正文。</td>
+              </tr>
+              <tr>
+                <td><code>git diff --stat</code></td><td>1,785 B</td><td>1,784 B<br>节省 0.1%</td><td>1,281 B<br>节省 28.2%</td><td>RTK 基本透传；San 添加总计并截短文件列表。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout">
+          <strong>上游价值主张可作为方向，不可作为 San 验收数据。</strong>
+          <p>
+            RTK README 自称常见开发命令可节省 60–90%，同时明确其 30 分钟样例是基于中型 TypeScript/Rust 项目的估算、实际结果会变化。
+            San 应记录真实 provider-bound 工具结果的字节数与实际 token 数，再按命令族、成功/失败、项目语言统计。
+          </p>
+        </div>
+
+        <h3 style="margin-top: 38px">已执行的验证</h3>
+        <div class="evidence">
+          <div class="evidence-row"><b>San minimizer tests</b><span><code>cargo test -p pi-shell minimizer</code>：759 个 unit test 与 1 个 fixture test 通过，0 failed。</span></div>
+          <div class="evidence-row"><b>RTK build</b><span>通过本地代理 <code>127.0.0.1:7897</code> 拉取依赖并完成 <code>cargo build --release</code>。</span></div>
+          <div class="evidence-row"><b>运行探针</b><span>RTK 与 San 均在同一工作树执行三条只读 Git 命令；退出码均为 0。</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="risks" class="band alt">
+      <div class="shell section">
+        <div class="kicker">05 / Gaps and risks</div>
+        <h2>评估发现的三个安全问题已在当前工作区修复，产品缺口仍在</h2>
+        <p class="lead">
+          最大风险不在“压得还不够多”，而在压缩后是否仍能证明原文可恢复、语义未被伪造，以及派生代码的许可证是否被正确保留。以下三项保留原始发现，并标明本次修复结果。
+        </p>
+
+        <div class="risk-grid">
+          <article class="risk">
+            <div class="rank">FIXED / LICENSE</div>
+            <h3>RTK 许可证已从 MIT 错标纠正为 Apache-2.0</h3>
+            <p>
+              <a href="../../crates/pi-shell/NOTICE">crates/pi-shell/NOTICE</a>、Cargo 与 native npm metadata 已改为正确的
+              <code>MIT AND Apache-2.0</code> 组合，并把 MIT、Apache-2.0 全文与第三方 notice 纳入 crate、npm leaf 和 GitHub Release 分发链。
+            </p>
+          </article>
+          <article class="risk">
+            <div class="rank">FIXED / RECOVERY</div>
+            <h3>artifact 保存失败现在保留正常 raw 结果</h3>
+            <p>
+              executor 现在只在原文 artifact 成功落盘后应用 minimized text；回调缺失、返回空 ID 或抛错时保留 Bash 原有 raw/truncation 契约，写入异常会记录包含 filter 与字节统计的 warning。
+            </p>
+          </article>
+          <article class="risk">
+            <div class="rank">FIXED / CORRECTNESS</div>
+            <h3><code>git status</code> 不再伪造尾部提示文件</h3>
+            <p>
+              long-status 解析不再把 untracked 区间的任意文本交给 tracked-path parser，只接受有真实缩进的路径；完整 dirty status fixture 已加入 Git 标准尾行，精确快照确认不会产生伪造的 <code>??</code> 项。
+            </p>
+          </article>
+        </div>
+
+        <div class="risk-grid" style="margin-top: 20px">
+          <article class="risk">
+            <div class="rank">P1 / OBSERVABILITY</div>
+            <h3>压缩元数据没有进入 session stats</h3>
+            <p>
+              native 已返回 filter、input bytes、output bytes，但 <code>BashResult</code> 丢掉了这些字段。
+              当前无法回答真实会话节省多少、哪个 filter 低收益、哪个命令经常 passthrough。
+            </p>
+          </article>
+          <article class="risk">
+            <div class="rank">P2 / SURFACE</div>
+            <h3>不同 Bash 路径体验不一致</h3>
+            <p>
+              本地非 PTY、后台任务、用户 <code>!</code> 和 RPC 进入现有执行器；PTY 与 ACP client-terminal 不过滤是合理边界。
+              但 <code>san shell</code> 虽传入 minimizer，实时控制台仍打印原始流且忽略最终 minimized 结果，容易误判功能未生效。
+            </p>
+          </article>
+          <article class="risk">
+            <div class="rank">P2 / UPSTREAM</div>
+            <h3>外部 RTK 本身也不能当正确性 oracle</h3>
+            <p>
+              在 RTK <code>0.42.4</code> 上实测 <code>wc /definitely-not-present</code>：原命令退出 1 且 stderr 有错误文本，
+              RTK 仍退出 1 但 stdout/stderr 均为空。其 runner 的 stdout-only 路径没有重放 captured stderr，与项目文档描述不一致。
+            </p>
+          </article>
+        </div>
+
+        <div class="callout danger">
+          <strong>“始终保留退出码”不等于“始终保留诊断语义”。</strong>
+          <p>退出码只能告诉 agent 失败了；若 stderr、失败块或警告被丢掉，agent 仍会重复调用、误判根因或采取错误修复。验收必须同时覆盖状态与关键信息召回。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="roadmap" class="band">
+      <div class="shell section">
+        <div class="kicker">06 / Recommended roadmap</div>
+        <h2>三步把已有 minimizer 做成正式能力</h2>
+        <div class="steps">
+          <article class="step">
+            <div class="rank">PHASE A / DONE IN WORKTREE</div>
+            <h3>安全与合规基线已封住</h3>
+            <p>Apache-2.0 attribution、artifact 失败回退和 <code>git status</code> 假文件均已修复；相关 Rust、Bash executor、native npm 分发与 Homebrew metadata 测试已通过。</p>
+          </article>
+          <article class="step">
+            <div class="rank">PHASE B / PRODUCT</div>
+            <h3>让用户和 agent 看得见</h3>
+            <p>在 Bash details/TUI 显示 <code>filter · 原始→压缩 · raw artifact</code>；提供清晰的 session toggle 与单次 raw bypass；保留现有 <code>only/except</code> 作为高级配置。</p>
+          </article>
+          <article class="step">
+            <div class="rank">PHASE C / MEASURE</div>
+            <h3>建立真实会话评测闭环</h3>
+            <p>把 filter、input/output bytes、命令族、退出状态写入本地统计；用真实 San 任务比较 task success、重试次数、输入 token 和延迟；RTK 仅作为固定版本的差异对照。</p>
+          </article>
+        </div>
+
+        <h3 style="margin-top: 42px">建议的强制验收契约</h3>
+        <ul class="checklist">
+          <li>任何发生文本改写的结果，原始字节必须 100% 可恢复；保存失败不得继续返回有损文本。</li>
+          <li>退出码、signal、cwd、env、超时、取消与后台任务语义不得因过滤改变。</li>
+          <li>管道、重定向、显式 JSON/porcelain/raw 输出、交互/TTY 默认 passthrough。</li>
+          <li>失败诊断、警告、文件位置、测试名、断言差异等关键事实应做结构化召回测试。</li>
+          <li>按命令族对比真实模型 token，而不是统一使用“字符数 ÷ 4”。</li>
+          <li>收益报告必须同时展示覆盖率：高压缩率不能掩盖大量 passthrough 或低质量过滤。</li>
+          <li>上游每次同步都记录来源 commit、文件/算法、许可证、修改说明和本地回归 fixture。</li>
+          <li>PTY 保持原样；ACP 只有在能得到完整原文并进入 San artifact 系统时才做后处理。</li>
+        </ul>
+
+        <div class="callout">
+          <strong>推荐的功能命名：</strong>
+          <p>对外称“Shell 输出压缩”或“Semantic Shell Output”，实现层继续叫 <code>shellMinimizer</code>。不要把产品能力绑定成“RTK 模式”，否则会模糊 San 自有执行契约与第三方来源边界。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="band alt">
+      <div class="shell section">
+        <div class="kicker">07 / Sources</div>
+        <h2>依据</h2>
+        <div class="evidence">
+          <div class="evidence-row">
+            <b>RTK README</b>
+            <span><a href="https://github.com/rtk-ai/rtk#readme">官方仓库与使用说明</a>：代理模式、hook 改写、覆盖范围及自报节省估算。</span>
+          </div>
+          <div class="evidence-row">
+            <b>RTK architecture</b>
+            <span><a href="https://github.com/rtk-ai/rtk/blob/develop/docs/contributing/ARCHITECTURE.md">官方架构文档</a>：exit-code preservation、fail-safe、raw verbosity、命令生命周期。</span>
+          </div>
+          <div class="evidence-row">
+            <b>RTK license</b>
+            <span><a href="https://github.com/rtk-ai/rtk/blob/878af7de99e0ba71da2e8fd996f6b52a1836e06c/LICENSE">本仓库 attribution 所钉 commit 的 LICENSE</a>：Apache License 2.0。</span>
+          </div>
+          <div class="evidence-row">
+            <b>Apache guidance</b>
+            <span><a href="https://www.apache.org/foundation/license-faq.html">Apache Licensing and Distribution FAQ</a>：修改与分发 Apache-2.0 代码时应保留原许可证识别与必要 notice。</span>
+          </div>
+          <div class="evidence-row">
+            <b>RTK telemetry</b>
+            <span><a href="https://github.com/rtk-ai/rtk/blob/develop/docs/TELEMETRY.md">官方 telemetry 文档</a>：当前实现要求显式同意，默认关闭；若外部二进制只用于开发对照，仍应强制 <code>RTK_TELEMETRY_DISABLED=1</code> 并隔离数据目录。</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell">
+      评估生成于 2026-07-13。未修改运行代码、用户配置或模型配置；新增内容仅为本研究文档。
+    </div>
+  </footer>
+</body>
+</html>

@@ -56,6 +56,7 @@ export const LEAF_TARGETS: readonly LeafTarget[] = [
 ];
 
 const packageDirDefault = path.join(import.meta.dir, "..");
+const LEGAL_FILES = ["NOTICE", "LICENSE-MIT", "LICENSE-APACHE-2.0"] as const;
 
 function expectedAddonFilenames(tag: string): string[] {
 	return tag.endsWith("-x64")
@@ -92,8 +93,8 @@ export function buildLeafManifest({ tag, os, cpu, files, version }: BuildLeafMan
 		os: [os],
 		cpu: [cpu],
 		main: `./${main}`,
-		files: ["*.node", "README.md"],
-		license: "MIT",
+		files: ["*.node", "README.md", ...LEGAL_FILES],
+		license: "MIT AND Apache-2.0",
 		repository: {
 			type: "git",
 			url: "git+https://github.com/can1357/oh-my-pi.git",
@@ -153,6 +154,9 @@ export async function generateNpmPackages({
 		await fs.mkdir(leafDir, { recursive: true });
 		for (const file of files) {
 			await fs.copyFile(path.join(nativeDir, file), path.join(leafDir, file));
+		}
+		for (const file of LEGAL_FILES) {
+			await fs.copyFile(path.join(packageDir, file), path.join(leafDir, file));
 		}
 		await Bun.write(path.join(leafDir, "package.json"), `${JSON.stringify(manifest, null, "\t")}\n`);
 		await Bun.write(path.join(leafDir, "README.md"), buildReadme(target.tag, manifest));

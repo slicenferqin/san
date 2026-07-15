@@ -171,7 +171,7 @@ export type WorkflowNodeStatus =
 	| "blocked"
 	| "unknown";
 
-export type WorkflowDeliveryState = "pending" | "delivered" | "blocked";
+export type WorkflowDeliveryState = "pending" | "delivering" | "delivered" | "blocked";
 export type WorkflowWriteArtifactStatus =
 	| "pending"
 	| "reviewed"
@@ -235,6 +235,7 @@ export interface WorkflowRun {
 	status: WorkflowRunStatus;
 	budget: WorkflowBudgetSnapshot;
 	deliveryState: WorkflowDeliveryState;
+	deliveryId?: string;
 	currentPhase: string;
 	nodes: WorkflowNode[];
 	writeArtifacts: WorkflowWriteArtifact[];
@@ -271,6 +272,7 @@ export type WorkflowEventType =
 	| "run_blocked"
 	| "run_completed"
 	| "run_failed"
+	| "result_delivery_prepared"
 	| "result_delivered";
 
 export interface WorkflowEvent {
@@ -285,6 +287,8 @@ export interface WorkflowEvent {
 export interface WorkflowAgentRequest {
 	callId: string;
 	nodeId: string;
+	/** 所有可能影响本次调用结果的已审批输入哈希。 */
+	inputHash: string;
 	phase: string;
 	/** Exact absolute execution directory bound to the user's approval. */
 	scopeKey: string;

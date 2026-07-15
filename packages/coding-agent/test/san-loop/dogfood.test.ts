@@ -24,7 +24,8 @@ describe("San loop dogfood verifier", () => {
 		expect(summary.scenarios[1]?.retryCount).toBe(1);
 		expect(summary.scenarios[1]?.events).toContain("retry_requested");
 		expect(summary.scenarios[2]?.reviews).toBe(2);
-		expect(summary.scenarios[2]?.events).toContain("finalized");
+		expect(summary.scenarios[2]?.events).not.toContain("finalized");
+		expect(summary.scenarios[2]?.events.filter(event => event === "review_completed")).toHaveLength(2);
 		expect(summary.scenarios[3]?.events).toContain("blocked");
 		expect(summary.scenarios[3]?.reviews).toBe(0);
 		expect(summary.scenarios[4]?.events).toContain("recovered");
