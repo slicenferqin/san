@@ -10,18 +10,26 @@ import type { SessionEntry } from "../session/session-entries";
 import type { ReadonlySessionManager } from "../session/session-manager";
 import { CONTEXT_PACKET_MESSAGE_TYPE, TURN_DIGEST_CUSTOM_TYPE, type TurnDigest, type TurnDigestSource } from "./types";
 
-/** Collect TurnDigest custom entries from a journal slice (branch or tree). */
+function digestSourceKey(source: TurnDigestSource): string {
+	return `${source.sessionId}\0${source.fromEntryId}\0${source.toEntryId}`;
+}
+
+/** 收集每个 source span 的最新有效 TurnDigest；后写入的权威升级覆盖旧 fallback。 */
 export function collectDigestRefs(entries: readonly SessionEntry[]): Array<{ entryId: string; digest: TurnDigest }> {
-	const refs: Array<{ entryId: string; digest: TurnDigest }> = [];
+	const refsBySource = new Map<string, { entryId: string; digest: TurnDigest }>();
 	for (const entry of entries) {
 		if (entry.type !== "custom") continue;
 		if (entry.customType !== TURN_DIGEST_CUSTOM_TYPE) continue;
 		const data = entry.data;
 		if (!data || typeof data !== "object") continue;
 		if (!("schemaVersion" in data) || !("turnId" in data) || !("source" in data)) continue;
-		refs.push({ entryId: entry.id, digest: data as TurnDigest });
+		const digest = data as TurnDigest;
+		const sourceKey = digestSourceKey(digest.source);
+		const existing = refsBySource.get(sourceKey);
+		if (existing?.digest.fallback === false && digest.fallback === true) continue;
+		refsBySource.set(sourceKey, { entryId: entry.id, digest });
 	}
-	return refs;
+	return [...refsBySource.values()];
 }
 
 // ── Source span extraction ──────────────────────────────────────────────────
@@ -230,7 +238,9 @@ export function findExistingDigest(
 	entries: readonly SessionEntry[],
 	source: TurnDigestSource,
 ): SessionEntry | undefined {
-	for (const entry of entries) {
+	let latestFallback: SessionEntry | undefined;
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index]!;
 		if (entry.type !== "custom") continue;
 		if (entry.customType !== TURN_DIGEST_CUSTOM_TYPE) continue;
 		const data = entry.data as TurnDigest | undefined;
@@ -241,10 +251,11 @@ export function findExistingDigest(
 			existingSource.toEntryId === source.toEntryId &&
 			existingSource.sessionId === source.sessionId
 		) {
-			return entry;
+			if (data.fallback !== true) return entry;
+			latestFallback ??= entry;
 		}
 	}
-	return undefined;
+	return latestFallback;
 }
 
 /**

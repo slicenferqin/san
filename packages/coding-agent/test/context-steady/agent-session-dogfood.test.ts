@@ -4,11 +4,12 @@
  * status/plan sharing, and branch-safe checkpoints.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -24,6 +25,8 @@ import {
 	CONTEXT_CHECKPOINT_CUSTOM_TYPE,
 	CONTEXT_PACKET_CUSTOM_TYPE,
 	CONTEXT_PACKET_MESSAGE_TYPE,
+	CONTEXT_SEGMENT_CUSTOM_TYPE,
+	type ContextSegment,
 	TURN_DIGEST_CUSTOM_TYPE,
 } from "../../src/context-steady/types";
 
@@ -88,6 +91,7 @@ describe("Context Steady AgentSession dogfood runtime", () => {
 	afterEach(async () => {
 		if (session) await session.dispose();
 		for (const authStorage of authStorages) await authStorage.close();
+		vi.restoreAllMocks();
 		removeSyncWithRetries(tempDir);
 	});
 
@@ -179,6 +183,77 @@ describe("Context Steady AgentSession dogfood runtime", () => {
 		expect(protectedRefs.every(ref => branchIds.has(ref))).toBe(true);
 		expect(latestPlan.budget?.steadyTarget).toBe(240_000);
 		expect(latestPlan.budget?.burstCeiling).toBe(320_000);
+	});
+
+	it("keeps a 60-call logical turn running across recursive Segment maintenance", async () => {
+		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!bundled) throw new Error("Expected bundled dogfood model");
+		const model = { ...bundled, contextWindow: 50_000, maxTokens: 4_000 };
+		const responses: Array<Record<string, unknown>> = [];
+		for (let call = 1; call <= 60; call++) {
+			responses.push({
+				content: [
+					{
+						type: "toolCall",
+						id: `segment_call_${call}`,
+						name: "echo",
+						arguments: { value: `${"segment-payload-".repeat(90)}${call}` },
+					},
+				],
+				usage: { input: call * 750, output: 20, totalTokens: call * 750 + 20 },
+			});
+		}
+		responses.push({ content: ["all 60 tool calls completed"] });
+		const mock = createMockModel({ responses });
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+			summary: `Recursive segment summary through ${preparation.messagesToSummarize.length} messages.`,
+			shortSummary: "Long tool turn compacted",
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: preparation.tokensBefore,
+			details: {},
+		}));
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Segment stress dogfood"], tools: [echoTool] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"san.contextSteady.qualityWindowTokens": 8_000,
+			"san.contextSteady.burstWindowTokens": 12_000,
+			"san.contextSteady.segment.enabled": true,
+			"san.contextSteady.segment.maxDigestInputTokens": 10_000,
+			"compaction.enabled": true,
+			"compaction.strategy": "context-full",
+			"compaction.thresholdTokens": 40_000,
+			"compaction.keepRecentTokens": 2_500,
+			"compaction.autoContinue": false,
+			"contextPromotion.enabled": false,
+			"todo.enabled": false,
+			"todo.reminders": false,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "segment-stress-auth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "segment-stress-models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+
+		await session.prompt("执行包含 60 次工具调用的长任务，中间维护上下文但不要停止");
+		await session.waitForIdle();
+
+		const segments = customEntries(sessionManager, CONTEXT_SEGMENT_CUSTOM_TYPE).map(
+			entry => entry.data as ContextSegment,
+		);
+		expect(mock.calls).toHaveLength(61);
+		expect(compactSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+		expect(segments.length).toBeGreaterThanOrEqual(2);
+		expect(new Set(segments.map(segment => segment.logicalTurnId)).size).toBe(1);
+		expect(segments.every(segment => !("budget" in segment))).toBe(true);
+		expect(session.messages.at(-1)?.role).toBe("assistant");
+		expect(JSON.stringify(session.messages.at(-1))).toContain("all 60 tool calls completed");
+		expect(customEntries(sessionManager, TURN_DIGEST_CUSTOM_TYPE)).toHaveLength(1);
 	});
 
 	it("records topic_shift rebase on explicit topic change", async () => {

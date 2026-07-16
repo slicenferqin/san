@@ -37,6 +37,13 @@ export interface ContextPlanQualityGateAudit {
 	reasons: string[];
 	protectedEntryRefs: string[];
 	missingEntryRefs: string[];
+	requiredTokens: number;
+	selectedInputTokens: number;
+	activeEntryCount: number;
+	archivedEntryCount: number;
+	activeCutoffEntryId?: string;
+	maintenanceId?: string;
+	recoveryAttempt?: number;
 	requiredBurstTokens?: number;
 	projectedInputTokens?: number;
 	projectedInputLimit?: number;
@@ -54,6 +61,11 @@ export interface ContextPlanQualityGateOptions {
 	burstCeiling: number;
 	nonMessageTokens: number;
 	projectedInputTokens?: number;
+	activeEntryCount?: number;
+	archivedEntryCount?: number;
+	activeCutoffEntryId?: string;
+	maintenanceId?: string;
+	recoveryAttempt?: number;
 }
 
 export interface ContextPlanMaterialAudit {

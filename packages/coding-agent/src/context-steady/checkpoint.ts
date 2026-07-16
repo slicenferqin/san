@@ -9,13 +9,13 @@
 import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import type { SessionEntry } from "../session/session-entries";
 import type { ReadonlySessionManager } from "../session/session-manager";
+import { collectDigestRefs } from "./session";
 import { polishContextSteadyText } from "./text";
 import {
 	CONTEXT_CHECKPOINT_CUSTOM_TYPE,
 	CONTEXT_CHECKPOINT_SCHEMA_VERSION,
 	type ContextCheckpoint,
 	type ContextCheckpointSummaryItem,
-	TURN_DIGEST_CUSTOM_TYPE,
 	type TurnDigest,
 } from "./types";
 
@@ -51,19 +51,6 @@ function estimateCheckpointTokens(checkpoint: Omit<ContextCheckpoint, "tokenEsti
 		content: [{ type: "text", text: JSON.stringify(checkpoint.summary) }],
 		timestamp: Date.now(),
 	});
-}
-
-function digestRefs(entries: readonly SessionEntry[]): DigestEntryRef[] {
-	const refs: DigestEntryRef[] = [];
-	for (const entry of entries) {
-		if (entry.type !== "custom") continue;
-		if (entry.customType !== TURN_DIGEST_CUSTOM_TYPE) continue;
-		const data = entry.data;
-		if (!data || typeof data !== "object") continue;
-		if (!("schemaVersion" in data) || !("turnId" in data) || !("source" in data)) continue;
-		refs.push({ entryId: entry.id, digest: data as TurnDigest });
-	}
-	return refs;
 }
 
 function sourceEntryRefsForDigest(entries: readonly SessionEntry[], digest: TurnDigest): string[] {
@@ -222,14 +209,15 @@ export function buildContextCheckpoint(
 	if (checkpointMaxTokens === 0) return null;
 
 	const covered = coveredDigestEntryIds(entries);
-	const candidates = digestRefs(entries).filter(ref => !covered.has(ref.entryId));
+	const digestRefs = collectDigestRefs(entries);
+	const candidates = digestRefs.filter(ref => !covered.has(ref.entryId));
 	// Residual digest tails smaller than checkpointEveryTurns intentionally stay
 	// unfolded; the ContextPacket recent-digest tail carries those fresh turns.
 	if (candidates.length < checkpointEveryTurns) return null;
 
 	const previousCheckpoint = latestContextCheckpoint(entries);
 	const selected = candidates.slice(0, checkpointEveryTurns);
-	const digestsByEntryId = new Map(digestRefs(entries).map(ref => [ref.entryId, ref.digest]));
+	const digestsByEntryId = new Map(digestRefs.map(ref => [ref.entryId, ref.digest]));
 	const appendedEntryRefs = selected.map(ref => ref.entryId);
 	const entryRefs = uniqueEntryRefs([...(previousCheckpoint?.checkpoint.entryRefs ?? []), ...appendedEntryRefs]);
 	const previousCoveredSourceEntryRefs =

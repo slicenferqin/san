@@ -5,6 +5,7 @@ import {
 	type ContextPlanCoverageAudit,
 	type ContextPlanMaterialAudit,
 } from "../../context-steady/plan-types";
+import { collectDigestRefs } from "../../context-steady/session";
 import type { SessionEntry } from "../../session/session-entries";
 
 const DEFAULT_PLAN_REPORT_COUNT = 1;
@@ -71,6 +72,27 @@ function formatRefs(refs: readonly string[]): string {
 	return refs.length > 0 ? refs.join(", ") : "none";
 }
 
+function formatDigestHealth(entries: readonly SessionEntry[]): string {
+	const refs = collectDigestRefs(entries);
+	const authoritative = refs.filter(ref => ref.digest.fallback === false).length;
+	const fallback = refs.length - authoritative;
+	const latest = refs.at(-1)?.digest;
+	const latestStatus = latest
+		? latest.fallback
+			? `fallback:${latest.fallbackReason ?? "unknown"}`
+			: "authoritative"
+		: "none";
+	const latestModel = latest?.fallback === false ? (latest.model ?? "unknown") : "none";
+	return [
+		"Digest health:",
+		`- effective=${refs.length}`,
+		`- authoritative=${authoritative}`,
+		`- fallback=${fallback}`,
+		`- latestStatus=${latestStatus}`,
+		`- latestModel=${latestModel}`,
+	].join("\n");
+}
+
 function formatBudget(plan: ContextPlanAudit): string[] {
 	const budget = plan.budget;
 	return [
@@ -93,6 +115,13 @@ function formatQuality(plan: ContextPlanAudit): string[] {
 		`- outcome=${gate.outcome}`,
 		`- protected=${formatRefs(gate.protectedEntryRefs)}`,
 		`- missing=${formatRefs(gate.missingEntryRefs)}`,
+		`- requiredTokens=${formatNumber(gate.requiredTokens ?? 0)}`,
+		`- selectedInputTokens=${formatNumber(gate.selectedInputTokens ?? 0)}`,
+		`- activeEntries=${formatNumber(gate.activeEntryCount ?? 0)}`,
+		`- archivedEntries=${formatNumber(gate.archivedEntryCount ?? 0)}`,
+		...(gate.activeCutoffEntryId ? [`- activeCutoffEntryId=${gate.activeCutoffEntryId}`] : []),
+		...(gate.maintenanceId ? [`- maintenanceId=${gate.maintenanceId}`] : []),
+		...(gate.recoveryAttempt === undefined ? [] : [`- recoveryAttempt=${formatNumber(gate.recoveryAttempt)}`]),
 		`- reasons=${gate.reasons.length > 0 ? gate.reasons.join(", ") : "none"}`,
 		...(gate.requiredBurstTokens === undefined
 			? []
@@ -143,10 +172,11 @@ export function buildContextPlanReportText(
 ): string {
 	const count = clampReportCount(options.count);
 	const plans = findContextPlanEntries(entries);
+	const digestHealth = formatDigestHealth(entries);
 	if (plans.length === 0) {
-		return "No San ContextPlan audit entries found.";
+		return `No San ContextPlan audit entries found.\n\n${digestHealth}`;
 	}
 	const selected = plans.slice(-count).reverse();
 	const heading = `San ContextPlan audit view (${selected.length}/${plans.length} shown)`;
-	return [heading, ...selected.map(formatPlan)].join("\n\n");
+	return [heading, digestHealth, ...selected.map(formatPlan)].join("\n\n");
 }

@@ -2736,6 +2736,13 @@ export const SETTINGS_SCHEMA = {
 	"san.contextSteady.contextPlan.enabled": { type: "boolean", default: true },
 	"san.contextSteady.contextPlan.recentDigests": { type: "number", default: 5 },
 	"san.contextSteady.contextPlan.maxTokens": { type: "number", default: 2000 },
+	"san.contextSteady.contextPlan.recentExactTokens": { type: "number", default: 16000 },
+	"san.contextSteady.contextPlan.liveTailTokens": { type: "number", default: 24000 },
+	"san.contextSteady.segment.enabled": { type: "boolean", default: true },
+	"san.contextSteady.segment.maxTokens": { type: "number", default: 40000 },
+	"san.contextSteady.segment.maxDurationMs": { type: "number", default: 900000 },
+	"san.contextSteady.segment.maxDigestInputTokens": { type: "number", default: 160000 },
+	"san.contextSteady.hardPressure.maxRecoveryPasses": { type: "number", default: 1 },
 	// Legacy ContextPacket setting paths are still accepted as aliases when the
 	// corresponding ContextPlan path is not explicitly configured.
 	"san.contextSteady.contextPacket.enabled": { type: "boolean", default: true },

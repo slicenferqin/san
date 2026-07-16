@@ -443,6 +443,73 @@ describe("buildContextPlan", () => {
 		expect(plan.audit.rebaseReason).toBe("topic_shift");
 	});
 
+	test("does not mark a topic shift when at least one historical digest remains relevant", () => {
+		const entries = asEntries([
+			messageEntry("u1", {
+				role: "user",
+				content: "prepare database migration",
+				timestamp: 1,
+				provider: "x",
+				model: "x",
+			}),
+			messageEntry("a1", { role: "assistant", content: "done", timestamp: 2, provider: "x", model: "x" }),
+			customEntry("d1", TURN_DIGEST_CUSTOM_TYPE, digest("t1", "u1", "a1", "prepare database migration")),
+			messageEntry("u2", {
+				role: "user",
+				content: "implement auth middleware",
+				timestamp: 3,
+				provider: "x",
+				model: "x",
+			}),
+			messageEntry("a2", { role: "assistant", content: "done", timestamp: 4, provider: "x", model: "x" }),
+			customEntry("d2", TURN_DIGEST_CUSTOM_TYPE, digest("t2", "u2", "a2", "implement auth middleware")),
+		]);
+
+		const plan = buildContextPlan({
+			entries,
+			sessionId: "s1",
+			requestKey: "r1",
+			epochId: "e1",
+			promptGeneration: 3,
+			settings: SETTINGS,
+			contextWindow: 500_000,
+			nonMessageTokens: 20_000,
+			currentPromptText: "fix auth middleware regression",
+		});
+
+		expect(plan.audit.rebaseReason).toBeUndefined();
+		expect(plan.materials.flatMap(material => ("digest" in material ? [material.entryId] : []))).toEqual(["d2"]);
+	});
+
+	test("treats delivery of current local changes as continuation", () => {
+		const entries = asEntries([
+			messageEntry("u1", {
+				role: "user",
+				content: "implement auth middleware",
+				timestamp: 1,
+				provider: "x",
+				model: "x",
+			}),
+			messageEntry("a1", { role: "assistant", content: "done", timestamp: 2, provider: "x", model: "x" }),
+			customEntry("d1", TURN_DIGEST_CUSTOM_TYPE, digest("t1", "u1", "a1", "implement auth middleware")),
+		]);
+
+		const plan = buildContextPlan({
+			entries,
+			sessionId: "s1",
+			requestKey: "r1",
+			epochId: "e1",
+			promptGeneration: 2,
+			settings: SETTINGS,
+			contextWindow: 500_000,
+			nonMessageTokens: 20_000,
+			currentPromptText: "把当前本地的变更都提交推送吧",
+		});
+
+		expect(plan.audit.rebaseReason).toBeUndefined();
+		expect(plan.materials.some(material => "digest" in material && material.entryId === "d1")).toBe(true);
+	});
+
 	test("drops derived materials on explicit topic shift", () => {
 		const oldUser = { role: "user", content: "implement auth middleware", timestamp: 1, provider: "x", model: "x" };
 		const oldAssistant = {

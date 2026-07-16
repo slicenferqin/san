@@ -8,6 +8,7 @@
 
 ### Added
 
+- Added San Context Steady Segment maintenance for long logical turns: token/time soft hints trigger mid-turn compaction without limiting execution, recursive Segment checkpoints bound final digest input, active/archive boundaries prevent stale journal refs from causing hard pressure, and maintenance recovery is persisted for audit.
 - Added `max` and `ultra` thinking selectors, CLI/configuration support, distinct status-line symbols, extended thinking budgets, literal `:max` model-id compatibility, and highest-advertised-tier `ultrathink` behavior.
 - Added `/effort` (`/thinking` alias) to set or show session thinking effort (`off|minimal|low|medium|high|xhigh|max|ultra|auto|status`).
 - Added `/connect` as the unified model-provider management surface (OAuth, API key, keyless/local). Connected providers sort first with auth origin and available model counts; successful connect refreshes that provider and opens a provider-filtered session model picker. Custom endpoints persist via a comment-preserving, locked, atomic `models.yml` path patch and store secrets only in AuthStorage (`auth: apiKey` without plaintext keys in YAML).
@@ -56,6 +57,7 @@
 
 ### Fixed
 
+- Fixed San Context Steady fallback digests to expose concrete failure reasons, warn when the configured digest model cannot resolve, append-only upgrade one historical fallback per successful turn, and treat only fully unrelated history as a natural topic shift. ContextPlan and checkpoint audit identity now stays bound to the journal session across provider-session rotation, and `/context plan` reports effective digest authority.
 - Fixed shell minimization exposing unrecoverable lossy output when saving the original capture failed: minimized text is now applied only after a raw artifact is persisted, and persistence errors retain the normal raw Bash result with a specific warning.
 - Fixed the final San v0.2-v0.4 rollout blockers: execution-loop cancellation and terminal authority, scoped low-authority Brain activation and rebuild, durable input-bound Workflow replay and acknowledged delivery, hard token preflight, canonical path/write CAS boundaries, and artifact-backed benchmark provenance.
 - Fixed ContextPlan user-boundary hard pressure to attempt model promotion and configured context maintenance before refusing the prompt, and aligned ContextPlan status/compaction estimates with the converted provider-wire snapshot.

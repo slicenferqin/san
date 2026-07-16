@@ -26,6 +26,7 @@ import { isVolatileContextSteadyMemory, polishContextSteadyText } from "./text";
 import type {
 	ContextSteadySettings,
 	TurnDigest,
+	TurnDigestFallbackReason,
 	TurnDigestFile,
 	TurnDigestMemoryCandidate,
 	TurnDigestSource,
@@ -145,6 +146,7 @@ export interface TurnDigestGenerationResult {
 	entryId?: string;
 	persisted: boolean;
 	reused: boolean;
+	upgraded: boolean;
 }
 
 /**
@@ -165,40 +167,65 @@ export async function generateDigest(
 
 	const entries = sessionManager.getEntries();
 	const existing = findExistingDigest(entries, source);
-	if (existing?.type === "custom") {
+	const existingDigest = existing?.type === "custom" ? (existing.data as TurnDigest) : undefined;
+	const canUpgrade =
+		existingDigest?.fallback === true && steadySettings.digest.llm?.enabled === true && digestModel !== undefined;
+	if (existingDigest && !canUpgrade) {
 		return {
-			digest: existing.data as TurnDigest,
-			entryId: existing.id,
+			digest: existingDigest,
+			entryId: existing?.id,
 			persisted: true,
 			reused: true,
+			upgraded: false,
 		};
 	}
 
-	const turnId = generateTurnId();
+	const turnId = existingDigest?.turnId ?? generateTurnId();
 	const sessionId = source.sessionId;
-	const fallbackDigest = generateFallbackDigest(
-		messages as Parameters<typeof generateFallbackDigest>[0],
-		source,
-		turnId,
-		sessionId,
-	);
+	const fallbackDigest =
+		existingDigest ??
+		generateFallbackDigest(messages as Parameters<typeof generateFallbackDigest>[0], source, turnId, sessionId);
 	const digest = await buildDigest(messages, fallbackDigest, steadySettings, digestModel);
 	if (!digest) return undefined;
+	if (existingDigest && digest.fallback) {
+		return {
+			digest: existingDigest,
+			entryId: existing?.id,
+			persisted: true,
+			reused: true,
+			upgraded: false,
+		};
+	}
+	const upgraded = existingDigest?.fallback === true && digest.fallback === false;
+	const persistedDigest = upgraded && existing ? { ...digest, supersedesEntryId: existing.id } : digest;
 
 	try {
-		const entryId = appendTurnDigest(sessionManager, digest);
+		const entryId = appendTurnDigest(sessionManager, persistedDigest);
 		logger.debug("TurnDigest persisted", {
-			turnId: digest.turnId,
-			fallback: digest.fallback,
-			sessionId: digest.sessionId,
+			turnId: persistedDigest.turnId,
+			fallback: persistedDigest.fallback,
+			upgraded,
+			sessionId: persistedDigest.sessionId,
 			fromEntryId: source.fromEntryId,
 			toEntryId: source.toEntryId,
 		});
-		return { digest, entryId, persisted: true, reused: false };
+		return { digest: persistedDigest, entryId, persisted: true, reused: false, upgraded };
 	} catch (err) {
-		logger.warn("Failed to persist TurnDigest", { error: String(err), sessionId: digest.sessionId });
-		return { digest, persisted: false, reused: false };
+		logger.warn("Failed to persist TurnDigest", { error: String(err), sessionId: persistedDigest.sessionId });
+		return { digest: persistedDigest, persisted: false, reused: false, upgraded };
 	}
+}
+
+function fallbackReasonForError(error: unknown): TurnDigestFallbackReason {
+	const message = error instanceof Error ? error.message : String(error);
+	if (/auth_unavailable|no auth available|unauthorized|forbidden|\b401\b|\b403\b/i.test(message)) {
+		return "auth_unavailable";
+	}
+	if (/timeout|timed out|aborterror/i.test(message)) return "timeout";
+	if (/structured turn digest|structured output|tool arguments|json object/i.test(message)) {
+		return "structured_output_invalid";
+	}
+	return "request_failed";
 }
 
 async function buildDigest(
@@ -207,8 +234,18 @@ async function buildDigest(
 	steadySettings: ContextSteadySettings,
 	digestModel?: ContextSteadyDigestModel,
 ): Promise<TurnDigest | undefined> {
-	if (!steadySettings.digest.llm?.enabled || !digestModel) {
-		return steadySettings.digest.persistFallback ? fallbackDigest : undefined;
+	if (!steadySettings.digest.llm?.enabled) {
+		return steadySettings.digest.persistFallback ? { ...fallbackDigest, fallbackReason: "llm_disabled" } : undefined;
+	}
+	if (!digestModel) {
+		logger.warn("TurnDigest model could not be resolved; persisting fallback digest", {
+			modelRole: steadySettings.digest.llm.modelRole,
+			sessionId: fallbackDigest.sessionId,
+			turnId: fallbackDigest.turnId,
+		});
+		return steadySettings.digest.persistFallback
+			? { ...fallbackDigest, fallbackReason: "model_unresolved" }
+			: undefined;
 	}
 
 	try {
@@ -226,7 +263,9 @@ async function buildDigest(
 			turnId: fallbackDigest.turnId,
 			model: `${digestModel.model.provider}/${digestModel.model.id}`,
 		});
-		return steadySettings.digest.persistFallback ? fallbackDigest : undefined;
+		return steadySettings.digest.persistFallback
+			? { ...fallbackDigest, fallbackReason: fallbackReasonForError(error) }
+			: undefined;
 	}
 }
 

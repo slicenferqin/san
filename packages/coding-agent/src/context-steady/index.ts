@@ -16,6 +16,7 @@ export * from "./plan-types";
 export * from "./planner";
 export * from "./prune";
 export * from "./quality-gate";
+export * from "./segment";
 // Legacy ContextPacket / prune engines: read-only compat + regression tests only.
 // Active runtime uses ContextPlan (planner + materialize).
 // collectDigestRefs lives in session.ts (canonical); packet re-exports it for

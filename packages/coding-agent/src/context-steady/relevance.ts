@@ -138,6 +138,15 @@ const EXPLICIT_CONTINUATION_MARKERS = [
 	"基于前面",
 	"基于刚才",
 	"最近的",
+	"当前本地",
+	"当前变更",
+	"当前改动",
+	"这些变更",
+	"这些改动",
+	"提交推送",
+	"提交并推送",
+	"提交并合并",
+	"推送并合并",
 ];
 
 const HISTORY_REFERENCE_MARKERS = [

@@ -30,7 +30,9 @@ import type { ContextPlanAudit } from "../../src/context-steady/plan-types";
 import { CONTEXT_PLAN_CUSTOM_TYPE } from "../../src/context-steady/plan-types";
 import {
 	CONTEXT_CHECKPOINT_CUSTOM_TYPE,
+	CONTEXT_MAINTENANCE_CUSTOM_TYPE,
 	type ContextCheckpoint,
+	type ContextMaintenanceAudit,
 	TURN_DIGEST_CUSTOM_TYPE,
 	type TurnDigest,
 } from "../../src/context-steady/types";
@@ -46,6 +48,8 @@ const PRODUCTION_SETTINGS = {
 	"san.contextSteady.contextPlan.enabled": true,
 	"san.contextSteady.contextPlan.recentDigests": 5,
 	"san.contextSteady.contextPlan.maxTokens": 3000,
+	"san.contextSteady.contextPlan.recentExactTokens": 3000,
+	"san.contextSteady.contextPlan.liveTailTokens": 6000,
 	"san.contextSteady.checkpoint.enabled": true,
 	"san.contextSteady.checkpoint.everyTurns": 4,
 	"san.contextSteady.checkpoint.maxTokens": 12000,
@@ -345,12 +349,19 @@ describe("Context Steady production-path completion", () => {
 		expect(plans.every(entry => (entry.data as ContextPlanAudit).qualityGate.outcome !== "hard_pressure")).toBe(true);
 
 		const finalAudit = plans.at(-1)!.data as ContextPlanAudit;
+		const maintenanceAudits = customEntries(harness.sessionManager, CONTEXT_MAINTENANCE_CUSTOM_TYPE).map(
+			entry => entry.data as ContextMaintenanceAudit,
+		);
 		const finalCall = harness.mock.calls.at(-1)!;
 		const finalObservation = harness.observations.at(-1)!;
 		expect(finalObservation.providerTokens).toBe(finalAudit.qualityGate.projectedInputTokens ?? -1);
 		expect(finalObservation.statusTokens).toBe(finalObservation.providerTokens);
 		expect(finalObservation.providerTokens).toBeLessThanOrEqual(finalAudit.qualityGate.projectedInputLimit ?? 0);
 		expect(contextPlanWireTokens(finalCall.context)).toBeLessThanOrEqual(finalAudit.budget.planTokenBudget);
+		expect(finalAudit.qualityGate.archivedEntryCount).toBeGreaterThan(0);
+		expect(finalAudit.qualityGate.activeCutoffEntryId).toBeTruthy();
+		expect(maintenanceAudits.some(audit => audit.state === "maintenance")).toBe(true);
+		expect(maintenanceAudits.some(audit => audit.state === "recovered")).toBe(true);
 		expect(rawMarkersInPayload(finalCall.context, "FALLBACK_RAW_END", 20).length).toBeLessThanOrEqual(8);
 		expect(
 			customEntries(harness.sessionManager, CONTEXT_CHECKPOINT_CUSTOM_TYPE).every(entry => {
@@ -369,6 +380,7 @@ describe("Context Steady production-path completion", () => {
 			"san.contextSteady.qualityWindowTokens": 10_000,
 			"san.contextSteady.burstWindowTokens": 18_000,
 			"san.contextSteady.contextPlan.maxTokens": 3000,
+			"san.contextSteady.contextPlan.recentExactTokens": 0,
 			"san.contextSteady.checkpoint.everyTurns": 100,
 		});
 

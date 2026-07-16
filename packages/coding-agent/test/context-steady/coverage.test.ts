@@ -80,7 +80,16 @@ function audit(materials: ContextPlanMaterial[] = [digestMaterial()]): ContextPl
 			reserveTokens: 100_000,
 			reserveRatio: 0.2,
 		},
-		qualityGate: { outcome: "pass", reasons: [], protectedEntryRefs: [], missingEntryRefs: [] },
+		qualityGate: {
+			outcome: "pass",
+			reasons: [],
+			protectedEntryRefs: [],
+			missingEntryRefs: [],
+			requiredTokens: 0,
+			selectedInputTokens: 20_000,
+			activeEntryCount: 2,
+			archivedEntryCount: 0,
+		},
 		materials: materials.map(material => material.audit),
 		coverage: [{ sourceEntryRefs: ["u1", "a1"], replacementMaterialId: "m1", reason: "digest replacement" }],
 	};

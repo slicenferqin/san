@@ -3,11 +3,11 @@
 # 只放模型选择和执行策略，不放 provider key。密钥继续放在用户级配置、
 # 环境变量或未跟踪的 agent dir 中。
 modelRoles:
-  default: asxs/gpt-5.5
-  smol: claude-code/claude-opus-4-8
-  slow: claude-code/claude-opus-4-8
-  plan: asxs/gpt-5.5:xhigh
-  advisor: claude-code/claude-opus-4-8
+  default: asxs/gpt-5.6-sol:xhigh
+  smol: self/gpt-5.4-mini
+  slow: self/gpt-5.6-sol
+  plan: asxs/gpt-5.6-sol:xhigh
+  advisor: self/claude-opus-4-8
   task: deepseek/deepseek-v4-pro
 
 setupVersion: 1
@@ -16,6 +16,18 @@ startup:
   quiet: true
   showSplash: false
   setupWizard: false
+
+tools:
+  discoveryMode: all
+  essentialOverride:
+    - read
+    - bash
+    - edit
+    - write
+    - glob
+    - eval
+    - grep
+    - lsp
 
 san:
   contextSteady:
@@ -26,13 +38,22 @@ san:
       timeoutMs: 30000
       llm:
         enabled: true
-        modelRole: claude-code/claude-opus-4-8
-    qualityWindowTokens: 24000
+        modelRole: self/gpt-5.4-mini
+    qualityWindowTokens: 240000
     reserveRatio: 0.25
-    contextPacket:
+    contextPlan:
       enabled: true
       recentDigests: 5
       maxTokens: 3000
+      recentExactTokens: 16000
+      liveTailTokens: 24000
+    segment:
+      enabled: true
+      maxTokens: 40000
+      maxDurationMs: 900000
+      maxDigestInputTokens: 160000
+    hardPressure:
+      maxRecoveryPasses: 1
     checkpoint:
       enabled: true
       everyTurns: 6
@@ -57,13 +78,13 @@ san:
       projectDir: .san/checks
     roles:
       commander:
-        modelRole: claude-code/claude-opus-4-8
+        modelRole: self/claude-opus-4-8
       worker:
         modelRole: deepseek/deepseek-v4-pro
       supervisor:
-        modelRole: claude-code/claude-opus-4-8
+        modelRole: self/claude-opus-4-8
       oracle:
-        modelRole: asxs/gpt-5.5:xhigh
+        modelRole: asxs/gpt-5.6-sol:xhigh
         enabledInModes:
           - council
     roleContext:

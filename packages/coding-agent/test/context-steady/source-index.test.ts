@@ -241,6 +241,36 @@ describe("buildContextSourceIndex", () => {
 		expect(index.checkpoints[0]?.coveredSourceEntryRefs).toEqual([]);
 	});
 
+	test("uses the authoritative append-only upgrade for digest and checkpoint coverage", () => {
+		const fallback = {
+			...digest("u1", "a1", [], true),
+			fallbackReason: "model_unresolved" as const,
+		};
+		const authoritative = {
+			...digest("u1", "a1"),
+			model: "self/gpt-5.4-mini",
+			supersedesEntryId: "d-fallback",
+		};
+		const index = buildContextSourceIndex(
+			asEntries([
+				messageEntry("u1", "first"),
+				messageEntry("a1", "answer"),
+				customEntry("d-fallback", TURN_DIGEST_CUSTOM_TYPE, fallback),
+				customEntry("d-authoritative", TURN_DIGEST_CUSTOM_TYPE, authoritative),
+				customEntry("cp1", CONTEXT_CHECKPOINT_CUSTOM_TYPE, checkpoint(["d-authoritative"])),
+			]),
+		);
+
+		expect(index.digests).toHaveLength(1);
+		expect(index.digests[0]).toMatchObject({
+			entryId: "d-authoritative",
+			digest: { fallback: false, supersedesEntryId: "d-fallback" },
+			sourceEntryRefs: ["u1", "a1"],
+		});
+		expect(index.checkpoints[0]?.coveredDigestEntryRefs).toEqual(["d-authoritative"]);
+		expect(index.checkpoints[0]?.coveredSourceEntryRefs).toEqual(["u1", "a1"]);
+	});
+
 	test("prefers v2 checkpoint covered source refs over digest span reconstruction", () => {
 		const index = buildContextSourceIndex(
 			asEntries([

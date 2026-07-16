@@ -41,6 +41,11 @@ export interface BuildContextPlanOptions {
 	activeToolCallIds?: readonly string[];
 	tokenEstimateByEntryRef?: ReadonlyMap<string, number>;
 	projectedInputTokens?: number;
+	activeEntryCount?: number;
+	archivedEntryCount?: number;
+	activeCutoffEntryId?: string;
+	maintenanceId?: string;
+	recoveryAttempt?: number;
 	recall?: ContextPacketRecallLayer;
 	maxDigestMaterials?: number;
 	createdAt?: string;
@@ -275,6 +280,11 @@ export function buildContextPlan(options: BuildContextPlanOptions): BuiltContext
 		burstCeiling: steadyBudget.burstCeiling,
 		nonMessageTokens: steadyBudget.nonMessageTokens,
 		projectedInputTokens: options.projectedInputTokens,
+		activeEntryCount: options.activeEntryCount,
+		archivedEntryCount: options.archivedEntryCount,
+		activeCutoffEntryId: options.activeCutoffEntryId,
+		maintenanceId: options.maintenanceId,
+		recoveryAttempt: options.recoveryAttempt,
 	});
 	const shouldSelectBurst = initialGate.outcome === "burst_required";
 	const budget = resolveContextPlanBudget({
@@ -295,6 +305,11 @@ export function buildContextPlan(options: BuildContextPlanOptions): BuiltContext
 		burstCeiling: budget.burstCeiling,
 		nonMessageTokens: budget.nonMessageTokens,
 		projectedInputTokens: options.projectedInputTokens,
+		activeEntryCount: options.activeEntryCount,
+		archivedEntryCount: options.archivedEntryCount,
+		activeCutoffEntryId: options.activeCutoffEntryId,
+		maintenanceId: options.maintenanceId,
+		recoveryAttempt: options.recoveryAttempt,
 	});
 	const candidateMaterials = buildMaterials(
 		sourceIndex,
@@ -309,8 +324,9 @@ export function buildContextPlan(options: BuildContextPlanOptions): BuiltContext
 		promptText.length > 0 &&
 		!isContinuationPrompt(promptText) &&
 		!topicShift &&
-		// Relevance gate dropped at least one digest that would otherwise be selected.
-		sourceIndex.digests.some(source => !isDigestRelevantToPrompt(promptText, source.digest));
+		sourceIndex.digests.length > 0 &&
+		// 仅当所有历史摘要都与当前请求无关时，才判定为自然话题切换。
+		!sourceIndex.digests.some(source => isDigestRelevantToPrompt(promptText, source.digest));
 	const planId = `plan_${crypto.randomUUID().slice(-12)}`;
 	const createdAt = options.createdAt ?? new Date().toISOString();
 	const buildAudit = (materials: ContextPlanMaterial[]): ContextPlanAudit => {

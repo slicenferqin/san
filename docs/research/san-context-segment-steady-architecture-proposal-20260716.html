@@ -1,0 +1,1013 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="San 长任务 Context Steady 与 Segment 维护协议的架构方案，重点说明用户输入、上下文维护、压缩恢复和防饿死机制。"
+    />
+    <title>San 长任务上下文稳态架构方案 · 2026-07-16</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --canvas: #edf1f2;
+        --paper: #ffffff;
+        --ink: #18232a;
+        --muted: #5b6a72;
+        --line: #d4dde1;
+        --header: #12242b;
+        --blue: #1e6289;
+        --blue-soft: #e7f1f6;
+        --green: #1b684e;
+        --green-soft: #e7f4ed;
+        --amber: #936008;
+        --amber-soft: #fff3d9;
+        --red: #a13932;
+        --red-soft: #fae9e7;
+        --violet: #6b5795;
+        --violet-soft: #f0edf8;
+        --shadow: 0 8px 26px rgba(24, 35, 42, 0.07);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--canvas);
+        font-family: "IBM Plex Sans", "Noto Sans CJK SC", "PingFang SC", sans-serif;
+        font-size: 15px;
+        line-height: 1.68;
+      }
+
+      a {
+        color: var(--blue);
+        text-underline-offset: 3px;
+      }
+
+      code,
+      pre {
+        font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+      }
+
+      code {
+        padding: 2px 5px;
+        border-radius: 4px;
+        background: #e8eef0;
+        overflow-wrap: anywhere;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin-top: 0;
+        font-family: "Iowan Old Style", "Noto Serif CJK SC", serif;
+      }
+
+      h1 {
+        margin-bottom: 14px;
+        font-size: 42px;
+        line-height: 1.14;
+      }
+
+      h2 {
+        margin-bottom: 16px;
+        font-size: 27px;
+        line-height: 1.28;
+      }
+
+      h3 {
+        margin-bottom: 8px;
+        font-size: 19px;
+      }
+
+      p {
+        margin: 0 0 12px;
+      }
+
+      ul,
+      ol {
+        margin: 8px 0 0;
+        padding-left: 22px;
+      }
+
+      li {
+        margin: 6px 0;
+      }
+
+      .page {
+        width: min(1180px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      .masthead {
+        color: #f5fafb;
+        background: var(--header);
+        border-bottom: 7px solid var(--blue);
+      }
+
+      .masthead-inner {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 320px;
+        gap: 46px;
+        align-items: end;
+        padding: 48px 0 42px;
+      }
+
+      .kicker,
+      .label,
+      .finding-id {
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .kicker {
+        color: #9dc6d9;
+      }
+
+      .lede {
+        max-width: 830px;
+        color: #d0e0e5;
+        font-size: 17px;
+      }
+
+      .verdict {
+        display: inline-block;
+        margin-top: 18px;
+        padding: 8px 13px;
+        border: 1px solid #7bb0c9;
+        border-radius: 4px;
+        background: #1a526e;
+        font-weight: 800;
+      }
+
+      .snapshot {
+        padding-left: 22px;
+        border-left: 1px solid #4b646e;
+      }
+
+      .snapshot dl {
+        margin: 0;
+      }
+
+      .snapshot div {
+        padding: 9px 0;
+        border-bottom: 1px solid #304950;
+      }
+
+      .snapshot dt {
+        color: #9db2ba;
+        font-size: 11px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      .snapshot dd {
+        margin: 2px 0 0;
+        overflow-wrap: anywhere;
+      }
+
+      main {
+        padding: 36px 0 60px;
+      }
+
+      section {
+        margin-top: 28px;
+        padding: 28px 30px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--paper);
+        box-shadow: var(--shadow);
+      }
+
+      .callout {
+        padding: 18px 20px;
+        border: 1px solid #b7d1df;
+        border-left: 6px solid var(--blue);
+        background: var(--blue-soft);
+      }
+
+      .callout.green {
+        border-color: #b8d8c8;
+        border-left-color: var(--green);
+        background: var(--green-soft);
+      }
+
+      .callout.amber {
+        border-color: #e4c98f;
+        border-left-color: var(--amber);
+        background: var(--amber-soft);
+      }
+
+      .callout.red {
+        border-color: #e2b8b3;
+        border-left-color: var(--red);
+        background: var(--red-soft);
+      }
+
+      .summary-grid,
+      .budget-grid,
+      .review-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .summary-item,
+      .budget-item,
+      .review-item {
+        min-width: 0;
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-top: 4px solid var(--blue);
+        background: #fbfcfd;
+      }
+
+      .summary-item.good,
+      .budget-item.good {
+        border-top-color: var(--green);
+      }
+
+      .summary-item.warn,
+      .budget-item.warn {
+        border-top-color: var(--amber);
+      }
+
+      .summary-item.bad,
+      .budget-item.bad {
+        border-top-color: var(--red);
+      }
+
+      .summary-item strong,
+      .budget-item strong,
+      .review-item strong {
+        display: block;
+        margin-bottom: 5px;
+      }
+
+      .diagram {
+        margin: 18px 0 6px;
+        padding: 18px;
+        border: 1px solid var(--line);
+        background: #fbfcfd;
+        overflow-x: auto;
+      }
+
+      .diagram-title {
+        margin-bottom: 14px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .flow-row {
+        display: grid;
+        grid-template-columns: minmax(120px, 1fr) 36px minmax(120px, 1fr) 36px minmax(150px, 1.2fr) 36px minmax(150px, 1.2fr);
+        align-items: center;
+        gap: 8px;
+        min-width: 820px;
+      }
+
+      .flow-node {
+        min-height: 78px;
+        padding: 12px 13px;
+        border: 1px solid #abc5d2;
+        border-top: 4px solid var(--blue);
+        border-radius: 5px;
+        background: var(--blue-soft);
+      }
+
+      .flow-node.green {
+        border-color: #afd0bf;
+        border-top-color: var(--green);
+        background: var(--green-soft);
+      }
+
+      .flow-node.amber {
+        border-color: #dfc486;
+        border-top-color: var(--amber);
+        background: var(--amber-soft);
+      }
+
+      .flow-node.red {
+        border-color: #dfb2ad;
+        border-top-color: var(--red);
+        background: var(--red-soft);
+      }
+
+      .flow-node.violet {
+        border-color: #c8bee2;
+        border-top-color: var(--violet);
+        background: var(--violet-soft);
+      }
+
+      .flow-node strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+
+      .flow-node small {
+        display: block;
+        color: var(--muted);
+        line-height: 1.48;
+      }
+
+      .arrow {
+        color: var(--blue);
+        font-size: 24px;
+        text-align: center;
+      }
+
+      .branch-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 14px;
+      }
+
+      .branch {
+        min-height: 138px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-top: 4px solid var(--green);
+        background: var(--green-soft);
+      }
+
+      .branch.soft {
+        border-top-color: var(--amber);
+        background: var(--amber-soft);
+      }
+
+      .branch.hard {
+        border-top-color: var(--red);
+        background: var(--red-soft);
+      }
+
+      .branch strong {
+        display: block;
+        margin-bottom: 5px;
+      }
+
+      .branch small {
+        color: var(--muted);
+      }
+
+      .layers {
+        display: grid;
+        gap: 10px;
+        min-width: 760px;
+      }
+
+      .layer {
+        display: grid;
+        grid-template-columns: 180px minmax(0, 1fr);
+        align-items: stretch;
+        border: 1px solid var(--line);
+      }
+
+      .layer-name {
+        display: flex;
+        align-items: center;
+        padding: 16px;
+        color: #f8fbfc;
+        background: var(--header);
+        font-weight: 800;
+      }
+
+      .layer-content {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        padding: 12px;
+        background: #fff;
+      }
+
+      .chip {
+        padding: 7px 10px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: #f7f9fa;
+      }
+
+      .layer-arrow {
+        margin: -2px 0;
+        color: var(--blue);
+        font-size: 22px;
+        text-align: center;
+      }
+
+      .state-row {
+        display: grid;
+        grid-template-columns: minmax(150px, 1fr) 54px minmax(170px, 1.2fr) 54px minmax(170px, 1.2fr);
+        align-items: center;
+        gap: 10px;
+        min-width: 760px;
+      }
+
+      .state {
+        min-height: 90px;
+        padding: 15px;
+        border: 2px solid var(--blue);
+        border-radius: 8px;
+        background: var(--blue-soft);
+        text-align: center;
+      }
+
+      .state.maintenance {
+        border-color: var(--amber);
+        background: var(--amber-soft);
+      }
+
+      .state.paused {
+        border-color: var(--red);
+        background: var(--red-soft);
+      }
+
+      .state strong {
+        display: block;
+      }
+
+      .state small {
+        display: block;
+        color: var(--muted);
+      }
+
+      .state-arrow {
+        color: var(--blue);
+        font-size: 22px;
+        text-align: center;
+      }
+
+      .state-notes {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 14px;
+      }
+
+      .state-note {
+        padding: 13px;
+        border-left: 4px solid var(--violet);
+        background: var(--violet-soft);
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        padding: 11px 12px;
+        border: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: #eaf0f3;
+        font-size: 12px;
+        text-transform: uppercase;
+      }
+
+      .status {
+        display: inline-block;
+        min-width: 58px;
+        padding: 2px 8px;
+        border-radius: 12px;
+        color: #fff;
+        font-size: 12px;
+        font-weight: 800;
+        text-align: center;
+      }
+
+      .status.must {
+        background: var(--red);
+      }
+
+      .status.should {
+        background: var(--amber);
+      }
+
+      .status.choice {
+        background: var(--violet);
+      }
+
+      .status.pass {
+        background: var(--green);
+      }
+
+      .evidence,
+      .footnote {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .mono-block {
+        margin: 12px 0 0;
+        padding: 14px 16px;
+        border: 1px solid var(--line);
+        background: #f6f8f9;
+        overflow-x: auto;
+        white-space: pre-wrap;
+      }
+
+      .review-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .review-item {
+        border-top-color: var(--violet);
+      }
+
+      .review-item p:last-child {
+        margin-bottom: 0;
+      }
+
+      @media (max-width: 900px) {
+        .masthead-inner {
+          grid-template-columns: 1fr;
+        }
+
+        .snapshot {
+          padding-left: 0;
+          border-left: 0;
+        }
+
+        .summary-grid,
+        .budget-grid,
+        .branch-grid {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+
+      @media (max-width: 580px) {
+        .page {
+          width: min(100% - 24px, 1180px);
+        }
+
+        h1 {
+          font-size: 34px;
+        }
+
+        section {
+          padding: 22px 18px;
+        }
+
+        .summary-grid,
+        .budget-grid,
+        .branch-grid,
+        .review-grid,
+        .state-notes {
+          grid-template-columns: 1fr;
+        }
+
+        .layer {
+          grid-template-columns: 1fr;
+        }
+
+        .layer-name {
+          padding: 10px 14px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="page masthead-inner">
+        <div>
+          <div class="kicker">San Context Steady · Architecture Proposal · 2026-07-16</div>
+          <h1>长任务上下文稳态：Segment 不是执行预算</h1>
+          <p class="lede">
+            本方案把数小时甚至一天的单次用户请求视为一个持续的逻辑 turn，但把内部执行拆成可维护的 segment。
+            Segment 只负责保存状态、压缩上下文和重建 provider working set，不拥有“剩余执行额度”，因此不会因为
+            segment 数量或维护次数而饿死 agent。
+          </p>
+          <div class="verdict">评审目标：确认逻辑边界、用户输入处理方式和长任务不会被维护机制意外终止</div>
+        </div>
+        <aside class="snapshot">
+          <dl>
+            <div>
+              <dt>Model</dt>
+              <dd><code>self/gpt-5.6-sol</code> · 300K context</dd>
+            </div>
+            <div>
+              <dt>Effective ceiling</dt>
+              <dd>约 225K（reserve ratio 25%）</dd>
+            </div>
+            <div>
+              <dt>Digest model</dt>
+              <dd><code>self/gpt-5.4-mini</code> · 仅用于维护，不是执行预算</dd>
+            </div>
+            <div>
+              <dt>Scope</dt>
+              <dd>用户输入、工具循环、Context Steady、compaction、resume</dd>
+            </div>
+            <div>
+              <dt>Status</dt>
+              <dd>方案评审稿；本文件不修改实现代码</dd>
+            </div>
+          </dl>
+        </aside>
+      </div>
+    </header>
+
+    <main class="page">
+      <section>
+        <h2>一、先给结论</h2>
+        <div class="callout green">
+          <strong>逻辑成立，但 Segment 必须被定义为“上下文维护单元”，不能被定义为“执行配额单元”。</strong>
+          一个逻辑 turn 可以拥有无限数量的 segment；只有 provider 的物理上下文无法再构造时，任务才进入显式的
+          <code>PAUSED_FOR_CONTEXT</code>，而不是因为“segment 预算用完”自动停止。
+        </div>
+        <div class="summary-grid" style="margin-top: 16px">
+          <div class="summary-item good">
+            <strong>原始记录不丢</strong>
+            Journal append-only 保存完整工具调用、工具结果、摘要和 compaction 边界。
+          </div>
+          <div class="summary-item">
+            <strong>当前请求可控</strong>
+            Provider working set 只保留目标状态、最新 checkpoint、有限 live tail 和未完成工具对。
+          </div>
+          <div class="summary-item warn">
+            <strong>维护失败可降级</strong>
+            摘要模型超时或限流时，使用确定性最小状态继续，不把摘要失败当成执行预算耗尽。
+          </div>
+        </div>
+        <p class="evidence" style="margin-top: 14px">
+          当前实现已经在 <code>onTurnEnd + willContinue</code> 安全边界做 mid-run compaction，但 San TurnDigest 仍主要在逻辑
+          turn 结束时生成；因此下一步重点是让 compaction、segment coverage 和 Context Plan 共用同一份 active-context 权威状态。
+          参考：<a href="/Users/sanjiu/development/self/projects/san/packages/coding-agent/src/session/agent-session.ts:11766">mid-run maintenance</a>、
+          <a href="/Users/sanjiu/development/self/projects/san/packages/coding-agent/src/session/agent-session.ts:4266">TurnDigest</a>。
+        </p>
+      </section>
+
+      <section>
+        <h2>二、三个预算必须分离</h2>
+        <div class="budget-grid">
+          <div class="budget-item good">
+            <strong>执行预算</strong>
+            用户或系统明确指定的最长时间、费用、步骤数。只有它可以主动结束任务；默认不由 Segment 生成。
+          </div>
+          <div class="budget-item warn">
+            <strong>上下文预算</strong>
+            Provider 的物理限制。达到 soft threshold 触发维护，达到 hard ceiling 执行一次恢复；不能假装成“执行额度”。
+          </div>
+          <div class="budget-item">
+            <strong>维护预算</strong>
+            摘要模型的 token、超时和重试上限。耗尽后切换到最小 checkpoint、artifact offload 或其他模型，不停止逻辑 turn。
+          </div>
+        </div>
+        <div class="callout amber" style="margin-top: 16px">
+          之前方案中出现的 <code>maxTokens</code>、<code>maxProviderRequests</code>、<code>maxDurationMs</code> 必须标注为
+          <strong>maintenance hint（软触发）</strong>，不能作为 hard cap。它们只回答“什么时候应该做维护”，不回答“任务还能执行多少”。
+        </div>
+      </section>
+
+      <section>
+        <h2>三、用户输入处理流程</h2>
+        <p>
+          用户输入和后台维护是两条并行流。输入路由器只决定消息进入当前执行、steering 或 FIFO 队列；它不因为维护中的摘要或
+          compaction 而丢弃、覆盖或重复消费用户消息。
+        </p>
+        <div class="diagram" role="img" aria-label="用户输入从输入路由到 provider 请求，再经过工具循环和上下文维护的流程图">
+          <div class="diagram-title">主流程：一条用户消息可以持续数小时，但每次 provider 请求都必须可构造</div>
+          <div class="flow-row">
+            <div class="flow-node"><strong>用户输入</strong><small>新任务、补充要求、状态询问或中途 steering</small></div>
+            <div class="arrow">→</div>
+            <div class="flow-node violet"><strong>输入路由器</strong><small>判断当前是否运行、维护中、可 steering 或必须 FIFO 排队</small></div>
+            <div class="arrow">→</div>
+            <div class="flow-node"><strong>Prompt Boundary</strong><small>生成逻辑 turn / prompt generation，读取 active state</small></div>
+            <div class="arrow">→</div>
+            <div class="flow-node green"><strong>Context Gate</strong><small>估算 projected input，读取 active protected refs 和 coverage ledger</small></div>
+          </div>
+          <div class="branch-grid">
+            <div class="branch">
+              <strong>低于 soft threshold</strong>
+              <small>直接发送 provider 请求。工具结果回到安全边界后继续同一个逻辑 turn。</small>
+            </div>
+            <div class="branch soft">
+              <strong>超过 soft threshold</strong>
+              <small>标记 <code>MAINTENANCE_PENDING</code>；先做最小 checkpoint 和 artifact offload，再重建 working set。</small>
+            </div>
+            <div class="branch hard">
+              <strong>超过 hard ceiling</strong>
+              <small>执行一次 compaction → coverage 重建 → Context Plan 重建 → replay 原请求一次；仍不适配才暂停。</small>
+            </div>
+          </div>
+          <div class="flow-row" style="margin-top: 14px">
+            <div class="flow-node green"><strong>Provider 请求</strong><small>稳定前缀 + checkpoint + live tail + 未完成工具对</small></div>
+            <div class="arrow">→</div>
+            <div class="flow-node"><strong>工具调用 / 结果</strong><small>按 call id 配对；大结果写 artifact，保留错误和必要证据</small></div>
+            <div class="arrow">→</div>
+            <div class="flow-node amber"><strong>安全边界</strong><small>工具对闭合后决定继续、维护或结束 segment</small></div>
+            <div class="arrow">→</div>
+            <div class="flow-node violet"><strong>继续 / 结束</strong><small>继续：同一 logicalTurnId；结束：从 segment/checkpoint 生成最终 TurnDigest</small></div>
+          </div>
+        </div>
+        <p class="footnote">
+          维护过程中的新用户消息进入 FIFO queue；维护成功后按入队顺序交付一次。用户的状态询问可以单独走轻量 progress 事件，不能依赖正常
+          todo reminder 才有响应。
+        </p>
+      </section>
+
+      <section>
+        <h2>四、三层数据架构</h2>
+        <p>
+          关键是区分“完整可追溯”与“当前必须放进 prompt”。旧消息可以从 provider working set 移出，但必须有 replacement ref 和可恢复路径。
+        </p>
+        <div class="diagram" role="img" aria-label="Journal、Execution Segment 和 Provider Working Set 三层数据架构">
+          <div class="diagram-title">数据流：原始 journal 永久保留，active context 只承载当前执行所需信息</div>
+          <div class="layers">
+            <div class="layer">
+              <div class="layer-name">Journal<br />不可变事实层</div>
+              <div class="layer-content">
+                <span class="chip">用户消息</span>
+                <span class="chip">assistant tool call</span>
+                <span class="chip">tool result</span>
+                <span class="chip">segment record</span>
+                <span class="chip">checkpoint</span>
+                <span class="chip">compaction entry</span>
+                <span class="chip">artifact index</span>
+              </div>
+            </div>
+            <div class="layer-arrow">↓ 通过 sourceRefs / replacementRef 建立 coverage</div>
+            <div class="layer">
+              <div class="layer-name">Coverage Ledger<br />替代关系层</div>
+              <div class="layer-content">
+                <span class="chip">active refs</span>
+                <span class="chip">archived refs</span>
+                <span class="chip">authoritative digest</span>
+                <span class="chip">deterministic checkpoint</span>
+                <span class="chip">degraded fallback</span>
+                <span class="chip">generation / maintenanceId</span>
+              </div>
+            </div>
+            <div class="layer-arrow">↓ 只 materialize active coverage</div>
+            <div class="layer">
+              <div class="layer-name">Provider Working Set<br />执行上下文层</div>
+              <div class="layer-content">
+                <span class="chip">system / tools prefix</span>
+                <span class="chip">current user intent</span>
+                <span class="chip">latest checkpoint</span>
+                <span class="chip">bounded live tail</span>
+                <span class="chip">unresolved tool pairs</span>
+                <span class="chip">selected evidence refs</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="callout red" style="margin-top: 16px">
+          <strong>Context Plan 的 requiredTokens 只能来自 active protected refs。</strong>
+          compaction 后，旧 journal entries 仍可查询，但不能因为仍存在于 branch 就继续参与 hard-pressure 计算。否则会出现“实际已压缩，planner 仍拒绝”的拒绝环。
+        </div>
+      </section>
+
+      <section>
+        <h2>五、Segment 生命周期与防饿死状态机</h2>
+        <div class="diagram" role="img" aria-label="长任务从运行到维护、恢复或显式暂停的状态图">
+          <div class="diagram-title">状态机：正常路径永远返回 RUNNING；暂停只表示物理上下文无法再恢复</div>
+          <div class="state-row">
+            <div class="state"><strong>RUNNING</strong><small>工具循环正常继续；不消耗 segment 执行额度</small></div>
+            <div class="state-arrow">→</div>
+            <div class="state maintenance"><strong>MAINTENANCE_PENDING</strong><small>soft pressure、segment hint 或大输出触发</small></div>
+            <div class="state-arrow">→</div>
+            <div class="state"><strong>RUNNING</strong><small>最小 checkpoint / compaction 完成，重建后继续</small></div>
+          </div>
+          <div class="state-notes">
+            <div class="state-note">
+              <strong>维护成功条件</strong><br />
+              active projected input 下降；active protected refs 已重算；同一 provider request 最多 replay 一次；工具不会重复执行。
+            </div>
+            <div class="state-note">
+              <strong>维护失败条件</strong><br />
+              artifact offload、确定性 checkpoint、compaction 和可用模型都无法构造合法请求，才转入显式暂停。
+            </div>
+          </div>
+          <div class="state-row" style="margin-top: 14px">
+            <div class="state paused"><strong>PAUSED_FOR_CONTEXT</strong><small>显示具体原因和恢复动作；输入继续 FIFO 排队</small></div>
+            <div class="state-arrow">←</div>
+            <div class="state paused"><strong>RECOVERY_FAILED</strong><small>维护无进展或 provider 仍拒绝；禁止静默 stop</small></div>
+            <div class="state-arrow">→</div>
+            <div class="state maintenance"><strong>RECOVERY_ONCE</strong><small>一次 compaction + replan + replay；有 maintenanceId 防止循环</small></div>
+          </div>
+        </div>
+        <p>
+          这里的“暂停”不是旧版本意义上的预算饿死：它是一个可观察、可恢复的状态。只要最小 continuation state 能放入 context，系统就必须回到
+          <code>RUNNING</code>，不受 segment 数量、摘要次数或摘要模型失败影响。
+        </p>
+      </section>
+
+      <section>
+        <h2>六、摘要与压缩的职责边界</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>机制</th>
+                <th>触发时机</th>
+                <th>输入</th>
+                <th>是否阻塞长任务</th>
+                <th>可替代的内容</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>最小 checkpoint</strong></td>
+                <td>每个需要维护的安全边界</td>
+                <td>结构化执行状态和 artifact 索引</td>
+                <td><span class="status must">必须完成</span>，但应是本地、确定性的</td>
+                <td>支持继续执行的最低状态</td>
+              </tr>
+              <tr>
+                <td><strong>SegmentDigest</strong></td>
+                <td>segment 闭合后；可异步升级</td>
+                <td>单个有限 segment，不读完整 logical turn</td>
+                <td><span class="status should">不阻塞</span>；超时降级</td>
+                <td>已闭合 segment 的语义摘要</td>
+              </tr>
+              <tr>
+                <td><strong>Compaction</strong></td>
+                <td>soft/hard context pressure</td>
+                <td>当前 active context + 可替代的历史材料</td>
+                <td><span class="status must">只阻塞当前请求</span>，不结束 logical turn</td>
+                <td>provider working set 的旧 raw span</td>
+              </tr>
+              <tr>
+                <td><strong>Final TurnDigest</strong></td>
+                <td>逻辑 turn 真正结束</td>
+                <td>checkpoint / segment digest frontier / 最终状态</td>
+                <td><span class="status should">不阻塞</span>后续用户输入</td>
+                <td>整条逻辑 turn 的可检索语义索引</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="mono-block">raw entries → segment checkpoint → segment digest → checkpoint digest → final TurnDigest
+
+provider working set = stable prefix + current state + latest checkpoint + bounded tail + unresolved pairs</div>
+      </section>
+
+      <section>
+        <h2>七、用户输入与维护并发时的处理</h2>
+        <div class="diagram" role="img" aria-label="用户在维护期间输入消息时的排队、恢复和一次性交付流程">
+          <div class="diagram-title">并发处理：消息不丢、不覆盖、不重复消费</div>
+          <div class="flow-row">
+            <div class="flow-node"><strong>用户消息 A</strong><small>任务补充 / steering / 状态询问</small></div>
+            <div class="arrow">→</div>
+            <div class="flow-node violet"><strong>Input Queue</strong><small>记录 sequence、prompt generation、消息类型</small></div>
+            <div class="arrow">→</div>
+            <div class="flow-node amber"><strong>维护中</strong><small>不交给会被 compaction 重置的临时队列</small></div>
+            <div class="arrow">→</div>
+            <div class="flow-node green"><strong>恢复后 FIFO 交付</strong><small>每条消息只注入一次，按序进入新的 prompt boundary</small></div>
+          </div>
+        </div>
+        <ul>
+          <li>维护期间的普通任务消息进入 FIFO；不会因为 compaction 重建 active messages 而丢失。</li>
+          <li>状态询问可由 progress channel 立即反馈，但不能把状态询问误当成新的逻辑 turn。</li>
+          <li>如果维护最终进入 <code>PAUSED_FOR_CONTEXT</code>，队列仍保留；用户可以继续输入恢复指令或主动终止。</li>
+          <li>恢复 replay 的是 provider request，不是用户消息；因此不能重新执行已经成功的工具调用。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>八、建议的初始参数（仅作为软触发）</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>参数</th>
+                <th>建议起点</th>
+                <th>语义</th>
+                <th>禁止的解释</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>activeTargetTokens</code></td>
+                <td>190K–210K</td>
+                <td>希望 working set 稳定落入的区间</td>
+                <td>不是 turn 或任务的 token 上限</td>
+              </tr>
+              <tr>
+                <td><code>liveTailTokens</code></td>
+                <td>16K–24K</td>
+                <td>最近实时证据和当前工具上下文</td>
+                <td>不是最近 N 个完整 turn</td>
+              </tr>
+              <tr>
+                <td><code>segment.maxTokens</code></td>
+                <td>32K–48K</td>
+                <td>建议闭合 segment 并做维护</td>
+                <td>达到后不能停止 agent</td>
+              </tr>
+              <tr>
+                <td><code>segment.maxDurationMs</code></td>
+                <td>10–15 分钟</td>
+                <td>防止长时间不产生 checkpoint</td>
+                <td>不是运行时间 quota</td>
+              </tr>
+              <tr>
+                <td><code>hardPressure.maxRecoveryPasses</code></td>
+                <td>1</td>
+                <td>同一压力事件最多一次 compaction/replan/replay</td>
+                <td>不是任务最多只能压缩一次</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="footnote">
+          300K context 配置 reserve ratio 25% 时，硬上限约为 225K；target 必须低于硬上限，留出 system tools、输出、重试和估算误差空间。
+        </p>
+      </section>
+
+      <section>
+        <h2>九、验收标准</h2>
+        <div class="review-grid">
+          <div class="review-item">
+            <strong>长任务连续性</strong>
+            <p>单个 logical turn 执行 200–1000 次工具调用，segment 数量不设上限，不因 segment hint 或摘要次数自动结束。</p>
+          </div>
+          <div class="review-item">
+            <strong>上下文稳态</strong>
+            <p>每次 provider 请求的 projected input 不超过 hard ceiling；维护后 active protected refs 不包含已归档 refs。</p>
+          </div>
+          <div class="review-item">
+            <strong>摘要模型降级</strong>
+            <p>digest 模型超时、429、400K 不足时，最小 checkpoint 仍能让任务继续；rich digest 可稍后升级。</p>
+          </div>
+          <div class="review-item">
+            <strong>工具安全</strong>
+            <p>compaction/replay 不会重复执行成功工具；未完成 tool pair 不会被移出 working set。</p>
+          </div>
+          <div class="review-item">
+            <strong>输入可靠性</strong>
+            <p>维护期间输入 FIFO 一次性交付；用户至少能看到 progress 或明确的 paused/recovery 状态。</p>
+          </div>
+          <div class="review-item">
+            <strong>真实物理极限</strong>
+            <p>只有所有最小状态都无法适配 context 时才暂停，并给出恢复动作；不能用“预算不足”静默饿死。</p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>十、需要审核的决策点</h2>
+        <ol>
+          <li><strong>是否接受“segment 数量无限，维护 hint 仅软触发”</strong>：这是避免复现预算饿死的核心前提。</li>
+          <li><strong>最小 checkpoint 是否允许作为 continuation authority</strong>：建议允许它替代旧 raw span 继续执行，但不把它当作最终高质量语义摘要。</li>
+          <li><strong>摘要模型失败后的处理</strong>：建议立即使用 deterministic checkpoint，后台异步升级，不等待 <code>gpt-5.4-mini</code>。</li>
+          <li><strong>物理上下文无法恢复时的用户体验</strong>：建议进入可见的 <code>PAUSED_FOR_CONTEXT</code>，保留 FIFO 输入和恢复指令，而不是自动 stop。</li>
+          <li><strong>缓存边界</strong>：建议只在 segment/compaction 边界重写 provider history；普通工具调用不改变稳定前缀。</li>
+        </ol>
+      </section>
+
+      <section>
+        <h2>十一、实施状态与自动验收</h2>
+        <div class="review-grid">
+          <div class="review-item">
+            <strong>P0 · 安全边界与恢复</strong>
+            <p>ContextPlan 只对最新 compaction 后的 active journal 区间做 hard-pressure 计算；历史条目仍保留用于审计。用户边界最多执行一次 promotion/compaction/replan replay，失败时写入可见的 <code>paused_for_context</code> 审计。</p>
+          </div>
+          <div class="review-item">
+            <strong>P1 · Segment 维护协议</strong>
+            <p>mid-turn compaction 会追加无执行预算的 <code>san.context_segment</code>。40K token 或 15 分钟只作为维护软提示；Segment 数量不设上限，不会令 agent 停止。</p>
+          </div>
+          <div class="review-item">
+            <strong>P2 · 有界摘要与观测</strong>
+            <p>最终 TurnDigest 使用“最新递归 Segment checkpoint + active tail”，默认最多向摘要模型提交 160K token；<code>/context plan</code> 同时展示 active/archive 数量、cutoff、maintenanceId 和 recovery attempt。</p>
+          </div>
+          <div class="review-item">
+            <strong>自动压测结果</strong>
+            <p>真实 AgentSession 已通过单个 logical turn 连续 60 次工具调用、多次 mid-turn compaction、多 Segment 后继续完成；纯边界测试以 500 条调用消息验证摘要输入不超过配置上限。</p>
+          </div>
+        </div>
+        <p class="footnote">自动测试只证明协议和状态转换成立；真实模型下一轮连续使用仍用于校准 40K/15 分钟软提示、摘要质量和缓存命中表现。</p>
+      </section>
+
+      <section>
+        <h2>参考证据</h2>
+        <ul>
+          <li><a href="/Users/sanjiu/development/self/projects/san/docs/research/san-omp-sync-session-retrospective-20260716.html">San OMP 同步会话回顾报告</a>：记录长工具回合、stale protected refs 和 hard-pressure 拒绝环。</li>
+          <li><a href="/Users/sanjiu/development/self/projects/san/docs/research/xai-san-omp-sync-session-acceptance-review-20260716.html">XAI San OMP 同步会话验收复核</a>：记录 silent stop、provider retry storm 和端到端未收口。</li>
+          <li><a href="/Users/sanjiu/development/self/projects/san/packages/coding-agent/src/session/agent-session.ts:4266">agent-session.ts · TurnDigest</a>：逻辑 turn 结束后的摘要入口。</li>
+          <li><a href="/Users/sanjiu/development/self/projects/san/packages/coding-agent/src/session/agent-session.ts:11766">agent-session.ts · maintainContextMidRun</a>：当前 mid-run compaction 安全边界。</li>
+          <li><a href="/Users/sanjiu/development/self/projects/san/packages/coding-agent/src/session/agent-session.ts:8324">agent-session.ts · Context Plan provider-call refresh</a>：当前 provider 调用前的重规划和 hard-pressure 路径。</li>
+        </ul>
+        <p class="footnote">本稿最初用于逻辑和需求评审；P0 安全修复、P1 分段维护和 P2 观测优化现已在同一交付中实施，后续以真实长任务数据继续调参。</p>
+      </section>
+    </main>
+  </body>
+</html>

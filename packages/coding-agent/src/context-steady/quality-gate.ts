@@ -67,6 +67,13 @@ export function evaluateContextPlanQualityGate(options: ContextPlanQualityGateOp
 		reasons,
 		protectedEntryRefs,
 		missingEntryRefs,
+		requiredTokens,
+		selectedInputTokens,
+		activeEntryCount: Math.max(0, Math.floor(options.activeEntryCount ?? options.sourceIndex.entryIds.length)),
+		archivedEntryCount: Math.max(0, Math.floor(options.archivedEntryCount ?? 0)),
+		...(options.activeCutoffEntryId ? { activeCutoffEntryId: options.activeCutoffEntryId } : {}),
+		...(options.maintenanceId ? { maintenanceId: options.maintenanceId } : {}),
+		...(options.recoveryAttempt === undefined ? {} : { recoveryAttempt: options.recoveryAttempt }),
 		...(projectedInputTokens !== undefined
 			? { projectedInputTokens, projectedInputLimit: options.burstCeiling }
 			: {}),

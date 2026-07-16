@@ -21,6 +21,7 @@ import { generateDigest } from "../../src/context-steady/digest";
 import { generateFallbackDigest, generateTurnId } from "../../src/context-steady/fallback";
 import { normalizeDigest } from "../../src/context-steady/normalize";
 import {
+	collectDigestRefs,
 	computeTurnSourceSpan,
 	extractSpanMessages,
 	findExistingDigest,
@@ -477,6 +478,68 @@ describe("normalize", () => {
 });
 
 describe("LLM digest orchestration", () => {
+	test("records model_unresolved when configured digest model cannot be resolved", async () => {
+		const source = { sessionId: "s", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 };
+		const sessionManager = createSessionManager();
+
+		const result = await generateDigest(
+			asM([umsg("Fix src/app.ts"), amsg("Done.")]),
+			source,
+			sessionManager as never,
+			{} as never,
+			steadySettings(true),
+		);
+
+		expect(result?.digest).toMatchObject({ fallback: true, fallbackReason: "model_unresolved" });
+		expect(sessionManager.getEntries()).toHaveLength(1);
+	});
+
+	test("append-only upgrades an existing fallback digest when the LLM model becomes available", async () => {
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(
+			assistantWithDigest({
+				userIntent: "Upgrade the fallback digest with an authoritative summary.",
+				actionsTaken: ["Reconstructed the original source span."],
+				decisions: ["Keep the upgraded digest append-only."],
+				filesTouched: [],
+				factsLearned: [],
+				openQuestions: [],
+				risks: [],
+				nextSteps: [],
+				memoryCandidates: [],
+			}),
+		);
+		const source = { sessionId: "s", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 };
+		const messages = asM([umsg("Upgrade the stored digest"), amsg("Done.")]);
+		const fallback = {
+			...generateFallbackDigest(messages, source, "turn-existing", "s"),
+			fallbackReason: "model_unresolved" as const,
+		};
+		const sessionManager = createSessionManager([centry("fallback-entry", TURN_DIGEST_CUSTOM_TYPE, fallback)]);
+
+		const result = await generateDigest(
+			messages,
+			source,
+			sessionManager as never,
+			{} as never,
+			steadySettings(true),
+			{ model: getDigestModel(), apiKey: async () => "test-key" },
+		);
+
+		sessionManager.appendCustomEntry(TURN_DIGEST_CUSTOM_TYPE, fallback);
+		const entries = sessionManager.getEntries();
+		expect(result).toMatchObject({ persisted: true, reused: false, upgraded: true });
+		expect(entries).toHaveLength(3);
+		expect(result?.digest).toMatchObject({
+			turnId: "turn-existing",
+			fallback: false,
+			supersedesEntryId: "fallback-entry",
+		});
+		const effective = collectDigestRefs(asE(entries));
+		expect(effective).toHaveLength(1);
+		expect(effective[0]).toMatchObject({ entryId: "custom-2", digest: { fallback: false } });
+		expect(findExistingDigest(asE(entries), source)?.id).toBe("custom-2");
+	});
+
 	test("persists normalized LLM digest while keeping local source and evidence fields authoritative", async () => {
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue(
 			assistantWithDigest({
@@ -730,6 +793,7 @@ describe("LLM digest orchestration", () => {
 
 		const stored = sessionManager.getEntries()[0]?.data as TurnDigest;
 		expect(stored.fallback).toBe(true);
+		expect(stored.fallbackReason).toBe("request_failed");
 		expect(stored.userIntent).toContain("Fix src/app.ts");
 		expect(stored.toolEvidence[0]).toMatchObject({ entryIds: ["tool-entry"] });
 	});

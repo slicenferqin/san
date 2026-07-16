@@ -8,6 +8,7 @@ import {
 	CONTEXT_PLAN_SCHEMA_VERSION,
 	type ContextPlanAudit,
 } from "../../src/context-steady/plan-types";
+import { TURN_DIGEST_CUSTOM_TYPE, TURN_DIGEST_SCHEMA_VERSION, type TurnDigest } from "../../src/context-steady/types";
 import type { SessionEntry } from "../../src/session/session-entries";
 import {
 	buildContextPlanReportText,
@@ -48,6 +49,10 @@ function plan(overrides: Partial<ContextPlanAudit> = {}): ContextPlanAudit {
 			reasons: ["protected_entries_exceed_control_band"],
 			protectedEntryRefs: ["u-current"],
 			missingEntryRefs: [],
+			requiredTokens: 250_000,
+			selectedInputTokens: 270_000,
+			activeEntryCount: 12,
+			archivedEntryCount: 4,
 			requiredBurstTokens: 10_000,
 		},
 		materials: [
@@ -88,6 +93,38 @@ function planEntry(id: string, data: ContextPlanAudit): SessionEntry {
 	};
 }
 
+function digestEntry(
+	id: string,
+	fromEntryId: string,
+	toEntryId: string,
+	overrides: Partial<TurnDigest> = {},
+): SessionEntry {
+	return {
+		...entryBase(id),
+		type: "custom",
+		customType: TURN_DIGEST_CUSTOM_TYPE,
+		data: {
+			schemaVersion: TURN_DIGEST_SCHEMA_VERSION,
+			turnId: `turn-${id}`,
+			sessionId: "session-1",
+			createdAt: "2026-07-12T00:00:00.000Z",
+			source: { sessionId: "session-1", fromEntryId, toEntryId, promptGeneration: 1 },
+			userIntent: "test digest health",
+			actionsTaken: [],
+			decisions: [],
+			filesTouched: [],
+			toolEvidence: [],
+			factsLearned: [],
+			openQuestions: [],
+			risks: [],
+			nextSteps: [],
+			memoryCandidates: [],
+			fallback: false,
+			...overrides,
+		},
+	};
+}
+
 describe("ContextPlan audit report", () => {
 	test("renders latest plan budget, quality gate, materials, and coverage", () => {
 		const report = buildContextPlanReportText([planEntry("plan-entry", plan())]);
@@ -122,8 +159,37 @@ describe("ContextPlan audit report", () => {
 		expect(report).not.toContain("## ContextPlan plan_1");
 	});
 
+	test("shows effective digest authority and the latest fallback reason", () => {
+		const report = buildContextPlanReportText([
+			planEntry("plan-entry", plan()),
+			digestEntry("digest-authoritative", "u1", "a1", { model: "self/gpt-5.4-mini" }),
+			digestEntry("digest-fallback", "u2", "a2", {
+				fallback: true,
+				fallbackReason: "model_unresolved",
+			}),
+		]);
+
+		expect(report).toContain("Digest health:");
+		expect(report).toContain("- effective=2");
+		expect(report).toContain("- authoritative=1");
+		expect(report).toContain("- fallback=1");
+		expect(report).toContain("- latestStatus=fallback:model_unresolved");
+		expect(report).toContain("- latestModel=none");
+	});
+
 	test("reports an empty state when no plans exist", () => {
-		expect(buildContextPlanReportText([])).toBe("No San ContextPlan audit entries found.");
+		expect(buildContextPlanReportText([])).toBe(
+			[
+				"No San ContextPlan audit entries found.",
+				"",
+				"Digest health:",
+				"- effective=0",
+				"- authoritative=0",
+				"- fallback=0",
+				"- latestStatus=none",
+				"- latestModel=none",
+			].join("\n"),
+		);
 	});
 
 	test("parses optional plan report counts", () => {

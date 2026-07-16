@@ -10,14 +10,11 @@ import type {
 	ContextPlanTurnBundleSource,
 	ContextSourceIndex,
 } from "./plan-types";
-import { CONTEXT_PACKET_CUSTOM_TYPE, TURN_DIGEST_CUSTOM_TYPE, type TurnDigest } from "./types";
+import { collectDigestRefs } from "./session";
+import { CONTEXT_PACKET_CUSTOM_TYPE, type TurnDigest } from "./types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
-}
-
-function isTurnDigest(value: unknown): value is TurnDigest {
-	return typeof value === "object" && value !== null && "turnId" in value && "source" in value;
 }
 
 function sourceEntryRefsForDigest(entries: readonly SessionEntry[], digest: TurnDigest): string[] {
@@ -32,17 +29,11 @@ function sourceEntryRefsForDigest(entries: readonly SessionEntry[], digest: Turn
 }
 
 function collectDigestSources(entries: readonly SessionEntry[]): ContextPlanDigestSource[] {
-	const digests: ContextPlanDigestSource[] = [];
-	for (const entry of entries) {
-		if (entry.type !== "custom" || entry.customType !== TURN_DIGEST_CUSTOM_TYPE) continue;
-		if (!isTurnDigest(entry.data)) continue;
-		digests.push({
-			entryId: entry.id,
-			digest: entry.data,
-			sourceEntryRefs: sourceEntryRefsForDigest(entries, entry.data),
-		});
-	}
-	return digests;
+	return collectDigestRefs(entries).map(ref => ({
+		entryId: ref.entryId,
+		digest: ref.digest,
+		sourceEntryRefs: sourceEntryRefsForDigest(entries, ref.digest),
+	}));
 }
 
 function textToolCallId(block: unknown): string | undefined {
