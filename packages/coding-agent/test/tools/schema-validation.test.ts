@@ -287,7 +287,6 @@ describe("tool schema validation (post-sanitization)", () => {
 		expect(description).toContain("issue://123");
 		expect(description).toContain("pr://123");
 	});
-
 	it("bash schema and prompt advertise the timeout clamp and zero-disable", async () => {
 		const session = createTestSession();
 		session.settings.set("async.enabled", true);

@@ -6,6 +6,12 @@
 
 - Fixed long-format `git status` minimization misreporting Git's trailing `no changes added to commit` guidance as an untracked file.
 - Corrected RTK-derived shell minimizer attribution and native package metadata from MIT-only to the applicable Apache-2.0 and MIT license combination, and included the license texts and third-party notice in native distributions.
+## [16.5.2] - 2026-07-14
+
+### Fixed
+
+- Fixed an issue where Windows PTY callers were forced through shell command re-quoting by supporting direct executable and argument launching.
+
 ## [16.4.6] - 2026-07-12
 
 ### Added

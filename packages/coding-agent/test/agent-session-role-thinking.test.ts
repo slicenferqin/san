@@ -48,15 +48,17 @@ describe("AgentSession role model thinking behavior", () => {
 		initialModelId: string;
 		initialThinkingLevel: Effort;
 		modelRoles: Record<string, string>;
+		runtimeApiKeys?: Record<string, string>;
 	}) {
 		const model = getAnthropicModelOrThrow(options.initialModelId);
-		await createSessionWithModel(model, options.initialThinkingLevel, options.modelRoles);
+		await createSessionWithModel(model, options.initialThinkingLevel, options.modelRoles, options.runtimeApiKeys);
 	}
 
 	async function createSessionWithModel(
 		model: Model,
 		initialThinkingLevel: Effort,
 		modelRoles: Record<string, string>,
+		runtimeApiKeys: Record<string, string> = {},
 	) {
 		const agent = new Agent({
 			initialState: {
@@ -70,6 +72,9 @@ describe("AgentSession role model thinking behavior", () => {
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorages.push(authStorage);
 		authStorage.setRuntimeApiKey(model.provider, "test-key");
+		for (const provider in runtimeApiKeys) {
+			authStorage.setRuntimeApiKey(provider, runtimeApiKeys[provider]);
+		}
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 
 		sessionSettings = Settings.isolated();
@@ -629,6 +634,34 @@ describe("AgentSession role model thinking behavior", () => {
 		expect(session.thinkingLevel).toBeUndefined();
 		expect(session.agent.state.thinkingLevel).toBeUndefined();
 		expect(session.autoResolvedThinkingLevel()).toBeUndefined();
+	});
+
+	it("applies matching role thinking to temporary model picks", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const temporaryModel = getBundledModel("google-antigravity", "gemini-3.5-flash");
+		if (!temporaryModel) throw new Error("Expected google-antigravity model gemini-3.5-flash to exist");
+
+		await createSession({
+			initialModelId: defaultModel.id,
+			initialThinkingLevel: Effort.Low,
+			modelRoles: {
+				smol: `${temporaryModel.provider}/${temporaryModel.id}:high`,
+			},
+			runtimeApiKeys: {
+				[temporaryModel.provider]: "test-key",
+			},
+		});
+
+		const roleResolved = session.resolveRoleModelWithThinking("smol");
+		expect(roleResolved.model?.id).toBe(temporaryModel.id);
+		expect(roleResolved.thinkingLevel).toBe(Effort.High);
+
+		const roleThinkingLevel = session.resolveTemporaryModelThinkingLevel(temporaryModel);
+		await session.setModelTemporary(temporaryModel, roleThinkingLevel);
+
+		expect(session.model?.provider).toBe(temporaryModel.provider);
+		expect(session.model?.id).toBe(temporaryModel.id);
+		expect(session.thinkingLevel).toBe(Effort.High);
 	});
 
 	it("ignores a stale recorded role and cycles from the active model", async () => {
