@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San 同步 OMP v16.5.2 执行记录</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0b1020;
+      --panel: #121a2f;
+      --text: #e8edf7;
+      --muted: #a9b4ca;
+      --line: #2b3857;
+      --accent: #75a7ff;
+      --good: #5bd6a2;
+      --warn: #f2c66d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+    }
+    main { max-width: 1120px; margin: 0 auto; padding: 40px 24px 80px; }
+    h1, h2 { line-height: 1.25; }
+    h1 { margin: 0 0 8px; font-size: 2rem; }
+    h2 { margin-top: 34px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+    p, li { color: var(--text); }
+    .muted { color: var(--muted); }
+    .summary, .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 18px 20px;
+    }
+    .summary { border-left: 4px solid var(--good); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      margin: 18px 0;
+    }
+    .metric strong { display: block; font-size: 1.45rem; color: var(--accent); }
+    .metric span { color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+    th, td { border: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }
+    th { background: rgba(117, 167, 255, 0.1); }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: rgba(117, 167, 255, 0.12);
+      border-radius: 5px;
+      padding: 0.1em 0.35em;
+    }
+    pre {
+      overflow: auto;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #080d18;
+    }
+    pre code { padding: 0; background: transparent; }
+    .good { color: var(--good); }
+    .warn { color: var(--warn); }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>San 同步 OMP v16.5.2 执行记录</h1>
+    <p class="muted">执行日期：2026-07-16；分支：<code>sync/omp-16.5.2</code>；目标：稳定标签 <code>v16.5.2</code>。</p>
+  </header>
+
+  <section class="summary">
+    <strong class="good">状态：完成。</strong>
+    <p>四个上游里程碑已按顺序合入独立 worktree，v16.5.2 的 13 个冲突文件全部解决。最终合并提交为 <code>b16729acb Merge OMP v16.5.2 into San</code>；依赖安装、全仓类型检查及 414 个聚焦回归测试通过，验证后工作区干净。</p>
+  </section>
+
+  <div class="grid">
+    <div class="card metric"><strong>4</strong><span>分阶段合并里程碑</span></div>
+    <div class="card metric"><strong>13</strong><span>v16.5.2 冲突文件</span></div>
+    <div class="card metric"><strong>414 / 0</strong><span>聚焦测试通过 / 失败</span></div>
+    <div class="card metric"><strong>Pass</strong><span><code>bun check</code></span></div>
+  </div>
+
+  <h2>1. 合并里程碑</h2>
+  <table>
+    <thead><tr><th>目标</th><th>提交</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td><code>v16.4.0</code></td><td><code>e9a170747</code> Merge OMP v16.4.0 into San</td><td class="good">完成</td></tr>
+      <tr><td><code>v16.4.5</code></td><td><code>20a5743d3</code> Merge OMP v16.4.5 into San</td><td class="good">完成</td></tr>
+      <tr><td><code>v16.5.0</code></td><td><code>2bfb01292</code> Merge OMP v16.5.0 into San</td><td class="good">完成</td></tr>
+      <tr><td><code>v16.5.2</code></td><td><code>b16729acb</code> Merge OMP v16.5.2 into San</td><td class="good">完成</td></tr>
+    </tbody>
+  </table>
+  <p>原 <code>main</code> 保持在 <code>2bab463c1</code>，同步仅发生于 <code>/Users/sanjiu/development/self/projects/san-omp-sync-16.5.2</code>。</p>
+
+  <h2>2. 已执行的语义决策</h2>
+  <table>
+    <thead><tr><th>区域</th><th>结果</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>品牌与路径</td>
+        <td>保留 <code>san</code>、<code>.san</code>、San 仓库与安装路径；Model 配置同时支持 <code>models.yml</code> 和 <code>models.yaml</code>。</td>
+      </tr>
+      <tr>
+        <td>Worker 构建</td>
+        <td>保留 San 单入口 worker 合约，没有恢复上游多入口构建路径。</td>
+      </tr>
+      <tr>
+        <td>read / grep 协议</td>
+        <td>保留独立 <code>selector</code> schema、执行路径和 TUI 渲染；继续支持 path 内联 selector，并保留字面冒号文件名的确定性解析。同步采用上游 leading-colon 路径恢复修复。</td>
+      </tr>
+      <tr>
+        <td>推理等级</td>
+        <td>保留 San canonical <code>max</code>/<code>ultra</code>。Model Picker 采用上游角色 thinking 解析，并在没有角色显式等级时继续执行 San 的 session effort 保留、clamp 与 Auto 回退。</td>
+      </tr>
+      <tr>
+        <td>Model Hub</td>
+        <td>采用上游 Model Hub。默认角色持久化使用稳定 selector；Auto 以 <code>Inherit</code> 写入模型切换路径，再由 session 状态保存用户侧 Auto 语义。</td>
+      </tr>
+      <tr>
+        <td>Context Steady</td>
+        <td>保留 agent 发起 turn 前的叶节点边界捕获，同时合入上游 terminal-empty-stop prompt 维护状态。</td>
+      </tr>
+      <tr>
+        <td>其它 v16.5.x 修复</td>
+        <td>采用 npm 全局安装与 Windows shim 识别、插件 MCP 相对命令/cwd 解析、continue 参数规范化、文本模型上的 snapcompact 回退及其余自动合并修复。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>3. v16.5.2 冲突收敛</h2>
+  <ul>
+    <li>文档与 CLI：<code>docs/models.md</code>、<code>update-cli.ts</code>、<code>main.ts</code>。</li>
+    <li>执行与会话：<code>agent-bridge.ts</code>、<code>bash-executor.ts</code>、<code>agent-session.ts</code>。</li>
+    <li>模型与工具：<code>selector-controller.ts</code>、<code>read.ts</code>、<code>read.md</code>。</li>
+    <li>回归测试：role thinking、插件发现、schema validation、update CLI。</li>
+  </ul>
+  <p>冲突解决后 <code>git diff --name-only --diff-filter=U</code> 无输出，<code>git diff --check --cached</code> 通过。</p>
+
+  <h2>4. 验证证据</h2>
+  <pre><code>bun install
+# 9 packages installed；工具视图重新生成
+
+bun check
+# passed；workspace package checks 全部通过
+
+bun test \
+  packages/coding-agent/test/model-resolver.test.ts \
+  packages/coding-agent/test/model-hub.test.ts \
+  packages/coding-agent/test/tools/schema-validation.test.ts \
+  packages/coding-agent/test/san-loop/agents.test.ts \
+  packages/coding-agent/test/agent-session-role-thinking.test.ts
+# 221 pass, 0 fail；5 files
+
+bun test &lt;13 个冲突相关回归文件&gt;
+# 193 pass, 0 fail；13 files
+# 覆盖 update CLI、read/grep selector、read TUI、插件发现、
+# extension flag、bash executor、snapcompact 和 eval/workflow agent bridge</code></pre>
+  <p><code>san-loop/agents.test.ts</code> 已覆盖 bundled agents 解析，<code>san-commander.md</code> frontmatter 未再触发 YAML 解析错误。</p>
+
+  <h2>5. 最终仓库状态</h2>
+  <ul>
+    <li>v16.5.2 合并提交：<code>b16729acb</code>。</li>
+    <li>验证后：staged 0、unstaged 0、untracked 0。</li>
+    <li>原 <code>main</code> 未修改。</li>
+    <li>本轮无遗留 UU 冲突、类型错误或聚焦测试失败。</li>
+  </ul>
+</main>
+</body>
+</html>
