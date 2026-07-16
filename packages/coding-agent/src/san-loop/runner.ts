@@ -153,20 +153,34 @@ async function mapWithLimit<T, U>(
 	items: readonly T[],
 	limit: number,
 	signal: AbortSignal,
-	mapper: (item: T, index: number) => Promise<U>,
+	mapper: (item: T, index: number, signal: AbortSignal) => Promise<U>,
 ): Promise<U[]> {
+	if (items.length === 0) return [];
 	const results: U[] = [];
 	let nextIndex = 0;
 	const workerCount = Math.max(1, Math.min(limit, items.length));
+	const batchController = new AbortController();
+	const batchSignal = AbortSignal.any([signal, batchController.signal]);
+	let firstError: { error: unknown } | undefined;
 	const workers = Array.from({ length: workerCount }, async () => {
-		while (nextIndex < items.length) {
-			signal.throwIfAborted();
+		while (!batchSignal.aborted && nextIndex < items.length) {
 			const index = nextIndex;
 			nextIndex += 1;
-			results[index] = await mapper(items[index]!, index);
+			try {
+				batchSignal.throwIfAborted();
+				results[index] = await mapper(items[index]!, index, batchSignal);
+			} catch (error) {
+				if (!firstError) {
+					firstError = { error };
+					batchController.abort(error);
+				}
+				return;
+			}
 		}
 	});
 	await Promise.all(workers);
+	if (firstError) throw firstError.error;
+	signal.throwIfAborted();
 	return results;
 }
 
@@ -177,6 +191,11 @@ function latestReview(run: SanLoopRunSnapshot): SanLoopReviewReport | undefined 
 function positiveInteger(value: number | undefined, fallback: number): number {
 	if (value === undefined || !Number.isFinite(value)) return fallback;
 	return Math.max(1, Math.floor(value));
+}
+
+function nonNegativeInteger(value: number | undefined, fallback: number): number {
+	if (value === undefined || !Number.isFinite(value)) return fallback;
+	return Math.max(0, Math.floor(value));
 }
 
 function withBudgetRemaining(transition: SanLoopTransition, remainingTurns: number): SanLoopTransition {
@@ -306,7 +325,7 @@ function assignmentDependencies(run: SanLoopRunSnapshot, assignment: SanLoopWork
 export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoopResult> {
 	const mode = options.mode ?? "team";
 	const policy = defaultSanLoopModePolicy(mode);
-	const maxWorkers = Math.max(1, Math.floor(options.maxWorkers ?? policy.maxWorkers));
+	const maxWorkers = positiveInteger(options.maxWorkers, policy.maxWorkers);
 	let remainingTurns = positiveInteger(options.maxTurns, policy.remainingTurns);
 	if (options.runId && activeSanLoopRuns.has(options.runId)) {
 		throw new Error(`Cannot start San execution loop ${options.runId}: another active run already uses this id.`);
@@ -316,7 +335,7 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 		objective: options.objective,
 		mode,
 		runId: options.runId,
-		maxRetries: options.maxRetries ?? policy.maxRetries,
+		maxRetries: nonNegativeInteger(options.maxRetries, policy.maxRetries),
 		initialRemainingTurns: remainingTurns,
 		contextPlanRefs: options.contextPlanRefs ? [...options.contextPlanRefs] : [],
 		contextPacketRefs: options.contextPacketRefs ? [...options.contextPacketRefs] : [],
@@ -402,14 +421,18 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 					blockForBudget();
 					break executionLoop;
 				}
-				const workerResultInputs = await mapWithLimit(readyAssignments, maxWorkers, signal, assignment =>
-					options.executor.worker({
-						run,
-						assignment,
-						mode,
-						signal,
-						checks: selectSanLoopChecks(options.checks ?? [], { role: "worker" }),
-					}),
+				const workerResultInputs = await mapWithLimit(
+					readyAssignments,
+					maxWorkers,
+					signal,
+					(assignment, _index, workerSignal) =>
+						options.executor.worker({
+							run,
+							assignment,
+							mode,
+							signal: workerSignal,
+							checks: selectSanLoopChecks(options.checks ?? [], { role: "worker" }),
+						}),
 				);
 				signal.throwIfAborted();
 				const batchWorkerResults: SanLoopWorkerResult[] = [];

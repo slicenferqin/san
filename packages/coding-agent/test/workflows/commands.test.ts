@@ -189,9 +189,14 @@ describe("Workflow command service", () => {
 		if (!handle) throw new Error("Managed Workflow run was not observed.");
 		expect((await handle.completion).status).toBe("completed");
 		expect(harness.getCalls()).toBe(1);
-		expect(harness.service.deliverCompletedRun(handle.runId)).toContain("audit main");
-		harness.service.acknowledgeCompletedRunDelivery(handle.runId);
-		expect(() => harness.service.deliverCompletedRun(handle.runId)).toThrow("already delivered");
+		const prepared = harness.service.prepareCompletedRunDelivery(handle.runId);
+		expect(prepared.text).toContain("audit main");
+		if (!prepared.receipt) throw new Error("Completed Workflow did not prepare a delivery receipt.");
+		await harness.service.execute("list", harness.context);
+		const replay = harness.service.prepareCompletedRunDelivery(handle.runId);
+		expect(replay.receipt).toEqual(prepared.receipt);
+		harness.service.acknowledgeDeliveryReceipt(prepared.receipt);
+		expect(() => harness.service.prepareCompletedRunDelivery(handle.runId)).toThrow("already delivered");
 	});
 
 	it("converts an SOP into an inert Managed source draft without saving, publishing or running it", async () => {
@@ -377,7 +382,9 @@ describe("Workflow command service", () => {
 		const handle = harness.getObserved();
 		if (!handle) throw new Error("Revised Ad-hoc Workflow run was not observed.");
 		expect((await handle.completion).status).toBe("completed");
-		expect(harness.service.deliverCompletedRun(handle.runId)).toContain("audit src/public");
+		const prepared = harness.service.prepareCompletedRunDelivery(handle.runId);
+		expect(prepared.text).toContain("audit src/public");
+		if (prepared.receipt) harness.service.acknowledgeDeliveryReceipt(prepared.receipt);
 		expect(harness.getCalls()).toBe(1);
 	});
 

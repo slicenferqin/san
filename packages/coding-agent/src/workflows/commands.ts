@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -95,6 +96,21 @@ export interface WorkflowCommandServiceOptions {
 	now?: () => Date;
 	challengeIdFactory?: () => string;
 	home?: string;
+}
+
+export interface WorkflowDeliveryReceipt {
+	runId: string;
+	deliveryId: string;
+}
+
+export interface WorkflowPreparedRunOutput {
+	text: string;
+	receipt?: WorkflowDeliveryReceipt;
+}
+
+export interface WorkflowPreparedCommandOutput {
+	text: string;
+	deliveryReceipts: WorkflowDeliveryReceipt[];
 }
 
 interface AdHocDraftDescriptor {
@@ -213,7 +229,7 @@ export class WorkflowCommandService {
 	#challengeIdFactory: () => string;
 	#home: string;
 	#challenges = new Map<string, ApprovalChallenge>();
-	#preparedDeliveries = new Map<string, string>();
+	#deliveryReceipts = new AsyncLocalStorage<WorkflowDeliveryReceipt[]>();
 
 	constructor(options: WorkflowCommandServiceOptions) {
 		this.#store = options.store;
@@ -225,6 +241,18 @@ export class WorkflowCommandService {
 	}
 
 	async execute(input: string, context: WorkflowCommandContext): Promise<string> {
+		const prepared = await this.prepareCommandOutput(input, context);
+		this.acknowledgeDeliveryReceipts(prepared.deliveryReceipts);
+		return prepared.text;
+	}
+
+	async prepareCommandOutput(input: string, context: WorkflowCommandContext): Promise<WorkflowPreparedCommandOutput> {
+		const deliveryReceipts: WorkflowDeliveryReceipt[] = [];
+		const text = await this.#deliveryReceipts.run(deliveryReceipts, () => this.#executeCommand(input, context));
+		return { text, deliveryReceipts };
+	}
+
+	async #executeCommand(input: string, context: WorkflowCommandContext): Promise<string> {
 		const { verb, rest } = splitSubcommand(input);
 		this.#manager.cleanupExpiredAdHocDrafts(context.taskRef, path.resolve(context.cwd));
 		if (
@@ -283,40 +311,47 @@ export class WorkflowCommandService {
 		}
 	}
 
-	deliverCompletedRun(runId: string): string {
+	prepareCompletedRunDelivery(runId: string): WorkflowPreparedRunOutput {
 		const run = this.#manager.getRun(runId);
 		if (!run) throw new Error(`Workflow run ${runId} does not exist in this session.`);
-		if (run.status !== "completed") return this.#formatTerminalRun(run);
+		if (run.status !== "completed") return { text: this.#formatTerminalRun(run) };
 		const unresolved = run.writeArtifacts.filter(
 			artifact => artifact.status !== "applied" && artifact.status !== "rejected",
 		);
 		if (unresolved.length > 0) {
-			return this.#sanitize(
-				[
-					`Workflow ${run.runId} completed its Agent phases, but isolated changes still require a decision.`,
-					...unresolved.map(
-						artifact =>
-							`  ${artifact.artifactId} · ${artifact.status} · /workflow review-write ${artifact.artifactId}`,
-					),
-				].join("\n"),
-			);
+			return {
+				text: this.#sanitize(
+					[
+						`Workflow ${run.runId} completed its Agent phases, but isolated changes still require a decision.`,
+						...unresolved.map(
+							artifact =>
+								`  ${artifact.artifactId} · ${artifact.status} · /workflow review-write ${artifact.artifactId}`,
+						),
+					].join("\n"),
+				),
+			};
 		}
 		const delivery = this.#manager.prepareResultDelivery(runId);
-		this.#preparedDeliveries.set(runId, delivery.deliveryId);
-		return this.#sanitize(
-			[`Workflow ${run.runId} completed.`, "Result:", JSON.stringify(delivery.result, null, 2)].join("\n"),
-		);
+		return {
+			text: this.#sanitize(
+				[`Workflow ${run.runId} completed.`, "Result:", JSON.stringify(delivery.result, null, 2)].join("\n"),
+			),
+			receipt: { runId, deliveryId: delivery.deliveryId },
+		};
 	}
 
-	acknowledgeCompletedRunDelivery(runId: string): void {
-		const deliveryId = this.#preparedDeliveries.get(runId);
-		if (!deliveryId) return;
-		this.#manager.acknowledgeResultDelivery(runId, deliveryId);
-		this.#preparedDeliveries.delete(runId);
+	acknowledgeDeliveryReceipt(receipt: WorkflowDeliveryReceipt): void {
+		this.#manager.acknowledgeResultDelivery(receipt.runId, receipt.deliveryId);
 	}
 
-	acknowledgePreparedDeliveries(): void {
-		for (const runId of [...this.#preparedDeliveries.keys()]) this.acknowledgeCompletedRunDelivery(runId);
+	acknowledgeDeliveryReceipts(receipts: readonly WorkflowDeliveryReceipt[]): void {
+		for (const receipt of receipts) this.acknowledgeDeliveryReceipt(receipt);
+	}
+
+	#renderCompletedRun(runId: string): string {
+		const prepared = this.prepareCompletedRunDelivery(runId);
+		if (prepared.receipt) this.#deliveryReceipts.getStore()?.push(prepared.receipt);
+		return prepared.text;
 	}
 
 	async #list(context: WorkflowCommandContext): Promise<string> {
@@ -704,7 +739,7 @@ export class WorkflowCommandService {
 			run?.status === "completed" &&
 			run.writeArtifacts.every(artifact => artifact.status === "applied" || artifact.status === "rejected")
 		) {
-			lines.push("", this.deliverCompletedRun(applied.runId));
+			lines.push("", this.#renderCompletedRun(applied.runId));
 		}
 		return this.#sanitize(lines.join("\n"));
 	}
@@ -721,7 +756,7 @@ export class WorkflowCommandService {
 			run?.status === "completed" &&
 			run.writeArtifacts.every(artifact => artifact.status === "applied" || artifact.status === "rejected")
 		) {
-			lines.push("", this.deliverCompletedRun(rejected.runId));
+			lines.push("", this.#renderCompletedRun(rejected.runId));
 		}
 		return this.#sanitize(lines.join("\n"));
 	}

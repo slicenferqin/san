@@ -152,7 +152,9 @@ return await agent("prepare one isolated change");`;
 		expect(() => manager.deliverResult(handle.runId)).toThrow("unresolved isolated write artifact");
 		const service = new WorkflowCommandService({ store: requiredStore(), manager, home: requiredTempDir().path() });
 		const context = { cwd: repo, taskRef: "delivery-test", allowIsolatedWrite: true, allowAdHoc: true };
-		expect(service.deliverCompletedRun(handle.runId)).toContain("isolated changes still require a decision");
+		expect(service.prepareCompletedRunDelivery(handle.runId).text).toContain(
+			"isolated changes still require a decision",
+		);
 
 		const review = await service.execute(`review-write ${artifact.artifactId}`, context);
 		expect(review).toContain("+new");
@@ -163,7 +165,6 @@ return await agent("prepare one isolated change");`;
 		expect(applied).toContain("Applied Workflow patch");
 		expect(applied).toContain("write-ready");
 		expect(await Bun.file(path.join(repo, "tracked.txt")).text()).toBe("new\n");
-		service.acknowledgePreparedDeliveries();
 		expect(() => manager.deliverResult(handle.runId)).toThrow("already delivered");
 		await expect(service.execute("apply-write workflow-write-review-1", context)).rejects.toThrow("invalid or stale");
 

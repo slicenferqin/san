@@ -171,7 +171,7 @@ export interface BuiltContextPlan {
 	sourceIndex: ContextSourceIndex;
 	requestKey: string;
 	renderedContent: string;
-	message: AgentMessage;
+	message: Extract<AgentMessage, { role: "custom" }>;
 	tokenEstimate: number;
 	coverageEntryRefs: string[];
 }

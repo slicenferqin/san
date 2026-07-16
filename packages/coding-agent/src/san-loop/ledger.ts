@@ -299,6 +299,10 @@ export function recordSanLoopRunCreated(
 ): RecordSanLoopRunResult {
 	const sessionId = options.sessionId ?? sessionManager.getSessionId?.();
 	if (!sessionId) throw new Error("Cannot create San loop run without a session id");
+	if (options.runId && sessionManager.getEntries) {
+		const existing = findLatestSanLoopRun(sessionManager.getEntries(), options.runId);
+		if (existing) throw new Error(`Cannot create San loop run ${options.runId}: run id already exists.`);
+	}
 	const run = createSanLoopRunSnapshot({ ...options, sessionId });
 	const runEntryId = appendSanLoopRunSnapshot(sessionManager, run);
 	const event = createSanLoopEvent(run, "run_created", `Started San execution loop: ${run.objective}`, {
@@ -479,7 +483,10 @@ export function rebuildSanLoopLedger(entries: readonly SessionEntry[]): SanLoopL
 			case SAN_LOOP_RUN_CUSTOM_TYPE:
 				if (isSanLoopRunSnapshot(entry.data)) {
 					const run = normalizeRunSnapshotMode(entry.data);
-					latestRuns.set(run.runId, customEntryRef(entry, run));
+					const current = latestRuns.get(run.runId);
+					if (!current || run.revision >= current.data.revision) {
+						latestRuns.set(run.runId, customEntryRef(entry, run));
+					}
 				}
 				break;
 			case SAN_LOOP_EVENT_CUSTOM_TYPE:

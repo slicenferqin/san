@@ -309,7 +309,8 @@ export async function runWorkflowDeterministicDogfood(): Promise<WorkflowDogfood
 			if (!handle) throw new Error(`Workflow dogfood did not observe ${narrowDraftId}.`);
 			await handle.completion;
 			adHocRuns++;
-			service.deliverCompletedRun(handle.runId);
+			const delivery = service.prepareCompletedRunDelivery(handle.runId);
+			if (delivery.receipt) service.acknowledgeDeliveryReceipt(delivery.receipt);
 			try {
 				await service.execute(`run-draft ${narrowDraftId}`, context);
 				adHocApprovalReuses++;

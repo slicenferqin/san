@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="San v0.1-v0.4 current-code logic and contract audit, produced before the 2026-07-15 repair pass.">
+  <title>San v0.1–v0.4 当前代码逻辑审计 · 2026-07-15</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f4efe4;
+      --panel: #fffdf8;
+      --ink: #202722;
+      --muted: #657067;
+      --line: #d9d0bf;
+      --navy: #173b45;
+      --green: #246a52;
+      --green-soft: #e4f0e9;
+      --amber: #8a5a12;
+      --amber-soft: #f8ecd2;
+      --red: #9a342d;
+      --red-soft: #f6dfda;
+      --blue: #315f86;
+      --blue-soft: #e1edf5;
+      --code: #ede7db;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 9% 0%, rgba(49, 95, 134, .12), transparent 26rem),
+        radial-gradient(circle at 92% 8%, rgba(36, 106, 82, .11), transparent 28rem),
+        var(--paper);
+      font: 16px/1.72 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { width: min(1120px, calc(100% - 32px)); margin: 32px auto 72px; }
+    header, section {
+      margin: 0 0 20px;
+      padding: 28px 30px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: color-mix(in srgb, var(--panel) 96%, transparent);
+      box-shadow: 0 18px 42px rgba(40, 45, 38, .055);
+    }
+    header { padding: 42px 38px; background: linear-gradient(135deg, #fffdf7 0%, #eef4ef 100%); }
+    h1, h2, h3 { margin: 0; line-height: 1.24; color: var(--navy); }
+    h1 { max-width: 900px; font-size: clamp(2rem, 5vw, 3.9rem); letter-spacing: -.045em; }
+    h2 { margin-bottom: 16px; font-size: 1.65rem; }
+    h3 { margin-top: 20px; margin-bottom: 8px; font-size: 1.08rem; }
+    p { margin: 10px 0; }
+    ul, ol { margin: 10px 0; padding-left: 1.35rem; }
+    li + li { margin-top: 5px; }
+    a { color: var(--blue); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: var(--code);
+      font: .92em/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    pre {
+      overflow-x: auto;
+      padding: 16px 18px;
+      border-radius: 12px;
+      color: #e6f0ed;
+      background: #17282d;
+      font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: .94rem; }
+    th, td { padding: 11px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--navy); background: #eee8dc; }
+    tr:nth-child(even) td { background: #fbf8f1; }
+    .eyebrow { margin: 0 0 12px; color: var(--green); font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+    .lead { max-width: 900px; color: #3f4b44; font-size: 1.13rem; }
+    .meta, .cards { display: grid; gap: 12px; margin-top: 22px; }
+    .meta { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+    .cards { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+    .card, .metric { padding: 15px 16px; border: 1px solid var(--line); border-radius: 13px; background: #fbf8f1; }
+    .metric span { display: block; color: var(--muted); font-size: .82rem; text-transform: uppercase; letter-spacing: .08em; }
+    .metric strong { display: block; margin-top: 3px; color: var(--navy); font-size: 1.35rem; }
+    .callout { margin: 16px 0; padding: 15px 18px; border: 1px solid #a8c8ba; border-left: 6px solid var(--green); border-radius: 12px; background: var(--green-soft); }
+    .callout.warn { border-color: #d8b879; border-left-color: var(--amber); background: var(--amber-soft); }
+    .callout.danger { border-color: #d9a19b; border-left-color: var(--red); background: var(--red-soft); }
+    .tag { display: inline-block; margin-right: 5px; padding: 2px 8px; border-radius: 999px; font-size: .76rem; font-weight: 800; letter-spacing: .04em; }
+    .p0 { color: #fff; background: var(--red); }
+    .p1 { color: #fff; background: var(--amber); }
+    .p2 { color: #fff; background: var(--blue); }
+    .fixed { color: #fff; background: var(--green); }
+    .open { color: var(--red); background: var(--red-soft); }
+    .evidence { color: var(--blue); background: var(--blue-soft); }
+    .finding { margin-top: 16px; padding: 19px 20px; border: 1px solid var(--line); border-radius: 14px; background: #fffdf8; }
+    .finding h3 { margin-top: 0; }
+    .finding-grid { display: grid; grid-template-columns: 150px 1fr; gap: 7px 16px; margin-top: 12px; }
+    .finding-grid dt { color: var(--muted); font-weight: 700; }
+    .finding-grid dd { margin: 0; }
+    .small { color: var(--muted); font-size: .88rem; }
+    footer { padding: 12px 4px; color: var(--muted); text-align: center; font-size: .86rem; }
+    @media (max-width: 700px) {
+      main { width: min(100% - 18px, 1120px); margin-top: 10px; }
+      header, section { padding: 22px 18px; border-radius: 15px; }
+      .finding-grid { grid-template-columns: 1fr; gap: 2px; }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">Current-code audit · report-before-repair snapshot</p>
+    <h1>San v0.1–v0.4：主干已经成形，但仍有 8 个会在真实运行中破坏合同的逻辑缺口。</h1>
+    <p class="lead">
+      本报告不是沿用旧 CR 的结论，而是以当前 <code>main@2bab463c15f0</code> 和当前工作区为对象，重新对照规范、生产入口、状态机、并发失败、恢复和交付路径做代码级推演。旧报告中的大部分问题已在 HEAD 修复；这里仅保留当前仍能从代码构造出反例的事项。
+    </p>
+    <div class="meta">
+      <div class="metric"><span>范围</span><strong>v0.1–v0.4</strong></div>
+      <div class="metric"><span>确认缺陷</span><strong>8</strong></div>
+      <div class="metric"><span>优先级</span><strong>4×P0 · 3×P1 · 1×P2</strong></div>
+      <div class="metric"><span>审计日期</span><strong>2026-07-15</strong></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>1. 结论先行</h2>
+    <div class="callout danger">
+      <strong>当前不适合把 v0.1–v0.4 统称为“成熟可用”。</strong>
+      v0.1 的主要稳态链路已接近代码级闭环，本轮发现的 ContextPlan 漂移也已有工作区修补；但 v0.2 的默认关闭、并发收敛和账本单调性，v0.3 的跨会话 scope，以及 v0.4 的交付确认并发隔离，仍存在生产入口可达的合同破坏。
+    </div>
+    <div class="cards">
+      <div class="card"><strong>v0.1 · 条件 GO</strong><p>核心路径完整；本轮关闭 tool-loop/compaction 后审计快照失真。真实模型长轮质量仍属于产品验收。</p></div>
+      <div class="card"><strong>v0.2 · NO-GO</strong><p>功能开关不能阻止显式运行；Worker 异常可在 run 已终止后继续执行；runId/revision 可破坏账本单调性。</p></div>
+      <div class="card"><strong>v0.3 · NO-GO</strong><p>生产 capture 把 project fact、workflow、failure posture 全部写成 session scope，跨 session Brain 实际失效。</p></div>
+      <div class="card"><strong>v0.4 · NO-GO</strong><p>全局 prepared-delivery 集合允许无关命令提前确认后台结果；过期 checkpoint 还拥有 1ms 继续完成窗口。</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 审计口径与权威来源</h2>
+    <p>本轮采用“规范合同 → 生产调用链 → 失败路径 → 可观察结果”的顺序。文档只定义承诺，源码和测试决定当前事实。</p>
+    <table>
+      <thead><tr><th>版本</th><th>合同来源</th><th>本轮重点</th></tr></thead>
+      <tbody>
+        <tr><td>v0.1</td><td><a href="./context-steady-state-san.html">Context Steady State</a>、240K 实现/验收系列</td><td>ContextPlan 与真实 provider payload 一致性、compaction/rebase、digest/recall/checkpoint。</td></tr>
+        <tr><td>v0.2</td><td><a href="./san-v0.2-requirements-plan.html">需求</a>、<a href="./san-v0.2-technical-design.html">技术设计</a></td><td>默认关闭、三角色闭环、DAG/并发、硬预算、abort/recovery、append-only ledger。</td></tr>
+        <tr><td>v0.3</td><td><a href="./san-v0.3-p0-design-freeze-20260710.html">P0 Design Freeze</a></td><td>Digest→Capture 顺序、稳定 scope identity、review-first、激活隔离、150ms 边界。</td></tr>
+        <tr><td>v0.4</td><td><a href="./san-v0.4-dynamic-workflows-proposal-20260711.html">方案</a>、<a href="./san-v0.4-workflows-implementation-report-20260711.html">实现报告</a></td><td>显式审批、受限 runtime、硬预算、durable resume、exactly-once delivery、受控写入。</td></tr>
+      </tbody>
+    </table>
+    <h3>明确排除</h3>
+    <ul>
+      <li>旧审计中已经被当前 HEAD 关闭的问题，不重复列为当前缺陷。</li>
+      <li>文件名、类名或实现形状与早期方案不同，不单独视为漂移；只看可观察合同。</li>
+      <li>真实模型 A/B、20-turn p95、真实 token 节省属于 rollout 证据，不伪装成静态代码已经证明。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>3. Findings 总表</h2>
+    <table>
+      <thead><tr><th>ID</th><th>版本</th><th>级别</th><th>缺陷</th><th>报告时状态</th></tr></thead>
+      <tbody>
+        <tr><td>V01-01</td><td>v0.1</td><td><span class="tag p0">P0</span></td><td>ContextPlan 在 tool-loop 扩张或 compaction 后仍可能沿用旧 projected audit。</td><td><span class="tag fixed">工作区已修补</span></td></tr>
+        <tr><td>V02-01</td><td>v0.2</td><td><span class="tag p0">P0</span></td><td><code>san.executionLoop.enabled=false</code> 仍可经命令实际启动 Agent。</td><td><span class="tag open">OPEN</span></td></tr>
+        <tr><td>V02-02</td><td>v0.2</td><td><span class="tag p0">P0</span></td><td>并发 Worker 一个 throw 后，兄弟 Worker 不取消、不 drain，run 可先终止。</td><td><span class="tag open">OPEN</span></td></tr>
+        <tr><td>V02-03</td><td>v0.2</td><td><span class="tag p1">P1</span></td><td>重复 runId 与晚到低 revision 快照可回滚 ledger 视图。</td><td><span class="tag open">OPEN</span></td></tr>
+        <tr><td>V02-04</td><td>v0.2</td><td><span class="tag p2">P2</span></td><td>SDK 数值参数未统一归一化，NaN/负值可产生空调度或异常重试合同。</td><td><span class="tag open">OPEN</span></td></tr>
+        <tr><td>V03-01</td><td>v0.3</td><td><span class="tag p0">P0</span></td><td>生产 capture 一律写入 session scope，项目知识不能跨 session 激活。</td><td><span class="tag open">OPEN</span></td></tr>
+        <tr><td>V04-01</td><td>v0.4</td><td><span class="tag p0">P0</span></td><td>全局 prepared delivery 可被无关前台命令提前 ack。</td><td><span class="tag open">OPEN</span></td></tr>
+        <tr><td>V04-02</td><td>v0.4</td><td><span class="tag p1">P1</span></td><td>已耗尽 duration 的恢复任务仍获得 1ms 执行窗口。</td><td><span class="tag open">OPEN</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>4. v0.1 · Context Steady</h2>
+    <div class="finding">
+      <h3><span class="tag p0">V01-01 · P0</span> ContextPlan 计划快照与真实 provider 输入发生漂移</h3>
+      <dl class="finding-grid">
+        <dt>生产证据</dt><dd><code>AgentSession.#buildContextSteadyRequestPlanWithRecovery()</code> 在首请求前建计划；tool-loop 后消息继续增长，compaction/model/non-message budget 也可能改变输入边界。</dd>
+        <dt>反例</dt><dd>首个 provider request 的 projected tokens 在 control band 内；工具结果把下一次请求推过边界，但旧 plan 仍用于 materialize/status/audit，导致“审计显示安全、实际 payload 已变化”。</dd>
+        <dt>影响</dt><dd>质量门、hard-pressure 判断、持久化 audit 和真实请求不一致，直接破坏 v0.1 的可审计稳态合同。</dd>
+        <dt>修复合同</dt><dd>每次 provider call 前重新比较 plan 输入指纹和 projected tokens；尾部增长只刷新 audit，结构性输入变化则完整重建；compaction 后清空 stale last plan。</dd>
+        <dt>当前状态</dt><dd><span class="tag fixed">工作区已修补</span> <code>agent-session.ts</code> 与 <code>agent-session-m2.test.ts</code> 已有对应改动，仍需纳入本轮最终全量验证。</dd>
+      </dl>
+    </div>
+    <div class="callout">
+      <strong>本轮未再确认新的 v0.1 代码级阻断。</strong>
+      Digest ledger、fallback、ContextPlan materialize、checkpoint/rebase、recall scope filtering 和 provider role 路径在当前实现中均有生产调用与合同测试。真实模型质量、长轮 p95 和 burst 恢复持续轮数仍需产品验收，不能由单元测试替代。
+    </div>
+  </section>
+
+  <section>
+    <h2>5. v0.2 · Execution Loop</h2>
+    <div class="finding">
+      <h3><span class="tag p0">V02-01 · P0</span> 默认关闭只是“少注入上下文”，并没有阻止执行</h3>
+      <dl class="finding-grid">
+        <dt>生产证据</dt><dd><code>settings-schema.ts</code> 将 <code>san.executionLoop.enabled</code> 默认设为 false；但 <code>runConfiguredSanLoop()</code>、<code>/san-loop run</code>、<code>/solo</code>、<code>/team</code>、<code>/council</code> 都未检查该值。</dd>
+        <dt>反例</dt><dd>保持默认设置，执行 <code>/team ship it</code>，仍会创建 task-agent executor、发现 checks 并启动 Commander/Worker/Supervisor。</dd>
+        <dt>影响</dt><dd>违反“显式启用、默认交互路径关闭”的发布合同；用户以为功能关闭时仍可能产生模型调用、子 Agent 和工作区变更。</dd>
+        <dt>修复合同</dt><dd>所有 run/shortcut 入口统一 fail-closed；<code>status</code> 和 <code>stop</code> 保持可用，避免关闭后无法观察或中止历史 run。</dd>
+      </dl>
+    </div>
+
+    <div class="finding">
+      <h3><span class="tag p0">V02-02 · P0</span> Worker throw 后兄弟任务可越过终态继续运行</h3>
+      <dl class="finding-grid">
+        <dt>生产证据</dt><dd><code>runner.ts::mapWithLimit()</code> 使用共享外部 signal 和 <code>Promise.all(workers)</code>；任一 mapper reject 会立刻退出，没有 batch AbortController，也不等待其他 worker settled。</dd>
+        <dt>反例</dt><dd>A Worker 立即 throw；B Worker 已启动并等待 I/O。runner catch 持久化 failed 并返回/抛错，active registry 清理；B 仍持有未 aborted signal，可在终态后继续读写。</dd>
+        <dt>影响</dt><dd>ledger 终态不再代表副作用终止；迟到结果不入账，abort/status 也无法再找到 active run。</dd>
+        <dt>修复合同</dt><dd>首个异常原子触发 batch abort，停止新调度，等待所有已启动 Worker settled，再持久化 terminal；保留第一个业务错误作为 surfaced error。</dd>
+      </dl>
+    </div>
+
+    <div class="finding">
+      <h3><span class="tag p1">V02-03 · P1</span> append-only ledger 不是 revision 单调视图</h3>
+      <dl class="finding-grid">
+        <dt>生产证据</dt><dd><code>rebuildSanLoopLedger()</code> 按 entry 遍历直接 <code>latestRuns.set(runId, entry)</code>，不比较 revision；<code>runSanLoop()</code> 只拒绝“当前 active”同 ID，不拒绝历史 terminal 同 ID。</dd>
+        <dt>反例 A</dt><dd>revision 5 后追加一个迟到 revision 3 快照，重建结果回滚到 revision 3。</dd>
+        <dt>反例 B</dt><dd>复用 terminal runId 会追加 revision 0 新 run，覆盖旧运行的查询视图，并把两次生命周期的 event 混在同一个 runId 下。</dd>
+        <dt>修复合同</dt><dd>创建前拒绝任何历史重复 runId；重建选择最高 revision，同 revision 只允许后写 entry 作为等价迁移兼容。</dd>
+      </dl>
+    </div>
+
+    <div class="finding">
+      <h3><span class="tag p2">V02-04 · P2</span> SDK 数值边界未归一化</h3>
+      <dl class="finding-grid">
+        <dt>生产证据</dt><dd><code>maxWorkers = Math.max(1, Math.floor(value))</code> 对 NaN 仍为 NaN；<code>maxRetries</code> 原样进入 snapshot。</dd>
+        <dt>反例</dt><dd>SDK 传 <code>maxWorkers: NaN</code>，<code>Array.from({length: NaN})</code> 启动 0 个 worker；输入数组存在但结果为空，后续状态机可错误推进。NaN retry cap 也会破坏 exhausted 比较。</dd>
+        <dt>修复合同</dt><dd>worker 使用正整数归一化；retry 使用非负整数归一化，并保留合法的 <code>0</code>。</dd>
+      </dl>
+    </div>
+  </section>
+
+  <section>
+    <h2>6. v0.3 · Brain Runtime</h2>
+    <div class="finding">
+      <h3><span class="tag p0">V03-01 · P0</span> 稳定 identity 已实现，但 capture 生产路径没有使用</h3>
+      <dl class="finding-grid">
+        <dt>生产证据</dt><dd><code>AgentSession.#generateTurnDigest()</code> 调用 <code>captureSanBrainTurn()</code> 时固定传入 <code>{ kind: "session", key: this.sessionId }</code>。稳定 user/project/repo scope 只在下一轮 activation/recall 时解析。</dd>
+        <dt>传播范围</dt><dd><code>extract.ts</code> 把 project fact、standing decision、workflow pattern、skill/check/recall candidate、failure posture 全部放入 fallback scope。</dd>
+        <dt>反例</dt><dd>Session A 捕获并批准项目事实；Session B 位于同一 worktree。B activation 查询稳定 project/repo key，但候选 key 是 A 的 sessionId，因此永远不匹配。</dd>
+        <dt>影响</dt><dd>v0.3 对外最核心的“跨 session 项目经验”在真实 AgentSession 中不可达；dogfood 手工传 repo scope，因此没有暴露生产差异。</dd>
+        <dt>修复合同</dt><dd>capture 前解析稳定 identity；user preference 使用 user scope，其余 deterministic fallback 使用更窄且稳定的 project scope；解析失败时 fail-closed 到 session scope，不能扩大。</dd>
+      </dl>
+    </div>
+    <div class="callout warn">
+      <strong>150ms 边界属于需要继续守住的合同。</strong>
+      当前 Brain capture 开启时会把 digest 单次请求 timeout 压到 150ms，但 retry 与 provider abort 服从性仍需最终测试覆盖“总等待时间”，而不是只检查配置值。本报告暂不把它列为已证实的第 9 个缺陷；修复 V03-01 时会补生产 capture 测试，并保留这一残余风险说明。
+    </div>
+  </section>
+
+  <section>
+    <h2>7. v0.4 · Workflows</h2>
+    <div class="finding">
+      <h3><span class="tag p0">V04-01 · P0</span> unrelated command 可以替后台结果完成 delivery ack</h3>
+      <dl class="finding-grid">
+        <dt>生产证据</dt><dd><code>WorkflowCommandService</code> 用实例级 <code>#preparedDeliveries</code> 保存所有 delivery；每个前台命令 output 成功后，helper 调用 <code>acknowledgePreparedDeliveries()</code> 批量确认全部。</dd>
+        <dt>并发反例</dt><dd>后台 run completion 调用 <code>deliverCompletedRun(A)</code> 后阻塞在 output(A)；此时用户执行无关 <code>/workflow list</code>，它 output 成功并批量 ack A；随后 output(A) 失败。结果从未交付给消费者，但 durable state 已是 delivered。</dd>
+        <dt>影响</dt><dd>破坏“只有对应消费者成功接收后才确认”的 exactly-once/at-least-once 边界；失败后无法 replay。</dd>
+        <dt>修复合同</dt><dd>delivery preparation 必须返回显式 receipt；调用方只 ack 本次 output 对应的 receipt。移除全局 bulk-ack，不允许跨命令、跨后台观察者串线。</dd>
+      </dl>
+    </div>
+
+    <div class="finding">
+      <h3><span class="tag p1">V04-02 · P1</span> 已过期 checkpoint 仍被赋予最少 1ms</h3>
+      <dl class="finding-grid">
+        <dt>生产证据</dt><dd><code>RestrictedWorkflowRuntime</code> 计算 <code>remainingDurationMs = Math.max(1, limit - elapsed)</code>，即使 elapsed 已超过 hard duration 也创建 1ms timer。</dd>
+        <dt>反例</dt><dd>恢复一个已经超过 duration 的 paused checkpoint，脚本只执行同步 <code>return</code> 或命中 completed-call cache；在 timer 触发前即可完成并被标为 completed。</dd>
+        <dt>影响</dt><dd>硬时间预算在 crash/resume 边界失效，且结果与机器调度速度相关。</dd>
+        <dt>修复合同</dt><dd>构造时记录“启动即过期”，<code>execute()</code> 在 parse/step/缓存命中之前同步抛出 <code>time_limit</code>；未过期才创建剩余时长 timer。</dd>
+      </dl>
+    </div>
+  </section>
+
+  <section>
+    <h2>8. 已确认没有回归的旧问题</h2>
+    <p>以下项目曾出现在旧审计里，但当前 HEAD 已有实现与测试，不应继续作为 open finding：</p>
+    <ul>
+      <li>v0.2：checks 已进入 Commander/Worker/Supervisor；role tools/context 已按角色收窄；failure/dependency/Oracle/usage/abort CAS 已接入 runner。</li>
+      <li>v0.3：Brain message 在 provider 侧使用 user role；敏感/secret 不激活；SQLite 可重建；stable identity、projection、undo、recall fail-closed 已存在。</li>
+      <li>v0.4：Ad-hoc approval consume/delete 原子化；call identity 已绑定 input hash；loop lexical binding 已修；token hard limit 使用真实 usage 校验；taskRef 已绑定真实用户 entry；write apply 有 baseline/preimage/lock/unknown-side-effect 防线。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>9. 修复顺序与验收探针</h2>
+    <ol>
+      <li><strong>先关 P0：</strong>v0.2 enabled gate、Worker cancel+drain、v0.3 stable capture scope、v0.4 receipt-scoped ack。</li>
+      <li><strong>再修持久化与硬边界：</strong>v0.2 revision/runId、数值归一化，v0.4 expired checkpoint。</li>
+      <li><strong>契约测试：</strong>每个 finding 至少一个能在修复前失败、修复后通过的可观察回归测试。</li>
+      <li><strong>分层验证：</strong>Context Steady、San Loop、Brain、Workflows、ACP slash command；随后运行 coding-agent 全套与 <code>bun check</code>。</li>
+      <li><strong>回填本报告：</strong>记录修复文件、测试命令、通过数量、已知非本轮基线问题和仍需真实 dogfood 的门禁。</li>
+    </ol>
+    <pre><code>bun test packages/coding-agent/test/context-steady
+bun test packages/coding-agent/test/san-loop packages/coding-agent/test/acp-builtins.test.ts
+bun test packages/coding-agent/test/brain
+bun test packages/coding-agent/test/workflows
+bun test packages/coding-agent
+bun check</code></pre>
+  </section>
+
+  <section>
+    <h2>10. 仍不能由本轮代码修复替代的证据</h2>
+    <table>
+      <thead><tr><th>版本</th><th>残余产品门禁</th><th>准确口径</th></tr></thead>
+      <tbody>
+        <tr><td>v0.1</td><td>真实模型 20+ turn、240K/320K 压力、任务质量与 p95。</td><td>代码可验证有界性与审计一致性，不能证明模型质量。</td></tr>
+        <tr><td>v0.2</td><td>真实多 Agent 成本、失败恢复、用户可理解性。</td><td>修复后进入 dogfood，不直接宣称默认开启。</td></tr>
+        <tr><td>v0.3</td><td>跨 session 真实命中率、误激活率、候选审批负担。</td><td>代码先保证 scope 正确，再采真实数据。</td></tr>
+        <tr><td>v0.4</td><td>Skill vs Managed 的真实 token/稳定性 benchmark、5 个真实 SOP 重复运行。</td><td>当前确定性 dogfood 不是外部模型 benchmark。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>San v0.1–v0.4 current-code audit · pre-repair snapshot · 2026-07-15</footer>
+</main>
+</body>
+</html>

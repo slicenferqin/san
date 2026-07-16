@@ -291,6 +291,7 @@ describe("ACP builtin slash commands", () => {
 
 	it("runs the San execution loop instead of only creating a ledger entry", async () => {
 		const { output, runtime } = createRuntime();
+		runtime.settings.set("san.executionLoop.enabled", true);
 		runtime.sessionManager.appendCustomEntry(CONTEXT_PLAN_CUSTOM_TYPE, { planId: "plan-old" });
 		const latestPlanEntryId = runtime.sessionManager.appendCustomEntry(CONTEXT_PLAN_CUSTOM_TYPE, {
 			planId: "plan-current",
@@ -354,6 +355,7 @@ describe("ACP builtin slash commands", () => {
 
 	it("runs solo, team, and council shortcuts with their fixed modes", async () => {
 		const { runtime } = createRuntime();
+		runtime.settings.set("san.executionLoop.enabled", true);
 		const runSpy = spyOn(sanLoopModule, "runSanLoop").mockImplementation(async options => {
 			const mode = options.mode ?? "team";
 			const now = "2026-07-01T00:00:00.000Z";
@@ -401,6 +403,25 @@ describe("ACP builtin slash commands", () => {
 				{ mode: "solo", objective: "deliver solo objective" },
 				{ mode: "team", objective: "deliver team objective" },
 				{ mode: "council", objective: "deliver council objective" },
+			]);
+		} finally {
+			runSpy.mockRestore();
+		}
+	});
+
+	it("keeps San execution runs disabled by default while leaving ledger commands available", async () => {
+		const { output, runtime } = createRuntime();
+		const runSpy = spyOn(sanLoopModule, "runSanLoop");
+		try {
+			expect(await executeAcpBuiltinSlashCommand("/san-loop run must not start", runtime)).toEqual({
+				consumed: true,
+			});
+			expect(await executeAcpBuiltinSlashCommand("/team must not start", runtime)).toEqual({ consumed: true });
+
+			expect(runSpy).not.toHaveBeenCalled();
+			expect(output).toEqual([
+				"San v0.2 execution loop is disabled. Enable san.executionLoop.enabled before starting a run.",
+				"San v0.2 execution loop is disabled. Enable san.executionLoop.enabled before starting a run.",
 			]);
 		} finally {
 			runSpy.mockRestore();

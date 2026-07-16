@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Grok Build × San 交叉分析（2026-07-16）</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0b1020;
+      --panel: #121933;
+      --panel-2: #182244;
+      --text: #e8edf7;
+      --muted: #9aa8c7;
+      --line: #2a3760;
+      --accent: #7dd3fc;
+      --good: #4ade80;
+      --chip: #243056;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: radial-gradient(1200px 600px at 10% -10%, #1a2a55 0%, var(--bg) 55%);
+      color: var(--text);
+    }
+    main { max-width: 1080px; margin: 0 auto; padding: 32px 20px 80px; }
+    h1, h2, h3 { line-height: 1.25; }
+    h1 { font-size: 1.8rem; margin: 0 0 8px; }
+    h2 { margin-top: 2.2rem; padding-top: 0.6rem; border-top: 1px solid var(--line); font-size: 1.25rem; }
+    h3 { margin-top: 1.4rem; font-size: 1.05rem; color: var(--accent); }
+    p, li { color: var(--text); }
+    .muted { color: var(--muted); }
+    .meta {
+      display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 24px;
+    }
+    .chip {
+      background: var(--chip);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .panel {
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px 18px;
+      margin: 14px 0;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+    }
+    .card {
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+    }
+    .card h4 { margin: 0 0 8px; font-size: 0.95rem; }
+    .tag {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      border-radius: 6px;
+      padding: 2px 7px;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .p0 { background: #7f1d1d; color: #fecaca; }
+    .p1 { background: #7c2d12; color: #fed7aa; }
+    .p2 { background: #1e3a5f; color: #bae6fd; }
+    .p3 { background: #14532d; color: #bbf7d0; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13.5px;
+      margin: 12px 0 8px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: var(--panel-2); color: var(--muted); font-weight: 600; }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12.5px;
+    }
+    code {
+      background: #0f172a;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 1px 5px;
+    }
+    pre {
+      background: #0a0f1f;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px 14px;
+      overflow-x: auto;
+      color: #dbe7ff;
+    }
+    ul.compact > li { margin: 0.25rem 0; }
+    .verdict { border-left: 4px solid var(--accent); padding-left: 12px; }
+    a { color: var(--accent); }
+    .score { font-weight: 700; color: var(--good); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Grok Build × San 交叉分析</h1>
+  <p class="muted">源仓库：<code>https://github.com/xai-org/grok-build</code>（SpaceXAI 终端 coding agent，Rust 单仓同步产物） · 对照仓库：本仓 San（Bun/TS，Context Steady + Execution Loop + Brain + Workflows）</p>
+  <div class="meta">
+    <span class="chip">日期：2026-07-16</span>
+    <span class="chip">分析对象：main @ b189869</span>
+    <span class="chip">类型：架构借鉴 / 路线筛选</span>
+    <span class="chip">结论：可借鉴，但不该整仓抄</span>
+    <span class="chip">文件：xai-grok-build-san-borrow-analysis-20260716.html</span>
+  </div>
+
+  <div class="panel verdict">
+    <strong>一句话结论</strong>
+    <p>
+      Grok Build 是<strong>工业级 harness 产品</strong>：TUI、权限、OS sandbox、session 恢复、subagent 生态、memory、worktree 都做得很厚。
+      San 是<strong>执行系统产品</strong>：Context Steady、多角色 ledger、Brain 经验、Workflows 才是差异化。
+      对 San 最有价值的不是再做一个“Grok 克隆”，而是挑 6–8 个<strong>补齐工程闭环</strong>的点：OS sandbox、memory dream/flush、hunk 归因、后台任务协调、folder trust、permission 分层、plan 审批 UX、capability 偏序。
+    </p>
+  </div>
+
+  <h2>1. Grok Build 是什么</h2>
+  <div class="grid">
+    <div class="card">
+      <h4>定位</h4>
+      <p>SpaceXAI 的终端 AI coding agent（二进制名 <code>grok</code> / 源码产物 <code>xai-grok-pager</code>）。全屏 TUI、headless、ACP IDE 集成。</p>
+    </div>
+    <div class="card">
+      <h4>栈</h4>
+      <p>Rust monorepo 切片；~60 个 codegen crate；ratatui TUI；workspace hub；sqlite journal；tree-sitter code graph。</p>
+    </div>
+    <div class="card">
+      <h4>对外贡献</h4>
+      <p><code>CONTRIBUTING.md</code> 明确不接受外部贡献；仓库是 monorepo 定期同步。可当参考实现，不可当 upstream 协作对象。</p>
+    </div>
+    <div class="card">
+      <h4>系谱痕迹</h4>
+      <p><code>THIRD-PARTY-NOTICES</code> 声明 tools 实现有 openai/codex、sst/opencode 端口；与 San 同属 coding-agent harness 谱系，不是正交领域。</p>
+    </div>
+  </div>
+
+  <h3>1.1 仓库骨架</h3>
+  <table>
+    <thead>
+      <tr><th>路径</th><th>职责</th><th>对 San 的对照</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>xai-grok-pager</code></td><td>全屏 TUI、滚动区、弹层、快捷键</td><td><code>packages/tui</code> + coding-agent modes</td></tr>
+      <tr><td><code>xai-grok-shell</code></td><td>agent runtime / leader / headless / ACP 入口</td><td><code>agent-session</code> + cli + acp</td></tr>
+      <tr><td><code>xai-grok-agent</code></td><td>Agent 定义、prompt 装配、compaction policy</td><td>system-prompt + task agents + prompts/*.md</td></tr>
+      <tr><td><code>xai-grok-tools</code></td><td>工具实现（terminal / edit / search / memory …）</td><td><code>tools/*</code></td></tr>
+      <tr><td><code>xai-grok-workspace</code></td><td>FS/VCS/permission/hub/worktree/hunk</td><td>session + natives + task/worktree + tools/approval</td></tr>
+      <tr><td><code>xai-grok-sandbox</code></td><td>Landlock / Seatbelt / bubblewrap deny</td><td><strong>缺口</strong>（San 主要是 worktree/iso，非 kernel sandbox）</td></tr>
+      <tr><td><code>xai-grok-memory</code></td><td>跨 session markdown + FTS/vec + dream</td><td>memories / mnemopi / brain / hindsight（语义部分重叠）</td></tr>
+      <tr><td><code>xai-codebase-graph</code></td><td>tree-sitter 索引，goto def/refs</td><td>LSP/ast-grep 局部有；无统一 code graph crate</td></tr>
+      <tr><td><code>xai-fast-worktree</code></td><td>CoW / BTRFS / overlay / worktree pool</td><td><code>pi-iso</code> + <code>task/worktree</code>（已有，但成熟度不同）</td></tr>
+      <tr><td><code>xai-hunk-tracker</code></td><td>Agent vs External 改动归因</td><td><strong>缺口</strong>（有 file-recorder / isolation patch，缺 live hunk 归因）</td></tr>
+    </tbody>
+  </table>
+
+  <h2>2. 能力对照矩阵</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>能力域</th>
+        <th>Grok Build</th>
+        <th>San 现状</th>
+        <th>借鉴价值</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>长上下文稳态</td>
+        <td>经典 compact + memory flush/prune；85% 自动 compact</td>
+        <td><strong>Context Steady 更强</strong>：TurnDigest / checkpoint / ContextPlan / provider pruning / quality gate</td>
+        <td class="muted">低（San 领先）</td>
+      </tr>
+      <tr>
+        <td>多角色工程执行</td>
+        <td>subagent + personas + spawn；无 Commander/Supervisor ledger 语义</td>
+        <td><strong>San Loop 更强</strong>：solo/team/council + ledger + checks + abort 收敛</td>
+        <td class="muted">低（San 领先）</td>
+      </tr>
+      <tr>
+        <td>经验 / 记忆</td>
+        <td>Markdown MEMORY.md + SQLite hybrid search + <strong>autoDream 巩固</strong> + 压实前 flush</td>
+        <td>Brain M1–M6 + mnemopi + hindsight + memories；巩固有，但 UX/检索/flush 可学</td>
+        <td><span class="score">高</span></td>
+      </tr>
+      <tr>
+        <td>安全边界</td>
+        <td>OS sandbox 档案 + permission 分层 + folder trust + PreToolUse hooks</td>
+        <td>approval / path-scope / isolation worktree；缺 kernel sandbox 与统一 trust 门</td>
+        <td><span class="score">高</span></td>
+      </tr>
+      <tr>
+        <td>Plan 模式</td>
+        <td>enter/exit plan、只写 plan.md、审批 UI 支持行评论/改计划</td>
+        <td>已有 plan-mode 保护与 approved-plan handoff</td>
+        <td>中高（UX 层）</td>
+      </tr>
+      <tr>
+        <td>后台长任务</td>
+        <td>background terminal、wait_any/all、monitor 流、/loop 调度</td>
+        <td>job/task/yield-queue 有部分；统一 monitor/loop 较弱</td>
+        <td><span class="score">高</span></td>
+      </tr>
+      <tr>
+        <td>Worktree 隔离</td>
+        <td>fast CoW + pool + BTRFS/overlay + dirty sync</td>
+        <td>pi-iso + task isolation + nested patch apply</td>
+        <td>中（性能/池化）</td>
+      </tr>
+      <tr>
+        <td>改动可审阅性</td>
+        <td>hunk tracker：agent/external 归因、accept/reject</td>
+        <td>isolation write artifacts / review-write；session 内 live hunk 弱</td>
+        <td><span class="score">高</span></td>
+      </tr>
+      <tr>
+        <td>代码理解索引</td>
+        <td>codebase-graph（def/refs，增量）</td>
+        <td>LSP + ast-grep + grep/glob</td>
+        <td>中（可做可选加速层）</td>
+      </tr>
+      <tr>
+        <td>Agent 可组合性</td>
+        <td>Markdown agent 定义 + MiniJinja + completionRequirement 强制收口</td>
+        <td>task agents + prompts.md + San Loop roles</td>
+        <td>中（收口协议可学）</td>
+      </tr>
+      <tr>
+        <td>Workflows</td>
+        <td>主要靠 hooks/skills/plugins</td>
+        <td><strong>San Workflows 更强</strong>：Managed/Ad-hoc + restricted runtime + delivery receipts</td>
+        <td class="muted">低（San 领先）</td>
+      </tr>
+      <tr>
+        <td>模型生态</td>
+        <td>xAI 为主 + custom models + Claude 兼容配置</td>
+        <td>多 provider catalog + /connect + effort/thinking</td>
+        <td class="muted">低（方向不同）</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>3. 最值得借鉴的点（按 ROI 排序）</h2>
+
+  <h3><span class="tag p0">P0</span> 3.1 OS-level Sandbox（补安全底座）</h3>
+  <div class="panel">
+    <p><strong>Grok 做法</strong>：<code>--sandbox workspace|read-only|strict|devbox</code>；macOS Seatbelt、Linux Landlock + bubblewrap deny bind-over；自定义 profile 支持 <code>deny</code> glob（含 <code>**/.env</code>），并显式关闭 <code>mv secret && cat</code> 类旁路。</p>
+    <p><strong>San 现状</strong>：task isolation / path-scope / approval 主要是应用层；主会话 bash 仍可触达任意路径（依赖用户信任）。</p>
+    <p><strong>可迁移形态</strong>（不必照搬 Rust crate）：</p>
+    <ul class="compact">
+      <li>先做 <code>san.sandbox.profile = off|workspace|read-only|strict</code> 设置与 CLI 开关。</li>
+      <li>macOS 用 Seatbelt profile 包住 bash 子进程；Linux 用 landlock/bwrap（有则启用，无则 fail-closed 或降级警告）。</li>
+      <li>与现有 path-scope / workflows isolated write 叠加，不互相替代。</li>
+    </ul>
+    <p><strong>为什么现在值得做</strong>：San 的 loop/workflows/team worker 会并发跑工具；没有 kernel 边界时，“可审计执行”仍可能误伤本机秘密文件。</p>
+  </div>
+
+  <h3><span class="tag p0">P0</span> 3.2 Permission 分层 + Folder Trust</h3>
+  <div class="panel">
+    <p><strong>Grok 授权流水线</strong>：</p>
+    <pre>PreToolUse hooks
+ → deny/ask/allow rules
+ → remembered grants（危险命令除外）
+ → 内置只读自动批准（工具 + shell 白名单分句）
+ → permission mode（default / dontAsk / acceptEdits / bypass）</pre>
+    <p><strong>Folder trust</strong> 把 project hooks / MCP / LSP 统一成“是否信任这个目录”的一门闸。</p>
+    <p><strong>对 San</strong>：今天 approval 与 settings 有碎片感。可把“项目是否受信任”抽成统一 gate，驱动：</p>
+    <ul class="compact">
+      <li>项目级 MCP / skills / workflows discovery</li>
+      <li>默认 write 权限策略</li>
+      <li>San Loop team/council 是否允许自动跑 checks</li>
+    </ul>
+  </div>
+
+  <h3><span class="tag p1">P1</span> 3.3 Memory Dream + 压实前 Flush + Hybrid Recall</h3>
+  <div class="panel">
+    <p><strong>Grok 亮点</strong>：</p>
+    <ul class="compact">
+      <li>存储是人可读 Markdown（global / workspace / session logs），不是黑盒向量库 alone。</li>
+      <li>SQLite FTS5 + 可选 vec0 hybrid search。</li>
+      <li><strong>autoDream</strong>：按时间 + 会话数 gate，把 session logs 合并进 durable MEMORY.md（消矛盾、绝对日期、丢短暂细节）。</li>
+      <li><strong>pre-compaction memory flush</strong>：在 compact 丢历史前，先强制把重要事实写入 memory。</li>
+      <li>可选 MMR 去冗余重排（Jaccard，无 embedding 也可）。</li>
+    </ul>
+    <p><strong>对 San 的映射</strong>：</p>
+    <ul class="compact">
+      <li>San Brain 的 capture → approve → consolidate → project 已比 Grok “更结构化/可审计”。</li>
+      <li>缺口在：<strong>压实/裁剪前强制 flush</strong>、跨 session 人可读 curated 层、检索多样性（MMR）、以及 “dream gate” 的节流策略。</li>
+      <li>建议：给 Context Steady compaction / plan rebuild 前加 <code>san.brain.flushBeforePrune</code>；给 Brain consolidate 加 dream 风格的时间/会话阈值，避免每轮都 consolidate。</li>
+    </ul>
+  </div>
+
+  <h3><span class="tag p1">P1</span> 3.4 Hunk Tracker（Agent vs External 归因）</h3>
+  <div class="panel">
+    <p>Grok 用 actor 模式跟踪文件 hunk，区分 agent 写入与外部编辑，支持 accept/reject，并与 fs_notify 合流。</p>
+    <p><strong>对 San 的价值</strong>：</p>
+    <ul class="compact">
+      <li>Context Steady TurnDigest 的 files_touched 可以更准（过滤用户手动改动）。</li>
+      <li>San Loop Supervisor 复验可以只审 agent 引入 diff。</li>
+      <li>Workflows isolated write review 可从“整文件 artifact”升级到 “hunk-level 决策”。</li>
+    </ul>
+    <p>不必一次性做完整 IDE-style review UI；先做 session 内 hunk ledger + 归因标签即可。</p>
+  </div>
+
+  <h3><span class="tag p1">P1</span> 3.5 后台任务协调：background / wait_any|all / monitor /loop</h3>
+  <div class="panel">
+    <p>Grok 把长跑进程从“阻塞对话”中解放出来：</p>
+    <ul class="compact">
+      <li><code>run_terminal_command(background=true)</code> → task_id</li>
+      <li><code>get_command_or_subagent_output</code> / <code>wait_commands_or_subagents(mode=wait_any|wait_all)</code></li>
+      <li><code>monitor</code> 把脚本逐行事件注入会话</li>
+      <li><code>/loop 5m ...</code> 周期 prompt（带过期与上限）</li>
+    </ul>
+    <p><strong>对 San</strong>：team/council 与 dogfood、dev server + 测例并行特别受益。现有 job/task 可统一到同一 task bus，并让 San Loop Worker 的并行等待语义与 runner 的 sibling abort 共用同一取消传播模型（mapWithLimit abort 方向一致）。</p>
+  </div>
+
+  <h3><span class="tag p2">P2</span> 3.6 Plan Mode 审批 UX</h3>
+  <div class="panel">
+    <p>Grok 的 plan 审批不是“是/否”：可滚动预览、行级评论、改计划、空 plan 仍可决策、compact 后仍保持 plan 状态。</p>
+    <p>San 已有 plan protection 与 approved plan handoff。可借鉴的是 <strong>人机共审协议</strong>：</p>
+    <ul class="compact">
+      <li>行注释 → 回灌给 agent 修订 plan</li>
+      <li>plan 状态穿越 compaction / ContextPlan rebuild</li>
+      <li>与 San Loop Commander 输出 plan 的 ledger 挂钩（plan revision 进入 loop event）</li>
+    </ul>
+  </div>
+
+  <h3><span class="tag p2">P2</span> 3.7 Subagent Capability 偏序 + Personas 分层</h3>
+  <div class="panel">
+    <p>Grok 把：</p>
+    <ul class="compact">
+      <li><strong>Agent</strong>：会话本体（model/tools/prompt）</li>
+      <li><strong>Persona</strong>：行为覆盖（tone/format/IO 契约）</li>
+      <li><strong>CapabilityMode</strong>：ReadOnly ⊂ ReadWrite 等偏序，过滤工具集</li>
+    </ul>
+    <p>San Loop 已有角色（Commander/Worker/Supervisor/Oracle），但 capability 过滤更多散落在工具与 path-scope。可把 “角色 → capability 偏序 → 允许工具/写范围” 做成显式表，减少 prompt 文本约束泄漏。</p>
+  </div>
+
+  <h3><span class="tag p2">P2</span> 3.8 Agent completionRequirement（强制收口）</h3>
+  <div class="panel">
+    <p>Grok agent 定义可要求结束前必须调用 <code>complete_task</code>，否则自动提醒重试（带 maxRetries/backoff）。</p>
+    <p>对 San Loop Worker / Workflows agent bridge 很实用：避免 “讲完故事却不交付结构化结果”，与 delivery receipts / run snapshot 终端状态机对齐。</p>
+  </div>
+
+  <h3><span class="tag p3">P3</span> 3.9 Codebase Graph（可选加速）</h3>
+  <div class="panel">
+    <p>tree-sitter 增量索引 + goto def/refs，适合 explore/plan 代理降工具往返。San 可作可选后台索引（不阻塞启动），喂给 Context Steady relevance 或 San Brain evidence。优先级低于安全与记忆 flush。</p>
+  </div>
+
+  <h3><span class="tag p3">P3</span> 3.10 Fast Worktree Pool</h3>
+  <div class="panel">
+    <p>Grok 的 CoW/BTRFS/overlay pool 主要解决“大仓频繁 spawn 的启动成本”。San 已有 iso；若 dogfood 显示 isolation spawn 成为瓶颈，再引入 pool / dirty-sync。不要先做。</p>
+  </div>
+
+  <h2>4. 不建议照搬的点</h2>
+  <table>
+    <thead><tr><th>项</th><th>原因</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>整仓 Rust 重写 harness</td>
+        <td>San 的差异化在 Context Steady / Loop / Brain / Workflows，已在 Bun/TS 落地并 dogfood；迁移成本会吞噬路线图。</td>
+      </tr>
+      <tr>
+        <td>Claude/Cursor 兼容层堆叠</td>
+        <td>Grok 作为大众 CLI 需要兼容面；San 作为独立产品应优先自己的 <code>.san</code> 契约，兼容可作为后置。</td>
+      </tr>
+      <tr>
+        <td>xAI 绑定的 auth/telemetry 产品形态</td>
+        <td>与 San 多 provider 路线冲突。</td>
+      </tr>
+      <tr>
+        <td>用 classic compact 取代 Context Steady</td>
+        <td>Grok 的 compact+memory 是“丢历史后靠记忆找回”；San 走的是“provider-bound 稳态 + 可审计 digest”。方向不要回退。</td>
+      </tr>
+      <tr>
+        <td>把 subagent personas 当 San Loop 替代品</td>
+        <td>personas 是提示层；San Loop 是状态机 + ledger + checks。可叠加，不可替换。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>5. 建议落到 San 路线图的方式</h2>
+
+  <h3>5.1 与现有版本叙事对齐</h3>
+  <table>
+    <thead><tr><th>San 版本轴</th><th>可吸收的 Grok 点</th><th>验收形态</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>v0.1 Context Steady</td>
+        <td>compact/prune 前 memory/brain flush；hunk 归因提升 files_touched 质量</td>
+        <td>压实后关键事实仍可在下一轮 ContextPlan/Brain activation 中出现</td>
+      </tr>
+      <tr>
+        <td>v0.2 Execution Loop</td>
+        <td>sibling abort + 后台 wait；Worker capability 偏序；completionRequirement</td>
+        <td>team 模式失败收敛、Worker 不交付结构化结果会自动收口</td>
+      </tr>
+      <tr>
+        <td>v0.3 Brain</td>
+        <td>dream gate、hybrid recall、MMR、人可读 curated MEMORY 层</td>
+        <td>跨 session 召回质量 + 巩固节流可测</td>
+      </tr>
+      <tr>
+        <td>v0.4 Workflows</td>
+        <td>hunk-level write review；folder trust 对 project workflows/hooks</td>
+        <td>isolated write 可 hunk 审；未信任仓库不自动加载危险扩展</td>
+      </tr>
+      <tr>
+        <td>v0.5 路由 / 模型选择</td>
+        <td>agent profile 作为路由目标的一部分；plan 审批反馈进入路由证据</td>
+        <td>任务类型 → 角色/能力/模型 的可解释选择</td>
+      </tr>
+      <tr>
+        <td>横切平台能力</td>
+        <td>OS sandbox + permission mode + 后台任务 bus</td>
+        <td>默认安全姿态可声明；长任务不阻塞 loop</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>5.2 推荐落地顺序（90 天量级）</h3>
+  <ol>
+    <li><strong>Week 1–2：Permission + Folder Trust 契约</strong><br/>统一 project trust gate；整理 deny/ask/allow 与现有 approval 的优先级文档 + 最小实现。</li>
+    <li><strong>Week 2–5：Sandbox MVP</strong><br/>workspace/read-only 两档；包住 bash 与 subagent；dogfood 用 strict 跑 explore。</li>
+    <li><strong>Week 3–6：Brain flush-before-prune + dream gate</strong><br/>接 Context Steady 压实路径；consolidate 频率化；补 hybrid search 质量指标。</li>
+    <li><strong>Week 5–8：Task bus（background/wait/monitor）</strong><br/>统一 job/subagent/loop 等待与取消；San Loop 并行 Worker 复用。</li>
+    <li><strong>Week 7–10：Hunk ledger MVP</strong><br/>agent write 归因 + session 查询 API；Supervisor/Workflows review 消费。</li>
+    <li><strong>之后可选：</strong> plan 行评论 UX、code graph 后台索引、worktree pool。</li>
+  </ol>
+
+  <h2>6. 对 San 差异化的再确认</h2>
+  <div class="grid">
+    <div class="card">
+      <h4>继续 fortify（San 自己的 moat）</h4>
+      <ul class="compact">
+        <li>Context Steady / ContextPlan 质量门</li>
+        <li>San Loop ledger + checks + 多角色收敛</li>
+        <li>Brain approve/project 可审计经验系统</li>
+        <li>Workflows restricted runtime + exactly-once delivery</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>从 Grok 补齐（工业 harness 短板）</h4>
+      <ul class="compact">
+        <li>OS sandbox 与 permission 分层</li>
+        <li>长任务后台协调</li>
+        <li>改动 hunk 归因与审阅</li>
+        <li>记忆巩固的节流与压实联动</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>明确不做</h4>
+      <ul class="compact">
+        <li>重写为 Grok 风格通用 CLI 全家桶</li>
+        <li>用 personas 取代 loop 角色状态机</li>
+        <li>用 classic compact 取代 Context Steady</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>7. 证据与阅读路径</h2>
+  <div class="panel">
+    <p class="muted">本地克隆：<code>/tmp/grok-build</code>（浅克隆，HEAD <code>b189869</code>）</p>
+    <ul class="compact">
+      <li>用户文档：<code>crates/codegen/xai-grok-pager/docs/user-guide/</code>（memory / sandbox / plan / subagents / permissions / background）</li>
+      <li>Sandbox：<code>xai-grok-sandbox</code></li>
+      <li>Memory dream：<code>xai-grok-memory/src/dream.rs</code>、<code>mmr.rs</code></li>
+      <li>Hunk：<code>xai-hunk-tracker</code></li>
+      <li>Worktree：<code>xai-fast-worktree</code></li>
+      <li>Code graph：<code>xai-codebase-graph</code></li>
+      <li>Agent 定义与 completionRequirement：<code>xai-grok-agent/README.md</code></li>
+    </ul>
+  </div>
+
+  <h2>8. 最终判断</h2>
+  <div class="panel verdict">
+    <p>
+      <strong>能帮助 San 吗？能。</strong> 主要帮助在于把 “可审计执行系统” 补成 “可在真实机器上安全、可恢复、可并行运行的工程 runtime”。
+    </p>
+    <p>
+      Grok 强在 <em>harness 完成度</em>；San 强在 <em>执行语义与上下文稳态</em>。
+      正确策略是：<strong>吸收 Grok 的安全、并发、审阅、记忆巩固机制，继续加深 San 自己的 loop/brain/context/workflows 叙事</strong>，而不是追齐它的功能目录。
+    </p>
+    <p class="muted">
+      若只挑 3 个立刻动手的点：① OS sandbox + folder trust；② compact/prune 前 Brain flush + dream gate；③ 统一 background task bus（含 wait/cancel）。
+    </p>
+  </div>
+</main>
+</body>
+</html>

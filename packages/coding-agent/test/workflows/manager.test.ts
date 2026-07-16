@@ -528,6 +528,7 @@ describe("WorkflowManager live controls", () => {
 					return agentResult(request);
 				},
 			}),
+			now: () => new Date("2026-07-11T00:10:00.100Z"),
 			idFactory: kind => `restored-${kind}-${++id}`,
 		});
 		expect(restored.getRun(handle.runId)?.status).toBe("paused");

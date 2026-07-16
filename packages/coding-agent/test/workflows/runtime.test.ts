@@ -55,6 +55,8 @@ function runtime(
 		initialAgentsStarted?: number;
 		initialAgentsCompleted?: number;
 		initialTokensUsed?: number;
+		initialStartedAt?: number;
+		now?: () => number;
 		maxSteps?: number;
 		maxCollectionSize?: number;
 	} = {},
@@ -71,6 +73,8 @@ function runtime(
 		initialAgentsStarted: options.initialAgentsStarted,
 		initialAgentsCompleted: options.initialAgentsCompleted,
 		initialTokensUsed: options.initialTokensUsed,
+		initialStartedAt: options.initialStartedAt,
+		now: options.now,
 		maxSteps: options.maxSteps,
 		maxCollectionSize: options.maxCollectionSize,
 	});
@@ -140,6 +144,27 @@ return await parallel([() => agent("a"), () => agent("b"), () => agent("c")]);`;
 			code: "agent_limit",
 		});
 		expect(calls).toBe(2);
+	});
+
+	it("fails an already-expired restored run before executing script or cached work", async () => {
+		const sourceText = `export const meta = { name: "expired", description: "Expired checkpoint" };
+return "must-not-complete";`;
+		let bridgeCalls = 0;
+		const bridge: WorkflowAgentBridge = {
+			async run(request) {
+				bridgeCalls++;
+				return result(request, "unexpected");
+			},
+		};
+
+		await expect(
+			runtime(sourceText, bridge, {
+				limits: limits({ durationMs: 50 }),
+				initialStartedAt: 1_000,
+				now: () => 1_051,
+			}).execute(),
+		).rejects.toMatchObject({ code: "time_limit" });
+		expect(bridgeCalls).toBe(0);
 	});
 
 	it("does not schedule more parallel work after the first observed bridge failure", async () => {
