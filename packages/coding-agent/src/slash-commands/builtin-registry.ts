@@ -41,6 +41,7 @@ import {
 	MarketplaceManager,
 } from "../extensibility/plugins/marketplace";
 import { resolveMemoryBackend } from "../memory-backend";
+import { runPauseScreen } from "../modes/components/pause-screen";
 import { describeLoopLimitRuntime } from "../modes/loop-limit";
 import { theme } from "../modes/theme/theme";
 import type { InteractiveModeContext } from "../modes/types";
@@ -67,7 +68,12 @@ import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
 import { CLI_THINKING_LEVELS, getConfiguredThinkingLevelMetadata, parseConfiguredThinkingLevel } from "../thinking";
 import { expandTilde, resolveToCwd } from "../tools/path-utils";
 import { urlHyperlinkAlways } from "../tui";
-import { getChangelogPath, parseChangelog } from "../utils/changelog";
+import {
+	getChangelogPath,
+	parseChangelog,
+	RECENT_CHANGELOG_ENTRY_LIMIT,
+	renderChangelogEntries,
+} from "../utils/changelog";
 import { copyToClipboard } from "../utils/clipboard";
 import { CollabQrCodeComponent } from "./helpers/collab-qrcode";
 import { buildContextPacketReportText, parseContextPacketReportCount } from "./helpers/context-packet-report";
@@ -504,6 +510,22 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "vibe",
+		description: "Toggle vibe mode (direct persistent fast/good worker sessions; read-only toolset)",
+		inlineHint: "[prompt]",
+		allowArgs: true,
+		getTuiAutocompleteDescription: runtime => {
+			if (runtime.ctx.vibeModeEnabled) return "Vibe: on";
+			if (runtime.ctx.planModeEnabled) return "Vibe: blocked by plan mode";
+			if (runtime.ctx.goalModeEnabled) return "Vibe: blocked by goal mode";
+			return "Vibe: off";
+		},
+		handleTui: async (command, runtime) => {
+			await runtime.ctx.handleVibeModeCommand(command.args || undefined);
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "goal",
 		description: "Toggle goal mode (persistent autonomous objective for this session)",
 		subcommands: [
@@ -614,7 +636,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 			// Session-only direct select (Enter switches and closes).
-			runtime.ctx.showModelSelector({ temporaryOnly: true, directSelect: true, hideProviderTabs: true });
+			runtime.ctx.showModelSelector();
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -633,7 +655,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			return commandConsumed();
 		},
 		handleTui: (_command, runtime) => {
-			runtime.ctx.showModelSelector({ temporaryOnly: true, directSelect: true, hideProviderTabs: true });
+			runtime.ctx.showModelSelector();
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -1437,17 +1459,12 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			const changelogPath = getChangelogPath();
 			const allEntries = await parseChangelog(changelogPath);
 			const showFull = command.args.trim().toLowerCase() === "full";
-			const entriesToShow = showFull ? allEntries : allEntries.slice(0, 3);
+			const entriesToShow = showFull ? allEntries : allEntries.slice(0, RECENT_CHANGELOG_ENTRY_LIMIT);
 			if (entriesToShow.length === 0) {
 				await runtime.output("No changelog entries found.");
 				return commandConsumed();
 			}
-			await runtime.output(
-				[...entriesToShow]
-					.reverse()
-					.map(entry => entry.content)
-					.join("\n\n"),
-			);
+			await runtime.output(renderChangelogEntries(entriesToShow).markdown);
 			return commandConsumed();
 		},
 		handleTui: async (command, runtime) => {
@@ -2861,6 +2878,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 
 			// If a prompt was provided, pass it through as input
 			if (prompt) return { prompt };
+		},
+	},
+	{
+		name: "pause",
+		description: "Freeze all agents (main, subagents, advisor) until resumed",
+		handleTui: async (_command, runtime) => {
+			runtime.ctx.editor.setText("");
+			await runPauseScreen(runtime.ctx);
 		},
 	},
 	{

@@ -690,8 +690,8 @@ function normalizeSuppressedSelector(
 	const trimmed = selector.trim();
 	if (!trimmed) return trimmed;
 	const parsed = parseModelString(trimmed, {
-
 		allowAutoAlias: true,
+		allowMaxSuffix: true,
 		isLiteralModelId: (provider, id) => hasLiveModel?.(provider, id) === true,
 	});
 	if (!parsed) return trimmed;

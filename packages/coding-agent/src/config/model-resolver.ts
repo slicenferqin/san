@@ -79,17 +79,19 @@ export interface ScopedModel {
 }
 
 interface ThinkingSuffixOptions {
-
 	allowAutoAlias?: boolean;
+	allowMaxSuffix?: boolean;
 }
 
 interface ModelStringParseOptions extends ThinkingSuffixOptions {
 	isLiteralModelId?: (provider: string, id: string) => boolean;
 }
-// `auto` is a session-only selector rather than a provider effort, so model
-// parsing opts into it explicitly. `max` is now a concrete effort; callers
-// still preserve literal `:max` model ids where the previous alias grammar did.
-const MODEL_PATTERN_THINKING_SUFFIX_OPTIONS: ThinkingSuffixOptions = { allowAutoAlias: true };
+// Suffix recognition for the model-pattern parser: `:max` is a real thinking
+// level and `:auto` maps to the auto sentinel. Both are gated behind flags
+// (and the literal-id / exact-match guards on the callers) because real model
+// ids end in `:max` (e.g. `glm-4.7:max`) — an ungated split would silently
+// reinterpret them as a thinking suffix.
+const MAX_THINKING_SUFFIX_OPTIONS: ThinkingSuffixOptions = { allowMaxSuffix: true, allowAutoAlias: true };
 
 function parseThinkingSuffix(value: string, options?: ThinkingSuffixOptions): ConfiguredThinkingLevel | undefined {
 	const level = parseThinkingLevel(value);
@@ -102,9 +104,10 @@ function parseThinkingSuffix(value: string, options?: ThinkingSuffixOptions): Co
 /**
  * Split a trailing `:<level>` thinking selector off a model pattern.
  *
- * `level` is set when the suffix parses as a concrete thinking level (or when
- * the caller opts into the session-only `:auto` selector); `base` then has the
- * suffix stripped. Otherwise `base` is the input.
+ * `level` is set when the suffix parses as a concrete thinking level (or, when
+ * the caller opts in via `allowMaxSuffix`/`allowAutoAlias`, the guarded `:max`
+ * level / `:auto` sentinel); `base` then has the suffix stripped. Otherwise
+ * `base` is the input.
  * `minColonIndex` requires the colon to appear strictly after that index —
  * role-alias callers pass `PREFIX_MODEL_ROLE.length` so the base is at least
  * as long as the `pi/` prefix.
@@ -136,18 +139,25 @@ function resolveGlobScopePattern(
 	// Coerce the `auto` sentinel to a concrete-only view so scope callers stay
 	// typed on `ThinkingLevel` and `enabledModels: [\"openai/*:auto\"]` doesn't
 	// pin a stray per-model level.
-	const suffix = splitThinkingSuffix(pattern, -1, MODEL_PATTERN_THINKING_SUFFIX_OPTIONS);
-	if (suffix.level !== undefined) {
-		// `:max` and `:auto` were historically collision-prone aliases. Keep a
-		// literal glob match authoritative even though max is now a real effort.
-		const preservesLiteralSuffix = suffix.level === ThinkingLevel.Max || suffix.level === AUTO_THINKING;
+	const strictSuffix = splitThinkingSuffix(pattern);
+	if (strictSuffix.level !== undefined) {
+		const thinkingLevel = concreteThinkingLevel(strictSuffix.level);
+		return {
+			models: matchingGlobModels(strictSuffix.base, availableModels),
+			thinkingLevel,
+			explicitThinkingLevel: thinkingLevel !== undefined,
+		};
+	}
+
+	const maxSuffix = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
+	if (maxSuffix.level !== undefined) {
 		const literalMatches = matchingGlobModels(pattern, availableModels);
-		if (preservesLiteralSuffix && literalMatches.length > 0) {
+		if (literalMatches.length > 0) {
 			return { models: literalMatches, thinkingLevel: undefined, explicitThinkingLevel: false };
 		}
-		const thinkingLevel = concreteThinkingLevel(suffix.level);
+		const thinkingLevel = concreteThinkingLevel(maxSuffix.level);
 		return {
-			models: matchingGlobModels(suffix.base, availableModels),
+			models: matchingGlobModels(maxSuffix.base, availableModels),
 			thinkingLevel,
 			explicitThinkingLevel: thinkingLevel !== undefined,
 		};
@@ -172,12 +182,16 @@ export function parseModelString(
 	if (slashIdx <= 0) return undefined;
 	const id = modelStr.slice(slashIdx + 1);
 	const provider = modelStr.slice(0, slashIdx);
-	const suffix = splitThinkingSuffix(id, -1, options);
-	if (suffix.level !== undefined) {
-		const preservesLiteralSuffix = suffix.level === ThinkingLevel.Max || suffix.level === AUTO_THINKING;
-		return preservesLiteralSuffix && options?.isLiteralModelId?.(provider, id) === true
+	// Strip strict thinking level suffixes first (e.g. "claude-sonnet-4-6:high" -> id "claude-sonnet-4-6", thinkingLevel "high").
+	const strict = splitThinkingSuffix(id);
+	if (strict.level) return { provider, id: strict.base, thinkingLevel: strict.level };
+	// `max` is a real thinking level, but real model IDs can also end in
+	// `:max`. Context-aware callers pass a literal lookup so those models win.
+	const maxAlias = splitThinkingSuffix(id, -1, options);
+	if (maxAlias.level) {
+		return options?.isLiteralModelId?.(provider, id) === true
 			? { provider, id }
-			: { provider, id: suffix.base, thinkingLevel: suffix.level };
+			: { provider, id: maxAlias.base, thinkingLevel: maxAlias.level };
 	}
 	return { provider, id };
 }
@@ -229,7 +243,7 @@ function getOpenRouterRouteSuffix(modelId: string): { baseId: string; suffix: st
 	const suffix = modelId.slice(colonIdx + 1).trim();
 	// Thinking selectors are never OpenRouter route suffixes. They fall through
 	// to selector parsing instead of cloning a literal routed model id.
-	if (!suffix || parseThinkingSuffix(suffix, MODEL_PATTERN_THINKING_SUFFIX_OPTIONS)) {
+	if (!suffix || parseThinkingSuffix(suffix, MAX_THINKING_SUFFIX_OPTIONS)) {
 		return undefined;
 	}
 
@@ -753,7 +767,7 @@ function parseModelPatternWithContext(
 
 	// No match - try stripping a valid thinking suffix and recursing. Exact
 	// matching above keeps literal model ids ending in `:max` / `:auto` intact.
-	const { base, level } = splitThinkingSuffix(pattern, -1, MODEL_PATTERN_THINKING_SUFFIX_OPTIONS);
+	const { base, level } = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
 	if (level) {
 		const result = parseModelPatternWithContext(base, availableModels, context, options);
 		if (result.model) {
@@ -897,7 +911,7 @@ function resolveDefaultInheritedPatterns(
 		const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(
 			pattern,
 			PREFIX_MODEL_ROLE.length,
-			MODEL_PATTERN_THINKING_SUFFIX_OPTIONS,
+			MAX_THINKING_SUFFIX_OPTIONS,
 		);
 		const aliasRole = getModelRoleAlias(aliasCandidate);
 		if (aliasRole === role) {
@@ -936,7 +950,7 @@ function resolveConfiguredRolePattern(
 	const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(
 		normalized,
 		PREFIX_MODEL_ROLE.length,
-		MODEL_PATTERN_THINKING_SUFFIX_OPTIONS,
+		MAX_THINKING_SUFFIX_OPTIONS,
 	);
 	const role = getModelRoleAlias(aliasCandidate);
 	if (!role) return [normalized];
@@ -1087,11 +1101,7 @@ export function extractExplicitThinkingSelector(
 	let current = normalized;
 	while (!visited.has(current)) {
 		visited.add(current);
-		const selector = splitThinkingSuffix(
-			current,
-			PREFIX_MODEL_ROLE.length,
-			MODEL_PATTERN_THINKING_SUFFIX_OPTIONS,
-		).level;
+		const selector = splitThinkingSuffix(current, PREFIX_MODEL_ROLE.length, MAX_THINKING_SUFFIX_OPTIONS).level;
 		if (selector) {
 			const preservesLiteralSuffix = selector === ThinkingLevel.Max || selector === AUTO_THINKING;
 			if (
@@ -1122,7 +1132,7 @@ export function resolveModelFromString(
 	const exact = available.find(model => `${model.provider}/${model.id}` === value);
 	if (exact) return exact;
 	const parsed = parseModelString(value, {
-		...MODEL_PATTERN_THINKING_SUFFIX_OPTIONS,
+		...MAX_THINKING_SUFFIX_OPTIONS,
 		isLiteralModelId: (provider, id) => available.some(model => model.provider === provider && model.id === id),
 	});
 	if (parsed) {

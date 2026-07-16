@@ -6,6 +6,25 @@
 
 - Fixed long-format `git status` minimization misreporting Git's trailing `no changes added to commit` guidance as an untracked file.
 - Corrected RTK-derived shell minimizer attribution and native package metadata from MIT-only to the applicable Apache-2.0 and MIT license combination, and included the license texts and third-party notice in native distributions.
+## [16.4.5] - 2026-07-11
+
+### Added
+
+- Added context-safe, in-process shell builtins for common utilities including base64, basename, dirname, cut, tee, tr, paste, comm, sed, xargs, jq, and the md5sum/sha/b2sum checksum family. These builtins run without spawning external binaries, support pipelines, respect shell-relative paths and environment variables, and honor abort/timeout cancellation.
+
+## [16.4.4] - 2026-07-11
+
+### Fixed
+
+- Fixed fuzzyFind tie-breaking logic to prefer shallower paths first, preventing deeply nested matches from ranking above shallow ones on score ties.
+- Fixed macOS installation issues for pi-natives by statically linking PCRE2, removing the runtime dependency on Homebrew's dynamic libpcre2-8.0.dylib library.
+
+## [16.4.3] - 2026-07-11
+
+### Fixed
+
+- Optimized non-recursive glob patterns (e.g., `dir/*.json`) to prevent traversing entire subtrees, significantly improving performance and preventing timeouts when searching large directories.
+- Fixed native filesystem searches (`glob`, `grep`, and AST search/edit) incorrectly excluding explicitly rooted directories due to ancestor ignore rules.
 
 ## [16.3.13] - 2026-07-09
 

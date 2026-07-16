@@ -1182,7 +1182,7 @@ describe("parseModelString", () => {
 				Effort.Ultra,
 			] as const;
 			for (const level of levels) {
-				const result = parseModelString(`anthropic/claude-sonnet-4-5:${level}`);
+				const result = parseModelString(`anthropic/claude-sonnet-4-5:${level}`, { allowMaxSuffix: true });
 				expect(result?.id).toBe("claude-sonnet-4-5");
 				expect(result?.thinkingLevel).toBe(level);
 			}
@@ -1204,13 +1204,13 @@ describe("parseModelString", () => {
 		});
 
 		test("extracts max as a concrete provider id selector", () => {
-			const result = parseModelString("deepseek/deepseek-v4-pro:max");
+			const result = parseModelString("deepseek/deepseek-v4-pro:max", { allowMaxSuffix: true });
 			expect(result).toEqual({ provider: "deepseek", id: "deepseek-v4-pro", thinkingLevel: Effort.Max });
 		});
 
 		test("preserves literal max model ids when the caller can prove they exist", () => {
 			const result = parseModelString("nanogpt/coding-router:max", {
-
+				allowMaxSuffix: true,
 				isLiteralModelId: (provider, id) => provider === "nanogpt" && id === "coding-router:max",
 			});
 			expect(result).toEqual({ provider: "nanogpt", id: "coding-router:max" });

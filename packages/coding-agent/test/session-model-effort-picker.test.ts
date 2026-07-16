@@ -1,20 +1,49 @@
-import { beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { Effort } from "@oh-my-pi/pi-ai";
+import { Effort, type Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { ModelSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/model-selector";
+import { ModelHubComponent, resetProviderAutoRefreshGuard } from "@oh-my-pi/pi-coding-agent/modes/components/model-hub";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-coding-agent/thinking";
 import type { TUI } from "@oh-my-pi/pi-tui";
 
-function normalizeRenderedText(text: string): string {
-	return stripVTControlCharacters(text).replace(/\s+/g, " ").trim();
+const openHubs: ModelHubComponent[] = [];
+
+function normalizeRenderedText(lines: readonly string[]): string {
+	return stripVTControlCharacters(lines.join("\n")).replace(/\s+/g, " ").trim();
 }
 
-function renderSelector(selector: ModelSelectorComponent): string {
-	return normalizeRenderedText(selector.render(100).join("\n"));
+function createHub(model: Model, initialThinkingLevel?: ConfiguredThinkingLevel) {
+	const onPick = vi.fn();
+	const registry = {
+		refresh: async () => {},
+		refreshProvider: async () => {},
+		getError: () => undefined,
+		getAvailable: () => [model],
+		getAll: () => [model],
+		getDiscoverableProviders: () => [],
+		getProviderDiscoveryState: () => undefined,
+		authStorage: { hasAuth: () => false },
+	} as unknown as ModelRegistry;
+	const ui = { requestRender: vi.fn(), terminal: { rows: 40 } } as unknown as TUI;
+	const hub = new ModelHubComponent(
+		ui,
+		Settings.isolated({}),
+		registry,
+		[{ model }],
+		{
+			onAssign: vi.fn(),
+			onUnassign: vi.fn(),
+			onPick,
+			onCancel: vi.fn(),
+		},
+		{ mode: "pick", initialThinkingLevel },
+	);
+	openHubs.push(hub);
+	return { hub, onPick };
 }
 
 describe("session model effort picker", () => {
@@ -22,6 +51,11 @@ describe("session model effort picker", () => {
 		const theme = await getThemeByName("dark");
 		if (!theme) throw new Error("Failed to load dark theme");
 		setThemeInstance(theme);
+	});
+
+	afterEach(() => {
+		resetProviderAutoRefreshGuard();
+		for (const hub of openHubs.splice(0)) hub.dispose();
 	});
 
 	it("opens effort step after selecting a reasoning model in session mode", async () => {
@@ -42,48 +76,19 @@ describe("session model effort picker", () => {
 			maxTokens: 8192,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		});
-		const onSelect = vi.fn(async () => {});
-		const registry = {
-			refresh: async () => {},
-			refreshProvider: async () => {},
-			getError: () => undefined,
-			getAvailable: () => [model],
-			getAll: () => [model],
-			getDiscoverableProviders: () => [],
-			getProviderDiscoveryState: () => undefined,
-		} as unknown as ModelRegistry;
-		const ui = { requestRender: vi.fn() } as unknown as TUI;
-		const selector = new ModelSelectorComponent(
-			ui,
-			model,
-			Settings.isolated({ defaultThinkingLevel: ThinkingLevel.High }),
-			registry,
-			[],
-			onSelect,
-			() => {},
-			{ temporaryOnly: true, directSelect: true, hideProviderTabs: true },
-		);
-		// Flush the offline refresh microtask without sleeping.
+		const { hub, onPick } = createHub(model, ThinkingLevel.High);
 		await Promise.resolve();
 
-		selector.handleInput("\n");
-		const rendered = renderSelector(selector);
+		hub.handleInput("\n");
+		const rendered = normalizeRenderedText(hub.render(100));
 		expect(rendered).toContain("Effort for session");
 		expect(rendered).toContain("high");
-		expect(onSelect).not.toHaveBeenCalled();
+		expect(onPick).not.toHaveBeenCalled();
 
-		selector.handleInput("\n");
-		await Promise.resolve();
-		expect(onSelect).toHaveBeenCalledTimes(1);
-		const call = onSelect.mock.calls[0] as unknown as [
-			unknown,
-			string | null,
-			string | undefined,
-			string | undefined,
-			string | undefined,
-		];
-		expect(call[1]).toBeNull();
-		expect(call[2]).toBe(ThinkingLevel.High);
+		hub.handleInput("\n");
+		expect(onPick).toHaveBeenCalledTimes(1);
+		expect(onPick.mock.calls[0]?.[0]).toBe(model);
+		expect(onPick.mock.calls[0]?.[2]).toBe(ThinkingLevel.High);
 	});
 
 	it("selects non-reasoning models immediately without effort step", async () => {
@@ -99,40 +104,12 @@ describe("session model effort picker", () => {
 			maxTokens: 8192,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		});
-		const onSelect = vi.fn(async () => {});
-		const registry = {
-			refresh: async () => {},
-			refreshProvider: async () => {},
-			getError: () => undefined,
-			getAvailable: () => [model],
-			getAll: () => [model],
-			getDiscoverableProviders: () => [],
-			getProviderDiscoveryState: () => undefined,
-		} as unknown as ModelRegistry;
-		const ui = { requestRender: vi.fn() } as unknown as TUI;
-		const selector = new ModelSelectorComponent(
-			ui,
-			model,
-			Settings.isolated({}),
-			registry,
-			[],
-			onSelect,
-			() => {},
-			{ temporaryOnly: true, directSelect: true, hideProviderTabs: true },
-		);
+		const { hub, onPick } = createHub(model);
 		await Promise.resolve();
 
-		selector.handleInput("\n");
-		await Promise.resolve();
-		expect(onSelect).toHaveBeenCalledTimes(1);
-		const call = onSelect.mock.calls[0] as unknown as [
-			unknown,
-			string | null,
-			string | undefined,
-			string | undefined,
-			string | undefined,
-		];
-		expect(call[1]).toBeNull();
-		expect(call[2]).toBeUndefined();
+		hub.handleInput("\n");
+		expect(onPick).toHaveBeenCalledTimes(1);
+		expect(onPick.mock.calls[0]?.[0]).toBe(model);
+		expect(onPick.mock.calls[0]?.[2]).toBeUndefined();
 	});
 });

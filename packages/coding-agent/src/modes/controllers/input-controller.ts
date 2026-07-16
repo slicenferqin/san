@@ -419,14 +419,12 @@ export class InputController {
 		);
 		// Alt+P and Alt+M both open the session-only model picker. Role assignment
 		// is `/model roles` only — progressive disclosure for simple users.
-		this.ctx.editor.onSelectModelTemporary = () =>
-			this.ctx.showModelSelector({ temporaryOnly: true, directSelect: true, hideProviderTabs: true });
+		this.ctx.editor.onSelectModelTemporary = () => this.ctx.showModelSelector();
 
 		// Global debug handler on TUI (works regardless of focus)
 		this.ctx.ui.onDebug = () => this.ctx.showDebugSelector();
 		this.ctx.editor.setActionKeys("app.model.select", this.ctx.keybindings.getKeys("app.model.select"));
-		this.ctx.editor.onSelectModel = () =>
-			this.ctx.showModelSelector({ temporaryOnly: true, directSelect: true, hideProviderTabs: true });
+		this.ctx.editor.onSelectModel = () => this.ctx.showModelSelector();
 		this.ctx.editor.setActionKeys("app.history.search", this.ctx.keybindings.getKeys("app.history.search"));
 		this.ctx.editor.onHistorySearch = () => this.ctx.showHistorySearch();
 		this.ctx.editor.setActionKeys("app.thinking.toggle", this.ctx.keybindings.getKeys("app.thinking.toggle"));
