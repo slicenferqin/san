@@ -427,7 +427,7 @@ export async function transformRequestBody(
 
 	body.text = {
 		...body.text,
-		verbosity: options.textVerbosity || "high",
+		verbosity: options.textVerbosity || "medium",
 	};
 
 	const include = Array.isArray(options.include) ? [...options.include] : [];

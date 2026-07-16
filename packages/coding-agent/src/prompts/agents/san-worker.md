@@ -3,7 +3,7 @@ name: san-worker
 description: San v0.2 worker for bounded implementation assignments inside the execution loop.
 tools: read, grep, glob, write, edit, bash, yield
 spawns: ""
-model: pi/task
+model: "@task"
 thinking-level: medium
 output:
   properties:

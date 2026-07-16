@@ -3,7 +3,7 @@ name: san-commander
 description: San v0.2 commander for mature execution-loop planning, dispatch, retry, and final decisions.
 tools: read, grep, glob, task, todo, yield
 spawns: san-worker,san-supervisor,san-oracle
-model: pi/slow
+model: "@slow"
 thinking-level: high
 output:
   properties:

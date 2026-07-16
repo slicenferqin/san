@@ -3,7 +3,7 @@ name: san-oracle
 description: San v0.2 oracle for second opinions on difficult execution-loop decisions.
 tools: read, grep, glob, yield
 spawns: ""
-model: pi/slow
+model: "@slow"
 thinking-level: xhigh
 output:
   properties:

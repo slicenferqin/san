@@ -883,8 +883,8 @@ function normalizeRoleModelOverride(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const trimmed = value.trim();
 	if (!trimmed) return undefined;
-	if (trimmed.includes("/") || trimmed.includes(",")) return trimmed;
-	return `pi/${trimmed}`;
+	if (trimmed.startsWith("@") || trimmed.includes("/") || trimmed.includes(",")) return trimmed;
+	return `@${trimmed}`;
 }
 
 export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutorOptions): SanLoopAgentExecutor {

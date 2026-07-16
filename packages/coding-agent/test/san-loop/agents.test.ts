@@ -132,17 +132,17 @@ describe("San loop bundled agents", () => {
 		const byName = new Map(agents.map(agent => [agent.name, agent]));
 
 		expect(byName.get("san-commander")?.spawns).toEqual(["san-worker", "san-supervisor", "san-oracle"]);
-		expect(byName.get("san-commander")?.model).toEqual(["pi/slow"]);
+		expect(byName.get("san-commander")?.model).toEqual(["@slow"]);
 		expect(byName.get("san-commander")?.tools).toEqual(expect.arrayContaining(["task", "todo", "yield"]));
 		expect(byName.get("san-worker")?.spawns).toBeUndefined();
-		expect(byName.get("san-worker")?.model).toEqual(["pi/task"]);
+		expect(byName.get("san-worker")?.model).toEqual(["@task"]);
 		expect(byName.get("san-worker")?.tools).toEqual(expect.arrayContaining(["write", "edit", "bash", "yield"]));
 		expect(byName.get("san-supervisor")?.spawns).toEqual(["san-oracle"]);
-		expect(byName.get("san-supervisor")?.model).toEqual(["pi/slow"]);
+		expect(byName.get("san-supervisor")?.model).toEqual(["@slow"]);
 		expect(byName.get("san-supervisor")?.tools).toEqual(expect.arrayContaining(["bash", "yield"]));
 		expect(byName.get("san-supervisor")?.tools ?? []).not.toContain("write");
 		expect(byName.get("san-oracle")?.spawns).toBeUndefined();
-		expect(byName.get("san-oracle")?.model).toEqual(["pi/slow"]);
+		expect(byName.get("san-oracle")?.model).toEqual(["@slow"]);
 		expect(byName.get("san-oracle")?.tools ?? []).not.toContain("bash");
 	});
 
@@ -285,7 +285,7 @@ describe("San loop bundled agents", () => {
 		});
 
 		expect(calls).toEqual([
-			{ agent: "san-commander", modelOverride: "pi/plan" },
+			{ agent: "san-commander", modelOverride: "@plan" },
 			{ agent: "san-worker", modelOverride: "deepseek/deepseek-v4-pro" },
 			{ agent: "san-supervisor", modelOverride: "anthropic/claude-sonnet-4-5:max" },
 			{ agent: "san-oracle", modelOverride: "openai/gpt-5.5:xhigh" },

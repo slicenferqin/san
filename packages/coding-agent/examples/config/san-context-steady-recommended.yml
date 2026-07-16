@@ -15,7 +15,7 @@ san:
       timeoutMs: 30000
       llm:
         enabled: true
-        modelRole: pi/smol
+        modelRole: "@smol"
     qualityWindowTokens: 240000
     reserveRatio: 0.25
     contextPlan:

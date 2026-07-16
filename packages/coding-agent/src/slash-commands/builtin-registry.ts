@@ -22,6 +22,7 @@ import {
 } from "../brain";
 import { COLLAB_GUEST_ALLOWED_COMMANDS, CollabGuestLink } from "../collab/guest";
 import { CollabHost } from "../collab/host";
+import { expandRoleAlias, getModelMatchPreferences, resolveCliModel } from "../config/model-resolver";
 import { applyProviderGlobalsFromSettings } from "../config/provider-globals";
 import type { SettingPath, Settings, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";
@@ -580,6 +581,15 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "queue",
+		description: "Queue a message for after the agent yields",
+		inlineHint: "<message>",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			await runtime.ctx.handleQueueCommand(command.args);
+		},
+	},
+	{
 		name: "model",
 		aliases: ["models"],
 		description: "Switch model for this session",
@@ -655,7 +665,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			return commandConsumed();
 		},
 		handleTui: (_command, runtime) => {
-			runtime.ctx.showModelSelector();
+			runtime.ctx.showModelSelector({ temporaryOnly: true });
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -804,6 +814,30 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				`Effort set to ${getConfiguredThinkingLevelMetadata(level).label}. Shift+Tab cycles levels.`,
 			);
 			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "prewalk",
+		description: "Switch to a fast/cheap model at the next action (works even without --prewalk)",
+		acpDescription: "Prewalk at the next action",
+		handle: async (_command, runtime) => {
+			const rolePattern = expandRoleAlias("@smol", runtime.settings);
+			const resolved = resolveCliModel({
+				cliModel: rolePattern,
+				modelRegistry: runtime.session.modelRegistry,
+				preferences: getModelMatchPreferences(runtime.settings),
+			});
+			if (resolved.error || !resolved.model) {
+				return usage(resolved.error ?? `Model "${rolePattern}" not found`, runtime);
+			}
+			if (!runtime.session.modelRegistry.hasConfiguredAuth(resolved.model)) {
+				return usage(`No API key for ${resolved.model.provider}/${resolved.model.id}`, runtime);
+			}
+			runtime.session.armPrewalk(resolved.model, resolved.thinkingLevel);
+			await runtime.output(
+				`Prewalk on: switching to ${resolved.model.provider}/${resolved.model.id} at the next edit/write (todo-gated).`,
+			);
+			return commandConsumed();
 		},
 	},
 	{

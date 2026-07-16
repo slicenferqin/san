@@ -173,7 +173,7 @@ function steadySettings(llmEnabled: boolean, persistFallback = true) {
 			enabled: true,
 			persistFallback,
 			timeoutMs: 5000,
-			llm: { enabled: llmEnabled, modelRole: "pi/smol" },
+			llm: { enabled: llmEnabled, modelRole: "@smol" },
 		},
 	};
 }

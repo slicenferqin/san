@@ -259,6 +259,11 @@ export const credentialBlocksDeleteResponseSchema = type({
 	ok: "boolean",
 });
 
+export const usageStaleResponseSchema = type({
+	"+": "reject",
+	ok: "boolean",
+});
+
 // ─── Upload ────────────────────────────────────────────────────────────────
 
 export const credentialUploadRequestSchema = type({
