@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<meta
+		name="description"
+		content="Grok Build 与 San 的源码级交叉分析：可借鉴机制、重复能力、优先级与落地建议。"
+	/>
+	<title>Grok Build x San 源码交叉分析 - 2026-07-16</title>
+	<style>
+		:root {
+			color-scheme: light;
+			--bg: #f4f6f3;
+			--paper: #ffffff;
+			--ink: #17211d;
+			--muted: #5e6b64;
+			--line: #cfd8d2;
+			--soft: #eef2ef;
+			--green: #17643d;
+			--green-soft: #e3f2e9;
+			--blue: #245a87;
+			--blue-soft: #e7f0f7;
+			--amber: #8a5700;
+			--amber-soft: #f8edcf;
+			--red: #972f2f;
+			--red-soft: #f8e5e5;
+			--code: #19231f;
+		}
+		* { box-sizing: border-box; }
+		html { scroll-behavior: smooth; }
+		body {
+			margin: 0;
+			background: var(--bg);
+			color: var(--ink);
+			font: 15px/1.68 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			letter-spacing: 0;
+		}
+		a { color: var(--blue); text-underline-offset: 2px; }
+		main { width: min(1120px, calc(100% - 32px)); margin: 0 auto 72px; }
+		header {
+			margin: 0 -16px 28px;
+			padding: 42px max(24px, calc((100vw - 1120px) / 2 + 16px)) 34px;
+			background: #16231d;
+			color: #f7faf8;
+			border-bottom: 5px solid #3e9669;
+		}
+		header .inner { max-width: 1120px; margin: 0 auto; }
+		h1, h2, h3, h4 { line-height: 1.28; letter-spacing: 0; }
+		h1 { max-width: 900px; margin: 0 0 12px; font-size: 2.15rem; }
+		header p { max-width: 900px; margin: 0; color: #c9d6cf; font-size: 1.02rem; }
+		h2 {
+			margin: 42px 0 16px;
+			padding-top: 14px;
+			border-top: 2px solid var(--line);
+			font-size: 1.42rem;
+		}
+		h3 { margin: 28px 0 10px; font-size: 1.1rem; }
+		h4 { margin: 0 0 6px; font-size: 0.98rem; }
+		p { margin: 8px 0 13px; }
+		ul, ol { padding-left: 1.3rem; }
+		li { margin: 0.36rem 0; }
+		.meta {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px;
+			margin-top: 20px;
+		}
+		.meta span, .tag {
+			display: inline-flex;
+			align-items: center;
+			min-height: 28px;
+			padding: 3px 9px;
+			border: 1px solid #52645b;
+			border-radius: 6px;
+			color: #dce6e0;
+			font-size: 0.78rem;
+		}
+		.summary {
+			display: grid;
+			grid-template-columns: repeat(4, minmax(0, 1fr));
+			gap: 10px;
+			margin: 22px 0 30px;
+		}
+		.summary article {
+			min-height: 148px;
+			padding: 16px;
+			background: var(--paper);
+			border: 1px solid var(--line);
+			border-top: 4px solid var(--green);
+			border-radius: 8px;
+		}
+		.summary article:nth-child(2) { border-top-color: var(--red); }
+		.summary article:nth-child(3) { border-top-color: var(--blue); }
+		.summary article:nth-child(4) { border-top-color: var(--amber); }
+		.summary strong { display: block; margin-bottom: 6px; font-size: 1.04rem; }
+		.summary p { margin: 0; color: var(--muted); }
+		.callout {
+			margin: 18px 0;
+			padding: 15px 17px;
+			background: var(--green-soft);
+			border: 1px solid #a9cdb8;
+			border-left: 5px solid var(--green);
+			border-radius: 8px;
+		}
+		.callout.warn { background: var(--amber-soft); border-color: #dcc17e; border-left-color: var(--amber); }
+		.callout.info { background: var(--blue-soft); border-color: #afc9dd; border-left-color: var(--blue); }
+		.callout.danger { background: var(--red-soft); border-color: #ddb2b2; border-left-color: var(--red); }
+		.grid {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 12px;
+			margin: 14px 0;
+		}
+		.card {
+			padding: 15px 16px;
+			background: var(--paper);
+			border: 1px solid var(--line);
+			border-radius: 8px;
+		}
+		.card p:last-child, .card ul:last-child { margin-bottom: 0; }
+		.table-wrap { overflow-x: auto; margin: 14px 0; border: 1px solid var(--line); border-radius: 8px; }
+		table { width: 100%; min-width: 760px; border-collapse: collapse; background: var(--paper); font-size: 0.89rem; }
+		th, td { padding: 10px 11px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); text-align: left; vertical-align: top; }
+		th:last-child, td:last-child { border-right: 0; }
+		tr:last-child td { border-bottom: 0; }
+		th { background: var(--soft); color: #37443e; font-weight: 700; }
+		.status {
+			display: inline-block;
+			min-width: 36px;
+			padding: 1px 7px;
+			border-radius: 5px;
+			font-size: 0.75rem;
+			font-weight: 800;
+			text-align: center;
+		}
+		.p0 { color: #fff; background: var(--red); }
+		.p1 { color: #fff; background: var(--amber); }
+		.p2 { color: #fff; background: var(--blue); }
+		.p3 { color: #fff; background: var(--green); }
+		.skip { color: #f5f7f6; background: #59635e; }
+		code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+		code { padding: 1px 5px; color: #1d4933; background: #e8eee9; border-radius: 4px; font-size: 0.88em; overflow-wrap: anywhere; }
+		pre {
+			margin: 12px 0;
+			padding: 14px 16px;
+			overflow-x: auto;
+			background: var(--code);
+			color: #e9f2ed;
+			border-radius: 8px;
+			font-size: 0.82rem;
+			line-height: 1.55;
+		}
+		pre code { padding: 0; color: inherit; background: transparent; }
+		.priority {
+			margin: 20px 0 28px;
+			padding: 18px;
+			background: var(--paper);
+			border: 1px solid var(--line);
+			border-radius: 8px;
+		}
+		.priority h3 { margin-top: 0; }
+		.evidence { color: var(--muted); font-size: 0.9rem; }
+		.evidence a { overflow-wrap: anywhere; }
+		.small { color: var(--muted); font-size: 0.87rem; }
+		strong.good { color: var(--green); }
+		strong.bad { color: var(--red); }
+		footer { margin-top: 42px; padding-top: 18px; border-top: 2px solid var(--line); color: var(--muted); }
+		@media (max-width: 860px) {
+			.summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+			.grid { grid-template-columns: 1fr; }
+			h1 { font-size: 1.75rem; }
+		}
+		@media (max-width: 560px) {
+			main { width: min(100% - 20px, 1120px); }
+			header { margin-left: -10px; margin-right: -10px; padding-left: 18px; padding-right: 18px; }
+			.summary { grid-template-columns: 1fr; }
+			.summary article { min-height: 0; }
+		}
+		@media print {
+			body { background: #fff; }
+			main { width: 100%; margin: 0; }
+			header { margin: 0 0 20px; padding: 24px; }
+			a { color: inherit; }
+			.summary article, .card, .priority, .table-wrap { break-inside: avoid; }
+		}
+	</style>
+</head>
+<body>
+	<main>
+		<header>
+			<div class="inner">
+				<h1>Grok Build x San：值得借鉴，但重点不是“功能追平”</h1>
+				<p>
+					这是一份基于两边当前源码的交叉分析。Grok Build 的优势是工业 harness 的安全边界、变更归因和持久自治；San 的优势是 Context Steady、结构化 subagent 交付、跨平台隔离、Execution Loop 与可审计 Brain。正确做法是补齐 San 的边界层，而不是重写或复制整套产品。
+				</p>
+				<div class="meta">
+					<span>分析日期 2026-07-16</span>
+					<span>Grok Build b189869b7755</span>
+					<span>San 1a94da7f0a47</span>
+					<span>源码级架构 / 产品能力 / 落地优先级</span>
+				</div>
+			</div>
+		</header>
+
+		<section class="summary" aria-label="结论摘要">
+			<article>
+				<strong>最值得吸收</strong>
+				<p>Folder Trust、OS sandbox 与细粒度权限策略，直接补 San 当前最真实的供应链和本机安全缺口。</p>
+			</article>
+			<article>
+				<strong>最值得联动</strong>
+				<p>把 Grok 的 goal verifier/stall detection 接到 San Goal + San Loop，完成从“自报完成”到“证据判定完成”的升级。</p>
+			</article>
+			<article>
+				<strong>最值得复用思想</strong>
+				<p>Agent/user hunk 归因和 compact 前 durable flush，让审阅、Supervisor 与 Context Steady 使用同一份可信证据。</p>
+			</article>
+			<article>
+				<strong>不要重复建设</strong>
+				<p>San 已有 plan 共审、后台 job bus、结构化 yield、更多隔离后端和多 provider；这些不是当前差距。</p>
+			</article>
+		</section>
+
+		<div class="callout">
+			<strong>最终判断：</strong>有帮助，而且帮助很具体。建议把 Grok Build 当作“安全与自治运行时参考实现”，而不是新的产品路线。按价值排序，San 应先做项目信任与 sandbox，再做证据化 Goal 收口与 hunk provenance，最后才考虑 monitor/scheduler、code graph 和 worktree pool。
+		</div>
+
+		<h2>1. 分析基线与可信边界</h2>
+		<div class="grid">
+			<div class="card">
+				<h4>Grok Build 快照</h4>
+				<p><code>xai-org/grok-build</code> 的浅克隆 HEAD 是 <code>b189869b7755d2b482969acf6c92da3ecfeffd36</code>，提交时间 2026-07-15。Cargo metadata 给出 79 个 workspace package，其中 62 个位于 <code>crates/codegen</code>。</p>
+			</div>
+			<div class="card">
+				<h4>San 快照</h4>
+				<p>对照基线是 <code>main@1a94da7f0a476dc0f7c4a3f3c15ed34d9439e302</code>。重点检查了 coding-agent 的 Context Steady、San Loop、Brain、Workflows、Goal、task、async job、approval、plan review 与 <code>pi-iso</code>。</p>
+			</div>
+			<div class="card">
+				<h4>许可证与协作现实</h4>
+				<p>Grok Build 第一方代码是 Apache-2.0，可作实现参考；但它不接收外部贡献，并且是 SpaceXAI monorepo 的周期同步树。复制代码时仍要逐文件核对 <code>THIRD-PARTY-NOTICES</code> 和变更声明。</p>
+			</div>
+			<div class="card">
+				<h4>不能从该快照推出什么</h4>
+				<p>公开树没有可用于长期演进判断的完整 monorepo 历史。本报告只评价当前可见合同和实现，不把 crate 数量、注释数量或测试函数数量等同于生产质量。</p>
+			</div>
+		</div>
+
+		<div class="callout warn">
+			<strong>两个重要限定：</strong>Grok 的内置 sandbox 应用失败时通常警告后继续，只有显式 custom profile 才严格拒绝启动；它的 Folder Trust 在未带 <code>GROK_VERSION</code> 的本地自编译版本中会整体变成 inert。San 不应照搬这两个降级策略。
+		</div>
+
+		<h2>2. Grok Build 的架构形状</h2>
+		<div class="table-wrap">
+			<table>
+				<thead>
+					<tr><th>层</th><th>Grok Build</th><th>San 对照</th><th>判断</th></tr>
+				</thead>
+				<tbody>
+					<tr><td>交互与协议</td><td><code>xai-grok-pager</code>、headless、ACP、dashboard</td><td><code>packages/tui</code>、interactive/print/RPC/ACP、agent hub</td><td>两边都厚，不是迁移重点</td></tr>
+					<tr><td>Agent runtime</td><td><code>xai-grok-shell</code>、agent definitions、goal、subagent、prompt queue</td><td><code>AgentSession</code>、task agents、Goal、San Loop、async jobs</td><td>San 的结构化交付更强；Grok 的持久 goal verifier 更强</td></tr>
+					<tr><td>Workspace</td><td>workspace hub、hunk tracker、rewind、fast worktree、fs notify</td><td>session tree、file snapshots、task isolation、patch artifacts</td><td>San 缺 live hunk provenance</td></tr>
+					<tr><td>安全</td><td>folder trust、permission rules、Seatbelt/Landlock/bwrap/seccomp</td><td>tool tiers、per-tool approval、path scope、isolated workflow write</td><td><strong class="bad">San 的最大缺口</strong></td></tr>
+					<tr><td>记忆与上下文</td><td>classic compaction、pre-compact flush、Markdown memory、FTS/vec、Dream</td><td>Context Steady、TurnDigest/checkpoint、Brain、mnemopi/hindsight</td><td>San 核心路线更强；Grok 的 lifecycle gate 值得吸收</td></tr>
+					<tr><td>代码理解</td><td>tree-sitter code graph + LSP</td><td>LSP + ast-grep + native grep</td><td>仅在 LSP 不可用时有增量价值</td></tr>
+					<tr><td>隔离副本</td><td>Btrfs/overlay/copy/git + macOS worktree pool</td><td>APFS/Btrfs/ZFS/Linux reflink/overlayfs/Windows block clone/ProjFS/rcopy</td><td><strong class="good">San 后端覆盖更广</strong>；只缺 pool</td></tr>
+				</tbody>
+			</table>
+		</div>
+
+		<h2>3. 能力结论矩阵</h2>
+		<div class="table-wrap">
+			<table>
+				<thead>
+					<tr><th>机制</th><th>San 当前事实</th><th>增量价值</th><th>优先级</th><th>建议</th></tr>
+				</thead>
+				<tbody>
+					<tr><td>Folder Trust</td><td>项目级 extensions/hooks/MCP 可进入运行时，但没有统一目录信任门</td><td>非常高</td><td><span class="status p0">P0</span></td><td>直接立项</td></tr>
+					<tr><td>OS sandbox</td><td>isolation 与 path scope 是应用/副本边界，不是 kernel capability boundary</td><td>非常高</td><td><span class="status p0">P0</span></td><td>与 trust 同一安全 epic</td></tr>
+					<tr><td>细粒度 permission rules</td><td>已有 read/write/exec tier 和 per-tool allow/deny/prompt；缺参数级策略</td><td>高</td><td><span class="status p1">P1</span></td><td>基于 shell AST 与 canonical path 实现</td></tr>
+					<tr><td>Goal verifier + stall detection</td><td>Goal 由模型调用工具自报完成；San Loop 有 Supervisor/Oracle，但两者未闭环</td><td>高</td><td><span class="status p1">P1</span></td><td>桥接既有模块，不另造 orchestrator</td></tr>
+					<tr><td>Hunk provenance</td><td>有 tool diff、snapshot 和 isolated patch；没有 agent/user live hunk 归因</td><td>高</td><td><span class="status p1">P1</span></td><td>先做 ledger，再做 accept/reject UI</td></tr>
+					<tr><td>Pre-compact durable flush / Dream gate</td><td>每轮已有 digest/capture，compaction 有 hooks；缺显式“破坏性重写前全部持久化完成”合同</td><td>中高</td><td><span class="status p1">P1</span></td><td>做 lifecycle barrier，不复制另一套 memory</td></tr>
+					<tr><td>Monitor + wall-clock scheduler</td><td>AsyncJobManager、自动交付、poll/cancel/list 与连续 /loop 已有</td><td>中</td><td><span class="status p2">P2</span></td><td>只补事件流和定时触发</td></tr>
+					<tr><td>Codebase graph</td><td>LSP/ast-grep 已覆盖主语义查询</td><td>低到中</td><td><span class="status p3">P3</span></td><td>作为 LSP fallback，先 benchmark</td></tr>
+					<tr><td>Worktree pool</td><td><code>pi-iso</code> 的后端能力已经更广</td><td>低</td><td><span class="status p3">P3</span></td><td>仅在 spawn p95 成为瓶颈时做</td></tr>
+					<tr><td>Plan review / completionRequirement / capability presets</td><td>San 已有 annotations/delete/undo/editor/model slider、强制 yield/schema、agent tools/spawns</td><td>很低</td><td><span class="status skip">跳过</span></td><td>不重复建设</td></tr>
+				</tbody>
+			</table>
+		</div>
+
+		<h2>4. 优先借鉴项</h2>
+
+		<section class="priority">
+			<h3><span class="status p0">P0</span> 4.1 Folder Trust：先堵住项目级代码执行入口</h3>
+			<p><strong>Grok 做法：</strong>检测 repo-local MCP、LSP、hooks、plugins、envrc、Claude settings 与 agents；交互环境询问，headless 未授权即阻断；信任状态放在用户目录，使用 canonical path，父目录授权可向下继承，更具体的 child deny 优先。</p>
+			<p><strong>San 缺口：</strong><a href="../extension-loading.md">当前 extension loading 文档</a>明确说明项目 <code>.san/extensions</code> 会以 Bun module 形式进入同进程，extensions 不 sandbox。项目 MCP / Hook 也没有共同的 folder-trust verdict。这比普通 tool approval 更早发生，tool approval 无法补救恶意模块初始化。</p>
+			<p><strong>建议合同：</strong></p>
+			<ul>
+				<li>新增统一 <code>ProjectTrustVerdict</code>，在 discovery 之前计算，覆盖 extension、hook、plugin executable entry、stdio MCP、LSP 与项目环境注入。</li>
+				<li>持久化文件必须位于用户配置根，永远不能从 checkout 内读取；canonicalize 查询与写入；home、filesystem root、relative path 不允许成为可继承 trust root。</li>
+				<li>仅当发现 code-exec marker 时提示；headless 默认 fail closed，并提供显式 <code>--trust-project</code> 或预置 policy。</li>
+				<li>不要复制 Grok 的“本地 build 自动关闭 trust”逻辑。开发构建应与发布构建拥有同一安全语义，测试可通过注入 store/decision seam 完成。</li>
+			</ul>
+			<p class="evidence">证据：<a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-workspace/src/folder_trust.rs">Grok folder_trust.rs</a>、<a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-workspace/src/trust.rs">trust.rs</a>、<a href="../extension-loading.md">San extension-loading.md</a>。</p>
+		</section>
+
+		<section class="priority">
+			<h3><span class="status p0">P0</span> 4.2 OS Sandbox：把“约束意图”升级成 kernel enforcement</h3>
+			<p><strong>Grok 做法：</strong><code>workspace</code>、<code>read-only</code>、<code>strict</code>、<code>devbox</code> profile；macOS Seatbelt，Linux Landlock；child network 在 Linux 用 seccomp；敏感 deny path/glob 在 Linux 借 bwrap bind-over，在 macOS 转为 Seatbelt regex。</p>
+			<p><strong>对 San 的价值：</strong>San 的 team/council、Goal、workflow 与 background tasks 会放大命令并发和执行时长。Worktree 只隔离项目副本，不阻止读取 <code>~/.ssh</code>、cloud credentials 或项目外秘密；path-scope 也只覆盖经过 adapter 的工具参数。</p>
+			<p><strong>建议合同：</strong></p>
+			<ul>
+				<li>先定义 <code>off | workspace | read-only | strict</code> 四档，不先承诺复杂 custom DSL。</li>
+				<li>profile 在 session 建立时解析并持久化；resume 不允许静默换成更宽权限。</li>
+				<li><code>strict</code> 与显式 profile 不能 fail open。kernel primitive、helper 或 deny path 任一无法落实时，拒绝启动该 session。</li>
+				<li>应用层 approval/path-scope 继续保留：permission 决定“该不该做”，sandbox 决定“最多能做到哪里”。</li>
+				<li>OS primitive 适合放入 Rust/native 边界；不要用 shell string wrapper 模拟安全边界。覆盖 direct file tools、bash child、subagent 和 workflow runner 的一致性要成为验收条件。</li>
+			</ul>
+			<p class="evidence">证据：<a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-pager/docs/user-guide/18-sandbox.md">Grok sandbox guide</a>、<a href="https://github.com/xai-org/grok-build/tree/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-sandbox">xai-grok-sandbox</a>、<a href="../../packages/coding-agent/src/tools/path-scope.ts">San path-scope.ts</a>、<a href="../../crates/pi-iso/src/lib.rs">pi-iso</a>。</p>
+		</section>
+
+		<section class="priority">
+			<h3><span class="status p1">P1</span> 4.3 Permission Policy：借架构，不抄 matcher</h3>
+			<p>Grok 将多来源规则归一到 <code>deny &gt; ask &gt; allow</code>，支持 command/path/MCP/domain pattern、危险命令、session remembered grants 与 permission mode。San 当前已有正确的 tier 基础：<code>read &lt; write &lt; exec</code> 和 per-tool <code>allow | deny | prompt</code>。</p>
+			<div class="callout danger">
+				<strong>不能照抄的细节：</strong>Grok 文档明确说明 <code>Bash(git *)</code> 的 allow 对整串命令做 prefix match，因此可能允许 <code>git status &amp;&amp; rm -rf /</code>；它依赖额外 deny 规则兜底。San 应从 shell AST 得到每个可执行 segment，并要求每段均满足 allow，未知构造降级为 ask/deny。
+			</div>
+			<ul>
+				<li>复用 San 已有 <code>ToolTier</code>，在其上增加参数级 policy evaluator，不重写 approval wrapper。</li>
+				<li>bash policy 使用 <code>pi-shell</code> 的解析结果处理 env assignment、wrapper、pipeline、subshell、redirection 与 command substitution。</li>
+				<li>路径策略对 direct tools 与 shell 文件访问使用同一 canonical/symlink 语义；安全 deny 不允许被 yolo 覆盖。</li>
+				<li>保留 San hook tool-call error 的 fail-closed 行为；不要复制 Grok 文档中“hook 崩溃时继续执行”的安全语义。</li>
+			</ul>
+			<p class="evidence">证据：<a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-pager/docs/user-guide/22-permissions-and-safety.md">Grok permissions guide</a>、<a href="../../packages/coding-agent/src/tools/approval.ts">San approval.ts</a>、<a href="../hooks.md">San hooks.md</a>。</p>
+		</section>
+
+		<section class="priority">
+			<h3><span class="status p1">P1</span> 4.4 Goal + San Loop：用独立证据决定完成</h3>
+			<p><strong>Grok 源码里最容易被忽略、但对 San 很有价值的一点：</strong>它的 Goal 不只是重复 prompt。它维护 Planning/Executing phase、不同 pause reason、planner baseline、多 skeptic 独立 scratch、verification details、gap fingerprint、连续无进展 early pause、classifier run cap 与 strategist restructure。</p>
+			<p><strong>San 当前组合：</strong>Goal runtime 负责持久目标、token/time budget 和 continuation；<code>goal.complete</code> 仍由执行模型自报。San Loop 已经拥有 Commander/Worker/Supervisor/Oracle、ledger、checks 和 retry，但没有成为 Goal 的 completion gate。</p>
+			<p><strong>推荐的 San 原生融合：</strong></p>
+			<pre><code>Goal objective
+-- San Loop Commander / Workers execute
+-- Supervisor checks observable evidence
+-- Oracle only for council/high-risk mode
+-- evidence verdict achieved? ---- yes --&gt; Goal complete
+-- normalized gaps unchanged twice? -----&gt; Goal paused: no_progress
+-- infra / budget / human blocker? -------&gt; typed paused state</code></pre>
+			<ul>
+				<li>不要新增另一套 Grok-style goal orchestrator；让 Goal 负责跨 turn 生命周期，让 San Loop 负责单轮工程执行与验证。</li>
+				<li>扩展 Goal status 的 pause reason；未知 persisted status 恢复为 paused，绝不能恢复为自动执行。</li>
+				<li>把 Supervisor 的 defects/evidence 规范化为 gap fingerprint；相同 gap 连续出现达到阈值时停机，而不是继续烧 token。</li>
+				<li>completion gate 必须消费 checks、diff/hunk evidence 与产物，不接受只读模型声明“已完成”。</li>
+			</ul>
+			<p class="evidence">证据：<a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-shell/src/session/goal_tracker.rs">Grok goal_tracker.rs</a>、<a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-shell/src/session/goal_classifier.rs">goal_classifier.rs</a>、<a href="../../packages/coding-agent/src/goals/runtime.ts">San goals/runtime.ts</a>、<a href="../../packages/coding-agent/src/san-loop/runner.ts">San Loop runner.ts</a>。</p>
+		</section>
+
+		<section class="priority">
+			<h3><span class="status p1">P1</span> 4.5 Hunk Provenance：建立可信变更账本</h3>
+			<p>Grok 的 <code>xai-hunk-tracker</code> 用 actor 串行维护 baseline，接收 agent tool write 与 fs-notify external change，将每个 hunk 标成 <code>AgentEdit(prompt_index)</code>、<code>ExternalEditOnAgentFile</code> 或 <code>External</code>，并提供按 hunk/file/turn 的 accept/reject 与统计。</p>
+			<p>这对 San 的价值不是“多一个 diff UI”，而是形成跨模块共享的事实源：</p>
+			<ul>
+				<li>Context Steady <code>filesTouched</code> 不再主要依赖 transcript/LLM 推断。</li>
+				<li>Supervisor 只审 agent 引入的 diff，不把用户并行编辑归罪于 worker。</li>
+				<li>Workflow isolated write 从整 patch 决策逐步升级到 hunk 级决策。</li>
+				<li>多 subagent 共享 workspace 时，可以检测覆盖、交叉编辑和 stale baseline。</li>
+			</ul>
+			<p><strong>MVP 顺序：</strong>先做 append-only provenance ledger 和查询 API；第二阶段接 TurnDigest/Supervisor；最后再做 accept/reject UI。默认绝不自动回滚 external hunks。</p>
+			<p class="evidence">证据：<a href="https://github.com/xai-org/grok-build/tree/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-hunk-tracker">xai-hunk-tracker</a>、<a href="../../packages/coding-agent/src/context-steady/digest.ts">San digest.ts</a>、<a href="../../packages/coding-agent/src/tools/file-recorder.ts">file-recorder.ts</a>。</p>
+		</section>
+
+		<section class="priority">
+			<h3><span class="status p1">P1</span> 4.6 Memory Lifecycle：加 barrier，不再造一个 memory product</h3>
+			<p>Grok 的 memory 组合包括：人可读 Markdown、workspace/global/session scope、SQLite FTS5 + 可选 vec0、0.7/0.3 hybrid score、session temporal decay、可选 MMR、按时间和 session 数触发的 Dream，以及默认开启的 pre-compaction flush（距 compact threshold 4000 token，单 cycle 一次，带 exact/semantic dedup）。</p>
+			<p>San 已经有更适合自身路线的 TurnDigest/checkpoint、Brain candidate/approval/activation/projection，以及 mnemopi/hindsight。再复制 <code>MEMORY.md + Dream</code> 会形成第三套权威状态。</p>
+			<p><strong>值得吸收的是 lifecycle contract：</strong></p>
+			<ol>
+				<li>进入 destructive compaction/history rewrite 前，等待当前 settled turn 的 digest/Brain capture 完成。</li>
+				<li>强制 flush hindsight retain queue，并在需要时追加 Context Steady checkpoint。</li>
+				<li>计算 source coverage；只有 coverage 缺口存在时才调用额外 LLM flush，避免每次 compaction 重复付费。</li>
+				<li>为 Brain/mnemopi consolidation 增加 min-hours + min-sessions gate，并可选 MMR 去冗余。</li>
+			</ol>
+			<p>San 已有 <code>session_before_compact</code> hook，是合适的接入点；这个 barrier 失败时 compaction 可以按 policy 选择阻断或记录 degraded evidence，但不能静默假装 durable state 已经完整。</p>
+			<p class="evidence">证据：<a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-config-types/src/memory.rs">Grok memory config</a>、<a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-shell/src/session/helpers/memory_flush.rs">memory_flush.rs</a>、<a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-memory/src/dream.rs">dream.rs</a>、<a href="../../packages/coding-agent/src/brain/capture.ts">San brain/capture.ts</a>。</p>
+		</section>
+
+		<h2>5. 应该降级或跳过的借鉴项</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>看起来像缺口</th><th>源码对照后的事实</th><th>结论</th></tr></thead>
+				<tbody>
+					<tr><td>Plan review</td><td>Grok 有 line/range comment 与 refine；San 已有 ToC、section annotations、delete/undo、external editor、model slider、refine feedback，并在 compaction 后重新注入 approved plan。</td><td><span class="status skip">不做</span> 仅可微调 line-range comment</td></tr>
+					<tr><td>统一 background task bus</td><td>San 已有 owner-scoped AsyncJobManager、自动交付重试、cancel/list/poll-any、adaptive wait、batch subagents 和 async wake。没有必要重构成 Grok 的名字。</td><td><span class="status p2">P2</span> 只补 monitor line stream 与 wall-clock scheduler</td></tr>
+					<tr><td><code>completionRequirement</code></td><td>Grok 可要求某 tool 在结束前必须调用；San 的 subagent 强制提供 <code>yield</code>，支持 incremental section、terminal result、schema validation/retry 和 missing-yield warning。</td><td><span class="status skip">不做</span> San 合同更具体</td></tr>
+					<tr><td>CapabilityMode / Personas</td><td>San agent frontmatter 已有 tools、spawns、model、thinking、output、blocking、skills；task call 还有 role、isolation、batch 与 plan-mode child allowlist。</td><td><span class="status p3">P3</span> 可加 named preset，仅属配置易用性</td></tr>
+					<tr><td>Fast worktree backend</td><td>San <code>pi-iso</code> 已覆盖 APFS、Btrfs、ZFS、Linux reflink、overlayfs、Windows block clone、ProjFS 和 fallback，明显不应替换。</td><td><span class="status p3">P3</span> 只研究 bounded prewarm pool</td></tr>
+					<tr><td>Classic compact</td><td>Grok 的 summary + memory recovery 不能替代 San provider-bound ContextPlan、coverage gate、digest/checkpoint 与 hard-pressure recovery。</td><td><span class="status skip">禁止回退</span></td></tr>
+					<tr><td>Rust 全量重写</td><td>安全 primitive 可以进入 native crate，但 San 的产品语义和大量合同已在 Bun/TS 成熟。</td><td><span class="status skip">不做</span> 仅把 OS primitive 下沉</td></tr>
+				</tbody>
+			</table>
+		</div>
+
+		<h2>6. 两个有条件价值的后置项</h2>
+		<div class="grid">
+			<div class="card">
+				<h4>Monitor / Scheduler</h4>
+				<p>Grok 将长进程每行输出转成受速率限制的 session event，并提供最短 60 秒、最多 50 个、7 天过期的 recurring scheduler。San 可用于 CI、部署、日志观察，但必须增加 coalesce、secret filtering、line/byte budget 和 durable ownership；否则会把 Context Steady 变成日志吞吐管道。</p>
+			</div>
+			<div class="card">
+				<h4>Tree-sitter Code Graph</h4>
+				<p>Grok 的 graph 支持 Rust/Go/JS/TS/Python、缓存和 fs 增量更新。San 可把它作为 LSP unavailable/slow 时的 fallback，并给 ContextPlan relevance 提供 symbol neighborhood。立项门槛应是：在无 LSP 环境下，真实任务的 tool turns 或 time-to-first-definition 显著下降。</p>
+			</div>
+		</div>
+
+		<h2>7. 建议落地顺序</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>阶段</th><th>输出</th><th>必须通过的合同</th><th>不在范围</th></tr></thead>
+				<tbody>
+					<tr>
+						<td><strong>A. Trust foundation</strong></td>
+						<td>ProjectTrustVerdict、外部 trust store、headless policy、discovery gate</td>
+						<td>恶意 checkout 在确认前不能启动 extension/hook/stdio MCP/LSP；symlink alias 不能绕过；无 home 环境 fail closed</td>
+						<td>不改 tool approval UI</td>
+					</tr>
+					<tr>
+						<td><strong>B. Enforcement plane</strong></td>
+						<td>Sandbox profile contract、native launcher、session persistence、permission evaluator</td>
+						<td>strict 无法应用就拒绝；direct tools/bash/subagent 同 profile；resume 不能权限升级；deny 不被 yolo 覆盖</td>
+						<td>不做任意 custom profile DSL</td>
+					</tr>
+					<tr>
+						<td><strong>C. Evidence plane</strong></td>
+						<td>Hunk provenance ledger、TurnDigest/Supervisor adapter、Brain/compact barrier</td>
+						<td>agent/external edit 可区分；并发编辑不误归因；compact 后关键 durable state 可追溯；external edit 不被自动回滚</td>
+						<td>不先做复杂 diff UI</td>
+					</tr>
+					<tr>
+						<td><strong>D. Verified autonomy</strong></td>
+						<td>Goal -> San Loop bridge、typed pause reasons、gap fingerprint、evidence-gated completion</td>
+						<td>自报完成不能直接结束；相同 gaps 连续出现自动暂停；unknown persisted state 恢复为 paused；预算/取消单调收敛</td>
+						<td>不新增第二套 loop/ledger</td>
+					</tr>
+					<tr>
+						<td><strong>E. Optional accelerators</strong></td>
+						<td>monitor/scheduler、code graph fallback、worktree pool 中由 benchmark 证明的一项</td>
+						<td>必须有真实 p50/p95、token、成功率或恢复质量提升</td>
+						<td>不按功能目录追平</td>
+					</tr>
+				</tbody>
+			</table>
+		</div>
+
+		<h2>8. 最小验收清单</h2>
+		<div class="grid">
+			<div class="card">
+				<h4>安全</h4>
+				<ul>
+					<li>clone 一个带恶意 project extension/hook/MCP 的 fixture，未授权时没有进程、网络或模块初始化副作用。</li>
+					<li>strict profile 下验证项目外 secret 的 direct read、shell read、rename-then-read、symlink read 全部失败。</li>
+					<li>resume/fork/subagent/workflow 保持或收紧原 profile，不发生 silent widening。</li>
+				</ul>
+			</div>
+			<div class="card">
+				<h4>证据与自治</h4>
+				<ul>
+					<li>agent 与用户在同文件交错修改，ledger 能稳定归因到 turn/actor，Supervisor 只审 agent hunks。</li>
+					<li>Goal 模型声称完成但 check 失败时不能终止；修复后 evidence verdict 才能完成。</li>
+					<li>两轮相同 verifier gaps 自动进入 <code>no_progress</code> pause，并保留可恢复证据。</li>
+				</ul>
+			</div>
+			<div class="card">
+				<h4>Context / Memory</h4>
+				<ul>
+					<li>compaction 前最后 settled turn 的 digest/capture/retain queue 均已 durable，或明确记录 degraded reason。</li>
+					<li>compaction 后 ContextPlan 可引用同一 evidence；额外 LLM flush 只在 coverage gap 时触发。</li>
+					<li>consolidation 有节流、冲突/重复指标和可回滚记录。</li>
+				</ul>
+			</div>
+			<div class="card">
+				<h4>非回归</h4>
+				<ul>
+					<li>现有 plan review、AsyncJobManager、task yield、San Loop 和 workflow exactly-once 合同不被替换。</li>
+					<li><code>pi-iso</code> 继续作为 workspace isolation PAL；sandbox 是额外 capability boundary。</li>
+					<li>多 provider/model routing 与 Context Steady wire shape 保持独立。</li>
+				</ul>
+			</div>
+		</div>
+
+		<h2>9. 证据索引</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>主题</th><th>Grok Build</th><th>San</th></tr></thead>
+				<tbody>
+					<tr><td>仓库与架构</td><td><a href="https://github.com/xai-org/grok-build/tree/b189869b7755d2b482969acf6c92da3ecfeffd36">固定 commit</a>、<a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/README.md">README</a></td><td><a href="../../README.md">README</a>、<a href="../../packages/coding-agent/package.json">coding-agent package</a></td></tr>
+					<tr><td>Folder Trust</td><td><a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-workspace/src/folder_trust.rs">decision</a>、<a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-workspace/src/trust.rs">store</a></td><td><a href="../extension-loading.md">extension loading</a>、<a href="../mcp-config.md">MCP config</a>、<a href="../hooks.md">hooks</a></td></tr>
+					<tr><td>Sandbox / permission</td><td><a href="https://github.com/xai-org/grok-build/tree/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-sandbox">sandbox crate</a>、<a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-pager/docs/user-guide/22-permissions-and-safety.md">permission guide</a></td><td><a href="../../packages/coding-agent/src/tools/approval.ts">approval</a>、<a href="../../packages/coding-agent/src/tools/path-scope.ts">path scope</a></td></tr>
+					<tr><td>Goal verification</td><td><a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-shell/src/session/goal_tracker.rs">tracker</a>、<a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-shell/src/session/goal_classifier/evidence.rs">evidence</a></td><td><a href="../../packages/coding-agent/src/goals/runtime.ts">Goal runtime</a>、<a href="../../packages/coding-agent/src/san-loop/runner.ts">Loop runner</a>、<a href="../../packages/coding-agent/src/san-loop/orchestrator.ts">orchestrator</a></td></tr>
+					<tr><td>Hunk</td><td><a href="https://github.com/xai-org/grok-build/tree/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-hunk-tracker">hunk tracker</a></td><td><a href="../../packages/coding-agent/src/context-steady/digest.ts">digest</a>、<a href="../../packages/coding-agent/src/task/isolation-runner.ts">isolation runner</a></td></tr>
+					<tr><td>Memory</td><td><a href="https://github.com/xai-org/grok-build/tree/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-memory">memory crate</a>、<a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-shell/src/session/helpers/memory_flush.rs">pre-compact flush</a></td><td><a href="../../packages/coding-agent/src/context-steady/index.ts">Context Steady</a>、<a href="../../packages/coding-agent/src/brain/index.ts">Brain</a>、<a href="../../packages/coding-agent/src/hindsight/state.ts">hindsight state</a></td></tr>
+					<tr><td>Async / plan / task</td><td><a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-pager/docs/user-guide/20-background-tasks.md">background guide</a>、<a href="https://github.com/xai-org/grok-build/blob/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-grok-pager/docs/user-guide/19-plan-mode.md">plan guide</a></td><td><a href="../../packages/coding-agent/src/async/job-manager.ts">job manager</a>、<a href="../../packages/coding-agent/src/modes/components/plan-review-overlay.ts">plan overlay</a>、<a href="../task-agent-discovery.md">task agents</a></td></tr>
+					<tr><td>Isolation / code graph</td><td><a href="https://github.com/xai-org/grok-build/tree/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-fast-worktree">fast worktree</a>、<a href="https://github.com/xai-org/grok-build/tree/b189869b7755d2b482969acf6c92da3ecfeffd36/crates/codegen/xai-codebase-graph">code graph</a></td><td><a href="../../crates/pi-iso/src/lib.rs">pi-iso</a>、<a href="../../packages/coding-agent/src/lsp/index.ts">LSP</a></td></tr>
+				</tbody>
+			</table>
+		</div>
+
+		<h2>10. 决策结论</h2>
+		<div class="callout info">
+			<p><strong>Grok Build 能帮助 San，但不是通过“搬功能”。</strong></p>
+			<p>San 现在最需要的，是把已经很强的 Context/Loop/Brain/Workflow 语义，放进一个更可信的执行外壳：项目代码先经过 trust gate，工具受 permission policy 与 OS sandbox 双重约束，文件修改有 actor/turn provenance，Goal 的完成由独立 evidence verifier 判定，compaction 前有 durable barrier。</p>
+			<p>这些机制一旦补齐，San 的差异化会更清楚：<strong>Grok 强在通用 harness 完成度；San 强在上下文稳态与可审计执行语义。San 应吸收前者的边界工程，让后者真正能长期、安全地跑。</strong></p>
+		</div>
+
+		<footer>
+			<p>本报告未修改产品代码，也未运行 Grok Build 的完整 workspace test suite。已完成 git clone、固定 commit、Cargo metadata 解析、关键源码/用户文档交叉核对，以及 San 当前实现逐项对照。</p>
+		</footer>
+	</main>
+</body>
+</html>
