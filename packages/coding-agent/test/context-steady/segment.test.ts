@@ -84,22 +84,36 @@ describe("ContextSegment", () => {
 		expect("maxSteps" in (segment as unknown as Record<string, unknown>)).toBe(false);
 	});
 
-	test("starts the next segment after the previous covered range", () => {
+	test("starts recursive segments after the previous range while preserving the original user intent", () => {
 		const initial = [
 			userEntry("user-1", null, "继续同一个长任务"),
 			assistantEntry("assistant-1", "user-1", "第一段"),
 			assistantEntry("assistant-2", "assistant-1", "第二段"),
 			assistantEntry("assistant-3", "assistant-2", "第三段"),
+			assistantEntry("assistant-4", "assistant-3", "第四段"),
 		];
 		const first = buildSegment(initial, "assistant-2", "maintenance-1");
 		if (!first) throw new Error("Expected first segment");
-		const entries = [...initial.slice(0, 3), segmentEntry("segment-entry-1", "assistant-2", first), initial[3]!];
+		const entries = [
+			...initial.slice(0, 3),
+			segmentEntry("segment-entry-1", "assistant-2", first),
+			...initial.slice(3),
+		];
 		const second = buildSegment(entries, "assistant-3", "maintenance-2");
+		if (!second) throw new Error("Expected second segment");
+		const recursiveEntries = [
+			...entries.slice(0, 5),
+			segmentEntry("segment-entry-2", "assistant-3", second),
+			...entries.slice(5),
+		];
+		const third = buildSegment(recursiveEntries, "assistant-4", "maintenance-3");
 
 		expect(second?.logicalTurnId).toBe("user-1");
 		expect(second?.source.fromEntryId).toBe("assistant-2");
 		expect(second?.source.toEntryId).toBe("segment-entry-1");
 		expect(second?.source.fromEntryId).not.toBe(first.source.fromEntryId);
+		expect(second.checkpoint.userIntent).toBe("继续同一个长任务");
+		expect(third?.checkpoint.userIntent).toBe("继续同一个长任务");
 	});
 
 	test("bounds a 500-call logical turn by the latest recursive segment frontier", () => {

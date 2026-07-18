@@ -1,0 +1,43 @@
+# Context Steady 公共 Benchmark 的隔离模型目录。
+# 凭证只通过 runner 的 mode-specific runtime key 注入，不写入此文件。
+providers:
+  asxs:
+    baseUrl: https://api.asxs.top/v1
+    api: openai-responses
+    auth: apiKey
+    authHeader: true
+    models:
+      - id: gpt-5.6-sol
+        name: GPT-5.6 SOL
+        reasoning: true
+        thinking:
+          mode: effort
+          efforts: [minimal, low, medium, high, xhigh]
+          defaultLevel: xhigh
+        input: [text, image]
+        supportsTools: true
+        cost:
+          input: 5
+          output: 30
+          cacheRead: 0.5
+          cacheWrite: 6.25
+        contextWindow: 500000
+        maxTokens: 128000
+  self:
+    baseUrl: https://api.asxs.top/v1
+    api: openai-responses
+    auth: apiKey
+    authHeader: true
+    models:
+      - id: gpt-5.4-mini
+        name: GPT-5.4 Mini
+        reasoning: true
+        input: [text, image]
+        supportsTools: true
+        cost:
+          input: 5
+          output: 30
+          cacheRead: 0.5
+          cacheWrite: 6.25
+        contextWindow: 400000
+        maxTokens: 128000

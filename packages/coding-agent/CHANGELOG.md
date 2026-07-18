@@ -8,6 +8,8 @@
 
 ### Added
 
+- Added a cost-tiered public Context Steady benchmark runner with randomized Native/Steady pairs, isolated runtime credentials, Agent/Digest/Compaction usage aggregation, external quality verifiers, reproducible artifacts, a 180-step controlled-stress task, and explicit guards for 30-run Release and 50-run Extended campaigns.
+- Added a sidecar Context Steady probe that records exact per-request usage, cache rate, active/raw context estimates, prefix changes, and the configured native-compaction baseline; `/context` now shows the session ID, session file, probe file, and cumulative cache-read rate.
 - Added San Context Steady Segment maintenance for long logical turns: token/time soft hints trigger mid-turn compaction without limiting execution, recursive Segment checkpoints bound final digest input, active/archive boundaries prevent stale journal refs from causing hard pressure, and maintenance recovery is persisted for audit.
 - Added `max` and `ultra` thinking selectors, CLI/configuration support, distinct status-line symbols, extended thinking budgets, literal `:max` model-id compatibility, and highest-advertised-tier `ultrathink` behavior.
 - Added `/effort` (`/thinking` alias) to set or show session thinking effort (`off|minimal|low|medium|high|xhigh|max|ultra|auto|status`).
@@ -57,6 +59,8 @@
 
 ### Fixed
 
+- Fixed single-agent benchmark runs reusing one global Settings instance across Native/Steady overlays and retaining JavaScript eval subprocesses after task completion. Public benchmark runs now use an exact tool whitelist, reject process-environment credentials for paid runs, redact in-memory runtime keys from provider/session artifacts, and classify overload, stream-read, and quota failures as invalid pairs.
+- Fixed recursive Segments losing the original user intent, transient/invalid TurnDigest responses falling back without a second attempt, repeated no-op mid-turn maintenance, and per-tool-call ContextPlan rewrites invalidating the current turn's prompt-cache prefix.
 - Fixed San Context Steady fallback digests to expose concrete failure reasons, warn when the configured digest model cannot resolve, append-only upgrade one historical fallback per successful turn, and treat only fully unrelated history as a natural topic shift. ContextPlan and checkpoint audit identity now stays bound to the journal session across provider-session rotation, and `/context plan` reports effective digest authority.
 - Fixed shell minimization exposing unrecoverable lossy output when saving the original capture failed: minimized text is now applied only after a raw artifact is persisted, and persistence errors retain the normal raw Bash result with a specific warning.
 - Fixed the final San v0.2-v0.4 rollout blockers: execution-loop cancellation and terminal authority, scoped low-authority Brain activation and rebuild, durable input-bound Workflow replay and acknowledged delivery, hard token preflight, canonical path/write CAS boundaries, and artifact-backed benchmark provenance.

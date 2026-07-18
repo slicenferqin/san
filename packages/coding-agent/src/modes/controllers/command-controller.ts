@@ -44,6 +44,7 @@ import type { CompactMode } from "../../session/compact-modes";
 import type { NewSessionOptions } from "../../session/session-entries";
 import { formatShakeSummary, type ShakeMode, type ShakeResult } from "../../session/shake-types";
 import { limitMatchesActiveAccount } from "../../slash-commands/helpers/active-oauth-account";
+import { buildContextSessionMetadataText } from "../../slash-commands/helpers/context-report";
 import { outputMeta } from "../../tools/output-meta";
 import { resolveToCwd, stripOuterDoubleQuotes } from "../../tools/path-utils";
 import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
@@ -521,8 +522,9 @@ export class CommandController {
 
 	handleContextCommand(): void {
 		const breakdown = computeContextBreakdown(this.ctx.session, { snapcompactSavings: true });
+		const metadata = buildContextSessionMetadataText(this.ctx.session.sessionManager);
 		if (breakdown.contextWindow <= 0) {
-			this.ctx.showWarning("Context usage is unavailable: no model is selected for this session.");
+			this.ctx.showWarning(`${metadata}\n\nContext usage is unavailable: no model is selected for this session.`);
 			return;
 		}
 		const output = renderContextUsage(breakdown, theme);
@@ -530,7 +532,7 @@ export class CommandController {
 		block.addChild(new DynamicBorder());
 		block.addChild(new Text(theme.bold(theme.fg("accent", "Context Usage")), 1, 0));
 		block.addChild(new Spacer(1));
-		block.addChild(new Text(output, 1, 0));
+		block.addChild(new Text(`${metadata}\n\n${output}`, 1, 0));
 		block.addChild(new DynamicBorder());
 		this.ctx.present(block);
 	}

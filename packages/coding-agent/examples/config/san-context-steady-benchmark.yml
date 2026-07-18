@@ -1,0 +1,54 @@
+# Context Steady 公共 Benchmark 的 Steady 实验组。
+# 与 Native 使用相同主模型、重试、原生压缩和工具环境，仅开启稳态管线。
+modelRoles:
+  smol: self/gpt-5.4-mini
+
+retry:
+  enabled: true
+  maxRetries: 1
+  modelFallback: false
+
+compaction:
+  enabled: true
+  strategy: snapcompact
+  midTurnEnabled: true
+  autoContinue: true
+  remoteEnabled: false
+
+memory:
+  backend: "off"
+
+san:
+  contextSteady:
+    enabled: true
+    probe:
+      enabled: true
+    digest:
+      enabled: true
+      persistFallback: true
+      timeoutMs: 30000
+      llm:
+        enabled: true
+        modelRole: "@smol"
+    qualityWindowTokens: 240000
+    reserveRatio: 0.25
+    contextPlan:
+      enabled: true
+      recentDigests: 5
+      maxTokens: 3000
+    checkpoint:
+      enabled: true
+      everyTurns: 6
+      maxTokens: 12000
+    recall:
+      enabled: false
+      maxItems: 3
+      maxTokens: 1000
+      maxQueryChars: 2000
+    segment:
+      enabled: true
+      maxTokens: 40000
+      maxDurationMs: 900000
+      maxDigestInputTokens: 160000
+  executionLoop:
+    enabled: false

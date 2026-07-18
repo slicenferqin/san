@@ -411,6 +411,28 @@ export class Settings {
 	}
 
 	/**
+	 * 在串行脚本运行期间，把隔离 Settings 暂时暴露给仍依赖全局代理的旧代码。
+	 * 并发或嵌套作用域会互相污染，因此显式拒绝重入。
+	 */
+	static async runWithActiveInstance<T>(instance: Settings, operation: () => Promise<T>): Promise<T> {
+		if (activeInstanceScope) throw new Error("An active Settings scope already exists");
+		const previousInstance = globalInstance;
+		const previousPromise = globalInstancePromise;
+		activeInstanceScope = true;
+		globalInstance = instance;
+		globalInstancePromise = Promise.resolve(instance);
+		clearBoundSettingsMethods();
+		try {
+			return await operation();
+		} finally {
+			globalInstance = previousInstance;
+			globalInstancePromise = previousPromise;
+			clearBoundSettingsMethods();
+			activeInstanceScope = false;
+		}
+	}
+
+	/**
 	 * Create an isolated instance for testing.
 	 * Does not affect the global singleton.
 	 */
@@ -1648,6 +1670,7 @@ export const onHindsightScopeChanged = (cb: () => void) => hindsightScopeSignal.
 
 let globalInstance: Settings | null = null;
 let globalInstancePromise: Promise<Settings> | null = null;
+let activeInstanceScope = false;
 let boundSettingsInstance: Settings | null = null;
 let boundSettingsMethods = new Map<PropertyKey, unknown>();
 
@@ -1667,6 +1690,7 @@ export function isSettingsInitialized(): boolean {
 export function resetSettingsForTest(): void {
 	globalInstance = null;
 	globalInstancePromise = null;
+	activeInstanceScope = false;
 	clearBoundSettingsMethods();
 	configureProviderMaxInFlightRequests(undefined);
 }

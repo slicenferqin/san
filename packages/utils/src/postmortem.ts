@@ -157,10 +157,16 @@ if (isMainThread) {
 		})
 		.on("SIGUSR1", () => {
 			if (inspectorOpened) return;
-			inspectorOpened = true;
-			inspector.open(undefined, undefined, false);
-			const url = inspector.url();
-			process.stderr.write(`Inspector opened: ${url}\n`);
+			try {
+				inspector.open(undefined, undefined, false);
+				inspectorOpened = true;
+				const url = inspector.url();
+				process.stderr.write(`Inspector opened: ${url}\n`);
+			} catch (error) {
+				logger.warn("Inspector unavailable after SIGUSR1", { error });
+				const message = error instanceof Error ? error.message : String(error);
+				process.stderr.write(`Inspector unavailable after SIGUSR1: ${message}\n`);
+			}
 		})
 		.on("uncaughtException", async err => {
 			if (isExpectedCleanupError(err)) {

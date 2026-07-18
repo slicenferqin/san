@@ -127,6 +127,15 @@ describe("Workflow tool path scope", () => {
 			}),
 		).toThrow("path escapes the approved directory");
 		expect(() => assertScoped(scope, "bash", { command: "pwd" })).toThrow("tool has no approved path-scope adapter");
+		expect(() =>
+			authorizeToolArgumentsWithinPathScope({
+				args: { step: 1 },
+				toolName: "benchmark_step",
+				cwd: scope,
+				scopeRoot: scope,
+				exemptToolNames: new Set(["benchmark_step"]),
+			}),
+		).not.toThrow();
 	});
 
 	it("fails closed for a non-absolute approval scope", async () => {

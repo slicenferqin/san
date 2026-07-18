@@ -1,0 +1,27 @@
+# Context Steady 公共 Benchmark 的 Native 对照组。
+# 主模型由 runner 的 --model 冻结；摘要角色仍固定，保证两组配置除稳态开关外一致。
+modelRoles:
+  smol: self/gpt-5.4-mini
+
+retry:
+  enabled: true
+  maxRetries: 1
+  modelFallback: false
+
+compaction:
+  enabled: true
+  strategy: snapcompact
+  midTurnEnabled: true
+  autoContinue: true
+  remoteEnabled: false
+
+memory:
+  backend: "off"
+
+san:
+  contextSteady:
+    enabled: false
+    probe:
+      enabled: true
+  executionLoop:
+    enabled: false

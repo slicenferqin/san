@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>San Context Steady V0.5 与 Release Benchmark 交接</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --background: #f5f7f5;
+      --surface: #ffffff;
+      --surface-soft: #edf3ef;
+      --foreground: #17211c;
+      --muted: #5d6b63;
+      --border: #d5ddd8;
+      --steady: #177a55;
+      --steady-soft: #dff1e8;
+      --native: #b65d2f;
+      --native-soft: #f7e8df;
+      --accent: #177b94;
+      --warning: #996a12;
+      --warning-soft: #fff2d4;
+      --code: #e8eeea;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --background: #111713;
+        --surface: #18211c;
+        --surface-soft: #202d26;
+        --foreground: #edf4ef;
+        --muted: #b0bdb5;
+        --border: #35433a;
+        --steady: #63d39f;
+        --steady-soft: #1c3b2d;
+        --native: #eda574;
+        --native-soft: #442d23;
+        --accent: #76cade;
+        --warning: #e7bf68;
+        --warning-soft: #3b321d;
+        --code: #243129;
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--background);
+      color: var(--foreground);
+      font: 15px/1.7 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    main {
+      width: min(1120px, calc(100% - 36px));
+      margin: 0 auto;
+      padding: 48px 0 84px;
+    }
+
+    header {
+      padding: 0 0 34px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    h1, h2, h3 { line-height: 1.25; letter-spacing: 0; }
+    h1 { max-width: 900px; margin: 16px 0 14px; font-size: 40px; }
+    h2 { margin: 44px 0 16px; font-size: 26px; }
+    h3 { margin: 24px 0 8px; font-size: 18px; }
+    p { margin: 8px 0 14px; }
+    a { color: var(--accent); }
+    strong { font-weight: 700; }
+
+    code, pre, .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    code {
+      padding: 0.1em 0.35em;
+      border-radius: 4px;
+      background: var(--code);
+      overflow-wrap: anywhere;
+    }
+
+    pre {
+      margin: 12px 0 18px;
+      padding: 15px 16px;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--surface);
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--surface-soft);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    ul, ol { padding-left: 22px; }
+    li + li { margin-top: 6px; }
+
+    .eyebrow {
+      color: var(--steady);
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .lead {
+      max-width: 940px;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    .status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 20px;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 3px 9px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .status.pass { border-color: var(--steady); color: var(--steady); }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 22px 0 8px;
+    }
+
+    .metric {
+      min-height: 134px;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    .metric-label { color: var(--muted); font-size: 13px; }
+    .metric-value { margin: 3px 0 2px; font-size: 28px; font-weight: 700; }
+    .metric-note { color: var(--muted); font-size: 13px; }
+    .positive { color: var(--steady); }
+    .negative { color: var(--native); }
+
+    .callout {
+      margin: 18px 0;
+      padding: 14px 16px;
+      border-left: 4px solid var(--steady);
+      background: var(--steady-soft);
+    }
+
+    .callout.warning {
+      border-left-color: var(--warning);
+      background: var(--warning-soft);
+    }
+
+    .two-column {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 24px;
+    }
+
+    .scope-block {
+      padding-top: 12px;
+      border-top: 3px solid var(--border);
+    }
+
+    .scope-block.native { border-top-color: var(--native); }
+    .scope-block.steady { border-top-color: var(--steady); }
+
+    .table-scroll { overflow-x: auto; }
+    .nowrap { white-space: nowrap; }
+    .number { text-align: right; font-variant-numeric: tabular-nums; }
+    .small { color: var(--muted); font-size: 13px; }
+
+    .file-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px 24px;
+      margin: 14px 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .file-list li {
+      margin: 0;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    footer {
+      margin-top: 50px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 820px) {
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .two-column, .file-list { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 520px) {
+      main { width: min(100% - 24px, 1120px); padding-top: 28px; }
+      h1 { font-size: 31px; }
+      h2 { font-size: 23px; }
+      .metrics { grid-template-columns: 1fr; }
+      th, td { padding: 9px; }
+    }
+
+    @media print {
+      :root {
+        --background: #ffffff;
+        --surface: #ffffff;
+        --surface-soft: #f2f5f3;
+        --foreground: #17211c;
+        --muted: #4d5b53;
+        --border: #cbd4ce;
+        --code: #eef2ef;
+      }
+
+      body { background: #ffffff; }
+      main { width: 100%; padding: 18px; }
+      a { color: inherit; text-decoration: none; }
+      pre, table, .metric { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">San V0.5 · Engineering Handoff · 2026-07-19</div>
+    <h1>Context Steady 与 Release Benchmark 交接</h1>
+    <p class="lead">本交接冻结 Context Steady 实测修复、公共 Benchmark 工具链、Release r9 结果与当前验证状态。正式可视化 Benchmark 报告按当前决定暂停，不属于本次提交。</p>
+    <div class="status-row" aria-label="当前状态">
+      <span class="status pass">实现完成</span>
+      <span class="status pass">Release 30/30 质量通过</span>
+      <span class="status pass">全仓检查通过</span>
+      <span class="status">分支 feature/san-v0.5</span>
+    </div>
+  </header>
+
+  <section aria-labelledby="decision">
+    <h2 id="decision">1. 结论与接手判断</h2>
+    <div class="metrics">
+      <div class="metric">
+        <div class="metric-label">管理台监控 Token</div>
+        <div class="metric-value positive">-52.2%</div>
+        <div class="metric-note">Native 297M → Steady 142M</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">管理台监控成本</div>
+        <div class="metric-value positive">-39.7%</div>
+        <div class="metric-note">Native $446 → Steady $269</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Runner 最大活跃上下文</div>
+        <div class="metric-value positive">-80.9%</div>
+        <div class="metric-note">355,606 → 67,972 tokens</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">质量门禁</div>
+        <div class="metric-value">30 / 30</div>
+        <div class="metric-note">15 组配对均可比较</div>
+      </div>
+    </div>
+
+    <div class="callout"><strong>可交付判断：</strong>Context Steady 的超长任务价值已被正式 Release 数据验证。L5 中 Prompt 降低 69.0%、Runner 估算成本降低 50.7%，六次 180 步顺序证据链全部完成；最大活跃上下文约 68K，而 raw journal 仍增长到约 565K，机制目标成立。</div>
+    <div class="callout warning"><strong>声明边界：</strong>L1-L4 的 Runner 估算成本分别比 Native 高 16% 至 27%，配对中位数及 bootstrap 95% CI 跨越零。可以声明“超长上下文显著受益”，不能声明“每个短中任务都更便宜”。建议按长上下文阈值或显式场景启用，而不是仅凭本组数据全局强制开启。</div>
+  </section>
+
+  <section aria-labelledby="scope">
+    <h2 id="scope">2. 两套数据口径</h2>
+    <p>管理台监控值与 Runner 可观测值属于不同统计范围，交接时必须分开引用。</p>
+    <div class="two-column">
+      <div class="scope-block native">
+        <h3>服务商管理台监控</h3>
+        <p>用户在运行完成后提供：Native 约 297M tokens / $446，Steady 约 142M tokens / $269。由此推导 Token 下降 52.2%、成本下降 39.7%。</p>
+        <p class="small">该口径未审计，可能包含中断请求、重试、失败请求或其他计费项，以服务商最终账单为准。</p>
+      </div>
+      <div class="scope-block steady">
+        <h3>Runner Probe 可观测</h3>
+        <p>Native 215,723,578 prompt tokens / $132.760592；Steady 68,469,864 prompt tokens / $69.696。固定价格表推导 Prompt 下降 68.3%、估算成本下降 47.5%。</p>
+        <p class="small">该口径只覆盖正式有效配对内 Probe 捕获的 Agent、Digest 与 LLM Compaction usage，不是服务商账单。</p>
+      </div>
+    </div>
+    <p>管理台 Token 降幅大于成本降幅，是因为 Steady 的管理台单位 Token 成本约高 26.1%。这只能说明两种模式的实际请求构成不同，不能用 Runner 冻结价格表反推服务商未公开的计费明细。</p>
+  </section>
+
+  <section aria-labelledby="tasks">
+    <h2 id="tasks">3. Release r9 分任务结果</h2>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>任务</th>
+            <th>场景</th>
+            <th class="number">Prompt 节省</th>
+            <th class="number">成本节省</th>
+            <th>解释</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>L1</td><td>跨模块路由策略迁移</td><td class="number negative">-13.9%</td><td class="number negative">-20.5%</td><td>短任务维护开销未摊薄</td></tr>
+          <tr><td>L2</td><td>有界幂等重试修复</td><td class="number negative">-14.4%</td><td class="number negative">-20.6%</td><td>Native 更便宜</td></tr>
+          <tr><td>L3</td><td>多 turn 策略演进</td><td class="number positive">+1.6%</td><td class="number negative">-27.0%</td><td>Token 接近，但输出与维护结构使成本更高</td></tr>
+          <tr><td>L4</td><td>目录代码与文档交付</td><td class="number negative">-19.0%</td><td class="number negative">-16.0%</td><td>Native 更便宜</td></tr>
+          <tr><td>L5</td><td>180 步顺序证据压力任务</td><td class="number positive">+69.0%</td><td class="number positive">+50.7%</td><td>超长任务收益稳定且主导总量</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="small">正值表示 Steady 节省；负值表示 Steady 高于 Native。每个任务包含 3 组 Native / Steady 配对。</p>
+
+    <h3>L5 证据完整性</h3>
+    <ul>
+      <li>6 次运行 × 180 步，共 1,080 次模型直接调用 <code>benchmark_step</code>。</li>
+      <li>每个助手消息最多一次调用，proof 串联顺序、隐藏 verifier 与最终质量门禁全部通过。</li>
+      <li>Native 每次发生 1 次原生压缩；Steady 每次发生 13 次 Segment / Compaction。</li>
+      <li>Native 最大活跃上下文 355,606；Steady 最大活跃上下文 67,972；两者 raw journal 峰值都约 550K。</li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="implementation">
+    <h2 id="implementation">4. 已完成实现</h2>
+    <ul>
+      <li><strong>Segment 正确性：</strong>递归 Segment 保留原始用户意图，并从上一个分段边界继续覆盖。</li>
+      <li><strong>Digest 稳定性：</strong>临时请求错误和结构缺失会有限重试；usage 通过响应观察器记录，不改写生产请求路径。</li>
+      <li><strong>缓存前缀：</strong>同一工具循环内冻结 ContextPlan 字节，避免每次 provider boundary 重写前缀。</li>
+      <li><strong>维护抖动：</strong>无进展的 Segment 维护不会在每次 provider boundary 重复触发。</li>
+      <li><strong>Probe：</strong>区分 Agent、TurnDigest、Compaction 请求，记录 usage、缓存、active/raw context、Segment 与 Compaction 事件。</li>
+      <li><strong>可诊断性：</strong><code>/context</code> 展示 session ID、session 文件、Probe 文件与累计缓存读取率；Prompt 口径为 input + cache read + cache write。</li>
+      <li><strong>Benchmark：</strong>实现随机配对、严格工具白名单、隐藏 verifier、质量先行汇总、基础设施整对失效与一次共同重跑、bootstrap CI、费用预检及可复现 provenance。</li>
+      <li><strong>凭证隔离：</strong>付费运行只从 stdin 读入 mode-specific runtime key，在内存中注册并对 artifact 脱敏；拒绝旧环境变量传输路径。</li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="config">
+    <h2 id="config">5. 正式配置冻结</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>项目</th><th>值</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>Native / Steady 主模型</td><td><code>asxs/gpt-5.6-sol:xhigh</code></td><td>两种模式完全一致，禁止模型 fallback</td></tr>
+          <tr><td>Steady Digest 模型</td><td><code>self/gpt-5.4-mini</code></td><td>仅维护请求使用</td></tr>
+          <tr><td>Quality window</td><td><code>240000</code></td><td>是 240K，不是 24K</td></tr>
+          <tr><td>ContextPlan</td><td><code>maxTokens=3000</code>，<code>recentDigests=5</code></td><td>稳定计划层</td></tr>
+          <tr><td>Checkpoint</td><td><code>everyTurns=6</code>，<code>maxTokens=12000</code></td><td>稳定摘要层</td></tr>
+          <tr><td>Segment</td><td><code>maxTokens=40000</code>，<code>maxDuration=900000</code>，<code>maxDigestInput=160000</code></td><td>长逻辑 turn 维护</td></tr>
+          <tr><td>Compaction</td><td><code>snapcompact</code>，mid-turn，remote disabled</td><td>确保 LLM fallback usage 可观测</td></tr>
+          <tr><td>重试</td><td><code>maxRetries=1</code></td><td>基础设施故障使整个配对失效</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="verification">
+    <h2 id="verification">6. 当前验证结果</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>范围</th><th>结果</th><th>结论</th></tr></thead>
+        <tbody>
+          <tr><td>Context Steady + ACP</td><td class="nowrap"><strong>288 pass / 0 fail</strong></td><td>1,210 assertions；包含生产路径、TurnDigest、Segment、Probe 与 Benchmark 契约</td></tr>
+          <tr><td>SDK / 路径隔离 / 清理回归</td><td class="nowrap"><strong>33 pass / 0 fail</strong></td><td>112 assertions；覆盖严格工具列表、session 隔离和预期清理错误</td></tr>
+          <tr><td>全仓检查</td><td><strong>通过</strong></td><td>Biome 与所有 TypeScript package typecheck 通过；无 Rust 影响文件，因此 Rust check 按脚本规则跳过</td></tr>
+          <tr><td>Release 费用预检</td><td><strong>通过</strong></td><td>30 runs / 15 pairs；含一次整对重跑时上界 60 runs，按 $27/run 估算上界 $1,620</td></tr>
+          <tr><td>正式 Release r9</td><td><strong>30 / 30 质量通过</strong></td><td>无最终 infrastructure-invalid pair；所有公开与隐藏 verifier 通过</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <pre><code>HOME=/private/tmp/san-test-home bun test \
+  packages/coding-agent/test/context-steady \
+  packages/coding-agent/test/acp-builtins.test.ts
+
+HOME=/private/tmp/san-test-home bun test \
+  packages/coding-agent/test/sdk-session-isolation.test.ts \
+  packages/coding-agent/test/sdk-tool-activation.test.ts \
+  packages/coding-agent/test/workflows/path-scope.test.ts \
+  packages/utils/test/postmortem-cleanup-error.test.ts
+
+PATH=/Users/sanjiu/.bun/bin:/usr/bin:/bin \
+HOME=/private/tmp/san-test-home \
+/Users/sanjiu/.bun/bin/bun check</code></pre>
+  </section>
+
+  <section aria-labelledby="artifacts">
+    <h2 id="artifacts">7. 代码、数据与证据位置</h2>
+    <ul class="file-list">
+      <li><a href="./san-context-steady-public-benchmark-design-20260717.html">公共 Benchmark 设计</a></li>
+      <li><a href="./san-context-steady-release-benchmark-summary-20260718.json">Release 结论快照 JSON</a></li>
+      <li><code>packages/coding-agent/scripts/san-context-steady-benchmark.ts</code></li>
+      <li><code>packages/coding-agent/scripts/san-context-steady-benchmark-evidence.ts</code></li>
+      <li><code>packages/coding-agent/examples/context-steady-benchmark-tasks.json</code></li>
+      <li><code>packages/coding-agent/examples/context-steady-benchmark-verifiers/</code></li>
+      <li><code>packages/coding-agent/examples/config/san-context-steady-benchmark.yml</code></li>
+      <li><code>packages/coding-agent/src/context-steady/probe.ts</code></li>
+    </ul>
+    <p>正式 r9 原始证据当前位于 <code>/private/tmp/san-context-steady-release-xhigh-r9-evidence</code>，共约 43MB / 189 个文件。它包含 summary、manifest、session、probe、diff、verifier 日志与 L5 evidence；未纳入 Git，以避免提交大体积会话数据和本机路径。仓库中的结论快照是其脱敏、稳定摘要。</p>
+    <p>Benchmark provenance：base commit <code>3ac89d1c2845ec49fc5407c422c4dfef710318ee</code>，source diff hash <code>9e2a0ead3ae86431889f6f56aa0e0197c9a73a00343a840308622989f31f87c8</code>。完整 config / task / model hash 见结论快照。</p>
+  </section>
+
+  <section aria-labelledby="security">
+    <h2 id="security">8. 安全与工作区边界</h2>
+    <ul>
+      <li>两个正式 Benchmark key 未写入配置、文档或本次 Git 提交。</li>
+      <li><code>context-steady-benchmark-agent</code> 下只提交无凭证的 <code>models.yml</code>；本地数据库和 sessions 已加入 <code>.gitignore</code>。</li>
+      <li>本地 sessions 可能包含用户对话与运行内容，不应作为源代码提交。需要长期保存原始证据时，应走独立的受控 artifact 存储。</li>
+      <li><code>.san/mcp.json</code> 与本任务无关，不纳入提交。</li>
+      <li>其他既有未跟踪研究文档保持原样，不在本次提交中混入。</li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="open">
+    <h2 id="open">9. 未完成项与下一接手顺序</h2>
+    <ol>
+      <li><strong>正式可视化报告暂停：</strong>已按当前要求停止，尚未创建 <code>san-context-steady-release-benchmark-report-20260718.html</code>。</li>
+      <li><strong>原始 artifact 归档：</strong>如需要跨机器审计，应先进行路径脱敏与敏感内容扫描，再上传独立 artifact 存储；不要直接把 43MB 原始目录提交进 Git。</li>
+      <li><strong>产品启用策略：</strong>基于当前证据优先做长上下文阈值或显式场景启用，避免将 L5 加权总量误解为短任务普遍收益。</li>
+      <li><strong>对外文案：</strong>分别标注“管理台监控”和“Runner Probe 估算”，并公开 L1-L4 成本回退及置信区间跨零这一限制。</li>
+    </ol>
+  </section>
+
+  <footer>
+    <p>交接日期：2026-07-19。本文与机器可读结论快照共同构成本次 Context Steady V0.5 工作的提交内交接材料。</p>
+  </footer>
+</main>
+</body>
+</html>

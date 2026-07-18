@@ -121,6 +121,21 @@ describe("postmortem expected cleanup errors", () => {
 		expect(result.stderr).toContain("[Unhandled Rejection] Error: unexpected cleanup rejection");
 	});
 
+	it("survives SIGUSR1 when the runtime inspector is unavailable", async () => {
+		const result = await runPostmortemProbe(`
+			import "${postmortemModuleUrl}";
+
+			process.kill(process.pid, "SIGUSR1");
+			await Bun.sleep(50);
+			console.log("survived SIGUSR1");
+		`);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("survived SIGUSR1");
+		expect(result.stderr).toMatch(/Inspector (?:opened|unavailable after SIGUSR1)/);
+		expect(result.stderr).not.toContain("[Uncaught Exception]");
+	});
+
 	it("releases manual cleanup at the deadline even when a callback never settles", async () => {
 		const result = await runPostmortemProbe(`
 			import { vi } from "bun:test";

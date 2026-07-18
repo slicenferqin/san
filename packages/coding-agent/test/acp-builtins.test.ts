@@ -19,6 +19,7 @@ import {
 	CONTEXT_PACKET_SCHEMA_VERSION,
 } from "@oh-my-pi/pi-coding-agent/context-steady/types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { UsageStatistics } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import { removeWithRetries, setProjectDir } from "@oh-my-pi/pi-utils";
@@ -79,6 +80,7 @@ interface FakeAcpBuiltinSessionManager {
 	_sessionName: string | undefined;
 	getSessionId(): string;
 	getSessionFile(): string | undefined;
+	getUsageStatistics?(): UsageStatistics;
 	getEntries(): Array<Record<string, unknown> & { type?: string; customType?: string; data?: unknown }>;
 	getBranch(): Array<Record<string, unknown> & { type?: string; customType?: string; data?: unknown }>;
 	appendCustomEntry(customType: string, data?: unknown): string;
@@ -1339,7 +1341,7 @@ describe("wave 5 — adapters and polish", () => {
 
 	// /context breakdown
 	it("/context: lists more than one breakdown line for session with messages", async () => {
-		const { output, session, runtime } = createRuntime();
+		const { output, session, fakeSessionManager, runtime } = createRuntime();
 		// computeContextBreakdown needs model.contextWindow; fake session falls back gracefully
 		(session as unknown as Record<string, unknown>).model = {
 			provider: "anthropic",
@@ -1353,10 +1355,25 @@ describe("wave 5 — adapters and polish", () => {
 			{ role: "user", content: "Hello, how are you?" },
 			{ role: "assistant", content: "I am doing well." },
 		];
+		fakeSessionManager.getUsageStatistics = () => ({
+			input: 100,
+			output: 10,
+			cacheRead: 800,
+			cacheWrite: 100,
+			totalTokens: 1_010,
+			orchestrationInput: 0,
+			orchestrationOutput: 0,
+			orchestrationCacheRead: 0,
+			premiumRequests: 0,
+			cost: 0,
+		});
 		const result = await executeAcpBuiltinSlashCommand("/context", runtime);
 		expect(result).toEqual({ consumed: true });
 		// Should show the breakdown with multiple lines (Messages category visible)
 		const text = output[0] ?? "";
+		expect(text).toContain("Session ID: fake-session-id");
+		expect(text).toContain("Session file: In-memory");
+		expect(text).toContain("Cache read: 800/1,000 prompt tokens (80.0%)");
 		expect(text).toContain("tokens");
 		expect(text.split("\n").length).toBeGreaterThan(1);
 	});

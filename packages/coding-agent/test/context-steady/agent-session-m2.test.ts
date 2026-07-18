@@ -1088,7 +1088,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		expect(secondPayload.length).toBeGreaterThan(500_000);
 	});
 
-	it("refreshes the projected audit when a legal tool-loop tail grows inside the control band", async () => {
+	it("keeps ContextPlan bytes stable while a legal tool-loop tail grows inside the control band", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const toolPayload = "Q".repeat(20_000);
 		const mock = createMockModel({
@@ -1144,7 +1144,54 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 
 		expect(secondProviderTokens).toBeGreaterThan(0);
 		expect(secondProviderTokens).toBeLessThanOrEqual(plan.qualityGate.projectedInputLimit ?? 0);
-		expect(secondProviderTokens).toBe(plan.qualityGate.projectedInputTokens ?? -1);
+		expect(secondProviderTokens).toBeGreaterThan(plan.qualityGate.projectedInputTokens ?? -1);
+		const planMessages = mock.calls.map(call =>
+			call.context.messages.find(message => JSON.stringify(message).includes("<san_context_plan>")),
+		);
+		expect(planMessages[0]).toBeDefined();
+		expect(JSON.stringify(planMessages[1])).toBe(JSON.stringify(planMessages[0]));
+	});
+
+	it("does not retry a no-op Segment maintenance pass at every provider boundary", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "call_noop_1", name: "echo", arguments: { value: "one" } }] },
+				{ content: [{ type: "toolCall", id: "call_noop_2", name: "echo", arguments: { value: "two" } }] },
+				{ content: ["no-op maintenance probe complete"] },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [echoTool] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"san.contextSteady.segment.maxTokens": 1,
+			"san.contextSteady.segment.maxDurationMs": 0,
+			"san.contextSteady.qualityWindowTokens": 240_000,
+			"compaction.enabled": true,
+			"compaction.strategy": "context-full",
+			"compaction.thresholdTokens": 190_000,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "noop-auth.db"));
+		authStorages.push(authStorage);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "noop-models.yml"));
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		let maintenanceStarts = 0;
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_start") maintenanceStarts++;
+		});
+
+		await session.prompt("run the no-op maintenance probe");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(3);
+		expect(maintenanceStarts).toBe(1);
 	});
 
 	it("rebuilds the active plan after pre-prompt compaction rewrites history", async () => {

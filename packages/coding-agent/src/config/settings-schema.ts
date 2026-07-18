@@ -2742,6 +2742,12 @@ export const SETTINGS_SCHEMA = {
 	"san.contextSteady.segment.maxTokens": { type: "number", default: 40000 },
 	"san.contextSteady.segment.maxDurationMs": { type: "number", default: 900000 },
 	"san.contextSteady.segment.maxDigestInputTokens": { type: "number", default: 160000 },
+	"san.contextSteady.probe.enabled": {
+		type: "boolean",
+		default: true,
+		description:
+			"Write per-provider-request context, cache, and native-compaction baseline observations to a sidecar JSONL file.",
+	},
 	"san.contextSteady.hardPressure.maxRecoveryPasses": { type: "number", default: 1 },
 	// Legacy ContextPacket setting paths are still accepted as aliases when the
 	// corresponding ContextPlan path is not explicitly configured.

@@ -220,13 +220,15 @@ import {
 import { appendContextCheckpoint, buildContextCheckpoint } from "../context-steady/checkpoint";
 import { generateDigest as generateContextSteadyDigest } from "../context-steady/digest";
 import { generateFallbackDigest } from "../context-steady/fallback";
-import {
-	estimateContextPlanProjectedTokens,
-	materializeContextPlanMessages,
-	renderContextPlanContent,
-} from "../context-steady/materialize";
+import { estimateContextPlanProjectedTokens, materializeContextPlanMessages } from "../context-steady/materialize";
 import { type BuiltContextPlan, CONTEXT_PLAN_CUSTOM_TYPE } from "../context-steady/plan-types";
 import { type BuildContextPlanOptions, buildContextPlan } from "../context-steady/planner";
+import {
+	appendContextProbeRecord,
+	buildContextProbeRecord,
+	type ContextProbeRequestKind,
+	contextProbeFilePath,
+} from "../context-steady/probe";
 import { buildContextSteadyRecallQuery, normalizeContextSteadyRecallItems } from "../context-steady/recall";
 import { isTopicShiftPrompt } from "../context-steady/relevance";
 import {
@@ -812,6 +814,8 @@ const RETRY_BACKOFF_JITTER_RATIO = 0.25;
  * most-recent kept turn already exceeds the threshold (the snapcompact thrash).
  */
 const COMPACTION_RECOVERY_BAND = 0.8;
+const MID_RUN_MAINTENANCE_NOOP_RETRY_TOKENS = 8_000;
+const MID_RUN_MAINTENANCE_NOOP_RETRY_MS = 60_000;
 
 function calculateRetryBackoffDelayMs(baseDelayMs: number, attempt: number): number {
 	const cappedDelayMs = Math.min(Math.max(0, baseDelayMs) * 2 ** Math.max(0, attempt - 1), RETRY_BACKOFF_MAX_DELAY_MS);
@@ -2110,6 +2114,9 @@ export class AgentSession {
 	#contextSteadyPendingBudgetPressureRebase = false;
 	#contextSteadyMaintenanceId: string | undefined;
 	#contextSteadyRecoveryAttempt = 0;
+	#midRunMaintenanceNoop: { boundaryId: string; tokens: number; elapsedMs: number } | undefined;
+	#contextProbeWrite: Promise<void> = Promise.resolve();
+	#contextProbeLastPrefixFingerprint: { sessionId: string; value: string } | undefined;
 	#sessionStopContinuationCount = 0;
 	#sessionStopHookActive = false;
 	/** When a session_stop continuation is active, holds the original pre-turn
@@ -3505,6 +3512,8 @@ export class AgentSession {
 						promptCacheKey: advisorProviderSessionId,
 						providerSessionState: this.#providerSessionState,
 						codexCompaction,
+						completeImpl: (requestModel, requestContext, requestOptions) =>
+							this.#completeSideRequestWithProbe("compaction", requestModel, requestContext, requestOptions),
 					},
 				);
 				break;
@@ -4392,6 +4401,7 @@ export class AgentSession {
 			if (event.message.role === "assistant") {
 				this.#lastAssistantMessage = event.message;
 				const assistantMsg = event.message as AssistantMessage;
+				this.#recordContextProbe(assistantMsg, "agent");
 				// Fold this turn's timing into per-model perf aggregates (drives the
 				// /models TPS/TTFT display). Errored turns measure nothing; aborted
 				// turns with reported usage are still valid throughput samples.
@@ -4944,6 +4954,8 @@ export class AgentSession {
 							obfuscator: this.#obfuscator,
 							prepareStreamOptions: (options: SimpleStreamOptions, provider: string) =>
 								this.prepareSimpleStreamOptions(options, provider),
+							onResponse: (response: AssistantMessage) =>
+								this.#recordContextProbe(response, "turn_digest", resolvedDigestModel.contextWindow),
 						}
 					: undefined;
 
@@ -6764,6 +6776,7 @@ export class AgentSession {
 		// Clean up an empty session created by this session's /move so it doesn't accumulate.
 		await cleanupEmptyMoveSession(this.sessionManager, this.#movedFromEmptySessionFile);
 		this.#movedFromEmptySessionFile = undefined;
+		await this.#contextProbeWrite;
 		await this.sessionManager.close();
 		// beginDispose() stopped the advisor and captured its recorder close; await
 		// it so the final advisor turn is flushed before the process may exit.
@@ -9081,52 +9094,6 @@ export class AgentSession {
 	 * changed. Freezes old-history selection from the request-start plan only
 	 * while the source history and non-message context are unchanged.
 	 */
-	#refreshContextSteadyPlanProjection(
-		messages: readonly AgentMessage[],
-		branchEntries: readonly SessionEntry[],
-		plan: BuiltContextPlan,
-		projectedInputTokens: number,
-	): BuiltContextPlan | undefined {
-		if (plan.audit.qualityGate.projectedInputTokens === projectedInputTokens) return plan;
-		let current = plan;
-		let projected = projectedInputTokens;
-		for (let attempt = 0; attempt < 4; attempt++) {
-			const audit = {
-				...current.audit,
-				qualityGate: {
-					...current.audit.qualityGate,
-					projectedInputTokens: projected,
-					projectedInputLimit: current.audit.budget.burstCeiling,
-				},
-			};
-			const renderedContent = renderContextPlanContent({ audit, materials: current.materials });
-			const message: AgentMessage = {
-				...current.message,
-				content: renderedContent,
-			};
-			const next: BuiltContextPlan = {
-				...current,
-				audit,
-				renderedContent,
-				message,
-				tokenEstimate: estimateTokens({
-					role: "user",
-					content: renderedContent,
-					attribution: "agent",
-					timestamp: message.timestamp,
-				}),
-			};
-			const finalProjection = this.#estimateMaterializedProjectedInputTokens(messages, branchEntries, next, "full");
-			current = next;
-			if (finalProjection === projected) return current;
-			projected = finalProjection;
-		}
-		// Do not publish a plan whose rendered projection did not converge. The
-		// caller falls through to the full rebuild, which has the same fail-closed
-		// behavior as the request-start fixed-point builder.
-		return undefined;
-	}
-
 	#refreshContextSteadyPlanForProviderCall(messages: readonly AgentMessage[]): BuiltContextPlan | undefined {
 		const existing = this.#contextSteadyRequestPlan;
 		if (!existing) return undefined;
@@ -9137,17 +9104,10 @@ export class AgentSession {
 		const controlMax = existing.audit.budget.controlMax;
 		const nonMessageTokens = computeNonMessageTokens(this);
 		if (!this.#contextSteadyPlanInputsChanged(existing) && projected <= controlMax) {
-			// Keep frozen historical materials, but refresh the projection for the
-			// live tool tail so the audit and rendered plan stay truthful.
-			const refreshed = this.#refreshContextSteadyPlanProjection(messages, branchEntries, existing, projected);
-			if (refreshed) {
-				const refreshedProjected = refreshed.audit.qualityGate.projectedInputTokens ?? projected;
-				if (refreshedProjected <= controlMax) {
-					this.#contextSteadyRequestPlan = refreshed;
-					this.#contextSteadyLastPlan = refreshed;
-					return refreshed;
-				}
-			}
+			// 同一逻辑 turn 内冻结 ContextPlan 字节。每次工具调用都重写投影值会让
+			// plan 之后的整条 turn 前缀失效，实际会把 provider cache read 压到仅剩
+			// system/tools。实时 projected 只用于门控；跨过 controlMax 时才重建。
+			return existing;
 		}
 		// Crossed control band, or a model/history/non-message input changed: rebuild
 		// with the live tail for an accurate gate and material selection.
@@ -12617,6 +12577,88 @@ export class AgentSession {
 	 * floor the compaction decision respects so on-wire compression can never
 	 * suppress it.
 	 */
+	async #completeSideRequestWithProbe<TApi extends AssistantMessage["api"]>(
+		requestKind: Exclude<ContextProbeRequestKind, "agent">,
+		model: Model<TApi>,
+		context: Context,
+		options: SimpleStreamOptions,
+	): Promise<AssistantMessage> {
+		const stream = await this.#sideStreamFn(model, context, options);
+		const assistant = await stream.result();
+		this.#recordContextProbe(assistant, requestKind, model.contextWindow);
+		return assistant;
+	}
+
+	#recordContextProbe(
+		assistant: AssistantMessage,
+		requestKind: ContextProbeRequestKind,
+		requestContextWindow?: number | null,
+	): void {
+		if (this.settings.get("san.contextSteady.probe.enabled") !== true) return;
+		const sessionFile = this.sessionManager.getSessionFile();
+		if (!sessionFile) return;
+
+		const branch = this.sessionManager.getBranch();
+		const compactionIds = branch.filter(entry => entry.type === "compaction").map(entry => entry.id);
+		const segmentIds = collectContextSegmentRefs(branch).map(ref => ref.segment.segmentId);
+		const contextWindow = requestContextWindow ?? this.model?.contextWindow ?? 0;
+		const activeEstimatedTokens = this.#estimateStoredContextTokens();
+		const rawJournalEstimatedTokens =
+			computeNonMessageTokens(this) +
+			branch.reduce(
+				(sum, entry) =>
+					entry.type === "message" ? sum + this.#estimateProviderWireMessageTokens(entry.message) : sum,
+				0,
+			);
+		const compactionSettings = this.settings.getGroup("compaction");
+		const nativeCompactionThresholdTokens =
+			contextWindow > 0 ? resolveThresholdTokens(contextWindow, compactionSettings) : 0;
+		const configuredSteadyTarget = Math.floor(this.settings.get("san.contextSteady.qualityWindowTokens") as number);
+		const steadyTargetTokens =
+			contextWindow > 0 ? Math.min(contextWindow, configuredSteadyTarget > 0 ? configuredSteadyTarget : 240_000) : 0;
+		const prefixFingerprint = String(
+			Bun.hash(
+				JSON.stringify({
+					model: this.model ? `${this.model.provider}/${this.model.id}` : "none",
+					promptModelKey: this.#promptModelKey,
+					baseSystemPrompt: this.#baseSystemPrompt,
+					toolSignature: this.#lastAppliedToolSignature,
+					contextPlan: this.#contextSteadyRequestPlan?.renderedContent,
+					latestCompactionId: compactionIds.at(-1),
+				}),
+			),
+		);
+		const record = buildContextProbeRecord({
+			sessionId: this.sessionId,
+			sessionFile,
+			requestKind,
+			assistant,
+			contextWindow,
+			steadyEnabled: this.settings.get("san.contextSteady.enabled") === true,
+			activeEstimatedTokens,
+			rawJournalEstimatedTokens,
+			nativeCompactionStrategy: compactionSettings.strategy,
+			nativeCompactionThresholdTokens,
+			steadyTargetTokens,
+			compactionIds,
+			segmentIds,
+			prefixFingerprint,
+			...(this.#contextProbeLastPrefixFingerprint?.sessionId === this.sessionId
+				? { previousPrefixFingerprint: this.#contextProbeLastPrefixFingerprint.value }
+				: {}),
+		});
+		this.#contextProbeLastPrefixFingerprint = { sessionId: this.sessionId, value: prefixFingerprint };
+		const probeFile = contextProbeFilePath(sessionFile);
+		const write = this.#contextProbeWrite.then(() => appendContextProbeRecord(sessionFile, record));
+		this.#contextProbeWrite = write.catch(error => {
+			logger.warn("Failed to append context probe record", {
+				sessionId: this.sessionId,
+				probeFile,
+				error: String(error),
+			});
+		});
+	}
+
 	#estimateStoredContextTokens(pendingMessages: AgentMessage[] = []): number {
 		// Exclude encrypted reasoning (thinkingSignature / redactedThinking): its
 		// local byte size diverges from what the provider bills, so counting it here
@@ -12684,12 +12726,13 @@ export class AgentSession {
 		durationHint: boolean;
 		tokens: number;
 		elapsedMs: number;
+		boundaryId: string;
 	} {
 		if (
 			this.settings.get("san.contextSteady.enabled") !== true ||
 			this.settings.get("san.contextSteady.segment.enabled") !== true
 		) {
-			return { required: false, tokenHint: false, durationHint: false, tokens: 0, elapsedMs: 0 };
+			return { required: false, tokenHint: false, durationHint: false, tokens: 0, elapsedMs: 0, boundaryId: "none" };
 		}
 		const entries = this.sessionManager.getBranch();
 		let userIndex = -1;
@@ -12700,7 +12743,9 @@ export class AgentSession {
 				break;
 			}
 		}
-		if (userIndex < 0) return { required: false, tokenHint: false, durationHint: false, tokens: 0, elapsedMs: 0 };
+		if (userIndex < 0) {
+			return { required: false, tokenHint: false, durationHint: false, tokens: 0, elapsedMs: 0, boundaryId: "none" };
+		}
 
 		const latestSegment = collectContextSegmentRefs(entries).at(-1);
 		const latestSegmentIndex = latestSegment ? entries.findIndex(entry => entry.id === latestSegment.entryId) : -1;
@@ -12720,7 +12765,14 @@ export class AgentSession {
 		);
 		const tokenHint = maxTokens > 0 && tokens >= maxTokens;
 		const durationHint = maxDurationMs > 0 && elapsedMs >= maxDurationMs;
-		return { required: tokenHint || durationHint, tokenHint, durationHint, tokens, elapsedMs };
+		return {
+			required: tokenHint || durationHint,
+			tokenHint,
+			durationHint,
+			tokens,
+			elapsedMs,
+			boundaryId: latestSegmentIndex > userIndex ? latestSegment!.entryId : entries[userIndex]!.id,
+		};
 	}
 
 	/**
@@ -12771,25 +12823,37 @@ export class AgentSession {
 		const billedContextTokens = calculateContextTokens(lastAssistant.usage);
 		const storedContextTokens = this.#estimateStoredContextTokens();
 		const contextTokens = compactionContextTokens(billedContextTokens, storedContextTokens);
+		const configuredSteadyTarget = this.settings.get("san.contextSteady.qualityWindowTokens") as number;
 		const contextSteadyTarget =
 			this.settings.get("san.contextSteady.enabled") === true
 				? Math.max(
 						1,
 						Math.min(
 							contextWindow,
-							this.settings.get("san.contextSteady.qualityWindowTokens") as number,
+							configuredSteadyTarget > 0 ? configuredSteadyTarget : 240_000,
 							this.#contextSteadyBurstWindowTokens(),
 						),
 					)
 				: Number.POSITIVE_INFINITY;
 		const steadyMaintenanceRequired = contextTokens > contextSteadyTarget;
 		const segmentHint = this.#contextSteadySegmentMaintenanceHint();
+		const nativeMaintenanceRequired = shouldCompact(contextTokens, contextWindow, compactionSettings);
+		if (!steadyMaintenanceRequired && !segmentHint.required && !nativeMaintenanceRequired) return;
+		const priorNoop = this.#midRunMaintenanceNoop;
 		if (
 			!steadyMaintenanceRequired &&
-			!segmentHint.required &&
-			!shouldCompact(contextTokens, contextWindow, compactionSettings)
-		)
+			!nativeMaintenanceRequired &&
+			segmentHint.required &&
+			priorNoop?.boundaryId === segmentHint.boundaryId &&
+			segmentHint.tokens < priorNoop.tokens + MID_RUN_MAINTENANCE_NOOP_RETRY_TOKENS &&
+			segmentHint.elapsedMs < priorNoop.elapsedMs + MID_RUN_MAINTENANCE_NOOP_RETRY_MS
+		) {
+			logger.debug("Skipping repeated mid-run maintenance after a no-op", {
+				segmentHint,
+				priorNoop,
+			});
 			return;
+		}
 
 		// Promote to a larger-context sibling before compacting, mirroring the
 		// pre-prompt (#runPrePromptCompactionIfNeeded) and post-turn threshold
@@ -12807,7 +12871,8 @@ export class AgentSession {
 		}
 
 		const messagesBefore = activeMessages.length;
-		await this.#runAutoCompaction("threshold", false, false, false, {
+		const compactionBefore = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
+		const maintenanceResult = await this.#runAutoCompaction("threshold", false, false, false, {
 			autoContinue: false,
 			suppressContinuation: true,
 			suppressHandoff: true,
@@ -12820,7 +12885,14 @@ export class AgentSession {
 		if (compactedMessages !== activeMessages) {
 			activeMessages.splice(0, activeMessages.length, ...compactedMessages);
 		}
-		logger.debug("Mid-run compaction ran between provider calls", {
+		const compactionAfter = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
+		const committed =
+			maintenanceResult.historyRewritten === true ||
+			(compactionAfter !== undefined && compactionAfter !== compactionBefore);
+		this.#midRunMaintenanceNoop = committed
+			? undefined
+			: { boundaryId: segmentHint.boundaryId, tokens: segmentHint.tokens, elapsedMs: segmentHint.elapsedMs };
+		logger.debug(committed ? "Mid-run compaction committed between provider calls" : "Mid-run compaction no-op", {
 			contextTokens,
 			contextWindow,
 			contextSteadyTarget,
@@ -12830,6 +12902,8 @@ export class AgentSession {
 			goalActive: this.#goalModeState?.enabled === true && this.#goalModeState.goal.status === "active",
 			messagesBefore,
 			messagesAfter: activeMessages.length,
+			compactionBefore,
+			compactionAfter,
 		});
 	}
 	/**
@@ -14542,10 +14616,8 @@ export class AgentSession {
 						// subagents auto/manually compacting issued uncapped
 						// summary requests in parallel (chatgpt-codex review on
 						// #3751).
-						completeImpl: async (requestModel, requestContext, requestOptions) => {
-							const stream = await this.#sideStreamFn(requestModel, requestContext, requestOptions);
-							return stream.result();
-						},
+						completeImpl: (requestModel, requestContext, requestOptions) =>
+							this.#completeSideRequestWithProbe("compaction", requestModel, requestContext, requestOptions),
 					},
 				);
 			} catch (error) {
@@ -15305,6 +15377,13 @@ export class AgentSession {
 									promptCacheKey: this.sessionId,
 									providerSessionState: this.#providerSessionState,
 									codexCompaction,
+									completeImpl: (requestModel, requestContext, requestOptions) =>
+										this.#completeSideRequestWithProbe(
+											"compaction",
+											requestModel,
+											requestContext,
+											requestOptions,
+										),
 								},
 							);
 							break;

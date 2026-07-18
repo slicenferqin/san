@@ -14,6 +14,7 @@ export {
 } from "./packet";
 export * from "./plan-types";
 export * from "./planner";
+export * from "./probe";
 export * from "./prune";
 export * from "./quality-gate";
 export * from "./segment";

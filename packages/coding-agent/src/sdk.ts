@@ -107,6 +107,7 @@ import {
 	loadSecrets,
 	obfuscateMessages,
 	obfuscateProviderContext,
+	type SecretEntry,
 	SecretObfuscator,
 } from "./secrets";
 import { AgentSession, type PlanYolo, type Prewalk } from "./session/agent-session";
@@ -397,6 +398,8 @@ export interface CreateAgentSessionOptions {
 	authStorage?: AuthStorage;
 	/** Model registry. Default: discoverModels(authStorage, agentDir) */
 	modelRegistry?: ModelRegistry;
+	/** 仅保存在内存中的额外敏感值；传入后即使全局开关关闭也会启用出站脱敏。 */
+	additionalSecretEntries?: readonly SecretEntry[];
 
 	/** Model to use. Default: from settings, else first available */
 	model?: Model;
@@ -523,6 +526,8 @@ export interface CreateAgentSessionOptions {
 	strictToolNames?: boolean;
 	/** Absolute host-approved filesystem root enforced before strict tool execution. */
 	toolPathScope?: string;
+	/** 宿主明确豁免路径转换的受控自定义工具；工具实现本身不得接收文件系统路径。 */
+	toolPathScopeExemptToolNames?: string[];
 	/** Hard provider output cap for every request in an approved programmatic child. */
 	maxOutputTokens?: number;
 	/** 已审批程序化子任务的输入与输出累计硬上限。 */
@@ -1280,13 +1285,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Load and create secret obfuscator early so resumed session state and prompt warnings
 	// reflect actual loaded secrets, not just the setting toggle.
 	let obfuscator: SecretObfuscator | undefined;
-	if (settings.get("secrets.enabled")) {
-		const fileEntries = await logger.time("loadSecrets", loadSecrets, cwd, agentDir);
-		const envEntries = collectEnvSecrets();
-		const allEntries = [...envEntries, ...fileEntries];
-		if (allEntries.length > 0) {
-			obfuscator = new SecretObfuscator(allEntries);
-		}
+	const additionalSecretEntries = options.additionalSecretEntries ?? [];
+	if (settings.get("secrets.enabled") || additionalSecretEntries.length > 0) {
+		const fileEntries = settings.get("secrets.enabled")
+			? await logger.time("loadSecrets", loadSecrets, cwd, agentDir)
+			: [];
+		const envEntries = settings.get("secrets.enabled") ? collectEnvSecrets() : [];
+		const allEntries = [...envEntries, ...fileEntries, ...additionalSecretEntries];
+		if (allEntries.length > 0) obfuscator = new SecretObfuscator(allEntries);
 	}
 	const secretsEnabled = obfuscator?.hasSecrets() === true;
 
@@ -2861,6 +2867,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						toolName,
 						cwd,
 						scopeRoot: options.toolPathScope,
+						exemptToolNames: new Set(options.toolPathScopeExemptToolNames),
 					});
 				}
 				return result;
