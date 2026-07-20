@@ -2715,6 +2715,12 @@ export const SETTINGS_SCHEMA = {
 				"Enable San context steady state: persist settled-turn digests and inject a compact ContextPlan into later provider requests.",
 		},
 	},
+	"san.contextSteady.activationThresholdTokens": {
+		type: "number",
+		default: 240000,
+		description:
+			"Minimum full provider-input estimate before Context Steady activates for a session. 0 activates immediately; once activated, the session stays active across later compaction and resume.",
+	},
 	"san.contextSteady.digest.enabled": { type: "boolean", default: true },
 	"san.contextSteady.digest.persistFallback": { type: "boolean", default: true },
 	"san.contextSteady.digest.timeoutMs": { type: "number", default: 30000 },

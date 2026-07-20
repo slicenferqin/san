@@ -31,14 +31,17 @@ import { CONTEXT_PLAN_CUSTOM_TYPE } from "../../src/context-steady/plan-types";
 import {
 	CONTEXT_CHECKPOINT_CUSTOM_TYPE,
 	CONTEXT_MAINTENANCE_CUSTOM_TYPE,
+	CONTEXT_STEADY_ACTIVATION_CUSTOM_TYPE,
 	type ContextCheckpoint,
 	type ContextMaintenanceAudit,
+	type ContextSteadyActivation,
 	TURN_DIGEST_CUSTOM_TYPE,
 	type TurnDigest,
 } from "../../src/context-steady/types";
 
 const PRODUCTION_SETTINGS = {
 	"san.contextSteady.enabled": true,
+	"san.contextSteady.activationThresholdTokens": 0,
 	"san.contextSteady.digest.enabled": true,
 	"san.contextSteady.digest.persistFallback": true,
 	"san.contextSteady.digest.timeoutMs": 5000,
@@ -173,7 +176,7 @@ describe("Context Steady production-path completion", () => {
 
 	async function createHarness(
 		settingsValues: Parameters<typeof Settings.isolated>[0],
-		options: { persisted?: boolean; contextWindow?: number; responsePrefix?: string } = {},
+		options: { persisted?: boolean; contextWindow?: number; responsePrefix?: string; sessionFile?: string } = {},
 	): Promise<RuntimeHarness> {
 		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!bundled) throw new Error("Expected bundled production-path test model");
@@ -202,9 +205,11 @@ describe("Context Steady production-path completion", () => {
 			convertToLlm,
 		});
 		const sessionDir = path.join(tempDir, `sessions-${sessions.length}`);
-		const sessionManager = options.persisted
-			? SessionManager.create(tempDir, sessionDir)
-			: SessionManager.inMemory(tempDir);
+		const sessionManager = options.sessionFile
+			? await SessionManager.open(options.sessionFile, undefined, undefined, { suppressBreadcrumb: true })
+			: options.persisted
+				? SessionManager.create(tempDir, sessionDir)
+				: SessionManager.inMemory(tempDir);
 		const authStorage = await AuthStorage.create(path.join(tempDir, `auth-${authStorages.length}.db`));
 		authStorages.push(authStorage);
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
@@ -408,6 +413,100 @@ describe("Context Steady production-path completion", () => {
 			expect(planText).toContain(coverage.replacementMaterialId);
 		}
 		expect(planText).toContain("Burst contract turn 1");
+	});
+
+	it("keeps below-threshold sessions provider- and journal-equivalent to native", async () => {
+		async function run(settings: Parameters<typeof Settings.isolated>[0]) {
+			const harness = await createHarness(settings, { responsePrefix: "dormant parity" });
+			await harness.session.prompt("Dormant parity turn one");
+			await harness.session.waitForIdle();
+			await harness.session.prompt("Dormant parity turn two");
+			await harness.session.waitForIdle();
+			return harness;
+		}
+
+		const baseline = await run({
+			"todo.enabled": false,
+			"todo.reminders": false,
+		});
+		const finalBaselineMessage = baseline.session.messages.at(-1);
+		expect(finalBaselineMessage?.role).toBe("assistant");
+		const activationThresholdTokens =
+			Math.max(...baseline.observations.map(observation => observation.providerTokens)) +
+			estimateTokens(finalBaselineMessage!) +
+			1;
+		const dormant = await run({
+			...PRODUCTION_SETTINGS,
+			"san.contextSteady.activationThresholdTokens": activationThresholdTokens,
+		});
+
+		expect(dormant.mock.calls).toHaveLength(baseline.mock.calls.length);
+		for (let index = 0; index < baseline.mock.calls.length; index++) {
+			expect(normalizeProviderMessages(dormant.mock.calls[index]!.context.messages)).toEqual(
+				normalizeProviderMessages(baseline.mock.calls[index]!.context.messages),
+			);
+		}
+		expect(customEntries(dormant.sessionManager, CONTEXT_STEADY_ACTIVATION_CUSTOM_TYPE)).toHaveLength(0);
+		expect(customEntries(dormant.sessionManager, TURN_DIGEST_CUSTOM_TYPE)).toHaveLength(0);
+		expect(customEntries(dormant.sessionManager, CONTEXT_PLAN_CUSTOM_TYPE)).toHaveLength(0);
+		expect(customEntries(dormant.sessionManager, CONTEXT_CHECKPOINT_CUSTOM_TYPE)).toHaveLength(0);
+	});
+
+	it("latches threshold activation and restores it from the dedicated session marker", async () => {
+		const activationThresholdTokens = 10_000;
+		const initial = await createHarness(
+			{
+				...PRODUCTION_SETTINGS,
+				"san.contextSteady.activationThresholdTokens": activationThresholdTokens,
+				"san.contextSteady.digest.enabled": false,
+				"san.contextSteady.contextPlan.enabled": false,
+				"san.contextSteady.checkpoint.enabled": false,
+				"san.contextSteady.segment.enabled": false,
+			},
+			{ persisted: true, responsePrefix: "activation latch" },
+		);
+
+		await initial.session.prompt("Remain below the Context Steady activation threshold.");
+		await initial.session.waitForIdle();
+		expect(initial.observations[0]?.providerTokens).toBeLessThan(activationThresholdTokens);
+		expect(customEntries(initial.sessionManager, CONTEXT_STEADY_ACTIVATION_CUSTOM_TYPE)).toHaveLength(0);
+
+		await initial.session.prompt(
+			`Cross the Context Steady activation threshold now. ${"alpha beta gamma delta epsilon zeta ".repeat(3500)}`,
+		);
+		await initial.session.waitForIdle();
+
+		const activationEntries = customEntries(initial.sessionManager, CONTEXT_STEADY_ACTIVATION_CUSTOM_TYPE);
+		expect(activationEntries).toHaveLength(1);
+		const activationEntry = activationEntries[0];
+		expect(activationEntry).toBeDefined();
+		if (!activationEntry) throw new Error("Expected a Context Steady activation entry");
+		const activation = activationEntry.data as ContextSteadyActivation;
+		expect(activation).toMatchObject({
+			schemaVersion: 1,
+			activationThresholdTokens,
+		});
+		expect(activation.observedInputTokens).toBeGreaterThanOrEqual(activationThresholdTokens);
+		expect(customEntries(initial.sessionManager, TURN_DIGEST_CUSTOM_TYPE)).toHaveLength(0);
+		expect(customEntries(initial.sessionManager, CONTEXT_PLAN_CUSTOM_TYPE)).toHaveLength(0);
+
+		await initial.sessionManager.flush();
+		const sessionFile = initial.sessionManager.getSessionFile();
+		expect(sessionFile).toBeDefined();
+		const resumed = await createHarness(
+			{
+				...PRODUCTION_SETTINGS,
+				"san.contextSteady.activationThresholdTokens": 1_000_000,
+				"san.contextSteady.digest.enabled": false,
+			},
+			{ sessionFile: sessionFile!, responsePrefix: "activation resume" },
+		);
+
+		await resumed.session.prompt("Use the restored Context Steady activation latch.");
+		await resumed.session.waitForIdle();
+
+		expect(contextPlanText(resumed.mock.calls[0]!.context)).toContain("<san_context_plan>");
+		expect(customEntries(resumed.sessionManager, CONTEXT_STEADY_ACTIVATION_CUSTOM_TYPE)).toHaveLength(1);
 	});
 
 	it("preserves non-steady provider payloads, journal writes, and provider sessions when disabled", async () => {

@@ -112,6 +112,7 @@ async function createHarness(contextSteadyEnabled: boolean, llmDigestEnabled = f
 			"todo.enabled": false,
 			"todo.reminders": false,
 			"san.contextSteady.enabled": contextSteadyEnabled,
+			"san.contextSteady.activationThresholdTokens": 0,
 			"san.contextSteady.digest.enabled": true,
 			"san.contextSteady.digest.persistFallback": true,
 			"san.contextSteady.digest.timeoutMs": 1000,

@@ -21,6 +21,7 @@ memory:
 san:
   contextSteady:
     enabled: true
+    activationThresholdTokens: 0
     probe:
       enabled: true
     digest:

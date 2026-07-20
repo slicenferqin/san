@@ -253,6 +253,7 @@ function createRuntime() {
 			},
 			refreshCommands: () => {},
 			reloadPlugins: async () => {},
+			reloadMcp: undefined as (() => Promise<void>) | undefined,
 			notifyTitleChanged: undefined as (() => Promise<void> | void) | undefined,
 			notifyConfigChanged: undefined as (() => Promise<void> | void) | undefined,
 		},
@@ -1128,6 +1129,40 @@ describe("wave 4 commands", () => {
 		expect(result).toEqual({ consumed: true });
 		expect(refreshCalled).toBe(true);
 		expect(output[0]).toContain("reload");
+	});
+
+	it("/reload all refreshes each runtime layer in dependency order", async () => {
+		const events: string[] = [];
+		const { output, runtime } = createRuntime();
+		const reloadSettings = spyOn(runtime.settings, "reloadFromDisk").mockImplementation(async () => {
+			events.push("config");
+		});
+		Object.defineProperty(runtime.session, "modelRegistry", {
+			configurable: true,
+			value: {
+				async refresh(strategy: string) {
+					events.push(`models:${strategy}`);
+				},
+			},
+		});
+		runtime.notifyConfigChanged = () => {
+			events.push("notify");
+		};
+		runtime.reloadPlugins = async () => {
+			events.push("plugins");
+		};
+		runtime.reloadMcp = async () => {
+			events.push("mcp");
+		};
+
+		try {
+			const result = await executeAcpBuiltinSlashCommand("/reload all", runtime);
+			expect(result).toEqual({ consumed: true });
+			expect(events).toEqual(["config", "notify", "models:offline", "plugins", "mcp"]);
+			expect(output).toEqual(["Configuration, models, plugins, and MCP runtime reloaded."]);
+		} finally {
+			reloadSettings.mockRestore();
+		}
 	});
 
 	it("/mcp resources: outputs server list or no-server message", async () => {

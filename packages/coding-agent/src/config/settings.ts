@@ -29,7 +29,7 @@ import {
 import { JSONC, YAML } from "bun";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
 import type { ModelRole } from "../config/model-roles";
-import { loadCapability } from "../discovery";
+import { loadCapability, reset as resetDiscoveryCache } from "../discovery";
 import { isLightTheme, setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "../modes/theme/theme";
 import { AgentStorage } from "../session/agent-storage";
 import { normalizeToolName } from "../tools/builtin-names";
@@ -574,6 +574,35 @@ export class Settings {
 		cloned.#rebuildMerged();
 		cloned.#fireAllHooks();
 		return cloned;
+	}
+
+	/**
+	 * Reload every disk-backed settings layer for the current working directory
+	 * in place. Runtime overrides survive the reload. Fresh snapshots replace the
+	 * live layers together after every source has been read.
+	 */
+	async reloadFromDisk(): Promise<void> {
+		if (this.#configPath === null) return;
+
+		await this.flush();
+		resetDiscoveryCache();
+		const prevModelRoles = this.get("modelRoles");
+		const prevSessionAccent = this.get("statusLine.sessionAccent");
+		const global = (await this.#loadExistingMainYaml()) ?? {};
+		const project = await this.#loadProjectSettings();
+		const configOverlay = await this.#loadConfigOverlays();
+
+		this.#global = global;
+		this.#project = project;
+		this.#configOverlay = configOverlay;
+		this.#rebuildMerged();
+		this.#fireEffectiveSettingChanged("modelRoles", this.get("modelRoles"), prevModelRoles);
+		this.#fireEffectiveSettingChanged(
+			"statusLine.sessionAccent",
+			this.get("statusLine.sessionAccent"),
+			prevSessionAccent,
+		);
+		this.#fireAllHooks();
 	}
 
 	/**

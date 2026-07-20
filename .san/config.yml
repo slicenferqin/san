@@ -4,10 +4,10 @@
 # 环境变量或未跟踪的 agent dir 中。
 modelRoles:
   default: asxs/gpt-5.6-sol:xhigh
-  smol: self/gpt-5.4-mini
-  slow: self/gpt-5.6-sol
+  smol: self-botcf/gpt-5.4-mini
+  slow: self-botcf/gpt-5.6-sol
   plan: asxs/gpt-5.6-sol:xhigh
-  advisor: self/claude-opus-4-8
+  advisor: self-botcf/claude-opus-4-8
   task: deepseek/deepseek-v4-pro
 
 setupVersion: 1
@@ -38,7 +38,7 @@ san:
       timeoutMs: 30000
       llm:
         enabled: true
-        modelRole: self/deepseek-v4-flash
+        modelRole: self-botcf/deepseek-v4-flash
     qualityWindowTokens: 240000
     reserveRatio: 0.25
     contextPlan:
@@ -78,11 +78,11 @@ san:
       projectDir: .san/checks
     roles:
       commander:
-        modelRole: self/claude-opus-4-8
+        modelRole: self-botcf/claude-opus-4-8
       worker:
         modelRole: deepseek/deepseek-v4-pro
       supervisor:
-        modelRole: self/claude-opus-4-8
+        modelRole: self-botcf/claude-opus-4-8
       oracle:
         modelRole: asxs/gpt-5.6-sol:xhigh
         enabledInModes:

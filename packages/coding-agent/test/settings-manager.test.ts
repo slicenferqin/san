@@ -922,6 +922,7 @@ describe("Settings", () => {
 				});
 
 				expect(settings.get("san.contextSteady.enabled")).toBe(true);
+				expect(settings.get("san.contextSteady.activationThresholdTokens")).toBe(240000);
 				expect(settings.get("san.contextSteady.digest.enabled")).toBe(true);
 				expect(settings.get("san.contextSteady.digest.persistFallback")).toBe(true);
 				expect(settings.get("san.contextSteady.qualityWindowTokens")).toBe(240000);

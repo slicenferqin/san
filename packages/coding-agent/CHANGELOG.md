@@ -16,9 +16,11 @@
 - Added `/connect` as the unified model-provider management surface (OAuth, API key, keyless/local). Connected providers sort first with auth origin and available model counts; successful connect refreshes that provider and opens a provider-filtered session model picker. Custom endpoints persist via a comment-preserving, locked, atomic `models.yml` path patch and store secrets only in AuthStorage (`auth: apiKey` without plaintext keys in YAML).
 - Added comment-preserving YAML path patch helpers and a safe `models.yml` writer for custom providers (no API key material in YAML, logs, or errors).
 - Added `/model roles` expert entry for the legacy role/thinking assignment picker.
+- Added `/reload <config|models|plugins|mcp|all>` to refresh disk-backed settings and runtime registries in place without restarting the CLI; runtime setting overrides remain active.
 
 ### Changed
 
+- Changed San Context Steady to remain native-equivalent below a configurable activation threshold (240K input tokens by default), then latch activation for the session and restore it after resume.
 - Changed custom provider validation so `models.yml` may declare `auth: apiKey` without embedding the secret (keys live in AuthStorage).
 - Restored no-argument `/logout` to the dedicated credential-removal selector (provider connect remains `/connect` / `/login`).
 - Custom provider setup now rolls back the newly written `models.yml` entry and any login credential when key storage or first registry load fails, avoiding half-configured providers.

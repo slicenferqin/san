@@ -32,6 +32,7 @@ import {
 
 const BASE_SETTINGS = {
 	"san.contextSteady.enabled": true,
+	"san.contextSteady.activationThresholdTokens": 0,
 	"san.contextSteady.digest.enabled": true,
 	"san.contextSteady.digest.persistFallback": true,
 	"san.contextSteady.digest.timeoutMs": 5000,

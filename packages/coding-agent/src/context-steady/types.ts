@@ -2,6 +2,14 @@
  * Context Steady State types.
  */
 
+export const CONTEXT_STEADY_ACTIVATION_SCHEMA_VERSION = 1;
+export const CONTEXT_STEADY_ACTIVATION_CUSTOM_TYPE = "san.context_steady.activation";
+
+export interface ContextSteadyActivation {
+	schemaVersion: typeof CONTEXT_STEADY_ACTIVATION_SCHEMA_VERSION;
+	activationThresholdTokens: number;
+	observedInputTokens: number;
+}
 export const TURN_DIGEST_SCHEMA_VERSION = 1;
 export const TURN_DIGEST_CUSTOM_TYPE = "san.turn_digest";
 export const CONTEXT_SEGMENT_SCHEMA_VERSION = 1;

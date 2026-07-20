@@ -118,6 +118,7 @@ describe("San Brain M4 AgentSession activation", () => {
 	it("applies the shared global budget to Brain and the production ContextPlan", async () => {
 		const { session, sessionManager, mock } = await createHarness();
 		session.settings.override("san.contextSteady.enabled", true);
+		session.settings.override("san.contextSteady.activationThresholdTokens", 0);
 		session.settings.override("san.contextSteady.contextPlan.enabled", true);
 		session.settings.override("san.contextSteady.contextPlan.maxTokens", 1000);
 		session.settings.override("san.brain.activation.globalMaxTokens", 1000);

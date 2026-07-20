@@ -246,9 +246,14 @@ import {
 	CONTEXT_CHECKPOINT_CUSTOM_TYPE,
 	CONTEXT_MAINTENANCE_CUSTOM_TYPE,
 	CONTEXT_MAINTENANCE_SCHEMA_VERSION,
+	CONTEXT_SEGMENT_CUSTOM_TYPE,
+	CONTEXT_STEADY_ACTIVATION_CUSTOM_TYPE,
+	CONTEXT_STEADY_ACTIVATION_SCHEMA_VERSION,
 	type ContextCheckpointRebaseReason,
 	type ContextMaintenanceAudit,
 	type ContextPacketRecallLayer,
+	type ContextSteadyActivation,
+	TURN_DIGEST_CUSTOM_TYPE,
 } from "../context-steady/types";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability } from "../discovery";
@@ -2106,6 +2111,9 @@ export class AgentSession {
 	#contextSteadyGlobalInjectionAllowed = true;
 	/** Survives turn end so idle status/compaction can share the last plan snapshot. */
 	#contextSteadyLastPlan: BuiltContextPlan | undefined = undefined;
+	/** Sticky per-session activation; persisted Context Steady entries restore it after resume. */
+	#contextSteadyActivatedSessionId: string | undefined;
+	#contextSteadyActivationScannedSessionId: string | undefined;
 	#contextSteadyLastRebaseCheckpointEntryId: string | undefined;
 	/** Next plan/checkpoint should advertise resume rebase after session switch. */
 	#contextSteadyPendingResumeRebase = false;
@@ -4854,7 +4862,7 @@ export class AgentSession {
 
 		return (async () => {
 			try {
-				const contextSteadyEnabled = settings.get("san.contextSteady.enabled") as boolean;
+				const contextSteadyEnabled = this.#contextSteadyIsActive();
 				const digestEnabled = settings.get("san.contextSteady.digest.enabled") as boolean;
 				const persistFallback = settings.get("san.contextSteady.digest.persistFallback") as boolean;
 				const brainCaptureEnabled = resolveSanBrainRuntimePolicy(settings).captureEnabled;
@@ -5031,7 +5039,7 @@ export class AgentSession {
 	}
 
 	#maybeAppendContextSteadyCheckpoint(options?: { rebaseReason?: ContextCheckpointRebaseReason }): void {
-		if (this.settings.get("san.contextSteady.enabled") !== true) return;
+		if (!this.#contextSteadyIsActive()) return;
 		if (this.settings.get("san.contextSteady.checkpoint.enabled") !== true) return;
 
 		const rebaseReason =
@@ -7542,10 +7550,7 @@ export class AgentSession {
 	}
 
 	async #buildSystemPromptForAgentStart(promptText: string): Promise<string[]> {
-		if (
-			this.settings.get("san.contextSteady.enabled") === true &&
-			this.settings.get("san.contextSteady.recall.enabled") === true
-		) {
+		if (this.#contextSteadyIsActive() && this.settings.get("san.contextSteady.recall.enabled") === true) {
 			if (this.#baseSystemPromptBeforeMemoryPromotion) {
 				this.#baseSystemPrompt = this.#baseSystemPromptBeforeMemoryPromotion;
 				this.#baseSystemPromptBeforeMemoryPromotion = undefined;
@@ -7921,7 +7926,9 @@ export class AgentSession {
 
 	async #transformContextForProvider(messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> {
 		const transformedMessages = await this.#transformContext(messages, signal);
-		if (this.settings.get("san.contextSteady.enabled") !== true) return transformedMessages;
+		if (!this.#contextSteadyIsActive(this.#estimateFullProviderInputTokens(transformedMessages))) {
+			return transformedMessages;
+		}
 		if (!this.#contextSteadyPlanEnabled()) return transformedMessages;
 		// Re-gate every provider call (including tool-loop steps) against live tail growth.
 		const plan = this.#refreshContextSteadyPlanForProviderCall(transformedMessages);
@@ -8720,10 +8727,11 @@ export class AgentSession {
 			if (brainStateMessage && typeof brainStateMessage.content === "string") {
 				injectionCandidates.push({ source: "brain", content: brainStateMessage.content });
 			}
+			const contextSteadyActive = this.#contextSteadyIsActive(
+				this.#estimateStoredContextTokens([...this.messages, message]),
+			);
 			const contextPlanReservedTokens =
-				this.settings.get("san.contextSteady.enabled") === true && this.#contextSteadyPlanEnabled()
-					? this.#contextSteadyPlanMaxTokens()
-					: 0;
+				contextSteadyActive && this.#contextSteadyPlanEnabled() ? this.#contextSteadyPlanMaxTokens() : 0;
 			if (contextPlanReservedTokens > 0) {
 				injectionCandidates.push({ source: "context_packet", tokenEstimate: contextPlanReservedTokens });
 			}
@@ -8874,6 +8882,56 @@ export class AgentSession {
 		return this.#contextSteadyRecentExactEntryRefs(entries, excludeRefs, tokenBudget, tokenEstimateByEntryRef);
 	}
 
+	#contextSteadyIsActive(observedInputTokens?: number): boolean {
+		if (this.settings.get("san.contextSteady.enabled") !== true) return false;
+		if (this.#contextSteadyActivatedSessionId === this.sessionId) return true;
+
+		let persistedActivation = false;
+		if (this.#contextSteadyActivationScannedSessionId !== this.sessionId) {
+			for (const entry of this.sessionManager.getBranch()) {
+				if (entry.type !== "custom") continue;
+				switch (entry.customType) {
+					case CONTEXT_STEADY_ACTIVATION_CUSTOM_TYPE:
+					case CONTEXT_PLAN_CUSTOM_TYPE:
+					case TURN_DIGEST_CUSTOM_TYPE:
+					case CONTEXT_CHECKPOINT_CUSTOM_TYPE:
+					case CONTEXT_SEGMENT_CUSTOM_TYPE:
+					case CONTEXT_MAINTENANCE_CUSTOM_TYPE:
+						persistedActivation = true;
+						break;
+				}
+				if (persistedActivation) break;
+			}
+			this.#contextSteadyActivationScannedSessionId = this.sessionId;
+		}
+
+		const configuredThreshold = this.settings.get("san.contextSteady.activationThresholdTokens") as number;
+		const activationThresholdTokens = Number.isFinite(configuredThreshold)
+			? Math.max(0, Math.floor(configuredThreshold))
+			: 240_000;
+		const inputTokens = observedInputTokens ?? (persistedActivation ? 0 : this.#estimateStoredContextTokens());
+		if (!persistedActivation && activationThresholdTokens > 0 && inputTokens < activationThresholdTokens) {
+			return false;
+		}
+
+		if (!persistedActivation && activationThresholdTokens > 0) {
+			const activation: ContextSteadyActivation = {
+				schemaVersion: CONTEXT_STEADY_ACTIVATION_SCHEMA_VERSION,
+				activationThresholdTokens,
+				observedInputTokens: inputTokens,
+			};
+			this.sessionManager.appendCustomEntry(CONTEXT_STEADY_ACTIVATION_CUSTOM_TYPE, activation);
+		}
+		this.#contextSteadyActivatedSessionId = this.sessionId;
+		logger.debug("Context Steady activated for session", {
+			sessionId: this.sessionId,
+			source: persistedActivation ? "persisted" : activationThresholdTokens === 0 ? "immediate" : "threshold",
+			inputTokens,
+			activationThresholdTokens,
+		});
+		return true;
+	}
+
 	/**
 	 * Rendered ContextPlans include their projected-input audit, so that audit can
 	 * change the final wire size. Rebuild until the recorded projection equals
@@ -8901,7 +8959,7 @@ export class AgentSession {
 		expandedText: string,
 		options?: { persistAudit?: boolean; throwOnHardPressure?: boolean; liveTailOnly?: boolean },
 	): Promise<BuiltContextPlan | undefined> {
-		if (this.settings.get("san.contextSteady.enabled") !== true) return undefined;
+		if (!this.#contextSteadyIsActive(this.#estimateStoredContextTokens(messages))) return undefined;
 		if (!this.#contextSteadyPlanEnabled()) return undefined;
 		if (!this.#contextSteadyGlobalInjectionAllowed) return undefined;
 		const persistAudit = options?.persistAudit !== false;
@@ -9339,6 +9397,14 @@ export class AgentSession {
 		return convertToLlm([message]).reduce(
 			(sum, providerMessage) => sum + estimateTokens(providerMessage as unknown as AgentMessage, options),
 			0,
+		);
+	}
+
+	#estimateFullProviderInputTokens(messages: readonly AgentMessage[]): number {
+		const options = { excludeEncryptedReasoning: true } as const;
+		return (
+			computeNonMessageTokens(this) +
+			messages.reduce((sum, message) => sum + this.#estimateProviderWireMessageTokens(message, options), 0)
 		);
 	}
 
@@ -12655,7 +12721,7 @@ export class AgentSession {
 		});
 	}
 
-	#estimateStoredContextTokens(pendingMessages: AgentMessage[] = []): number {
+	#estimateStoredContextTokens(pendingMessages: readonly AgentMessage[] = []): number {
 		// Exclude encrypted reasoning (thinkingSignature / redactedThinking): its
 		// local byte size diverges from what the provider bills, so counting it here
 		// would let a thinking-heavy turn falsely trip the floor. The provider usage
@@ -12689,6 +12755,7 @@ export class AgentSession {
 		if (contextWindow <= 0) return;
 		const compactionSettings = this.settings.getGroup("compaction");
 		const contextTokens = this.#estimatePrePromptContextTokens(messages, contextWindow);
+		this.#contextSteadyIsActive(contextTokens);
 		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) return;
 
 		// Auto-promote first: switching to a larger-context model avoids compacting
@@ -12724,10 +12791,7 @@ export class AgentSession {
 		elapsedMs: number;
 		boundaryId: string;
 	} {
-		if (
-			this.settings.get("san.contextSteady.enabled") !== true ||
-			this.settings.get("san.contextSteady.segment.enabled") !== true
-		) {
+		if (!this.#contextSteadyIsActive() || this.settings.get("san.contextSteady.segment.enabled") !== true) {
 			return { required: false, tokenHint: false, durationHint: false, tokens: 0, elapsedMs: 0, boundaryId: "none" };
 		}
 		const entries = this.sessionManager.getBranch();
@@ -12819,18 +12883,20 @@ export class AgentSession {
 		const billedContextTokens = calculateContextTokens(lastAssistant.usage);
 		const storedContextTokens = this.#estimateStoredContextTokens();
 		const contextTokens = compactionContextTokens(billedContextTokens, storedContextTokens);
+		const contextSteadyActive = this.#contextSteadyIsActive(
+			Math.max(calculatePromptTokens(lastAssistant.usage), storedContextTokens),
+		);
 		const configuredSteadyTarget = this.settings.get("san.contextSteady.qualityWindowTokens") as number;
-		const contextSteadyTarget =
-			this.settings.get("san.contextSteady.enabled") === true
-				? Math.max(
-						1,
-						Math.min(
-							contextWindow,
-							configuredSteadyTarget > 0 ? configuredSteadyTarget : 240_000,
-							this.#contextSteadyBurstWindowTokens(),
-						),
-					)
-				: Number.POSITIVE_INFINITY;
+		const contextSteadyTarget = contextSteadyActive
+			? Math.max(
+					1,
+					Math.min(
+						contextWindow,
+						configuredSteadyTarget > 0 ? configuredSteadyTarget : 240_000,
+						this.#contextSteadyBurstWindowTokens(),
+					),
+				)
+			: Number.POSITIVE_INFINITY;
 		const steadyMaintenanceRequired = contextTokens > contextSteadyTarget;
 		const segmentHint = this.#contextSteadySegmentMaintenanceHint();
 		const nativeMaintenanceRequired = shouldCompact(contextTokens, contextWindow, compactionSettings);
@@ -12936,6 +13002,11 @@ export class AgentSession {
 	): Promise<CompactionCheckResult> {
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
 		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return COMPACTION_CHECK_NONE;
+		if (this.settings.get("san.contextSteady.enabled") === true) {
+			this.#contextSteadyIsActive(
+				Math.max(calculatePromptTokens(assistantMessage.usage), this.#estimateStoredContextTokens()),
+			);
+		}
 		const contextWindow = this.model?.contextWindow ?? 0;
 		const generation = this.#promptGeneration;
 		// Skip overflow check if the message came from a different model.
@@ -15490,7 +15561,7 @@ export class AgentSession {
 				preserveData,
 			);
 			if (
-				this.settings.get("san.contextSteady.enabled") === true &&
+				this.#contextSteadyIsActive() &&
 				this.settings.get("san.contextSteady.segment.enabled") === true &&
 				options.phase === "mid_turn"
 			) {
@@ -17654,6 +17725,7 @@ export class AgentSession {
 			// ContextPlan epoch must rebase after resume so cache/prefix state cannot leak.
 			this.#contextSteadyRequestPlan = undefined;
 			this.#contextSteadyLastPlan = undefined;
+			this.#contextSteadyActivationScannedSessionId = undefined;
 			this.#contextSteadyLastRebaseCheckpointEntryId = undefined;
 			this.#contextSteadyPendingResumeRebase = true;
 			if (switchingToDifferentSession) {

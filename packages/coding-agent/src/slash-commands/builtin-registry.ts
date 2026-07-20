@@ -395,6 +395,49 @@ async function handleUsageResetCommand(
 	await output(describeRedeemOutcome(outcome, target.label));
 }
 
+const RELOAD_USAGE = "Usage: /reload <config|models|plugins|mcp|all>";
+
+async function handleReloadCommand(
+	command: ParsedSlashCommand,
+	runtime: SlashCommandRuntime,
+): Promise<SlashCommandResult> {
+	const { verb, rest } = parseSubcommand(command.args);
+	if (rest || !["config", "models", "plugins", "mcp", "all"].includes(verb)) {
+		return await usage(RELOAD_USAGE, runtime);
+	}
+
+	try {
+		if (verb === "config" || verb === "all") {
+			await runtime.settings.reloadFromDisk();
+			applyProviderGlobalsFromSettings(runtime.settings);
+			await runtime.notifyConfigChanged?.();
+		}
+		if (verb === "models" || verb === "all") {
+			await runtime.session.modelRegistry.refresh("offline");
+		}
+		if (verb === "plugins" || verb === "all") {
+			await runtime.reloadPlugins();
+		}
+		if (verb === "mcp" || verb === "all") {
+			if (runtime.reloadMcp) {
+				await runtime.reloadMcp();
+			} else {
+				await runtime.refreshCommands();
+			}
+		}
+	} catch (error) {
+		await runtime.output(`Reload failed: ${errorMessage(error)}`);
+		return commandConsumed();
+	}
+
+	const result =
+		verb === "all"
+			? "Configuration, models, plugins, and MCP runtime reloaded."
+			: `${verb === "mcp" ? "MCP runtime" : verb[0]!.toUpperCase() + verb.slice(1)} reloaded.`;
+	await runtime.output(result);
+	return commandConsumed();
+}
+
 /** Parse the `/shake` subcommand into a {@link ShakeMode}; empty defaults to elide. */
 function parseShakeMode(args: string): ShakeMode | { error: string } {
 	const verb = args.trim().toLowerCase();
@@ -2892,6 +2935,21 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "reload",
+		description: "Reload configuration, models, plugins, or MCP from disk",
+		acpDescription: "Reload runtime state from disk",
+		allowArgs: true,
+		inlineHint: "<config|models|plugins|mcp|all>",
+		subcommands: [
+			{ name: "config", description: "Reload global and project settings" },
+			{ name: "models", description: "Reload models.yml without network discovery" },
+			{ name: "plugins", description: "Reload plugin registries and commands" },
+			{ name: "mcp", description: "Reconnect MCP servers and rediscover tools" },
+			{ name: "all", description: "Reload configuration, models, plugins, and MCP" },
+		],
+		handle: handleReloadCommand,
+	},
+	{
 		name: "force",
 		description: "Force next turn to use a specific tool",
 		aliases: ["force:"],
@@ -3234,6 +3292,9 @@ export async function executeBuiltinSlashCommand(
 				clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
 				await ctx.refreshSlashCommandState();
 				await ctx.session.refreshSshTool({ activateIfAvailable: true });
+			},
+			reloadMcp: async () => {
+				await ctx.handleMCPCommand("/mcp reload");
 			},
 		};
 		const result = await command.handle(parsed, adapted);
