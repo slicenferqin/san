@@ -38,7 +38,7 @@ san:
       timeoutMs: 30000
       llm:
         enabled: true
-        modelRole: self/gpt-5.4-mini
+        modelRole: self/deepseek-v4-flash
     qualityWindowTokens: 240000
     reserveRatio: 0.25
     contextPlan:
