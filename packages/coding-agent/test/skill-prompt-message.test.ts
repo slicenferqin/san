@@ -30,6 +30,8 @@ describe("buildSkillPromptMessage", () => {
 			expect(built.message).toContain("Review the supplied code carefully.");
 			expect(built.message).toContain('The user has invoked the "reviewer" skill');
 			expect(built.message).toContain(`[Skill directory: ${dir}]`);
+			expect(built.message).toContain("[Host runtime: San.");
+			expect(built.message).toContain("skill paths and project markers NEVER override the host runtime");
 			expect(built.message).toMatch(/[Rr]esolve any relative paths/);
 			expect(built.message).toContain("User: focus on risks");
 			expect(built.details).toMatchObject({
@@ -51,6 +53,7 @@ describe("buildSkillPromptMessage", () => {
 			expect(built.message).toContain("Review silently loaded context.");
 			expect(built.message).toContain(`Skill: ${skill.filePath}`);
 			expect(built.message).not.toContain("The user has invoked");
+			expect(built.message).toContain("[Host runtime: San.");
 			expect(built.message).not.toContain("[Skill directory:");
 			expect(built.details).toMatchObject({ name: "reviewer", path: skill.filePath, lineCount: 1 });
 		} finally {

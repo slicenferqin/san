@@ -59,6 +59,8 @@
 
 ### Fixed
 
+- Fixed skills misclassifying San as Codex from shared skill paths or project markers by stamping the San host runtime into user-invoked and autoload prompts; explicit user-selected cross-runtime targets still win.
+- Fixed San Brain capture silently dropping slow but valid LLM TurnDigests behind a hidden 150 ms deadline; digest side requests now honor `san.contextSteady.digest.timeoutMs`, and settled-turn candidates are captured after digest completion.
 - Fixed single-agent benchmark runs reusing one global Settings instance across Native/Steady overlays and retaining JavaScript eval subprocesses after task completion. Public benchmark runs now use an exact tool whitelist, reject process-environment credentials for paid runs, redact in-memory runtime keys from provider/session artifacts, and classify overload, stream-read, and quota failures as invalid pairs.
 - Fixed recursive Segments losing the original user intent, transient/invalid TurnDigest responses falling back without a second attempt, repeated no-op mid-turn maintenance, and per-tool-call ContextPlan rewrites invalidating the current turn's prompt-cache prefix.
 - Fixed San Context Steady fallback digests to expose concrete failure reasons, warn when the configured digest model cannot resolve, append-only upgrade one historical fallback per successful turn, and treat only fully unrelated history as a natural topic shift. ContextPlan and checkpoint audit identity now stays bound to the journal session across provider-session rotation, and `/context plan` reports effective digest authority.

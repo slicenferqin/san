@@ -701,7 +701,6 @@ export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
 
 const UNEXPECTED_STOP_MAX_RETRIES = 3;
 const UNEXPECTED_STOP_TIMEOUT_MS = 4000;
-const SAN_BRAIN_CAPTURE_BOUNDARY_MS = 150;
 const EMPTY_STOP_MAX_RETRIES = 3;
 const RETRY_BACKOFF_MAX_DELAY_MS = 8_000;
 
@@ -4854,7 +4853,6 @@ export class AgentSession {
 		};
 
 		return (async () => {
-			const brainCaptureDeadline = performance.now() + SAN_BRAIN_CAPTURE_BOUNDARY_MS;
 			try {
 				const contextSteadyEnabled = settings.get("san.contextSteady.enabled") as boolean;
 				const digestEnabled = settings.get("san.contextSteady.digest.enabled") as boolean;
@@ -4927,15 +4925,13 @@ export class AgentSession {
 					toEntryId,
 					promptGeneration: this.#promptGeneration,
 				};
-				const configuredDigestTimeoutMs = (settings.get("san.contextSteady.digest.timeoutMs") as number) ?? 30000;
+				const digestTimeoutMs = (settings.get("san.contextSteady.digest.timeoutMs") as number) ?? 30000;
 				const steadySettings = {
 					enabled: contextSteadyEnabled,
 					digest: {
 						enabled: digestEnabled,
 						persistFallback,
-						timeoutMs: brainCaptureEnabled
-							? Math.min(configuredDigestTimeoutMs, SAN_BRAIN_CAPTURE_BOUNDARY_MS)
-							: configuredDigestTimeoutMs,
+						timeoutMs: digestTimeoutMs,
 						llm: {
 							enabled: settings.get("san.contextSteady.digest.llm.enabled") as boolean,
 							modelRole: settings.get("san.contextSteady.digest.llm.modelRole") as string,
@@ -4971,7 +4967,7 @@ export class AgentSession {
 							)
 						: undefined;
 
-				if (brainCaptureEnabled && performance.now() < brainCaptureDeadline) {
+				if (brainCaptureEnabled) {
 					const scopes = await this.#resolveSanBrainCaptureScopes();
 					const digest =
 						digestResult?.digest ??
