@@ -1,0 +1,829 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="基于 San 会话 019f63ad-952f-7000-982d-b6e7548af262 的 Harness dogfood 复盘。"
+    />
+    <title>San Harness 会话复盘 · 2026-07-15</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --canvas: #eef2f4;
+        --paper: #ffffff;
+        --ink: #17212b;
+        --muted: #5a6875;
+        --line: #d5dde4;
+        --header: #13202a;
+        --blue: #245f8c;
+        --blue-soft: #e9f2f8;
+        --red: #a52a24;
+        --red-soft: #fbeceb;
+        --amber: #875609;
+        --amber-soft: #fff3dc;
+        --green: #17634c;
+        --green-soft: #e8f5ef;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--canvas);
+        font-family:
+          "IBM Plex Sans", "Noto Sans CJK SC", "PingFang SC", sans-serif;
+        font-size: 15px;
+        line-height: 1.68;
+      }
+
+      a {
+        color: var(--blue);
+        text-underline-offset: 3px;
+      }
+
+      code,
+      pre {
+        font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+      }
+
+      code {
+        padding: 2px 5px;
+        border-radius: 4px;
+        background: #e8edf1;
+        overflow-wrap: anywhere;
+      }
+
+      pre {
+        overflow: auto;
+        margin: 12px 0 0;
+        padding: 15px 17px;
+        border-radius: 5px;
+        color: #edf4f8;
+        background: #18242d;
+        font-size: 12px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+      }
+
+      h1,
+      h2,
+      h3 {
+        font-family: "Iowan Old Style", "Noto Serif CJK SC", serif;
+      }
+
+      h1 {
+        margin: 8px 0 14px;
+        font-size: 44px;
+        line-height: 1.12;
+      }
+
+      h2 {
+        margin: 0 0 16px;
+        font-size: 28px;
+        line-height: 1.25;
+      }
+
+      h3 {
+        margin: 0 0 8px;
+        font-size: 19px;
+      }
+
+      p {
+        margin: 0 0 12px;
+      }
+
+      ul,
+      ol {
+        margin: 8px 0 0;
+        padding-left: 22px;
+      }
+
+      li {
+        margin: 5px 0;
+      }
+
+      .page {
+        width: min(1180px, calc(100% - 42px));
+        margin: 0 auto;
+      }
+
+      .masthead {
+        color: #f7fafc;
+        background: var(--header);
+        border-bottom: 7px solid #b43a31;
+      }
+
+      .masthead-inner {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 300px;
+        gap: 46px;
+        align-items: end;
+        padding: 50px 0 42px;
+      }
+
+      .kicker,
+      .label,
+      .finding-id {
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .kicker {
+        color: #9fc3dc;
+      }
+
+      .lede {
+        max-width: 850px;
+        color: #d5e0e7;
+        font-size: 17px;
+      }
+
+      .verdict {
+        display: inline-block;
+        margin-top: 18px;
+        padding: 8px 13px;
+        border: 1px solid #e08b84;
+        border-radius: 4px;
+        background: #812b27;
+        font-weight: 800;
+      }
+
+      .snapshot {
+        padding-left: 22px;
+        border-left: 1px solid #4a606e;
+      }
+
+      .snapshot dl {
+        margin: 0;
+      }
+
+      .snapshot div {
+        padding: 9px 0;
+        border-bottom: 1px solid #314652;
+      }
+
+      .snapshot dt {
+        color: #99aebb;
+        font-size: 11px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      .snapshot dd {
+        margin: 2px 0 0;
+        overflow-wrap: anywhere;
+      }
+
+      main {
+        padding: 36px 0 60px;
+      }
+
+      section {
+        margin-top: 28px;
+        padding: 28px 30px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--paper);
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .metric {
+        padding: 15px;
+        border: 1px solid var(--line);
+        border-top: 4px solid var(--blue);
+        background: #fbfcfd;
+      }
+
+      .metric strong {
+        display: block;
+        margin: 3px 0;
+        font-size: 25px;
+        line-height: 1.2;
+      }
+
+      .metric small {
+        color: var(--muted);
+      }
+
+      .finding {
+        margin-top: 16px;
+        padding: 20px;
+        border: 1px solid var(--line);
+        border-left: 6px solid var(--amber);
+        border-radius: 5px;
+        background: #fff;
+      }
+
+      .finding.p0 {
+        border-left-color: var(--red);
+        background: linear-gradient(90deg, var(--red-soft), #fff 28%);
+      }
+
+      .finding.p1 {
+        background: linear-gradient(90deg, var(--amber-soft), #fff 28%);
+      }
+
+      .finding.good {
+        border-left-color: var(--green);
+        background: linear-gradient(90deg, var(--green-soft), #fff 28%);
+      }
+
+      .finding-id {
+        color: var(--muted);
+      }
+
+      .finding.p0 .finding-id {
+        color: var(--red);
+      }
+
+      .finding.p1 .finding-id {
+        color: var(--amber);
+      }
+
+      .finding.good .finding-id {
+        color: var(--green);
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        padding: 11px 12px;
+        border: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: #eaf0f4;
+        font-size: 12px;
+        text-transform: uppercase;
+      }
+
+      .callout {
+        padding: 18px 20px;
+        border: 1px solid #b8d1e2;
+        border-left: 6px solid var(--blue);
+        background: var(--blue-soft);
+      }
+
+      .priority {
+        display: inline-block;
+        min-width: 34px;
+        padding: 2px 7px;
+        border-radius: 12px;
+        color: #fff;
+        background: var(--red);
+        font-size: 12px;
+        font-weight: 800;
+        text-align: center;
+      }
+
+      .priority.p1 {
+        background: var(--amber);
+      }
+
+      footer {
+        padding: 22px 0 32px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      @media (max-width: 860px) {
+        .masthead-inner {
+          grid-template-columns: 1fr;
+        }
+
+        .snapshot {
+          padding-left: 0;
+          border-left: 0;
+        }
+
+        .metrics {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 520px) {
+        .page {
+          width: min(100% - 24px, 1180px);
+        }
+
+        h1 {
+          font-size: 34px;
+        }
+
+        section {
+          padding: 22px 18px;
+        }
+
+        .metrics {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="page masthead-inner">
+        <div>
+          <div class="kicker">
+            San self-hosting · harness dogfood retrospective
+          </div>
+          <h1>任务完成了，Harness 还没有形成可信闭环</h1>
+          <p class="lede">
+            本报告按“harness”理解用户所说的“herness”，只复盘指定会话的运行证据。该会话成功交付了
+            <code>/effort</code>
+            与模型选择后的思维强度选择，但同时暴露了会话身份分裂、Context Steady
+            实际失效、摘要质量不足以及提交治理过宽四类问题。
+          </p>
+          <div class="verdict">
+            结论：交付能力可用；自省、上下文治理与审计可信度不合格
+          </div>
+        </div>
+        <aside class="snapshot">
+          <dl>
+            <div>
+              <dt>Journal session</dt>
+              <dd><code>019f63ad-952f-7000-982d-b6e7548af262</code></dd>
+            </div>
+            <div>
+              <dt>Session file</dt>
+              <dd>
+                <code
+                  >~/.san/agent/sessions/-development-self-projects-san/2026-07-15T02-49-08-144Z_019f63ad-952f-7000-982d-b6e7548af262.jsonl</code
+                >
+              </dd>
+            </div>
+            <div>
+              <dt>Runtime</dt>
+              <dd>2026-07-15 10:49–14:23 CST</dd>
+            </div>
+            <div>
+              <dt>Delivered commit</dt>
+              <dd><code>2bab463c1</code></dd>
+            </div>
+            <div>
+              <dt>Snapshot</dt>
+              <dd><code>main = origin/main = 2bab463c1</code></dd>
+            </div>
+          </dl>
+        </aside>
+      </div>
+    </header>
+
+    <main class="page">
+      <section>
+        <h2>证据快照</h2>
+        <div class="metrics">
+          <div class="metric">
+            <span class="label">用户轮次</span>
+            <strong>7</strong>
+            <small>其中最后一轮被中断</small>
+          </div>
+          <div class="metric">
+            <span class="label">工具调用</span>
+            <strong>80</strong>
+            <small>29 read / 16 edit / 12 bash / 11 grep</small>
+          </div>
+          <div class="metric">
+            <span class="label">工具错误</span>
+            <strong>5</strong>
+            <small>其中完整 bun check 未重新跑绿</small>
+          </div>
+          <div class="metric">
+            <span class="label">TurnDigest</span>
+            <strong>7/7 fallback</strong>
+            <small>没有权威 LLM digest</small>
+          </div>
+          <div class="metric">
+            <span class="label">ContextPlan</span>
+            <strong>7/7 burst</strong>
+            <small>57.8K → 130.7K projected input</small>
+          </div>
+        </div>
+
+        <div class="callout" style="margin-top: 20px">
+          <h3>会话主线</h3>
+          <p>
+            用户先询问是否有思维强度 slash command，随后指出模型选择完成后缺少
+            effort 可发现性，并授权实现 <code>/effort</code>。San
+            完成了交互、命令、ACP 与测试修改；之后按用户要求提交、推送并
+            fast-forward 合并到 <code>main</code>。问题出现在最后的自省问答：San
+            对“当前会话 ID 和文件路径”给出了完全错误的值，用户质疑后该轮被中断。
+          </p>
+        </div>
+      </section>
+
+      <section>
+        <h2>做对了什么</h2>
+        <article class="finding good">
+          <div class="finding-id">Strength 01 · 产品与实现链路</div>
+          <h3>从可发现性问题落到了完整用户合同</h3>
+          <p>
+            San 没有只补一个命令，而是同时覆盖模型选择后的 effort 二级选择、独立
+            <code>/effort</code>、会话状态变更、ACP builtin
+            以及对应测试。这个范围与用户描述的实际体验问题一致。
+          </p>
+        </article>
+        <article class="finding good">
+          <div class="finding-id">Strength 02 · 验证与规则注入</div>
+          <h3>Focused tests、类型检查与 TTSR 都实际工作</h3>
+          <p>
+            会话运行了 effort picker、slash command、ACP 相关 focused
+            tests，并执行类型检查；编辑与测试阶段分别出现 TTSR
+            规则注入。实现阶段的测试失败和类型错误被继续定位并修正；完整
+            <code>bun check</code> 未闭环的问题单列为下方
+            P0，不计入这项正面结论。
+          </p>
+        </article>
+        <article class="finding good">
+          <div class="finding-id">Strength 03 · Git 安全边界</div>
+          <h3>合并路径安全，未跟踪配置未被带入</h3>
+          <p>
+            推送前检查了分支与远端状态，合并使用 fast-forward，最终核对
+            <code>main = origin/main = 2bab463c1</code>，并保留未跟踪的
+            <code>.san/mcp.json</code>。这一段执行是稳的。
+          </p>
+        </article>
+      </section>
+
+      <section>
+        <h2>关键缺陷</h2>
+        <article class="finding p0">
+          <div class="finding-id">P0-01 · Session identity split-brain</div>
+          <h3>San 既向用户报错了身份，也把错误身份写回了原会话文件</h3>
+          <p>
+            会话 header 的真实 ID 是
+            <code>019f63ad-952f-7000-982d-b6e7548af262</code>，真实文件位于
+            <code>~/.san/agent/sessions/…</code>。
+          </p>
+          <p>
+            San 在 14:21 却无工具依据地回答 ID 为
+            <code>f1c87f11e22e90e3</code>，路径为项目内的
+            <code>.omp/agent/sessions/…</code
+            >。这不是格式误差，而是模型凭空生成了另一套产品名、目录和 ID。
+          </p>
+          <p>
+            更严重的是，用户质疑后的 <code>san.context_plan</code> 与
+            <code>san.turn_digest</code> 仍追加在原 JSONL 中，却把
+            <code>sessionId</code> 写成
+            <code>019f6471-6389-7000-b8c2-30e41ccd92a2</code>；其
+            <code>epochId</code> 又继续引用旧 session。这已经构成 durable audit
+            内部不一致。
+          </p>
+          <pre>
+journal header: 019f63ad-952f-7000-982d-b6e7548af262
+assistant answer: f1c87f11e22e90e3
+last plan/digest: 019f6471-6389-7000-b8c2-30e41ccd92a2
+last epoch: epoch_019f63ad-..._checkpoint_base</pre>
+          <p>
+            源码中的结构性诱因很明确：<a
+              href="../../packages/coding-agent/src/session/agent-session.ts"
+              >agent-session.ts</a
+            >
+            的公开 <code>sessionId</code> getter 返回活动 provider session
+            ID，而 <code>sessionFile</code> 来自
+            <code>sessionManager</code>；ContextPlan、TurnDigest、checkpoint
+            又大量使用 <code>this.sessionId</code>。 provider routing identity
+            与 journal identity 没有被类型和命名隔离。
+          </p>
+        </article>
+
+        <article class="finding p0">
+          <div class="finding-id">P0-02 · Context Steady ineffective</div>
+          <h3>两处配置漂移触发静默 fallback，且 fallback 一旦落盘便无法自愈</h3>
+          <p>
+            7 个 TurnDigest 全部是
+            <code>fallback=true</code>。当前设计正确地禁止 fallback digest
+            授权删除原始消息，因此 7 个 ContextPlan 全部进入
+            <code>burst_required</code>，受保护历史基本以 exact
+            形式保留；projected input 从 57,813 增长到峰值 135,272，最后仍为
+            130,686。
+          </p>
+          <p>
+            第一处根因已经确认：项目配置把 digest model 写成
+            <code>claude-code/claude-opus-4-8</code>，而当前 registry 中不存在
+            <code>claude-code</code> provider；同一个模型实际注册为
+            <code>self/claude-opus-4-8</code>。<code
+              >resolveModelOverride()</code
+            >
+            因此返回空模型，<a
+              href="../../packages/coding-agent/src/context-steady/digest.ts"
+              >digest.ts</a
+            >
+            随即走 deterministic fallback。这个分支没有 warning，也没有持久化
+            <code>fallbackReason=model_unresolved</code>，所以日志只留下
+            “TurnDigest persisted, fallback=true”。
+          </p>
+          <p>
+            第二处根因是项目 self-hosting 配置仍为
+            <code>qualityWindowTokens: 24000</code>，而当前 240K steady
+            推荐配置是 <code>240000</code>。24K 产生的 control max 只有
+            26K，所以首轮 57.8K 输入已经被判为 burst；如果使用 240K
+            配置，control max 会是 260K，本会话最高 135.3K 尚不应进入 burst。
+          </p>
+          <p>
+            还有一个放大故障：<code>generateDigest()</code>
+            发现同一 source span 已有 digest 时会直接复用，不区分它是否
+            <code>fallback=true</code>。因此即使后续修正模型配置，旧 fallback
+            也不会被权威 digest 回填；checkpoint
+            又按设计不能覆盖其原始跨度。一次配置错误会永久钉住该会话的 raw
+            transcript，直到另做 backfill/upgrade 机制。
+          </p>
+          <p>
+            结论不是“fallback 不安全”，而是“fallback
+            保护了正确性，却被当成了无告警、不可升级的正常状态”；这才是 240K
+            steady 在真实会话中失效的核心。
+          </p>
+        </article>
+
+        <article class="finding p1">
+          <div class="finding-id">P1-01 · Relevance and topic shift</div>
+          <h3>同一任务的连续推进被连续标成 topic_shift</h3>
+          <p>
+            除首轮外，其余 6 个 ContextPlan 全带
+            <code>rebaseReason=topic_shift</code
+            >，包括“可以改一下”、提交、合并以及询问当前会话信息。 这些不是 6
+            次真正的主题切换。
+          </p>
+          <p>
+            <a href="../../packages/coding-agent/src/context-steady/planner.ts"
+              >planner.ts</a
+            >
+            的 natural topic change 条件使用“历史 digests
+            中存在任意一个不相关项”；随着历史增长，只要有一个旧 digest 与当前
+            prompt 不重合，就会持续触发。 应改成“没有任何近期权威 digest
+            与当前目标相关”，并让明确 continuation、当前 task lineage
+            和用户指代优先。
+          </p>
+        </article>
+
+        <article class="finding p1">
+          <div class="finding-id">P1-02 · Digest semantics and accounting</div>
+          <h3>摘要存在，但还不能承担决策、记忆和成本审计</h3>
+          <ul>
+            <li>
+              7 个 digest 的 <code>decisions</code> 全为空，连用户明确决定“slash
+              叫 /effort”都没有捕获。
+            </li>
+            <li>
+              实现轮工具证据被固定截到 20 项，实际约 60 次工具调用无法完整归因。
+            </li>
+            <li>
+              基于关键词的 facts/memory
+              抽取把“合理改法”“验证”等标题式文本当成事实候选。
+            </li>
+            <li>
+              tokenStats 把一次工具循环中每次 provider call 的完整 input usage
+              相加，单个实现轮得到 8,054,862 input
+              tokens；它是累计计费量，不是该轮上下文尺寸，字段语义容易被误读。
+            </li>
+          </ul>
+          <p>
+            相关实现位于
+            <a href="../../packages/coding-agent/src/context-steady/fallback.ts"
+              >fallback.ts</a
+            >。需要把
+            <code>wireInputTokens</code
+            >、<code>cumulativeBilledInputTokens</code>、<code
+              >outputTokens</code
+            >
+            分开，并让 fallback
+            至少可靠提取用户决策、最终结果、验证结果和未解决风险。
+          </p>
+        </article>
+
+        <article class="finding p0">
+          <div class="finding-id">
+            P0-03 · Change and verification governance
+          </div>
+          <h3>
+            已知完整检查失败仍提交并合并，且一个 effort 提交承载了 95 个文件
+          </h3>
+          <p>
+            提交
+            <code
+              >2bab463c1 feat(coding-agent): expose session effort selection and
+              /effort</code
+            >
+            实际包含 95 个文件、5,978 行新增和 577 行删除，覆盖 native
+            licenses、shell minimizer、Brain、San
+            Loop、Workflows、文档等多个主题。
+            用户确实要求提交“当前本地的变更”，所以 staging
+            行为没有越权；但提交标题无法描述实际内容。
+          </p>
+          <p>
+            更关键的是，会话实际运行了完整 <code>bun check</code>，结果为 10
+            个错误、2 个警告。之后只对 3 个 effort 相关源码运行
+            Biome，并重新跑了 <code>check:types</code> 与 focused
+            tests；没有再次运行完整
+            <code>bun check</code>，也没有证明原来的跨域错误已经消失，就继续
+            commit、push、merge 到 <code>main</code>。这违反了仓库 self-hosting
+            的完成门禁，也说明 Harness 没有把“曾经失败的 required
+            check”保持为阻塞状态。
+          </p>
+          <p>
+            Harness 应在提交前基于 staged diff 识别受影响 package
+            与能力域：允许用户坚持单提交，但必须显式报告 scope
+            mismatch，补齐验证，或者拆分成可审计提交。
+          </p>
+        </article>
+
+        <article class="finding p1">
+          <div class="finding-id">
+            P1-04 · Tool observability and efficiency
+          </div>
+          <h3>能重放调用，但工具生命周期仍依赖间接拼接</h3>
+          <p>
+            JSONL 有 80 个 <code>tool_execution_start</code>，对应结果以普通
+            <code>toolResult</code> message 存在；没有同构的 durable completion
+            receipt。分析者必须按 call ID 自行重建
+            start/result/error/duration。对 orphan
+            call、进程退出和超时的判断不够直接。
+          </p>
+          <p>
+            一个中等规模 UI 变更用了 80 次工具调用，并出现多轮重复 read/grep、16
+            次 edit 以及重复定义、重复注释、import/格式修正等自造返工。
+            codegraph 首轮还注入了大块低相关结果。建议本地
+            <code>rg</code> 与精确 read 优先，只有需要跨模块 blast radius
+            时再使用 codegraph。
+          </p>
+        </article>
+      </section>
+
+      <section>
+        <h2>整改顺序</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>优先级</th>
+                <th>改动</th>
+                <th>验收合同</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="priority">P0</span></td>
+                <td>
+                  拆分
+                  <code>journalSessionId</code
+                  >、<code>providerSessionId</code>、<code>promptCacheKey</code>，禁止复用裸
+                  <code>sessionId</code>。
+                </td>
+                <td>
+                  模型切换、fresh provider session、abort、resume 后，所有
+                  durable entry 的 journal ID 必须等于 JSONL header。
+                </td>
+              </tr>
+              <tr>
+                <td><span class="priority">P0</span></td>
+                <td>
+                  增加受信任的 <code>/session info</code> 或 session-info
+                  tool，ID 与路径只从 SessionManager 读取。
+                </td>
+                <td>
+                  任何模型都不能推断路径；输出必须逐字等于
+                  <code>getSessionId()</code> 与 <code>getSessionFile()</code>。
+                </td>
+              </tr>
+              <tr>
+                <td><span class="priority">P0</span></td>
+                <td>
+                  启动时校验 digest model selector 与 quality window；为
+                  TurnDigest 增加 <code>fallbackReason</code>、resolved model 与
+                  side-request 状态，并在
+                  <code>/context plan</code> 显示健康告警。
+                </td>
+                <td>
+                  当前错误 selector 必须直接报告“未找到
+                  <code>claude-code/claude-opus-4-8</code>，可用模型为
+                  <code>self/claude-opus-4-8</code>”；24K/240K
+                  配置差异必须进入健康报告。
+                </td>
+              </tr>
+              <tr>
+                <td><span class="priority">P0</span></td>
+                <td>
+                  为已持久化的 fallback digest 增加可重试的 authoritative
+                  upgrade/backfill；成功前继续保留原文。
+                </td>
+                <td>
+                  模型修复后，旧 <code>fallback=true</code>
+                  可原子升级为权威摘要并获得
+                  coverage；模型未解析、无凭证、超时、结构化输出失败四类原因可区分。
+                </td>
+              </tr>
+              <tr>
+                <td><span class="priority p1">P1</span></td>
+                <td>
+                  修正 natural topic
+                  change：从“任一旧摘要不相关”改为“近期目标链无相关证据”，continuation
+                  优先。
+                </td>
+                <td>
+                  本会话前 3 轮不得标记 topic shift；提交与合并可标为同一 task
+                  的 delivery phase。
+                </td>
+              </tr>
+              <tr>
+                <td><span class="priority p1">P1</span></td>
+                <td>
+                  重构 digest 语义与 token
+                  accounting，区分上下文尺寸、累计计费、输出与 cache。
+                </td>
+                <td>
+                  “/slash 叫 /effort”进入 decisions；工具循环不再把累计 8M
+                  误呈现为单次上下文尺寸。
+                </td>
+              </tr>
+              <tr>
+                <td><span class="priority">P0</span></td>
+                <td>
+                  把 required check 状态做成提交/推送/合并前的 durable
+                  gate，并按 staged diff 生成验证矩阵。
+                </td>
+                <td>
+                  任何 required check 曾失败但未重跑成功时禁止报告完成；95-file
+                  跨域提交必须执行与实际 diff 匹配的验证计划。
+                </td>
+              </tr>
+              <tr>
+                <td><span class="priority p1">P1</span></td>
+                <td>增加 tool completion receipt。</td>
+                <td>
+                  每个 start 都有 terminal
+                  receipt，可直接审计成功、失败、超时、取消与持续时间。
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>下一轮 dogfood 的最低通过线</h2>
+        <ol>
+          <li>
+            同一 JSONL 内不存在第二个 journal session ID；provider session ID
+            使用独立字段。
+          </li>
+          <li>询问当前会话信息时，回复与 header、真实文件路径完全一致。</li>
+          <li>
+            LLM digest 成功率可观测；一旦 fallback，原因明确且有状态告警。
+          </li>
+          <li>
+            连续实现任务不被误判为 topic shift，checkpoint 能实际替换权威 digest
+            覆盖的旧原文。
+          </li>
+          <li>
+            第 6–10 轮 projected input
+            不再随工具输出近似线性增长，且稳定在配置的 control band 附近。
+          </li>
+          <li>
+            提交前验证矩阵按 staged diff 生成，报告覆盖的
+            package、测试、格式与构建结果。
+          </li>
+        </ol>
+        <div class="callout" style="margin-top: 20px">
+          <h3>最终判断</h3>
+          <p>
+            这次 dogfood 证明 San 已能完成真实编码与 Git
+            delivery，但还不能可信地回答“我是谁、我的会话在哪里”，也没有在真实工具密集会话中实现
+            steady context。 因此下一阶段不应继续扩展新能力，先修 session
+            identity、digest health 与 required-check gate 三个 P0，再用同类
+            7–10 轮任务复测 ContextPlan。
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="page">
+        San Harness session retrospective · 2026-07-15 · journal
+        <code>019f63ad-952f-7000-982d-b6e7548af262</code> · snapshot
+        <code>2bab463c1</code>
+      </div>
+    </footer>
+  </body>
+</html>

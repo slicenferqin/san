@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San 同步 OMP v16.5.2 可行性评估</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0b1020;
+      --panel: #121a2f;
+      --text: #e8edf7;
+      --muted: #a9b4ca;
+      --line: #2b3857;
+      --accent: #75a7ff;
+      --good: #5bd6a2;
+      --warn: #f2c66d;
+      --bad: #ff8e8e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+    }
+    main { max-width: 1120px; margin: 0 auto; padding: 40px 24px 80px; }
+    h1, h2, h3 { line-height: 1.25; }
+    h1 { margin: 0 0 8px; font-size: 2rem; }
+    h2 { margin-top: 36px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+    h3 { margin-bottom: 6px; }
+    p, li { color: var(--text); }
+    .muted { color: var(--muted); }
+    .summary, .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 18px 20px;
+    }
+    .summary { border-left: 4px solid var(--warn); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 12px;
+      margin: 18px 0;
+    }
+    .metric strong { display: block; font-size: 1.6rem; color: var(--accent); }
+    .metric span { color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+    th, td { border: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }
+    th { background: rgba(117, 167, 255, 0.1); }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: rgba(117, 167, 255, 0.12);
+      border-radius: 5px;
+      padding: 0.1em 0.35em;
+    }
+    pre {
+      overflow: auto;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #080d18;
+    }
+    pre code { padding: 0; background: transparent; }
+    a { color: var(--accent); }
+    .good { color: var(--good); }
+    .warn { color: var(--warn); }
+    .bad { color: var(--bad); }
+    .label {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      font-weight: 650;
+      border: 1px solid currentColor;
+    }
+    ul, ol { padding-left: 1.4rem; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>San 同步 OMP v16.5.2 可行性评估</h1>
+    <p class="muted">评估日期：2026-07-15；本地基线：OMP v16.3.15；建议目标：OMP v16.5.2 稳定标签。</p>
+  </header>
+
+  <section class="summary">
+    <strong>结论：可以同步，但不能直接无脑合并。</strong>
+    <p>上游已经从本地的 <code>v16.3.15</code> 更新到稳定版 <code>v16.5.2</code>。对当前 <code>main</code> 做无工作区写入的 merge-tree 模拟后，Git 能自动合并大部分变更，但仍有 <strong>60 个冲突文件</strong>；其中包含模型/推理等级、Provider/Model UX、任务协议、会话生命周期、工具参数协议和 San 品牌构建逻辑等语义冲突。应在独立同步分支和 worktree 中分阶段完成，不能在当前带未提交修改的 <code>main</code> 上直接操作。</p>
+  </section>
+
+  <h2>1. 已确认的上游状态</h2>
+  <div class="grid">
+    <div class="card metric"><strong>v16.3.15</strong><span>San 当前包版本</span></div>
+    <div class="card metric"><strong>v16.5.2</strong><span>上游最新稳定版</span></div>
+    <div class="card metric"><strong>12</strong><span>中间稳定发布数量</span></div>
+    <div class="card metric"><strong>29</strong><span>上游 main 相对 v16.5.2 的未发布提交</span></div>
+  </div>
+  <ul>
+    <li>官方仓库：<a href="https://github.com/can1357/oh-my-pi">can1357/oh-my-pi</a>。</li>
+    <li>官方最新稳定发布：<a href="https://github.com/can1357/oh-my-pi/releases/tag/v16.5.2">v16.5.2</a>，发布于 2026-07-14。</li>
+    <li>本地 <code>package.json</code> 和 <code>packages/coding-agent/package.json</code> 仍锁定 <code>16.3.15</code>。</li>
+    <li>本次已从官方仓库刷新 <code>omp/main</code> 和标签；当前 <code>omp/main</code> 位于 <code>2134526b7</code>，比 <code>v16.5.2</code> 多 29 个未发布提交。</li>
+    <li><span class="label warn">建议</span> 本轮只同步稳定标签 <code>v16.5.2</code>，不追上游 <code>main</code>。</li>
+  </ul>
+
+  <h2>2. 变更规模与自动合并结果</h2>
+  <div class="grid">
+    <div class="card metric"><strong>653</strong><span>v16.3.15 → v16.5.2 提交数（含合并提交）</span></div>
+    <div class="card metric"><strong>1,043</strong><span>上游变更文件数</span></div>
+    <div class="card metric"><strong>+110,911</strong><span>新增行</span></div>
+    <div class="card metric"><strong>−21,823</strong><span>删除行</span></div>
+    <div class="card metric"><strong>60</strong><span>merge-tree 冲突文件</span></div>
+    <div class="card metric"><strong>44 / 653</strong><span>San / 上游各自独有提交</span></div>
+  </div>
+
+  <table>
+    <thead><tr><th>目标标签</th><th>累计上游提交</th><th>累计变更文件</th><th>当前 main 直接合并冲突数</th></tr></thead>
+    <tbody>
+      <tr><td><code>v16.4.0</code></td><td>82</td><td>211</td><td>35</td></tr>
+      <tr><td><code>v16.4.5</code></td><td>247</td><td>588</td><td>46</td></tr>
+      <tr><td><code>v16.5.0</code></td><td>356</td><td>820</td><td>50</td></tr>
+      <tr><td><code>v16.5.2</code></td><td>653</td><td>1,043</td><td>60</td></tr>
+    </tbody>
+  </table>
+
+  <p>冲突分布：<strong>coding-agent 34</strong>、<strong>ai 14</strong>、<strong>agent 3</strong>、<strong>catalog 3</strong>、文档 1、根目录及其他 5。数量本身可控，但大部分冲突位于核心协议和生命周期代码，不能统一选择 ours/theirs。</p>
+
+  <h2>3. 主要语义冲突</h2>
+  <table>
+    <thead><tr><th>区域</th><th>上游变化</th><th>San 现状</th><th>合并策略</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>推理等级 / Effort</strong></td>
+        <td>v16.4.0 引入原生 <code>max</code>，并把模型 effort ladder 改为与 Provider wire 值 1:1。</td>
+        <td>San 已增加 canonical <code>max</code>/<code>ultra</code>，修改了 catalog、AI Provider、模型解析和 UI。</td>
+        <td><span class="label bad">高风险</span> 以新的 wire-exact ladder 为底座，重新承载 San 的用户侧 <code>ultra</code> 语义；不能保留两套并行映射。</td>
+      </tr>
+      <tr>
+        <td><strong>Provider / Model UX</strong></td>
+        <td>v16.4.5 引入全屏 Model Hub，删除旧 <code>model-selector.ts</code>，重构角色、thinking、Provider 刷新和导航。</td>
+        <td>San 最近刚完成 connect/logout、Provider 与模型选择统一、会话 effort 选择和 <code>/effort</code>。</td>
+        <td><span class="label bad">高风险</span> 采用上游 Model Hub 架构，把 San 的登录、Provider 管理和 effort UX 移植进去；不要复活已被上游删除的旧 selector。</td>
+      </tr>
+      <tr>
+        <td><strong>任务协议 / Agent 工作流</strong></td>
+        <td>v16.4.5 破坏性调整 task wire schema，并加入后台任务、暂停/恢复、扁平 agent-centric 任务结构。</td>
+        <td>San 有 managed/ad-hoc workflows、San Brain M1–M6 和 Context Steady 的任务/会话联动。</td>
+        <td><span class="label bad">高风险</span> 先迁移任务 schema 和执行器，再接回 San 工作流状态；重点验证 task/subagent/yield/pause 生命周期。</td>
+      </tr>
+      <tr>
+        <td><strong>会话与上下文</strong></td>
+        <td>上游新增 compaction 恢复、fallback、消息队列、完成工具结果保护、deadline 分类等大量修复。</td>
+        <td>San 在 <code>agent-session.ts</code> 和 <code>context-steady/*</code> 上有持续开发；当前未提交改动也触及 <code>agent-session.ts</code>。</td>
+        <td><span class="label bad">高风险</span> 逐项保留上游状态机修复，同时重新接入 Context Steady hook；必须用状态转换测试验证，不能按文本拼接。</td>
+      </tr>
+      <tr>
+        <td><strong>read / grep 参数协议</strong></td>
+        <td>v16.5.2 删除独立 <code>selector</code> 参数，要求把范围追加到 <code>path</code>。</td>
+        <td>San 当前工具 schema、执行路径、渲染器和本会话工具接口仍明确支持独立 <code>selector</code>；该参数也用于处理含冒号的字面文件名。</td>
+        <td><span class="label bad">高风险</span> 本轮保留 San 的独立 <code>selector</code> 合约，只移植上游的路径清理和其他修复。若要迁移协议，应单独做兼容性变更，不能夹在上游同步中。</td>
+      </tr>
+      <tr>
+        <td><strong>品牌、构建与目录</strong></td>
+        <td>上游继续使用 <code>omp</code>、<code>.omp</code> 和官方仓库元数据，并重构二进制构建脚本。</td>
+        <td>San 使用 <code>san</code>、<code>.san</code>、自有仓库 URL 和单入口 worker 构建约束。</td>
+        <td><span class="label warn">中风险</span> 保留 San 品牌和入口约束，移植上游构建实现；<code>.omp → .san</code> rename/location 冲突需人工处理。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>4. 值得同步的上游能力</h2>
+  <ul>
+    <li>Model Hub、角色管理、模型搜索和 Provider 刷新。</li>
+    <li>后台 task、pause/resume、消息队列和 subagent 生命周期修复。</li>
+    <li>更强的 grep、原生 shell builtins、hashline drift recovery、bulk conflict resolution。</li>
+    <li>launch PTY 终端渲染、macOS/BSD 命令兼容和 worker/runtime 稳定性修复。</li>
+    <li>Provider 账号用量感知、Codex 超时重试、空响应重试、fallback chain、OAuth/MCP 修复。</li>
+    <li>TUI resize、tmux/Kitty、自动补全、图片和流式渲染修复。</li>
+    <li><code>generate_image.enabled</code> 与工具白名单联动。</li>
+  </ul>
+
+  <h2>5. 当前工作区约束</h2>
+  <ul>
+    <li>当前 <code>main</code>：15 个未暂存跟踪文件、3 个未跟踪文件。</li>
+    <li>未提交改动中有 2 个文件也被上游修改：<code>packages/coding-agent/CHANGELOG.md</code>、<code>packages/coding-agent/src/session/agent-session.ts</code>。</li>
+    <li><code>agent-session.ts</code> 同时是本次 merge-tree 的冲突文件；因此当前工作区不适合直接 merge。</li>
+    <li>已有干净 worktree <code>/Users/sanjiu/development/self/projects/san-omp-sync</code>，分支为 <code>sync/omp-16.3.15</code>，可作为历史参考；建议另建 <code>sync/omp-16.5.2</code>，基于当前已提交的 <code>main</code>。</li>
+    <li>仓库当前只配置了 <code>origin</code> remote；<code>omp/main</code> 是通过官方 URL 直接刷新。后续若要常态化同步，应恢复正式 <code>omp</code> remote。</li>
+  </ul>
+
+  <h2>6. 推荐合并顺序</h2>
+  <ol>
+    <li>在独立 worktree 建立 <code>sync/omp-16.5.2</code>，目标固定为 tag，不跟随上游 main。</li>
+    <li>按 <code>v16.4.0 → v16.4.5 → v16.5.0 → v16.5.2</code> 分阶段合并和验证，保留清晰的冲突边界。</li>
+    <li>先解决 catalog/effort，再解决 AI Provider；否则 coding-agent 层无法稳定类型检查。</li>
+    <li>迁移 agent/task schema 和生命周期，再接 San Brain、managed/ad-hoc workflows、Context Steady。</li>
+    <li>采用上游 Model Hub，把 San Provider connect/logout、统一模型选择和 <code>/effort</code> 移植到新架构。</li>
+    <li>保留 read/grep 独立 <code>selector</code> 协议，吸收其余上游工具修复。</li>
+    <li>最后处理 San 品牌、构建、README/文档、版本号、锁文件和生成文件。</li>
+  </ol>
+
+  <h2>7. 验证门槛</h2>
+  <p>完成冲突解决后，至少执行：</p>
+  <pre><code>bun install
+bun check
+bun run ci:test:coding-agent:runtime
+bun run ci:test:coding-agent:ui
+bun run ci:test:coding-agent:native
+bun run ci:test:smoke</code></pre>
+  <p>同时需要针对下列 San 合约做聚焦回归：</p>
+  <ul>
+    <li>Provider connect/logout、模型选择、session effort 和 <code>/effort</code>。</li>
+    <li><code>max</code>/<code>ultra</code> 在不同 Provider 上的 clamp 与 wire 值。</li>
+    <li>Context Steady 规划、checkpoint、digest、source index 和 hard-pressure 恢复。</li>
+    <li>managed/ad-hoc workflow、task schema、后台 task、yield、pause/resume。</li>
+    <li>read/grep 的独立 <code>selector</code>、path 内 selector、含冒号字面文件名和 internal URL。</li>
+    <li><code>san --smoke-test</code> 对 worker host、stats sync 和 tiny-model subprocess 的覆盖。</li>
+  </ul>
+
+  <h2>8. 最终判断</h2>
+  <div class="card">
+    <p><strong class="good">应该同步 v16.5.2。</strong> 上游包含大量与 San 直接相关的可靠性和基础设施改进，继续停留在 v16.3.15 会扩大后续差距。</p>
+    <p><strong class="warn">但这次应视为一次语义迁移，不是普通依赖升级。</strong> 最关键的决策是：采用上游新的 Model Hub、task schema 和 wire-exact effort 基础，同时保留 San 的 Context Steady、Brain/workflow、Provider UX、<code>ultra</code> 用户语义及独立 selector 工具合约。</p>
+  </div>
+
+  <h2>证据与来源</h2>
+  <ul>
+    <li>官方仓库和标签：<a href="https://github.com/can1357/oh-my-pi">GitHub can1357/oh-my-pi</a>。</li>
+    <li>官方发布说明：<a href="https://github.com/can1357/oh-my-pi/releases/tag/v16.5.2">v16.5.2</a>。</li>
+    <li>本地获取的官方 Git 对象：<code>v16.5.2 = 7d02778c60f4b5db60f84bedbca79d6e64cb91f5</code>。</li>
+    <li>无工作区写入的合并模拟：<code>git merge-tree --write-tree main v16.5.2</code>。</li>
+    <li>差异统计：<code>git rev-list</code>、<code>git diff --stat</code>、<code>git status --porcelain</code>。</li>
+  </ul>
+</main>
+</body>
+</html>
