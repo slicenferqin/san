@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>San Context Steady 公共 Benchmark 设计</title>
+  <style>
+    :root { color-scheme: light; --ink:#182221; --muted:#61706e; --line:#d8e1df; --paper:#f8faf8; --card:#fff; --green:#176b52; --mint:#dff2e9; --amber:#946314; --blue:#315f91; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:15px/1.65 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(1160px,calc(100% - 36px)); margin:0 auto; padding:48px 0 80px; }
+    h1,h2,h3 { line-height:1.2; letter-spacing:-.02em; }
+    h1 { margin:0 0 14px; font-size:42px; }
+    h2 { margin:48px 0 16px; padding-top:18px; border-top:1px solid var(--line); font-size:27px; }
+    h3 { margin:24px 0 8px; font-size:18px; }
+    p { margin:8px 0 14px; }
+    code,pre,.mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+    code { background:#edf2f0; padding:.1em .35em; border-radius:4px; }
+    pre { overflow:auto; padding:16px; border:1px solid var(--line); border-radius:10px; background:#f1f5f3; }
+    table { width:100%; border-collapse:collapse; background:var(--card); }
+    th,td { padding:10px 12px; border:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { background:#edf3f1; }
+    ul,ol { padding-left:22px; }
+    .lead { max-width:900px; color:#344442; font-size:18px; }
+    .tag { display:inline-block; margin-right:7px; padding:4px 9px; border-radius:999px; background:var(--mint); color:var(--green); font-weight:700; font-size:12px; }
+    .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:20px 0; }
+    .card { padding:18px; border:1px solid var(--line); border-radius:12px; background:var(--card); }
+    .card b { display:block; margin-bottom:5px; color:var(--green); font-size:20px; }
+    .callout { margin:18px 0; padding:15px 18px; border-left:4px solid var(--green); background:var(--mint); }
+    .warning { border-left-color:var(--amber); background:#fff3d9; }
+    .flow { display:grid; grid-template-columns:1fr 42px 1fr 42px 1fr; align-items:center; margin:20px 0; }
+    .node { min-height:115px; padding:16px; border:1px solid var(--line); border-radius:12px; background:var(--card); }
+    .arrow { color:var(--green); text-align:center; font-size:25px; }
+    .metric { color:var(--blue); font-weight:700; }
+    .small { color:var(--muted); font-size:13px; }
+    @media (max-width:760px) { .grid{grid-template-columns:1fr}.flow{grid-template-columns:1fr}.arrow{transform:rotate(90deg)} h1{font-size:32px} }
+  </style>
+</head>
+<body>
+<main>
+  <div><span class="tag">PUBLIC BENCHMARK</span><span class="tag">RUNNER IMPLEMENTED</span><span class="tag">2026-07-17</span></div>
+  <h1>San Context Steady 公共 Benchmark 设计</h1>
+  <p class="lead">目标不是展示一条漂亮会话，而是提供可复现、可审计、质量门控的 A/B 实验，证明 San 能在数百次工具调用和超长任务中控制活跃上下文，同时减少 token 与实际费用，并保持交付质量。</p>
+
+  <div class="grid">
+    <div class="card"><b>稳得住</b>原始 journal 持续增长时，活跃 Prompt 保持在稳定区间，长 turn 不因分段预算饿死。</div>
+    <div class="card"><b>省得下</b>与原生压缩基线使用同模型、同任务、同配置，比较真实 provider usage 和账单口径。</div>
+    <div class="card"><b>活干对</b>只有通过隐藏测试、约束检查和产物审核的运行才进入效率比较。</div>
+  </div>
+
+  <h2>1. 核心实验</h2>
+  <p>每个任务使用两个真实运行模式，顺序随机化。旁路虚拟基线仅用于解释机制，不作为对外节省结论。</p>
+  <table>
+    <thead><tr><th>模式</th><th>配置</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Native</strong></td><td><code>san.contextSteady.enabled=false</code>，保留相同原生 compaction 策略</td><td>公开对照组</td></tr>
+      <tr><td><strong>Steady</strong></td><td><code>san.contextSteady.enabled=true</code>，使用发布推荐配置</td><td>实验组</td></tr>
+      <tr><td>Shadow Native</td><td>Steady 运行中的只读状态机，模拟原生阈值和压缩时点</td><td>解释 token 曲线，不替代真实 A/B</td></tr>
+    </tbody>
+  </table>
+
+  <div class="flow">
+    <div class="node"><strong>冻结实验输入</strong><br>代码 commit、任务 fixture、模型、工具集、thinking effort、上下文窗口、价格表。</div>
+    <div class="arrow">→</div>
+    <div class="node"><strong>随机顺序配对运行</strong><br>Native / Steady 使用独立工作区、独立会话和独立 cache key。</div>
+    <div class="arrow">→</div>
+    <div class="node"><strong>先质量、后效率</strong><br>隐藏 verifier 判定成功后，再比较 token、成本、耗时和稳态曲线。</div>
+  </div>
+
+  <div class="callout warning"><strong>禁止使用“完全无缓存”作为 Native 基线。</strong>Native 同样会缓存、也会在阈值处压缩。对外 headline 必须来自真实 Native 与真实 Steady 的配对运行。</div>
+
+  <h3>参考模型冻结</h3>
+  <p>正式参考运行的 Native 与 Steady 主请求都使用 <code>asxs/gpt-5.6-sol:xhigh</code>，Steady 的 TurnDigest 使用 <code>self/gpt-5.4-mini</code>。两种模式使用独立 runtime key，且各自的 <code>asxs</code> 与 <code>self</code> 请求都归入同一模式凭证；密钥不进入模型配置或实验产物。Native 与 Steady 禁止自动切换服务商；429、5xx、网络或并发故障会使整个配对失效，并最多把两种模式共同重跑一次。</p>
+
+  <h2>2. 任务矩阵</h2>
+  <table>
+    <thead><tr><th>ID</th><th>场景</th><th>必须覆盖</th><th>机械验收</th></tr></thead>
+    <tbody>
+      <tr><td>L1</td><td>单 turn API 迁移</td><td>跨类型、规范化、编译和错误契约；不人为规定调用次数</td><td>构建、隐藏测试、API 契约、禁止项扫描</td></tr>
+      <tr><td>L2</td><td>长周期缺陷修复</td><td>诊断、实现、回归、二次修复；早期约束在后期仍有效</td><td>回归测试、故障注入、最终 diff 约束</td></tr>
+      <tr><td>L3</td><td>多 turn 需求演进</td><td>中途追加需求、纠正决策、恢复较早事实</td><td>版本化需求清单和最终行为检查</td></tr>
+      <tr><td>L4</td><td>文档与代码联合交付</td><td>大量检索、实现、验证、架构文档同步</td><td>代码测试、文档事实一致性、链接检查</td></tr>
+      <tr><td>L5</td><td>顺序证据超窗压力任务</td><td>180 个 proof 串联步骤、至少 180 次模型请求、raw journal 越过原生阈值并跨多次维护</td><td>证据链完整、分析结果正确、无饿死、产物完整</td></tr>
+    </tbody>
+  </table>
+  <p class="small">L1-L4 是自然编码任务，不惩罚更少的工具调用；L5 是明确标注的 Controlled Stress。其 <code>benchmark_step</code> 后一步必须提交前一步 proof，不能批量领取，每个证据分片都进入最终 <code>evidence.ndjson</code> 与事故分析产物。</p>
+
+  <h2>3. 质量评分</h2>
+  <p>质量采用分层门禁，LLM judge 只处理无法机械判断的部分，不拥有最终否决机械事实的权力。</p>
+  <ol>
+    <li><strong>硬门禁：</strong>构建、测试、隐藏测试、安全约束、任务要求必须全部通过。</li>
+    <li><strong>约束保持：</strong>在任务早期埋入可验证约束，最终检查是否遗忘、反转或重复询问。</li>
+    <li><strong>产物质量：</strong>最小改动、错误处理、文档一致性和无无关修改，使用固定 rubric 双盲审核。</li>
+    <li><strong>任务完整性：</strong>不得以“预算不足”“先做到这里”作为成功；必须到达明确 terminal outcome。</li>
+  </ol>
+  <p><span class="metric">Primary quality metric:</span> pass rate 与 quality score 的非劣性。Steady 只有在质量不低于 Native 的情况下才能宣称节省。</p>
+
+  <h2>4. 效率与稳态指标</h2>
+  <table>
+    <thead><tr><th>类别</th><th>指标</th><th>报告方式</th></tr></thead>
+    <tbody>
+      <tr><td>Token</td><td>input、cache read/write、output、prompt total</td><td>总量、中位数、P95、每个通过任务</td></tr>
+      <tr><td>成本</td><td>Agent、TurnDigest、LLM Compaction 的实际 usage × 冻结价格表</td><td>总成本、维护成本、cost/pass、配对差值；本地 Snapcompact 记为零模型成本</td></tr>
+      <tr><td>稳态</td><td>active/raw tokens、max prompt、maintenance 次数、区间宽度</td><td>完整时间序列与 P95</td></tr>
+      <tr><td>缓存</td><td>cache read rate、冷启动、服务商切换、同指纹异常 miss</td><td>全量与稳定前缀两种口径</td></tr>
+      <tr><td>执行</td><td>wall time、模型时间、工具调用数、失败与重试</td><td>中位数和分布</td></tr>
+      <tr><td>质量效率</td><td>tokens/pass、cost/pass、quality-adjusted cost</td><td>仅统计通过硬门禁的运行</td></tr>
+    </tbody>
+  </table>
+
+  <h2>5. 统计与运行规模</h2>
+  <table>
+    <thead><tr><th>档位</th><th>任务 × 模式 × 重复</th><th>总运行数</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td>Smoke（默认）</td><td>1 × 2 × 1</td><td>2</td><td>验证 runner、凭证、artifact 和 verifier，不形成产品结论</td></tr>
+      <tr><td>Standard</td><td>3 × 2 × 1</td><td>6</td><td>开发期方向检查，不对外宣称统计显著</td></tr>
+      <tr><td>Confidence</td><td>3 × 2 × 3</td><td>18</td><td>候选版本对比和内部决策</td></tr>
+      <tr><td>Release</td><td>5 × 2 × 3</td><td>30</td><td>公开发布证据；必须显式确认高成本运行</td></tr>
+      <tr><td>Extended</td><td>5 × 2 × 5</td><td>50</td><td>方差过大或论文级扩展证据；不是默认发布门槛</td></tr>
+    </tbody>
+  </table>
+  <ul>
+    <li>普通执行默认只跑 2 次；Release 默认 30 次，只有方差不足以支持结论时才扩展到 50 次。</li>
+    <li>Release / Extended 必须先执行费用预估，并通过显式高成本开关才能启动；预估包含一次整对基础设施重跑的上界。</li>
+    <li>Native / Steady 在每个任务内随机交错，避免时间段、服务负载和缓存热度偏差。</li>
+    <li>报告中同时展示每次运行，不只展示均值；主统计使用配对中位数、IQR 和 bootstrap 95% CI。</li>
+    <li>预先冻结失败排除规则。Provider 5xx、限流和本地基础设施故障单独标记，但不得静默删除。</li>
+    <li>至少发布一次完整失败案例，避免只展示成功样本。</li>
+  </ul>
+
+  <h2>6. 防作弊与可复现要求</h2>
+  <ul>
+    <li>任务描述公开，隐藏 verifier 在运行结束后公开；开发期间不得让 Agent 读取 verifier。</li>
+    <li>两种模式使用同一模型版本、provider、thinking effort、工具定义和 system prompt。</li>
+    <li>每次运行使用全新工作区、会话目录和 prompt cache key，禁止跨运行复用缓存。</li>
+    <li>记录 Git commit、模型标识、context window、配置文件 hash、任务 fixture hash、开始结束时间和价格表。</li>
+    <li>原始 session、context probe、stdout/stderr、最终 diff、测试日志和汇总 JSON 全部作为 artifact 发布。</li>
+    <li>报告生成器只读取 artifact，不允许手工填写核心数字。</li>
+  </ul>
+
+  <h2>7. 产物目录</h2>
+  <pre>runs/context-steady/&lt;benchmark-id&gt;/
+  manifest.json
+  price-table.json
+  tasks/&lt;task-id&gt;/
+    pair-01/attempt-1/native/{result.json,session.jsonl,context-probe.jsonl,diff.patch,verify.log}
+    pair-01/attempt-1/steady/{result.json,session.jsonl,context-probe.jsonl,diff.patch,verify.log}
+  aggregate.json
+  report.html
+  report.md</pre>
+  <h3>低成本预检</h3>
+  <pre>bun packages/coding-agent/scripts/san-context-steady-benchmark.ts \
+  --task-file packages/coding-agent/examples/context-steady-benchmark-smoke-tasks.json \
+  --profile smoke \
+  --model asxs/gpt-5.6-sol:xhigh \
+  --agent-dir packages/coding-agent/examples/context-steady-benchmark-agent \
+  --estimate-only \
+  --estimated-cost-per-run 27</pre>
+  <p>该命令不调用模型，只输出配对数、代码/config/任务 hash 和包含一次整对重跑的费用上界。付费运行通过 <code>--runtime-keys-stdin</code> 读取 Native/Steady 凭证，禁止将密钥放入 runner 启动环境；实际 Smoke 仅运行 Native 与 Steady 各一次，Release / Extended 还必须显式传入 <code>--allow-expensive</code>。</p>
+
+  <h2>8. 对外声明门槛</h2>
+  <table>
+    <thead><tr><th>声明</th><th>最低证据</th></tr></thead>
+    <tbody>
+      <tr><td>“能稳住长任务”</td><td>L1/L5 raw journal 超过原生阈值，Steady P95 active context 保持在控制带内，任务完成且无预算饿死。</td></tr>
+      <tr><td>“节省 tokens / 成本”</td><td>质量非劣前提下，真实配对运行的 prompt tokens、实际费用和 cost/pass 均下降，并给出置信区间。</td></tr>
+      <tr><td>“质量没有下降”</td><td>隐藏测试 pass rate 非劣，约束保持检查通过，公开失败样本和评分 rubric。</td></tr>
+      <tr><td>“社区可复现”</td><td>一条命令运行、公开 fixture/verifier/config、机器可读 artifact 和自动生成报告。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>9. 当前真实会话的定位</h2>
+  <p>会话 <code>019f6a4f-6a05-7000-b199-0914f1549de1</code> 是 pilot evidence，不作为最终 A/B headline。它已经证明 benchmark 的压力规模可达成：</p>
+  <ul>
+    <li>332 次模型事件、10 次 Segment / Compaction。</li>
+    <li>raw journal 569,916 tokens，最终 active context 49,604 tokens。</li>
+    <li>稳定前缀缓存读取率 93.7%。</li>
+    <li>真实成本约 $26.87；缓存相对完全未缓存节省约 $94.94。</li>
+  </ul>
+  <p>正式报告不能把“完全未缓存”冒充 Native，也不能把 raw-active 累计差直接当作节省；必须等待真实 Native 配对结果。</p>
+
+  <h2>10. 实施边界</h2>
+  <p>Runner、成本保护、随机配对、隔离 Git 工作区、主请求与维护请求 usage 汇总、顺序证据工具、5 个任务 fixture、隐藏 verifier、JSON/HTML artifact 已实现。正式任务入口为 <code>packages/coding-agent/examples/context-steady-benchmark-tasks.json</code>。2026-07-17 的首轮 xhigh Smoke 因隔离 Settings 未暴露给旧全局代理，导致 Steady 的 Edit / Write 工具异常，该轮已作废；修复后的 Smoke 只验证了凭证隔离、主模型、Digest 模型、probe、artifact 和 runner，不形成效率结论。随后完成的 30-run Release 在审计中发现 L5 可经 <code>eval</code> 间接批量调用 <code>benchmark_step</code>，没有满足预注册的逐模型回合压力契约；该轮数据只保留作诊断，不得用于 Context Steady 节省声明。Runner 现已改为严格工具白名单并关闭此旁路，下一轮正式证据必须基于修复后的 source hash 重新生成。</p>
+  <div class="callout"><strong>完成定义：</strong>社区成员只需要准备一个兼容模型配置并执行一条命令，即可得到 Native / Steady 的完整配对 artifact、质量结论、token 曲线和 HTML 报告；任何 headline 数字都能回溯到具体 session 行。</div>
+</main>
+</body>
+</html>

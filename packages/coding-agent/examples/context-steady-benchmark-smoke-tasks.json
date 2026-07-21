@@ -1,0 +1,12 @@
+[
+  {
+    "id": "S01",
+    "label": "range-normalization-smoke",
+    "fixture": "context-steady-benchmark-fixtures/ranges",
+    "objective": "修复 src/ranges.ts 的 normalizeRanges。它必须返回按 start 升序排列、合并重叠或相邻区间后的新数组；不得修改输入；start 大于 end 时必须抛出包含区间下标的具体错误。运行测试并在完成后按要求给出 VERDICT、EVIDENCE 和 RISKS。",
+    "verifier": {
+      "argv": ["bun", "test"],
+      "timeoutMs": 60000
+    }
+  }
+]

@@ -1,15 +1,17 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
-import { z } from "@oh-my-pi/pi-ai";
+import * as ai from "@oh-my-pi/pi-ai";
+import { type AssistantMessage, z } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import {
 	BRAIN_EXPERIENCE_CANDIDATE_CUSTOM_TYPE,
+	BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE,
 	type SanBrainExperienceCandidate,
 } from "@oh-my-pi/pi-coding-agent/brain/types";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { TURN_DIGEST_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/context-steady/types";
+import { TURN_DIGEST_CUSTOM_TYPE, type TurnDigest } from "@oh-my-pi/pi-coding-agent/context-steady/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -50,11 +52,50 @@ function failureCall(reason: string): MockResponse {
 	};
 }
 
+function digestAssistant(): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [
+			{
+				type: "toolCall",
+				id: "brain-digest",
+				name: "record_turn_digest",
+				arguments: {
+					userIntent: "Run the failure probe and finish.",
+					actionsTaken: ["Ran the requested failure probe."],
+					decisions: [],
+					filesTouched: [],
+					factsLearned: [],
+					openQuestions: [],
+					risks: [],
+					nextSteps: [],
+					memoryCandidates: [
+						{ content: "User preference: 使用简洁中文回复。", type: "preference", importance: 0.9 },
+					],
+				},
+			},
+		],
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "claude-sonnet-4-5",
+		usage: {
+			input: 10,
+			output: 5,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 15,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "toolUse",
+		timestamp: Date.now(),
+	};
+}
+
 function customEntries(entries: readonly SessionEntry[]): CustomEntry[] {
 	return entries.filter((entry): entry is CustomEntry => entry.type === "custom");
 }
 
-async function createHarness(contextSteadyEnabled: boolean): Promise<Harness> {
+async function createHarness(contextSteadyEnabled: boolean, llmDigestEnabled = false): Promise<Harness> {
 	const tempDir = TempDir.createSync("@san-brain-capture-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 	const mock = createMockModel({
@@ -71,9 +112,12 @@ async function createHarness(contextSteadyEnabled: boolean): Promise<Harness> {
 			"todo.enabled": false,
 			"todo.reminders": false,
 			"san.contextSteady.enabled": contextSteadyEnabled,
+			"san.contextSteady.activationThresholdTokens": 0,
 			"san.contextSteady.digest.enabled": true,
 			"san.contextSteady.digest.persistFallback": true,
-			"san.contextSteady.digest.llm.enabled": false,
+			"san.contextSteady.digest.timeoutMs": 1000,
+			"san.contextSteady.digest.llm.enabled": llmDigestEnabled,
+			"san.contextSteady.digest.llm.modelRole": "anthropic/claude-sonnet-4-5",
 			"san.brain.enabled": true,
 			"san.brain.capture.enabled": true,
 			"san.brain.capture.maxCandidatesPerTurn": 5,
@@ -82,6 +126,7 @@ async function createHarness(contextSteadyEnabled: boolean): Promise<Harness> {
 	});
 	settings.setModelRole("default", `${mock.provider}/${mock.id}`);
 	authStorage.setRuntimeApiKey(mock.provider, "test-key");
+	authStorage.setRuntimeApiKey("anthropic", "test-key");
 
 	const sessionManager = SessionManager.inMemory(tempDir.path());
 	const tools = [failureTool as AgentTool];
@@ -109,6 +154,7 @@ afterEach(async () => {
 		await harness.authStorage.close();
 		harness.tempDir.removeSync();
 	}
+	vi.restoreAllMocks();
 });
 
 describe("San Brain M2 AgentSession capture lifecycle", () => {
@@ -160,6 +206,28 @@ describe("San Brain M2 AgentSession capture lifecycle", () => {
 		expect(candidate.evidence[0]).toMatchObject({
 			sourceMode: "message_span_fallback",
 			digestEntryIds: [],
+		});
+	});
+
+	it("uses the configured digest timeout while capturing Brain candidates", async () => {
+		const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => new AbortController().signal);
+		const digestSpy = vi.spyOn(ai, "completeSimple").mockImplementation(async () => digestAssistant());
+		const { session, sessionManager } = await createHarness(true, true);
+
+		await session.prompt("Run the failure probe and finish.");
+
+		const entries = customEntries(sessionManager.getBranch());
+		const digestEntry = entries.find(entry => entry.customType === TURN_DIGEST_CUSTOM_TYPE);
+		const profileEntry = entries.find(entry => entry.customType === BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE);
+		expect(timeoutSpy).toHaveBeenCalledWith(1000);
+		expect(digestSpy).toHaveBeenCalledTimes(1);
+		expect(digestEntry?.data as TurnDigest).toMatchObject({
+			fallback: false,
+			memoryCandidates: [{ type: "preference" }],
+		});
+		expect(profileEntry?.data).toMatchObject({
+			type: "user_preference",
+			value: expect.stringContaining("简洁中文"),
 		});
 	});
 });

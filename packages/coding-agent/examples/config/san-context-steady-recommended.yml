@@ -9,6 +9,8 @@
 san:
   contextSteady:
     enabled: true
+    # Stay native-equivalent for short/medium sessions; activation is sticky after crossing this threshold.
+    activationThresholdTokens: 240000
     digest:
       enabled: true
       persistFallback: true

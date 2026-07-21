@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San 验收复盘 — OMP v16.5.2 同步会话 (019f653d)</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #667085;
+      --paper: #f7f8f5;
+      --panel: #ffffff;
+      --line: #d8ddd2;
+      --line-strong: #aab4a3;
+      --green: #0b6b57;
+      --green-soft: #dfeee7;
+      --blue: #1e4d74;
+      --blue-soft: #dfeaf3;
+      --amber: #9a5b10;
+      --amber-soft: #f5ead4;
+      --red: #9a2f2f;
+      --red-soft: #f4dedb;
+      --slate: #26313c;
+      --slate-soft: #e9ecef;
+      --shadow: 0 18px 42px rgba(23, 32, 42, 0.08);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.68;
+    }
+    header {
+      padding: 48px 0 38px;
+      background:
+        linear-gradient(90deg, rgba(154, 47, 47, 0.08), transparent 42%),
+        linear-gradient(180deg, #ffffff 0%, #f7f8f5 100%);
+      border-bottom: 1px solid var(--line);
+    }
+    .wrap { width: min(1180px, calc(100% - 44px)); margin: 0 auto; }
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--red);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    h1 {
+      max-width: 980px;
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(32px, 4.8vw, 56px);
+      line-height: 1.08;
+      text-wrap: balance;
+    }
+    .subtitle {
+      max-width: 920px;
+      margin: 20px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 24px;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      font-size: 13px;
+      color: var(--slate);
+    }
+    .chip.bad { background: var(--red-soft); border-color: #e0b4b0; color: var(--red); }
+    .chip.warn { background: var(--amber-soft); border-color: #e4c98a; color: var(--amber); }
+    .chip.ok { background: var(--green-soft); border-color: #9fcfbe; color: var(--green); }
+    .chip.info { background: var(--blue-soft); border-color: #a9c5db; color: var(--blue); }
+    main { padding: 36px 0 80px; }
+    section {
+      margin: 0 0 28px;
+      padding: 28px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+    }
+    h2 {
+      margin: 0 0 14px;
+      font-size: 24px;
+      letter-spacing: -0.02em;
+    }
+    h3 { margin: 22px 0 10px; font-size: 17px; }
+    p { margin: 0 0 12px; }
+    ul, ol { margin: 0 0 12px; padding-left: 1.25em; }
+    li { margin: 0 0 6px; }
+    code, .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+    code {
+      padding: 1px 6px;
+      border-radius: 6px;
+      background: var(--slate-soft);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+      margin: 12px 0 4px;
+    }
+    th, td {
+      text-align: left;
+      vertical-align: top;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    th {
+      color: var(--muted);
+      font-weight: 700;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      background: #fafbf8;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      margin: 14px 0;
+    }
+    .stat {
+      padding: 16px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: #fbfcf9;
+    }
+    .stat .n {
+      font-family: Georgia, serif;
+      font-size: 28px;
+      line-height: 1.1;
+    }
+    .stat .l { color: var(--muted); font-size: 13px; margin-top: 4px; }
+    .callout {
+      margin: 14px 0;
+      padding: 14px 16px;
+      border-radius: 12px;
+      border-left: 4px solid var(--blue);
+      background: var(--blue-soft);
+    }
+    .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    .callout.bad { border-left-color: var(--red); background: var(--red-soft); }
+    .callout.ok { border-left-color: var(--green); background: var(--green-soft); }
+    .timeline {
+      border-left: 2px solid var(--line-strong);
+      margin: 12px 0 0 8px;
+      padding-left: 18px;
+    }
+    .timeline .ev {
+      position: relative;
+      margin: 0 0 16px;
+    }
+    .timeline .ev::before {
+      content: "";
+      position: absolute;
+      left: -25px;
+      top: 8px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--blue);
+      border: 2px solid #fff;
+      box-shadow: 0 0 0 1px var(--line-strong);
+    }
+    .timeline .ev.bad::before { background: var(--red); }
+    .timeline .ev.warn::before { background: var(--amber); }
+    .timeline .ev.ok::before { background: var(--green); }
+    .ts { color: var(--muted); font-size: 12px; font-family: ui-monospace, Menlo, monospace; }
+    footer {
+      padding: 20px 0 40px;
+      color: var(--muted);
+      font-size: 13px;
+      border-top: 1px solid var(--line);
+    }
+    .sev {
+      display: inline-block;
+      min-width: 52px;
+      text-align: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .sev.p0 { background: var(--red-soft); color: var(--red); }
+    .sev.p1 { background: var(--amber-soft); color: var(--amber); }
+    .sev.p2 { background: var(--blue-soft); color: var(--blue); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <p class="eyebrow">San Acceptance Review · Dogfood Session</p>
+      <h1>OMP v16.5.2 同步会话验收复盘</h1>
+      <p class="subtitle">
+        会话 <code>019f653d-83f1-7000-a522-8faba3aa317f</code>（标题：Assess OMP v16.5.2 merge）。
+        这是一次真实、长跑、高冲突的上游同步任务，作为 San 的验收样本。
+        最近几轮错误高度集中在「中途静默停机 / Provider 限流与超时 / 合并验证失败 / 上下文 hard pressure」四条线上。
+      </p>
+      <div class="meta">
+        <span class="chip bad">验收结论：未通过（任务未完成 + 运行时失稳）</span>
+        <span class="chip warn">工作产物：部分可复用</span>
+        <span class="chip info">窗口：2026-07-15 10:10 → 07-16 03:01 UTC</span>
+        <span class="chip">模型：self/gpt-5.6-sol（主）· digest 用 gpt-5.4-mini</span>
+        <span class="chip">JSONL：6.4MB / 1117 entries</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h2>0. 一句话结论</h2>
+      <p>
+        Agent <strong>评估质量高、里程碑策略对</strong>，并在独立 worktree 上推进到
+        <code>v16.4.0 → v16.4.5 → v16.5.0</code> 三连合并提交；但在 <code>v16.5.2</code> 冲突收尾与验证阶段反复失稳。
+        用户连续 4 次追问「为什么停 / 进度如何」，会话最终停在 <strong>13 个未解决冲突 + 未完成 check/test</strong>，
+        原仓库 <code>main</code> 未污染。对 San 产品本身，本会话暴露的是
+        <strong>长任务连续执行、Provider 错误恢复、上下文压力下的 turn 切断、冲突编辑合约</strong> 四类验收缺口。
+      </p>
+      <div class="callout bad">
+        <strong>验收判定</strong>：作为「能自主完成上游同步」的端到端能力 — <strong>Fail</strong>。
+        作为「评估 + 隔离 worktree + 分里程碑合并」的方法论与部分产物 — <strong>Partial Pass</strong>。
+      </div>
+    </section>
+
+    <section>
+      <h2>1. 会话画像</h2>
+      <div class="grid">
+        <div class="stat"><div class="n">10</div><div class="l">用户消息（含重复催进度）</div></div>
+        <div class="stat"><div class="n">229</div><div class="l">assistant turns</div></div>
+        <div class="stat"><div class="n">420</div><div class="l">tool calls</div></div>
+        <div class="stat"><div class="n">12</div><div class="l">assistant stopReason=error</div></div>
+        <div class="stat"><div class="n">24</div><div class="l">isError=true tool results</div></div>
+        <div class="stat"><div class="n">3</div><div class="l">compaction 事件</div></div>
+      </div>
+
+      <h3>工具分布（Top）</h3>
+      <table>
+        <thead><tr><th>Tool</th><th>Count</th><th>备注</th></tr></thead>
+        <tbody>
+          <tr><td><code>read</code></td><td>188</td><td>大量冲突文件逐块读；后期整批 read 未 resolve</td></tr>
+          <tr><td><code>bash</code></td><td>100</td><td>merge / test / check / git status；exit≠0 被标 isError</td></tr>
+          <tr><td><code>write</code></td><td>40</td><td>主要走 <code>conflict://N</code> 单块解决</td></tr>
+          <tr><td><code>grep</code></td><td>30</td><td>迁移定位 Model Hub / effort</td></tr>
+          <tr><td><code>edit</code></td><td>26</td><td>2 次 anchor 失败（见 §4.3）</td></tr>
+          <tr><td><code>mcp__codegraph_explore</code></td><td>8</td><td>评估与 schema 探索有效</td></tr>
+          <tr><td><code>todo</code></td><td>7</td><td>init 后更新偏少；中途 nudge 4 次</td></tr>
+        </tbody>
+      </table>
+
+      <h3>用户交互时间线（全部 10 条）</h3>
+      <div class="timeline">
+        <div class="ev ok">
+          <div class="ts">07-15 10:10</div>
+          <div>「看下当前项目…上游有没有更新，能不能同步」→ 评估完成，方案清晰</div>
+        </div>
+        <div class="ev ok">
+          <div class="ts">07-15 10:26</div>
+          <div>「按你的方案来」→ 创建 worktree，开始分里程碑 merge</div>
+        </div>
+        <div class="ev warn">
+          <div class="ts">07-15 12:34</div>
+          <div>「怎么停下来了？当前进度如何？」→ <strong>第一次静默中断</strong>（无 stop 文本，直接停在 toolUse 链中间）</div>
+        </div>
+        <div class="ev warn">
+          <div class="ts">07-16 01:35</div>
+          <div>「什么进度了？」→ 又只做了少量修复就再次可被打断</div>
+        </div>
+        <div class="ev bad">
+          <div class="ts">07-16 01:42 ×2</div>
+          <div>「为什么做一点就停下了？」→ 承诺连续执行；随后进入错误高发段</div>
+        </div>
+        <div class="ev bad">
+          <div class="ts">07-16 01:59–02:07</div>
+          <div><strong>10 次连续 provider error</strong>（timeout + concurrency rate limit）</div>
+        </div>
+        <div class="ev warn">
+          <div class="ts">07-16 02:45</div>
+          <div>开始 merge v16.5.2，再制造 13 个 UU 冲突后停在批量 read</div>
+        </div>
+        <div class="ev warn">
+          <div class="ts">07-16 02:59–03:01</div>
+          <div>用户连问进度 / 压缩完了吗；compaction 1.9MB 后 session dispose，未给出完成态答复</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. 任务进度（业务侧）</h2>
+      <table>
+        <thead><tr><th>里程碑</th><th>状态</th><th>证据</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>评估 v16.3.15 → v16.5.2</td>
+            <td><span class="chip ok">Done</span></td>
+            <td>冲突 60 文件模拟、语义冲突清单、独立 worktree 方案；产出 <code>docs/research/omp-upstream-sync-assessment-20260715.html</code></td>
+          </tr>
+          <tr>
+            <td>隔离 worktree</td>
+            <td><span class="chip ok">Done</span></td>
+            <td><code>/Users/sanjiu/development/self/projects/san-omp-sync-16.5.2</code>，分支 <code>sync/omp-16.5.2</code></td>
+          </tr>
+          <tr>
+            <td>Merge v16.4.0</td>
+            <td><span class="chip ok">Done</span></td>
+            <td>commit <code>e9a170747 Merge OMP v16.4.0 into San</code></td>
+          </tr>
+          <tr>
+            <td>Merge v16.4.5</td>
+            <td><span class="chip ok">Done*</span></td>
+            <td>commit <code>20a5743d3</code>；*验证阶段仍有 model-hub / thinking 契约测试红</td>
+          </tr>
+          <tr>
+            <td>Merge v16.5.0</td>
+            <td><span class="chip ok">Done*</span></td>
+            <td>commit <code>2bfb01292</code></td>
+          </tr>
+          <tr>
+            <td>Merge v16.5.2</td>
+            <td><span class="chip bad">In progress</span></td>
+            <td>13 UU 冲突未解决（见下表）</td>
+          </tr>
+          <tr>
+            <td>bun check / 聚焦测试 / smoke</td>
+            <td><span class="chip bad">Fail / 未跑完</span></td>
+            <td>多次 check fail、测试 3→16 fail 反复</td>
+          </tr>
+          <tr>
+            <td>同步记录文档</td>
+            <td><span class="chip warn">未做</span></td>
+            <td>todo 仍 open</td>
+          </tr>
+          <tr>
+            <td>原 main 保护</td>
+            <td><span class="chip ok">Pass</span></td>
+            <td>main 仍停在 <code>2bab463c1</code>，仅本地 context-steady 等未提交改动</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>当前 worktree 残留冲突（验收冻结时）</h3>
+      <ul>
+        <li><code>docs/models.md</code></li>
+        <li><code>packages/coding-agent/src/cli/update-cli.ts</code></li>
+        <li><code>packages/coding-agent/src/eval/agent-bridge.ts</code></li>
+        <li><code>packages/coding-agent/src/exec/bash-executor.ts</code></li>
+        <li><code>packages/coding-agent/src/main.ts</code></li>
+        <li><code>packages/coding-agent/src/modes/controllers/selector-controller.ts</code></li>
+        <li><code>packages/coding-agent/src/prompts/tools/read.md</code></li>
+        <li><code>packages/coding-agent/src/session/agent-session.ts</code>（4 块冲突，最重）</li>
+        <li><code>packages/coding-agent/src/tools/read.ts</code></li>
+        <li>测试：<code>agent-session-role-thinking.test.ts</code>、<code>omp-plugins.test.ts</code>、<code>schema-validation.test.ts</code>、<code>update-cli.test.ts</code></li>
+      </ul>
+      <div class="callout warn">
+        这些冲突恰好踩在评估阶段就点名的热点：<strong>read 协议</strong>、<strong>Model Hub / selector</strong>、<strong>agent-session / Context Steady</strong>。
+        分里程碑有效降低了前期风险，但最后一跳 v16.5.2 仍把硬冲突堆回同一批文件。
+      </div>
+    </section>
+
+    <section>
+      <h2>3. 错误集中区（最近几轮）</h2>
+      <p>按出现密度与对用户体验冲击排序。红色块是「最近几轮真正拖垮会话」的主因。</p>
+
+      <h3>3.1 P0 — 中途静默停机（产品验收致命）</h3>
+      <p>
+        用户在 <strong>12:34、01:35、01:42×2、02:59、03:00、03:01</strong> 反复追问进度/为何停下。
+        全会话 <code>stopReason=stop</code> 仅 3 次（评估答复 + 两次进度答复），大量工作以
+        <code>stopReason=toolUse</code> 链结束而没有用户可见收尾。
+      </p>
+      <ul>
+        <li><strong>第一次静默停</strong>（~10:40，L428–L430 之后）：正在做 v16.4.5 Model Hub 迁移编辑，
+          下一事件直接是 <code>san.context_plan</code>（qualityGate=<code>hard_pressure</code>）+ turn_digest，
+          没有 assistant 文本向用户交代。用户 2 小时后才发现停了。</li>
+        <li>Agent 自述原因（L505）：「上一轮错误地把进度汇报当成了可停点」。这是行为层 bug，不是仓库阻塞。</li>
+        <li>后续即便承诺「不再中途汇报」，仍在 v16.5.2 批量 read 冲突后再次断掉，且被 compaction / dispose 打断。</li>
+      </ul>
+      <div class="callout bad">
+        <strong>验收缺口</strong>：长任务缺少「连续执行合约」——没有 turn budget / 未完成 todo 自动续跑 /
+        用户可见的 running checkpoint。Context Steady 的 <code>hard_pressure</code> 与 turn 切断耦合后，
+        表现为「做一点就停」。
+      </div>
+
+      <h3>3.2 P0 — Provider 流式错误风暴（01:59–02:07，+ 02:35/02:38）</h3>
+      <table>
+        <thead><tr><th>时间 (UTC)</th><th>errorMessage</th><th>次数</th></tr></thead>
+        <tbody>
+          <tr><td>01:59–02:07</td><td><code>OpenAI responses stream timed out while waiting for the first event</code></td><td>3</td></tr>
+          <tr><td>01:59–02:05</td><td><code>rate_limit_exceeded: Concurrency limit exceeded for account</code></td><td>7</td></tr>
+          <tr><td>02:35</td><td>first-event timeout</td><td>1</td></tr>
+          <tr><td>02:38</td><td><code>stream stalled while waiting for the next event</code></td><td>1</td></tr>
+        </tbody>
+      </table>
+      <ul>
+        <li>全部 <code>usage.totalTokens=0</code>，空 content，属于请求根本没进有效生成。</li>
+        <li>限流与超时 <strong>交织重试</strong>，约 8 分钟内连撞 10 次，退避不足（或并发重试加重 concurrency limit）。</li>
+        <li>触发点：刚扩大测试面到 165 cases / 11 fail 之后，上下文也在抬升。</li>
+      </ul>
+      <div class="callout bad">
+        <strong>验收缺口</strong>：auth-retry / stream timeout / concurrency limit 的分类与退避对
+        <code>self</code> provider 不够；应指数退避 + 全局并发闸 + 可观测错误条，而不是空 turn 连发。
+      </div>
+
+      <h3>3.3 P1 — 验证红灯反复（check / test）</h3>
+      <p>最近几轮真正的工程错误簇（从 artifact log 归纳）：</p>
+      <table>
+        <thead><tr><th>簇</th><th>表现</th><th>根因判断</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="sev p0">P0</span> thinking <code>:max</code> 契约</td>
+            <td>model-resolver / parseModelPattern 大量 fail（artifact 107: 11 fail；114: 2 fail）</td>
+            <td>San 的 max/ultra 与上游 wire-exact max、以及 <code>allowMaxSuffix</code> 选项未对齐；类型上 <code>ThinkingSuffixOptions</code> 缺字段</td>
+          </tr>
+          <tr>
+            <td><span class="sev p0">P0</span> Model Hub 迁移缺口</td>
+            <td><code>configuredThinkingLevel is not a function</code>；role chips 断言失败（artifact 92）</td>
+            <td>上游删 model-selector 后，San session effort / role 芯片未完全挂到 Model Hub</td>
+          </tr>
+          <tr>
+            <td><span class="sev p1">P1</span> biome / organizeImports</td>
+            <td>selector-controller unused import、import 排序（artifact 73/134）</td>
+            <td>冲突解决后未跑 format / 未用 biome --write</td>
+          </tr>
+          <tr>
+            <td><span class="sev p1">P1</span> san-commander frontmatter</td>
+            <td>16 个 agents 测试全挂（artifact 142）：YAML Parse Unexpected token</td>
+            <td>合并损坏 <code>san-commander.md</code> 嵌入 frontmatter，属回归爆炸点</td>
+          </tr>
+          <tr>
+            <td><span class="sev p2">P2</span> node_modules 缺失</td>
+            <td>read/glob path not found</td>
+            <td>worktree 未 install 就去读依赖路径</td>
+          </tr>
+          <tr>
+            <td><span class="sev p2">P2</span> vendor 空白字符</td>
+            <td><code>git diff --check</code> exit 2 on uu-xargs LICENSE</td>
+            <td>上游 vendor 噪音，应用 pathspec 排除</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>3.4 P1 — 冲突编辑摩擦</h3>
+      <ul>
+        <li><code>write(conflict://N)</code> 单块解决在早期有效，但节奏过慢（一文件多轮 write）。</li>
+        <li><strong>edit anchor 失败 ×2</strong>（model-resolver.ts L727、model-hub.ts L966）：
+          anchor 行来自「折叠/部分 range 的 read」，工具正确拒绝，但 Agent 仍反复踩坑 → 应强制先 full-range read 或改用 write 全文件。</li>
+        <li>v16.5.2 merge 一上来就 13 文件 UU，最后一轮只 <code>read</code> 了冲突提示就停，没有进入 resolve。</li>
+      </ul>
+
+      <h3>3.5 P1 — Context Steady hard pressure / compaction</h3>
+      <ul>
+        <li>从第二次用户交互起，几乎每个 context_plan 的 qualityGate 都是 <code>hard_pressure</code>，
+          reasons 固定包含 <code>protected_entries_exceed_message_budget / control_band / burst_ceiling</code>。</li>
+        <li>promptTokens 峰值约 <strong>249k</strong>（窗口 300k，steady 目标 225k）。</li>
+        <li>compaction 3 次；最后一次摘要约 <strong>1.94MB</strong> 写入 JSONL，用户在压缩期间连发 3 条消息，
+          会话以 <code>session_exit dispose</code> 结束，没有交付态答复。</li>
+        <li>turn_digest 的 tokenStats 累计 input 已到 <strong>~1.75M</strong>（含 cacheRead 统计口径），说明长会话成本与噪声都很高。</li>
+      </ul>
+      <div class="callout warn">
+        Context Steady 在本会话更像「持续告警 + 强制压缩」，未能把「长 merge 会话」压回可控执行环。
+        保护条目过多导致 budget 形同虚设，是验收里值得单开的 CS 缺陷。
+      </div>
+    </section>
+
+    <section>
+      <h2>4. 做得好的地方（别因失败全盘否定）</h2>
+      <ol>
+        <li><strong>评估阶段扎实</strong>：merge-tree 模拟、冲突分类、语义热点（effort / Model Hub / task schema / agent-session / read selector / 品牌）一次讲清，用户直接批准。</li>
+        <li><strong>隔离 worktree 正确</strong>：原 main 与本地 15 个未提交文件未被动手术。</li>
+        <li><strong>分里程碑 merge</strong>：v16.4.0 → 16.4.5 → 16.5.0 有提交节点，可回滚、可审。</li>
+        <li><strong>冲突工具链可用</strong>：conflict read 提示 + <code>conflict://</code> write 在前中期有效推进。</li>
+        <li><strong>Codegraph MCP</strong>：用于 schema / 依赖探索，减少盲搜。</li>
+        <li><strong>todo 骨架正确</strong>：Integration + Verification 两阶段；但执行中更新频率不足。</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>5. 对 San 产品的验收条目（映射缺陷）</h2>
+      <table>
+        <thead><tr><th>ID</th><th>验收项</th><th>本会话结果</th><th>建议</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>A1</td>
+            <td>长任务连续执行（不因进度句/压力静默停）</td>
+            <td class="bad">Fail</td>
+            <td>未完成 todo 自动续跑；硬停必须写用户可见 handoff；禁止「只 digests 不说话」</td>
+          </tr>
+          <tr>
+            <td>A2</td>
+            <td>Provider 错误可恢复且不轰炸</td>
+            <td class="bad">Fail</td>
+            <td>concurrency limit 全局闸；first-event timeout 与 stall 分策略；空 turn 合并展示</td>
+          </tr>
+          <tr>
+            <td>A3</td>
+            <td>Context Steady 在 200k+ 长会话保持可执行</td>
+            <td class="bad">Fail</td>
+            <td>hard_pressure 时优先降保护集 / 工具结果落盘，而不是切断 turn；压缩中用户消息排队说明</td>
+          </tr>
+          <tr>
+            <td>A4</td>
+            <td>冲突解决路径高效</td>
+            <td class="warn">Partial</td>
+            <td>批量 <code>conflict://*</code> 策略引导；禁止用折叠 range 做 edit anchor</td>
+          </tr>
+          <tr>
+            <td>A5</td>
+            <td>验证闭环（check/test 失败可收敛）</td>
+            <td class="warn">Partial</td>
+            <td>合并后固定 pipeline：format → typecheck → 聚焦测 → 再扩面；损坏 frontmatter 优先扫</td>
+          </tr>
+          <tr>
+            <td>A6</td>
+            <td>进度可观测（用户不用追问）</td>
+            <td class="bad">Fail</td>
+            <td>每 N tool 或每里程碑强制 checkpoint 消息；todo 状态与 git 里程碑绑定</td>
+          </tr>
+          <tr>
+            <td>A7</td>
+            <td>不污染用户主工作区</td>
+            <td class="ok">Pass</td>
+            <td>保持 worktree 默认策略</td>
+          </tr>
+          <tr>
+            <td>A8</td>
+            <td>评估质量（能否合、怎么合）</td>
+            <td class="ok">Pass</td>
+            <td>可固化为 /sync-upstream skill 模板</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>6. 建议的续跑打法（不在本会话内执行）</h2>
+      <ol>
+        <li>在 <code>san-omp-sync-16.5.2</code> 上先清 13 个 UU：按热点文件优先级
+          <code>read.ts / read.md → agent-session.ts → selector-controller → 测试</code>。</li>
+        <li>固定验证顺序：<code>bun install</code> → biome write 冲突文件 → <code>bun check</code> →
+          聚焦 <code>model-resolver</code> / <code>model-hub</code> / <code>schema-validation</code> /
+          <code>san-loop/agents</code>。</li>
+        <li>优先修两个爆炸点：thinking max 契约、<code>san-commander.md</code> YAML。</li>
+        <li>新开干净会话做收尾，避免本会话 249k 压力上下文；把本复盘 + git log 当 handoff。</li>
+        <li>不要再从进度问答切入——直接指令「只工作不汇报，完成 v16.5.2 + check 绿再回来」。</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>7. 指标快照（便于对比后续 dogfood）</h2>
+      <table>
+        <thead><tr><th>指标</th><th>值</th></tr></thead>
+        <tbody>
+          <tr><td>Session ID</td><td><code>019f653d-83f1-7000-a522-8faba3aa317f</code></td></tr>
+          <tr><td>JSONL path</td><td><code>~/.san/agent/sessions/-development-self-projects-san/2026-07-15T10-05-58-129Z_019f653d-….jsonl</code></td></tr>
+          <tr><td>Wall span</td><td>~17h（含过夜间隙）</td></tr>
+          <tr><td>User progress-chase messages</td><td>7 / 10</td></tr>
+          <tr><td>Assistant error turns</td><td>12</td></tr>
+          <tr><td>True tool errors</td><td>24</td></tr>
+          <tr><td>Compactions</td><td>3（最后 summary ~1.9MB）</td></tr>
+          <tr><td>Peak promptTokens</td><td>~249,475</td></tr>
+          <tr><td>Context plan hard_pressure rate</td><td>高（第 2 次用户交互后几乎 100%）</td></tr>
+          <tr><td>Worktree open conflicts at freeze</td><td>13 files</td></tr>
+          <tr><td>Merge commits landed</td><td>3（16.4.0 / 16.4.5 / 16.5.0）</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>8. 总评</h2>
+      <p>
+        这是一次「能力上半场很强、执行下半场失稳」的 dogfood。
+        San 在评估、隔离、分里程碑、冲突工具上证明了价值；但在
+        <strong>连续执行、错误恢复、上下文压力、验证收敛</strong> 上未达可验收标准。
+        最近几轮错误不是「偶发一次 merge 冲突」，而是
+        <em>静默停机 × Provider 风暴 × 契约测试红 × hard_pressure 切断</em> 的叠加。
+      </p>
+      <div class="callout">
+        <strong>产品优先级建议</strong>：先修 A1（连续执行）与 A2（provider 退避），再修 A3（CS hard_pressure 策略）；
+        A4/A5 作为 coding-agent 工作流 hardening。业务上用新会话收尾 v16.5.2，不要复活本会话硬扛。
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      源会话：<code>san --resume 019f653d-83f1-7000-a522-8faba3aa317f</code> ·
+      复盘日期：2026-07-16 ·
+      分析基于 JSONL + worktree git 状态 + bash artifacts，未改动仓库代码。
+    </div>
+  </footer>
+</body>
+</html>

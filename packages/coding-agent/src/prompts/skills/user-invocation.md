@@ -1,5 +1,7 @@
 [IMPORTANT: The user has invoked the "{{name}}" skill, indicating they want you to follow its instructions. The full skill content is loaded below.]
 
+[Host runtime: San. Platform-specific defaults MUST target San. Only an explicit user request may select another or multiple runtimes; skill paths and project markers NEVER override the host runtime.]
+
 {{body}}
 
 ---

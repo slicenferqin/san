@@ -494,6 +494,42 @@ describe("LLM digest orchestration", () => {
 		expect(sessionManager.getEntries()).toHaveLength(1);
 	});
 
+	test("reports the digest response to the side-request usage observer", async () => {
+		const response = assistantWithDigest({
+			userIntent: "Account for digest usage through the session observer.",
+			actionsTaken: ["Recorded the side-request response."],
+			decisions: [],
+			filesTouched: [],
+			factsLearned: [],
+			openQuestions: [],
+			risks: [],
+			nextSteps: [],
+			memoryCandidates: [],
+		});
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(response);
+		const observed: AssistantMessage[] = [];
+		const source = { sessionId: "s", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 };
+		const sessionManager = createSessionManager();
+
+		const result = await generateDigest(
+			asM([umsg("Account for digest usage"), amsg("Done.")]),
+			source,
+			sessionManager as never,
+			{} as never,
+			steadySettings(true),
+			{
+				model: getDigestModel(),
+				apiKey: async () => "test-key",
+				onResponse: digestResponse => {
+					observed.push(digestResponse);
+				},
+			},
+		);
+
+		expect(observed).toEqual([response]);
+		expect(result?.digest).toMatchObject({ fallback: false, model: "anthropic/claude-sonnet-4-5" });
+	});
+
 	test("append-only upgrades an existing fallback digest when the LLM model becomes available", async () => {
 		vi.spyOn(ai, "completeSimple").mockResolvedValue(
 			assistantWithDigest({
@@ -775,6 +811,54 @@ describe("LLM digest orchestration", () => {
 		expect(stored.fallback).toBe(false);
 		expect(stored.userIntent).toBe("Finalize context steady acceptance.");
 		expect(stored.decisions).toEqual(["Treat a transient digest stream close as retryable."]);
+	});
+
+	test("retries a response that omits the structured digest before falling back", async () => {
+		const completeSimpleMock = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValueOnce({
+				...assistantWithDigest({
+					userIntent: "unused",
+					actionsTaken: [],
+					decisions: [],
+					filesTouched: [],
+					factsLearned: [],
+					openQuestions: [],
+					risks: [],
+					nextSteps: [],
+					memoryCandidates: [],
+				}),
+				content: [{ type: "text", text: "digest generation still in progress" }],
+			})
+			.mockResolvedValue(
+				assistantWithDigest({
+					userIntent: "Keep the original long task intent.",
+					actionsTaken: ["Retried the structured digest request."],
+					decisions: [],
+					filesTouched: [],
+					factsLearned: [],
+					openQuestions: [],
+					risks: [],
+					nextSteps: [],
+					memoryCandidates: [],
+				}),
+			);
+		const source = { sessionId: "s", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 };
+		const sessionManager = createSessionManager();
+
+		await generateDigest(
+			asM([umsg("继续长任务"), amsg("已完成。")]),
+			source,
+			sessionManager as never,
+			{} as never,
+			steadySettings(true),
+			{ model: getDigestModel(), apiKey: async () => "test-key" },
+		);
+
+		const stored = sessionManager.getEntries()[0]?.data as TurnDigest;
+		expect(completeSimpleMock).toHaveBeenCalledTimes(2);
+		expect(stored.fallback).toBe(false);
+		expect(stored.userIntent).toBe("Keep the original long task intent.");
 	});
 
 	test("falls back to deterministic digest when LLM generation fails and fallback persistence is enabled", async () => {

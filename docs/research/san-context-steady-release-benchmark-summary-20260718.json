@@ -1,0 +1,202 @@
+{
+  "schemaVersion": 1,
+  "title": "San Context Steady Release Benchmark 结论快照",
+  "status": "completed",
+  "benchmark": {
+    "label": "san-context-steady-release-xhigh-r9",
+    "profile": "release",
+    "seed": "san-context-steady-v1",
+    "model": "asxs/gpt-5.6-sol:xhigh",
+    "startedAt": "2026-07-18T13:15:35.060Z",
+    "completedAt": "2026-07-18T14:02:18.745Z",
+    "attemptedRuns": 30,
+    "finalRuns": 30,
+    "validPairs": 15,
+    "qualityPassedRuns": 30,
+    "qualityPassedPairs": 15,
+    "invalidInfrastructurePairs": []
+  },
+  "provenance": {
+    "sourceCommit": "3ac89d1c2845ec49fc5407c422c4dfef710318ee",
+    "sourceDirty": true,
+    "sourceDiffHash": "9e2a0ead3ae86431889f6f56aa0e0197c9a73a00343a840308622989f31f87c8",
+    "agentModelConfigHash": "1d01c5102ea9f2bade4f50fcfaa678cae1ed57764b1d1162171cc1256a324803",
+    "taskFileHash": "251505bcce73d1c142e1b93169252125c62fba2e18f7da199a0963b41dbd7664",
+    "nativeConfigHash": "30ae077e55faf251989994071bf6f8574e63dd479a4c6c1c2bf5320a62af4532",
+    "steadyConfigHash": "cb685731ce26f5b7310f18eaf70704096dce46ad745f51f2728c7988fdaca191",
+    "runtimeCredentialSource": "stdin",
+    "rawArtifactLocalPath": "/private/tmp/san-context-steady-release-xhigh-r9-evidence",
+    "rawArtifactTrackedByGit": false
+  },
+  "runnerObservable": {
+    "priceTable": {
+      "currency": "USD",
+      "unitTokens": 1000000,
+      "input": 5,
+      "output": 30,
+      "cacheRead": 0.5,
+      "cacheWrite": 6.25
+    },
+    "native": {
+      "runs": 15,
+      "qualityPassed": 15,
+      "promptTokens": 215723578,
+      "maintenancePromptTokens": 0,
+      "outputTokens": 207641,
+      "cacheReadTokens": 211574784,
+      "estimatedCostUsd": 132.760592,
+      "maintenanceEstimatedCostUsd": 0,
+      "costPerPassUsd": 8.850706,
+      "maxActiveTokens": 355606,
+      "maxRawTokens": 548594
+    },
+    "steady": {
+      "runs": 15,
+      "qualityPassed": 15,
+      "promptTokens": 68469864,
+      "maintenancePromptTokens": 116745,
+      "outputTokens": 215492,
+      "cacheReadTokens": 62026240,
+      "estimatedCostUsd": 69.696,
+      "maintenanceEstimatedCostUsd": 0.836595,
+      "costPerPassUsd": 4.6464,
+      "maxActiveTokens": 67972,
+      "maxRawTokens": 565279
+    },
+    "aggregateSavings": {
+      "promptTokens": 147253714,
+      "promptTokenRate": 0.682604,
+      "estimatedCostUsd": 63.064592,
+      "estimatedCostRate": 0.475025,
+      "maxActiveContextRate": 0.808856,
+      "steadyMaintenanceCostShare": 0.012003
+    },
+    "pairedDistributions": {
+      "promptSavings": {
+        "count": 15,
+        "median": -0.02858,
+        "q1": -0.140205,
+        "q3": 0.243875,
+        "bootstrap95Low": -0.095794,
+        "bootstrap95High": 0.316554
+      },
+      "costSavings": {
+        "count": 15,
+        "median": -0.199151,
+        "q1": -0.292198,
+        "q3": 0.044004,
+        "bootstrap95Low": -0.222495,
+        "bootstrap95High": 0.046961
+      }
+    }
+  },
+  "providerDashboardObserved": {
+    "source": "用户在 Release 完成后提供的服务商管理台监控值",
+    "scope": "管理台口径未审计，可能包含中断请求、重试、失败请求或其他计费项；不得与 Runner 可观测估算直接合并",
+    "native": {
+      "tokens": 297000000,
+      "costUsd": 446
+    },
+    "steady": {
+      "tokens": 142000000,
+      "costUsd": 269
+    },
+    "derivedSavings": {
+      "tokens": 155000000,
+      "tokenRate": 0.521886,
+      "costUsd": 177,
+      "costRate": 0.396861,
+      "steadyUnitCostPerMillionIncreaseRate": 0.261495
+    }
+  },
+  "perTaskRunnerTotals": [
+    {
+      "taskId": "L1",
+      "label": "cross-module-route-policy-migration",
+      "nativePromptTokens": 282223,
+      "steadyPromptTokens": 321426,
+      "promptSavingsRate": -0.138908,
+      "nativeEstimatedCostUsd": 0.914585,
+      "steadyEstimatedCostUsd": 1.10208,
+      "costSavingsRate": -0.205006
+    },
+    {
+      "taskId": "L2",
+      "label": "bounded-idempotent-retry-repair",
+      "nativePromptTokens": 413025,
+      "steadyPromptTokens": 472383,
+      "promptSavingsRate": -0.143715,
+      "nativeEstimatedCostUsd": 1.518519,
+      "steadyEstimatedCostUsd": 1.831947,
+      "costSavingsRate": -0.206404
+    },
+    {
+      "taskId": "L3",
+      "label": "multi-turn-policy-evolution",
+      "nativePromptTokens": 917908,
+      "steadyPromptTokens": 903530,
+      "promptSavingsRate": 0.015664,
+      "nativeEstimatedCostUsd": 1.931894,
+      "steadyEstimatedCostUsd": 2.452792,
+      "costSavingsRate": -0.269631
+    },
+    {
+      "taskId": "L4",
+      "label": "catalog-code-and-documentation-delivery",
+      "nativePromptTokens": 396914,
+      "steadyPromptTokens": 472454,
+      "promptSavingsRate": -0.190318,
+      "nativeEstimatedCostUsd": 1.483996,
+      "steadyEstimatedCostUsd": 1.720858,
+      "costSavingsRate": -0.159611
+    },
+    {
+      "taskId": "L5",
+      "label": "ordered-incident-evidence-controlled-stress",
+      "nativePromptTokens": 213713508,
+      "steadyPromptTokens": 66300071,
+      "promptSavingsRate": 0.689771,
+      "nativeEstimatedCostUsd": 126.911598,
+      "steadyEstimatedCostUsd": 62.588323,
+      "costSavingsRate": 0.506835
+    }
+  ],
+  "l5ControlledStress": {
+    "runs": 6,
+    "stepsPerRun": 180,
+    "totalDirectModelToolCalls": 1080,
+    "allEvidenceChainsValid": true,
+    "allQualityPassed": true,
+    "nativeCompactionsPerRun": 1,
+    "steadySegmentsPerRun": 13,
+    "steadyCompactionsPerRun": 13,
+    "nativeMaxActiveTokens": 355606,
+    "steadyMaxActiveTokens": 67972,
+    "nativeMaxRawTokens": 548594,
+    "steadyMaxRawTokens": 565279
+  },
+  "currentVerification": [
+    {
+      "command": "HOME=/private/tmp/san-test-home bun test packages/coding-agent/test/context-steady packages/coding-agent/test/acp-builtins.test.ts",
+      "result": "288 pass, 0 fail, 1210 assertions"
+    },
+    {
+      "command": "HOME=/private/tmp/san-test-home bun test packages/coding-agent/test/sdk-session-isolation.test.ts packages/coding-agent/test/sdk-tool-activation.test.ts packages/coding-agent/test/workflows/path-scope.test.ts packages/utils/test/postmortem-cleanup-error.test.ts",
+      "result": "33 pass, 0 fail, 112 assertions"
+    },
+    {
+      "command": "PATH=/Users/sanjiu/.bun/bin:/usr/bin:/bin HOME=/private/tmp/san-test-home /Users/sanjiu/.bun/bin/bun check",
+      "result": "pass; TypeScript/Biome checks completed, Rust check skipped because no Rust-affecting changes were present"
+    },
+    {
+      "command": "bun run --cwd packages/coding-agent bench:context-steady --task-file examples/context-steady-benchmark-tasks.json --profile release --agent-dir examples/context-steady-benchmark-agent --estimate-only --estimated-cost-per-run 27 --allow-expensive",
+      "result": "pass; 30 runs, 15 pairs, 60-run infrastructure-retry upper bound, estimated upper cost USD 1620"
+    }
+  ],
+  "conclusion": {
+    "quality": "正式 Release 数据集 30/30 运行通过质量门禁，15/15 配对可比较，L5 六次 180 步证据链全部有效",
+    "efficiency": "Steady 在 L5 超长任务中显著降低 Prompt 与 Runner 估算成本，并把最大活跃上下文从约 356K 控制到约 68K",
+    "boundary": "L1-L4 的 Runner 估算成本均高于 Native，配对中位数和 bootstrap 95% CI 跨越零；结果不支持每个短中任务都更便宜的普遍声明",
+    "recommendedPositioning": "可发布 Context Steady 与公共 Benchmark 能力；对外强调超长上下文收益和质量保持，启用策略应按长上下文阈值或显式场景控制"
+  }
+}

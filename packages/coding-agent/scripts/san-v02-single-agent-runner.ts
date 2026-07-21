@@ -4,9 +4,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as Handlebars from "handlebars";
+import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
+import { disposeAllVmContexts } from "../src/eval/js/context-manager";
 import singleAgentBaselinePrompt from "../src/prompts/san-loop/roi-single-agent-baseline.md" with { type: "text" };
-import { createAgentSession } from "../src/sdk";
+import { type CreateAgentSessionOptions, createAgentSession, discoverAuthStorage } from "../src/sdk";
+import type { SecretEntry } from "../src/secrets";
 
 export interface SingleAgentRunnerArgs {
 	agentDir?: string;
@@ -16,6 +19,20 @@ export interface SingleAgentRunnerArgs {
 	label: string;
 	model?: string;
 	objective: string;
+	followUps?: string[];
+	runtimeApiKeys?: ReadonlyMap<string, string>;
+	additionalSecretValues?: readonly string[];
+	sessionOptions?: Pick<
+		CreateAgentSessionOptions,
+		| "extensions"
+		| "skills"
+		| "rules"
+		| "contextFiles"
+		| "toolNames"
+		| "strictToolNames"
+		| "toolPathScope"
+		| "toolPathScopeExemptToolNames"
+	>;
 	out?: string;
 }
 
@@ -171,67 +188,142 @@ export async function writeSingleAgentOutput(output: SingleAgentRunOutput, outPa
 	await Bun.write(Bun.stdout, text);
 }
 
+const RUNTIME_SECRET_REPLACEMENT = "[REDACTED_RUNTIME_API_KEY]";
+
+function runtimeSecretValues(runtimeApiKeys: ReadonlyMap<string, string> | undefined): string[] {
+	return [...new Set(runtimeApiKeys?.values() ?? [])]
+		.filter(value => value.length > 0)
+		.sort((a, b) => b.length - a.length);
+}
+
+export function redactRuntimeSecrets(text: string, secrets: readonly string[]): string {
+	let redacted = text;
+	for (const secret of [...new Set(secrets)].filter(value => value.length > 0).sort((a, b) => b.length - a.length)) {
+		redacted = redacted.replaceAll(secret, RUNTIME_SECRET_REPLACEMENT);
+	}
+	return redacted;
+}
+
+async function redactRuntimeSecretsFromFile(filePath: string | undefined, secrets: readonly string[]): Promise<void> {
+	if (!filePath || secrets.length === 0) return;
+	try {
+		const text = await Bun.file(filePath).text();
+		const redacted = redactRuntimeSecrets(text, secrets);
+		if (redacted !== text) await Bun.write(filePath, redacted);
+	} catch (error) {
+		const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+		if (code === "ENOENT") return;
+		throw new Error(`Failed to redact runtime secrets from session artifact ${filePath}: ${String(error)}`);
+	}
+}
+
 export async function runSingleAgentTask(args: SingleAgentRunnerArgs): Promise<SingleAgentRunOutput> {
 	const startedAt = Date.now();
-	const settings = await Settings.init({
+	const protectedSecrets = [
+		...new Set([...runtimeSecretValues(args.runtimeApiKeys), ...(args.additionalSecretValues ?? [])]),
+	]
+		.filter(value => value.length > 0)
+		.sort((a, b) => b.length - a.length);
+	const additionalSecretEntries: SecretEntry[] = protectedSecrets.map(content => ({
+		type: "plain",
+		content,
+		mode: "replace",
+		replacement: RUNTIME_SECRET_REPLACEMENT,
+	}));
+	const settings = await Settings.loadReadOnly({
 		cwd: args.cwd,
 		agentDir: args.agentDir,
 		configFiles: args.config ? [args.config] : undefined,
 	});
-	const created = await createAgentSession({
-		cwd: args.cwd,
-		agentDir: args.agentDir,
-		settings,
-		enableMCP: false,
-		disableExtensionDiscovery: true,
-		autoApprove: true,
-		modelPattern: args.model,
-	});
-	const session = created.session;
+	return Settings.runWithActiveInstance(settings, async () => {
+		const authStorage =
+			args.agentDir || args.runtimeApiKeys?.size ? await discoverAuthStorage(args.agentDir) : undefined;
+		const modelRegistry =
+			authStorage && args.agentDir
+				? new ModelRegistry(authStorage, path.join(args.agentDir, "models.yml"))
+				: undefined;
+		try {
+			for (const [provider, apiKey] of args.runtimeApiKeys ?? []) {
+				authStorage?.setRuntimeApiKey(provider, apiKey);
+			}
+			const created = await createAgentSession({
+				cwd: args.cwd,
+				agentDir: args.agentDir,
+				settings,
+				...(authStorage ? { authStorage } : {}),
+				...(modelRegistry ? { modelRegistry } : {}),
+				enableMCP: false,
+				disableExtensionDiscovery: true,
+				autoApprove: true,
+				modelPattern: args.model,
+				additionalSecretEntries,
+				...args.sessionOptions,
+			});
+			const session = created.session;
+			const sessionFile = session.sessionFile;
 
-	try {
-		await session.prompt(buildPrompt(args.objective), { expandPromptTemplates: false });
-		const reportText = session.getLastAssistantText() ?? "";
-		const status = normalizeStatus(reportText);
-		const stats = session.getSessionStats();
-		const ok =
-			args.expect === "passed"
-				? status.status === "passed"
-				: ["passed", "blocked", "failed"].includes(status.status);
-		return {
-			ok,
-			expectation: args.expect,
-			label: args.label,
-			objective: args.objective,
-			sessionFile: session.sessionFile,
-			status: status.status,
-			finalVerdict: status.finalVerdict,
-			retryCount: 0,
-			maxRetries: 0,
-			transitions: 1,
-			reviewEntries: 0,
-			assignments: 0,
-			workerResults: 0,
-			reviewReports: 0,
-			decisions: 0,
-			changedFiles: [],
-			testsRun: [],
-			risks: collectList(reportText, "RISKS"),
-			reportText,
-			durationMs: Date.now() - startedAt,
-			usage: {
-				inputTokens: stats.tokens.input,
-				outputTokens: stats.tokens.output,
-				cacheReadTokens: stats.tokens.cacheRead,
-				cacheWriteTokens: stats.tokens.cacheWrite,
-				totalTokens: stats.tokens.total,
-				cost: stats.cost,
-				premiumRequests: stats.premiumRequests,
-			},
-		};
-	} finally {
-		await session.dispose();
-	}
+			try {
+				await session.prompt(buildPrompt(args.objective), { expandPromptTemplates: false });
+				for (const followUp of args.followUps ?? []) {
+					await session.prompt(followUp, { expandPromptTemplates: false });
+				}
+				const reportText = redactRuntimeSecrets(session.getLastAssistantText() ?? "", protectedSecrets);
+				const status = normalizeStatus(reportText);
+				const stats = session.getSessionStats();
+				const ok =
+					args.expect === "passed"
+						? status.status === "passed"
+						: ["passed", "blocked", "failed"].includes(status.status);
+				return {
+					ok,
+					expectation: args.expect,
+					label: args.label,
+					objective: args.objective,
+					sessionFile: session.sessionFile,
+					status: status.status,
+					finalVerdict: status.finalVerdict,
+					retryCount: 0,
+					maxRetries: 0,
+					transitions: 1 + (args.followUps?.length ?? 0),
+					reviewEntries: 0,
+					assignments: 0,
+					workerResults: 0,
+					reviewReports: 0,
+					decisions: 0,
+					changedFiles: [],
+					testsRun: [],
+					risks: collectList(reportText, "RISKS"),
+					reportText,
+					durationMs: Date.now() - startedAt,
+					usage: {
+						inputTokens: stats.tokens.input,
+						outputTokens: stats.tokens.output,
+						cacheReadTokens: stats.tokens.cacheRead,
+						cacheWriteTokens: stats.tokens.cacheWrite,
+						totalTokens: stats.tokens.total,
+						cost: stats.cost,
+						premiumRequests: stats.premiumRequests,
+					},
+				};
+			} finally {
+				try {
+					await session.dispose();
+				} finally {
+					try {
+						await disposeAllVmContexts();
+					} finally {
+						await redactRuntimeSecretsFromFile(sessionFile, protectedSecrets);
+						await redactRuntimeSecretsFromFile(
+							sessionFile?.replace(/\.jsonl$/, ".context-probe.jsonl"),
+							protectedSecrets,
+						);
+					}
+				}
+			}
+		} finally {
+			authStorage?.close();
+		}
+	});
 }
 
 async function main(): Promise<void> {

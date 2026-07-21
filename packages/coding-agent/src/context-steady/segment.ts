@@ -1,6 +1,6 @@
 import type { SessionEntry } from "../session/session-entries";
 import type { ReadonlySessionManager } from "../session/session-manager";
-import { generateFallbackDigest } from "./fallback";
+import { generateFallbackDigest, SYSTEM_DRIVEN_CONTINUATION_INTENT } from "./fallback";
 import { extractSpanMessages } from "./session";
 import {
 	CONTEXT_SEGMENT_CUSTOM_TYPE,
@@ -150,6 +150,10 @@ export function buildContextSegment(options: BuildContextSegmentOptions): Contex
 		segmentId,
 		options.sessionId,
 	);
+	const userIntent =
+		fallback.userIntent === SYSTEM_DRIVEN_CONTINUATION_INTENT && previousSegment
+			? previousSegment.checkpoint.userIntent
+			: fallback.userIntent;
 
 	return {
 		schemaVersion: CONTEXT_SEGMENT_SCHEMA_VERSION,
@@ -175,7 +179,7 @@ export function buildContextSegment(options: BuildContextSegmentOptions): Contex
 		summary: options.summary,
 		...(options.shortSummary ? { shortSummary: options.shortSummary } : {}),
 		checkpoint: {
-			userIntent: fallback.userIntent,
+			userIntent,
 			actionsTaken: fallback.actionsTaken,
 			decisions: fallback.decisions,
 			filesTouched: fallback.filesTouched,

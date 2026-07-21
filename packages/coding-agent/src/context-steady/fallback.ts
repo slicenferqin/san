@@ -14,6 +14,8 @@
 import type { TurnDigest, TurnDigestFile, TurnDigestSource, TurnDigestToolEvidence } from "./types";
 import { TURN_DIGEST_SCHEMA_VERSION } from "./types";
 
+export const SYSTEM_DRIVEN_CONTINUATION_INTENT = "System-driven continuation";
+
 // ── Inlined message shapes (compatible with AgentMessage / Message) ─────────
 
 interface InlinedToolCall {
@@ -173,7 +175,7 @@ function userIntent(msgs: readonly InlinedMessage[]): string {
 			return t.length > 200 ? `${t.slice(0, 197)}...` : t;
 		}
 	}
-	return "System-driven continuation";
+	return SYSTEM_DRIVEN_CONTINUATION_INTENT;
 }
 
 function collectDecisions(text: string): string[] {

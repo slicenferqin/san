@@ -216,6 +216,25 @@ git diff --check
 
 Context steady dogfood verifier 当前覆盖 digest 持久化、ContextPacket 注入、checkpoint 分层、token budget 约束、recall layer、provider-payload pruning、resume/replay 安全性等核心契约。
 
+### Context Steady 公共 Benchmark
+
+公共 Benchmark 使用同模型的 Native / Steady 随机配对，先通过隐藏 verifier，再比较 Agent、TurnDigest 和 LLM Compaction 的完整 usage 与成本。参考主模型为 `asxs/gpt-5.6-sol:xhigh`，Steady 的 TurnDigest 固定使用 `self/gpt-5.4-mini`；正式任务包含 4 个自然编码质量任务和 1 个 180 步顺序证据压力任务。
+
+先做不调用模型的费用预检：
+
+```sh
+bun run --cwd packages/coding-agent bench:context-steady \
+  --task-file examples/context-steady-benchmark-tasks.json \
+  --profile standard \
+  --agent-dir examples/context-steady-benchmark-agent \
+  --estimate-only \
+  --estimated-cost-per-run 27
+```
+
+费用预检不读取凭证。实际运行时添加 `--runtime-keys-stdin`，并从 stdin 传入 `{"native":{"asxs":"...","self":"..."},"steady":{"asxs":"...","self":"..."}}`。不要把密钥导出到进程环境；付费运行会拒绝旧的环境变量传输方式，避免子工具通过进程检查读到密钥。Runner 只在内存中注册凭证，对发往模型的上下文做不可逆替换，并在会话关闭后再次清理 session/probe artifact。两个 key 都需要能访问 `gpt-5.6-sol` 和 `gpt-5.4-mini`，从而让 Native 与 Steady 的主请求及可能的维护请求始终归入各自凭证。
+
+档位为 Smoke 2 次、Standard 6 次、Confidence 18 次、Release 30 次、Extended 50 次。Release / Extended 必须显式传入 `--allow-expensive`；Provider 429、5xx、overload、stream read、额度、网络或并发故障会作废整个配对，并最多共同重跑一次。首轮 Release 暴露出 L5 可经 `eval` 间接批量调用证据工具，未满足逐回合压力任务契约，因此该轮只保留为诊断数据，不形成付费 A/B 结论；Runner 现已使用严格工具白名单关闭该旁路。
+
 ## 仓库结构
 
 | 路径 | 说明 |

@@ -188,6 +188,46 @@ describe("createAgentSession session storage isolation", () => {
 		});
 	});
 
+	it("activates in-memory secret entries without enabling filesystem secret discovery", async () => {
+		await withClearedSecretEnv(async () => {
+			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-runtime-secrets-${Snowflake.next()}-`));
+			tempDirs.push(tempDir);
+			const cwd = path.join(tempDir, "project");
+			const agentDir = path.join(tempDir, "agent");
+			fs.mkdirSync(cwd, { recursive: true });
+
+			const { session } = await createAgentSession({
+				cwd,
+				agentDir,
+				modelRegistry: sharedModelRegistry,
+				settings: Settings.isolated({ "secrets.enabled": false }),
+				additionalSecretEntries: [
+					{
+						type: "plain",
+						content: "runtime-secret-token-123456",
+						mode: "replace",
+						replacement: "[REDACTED_RUNTIME_SECRET]",
+					},
+				],
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+			});
+
+			try {
+				expect(session.obfuscator?.obfuscate("token=runtime-secret-token-123456")).toBe(
+					"token=[REDACTED_RUNTIME_SECRET]",
+				);
+			} finally {
+				await session.dispose();
+			}
+		});
+	});
+
 	it("keeps restored assistant messages deobfuscated across reloads", async () => {
 		await withClearedSecretEnv(async () => {
 			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-session-secrets-${Snowflake.next()}-`));

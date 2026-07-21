@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="San self-hosting 项目的按需工具加载需求、决策、配置与验证记录。"
+    />
+    <title>San 按需工具加载方案 · 2026-07-15</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --canvas: #edf1f4;
+        --paper: #ffffff;
+        --ink: #17212b;
+        --muted: #5b6874;
+        --line: #d6dde3;
+        --navy: #13202a;
+        --blue: #245f8c;
+        --blue-soft: #e9f2f8;
+        --green: #17634c;
+        --green-soft: #e8f5ef;
+        --amber: #875609;
+        --amber-soft: #fff3dc;
+        --red: #9f312a;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--canvas);
+        font-family: "IBM Plex Sans", "Noto Sans CJK SC", "PingFang SC", sans-serif;
+        font-size: 15px;
+        line-height: 1.68;
+      }
+
+      code,
+      pre {
+        font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+      }
+
+      code {
+        padding: 2px 5px;
+        border-radius: 4px;
+        background: #e8edf1;
+        overflow-wrap: anywhere;
+      }
+
+      pre {
+        overflow: auto;
+        margin: 12px 0 0;
+        padding: 16px 18px;
+        border-radius: 6px;
+        color: #edf4f8;
+        background: #18242d;
+        font-size: 13px;
+        line-height: 1.62;
+      }
+
+      h1,
+      h2,
+      h3 {
+        font-family: "Iowan Old Style", "Noto Serif CJK SC", serif;
+      }
+
+      h1 {
+        margin: 8px 0 14px;
+        font-size: clamp(34px, 5vw, 48px);
+        line-height: 1.12;
+      }
+
+      h2 {
+        margin: 0 0 16px;
+        font-size: 28px;
+        line-height: 1.25;
+      }
+
+      h3 {
+        margin: 0 0 8px;
+        font-size: 19px;
+      }
+
+      p {
+        margin: 0 0 12px;
+      }
+
+      ul,
+      ol {
+        margin: 8px 0 0;
+        padding-left: 22px;
+      }
+
+      li {
+        margin: 5px 0;
+      }
+
+      .page {
+        width: min(1120px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      .masthead {
+        color: #f7fafc;
+        background: var(--navy);
+        border-bottom: 7px solid var(--blue);
+      }
+
+      .masthead-inner {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 280px;
+        gap: 44px;
+        align-items: end;
+        padding: 48px 0 40px;
+      }
+
+      .kicker,
+      .label {
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .kicker {
+        color: #9fc3dc;
+      }
+
+      .lede {
+        max-width: 780px;
+        color: #d5e0e7;
+        font-size: 17px;
+      }
+
+      .status {
+        display: inline-block;
+        margin-top: 18px;
+        padding: 8px 13px;
+        border: 1px solid #83c2a8;
+        border-radius: 4px;
+        color: #effbf5;
+        background: #17634c;
+        font-weight: 800;
+      }
+
+      .snapshot {
+        padding-left: 22px;
+        border-left: 1px solid #4a606e;
+      }
+
+      .snapshot dl {
+        margin: 0;
+      }
+
+      .snapshot div {
+        padding: 9px 0;
+        border-bottom: 1px solid #314652;
+      }
+
+      .snapshot dt {
+        color: #99aebb;
+        font-size: 11px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      .snapshot dd {
+        margin: 2px 0 0;
+        overflow-wrap: anywhere;
+      }
+
+      main {
+        padding: 34px 0 64px;
+      }
+
+      section {
+        margin-bottom: 24px;
+        padding: 28px 30px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--paper);
+      }
+
+      .decision {
+        border-left: 6px solid var(--green);
+      }
+
+      .decision strong {
+        color: var(--green);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+
+      .card {
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fbfcfd;
+      }
+
+      .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 16px;
+      }
+
+      .metric {
+        padding: 16px;
+        border-radius: 6px;
+        background: var(--blue-soft);
+      }
+
+      .metric strong {
+        display: block;
+        color: var(--blue);
+        font-size: 25px;
+        line-height: 1.2;
+      }
+
+      .metric span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 14px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      th,
+      td {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: var(--muted);
+        background: #f5f7f9;
+        font-size: 12px;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+      }
+
+      td.number,
+      th.number {
+        text-align: right;
+      }
+
+      .callout {
+        margin-top: 16px;
+        padding: 15px 17px;
+        border-left: 4px solid var(--amber);
+        background: var(--amber-soft);
+      }
+
+      .verified {
+        border-left-color: var(--green);
+        background: var(--green-soft);
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .tag {
+        display: inline-block;
+        margin: 2px 4px 2px 0;
+        padding: 3px 8px;
+        border-radius: 999px;
+        color: #24475f;
+        background: var(--blue-soft);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      footer {
+        padding: 22px 0 34px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      @media (max-width: 760px) {
+        .masthead-inner,
+        .grid,
+        .metric-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .snapshot {
+          padding-left: 0;
+          border-left: 0;
+        }
+
+        section {
+          padding: 22px 20px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="page masthead-inner">
+        <div>
+          <div class="kicker">San Self-hosting · Architecture Decision Record</div>
+          <h1>按需工具加载方案</h1>
+          <p class="lede">
+            降低每轮 provider 请求固定携带的工具描述与 JSON Schema 开销，同时保留完整工具能力，并让高频代码工作流无需额外发现往返。
+          </p>
+          <div class="status">状态：已落地并验证</div>
+        </div>
+        <aside class="snapshot" aria-label="文档元数据">
+          <dl>
+            <div>
+              <dt>日期</dt>
+              <dd>2026-07-15</dd>
+            </div>
+            <div>
+              <dt>证据会话</dt>
+              <dd><code>019f63ad-952f-7000-982d-b6e7548af262</code></dd>
+            </div>
+            <div>
+              <dt>实施范围</dt>
+              <dd><code>.san/config.yml</code></dd>
+            </div>
+            <div>
+              <dt>适用范围</dt>
+              <dd>San 仓库 self-hosting 会话</dd>
+            </div>
+          </dl>
+        </aside>
+      </div>
+    </header>
+
+    <main class="page">
+      <section class="decision">
+        <div class="label">Decision</div>
+        <h2>核心开发工具常驻，其余工具按需激活</h2>
+        <p>
+          <strong>采用 <code>tools.discoveryMode: all</code></strong>。常驻
+          <code>read</code>、<code>bash</code>、<code>edit</code>、<code>write</code>、<code>glob</code>、<code>eval</code>、<code>grep</code>、<code>lsp</code>；其他内置工具通过
+          <code>search_tool_bm25</code> 发现并激活。
+        </p>
+        <p>
+          该方案不删除工具，也不缩减 registry。区别仅在于工具 Schema 是否从会话开始就进入每轮 provider 请求。
+        </p>
+      </section>
+
+      <section>
+        <div class="label">Requirement</div>
+        <h2>需求与验收标准</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>需要解决的问题</h3>
+            <ul>
+              <li>目标会话的 System tools 固定占用为 16,958 tokens。</li>
+              <li>说明文档与参数 Schema 每轮进入上下文，但多数专项工具并非每轮使用。</li>
+              <li>长期 coding 会话更需要把稳定预算留给代码、决策、测试输出和历史状态。</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>必须保留的行为</h3>
+            <ul>
+              <li>完整工具能力仍可到达，不以禁用工具换取节省。</li>
+              <li>读、搜、改、写、执行和 LSP 导航无需先发现工具。</li>
+              <li>已选 MCP 工具继续随会话恢复。</li>
+              <li>配置仅作用于 San 仓库，不改变全局用户配置和产品默认值。</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="label">Evidence</div>
+        <h2>会话测量结果</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>策略</th>
+              <th class="number">活动工具</th>
+              <th class="number">System tools</th>
+              <th class="number">相对基线</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>原会话：内置工具即时全量可用</td>
+              <td class="number">24</td>
+              <td class="number">16,958</td>
+              <td class="number">基线</td>
+            </tr>
+            <tr>
+              <td><code>discoveryMode: all</code>，默认 essential</td>
+              <td class="number">13</td>
+              <td class="number">8,901</td>
+              <td class="number">−47.5%</td>
+            </tr>
+            <tr>
+              <td><strong>最终配置：默认 essential + grep + lsp</strong></td>
+              <td class="number"><strong>15</strong></td>
+              <td class="number"><strong>10,186</strong></td>
+              <td class="number"><strong>−39.9%</strong></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="metric-grid">
+          <div class="metric">
+            <strong>6,772</strong>
+            <span>每轮减少的工具 tokens</span>
+          </div>
+          <div class="metric">
+            <strong>39.9%</strong>
+            <span>System tools 相对降幅</span>
+          </div>
+          <div class="metric">
+            <strong>2.82%</strong>
+            <span>占 240K steady target 的释放比例</span>
+          </div>
+        </div>
+
+        <div class="callout">
+          原会话使用 372K context window，System tools 的 16,958 tokens 占 4.56%。最终配置将其降到 10,186 tokens；节省量占完整窗口 1.82%，占 San 240K steady target 2.82%。
+        </div>
+      </section>
+
+      <section>
+        <div class="label">Implementation</div>
+        <h2>项目配置</h2>
+        <p>
+          配置写入 <code>.san/config.yml</code>。<code>tools.essentialOverride</code> 是替换列表，不是追加列表，因此必须完整列出所有需要常驻的内置工具。
+        </p>
+        <pre><code>tools:
+  discoveryMode: all
+  essentialOverride:
+    - read
+    - bash
+    - edit
+    - write
+    - glob
+    - eval
+    - grep
+    - lsp</code></pre>
+
+        <h3 style="margin-top: 22px">最终常驻构成</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>分组</th>
+              <th>工具</th>
+              <th class="number">Tokens</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>核心开发工具</td>
+              <td><code>read</code>、<code>bash</code>、<code>edit</code>、<code>write</code>、<code>glob</code>、<code>eval</code>、<code>grep</code>、<code>lsp</code></td>
+              <td class="number">7,484</td>
+            </tr>
+            <tr>
+              <td>发现与控制</td>
+              <td><code>search_tool_bm25</code>、<code>resolve</code></td>
+              <td class="number">526</td>
+            </tr>
+            <tr>
+              <td>项目当前扩展</td>
+              <td><code>generate_image</code> 与会话已选择的 4 个 MCP 工具</td>
+              <td class="number">2,176</td>
+            </tr>
+            <tr>
+              <td><strong>总计</strong></td>
+              <td>15 个活动工具</td>
+              <td class="number"><strong>10,186</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <div class="label">Runtime Semantics</div>
+        <h2>按需加载的实际语义</h2>
+        <ol>
+          <li>所有工具仍注册在内部 tool registry。</li>
+          <li>非 essential 内置工具不进入初始 provider tool list。</li>
+          <li>模型通过常驻的 <code>search_tool_bm25</code> 在本地 BM25 索引中搜索工具。</li>
+          <li>命中的工具加入 active set，并触发 system prompt 与工具列表重建。</li>
+          <li>激活是会话内累积的；当前实现不会在单轮结束后自动卸载。</li>
+        </ol>
+
+        <p style="margin-top: 16px">初始按需工具包括：</p>
+        <div>
+          <span class="tag">ast_grep</span>
+          <span class="tag">ast_edit</span>
+          <span class="tag">browser</span>
+          <span class="tag">debug</span>
+          <span class="tag">task</span>
+          <span class="tag">job</span>
+          <span class="tag">irc</span>
+          <span class="tag">todo</span>
+          <span class="tag">web_search</span>
+        </div>
+      </section>
+
+      <section>
+        <div class="label">Trade-offs</div>
+        <h2>代价与控制措施</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>接受的代价</h3>
+            <ul>
+              <li>专项工具首次使用前多一次发现调用。</li>
+              <li>BM25 是词法匹配，搜索词过于抽象时可能漏掉目标工具。</li>
+              <li>发现工具默认 <code>limit</code> 为 8，宽查询可能一次激活多个工具。</li>
+              <li>工具激活后持续占用后续上下文，收益会随会话使用面扩大而递减。</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>已有控制</h3>
+            <ul>
+              <li><code>grep</code> 与 <code>lsp</code> 常驻，覆盖高频代码定位路径。</li>
+              <li><code>search_tool_bm25</code> 自身标记为 essential。</li>
+              <li>需要强制 tool choice 的功能由运行时保持对应工具 active。</li>
+              <li>已持久化选择的 MCP 工具在恢复会话时继续 active。</li>
+            </ul>
+          </div>
+        </div>
+        <div class="callout">
+          使用建议：发现目标明确时，将 <code>search_tool_bm25.limit</code> 设为 1–3，避免一次激活过多相近工具。该建议不依赖本次配置变更。
+        </div>
+      </section>
+
+      <section>
+        <div class="label">Verification</div>
+        <h2>验证记录</h2>
+        <div class="callout verified">
+          <strong>配置解析通过。</strong>
+          <code>config get tools.discoveryMode</code> 返回 <code>all</code>；
+          <code>config get tools.essentialOverride</code> 返回配置的 8 个核心工具。
+        </div>
+        <div class="callout verified">
+          <strong>会话行为通过。</strong>
+          使用目标 JSONL 的临时副本恢复会话，实际得到 15 个活动工具、10,186 个 System tools tokens；原始会话文件未作为写入目标。
+        </div>
+        <p class="muted" style="margin-top: 14px">
+          Token 口径与 San <code>/context</code> 面板一致：工具名称、完整说明文本及 provider wire JSON Schema 的估算总和。
+        </p>
+      </section>
+
+      <section>
+        <div class="label">Scope &amp; Rollback</div>
+        <h2>范围与回退</h2>
+        <ul>
+          <li>本次只修改 San 仓库的 self-hosting 配置，不修改产品默认行为。</li>
+          <li>不改变工具实现、权限、Schema、MCP 连接或会话存储格式。</li>
+          <li>若发现工具可靠性不足，可将 <code>discoveryMode</code> 改回 <code>auto</code> 或 <code>mcp-only</code>，并移除 <code>essentialOverride</code>。</li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="page">
+      San self-hosting decision record · On-demand tool loading · 2026-07-15
+    </footer>
+  </body>
+</html>

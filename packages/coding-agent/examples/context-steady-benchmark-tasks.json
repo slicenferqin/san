@@ -1,0 +1,68 @@
+[
+  {
+    "id": "L1",
+    "label": "cross-module-route-policy-migration",
+    "fixture": "context-steady-benchmark-fixtures/workflow-suite",
+    "objective": "完成 routing 模块的 LegacyRouteDefinition 到 RoutePolicy 迁移。normalizeRoute 必须在不修改输入的前提下：校验并大写 HTTP method（仅 DELETE/GET/PATCH/POST/PUT）；把路径收敛为单个前导斜杠、移除重复斜杠和非根路径末尾斜杠；把 timeoutSeconds 精确换算为 timeoutMs；拒绝非正 timeout、负数或非整数 retryLimit，错误必须包含 route id 和字段。compileRoutes 必须保持输入顺序，并在重复 id 时抛出包含 id、首次下标和重复下标的错误。只修改 routing 范围，运行 test/routing.test.ts，最终给出 VERDICT、EVIDENCE 和 RISKS。",
+    "verifier": {
+      "argv": ["bun", "{{taskDir}}/context-steady-benchmark-verifiers/verify.ts", "L1", "{{workspace}}"],
+      "timeoutMs": 120000
+    }
+  },
+  {
+    "id": "L2",
+    "label": "bounded-idempotent-retry-repair",
+    "fixture": "context-steady-benchmark-fixtures/workflow-suite",
+    "objective": "修复 retry 模块的生产重试契约。只有 RetryableRequestError 可以重试；GET/PUT/DELETE 可重试，POST 仅在提供非空 idempotencyKey 时可重试，其他 method 不重试。maxRetries 表示首次尝试之后的最大重试次数。延迟为 baseDelayMs * 2^(retry-1)，受 maxDelayMs 上限约束；Retry-After 与指数退避取较大值后仍受上限约束。每次操作和等待前后都检查 AbortSignal，取消时抛 RequestAbortedError，不能吞掉原始非重试异常。参数非法时给出包含字段和值的错误。只修改 retry 范围，运行 test/retry.test.ts，最终给出 VERDICT、EVIDENCE 和 RISKS。",
+    "verifier": {
+      "argv": ["bun", "{{taskDir}}/context-steady-benchmark-verifiers/verify.ts", "L2", "{{workspace}}"],
+      "timeoutMs": 120000
+    }
+  },
+  {
+    "id": "L3",
+    "label": "multi-turn-policy-evolution",
+    "fixture": "context-steady-benchmark-fixtures/workflow-suite",
+    "objective": "实现 policy 模块的初版决策：suspended account 始终拒绝；未暂停时 accountLimits 优先于 regionLimits，region 再优先于 defaultLimit；amount 等于 limit 时允许，超过时拒绝；PolicyDecision 必须准确返回 limit、source 和具体 reason。只修改 policy 范围，运行 test/policy.test.ts，并保留清晰的可继续修改结构。",
+    "followUps": [
+      "需求演进：加入 emergencyFreeze，它必须优先于暂停和额度规则；所有 eu region 请求在应用 account override 前必须验证 MFA，未验证时拒绝并把 source 标为 region。请更新实现和测试，但先不要扩大到 policy 之外。",
+      "最终纠正：serviceAccount 也绝不能绕过 emergencyFreeze；冻结时固定返回 allowed=false、limit=0、source=freeze、reason=emergency freeze。保留第一轮的额度优先级和 inclusive boundary，以及第二轮的 EU MFA 规则。运行 policy 测试后给出最终 VERDICT、EVIDENCE 和 RISKS。"
+    ],
+    "verifier": {
+      "argv": ["bun", "{{taskDir}}/context-steady-benchmark-verifiers/verify.ts", "L3", "{{workspace}}"],
+      "timeoutMs": 120000
+    }
+  },
+  {
+    "id": "L4",
+    "label": "catalog-code-and-documentation-delivery",
+    "fixture": "context-steady-benchmark-fixtures/workflow-suite",
+    "objective": "完成 catalog 的代码与文档联合交付。loadCatalog 必须使用 Bun.JSON5 读取 JSON5，拒绝 version != 1、空或重复 service id、非法 owner、非 critical/standard tier，以及非 ./ 开头或非 .md 结尾的 docs 路径；错误要包含具体 service id/字段/值。renderCatalogMarkdown 必须按 service id 排序并输出稳定的 Markdown 表格与末尾换行，docs 显示相对链接。CLI 保持明确的输入输出参数和错误。更新 docs/catalog.md，说明 JSON5 格式、校验、生成命令和生成文件归属。只修改 catalog 与该文档，运行 test/catalog.test.ts，最终给出 VERDICT、EVIDENCE 和 RISKS。",
+    "verifier": {
+      "argv": ["bun", "{{taskDir}}/context-steady-benchmark-verifiers/verify.ts", "L4", "{{workspace}}"],
+      "timeoutMs": 120000
+    }
+  },
+  {
+    "id": "L5",
+    "label": "ordered-incident-evidence-controlled-stress",
+    "calibration": true,
+    "fixture": "context-steady-benchmark-fixtures/workflow-suite",
+    "objective": "这是受控超长单 turn 任务。依次调用 benchmark_step 完成全部 180 个证据步骤：step=1 不传 previousProof，此后每一步必须传上一成功步骤返回的精确 PROOF，禁止跳步或并行猜测。每次 benchmark_step 必须由模型直接调用且每个助手回合只调用一次，禁止通过 eval、脚本或其他工具间接/批量调用；禁止检查 benchmark runner 或父进程，也禁止向它们发送信号。每次把返回的 RECORD JSON 对象按原顺序追加到工作区 evidence.ndjson，文件必须只有 180 条 JSONL 记录且不得包含 trace/proof。全部领取后实现 incident analyzer：高风险条件是 failureCount/sampleCount >= 0.2 或 p95Ms >= 1800；汇总总服务数、总失败数、按证据顺序排列的高风险/idempotency 服务、四区域失败数，以及第一条、中点（floor((n-1)/2)）、最后一条 constraint canary。运行 CLI 生成 incident-report.json，并运行 test/incident.test.ts。只修改 incident 范围及这两个产物；不得因上下文维护或预算提前结束，最终给出 VERDICT、EVIDENCE 和 RISKS。",
+    "evidenceChain": {
+      "steps": 180,
+      "seed": "san-context-steady-controlled-stress-v1",
+      "payloadChars": 10000
+    },
+    "verifier": {
+      "argv": [
+        "bun",
+        "{{taskDir}}/context-steady-benchmark-verifiers/verify.ts",
+        "L5",
+        "{{workspace}}",
+        "{{evidence}}"
+      ],
+      "timeoutMs": 300000
+    }
+  }
+]

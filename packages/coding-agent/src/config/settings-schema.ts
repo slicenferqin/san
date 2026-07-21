@@ -2715,6 +2715,12 @@ export const SETTINGS_SCHEMA = {
 				"Enable San context steady state: persist settled-turn digests and inject a compact ContextPlan into later provider requests.",
 		},
 	},
+	"san.contextSteady.activationThresholdTokens": {
+		type: "number",
+		default: 240000,
+		description:
+			"Minimum full provider-input estimate before Context Steady activates for a session. 0 activates immediately; once activated, the session stays active across later compaction and resume.",
+	},
 	"san.contextSteady.digest.enabled": { type: "boolean", default: true },
 	"san.contextSteady.digest.persistFallback": { type: "boolean", default: true },
 	"san.contextSteady.digest.timeoutMs": { type: "number", default: 30000 },
@@ -2742,6 +2748,12 @@ export const SETTINGS_SCHEMA = {
 	"san.contextSteady.segment.maxTokens": { type: "number", default: 40000 },
 	"san.contextSteady.segment.maxDurationMs": { type: "number", default: 900000 },
 	"san.contextSteady.segment.maxDigestInputTokens": { type: "number", default: 160000 },
+	"san.contextSteady.probe.enabled": {
+		type: "boolean",
+		default: true,
+		description:
+			"Write per-provider-request context, cache, and native-compaction baseline observations to a sidecar JSONL file.",
+	},
 	"san.contextSteady.hardPressure.maxRecoveryPasses": { type: "number", default: 1 },
 	// Legacy ContextPacket setting paths are still accepted as aliases when the
 	// corresponding ContextPlan path is not explicitly configured.

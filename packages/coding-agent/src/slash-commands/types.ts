@@ -70,6 +70,8 @@ export interface SlashCommandRuntime {
 	 * after plugin or project-scope changes.
 	 */
 	reloadPlugins: () => Promise<void>;
+	/** Reload and reconnect the active MCP runtime. */
+	reloadMcp?: () => Promise<void>;
 	notifyTitleChanged?: () => Promise<void> | void;
 	notifyConfigChanged?: () => Promise<void> | void;
 }

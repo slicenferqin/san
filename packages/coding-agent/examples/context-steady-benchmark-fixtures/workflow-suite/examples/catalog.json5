@@ -1,0 +1,8 @@
+{
+  // Catalog CLI 使用的公开示例。
+  version: 1,
+  services: [
+    { id: "orders", owner: "commerce", docs: "./services/orders.md", tier: "critical" },
+    { id: "catalog", owner: "commerce", docs: "./services/catalog.md", tier: "standard" },
+  ],
+}

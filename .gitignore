@@ -79,3 +79,8 @@ python/robomp/.env
 
 # Local, machine-specific boot perf baseline (see packages/coding-agent/scripts/bench-guard.ts)
 packages/coding-agent/bench/boot-baseline.json
+
+# Context Steady Benchmark 的本地 Agent 运行状态；仅 models.yml 是可复现配置。
+packages/coding-agent/examples/context-steady-benchmark-agent/agent.db*
+packages/coding-agent/examples/context-steady-benchmark-agent/models.db*
+packages/coding-agent/examples/context-steady-benchmark-agent/sessions/

@@ -29,7 +29,7 @@ import {
 import { JSONC, YAML } from "bun";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
 import type { ModelRole } from "../config/model-roles";
-import { loadCapability } from "../discovery";
+import { loadCapability, reset as resetDiscoveryCache } from "../discovery";
 import { isLightTheme, setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "../modes/theme/theme";
 import { AgentStorage } from "../session/agent-storage";
 import { normalizeToolName } from "../tools/builtin-names";
@@ -411,6 +411,28 @@ export class Settings {
 	}
 
 	/**
+	 * 在串行脚本运行期间，把隔离 Settings 暂时暴露给仍依赖全局代理的旧代码。
+	 * 并发或嵌套作用域会互相污染，因此显式拒绝重入。
+	 */
+	static async runWithActiveInstance<T>(instance: Settings, operation: () => Promise<T>): Promise<T> {
+		if (activeInstanceScope) throw new Error("An active Settings scope already exists");
+		const previousInstance = globalInstance;
+		const previousPromise = globalInstancePromise;
+		activeInstanceScope = true;
+		globalInstance = instance;
+		globalInstancePromise = Promise.resolve(instance);
+		clearBoundSettingsMethods();
+		try {
+			return await operation();
+		} finally {
+			globalInstance = previousInstance;
+			globalInstancePromise = previousPromise;
+			clearBoundSettingsMethods();
+			activeInstanceScope = false;
+		}
+	}
+
+	/**
 	 * Create an isolated instance for testing.
 	 * Does not affect the global singleton.
 	 */
@@ -552,6 +574,35 @@ export class Settings {
 		cloned.#rebuildMerged();
 		cloned.#fireAllHooks();
 		return cloned;
+	}
+
+	/**
+	 * Reload every disk-backed settings layer for the current working directory
+	 * in place. Runtime overrides survive the reload. Fresh snapshots replace the
+	 * live layers together after every source has been read.
+	 */
+	async reloadFromDisk(): Promise<void> {
+		if (this.#configPath === null) return;
+
+		await this.flush();
+		resetDiscoveryCache();
+		const prevModelRoles = this.get("modelRoles");
+		const prevSessionAccent = this.get("statusLine.sessionAccent");
+		const global = (await this.#loadExistingMainYaml()) ?? {};
+		const project = await this.#loadProjectSettings();
+		const configOverlay = await this.#loadConfigOverlays();
+
+		this.#global = global;
+		this.#project = project;
+		this.#configOverlay = configOverlay;
+		this.#rebuildMerged();
+		this.#fireEffectiveSettingChanged("modelRoles", this.get("modelRoles"), prevModelRoles);
+		this.#fireEffectiveSettingChanged(
+			"statusLine.sessionAccent",
+			this.get("statusLine.sessionAccent"),
+			prevSessionAccent,
+		);
+		this.#fireAllHooks();
 	}
 
 	/**
@@ -1648,6 +1699,7 @@ export const onHindsightScopeChanged = (cb: () => void) => hindsightScopeSignal.
 
 let globalInstance: Settings | null = null;
 let globalInstancePromise: Promise<Settings> | null = null;
+let activeInstanceScope = false;
 let boundSettingsInstance: Settings | null = null;
 let boundSettingsMethods = new Map<PropertyKey, unknown>();
 
@@ -1667,6 +1719,7 @@ export function isSettingsInitialized(): boolean {
 export function resetSettingsForTest(): void {
 	globalInstance = null;
 	globalInstancePromise = null;
+	activeInstanceScope = false;
 	clearBoundSettingsMethods();
 	configureProviderMaxInFlightRequests(undefined);
 }

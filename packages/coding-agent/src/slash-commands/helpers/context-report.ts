@@ -1,6 +1,32 @@
+import { contextProbeFilePath } from "../../context-steady/probe";
 import { computeContextBreakdown } from "../../modes/utils/context-usage";
+import type { SessionManager } from "../../session/session-manager";
+import { replaceTabs, shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
 import type { SlashCommandRuntime } from "../types";
 import { renderAsciiBar } from "./format";
+
+function renderContextPath(value: string): string {
+	return truncateToWidth(replaceTabs(shortenPath(value)), TRUNCATE_LENGTHS.LINE);
+}
+
+export function buildContextSessionMetadataText(sessionManager: SessionManager): string {
+	const sessionId = sessionManager.getSessionId();
+	const sessionFile = sessionManager.getSessionFile();
+	const lines = [
+		`Session ID: ${sessionId || "Unavailable"}`,
+		`Session file: ${sessionFile ? renderContextPath(sessionFile) : "In-memory"}`,
+		`Context probe: ${sessionFile ? renderContextPath(contextProbeFilePath(sessionFile)) : "Unavailable (in-memory session)"}`,
+	];
+	if (typeof sessionManager.getUsageStatistics === "function") {
+		const usage = sessionManager.getUsageStatistics();
+		const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+		const cacheRate = promptTokens > 0 ? (usage.cacheRead / promptTokens) * 100 : 0;
+		lines.push(
+			`Cache read: ${usage.cacheRead.toLocaleString()}/${promptTokens.toLocaleString()} prompt tokens (${cacheRate.toFixed(1)}%)`,
+		);
+	}
+	return lines.join("\n");
+}
 
 /**
  * Build the `/context` ACP-mode text. Tries the rich breakdown first
@@ -8,13 +34,14 @@ import { renderAsciiBar } from "./format";
  * minimal "window/used" lines when the breakdown helper throws.
  */
 export function buildContextReportText(runtime: SlashCommandRuntime): string {
+	const metadata = buildContextSessionMetadataText(runtime.sessionManager);
 	try {
 		const breakdown = computeContextBreakdown(runtime.session, { snapcompactSavings: true });
 		if (breakdown.contextWindow <= 0) {
-			return "Context usage is unavailable: no model is selected for this session.";
+			return `${metadata}\n\nContext usage is unavailable: no model is selected for this session.`;
 		}
 		const usedPct = Math.round((breakdown.usedTokens / breakdown.contextWindow) * 100);
-		const lines = [`Context window: ${breakdown.contextWindow} tokens (${usedPct}% used)`];
+		const lines = [metadata, "", `Context window: ${breakdown.contextWindow} tokens (${usedPct}% used)`];
 		for (const category of breakdown.categories) {
 			if (category.tokens === 0) continue;
 			const fraction = category.tokens / breakdown.contextWindow;
@@ -60,7 +87,7 @@ export function buildContextReportText(runtime: SlashCommandRuntime): string {
 		return lines.join("\n");
 	} catch {
 		const fallback = runtime.session.getContextUsage();
-		if (!fallback) return "Context usage is unavailable.";
-		return ["Context", `Window: ${fallback.contextWindow}`, `Used: ${fallback.tokens ?? 0}`].join("\n");
+		if (!fallback) return `${metadata}\n\nContext usage is unavailable.`;
+		return [metadata, "", "Context", `Window: ${fallback.contextWindow}`, `Used: ${fallback.tokens ?? 0}`].join("\n");
 	}
 }

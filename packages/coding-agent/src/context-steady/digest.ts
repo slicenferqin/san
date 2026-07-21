@@ -115,6 +115,8 @@ export interface ContextSteadyDigestModel {
 	 * When set, merged over the default digest request options before completeSimple.
 	 */
 	prepareStreamOptions?: (options: SimpleStreamOptions, provider: string) => SimpleStreamOptions;
+	/** Optional observer used to account for successful side-request usage. */
+	onResponse?: (response: AssistantMessage) => void;
 }
 
 export interface ContextSteadyDigestObfuscator {
@@ -295,7 +297,9 @@ async function generateLlmDigestWithRetry(
 
 function isRetryableDigestError(error: unknown): boolean {
 	const message = error instanceof Error ? error.message : String(error);
-	return /stream closed|terminal response|fetch failed|network|socket|econnreset|etimedout|temporar/i.test(message);
+	return /stream closed|terminal response|fetch failed|network|socket|econnreset|etimedout|timed out|timeout|aborterror|temporar|structured turn digest|structured output|tool arguments|json object/i.test(
+		message,
+	);
 }
 
 async function generateLlmDigest(
@@ -306,6 +310,7 @@ async function generateLlmDigest(
 ): Promise<Record<string, unknown>> {
 	const userContent = formatDigestUserMessage(messages, fallbackDigest);
 	const outboundUserContent = obfuscateDigestText(digestModel.obfuscator, userContent);
+	const timeoutSignal = AbortSignal.timeout(Math.max(1, steadySettings.digest.timeoutMs));
 	const baseOptions: SimpleStreamOptions = {
 		apiKey: digestModel.apiKey,
 		maxTokens: digestModel.model.reasoning ? Math.max(DIGEST_MAX_TOKENS, 4096) : DIGEST_MAX_TOKENS,
@@ -317,7 +322,7 @@ async function generateLlmDigest(
 			turnId: fallbackDigest.turnId,
 			sessionId: fallbackDigest.sessionId,
 		},
-		signal: AbortSignal.timeout(Math.max(1, steadySettings.digest.timeoutMs)),
+		signal: timeoutSignal,
 		// Isolate from main append-only conversation cache while keeping a stable cache key family.
 		sessionId: `${fallbackDigest.sessionId}:digest:${fallbackDigest.turnId}`,
 		promptCacheKey: fallbackDigest.sessionId,
@@ -341,6 +346,7 @@ async function generateLlmDigest(
 		},
 		preparedOptions,
 	);
+	digestModel.onResponse?.(response);
 
 	if (response.stopReason === "error") {
 		throw new Error(response.errorMessage ?? "provider returned an error");
@@ -351,6 +357,9 @@ async function generateLlmDigest(
 
 	const textJson = extractJsonObjectFromText(response);
 	if (textJson) return textJson;
+	if (timeoutSignal.aborted) {
+		throw new Error("TurnDigest request timed out before structured output");
+	}
 
 	throw new Error("provider did not return a structured turn digest");
 }

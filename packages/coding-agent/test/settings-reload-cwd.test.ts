@@ -159,5 +159,30 @@ describe("Settings.reloadForCwd", () => {
 			expect(settings.getCwd()).toBe(path.normalize(bareProject));
 			expect(settings.get("compaction.enabled")).toBe(true);
 		});
+
+		it("reloads global and project settings for the current directory while preserving overrides", async () => {
+			fs.rmSync(path.join(getProjectAgentDir(scopedProject), "settings.json"));
+			await Bun.write(path.join(agentDir, "config.yml"), "compaction:\n  enabled: false\n");
+			await Bun.write(
+				path.join(getProjectAgentDir(scopedProject), "config.yml"),
+				"statusLine:\n  transparent: true\n",
+			);
+			const settings = await Settings.init({ cwd: scopedProject, agentDir });
+			expect(settings.get("compaction.enabled")).toBe(false);
+			expect(settings.get("statusLine.transparent")).toBe(true);
+
+			settings.override("compaction.enabled", false);
+			await Bun.write(path.join(agentDir, "config.yml"), "compaction:\n  enabled: true\n");
+			await Bun.write(
+				path.join(getProjectAgentDir(scopedProject), "config.yml"),
+				"statusLine:\n  transparent: false\n",
+			);
+			await settings.reloadFromDisk();
+
+			expect(settings.get("statusLine.transparent")).toBe(false);
+			expect(settings.get("compaction.enabled")).toBe(false);
+			settings.clearOverride("compaction.enabled");
+			expect(settings.get("compaction.enabled")).toBe(true);
+		});
 	});
 });

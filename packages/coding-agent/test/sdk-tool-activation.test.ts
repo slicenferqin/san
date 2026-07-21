@@ -159,6 +159,24 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
+	it("keeps an explicitly approved extension tool while excluding eval from a strict list", async () => {
+		const tempDir = makeTempDir();
+
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			extensions: [toolActivationExtension],
+			toolNames: ["read", "default_active_tool"],
+			strictToolNames: true,
+		});
+
+		try {
+			expect(session.getActiveToolNames()).toEqual(["read", "default_active_tool"]);
+			expect(session.getActiveToolNames()).not.toContain("eval");
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	it("does not auto-add AST, memory or learning tools to a strict programmatic list", async () => {
 		const tempDir = makeTempDir();
 

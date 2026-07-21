@@ -15,6 +15,7 @@ export interface ToolPathScopeOptions {
 	toolName: string;
 	cwd: string;
 	scopeRoot: string;
+	exemptToolNames?: ReadonlySet<string>;
 }
 
 interface ResolvedPathScope {
@@ -213,6 +214,7 @@ export function authorizeToolArgumentsWithinPathScope(options: ToolPathScopeOpti
 	if (!isWithin(scope.canonicalRoot, canonicalCwd))
 		throw scopeError(options.toolName, "working directory is outside the approved scope");
 	const args = structuredClone(options.args);
+	if (options.exemptToolNames?.has(options.toolName)) return args;
 
 	if (PATHLESS_SCOPED_TOOLS.has(options.toolName)) return args;
 	if (DIRECT_PATH_TOOLS.has(options.toolName)) {
