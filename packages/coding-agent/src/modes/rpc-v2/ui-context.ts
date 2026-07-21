@@ -7,16 +7,21 @@
  * approval.requested event and wait for approval.decide from the client.
  */
 import type {
+	ExtensionToolApprovalDecision,
+	ExtensionToolApprovalRequest,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionUISelectItem,
 	ExtensionWidgetOptions,
 } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
-import type { ApprovalRequest, ApprovalScope } from "./dto/approval";
+import type { ApprovalPolicyResolution } from "./approval-rules";
+import { generateFingerprint } from "./approval-rules";
+import type { ApprovalPolicySnapshot, ApprovalRequest, ApprovalScope, ApprovalTarget, JsonValue } from "./dto/approval";
 import type { InteractionRequest } from "./dto/interaction";
-import type { ApprovalId, InteractionId } from "./protocol/ids";
-import { newApprovalId, newInteractionId } from "./protocol/ids";
+import type { ApprovalId, InteractionId, RunId, SessionId, ToolCallId } from "./protocol/ids";
+import { newApprovalId, newInteractionId, newRunId } from "./protocol/ids";
+import { sanitizeRpcText } from "./redaction";
 
 // ============================================================================
 // Pending request tracking
@@ -49,11 +54,44 @@ export class RpcV2UIContext implements ExtensionUIContext {
 	#pendingApprovals = new Map<string, PendingApproval>();
 	#pendingInteractions = new Map<string, PendingInteraction>();
 	#sessionId: string;
+	#runId: () => RunId | undefined;
+	#registerApproval?: (approval: ApprovalRequest) => Promise<void>;
+	#resolveRegisteredApproval?: (approvalId: string, decision: "allow" | "deny", scope: ApprovalScope) => Promise<void>;
+	#resolveApprovalPolicy?: (params: {
+		fingerprint: string;
+		tier: "read" | "write" | "exec";
+		requestOverride: boolean;
+		canPersistRule: boolean;
+	}) => ApprovalPolicyResolution;
+	#registerInteraction?: (interaction: InteractionRequest) => Promise<void>;
+	#sequence = 0;
 	#closedError: Error | undefined;
 
-	constructor(options: { output: V2OutputFn; sessionId: string }) {
+	constructor(options: {
+		output: V2OutputFn;
+		sessionId: string;
+		runId?: () => RunId | undefined;
+		registerApproval?: (approval: ApprovalRequest) => Promise<void>;
+		resolveRegisteredApproval?: (
+			approvalId: string,
+			decision: "allow" | "deny",
+			scope: ApprovalScope,
+		) => Promise<void>;
+		resolveApprovalPolicy?: (params: {
+			fingerprint: string;
+			tier: "read" | "write" | "exec";
+			requestOverride: boolean;
+			canPersistRule: boolean;
+		}) => ApprovalPolicyResolution;
+		registerInteraction?: (interaction: InteractionRequest) => Promise<void>;
+	}) {
 		this.#output = options.output;
 		this.#sessionId = options.sessionId;
+		this.#runId = options.runId ?? (() => undefined);
+		this.#registerApproval = options.registerApproval;
+		this.#resolveRegisteredApproval = options.resolveRegisteredApproval;
+		this.#resolveApprovalPolicy = options.resolveApprovalPolicy;
+		this.#registerInteraction = options.registerInteraction;
 	}
 
 	/** Reject all pending requests (called on disconnect). */
@@ -83,6 +121,15 @@ export class RpcV2UIContext implements ExtensionUIContext {
 		return true;
 	}
 
+	/** 取消一个仍由当前进程等待的 Interaction。 */
+	cancelInteraction(interactionId: string): boolean {
+		const pending = this.#pendingInteractions.get(interactionId);
+		if (!pending) return false;
+		this.#pendingInteractions.delete(interactionId);
+		pending.resolve(undefined);
+		return true;
+	}
+
 	get pendingApprovalCount(): number {
 		return this.#pendingApprovals.size;
 	}
@@ -103,15 +150,9 @@ export class RpcV2UIContext implements ExtensionUIContext {
 		if (this.#closedError) return Promise.reject(this.#closedError);
 		if (dialogOptions?.signal?.aborted) return Promise.resolve(undefined);
 
-		// Detect approval prompts (they have "Approve"/"Deny" options)
 		const labels = options.map(o => (typeof o === "string" ? o : (o.label ?? String(o))));
-		const isApproval = labels.includes("Approve") && labels.includes("Deny");
 
-		if (isApproval) {
-			return this.#handleApproval(title, dialogOptions);
-		}
-
-		// Generic select → interaction
+		// 所有普通选择都通过 typed Interaction；审批走 requestToolApproval。
 		return this.#handleInteraction(
 			{
 				kind: "select",
@@ -127,6 +168,15 @@ export class RpcV2UIContext implements ExtensionUIContext {
 			}
 			return undefined;
 		});
+	}
+
+	requestToolApproval(
+		request: ExtensionToolApprovalRequest,
+		dialogOptions?: ExtensionUIDialogOptions,
+	): Promise<ExtensionToolApprovalDecision> {
+		if (this.#closedError) return Promise.reject(this.#closedError);
+		if (dialogOptions?.signal?.aborted) return Promise.resolve({ allowed: false, scope: "once" });
+		return this.#handleApproval(request, dialogOptions);
 	}
 
 	confirm(title: string, message: string, dialogOptions?: ExtensionUIDialogOptions): Promise<boolean> {
@@ -244,13 +294,79 @@ export class RpcV2UIContext implements ExtensionUIContext {
 	// Internal: Approval flow
 	// =======================================================================
 
-	#handleApproval(title: string, dialogOptions?: ExtensionUIDialogOptions): Promise<string | undefined> {
+	async #handleApproval(
+		request: ExtensionToolApprovalRequest,
+		dialogOptions?: ExtensionUIDialogOptions,
+	): Promise<ExtensionToolApprovalDecision> {
 		const approvalId = newApprovalId();
-		const { promise, resolve, reject } = Promise.withResolvers<{ allowed: boolean; scope: ApprovalScope }>();
+		const redactedArguments = redactJsonValue(request.arguments);
+		const irreversible = request.tier === "exec";
+		const canPersistRule = !request.requestOverride && !irreversible && redactedArguments.redactedPaths.length === 0;
+		const allowedScopes: ApprovalScope[] = canPersistRule ? ["once", "session", "workspace", "global"] : ["once"];
+		const fingerprint = generateFingerprint({
+			requestAction: "tool_execute",
+			toolName: request.toolName,
+			operationKind: request.tier,
+			targetCanonical: stableSerializeJson(redactedArguments.value),
+			riskTier: request.tier,
+			workspaceRoot: request.cwd,
+		});
+		const policyResolution = this.#resolveApprovalPolicy?.({
+			fingerprint,
+			tier: request.tier,
+			requestOverride: request.requestOverride,
+			canPersistRule,
+		});
+		const policySnapshot: ApprovalPolicySnapshot = policyResolution?.snapshot ?? {
+			source: request.requestOverride ? "request_override" : "session",
+			effectiveDecision: "ask",
+			canPersistRule,
+			...(!canPersistRule ? { rationale: "This request is restricted to a one-time decision" } : {}),
+		};
+		const approval: ApprovalRequest = {
+			schemaVersion: 1,
+			approvalId,
+			sessionId: this.#sessionId as SessionId,
+			runId: this.#runId() ?? newRunId(),
+			toolCallId: request.toolCallId as ToolCallId,
+			requestAction: "tool_execute",
+			createdAt: new Date().toISOString(),
+			status: "pending",
+			title: `Approve ${request.toolName}`,
+			summary: sanitizeApprovalText(request.prompt),
+			risk: {
+				tier: request.tier,
+				level: request.tier === "exec" ? "high" : request.tier === "write" ? "medium" : "low",
+				irreversible,
+				reasons: request.reason ? [sanitizeApprovalText(request.reason)] : [],
+			},
+			tool: {
+				name: request.toolName,
+				label: request.toolName,
+				operationKind: request.tier,
+				arguments: redactedArguments,
+				argumentsSummary: `${request.toolName} (${request.tier})`,
+				cwd: request.cwd,
+			},
+			targets: extractApprovalTargets(redactedArguments.value, request.cwd),
+			policySnapshot,
+			allowedDecisions: ["allow", "deny"],
+			allowedScopes,
+			fingerprint,
+			invalidation: [],
+		};
 
+		if (policySnapshot.effectiveDecision !== "ask") {
+			const decision = policySnapshot.effectiveDecision;
+			const scope = policyResolution?.scope ?? "once";
+			await this.#emitApprovalRequested(approval);
+			await this.#emitApprovalResolved(approval, decision, scope);
+			return { allowed: decision === "allow", scope };
+		}
+
+		const { promise, resolve, reject } = Promise.withResolvers<{ allowed: boolean; scope: ApprovalScope }>();
 		this.#pendingApprovals.set(approvalId, { approvalId, resolve, reject });
 
-		// Abort handling
 		const onAbort = () => {
 			const pending = this.#pendingApprovals.get(approvalId);
 			if (pending) {
@@ -260,59 +376,82 @@ export class RpcV2UIContext implements ExtensionUIContext {
 		};
 		dialogOptions?.signal?.addEventListener("abort", onAbort, { once: true });
 
-		// Emit structured approval.requested event
-		const approval: ApprovalRequest = {
-			schemaVersion: 1,
-			approvalId,
-			sessionId: this.#sessionId as never,
-			runId: "" as never,
-			requestAction: "tool_execute",
-			createdAt: new Date().toISOString(),
-			status: "pending",
-			title: "Tool Approval",
-			summary: title,
-			risk: { tier: "write", level: "medium", irreversible: false, reasons: [] },
-			targets: [],
-			policySnapshot: { source: "session", effectiveDecision: "ask", canPersistRule: false },
-			allowedDecisions: ["allow", "deny"],
-			allowedScopes: ["once", "session"],
-			fingerprint: approvalId,
-			invalidation: [],
-		};
+		try {
+			await this.#emitApprovalRequested(approval);
+		} catch (error: unknown) {
+			this.#pendingApprovals.delete(approvalId);
+			reject(error instanceof Error ? error : new Error(String(error)));
+			throw error;
+		}
 
+		return promise.then(decision => {
+			dialogOptions?.signal?.removeEventListener("abort", onAbort);
+			// 注册到 Session 事实层时，resolved 事件由 SessionManager 统一发出。
+			if (!this.#registerApproval)
+				this.#output({
+					jsonrpc: "2.0",
+					method: "session.event",
+					params: {
+						schemaVersion: 1,
+						eventId: `evt_${approvalId}_resolved`,
+						sessionId: this.#sessionId,
+						sequence: ++this.#sequence,
+						timestamp: new Date().toISOString(),
+						type: "approval.resolved",
+						durability: "durable",
+						data: { approvalId, decision: decision.allowed ? "allow" : "deny", scope: decision.scope },
+					},
+				});
+			return decision;
+		});
+	}
+
+	async #emitApprovalRequested(approval: ApprovalRequest): Promise<void> {
+		if (this.#registerApproval) {
+			await this.#registerApproval(approval);
+			return;
+		}
 		this.#output({
 			jsonrpc: "2.0",
 			method: "session.event",
 			params: {
 				schemaVersion: 1,
-				eventId: `evt_${approvalId}`,
+				eventId: `evt_${approval.approvalId}`,
 				sessionId: this.#sessionId,
-				sequence: 0,
+				sequence: ++this.#sequence,
 				timestamp: new Date().toISOString(),
 				type: "approval.requested",
 				durability: "durable",
 				data: { approval },
 			},
 		});
+	}
 
-		return promise.then(decision => {
-			dialogOptions?.signal?.removeEventListener("abort", onAbort);
-			// Emit approval.resolved
-			this.#output({
-				jsonrpc: "2.0",
-				method: "session.event",
-				params: {
-					schemaVersion: 1,
-					eventId: `evt_${approvalId}_resolved`,
-					sessionId: this.#sessionId,
-					sequence: 0,
-					timestamp: new Date().toISOString(),
-					type: "approval.resolved",
-					durability: "durable",
-					data: { approvalId, decision: decision.allowed ? "allow" : "deny", scope: decision.scope },
-				},
-			});
-			return decision.allowed ? "Approve" : "Deny";
+	async #emitApprovalResolved(
+		approval: ApprovalRequest,
+		decision: "allow" | "deny",
+		scope: ApprovalScope,
+	): Promise<void> {
+		if (this.#resolveRegisteredApproval) {
+			await this.#resolveRegisteredApproval(approval.approvalId, decision, scope);
+			return;
+		}
+		if (this.#registerApproval) {
+			throw new Error("RPC v2 approval resolver is not configured");
+		}
+		this.#output({
+			jsonrpc: "2.0",
+			method: "session.event",
+			params: {
+				schemaVersion: 1,
+				eventId: `evt_${approval.approvalId}_resolved`,
+				sessionId: this.#sessionId,
+				sequence: ++this.#sequence,
+				timestamp: new Date().toISOString(),
+				type: "approval.resolved",
+				durability: "durable",
+				data: { approvalId: approval.approvalId, decision, scope, persistedRule: false },
+			},
 		});
 	}
 
@@ -320,7 +459,7 @@ export class RpcV2UIContext implements ExtensionUIContext {
 	// Internal: Interaction flow
 	// =======================================================================
 
-	#handleInteraction(
+	async #handleInteraction(
 		request: InteractionRequest["request"],
 		title: string,
 		dialogOptions?: ExtensionUIDialogOptions,
@@ -352,23 +491,103 @@ export class RpcV2UIContext implements ExtensionUIContext {
 			request,
 		};
 
-		this.#output({
-			jsonrpc: "2.0",
-			method: "session.event",
-			params: {
-				schemaVersion: 1,
-				eventId: `evt_${interactionId}`,
-				sessionId: this.#sessionId,
-				sequence: 0,
-				timestamp: new Date().toISOString(),
-				type: "interaction.requested",
-				durability: "durable",
-				data: { interaction },
-			},
-		});
+		if (this.#registerInteraction) {
+			try {
+				await this.#registerInteraction(interaction);
+			} catch (error: unknown) {
+				this.#pendingInteractions.delete(interactionId);
+				reject(error instanceof Error ? error : new Error(String(error)));
+				throw error;
+			}
+		} else
+			this.#output({
+				jsonrpc: "2.0",
+				method: "session.event",
+				params: {
+					schemaVersion: 1,
+					eventId: `evt_${interactionId}`,
+					sessionId: this.#sessionId,
+					sequence: ++this.#sequence,
+					timestamp: new Date().toISOString(),
+					type: "interaction.requested",
+					durability: "durable",
+					data: { interaction },
+				},
+			});
 
 		return promise.finally(() => {
 			dialogOptions?.signal?.removeEventListener("abort", onAbort);
 		});
 	}
+}
+
+const SECRET_FIELD =
+	/(?:api[_-]?key|authorization|cookie|credential|password|private[_-]?key|refresh[_-]?token|secret|token)/iu;
+
+function redactJsonValue(value: Record<string, unknown>): { value: JsonValue; redactedPaths: string[] } {
+	const redactedPaths: string[] = [];
+	const visit = (item: unknown, path: string): JsonValue => {
+		if (item === null || typeof item === "boolean") return item;
+		if (typeof item === "string") {
+			const sanitized = sanitizeRpcText(item, { maxChars: 10_000, redactPaths: false, trim: false });
+			if (sanitized !== item) redactedPaths.push(path || "value");
+			return sanitized;
+		}
+		if (typeof item === "number") {
+			if (!Number.isFinite(item)) throw new Error(`${path || "tool arguments"} contains a non-finite number`);
+			return item;
+		}
+		if (Array.isArray(item)) return item.map((child, index) => visit(child, `${path}[${index}]`));
+		if (typeof item === "object") {
+			const result: { [key: string]: JsonValue } = {};
+			for (const [key, child] of Object.entries(item)) {
+				if (child === undefined) continue;
+				const childPath = path ? `${path}.${key}` : key;
+				if (SECRET_FIELD.test(key)) {
+					result[key] = "[REDACTED]";
+					redactedPaths.push(childPath);
+				} else {
+					result[key] = visit(child, childPath);
+				}
+			}
+			return result;
+		}
+		throw new Error(`${path || "tool arguments"} contains unsupported ${typeof item} value`);
+	};
+	return { value: visit(value, ""), redactedPaths };
+}
+
+function sanitizeApprovalText(value: string): string {
+	return sanitizeRpcText(value, { maxChars: 2_000, redactPaths: false });
+}
+
+function stableSerializeJson(value: JsonValue): string {
+	if (value === null) return "null";
+	if (typeof value === "string") return JSON.stringify(value);
+	if (typeof value === "number" || typeof value === "boolean") return String(value);
+	if (Array.isArray(value)) return `[${value.map(stableSerializeJson).join(",")}]`;
+	return `{${Object.keys(value)
+		.sort()
+		.map(key => `${JSON.stringify(key)}:${stableSerializeJson(value[key]!)}`)
+		.join(",")}}`;
+}
+
+function extractApprovalTargets(value: JsonValue, cwd?: string): ApprovalTarget[] {
+	if (value === null || Array.isArray(value) || typeof value !== "object") return [];
+	const targets: ApprovalTarget[] = [];
+	for (const [key, item] of Object.entries(value)) {
+		if (typeof item !== "string" || item === "[REDACTED]") continue;
+		if (/^(?:command|cmd)$/iu.test(key)) {
+			targets.push({ kind: "command", display: sanitizeApprovalText(item), canonical: item });
+		} else if (/(?:url|uri)$/iu.test(key)) {
+			targets.push({ kind: "url", display: sanitizeApprovalText(item), canonical: item });
+		} else if (/(?:resourceId|resource)$/iu.test(key)) {
+			targets.push({ kind: "resource", display: sanitizeApprovalText(item), canonical: item });
+		} else if (/(?:path|file|directory|cwd|destination|source)$/iu.test(key)) {
+			const canonical = cwd && !item.startsWith("/") ? `${cwd.replace(/\/$/u, "")}/${item}` : item;
+			targets.push({ kind: "path", display: sanitizeApprovalText(item), canonical });
+		}
+		if (targets.length >= 16) break;
+	}
+	return targets;
 }

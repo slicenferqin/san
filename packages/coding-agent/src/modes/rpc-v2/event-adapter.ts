@@ -9,6 +9,7 @@
  */
 import type { AgentSessionEvent } from "../../session/agent-session";
 import type { SessionEvent } from "./dto/events";
+import type { ActiveStreamSnapshot } from "./dto/session";
 import type { EventSequencer } from "./event-sequencer";
 import type { MessageId, RunId, TurnId } from "./protocol/ids";
 import { newMessageId, newTurnId } from "./protocol/ids";
@@ -20,7 +21,11 @@ import { newMessageId, newTurnId } from "./protocol/ids";
 export class AdapterContext {
 	currentRunId: RunId | undefined;
 	currentTurnId: TurnId | undefined;
+	currentOperationId: string | undefined;
+	currentRunTerminalStatus: "completed" | "failed" | "aborted" | "interrupted" | undefined;
 	#currentMessageId: MessageId | undefined;
+	#activeMessage: Extract<ActiveStreamSnapshot, { kind: "message" }> | undefined;
+	#activeTools = new Map<string, Extract<ActiveStreamSnapshot, { kind: "tool" }>>();
 
 	/** Called on turn_start to allocate a fresh turnId. */
 	allocateTurn(): TurnId {
@@ -29,15 +34,51 @@ export class AdapterContext {
 	}
 
 	/** Called on message_start to allocate a fresh messageId. */
-	allocateMessage(): MessageId {
+	allocateMessage(role: string): MessageId {
 		this.#currentMessageId = newMessageId();
+		this.#activeMessage = {
+			kind: "message",
+			messageId: this.#currentMessageId,
+			role,
+			content: "",
+			truncated: false,
+		};
 		return this.#currentMessageId;
 	}
 
 	get currentMessageId(): MessageId | undefined {
 		return this.#currentMessageId;
 	}
+
+	clearMessage(): void {
+		this.#currentMessageId = undefined;
+		this.#activeMessage = undefined;
+	}
+
+	appendMessageDelta(delta: string): void {
+		if (!this.#activeMessage || !delta) return;
+		const combined = `${this.#activeMessage.content}${delta}`;
+		const bounded = truncateUtf8(combined, MAX_ACTIVE_TEXT_BYTES);
+		this.#activeMessage = { ...this.#activeMessage, content: bounded.value, truncated: bounded.truncated };
+	}
+
+	startTool(toolCallId: string, toolName: string): void {
+		this.#activeTools.set(toolCallId, { kind: "tool", toolCallId, toolName, status: "running" });
+	}
+
+	finishTool(toolCallId: string): void {
+		this.#activeTools.delete(toolCallId);
+	}
+
+	get activeStreams(): ActiveStreamSnapshot[] {
+		return [
+			...(this.#activeMessage ? [{ ...this.#activeMessage }] : []),
+			...[...this.#activeTools.values()].map(tool => ({ ...tool })),
+		];
+	}
 }
+
+const MAX_ACTIVE_TEXT_BYTES = 131_072;
 
 /**
  * Map an internal AgentSessionEvent to a v2 SessionEvent envelope.
@@ -57,14 +98,28 @@ export function adaptSessionEvent(
 		// Agent/Run lifecycle
 		// =================================================================
 		case "agent_start":
-			return sequencer.emit("run.started", { runId, turnId }, { durability: "durable", runId });
-
-		case "agent_end":
 			return sequencer.emit(
-				"run.completed",
-				{ runId, status: "completed" as const, finishedAt: new Date().toISOString() },
+				"run.started",
+				{ runId, ...(turnId ? { turnId } : {}) },
 				{ durability: "durable", runId },
 			);
+
+		case "agent_end": {
+			const status = ctx.currentRunTerminalStatus ?? "completed";
+			const eventType =
+				status === "completed"
+					? "run.completed"
+					: status === "failed"
+						? "run.failed"
+						: status === "aborted"
+							? "run.aborted"
+							: "run.interrupted";
+			return sequencer.emit(
+				eventType,
+				{ runId, status, finishedAt: new Date().toISOString() },
+				{ durability: "durable", runId },
+			);
+		}
 
 		// =================================================================
 		// Turn lifecycle
@@ -81,8 +136,8 @@ export function adaptSessionEvent(
 		// Message lifecycle
 		// =================================================================
 		case "message_start": {
-			const messageId = ctx.allocateMessage();
 			const role = "role" in event.message ? event.message.role : "assistant";
+			const messageId = ctx.allocateMessage(role);
 			return sequencer.emit("message.started", { messageId, role }, { durability: "durable", runId, turnId });
 		}
 
@@ -94,6 +149,8 @@ export function adaptSessionEvent(
 				"assistantMessageEvent" in event && event.assistantMessageEvent
 					? extractTextDelta(event.assistantMessageEvent)
 					: "";
+			if (!delta) return undefined;
+			ctx.appendMessageDelta(delta);
 			return sequencer.emit("message.delta", { messageId, delta }, { durability: "transient", runId, turnId });
 		}
 
@@ -101,17 +158,27 @@ export function adaptSessionEvent(
 			const messageId = ctx.currentMessageId;
 			if (!messageId) return undefined;
 			const role = "role" in event.message ? event.message.role : "assistant";
-			return sequencer.emit(
+			const visibleText = truncateUtf8(extractVisibleText(event.message), MAX_ACTIVE_TEXT_BYTES);
+			const completed = sequencer.emit(
 				"message.completed",
-				{ messageId, role, contentLength: estimateContentLength(event.message) },
+				{
+					messageId,
+					role,
+					content: visibleText.value,
+					contentLength: estimateContentLength(event.message),
+					truncated: visibleText.truncated,
+				},
 				{ durability: "durable", runId, turnId },
 			);
+			ctx.clearMessage();
+			return completed;
 		}
 
 		// =================================================================
 		// Tool lifecycle
 		// =================================================================
 		case "tool_execution_start":
+			ctx.startTool(event.toolCallId, event.toolName);
 			return sequencer.emit(
 				"tool.started",
 				{ toolCallId: event.toolCallId, toolName: event.toolName, intent: event.intent },
@@ -125,16 +192,19 @@ export function adaptSessionEvent(
 				{ durability: "transient", runId, turnId },
 			);
 
-		case "tool_execution_end":
+		case "tool_execution_end": {
+			ctx.finishTool(event.toolCallId);
 			return sequencer.emit(
 				"tool.completed",
 				{
 					toolCallId: event.toolCallId,
 					toolName: event.toolName,
 					outcome: event.isError ? ("error" as const) : ("success" as const),
+					summary: event.isError ? `${event.toolName} failed` : `${event.toolName} completed`,
 				},
 				{ durability: "durable", runId, turnId },
 			);
+		}
 
 		// =================================================================
 		// Context maintenance (compaction)
@@ -223,10 +293,20 @@ export function adaptSessionEvent(
 			);
 
 		// =================================================================
-		// Unmapped events — silently skip for now
+		// 未知事件必须进入可诊断的协议事件，不能静默丢弃。
 		// =================================================================
 		default:
-			return undefined;
+			return sequencer.emit(
+				"session.notice",
+				{
+					level: "warning",
+					code: "UNKNOWN_INTERNAL_EVENT",
+					message: `Unknown AgentSessionEvent: ${event.type}`,
+					source: "rpc-v2.event-adapter",
+					details: { eventType: event.type },
+				},
+				{ durability: "durable", runId },
+			);
 	}
 }
 
@@ -237,8 +317,34 @@ export function adaptSessionEvent(
 function extractTextDelta(assistantMessageEvent: unknown): string {
 	if (typeof assistantMessageEvent !== "object" || assistantMessageEvent === null) return "";
 	const evt = assistantMessageEvent as Record<string, unknown>;
-	if (evt.type === "text" && typeof evt.text === "string") return evt.text;
+	if (evt.type === "text_delta" && typeof evt.delta === "string") return evt.delta;
 	return "";
+}
+
+function extractVisibleText(message: unknown): string {
+	if (typeof message !== "object" || message === null || !("content" in message)) return "";
+	const content = (message as { content?: unknown }).content;
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter(
+			(part): part is { type: "text"; text: string } =>
+				typeof part === "object" && part !== null && part.type === "text" && typeof part.text === "string",
+		)
+		.map(part => part.text)
+		.join("");
+}
+
+function truncateUtf8(value: string, maxBytes: number): { value: string; truncated: boolean } {
+	if (Buffer.byteLength(value, "utf8") <= maxBytes) return { value, truncated: false };
+	let low = 0;
+	let high = value.length;
+	while (low < high) {
+		const middle = Math.ceil((low + high) / 2);
+		if (Buffer.byteLength(value.slice(0, middle), "utf8") <= maxBytes) low = middle;
+		else high = middle - 1;
+	}
+	return { value: value.slice(0, low), truncated: true };
 }
 
 function estimateContentLength(message: unknown): number {

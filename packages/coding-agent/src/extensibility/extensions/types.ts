@@ -13,6 +13,7 @@ import type {
 	AgentToolUpdateCallback,
 	ThinkingLevel,
 	ToolApproval,
+	ToolTier,
 } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type {
@@ -195,6 +196,26 @@ export interface ExtensionUIDialogOptions {
 	markableCount?: number;
 }
 
+/** 结构化工具审批请求，供 RPC 等非 TUI 宿主使用。 */
+export interface ExtensionToolApprovalRequest {
+	sessionId: string;
+	toolCallId: string;
+	toolName: string;
+	tier: ToolTier;
+	requestOverride: boolean;
+	arguments: Record<string, unknown>;
+	reason?: string;
+	prompt: string;
+	cwd?: string;
+}
+
+export interface ExtensionToolApprovalDecision {
+	allowed: boolean;
+	scope?: "once" | "session" | "workspace" | "global";
+	persistRule?: boolean;
+	comment?: string;
+}
+
 /** Raw terminal input listener for extensions. */
 export type TerminalInputHandler = (data: string) => { consume?: boolean; data?: string } | undefined;
 
@@ -232,6 +253,12 @@ export interface ExtensionUIContext {
 
 	/** Show a confirmation dialog. */
 	confirm(title: string, message: string, dialogOptions?: ExtensionUIDialogOptions): Promise<boolean>;
+
+	/** 请求结构化工具审批；普通交互不得复用 select 承载审批。 */
+	requestToolApproval?(
+		request: ExtensionToolApprovalRequest,
+		dialogOptions?: ExtensionUIDialogOptions,
+	): Promise<ExtensionToolApprovalDecision>;
 
 	/** Show a text input dialog. */
 	input(title: string, placeholder?: string, dialogOptions?: ExtensionUIDialogOptions): Promise<string | undefined>;

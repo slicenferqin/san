@@ -179,3 +179,18 @@ export function internalError(message: string): RpcErrorBody {
 		message,
 	});
 }
+
+/** 内部方法实现抛出的可预期协议错误；顶层路由原样返回其结构化 body。 */
+export class RpcMethodError extends Error {
+	readonly rpcError: RpcErrorBody;
+
+	constructor(rpcError: RpcErrorBody) {
+		super(rpcError.message);
+		this.name = "RpcMethodError";
+		this.rpcError = rpcError;
+	}
+}
+
+export function failRpc(options: SanErrorOptions): never {
+	throw new RpcMethodError(createRpcError(options));
+}

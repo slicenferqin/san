@@ -100,6 +100,7 @@ export interface PermissionPolicySnapshot {
 	revision: number;
 	defaults: Record<"read" | "write" | "exec", "ask" | "allow" | "deny">;
 	rules: PermissionRule[];
+	restartRequired?: boolean;
 }
 
 export interface PermissionRule {
@@ -113,11 +114,14 @@ export interface PermissionRule {
 	createdAt: Timestamp;
 	sourceApprovalId?: ApprovalId;
 	mutable: boolean;
+	sourceScope?: "session" | "workspace" | "global";
+	sourceScopeId?: string;
+	shadowedByRuleId?: string;
 }
 
 // ============================================================================
 // JSON value helper
 // ============================================================================
 
-type JsonPrimitive = string | number | boolean | null;
-type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };

@@ -3,13 +3,7 @@
  */
 
 import type { LeaseId, RunId, RuntimeId, SessionId } from "../protocol/ids";
-import type {
-	RecoveryReason,
-	RecoveryStrategy,
-	SessionAccess,
-	SessionPersistedStatus,
-	Timestamp,
-} from "../protocol/lifecycle";
+import type { RecoveryReason, RecoveryStrategy, SessionPersistedStatus, Timestamp } from "../protocol/lifecycle";
 import type { ApprovalRequest } from "./approval";
 import type { ContinuitySnapshot } from "./context";
 import type { EvidenceRecord } from "./evidence";
@@ -30,7 +24,7 @@ export interface SessionSummary {
 	createdAt: Timestamp;
 	updatedAt: Timestamp;
 	persistedStatus: SessionPersistedStatus;
-	access?: SessionAccess;
+	access?: "closed" | "read_only" | "read_write" | "locked";
 	attention: SessionAttention[];
 	messageCount: number;
 	sizeBytes: number;
@@ -69,7 +63,24 @@ export interface SessionSnapshot {
 	context: ContinuitySnapshot;
 	subagents: SubagentSnapshot[];
 	evidence: EvidenceSummary;
+	commandCatalogRevision: number;
+	activeStreams?: ActiveStreamSnapshot[];
 }
+
+export type ActiveStreamSnapshot =
+	| {
+			kind: "message";
+			messageId: string;
+			role: string;
+			content: string;
+			truncated: boolean;
+	  }
+	| {
+			kind: "tool";
+			toolCallId: string;
+			toolName: string;
+			status: "running";
+	  };
 
 export interface TodoPhaseSnapshot {
 	name: string;
@@ -132,4 +143,5 @@ export interface SyncResult {
 export interface StreamPolicy {
 	subagents?: "off" | "progress" | "events";
 	thinkingDeltas?: boolean;
+	maxTransientEventsPerSecond?: number;
 }

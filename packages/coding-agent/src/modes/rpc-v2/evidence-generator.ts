@@ -104,15 +104,41 @@ export function generateToolEvidence(
 export class EvidenceLedger {
 	#records: EvidenceRecord[] = [];
 
+	constructor(records: readonly EvidenceRecord[] = []) {
+		this.load(records);
+	}
+
 	append(record: EvidenceRecord): void {
+		if (this.#records.some(existing => existing.evidenceId === record.evidenceId)) return;
 		this.#records.push(record);
 	}
 
-	list(options?: { kinds?: EvidenceKind[]; verdicts?: EvidenceVerdict[]; limit?: number; offset?: number }): {
+	load(records: readonly EvidenceRecord[]): void {
+		this.#records = [];
+		for (const record of records) this.append(structuredClone(record));
+	}
+
+	entries(): EvidenceRecord[] {
+		return this.#records.map(record => structuredClone(record));
+	}
+
+	get(evidenceId: string): EvidenceRecord | undefined {
+		const record = this.#records.find(candidate => candidate.evidenceId === evidenceId);
+		return record ? structuredClone(record) : undefined;
+	}
+
+	list(options?: {
+		runId?: string;
+		kinds?: EvidenceKind[];
+		verdicts?: EvidenceVerdict[];
+		limit?: number;
+		offset?: number;
+	}): {
 		evidence: EvidenceRecord[];
 		total: number;
 	} {
 		let filtered = this.#records;
+		if (options?.runId) filtered = filtered.filter(record => record.runId === options.runId);
 		if (options?.kinds?.length) {
 			filtered = filtered.filter(r => options.kinds!.includes(r.kind));
 		}

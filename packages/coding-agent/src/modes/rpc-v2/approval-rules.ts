@@ -1,12 +1,34 @@
-/**
- * San RPC v2 Approval Rule Store.
- *
- * Persists approval rules with stable fingerprints. Rules are scoped
- * to session/workspace/global and can be listed, created, and revoked.
- */
-import { Snowflake } from "@oh-my-pi/pi-utils";
-import type { PermissionPolicySnapshot, PermissionRule } from "./dto/approval";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { getAgentDir, isEnoent, Snowflake } from "@oh-my-pi/pi-utils";
+import type { ApprovalPolicySnapshot, ApprovalScope, PermissionPolicySnapshot, PermissionRule } from "./dto/approval";
 import type { ApprovalId } from "./protocol/ids";
+
+export type ApprovalPolicyScope = "session" | "workspace" | "global";
+export type ApprovalPolicyDefaults = Record<"read" | "write" | "exec", "ask" | "allow" | "deny">;
+
+interface StoredScopePolicy {
+	revision: number;
+	defaults: Partial<ApprovalPolicyDefaults>;
+	rules: PermissionRule[];
+}
+
+interface StoredApprovalPolicies {
+	schemaVersion: 1;
+	policies: Record<string, StoredScopePolicy>;
+}
+
+export interface ApprovalPolicyContext {
+	sessionId?: string;
+	cwd?: string;
+}
+
+export interface ApprovalPolicyResolution {
+	snapshot: ApprovalPolicySnapshot;
+	scope: ApprovalScope;
+}
+
+const BUILTIN_DEFAULTS: ApprovalPolicyDefaults = { read: "allow", write: "ask", exec: "ask" };
 
 /** Generate a canonical fingerprint for an approval request. */
 export function generateFingerprint(params: {
@@ -17,27 +39,65 @@ export function generateFingerprint(params: {
 	riskTier: string;
 	workspaceRoot?: string;
 }): string {
-	const parts = [
-		params.requestAction,
-		params.toolName ?? "*",
-		params.operationKind ?? "*",
-		params.targetCanonical ?? "*",
-		params.riskTier,
-		params.workspaceRoot ?? "*",
-	];
-	return parts.join(":");
+	const canonical = stableSerialize({
+		requestAction: params.requestAction,
+		toolName: params.toolName ?? null,
+		operationKind: params.operationKind ?? null,
+		targetCanonical: params.targetCanonical ?? null,
+		riskTier: params.riskTier,
+		workspaceRoot: params.workspaceRoot ? path.resolve(params.workspaceRoot) : null,
+	});
+	return `sha256:${new Bun.CryptoHasher("sha256").update(canonical).digest("hex")}`;
 }
 
+/** San 持有的分层审批策略；写入采用同目录临时文件加 rename。 */
 export class ApprovalRuleStore {
-	#rules: PermissionRule[] = [];
-	#revision = 0;
+	readonly #storagePath: string;
+	#policies: StoredApprovalPolicies = { schemaVersion: 1, policies: {} };
+	#loaded = false;
+
+	constructor(storagePath = path.join(getAgentDir(), "rpc-v2", "approval-policy.json")) {
+		this.#storagePath = storagePath;
+	}
+
+	async load(): Promise<void> {
+		if (this.#loaded) return;
+		try {
+			const value = (await Bun.file(this.#storagePath).json()) as Partial<StoredApprovalPolicies>;
+			if (value.schemaVersion !== 1 || !isRecord(value.policies)) {
+				throw new Error("expected schemaVersion 1 and policies object");
+			}
+			const policies: Record<string, StoredScopePolicy> = {};
+			for (const [key, raw] of Object.entries(value.policies)) {
+				if (!isRecord(raw)) continue;
+				policies[key] = {
+					revision: typeof raw.revision === "number" && Number.isSafeInteger(raw.revision) ? raw.revision : 0,
+					defaults: validateDefaults(raw.defaults, true),
+					rules: Array.isArray(raw.rules)
+						? raw.rules.filter(isPermissionRule).map(rule => structuredClone(rule))
+						: [],
+				};
+			}
+			this.#policies = { schemaVersion: 1, policies };
+		} catch (error: unknown) {
+			if (!isEnoent(error))
+				throw new Error(`Failed to load approval policies ${this.#storagePath}: ${String(error)}`);
+		}
+		this.#loaded = true;
+	}
 
 	get revision(): number {
-		return this.#revision;
+		return Object.values(this.#policies.policies).reduce((total, policy) => total + policy.revision, 0);
+	}
+
+	getRevision(scope: ApprovalPolicyScope, context: ApprovalPolicyContext = {}): number {
+		return this.#policies.policies[scopeKey(scope, context)]?.revision ?? 0;
 	}
 
 	/** Add a rule from an approval decision. */
-	addRule(params: {
+	async addRule(params: {
+		scope?: ApprovalPolicyScope;
+		context?: ApprovalPolicyContext;
 		decision: "allow" | "deny";
 		fingerprint: string;
 		toolName?: string;
@@ -45,7 +105,11 @@ export class ApprovalRuleStore {
 		targetPattern?: string;
 		riskCeiling?: "low" | "medium" | "high";
 		sourceApprovalId?: ApprovalId;
-	}): PermissionRule {
+	}): Promise<PermissionRule> {
+		this.#assertLoaded();
+		const scope = params.scope ?? "session";
+		const context = params.context ?? {};
+		const policy = this.#mutablePolicy(scope, context);
 		const rule: PermissionRule = {
 			ruleId: `rule_${Snowflake.next()}`,
 			decision: params.decision,
@@ -57,44 +121,259 @@ export class ApprovalRuleStore {
 			createdAt: new Date().toISOString(),
 			sourceApprovalId: params.sourceApprovalId,
 			mutable: true,
+			sourceScope: scope,
+			sourceScopeId: scopeId(scope, context),
 		};
-		this.#rules.push(rule);
-		this.#revision++;
-		return rule;
+		policy.rules.push(rule);
+		policy.revision++;
+		await this.#save();
+		return structuredClone(rule);
 	}
 
-	/** Revoke a mutable rule. */
-	revoke(ruleId: string): boolean {
-		const index = this.#rules.findIndex(r => r.ruleId === ruleId && r.mutable);
+	/** Revoke a mutable rule with optimistic revision validation. */
+	async revoke(params: {
+		scope: ApprovalPolicyScope;
+		context?: ApprovalPolicyContext;
+		ruleId: string;
+		expectedRevision?: number;
+	}): Promise<boolean> {
+		this.#assertLoaded();
+		const context = params.context ?? {};
+		const policy = this.#mutablePolicy(params.scope, context);
+		assertRevision(policy.revision, params.expectedRevision);
+		const index = policy.rules.findIndex(rule => rule.ruleId === params.ruleId && rule.mutable);
 		if (index === -1) return false;
-		this.#rules.splice(index, 1);
-		this.#revision++;
+		policy.rules.splice(index, 1);
+		policy.revision++;
+		await this.#save();
 		return true;
 	}
 
-	/** Check if a fingerprint matches an existing rule. */
-	match(fingerprint: string): PermissionRule | undefined {
-		// Last matching rule wins (most recent decision)
-		for (let i = this.#rules.length - 1; i >= 0; i--) {
-			if (this.#rules[i].fingerprint === fingerprint) return this.#rules[i];
+	async updateDefaults(params: {
+		scope: ApprovalPolicyScope;
+		context?: ApprovalPolicyContext;
+		patch: Partial<ApprovalPolicyDefaults>;
+		expectedRevision?: number;
+	}): Promise<PermissionPolicySnapshot> {
+		this.#assertLoaded();
+		const context = params.context ?? {};
+		const policy = this.#mutablePolicy(params.scope, context);
+		assertRevision(policy.revision, params.expectedRevision);
+		policy.defaults = { ...policy.defaults, ...validateDefaults(params.patch, true) };
+		policy.revision++;
+		await this.#save();
+		return this.getPolicy(params.scope, context, true);
+	}
+
+	/** Check the most specific matching rule: session, workspace, then global. */
+	match(fingerprint: string, context: ApprovalPolicyContext = {}): PermissionRule | undefined {
+		this.#assertLoaded();
+		const scopes: ApprovalPolicyScope[] = ["session", "workspace", "global"];
+		for (const scope of scopes) {
+			const rules = this.#policies.policies[scopeKey(scope, context)]?.rules ?? [];
+			for (let index = rules.length - 1; index >= 0; index--) {
+				if (rules[index]?.fingerprint === fingerprint) return structuredClone(rules[index]);
+			}
 		}
 		return undefined;
 	}
 
-	/** Get the full policy snapshot. */
-	getPolicy(scope: "session" | "workspace" | "global"): PermissionPolicySnapshot {
+	/** Resolve the effective decision used by a live Approval request. */
+	resolve(params: {
+		fingerprint: string;
+		tier: "read" | "write" | "exec";
+		requestOverride: boolean;
+		canPersistRule: boolean;
+		context?: ApprovalPolicyContext;
+	}): ApprovalPolicyResolution {
+		this.#assertLoaded();
+		if (params.requestOverride) {
+			return {
+				scope: "once",
+				snapshot: {
+					source: "request_override",
+					effectiveDecision: "ask",
+					canPersistRule: false,
+					rationale: "The tool explicitly requires a one-time decision",
+				},
+			};
+		}
+
+		const context = params.context ?? {};
+		const matched = this.match(params.fingerprint, context);
+		if (matched) {
+			const source = matched.sourceScope ?? "session";
+			return {
+				scope: source,
+				snapshot: {
+					source,
+					ruleId: matched.ruleId,
+					matchedFingerprint: matched.fingerprint,
+					effectiveDecision: matched.decision,
+					canPersistRule: params.canPersistRule,
+					rationale: `Matched approval rule ${matched.ruleId}`,
+				},
+			};
+		}
+
+		let source: ApprovalPolicySnapshot["source"] = "builtin";
+		let decision = BUILTIN_DEFAULTS[params.tier];
+		for (const scope of policyHierarchy("session")) {
+			if (scope === "workspace" && !context.cwd) continue;
+			if (scope === "session" && !context.sessionId) continue;
+			const configured = this.#policies.policies[scopeKey(scope, context)]?.defaults[params.tier];
+			if (configured !== undefined) {
+				source = scope;
+				decision = configured;
+			}
+		}
 		return {
-			schemaVersion: 1,
-			scope,
-			revision: this.#revision,
-			defaults: { read: "allow", write: "ask", exec: "ask" },
-			rules: [...this.#rules],
+			scope: source === "builtin" ? "once" : source,
+			snapshot: {
+				source,
+				effectiveDecision: decision,
+				canPersistRule: params.canPersistRule,
+				rationale: source === "builtin" ? "Built-in approval default" : `Effective ${source} approval default`,
+			},
 		};
 	}
 
-	/** List rules, optionally filtered. */
-	list(options?: { toolName?: string }): PermissionRule[] {
-		if (!options?.toolName) return [...this.#rules];
-		return this.#rules.filter(r => r.toolName === options.toolName);
+	/** Get inherited effective policy and the target scope revision. */
+	getPolicy(
+		scope: ApprovalPolicyScope,
+		context: ApprovalPolicyContext = {},
+		includeInherited = true,
+	): PermissionPolicySnapshot {
+		this.#assertLoaded();
+		const hierarchy = policyHierarchy(scope);
+		let defaults = { ...BUILTIN_DEFAULTS };
+		const rules: PermissionRule[] = [];
+		for (const candidate of hierarchy) {
+			const policy = this.#policies.policies[scopeKey(candidate, context)];
+			if (!policy) continue;
+			defaults = { ...defaults, ...policy.defaults };
+			if (includeInherited || candidate === scope) rules.push(...policy.rules.map(rule => structuredClone(rule)));
+		}
+		return {
+			schemaVersion: 1,
+			scope,
+			scopeId: scopeId(scope, context),
+			revision: this.getRevision(scope, context),
+			defaults,
+			rules,
+			restartRequired: false,
+		};
 	}
+
+	list(options?: {
+		toolName?: string;
+		scope?: ApprovalPolicyScope;
+		context?: ApprovalPolicyContext;
+	}): PermissionRule[] {
+		this.#assertLoaded();
+		const policy = this.getPolicy(options?.scope ?? "session", options?.context, true);
+		return options?.toolName ? policy.rules.filter(rule => rule.toolName === options.toolName) : policy.rules;
+	}
+
+	#mutablePolicy(scope: ApprovalPolicyScope, context: ApprovalPolicyContext): StoredScopePolicy {
+		const key = scopeKey(scope, context);
+		const existing = this.#policies.policies[key];
+		if (existing) return existing;
+		const policy: StoredScopePolicy = { revision: 0, defaults: {}, rules: [] };
+		this.#policies.policies[key] = policy;
+		return policy;
+	}
+
+	async #save(): Promise<void> {
+		await fs.mkdir(path.dirname(this.#storagePath), { recursive: true });
+		const tempPath = `${this.#storagePath}.${process.pid}.${Date.now()}.tmp`;
+		await Bun.write(tempPath, `${JSON.stringify(this.#policies)}\n`);
+		await fs.rename(tempPath, this.#storagePath);
+	}
+
+	#assertLoaded(): void {
+		if (!this.#loaded) throw new Error("ApprovalRuleStore.load() must complete before use");
+	}
+}
+
+function policyHierarchy(scope: ApprovalPolicyScope): ApprovalPolicyScope[] {
+	if (scope === "global") return ["global"];
+	if (scope === "workspace") return ["global", "workspace"];
+	return ["global", "workspace", "session"];
+}
+
+function scopeKey(scope: ApprovalPolicyScope, context: ApprovalPolicyContext): string {
+	return `${scope}:${scopeId(scope, context)}`;
+}
+
+function scopeId(scope: ApprovalPolicyScope, context: ApprovalPolicyContext): string {
+	if (scope === "global") return "global";
+	if (scope === "workspace") {
+		if (!context.cwd) throw new Error("Workspace approval policy requires cwd");
+		return path.resolve(context.cwd);
+	}
+	if (!context.sessionId) throw new Error("Session approval policy requires sessionId");
+	return context.sessionId;
+}
+
+function assertRevision(current: number, expected: number | undefined): void {
+	if (expected !== undefined && expected !== current) {
+		throw new ApprovalPolicyRevisionError(expected, current);
+	}
+}
+
+export class ApprovalPolicyRevisionError extends Error {
+	readonly expectedRevision: number;
+	readonly currentRevision: number;
+
+	constructor(expectedRevision: number, currentRevision: number) {
+		super(`Approval policy revision conflict: expected ${expectedRevision}, current ${currentRevision}`);
+		this.name = "ApprovalPolicyRevisionError";
+		this.expectedRevision = expectedRevision;
+		this.currentRevision = currentRevision;
+	}
+}
+
+function validateDefaults(value: unknown, partial: true): Partial<ApprovalPolicyDefaults>;
+function validateDefaults(value: unknown, partial: boolean): Partial<ApprovalPolicyDefaults> {
+	if (!isRecord(value)) return {};
+	const result: Partial<ApprovalPolicyDefaults> = {};
+	for (const tier of ["read", "write", "exec"] as const) {
+		const decision = value[tier];
+		if (decision === undefined && partial) continue;
+		if (decision !== "ask" && decision !== "allow" && decision !== "deny") {
+			throw new Error(`Approval policy ${tier} must be ask, allow, or deny`);
+		}
+		result[tier] = decision;
+	}
+	return result;
+}
+
+function isPermissionRule(value: unknown): value is PermissionRule {
+	return (
+		isRecord(value) &&
+		typeof value.ruleId === "string" &&
+		(value.decision === "allow" || value.decision === "deny") &&
+		typeof value.fingerprint === "string" &&
+		typeof value.createdAt === "string" &&
+		typeof value.mutable === "boolean"
+	);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stableSerialize(value: unknown): string {
+	if (value === null) return "null";
+	if (typeof value === "string") return JSON.stringify(value);
+	if (typeof value === "number" || typeof value === "boolean") return String(value);
+	if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+	if (isRecord(value)) {
+		return `{${Object.keys(value)
+			.sort()
+			.map(key => `${JSON.stringify(key)}:${stableSerialize(value[key])}`)
+			.join(",")}}`;
+	}
+	throw new Error(`Approval fingerprint contains unsupported ${typeof value} value`);
 }
