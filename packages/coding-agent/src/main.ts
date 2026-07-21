@@ -1503,10 +1503,15 @@ export async function runRootCommand(
 		}
 
 		if (mode === "rpc" || mode === "rpc-ui") {
-			// Branch-only protocol runner: keep RPC host code out of normal interactive startup.
-			const runRpcMode: RunRpcMode = (await import("./modes/rpc/rpc-mode")).runRpcMode;
 			stopStartupWatchdog();
-			await runRpcMode(session, mode === "rpc-ui" ? setToolUIContext : undefined, eventBus);
+			if (parsedArgs.rpcProtocol === "2") {
+				const { runRpcV2Mode } = await import("./modes/rpc-v2/rpc-v2-mode");
+				await runRpcV2Mode(session, mode === "rpc-ui" ? setToolUIContext : undefined, eventBus);
+			} else {
+				// Branch-only protocol runner: keep RPC host code out of normal interactive startup.
+				const runRpcMode: RunRpcMode = (await import("./modes/rpc/rpc-mode")).runRpcMode;
+				await runRpcMode(session, mode === "rpc-ui" ? setToolUIContext : undefined, eventBus);
+			}
 		} else if (isInteractive) {
 			const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);
 			const changelogMarkdown = await logger.time("main:getChangelogForDisplay", getChangelogForDisplay, parsedArgs);

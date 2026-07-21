@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>San RPC v2 实施计划</title>
+<style>
+:root{color-scheme:light dark;--page:#f6f7f8;--surface:#fff;--surface-2:#f0f2f4;--ink:#17191c;--muted:#5d6670;--line:#d5dae0;--accent:#1f5fa8;--accent-soft:#e7f0fa;--green:#16714f;--green-soft:#e6f4ee;--orange:#a45113;--orange-soft:#fff0e3;--red:#a12a35;--red-soft:#fbeaec;--code:#1f242b;--code-ink:#e9edf1;--shadow:0 8px 28px rgba(20,28,36,.08)}
+@media(prefers-color-scheme:dark){:root{--page:#111315;--surface:#181b1f;--surface-2:#20242a;--ink:#eef1f4;--muted:#a7b0ba;--line:#343a42;--accent:#77ace4;--accent-soft:#1b3148;--green:#72c8a4;--green-soft:#17372d;--orange:#efaa69;--orange-soft:#3c291a;--red:#ec8d96;--red-soft:#412126;--code:#0d0f12;--code-ink:#e7ebef;--shadow:0 8px 30px rgba(0,0,0,.22)}}
+*{box-sizing:border-box}body{margin:0;background:var(--page);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;font-size:15px;line-height:1.72}
+main{max-width:960px;margin:0 auto;padding:48px 24px 90px}
+h1{font-size:32px;margin:0 0 8px}h2{font-size:22px;margin:42px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}h3{font-size:16px;margin:24px 0 8px}
+p{margin:8px 0}ul,ol{padding-left:22px}li{margin:4px 0}
+code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{margin:12px 0;padding:14px;overflow:auto;border:1px solid #363c44;border-radius:4px;background:var(--code);color:var(--code-ink);font-size:12px;line-height:1.55;tab-size:2}
+:not(pre)>code{padding:1px 4px;border:1px solid var(--line);border-radius:3px;background:var(--surface-2);font-size:.9em}
+.lead{color:var(--muted);font-size:16px;margin:0 0 24px}
+.meta{color:var(--muted);font-size:12px;margin-bottom:32px}
+table{width:100%;border-collapse:collapse;font-size:13px;margin:12px 0}
+th,td{padding:8px 10px;border:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:var(--surface-2);font-size:11px;text-transform:uppercase}
+.callout{margin:14px 0;padding:12px 14px;border-left:3px solid var(--accent);background:var(--accent-soft)}
+.callout.warn{border-left-color:var(--orange);background:var(--orange-soft)}
+.phase{margin:16px 0;padding:16px;border:1px solid var(--line);background:var(--surface)}
+.phase h3{margin-top:0}
+.tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700;margin-right:4px}
+.tag.new{background:var(--green-soft);color:var(--green)}
+.tag.mod{background:var(--accent-soft);color:var(--accent)}
+.tag.dep{background:var(--orange-soft);color:var(--orange)}
+</style>
+</head>
+<body>
+<main>
+<h1>San RPC v2 实施计划</h1>
+<p class="lead">从当前 v1 RPC 到 Desktop 0.2 Alpha 所需的完整 JSON-RPC 2.0 协议。基于 2026-07-20 需求规范与源码核实。</p>
+<p class="meta">分支 feature/rpc-v2 &middot; 日期 2026-07-20 &middot; 关联需求 san-desktop-san-rpc-v2-requirements-20260720.html</p>
+
+<h2>当前基线摘要</h2>
+<table>
+<tr><th>组件</th><th>现状</th><th>目标</th></tr>
+<tr><td>Envelope</td><td>自定义 <code>{type:"response",command,success}</code></td><td>JSON-RPC 2.0 request/result/error</td></tr>
+<tr><td>启动</td><td><code>{type:"ready"}</code> 无版本</td><td><code>server.ready</code> + <code>initialize</code> 协商</td></tr>
+<tr><td>Session</td><td>单进程单 Session，无 index/lease</td><td>多 Session index、write lease、原子 sync</td></tr>
+<tr><td>事件</td><td>AgentSessionEvent 原样输出，无 sequence</td><td>SessionEvent envelope + eventId + sequence</td></tr>
+<tr><td>错误</td><td>字符串 error</td><td>结构化 RpcError + reason + retryable</td></tr>
+<tr><td>审批</td><td>tier + prompt/allow/deny</td><td>结构化 ApprovalRequest + scope + policy</td></tr>
+<tr><td>Context</td><td>内部 TurnDigest/Checkpoint 未暴露</td><td>稳定 ContinuitySnapshot DTO + events</td></tr>
+</table>
+
+<h2>代码位置规划</h2>
+<table>
+<tr><th>路径</th><th>职责</th></tr>
+<tr><td><code>packages/coding-agent/src/modes/rpc-v2/</code></td><td>v2 协议主目录</td></tr>
+<tr><td><code>packages/coding-agent/src/modes/rpc-v2/protocol/</code></td><td>Envelope、Error、Capability、ID 类型</td></tr>
+<tr><td><code>packages/coding-agent/src/modes/rpc-v2/methods/</code></td><td>按领域分文件的方法实现</td></tr>
+<tr><td><code>packages/coding-agent/src/modes/rpc-v2/events/</code></td><td>事件 envelope、event catalog、adapter</td></tr>
+<tr><td><code>packages/coding-agent/src/modes/rpc-v2/dto/</code></td><td>Session/Run/Approval/Context/Evidence DTO</td></tr>
+<tr><td><code>packages/coding-agent/src/modes/rpc-v2/rpc-v2-mode.ts</code></td><td>入口：stdin reader、dispatch、output</td></tr>
+<tr><td><code>packages/coding-agent/src/modes/rpc-v2/session-manager.ts</code></td><td>Session index、lease、sync 逻辑</td></tr>
+<tr><td><code>packages/coding-agent/test/rpc-v2/</code></td><td>Conformance tests + golden fixtures</td></tr>
+</table>
+
+<h2>实施阶段</h2>
+
+<div class="phase">
+<h3>P1 契约源 <span class="tag new">NEW</span></h3>
+<p><strong>目标：</strong>建立 v2 的类型基础和协议骨架，不改变任何运行时行为。</p>
+<ol>
+<li><code>protocol/envelope.ts</code> — ClientRequest、ServerResult、ServerError、Notification 类型</li>
+<li><code>protocol/errors.ts</code> — RpcError 接口、SanErrorCode 枚举（-32001 到 -32070）、error factory</li>
+<li><code>protocol/capabilities.ts</code> — CapabilityDescriptor、CapabilityStatus、ServerCapabilities 常量</li>
+<li><code>protocol/ids.ts</code> — ID 生成（runtimeId、sessionId 已有 Snowflake；新增 leaseId、runId、turnId、eventId、sequence 分配器）</li>
+<li><code>protocol/lifecycle.ts</code> — Session access、Run status、Approval status、Interaction status 状态机与合法转换</li>
+<li><code>dto/session.ts</code> — SessionSummary、SessionSnapshot、RecoveryDescriptor</li>
+<li><code>dto/run.ts</code> — RunSnapshot、QueueItem</li>
+<li><code>dto/approval.ts</code> — ApprovalRequest、ApprovalTarget、PermissionPolicySnapshot</li>
+<li><code>dto/interaction.ts</code> — InteractionRequest union、InteractionResponseParams</li>
+<li><code>dto/context.ts</code> — ContinuitySnapshot、CheckpointSummary</li>
+<li><code>dto/evidence.ts</code> — EvidenceRecord</li>
+<li><code>dto/events.ts</code> — SessionEvent envelope、所有 event data 类型</li>
+<li><code>dto/resources.ts</code> — ContentPart、InputResourceRef、ArtifactRef、ResourceLimits</li>
+<li><code>dto/integration.ts</code> — IntegrationSummary、ExecutionProfile、SessionRuntimeSettings</li>
+</ol>
+<p><strong>验收：</strong><code>bun check</code> 通过；类型与需求规范附录一致；无 any、无 ReturnType。</p>
+</div>
+
+<div class="phase">
+<h3>P2 Envelope 层 <span class="tag new">NEW</span> <span class="tag dep">依赖 P1</span></h3>
+<p><strong>目标：</strong>新增 <code>--rpc-protocol=2</code> 入口，完成 JSON-RPC 2.0 帧处理和握手。</p>
+<ol>
+<li><code>rpc-v2-mode.ts</code> — 新入口：stdout purity guard、NDJSON reader、request dispatcher</li>
+<li><code>server.ready</code> notification — 输出 runtimeId、San version、protocol supported</li>
+<li><code>initialize</code> method — 验证 protocolVersion、协商 capabilities、返回 limits</li>
+<li><code>server.getHealth</code> / <code>server.getCapabilities</code> / <code>server.shutdown</code></li>
+<li>Method router — 基于 initialize 状态的访问控制（未握手只允许 3 个方法）</li>
+<li>stdout purity — 拦截 process.stdout 非协议写入（复用 PI_NOTIFICATIONS=off 策略 + 额外 guard）</li>
+<li>CLI 集成 — <code>launch.ts</code> 增加 <code>--rpc-protocol</code> flag，<code>main.ts</code> 路由到 v2 入口</li>
+</ol>
+<p><strong>验收：</strong>启动后 stdout 第一行是 server.ready；initialize 往返正确；不兼容版本返回 VERSION_INCOMPATIBLE。</p>
+</div>
+
+<div class="phase">
+<h3>P3 Session 基础 <span class="tag new">NEW</span> <span class="tag dep">依赖 P2</span></h3>
+<p><strong>目标：</strong>暴露 Session index、lease 管理、原子 sync 和事件分页。</p>
+<ol>
+<li><code>session-manager.ts</code> — 封装 listSessions/listAllSessions 为 <code>session.list</code>（分页、搜索、排序）</li>
+<li><code>session.create</code> / <code>session.open</code> — write lease 分配、冲突检测（SESSION_LOCKED）</li>
+<li><code>session.sync</code> — 原子 snapshot/replay + subscription 建立</li>
+<li>Event sequencer — 为每个 Session event 分配单调 sequence + eventId</li>
+<li><code>session.events.list</code> — 分页历史事件</li>
+<li><code>session.close</code> / <code>session.recover</code> — lease 释放、interrupted 检测</li>
+<li>v1 事件适配层 — AgentSessionEvent → SessionEvent envelope 转换</li>
+</ol>
+<p><strong>验收：</strong>session.list 返回正确索引；sync 无竞态（并发事件不丢失）；重连 replay 与 snapshot 投影一致。</p>
+</div>
+
+<div class="phase">
+<h3>P4 执行闭环 <span class="tag mod">ADAPT</span> <span class="tag dep">依赖 P3</span></h3>
+<p><strong>目标：</strong>Run/Turn/Message/Tool 生命周期通过 v2 事件流输出。</p>
+<ol>
+<li><code>run.start</code> — 接受 prompt、生成 runId、发 run.accepted + run.started</li>
+<li><code>run.steer</code> / <code>run.followUp</code> / <code>run.replace</code> / <code>run.abort</code></li>
+<li>Turn/Message/Tool adapter — 从 AgentSessionEvent 映射到 v2 领域事件</li>
+<li>Queue 管理 — QueueItem 快照、queue.item.added/promoted/cancelled 事件</li>
+<li><code>settings.get</code> / <code>settings.update</code> — typed runtime settings</li>
+<li><code>model.list</code> / <code>model.select</code> / <code>thinking.set</code></li>
+<li><code>execution.profile.list</code> — Solo/Team/Council profile 目录</li>
+</ol>
+</div>
+
+<div class="phase">
+<h3>P5 阻塞交互 <span class="tag mod">ADAPT</span> <span class="tag dep">依赖 P4</span></h3>
+<ol>
+<li>结构化 Approval — 从 tool approval 系统生成 ApprovalRequest DTO</li>
+<li><code>approval.decide</code> — scope 验证、rule 持久化、fingerprint 生成</li>
+<li><code>approval.rules.list</code> / <code>approval.rules.revoke</code> / <code>approval.policy.get/update</code></li>
+<li>Interaction — 从 ExtensionUI 映射到 typed InteractionRequest</li>
+<li>Host Tool — 迁移到 JSON-RPC server request（<code>host.tool.invoke</code>）</li>
+<li>Provider auth — <code>auth.login.start</code> + open_url Interaction</li>
+</ol>
+</div>
+
+<div class="phase">
+<h3>P6 资源与集成 <span class="tag new">NEW</span> <span class="tag dep">依赖 P4</span></h3>
+<ol>
+<li>Resource upload — chunk 分片、hash commit、ContentPart 验证</li>
+<li>Host URI resource — <code>resource.registerHostUri</code></li>
+<li>Artifact — <code>artifact.read</code> 有界分块</li>
+<li>Integration catalog — Skill/MCP/Extension list/get/setEnabled/refresh</li>
+</ol>
+</div>
+
+<div class="phase">
+<h3>P7 工程状态 <span class="tag mod">ADAPT</span> <span class="tag dep">依赖 P4</span></h3>
+<ol>
+<li>Goal/Todo — 从 GoalModeState/TodoPhase 生成 snapshot + events</li>
+<li>Subagent — 统一进入 SessionEvent envelope + sequence</li>
+<li>Context — ContinuitySnapshot 从 ContextSteady 内部类型投影</li>
+<li>Evidence — append-only ledger 从 tool result 生成</li>
+</ol>
+</div>
+
+<div class="phase">
+<h3>P8 可靠性 <span class="tag new">NEW</span> <span class="tag dep">依赖 P5-P7</span></h3>
+<ol>
+<li>Backpressure — stdout drain 等待、transient 合并</li>
+<li>Idempotency — mutation receipt 持久化</li>
+<li>Diagnostics — strict redaction library + <code>server.getDiagnostics</code></li>
+<li>Crash fixtures — kill -9 恢复测试</li>
+<li>压力验证 — 200 events/s、100 MiB 输出、1000 Session index</li>
+</ol>
+</div>
+
+<h2>关键设计决策</h2>
+<table>
+<tr><th>决策</th><th>选择</th><th>理由</th></tr>
+<tr><td>v2 代码位置</td><td><code>modes/rpc-v2/</code> 平行于 <code>modes/rpc/</code></td><td>v1 保留不动，v2 独立演进，切换由 CLI flag 控制</td></tr>
+<tr><td>事件适配</td><td>Adapter 层包装 AgentSessionEvent</td><td>不重构 Session 内核；v2 DTO 从内部事件投影</td></tr>
+<tr><td>Sequence 分配</td><td>RPC 层 per-Session 单调计数器</td><td>不修改 journal 格式；重连时从 journal 重建 watermark</td></tr>
+<tr><td>Lease 实现</td><td>进程内 + 文件锁（flock 或 lockfile）</td><td>单进程模型下只需防多进程冲突</td></tr>
+<tr><td>Schema 生成</td><td>手写 TS 类型为权威源；JSON Schema 后续从类型生成</td><td>当前无 schema gen 基础设施；先稳定类型再补工具链</td></tr>
+<tr><td>ID 格式</td><td>前缀 + Snowflake/ULID（如 <code>rt_</code>, <code>ses_</code>, <code>run_</code>）</td><td>可调试、可排序、全局唯一</td></tr>
+</table>
+
+<h2>风险与缓解</h2>
+<table>
+<tr><th>风险</th><th>影响</th><th>缓解</th></tr>
+<tr><td>AgentSessionEvent 缺少稳定 ID</td><td>事件去重和 replay 困难</td><td>Adapter 层生成 eventId；sequence 由 RPC 层分配</td></tr>
+<tr><td>Session journal 无 sequence watermark</td><td>crash 后无法精确 replay</td><td>P3 引入 per-session sequence 持久化（sidecar 或 journal 尾部标记）</td></tr>
+<tr><td>Approval 从 tier 系统到结构化 DTO 跨度大</td><td>P5 工作量大</td><td>先实现 tool_execute 类型；resource_access/integration_manage 后续补充</td></tr>
+<tr><td>Backpressure 需要改造 stdout 写入</td><td>当前直接 process.stdout.write</td><td>P2 引入 write queue + drain 等待</td></tr>
+</table>
+
+<h2>立即开始：P1 文件清单</h2>
+<pre><code>packages/coding-agent/src/modes/rpc-v2/
+  protocol/
+    envelope.ts       # JSON-RPC 2.0 帧类型
+    errors.ts         # 错误码、RpcError、factory
+    capabilities.ts   # Capability 描述与常量
+    ids.ts            # ID 前缀与生成器
+    lifecycle.ts      # 状态机定义
+    index.ts          # barrel
+  dto/
+    session.ts        # SessionSummary, SessionSnapshot, RecoveryDescriptor
+    run.ts            # RunSnapshot, QueueItem
+    approval.ts       # ApprovalRequest, ApprovalTarget, PermissionPolicySnapshot
+    interaction.ts    # InteractionRequest, InteractionResponseParams
+    context.ts        # ContinuitySnapshot, CheckpointSummary
+    evidence.ts       # EvidenceRecord
+    events.ts         # SessionEvent, event data types
+    resources.ts      # ContentPart, InputResourceRef, ArtifactRef
+    integration.ts    # IntegrationSummary, ExecutionProfile, Settings
+    index.ts          # barrel
+  index.ts            # 顶层 barrel</code></pre>
+
+</main>
+</body>
+</html>
