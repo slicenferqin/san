@@ -1,0 +1,6 @@
+{"jsonrpc":"2.0","id":"req_err_01","method":"session.sync","params":{}}
+{"jsonrpc":"2.0","id":"req_err_01","error":{"code":-32602,"message":"session.sync requires leaseId","data":{"reason":"INVALID_PARAMS","category":"validation","retryable":false,"correlationId":"corr_01K000000000000001"}}}
+{"jsonrpc":"2.0","id":"req_err_02","method":"unknown.method","params":{}}
+{"jsonrpc":"2.0","id":"req_err_02","error":{"code":-32601,"message":"Method not found: unknown.method","data":{"reason":"METHOD_NOT_FOUND","category":"protocol","retryable":false,"correlationId":"corr_01K000000000000002"}}}
+{"jsonrpc":"2.0","id":"req_err_03","method":"approval.decide","params":{"approvalId":"apr_nonexistent","decision":"allow","scope":"once"}}
+{"jsonrpc":"2.0","id":"req_err_03","error":{"code":-32040,"message":"Approval apr_nonexistent is not pending","data":{"reason":"APPROVAL_NOT_PENDING","category":"conflict","retryable":false,"correlationId":"corr_01K000000000000003"}}}

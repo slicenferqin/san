@@ -14,7 +14,11 @@ import { readJsonl, VERSION } from "@oh-my-pi/pi-utils";
 import type { ExtensionUIContext } from "../../extensibility/extensions";
 import type { AgentSession } from "../../session/agent-session";
 import type { EventBus } from "../../utils/event-bus";
+import { ApprovalRuleStore } from "./approval-rules";
+import { executeRecovery } from "./crash-recovery";
+import { EvidenceLedger } from "./evidence-generator";
 import { RpcV2HostToolBridge } from "./host-tool-bridge";
+import { IdempotencyStore } from "./idempotency";
 import type { ClientCapabilities } from "./protocol/capabilities";
 import {
 	buildServerCapabilities,
@@ -34,6 +38,7 @@ import {
 } from "./protocol/envelope";
 import { createRpcError, internalError, methodNotFound, notInitialized } from "./protocol/errors";
 import { type LeaseId, newRunId, newRuntimeId, type RuntimeId } from "./protocol/ids";
+import { ResourceUploadManager } from "./resource-upload";
 import { RpcV2SessionManager } from "./session-manager";
 import { RpcV2UIContext } from "./ui-context";
 
@@ -183,6 +188,10 @@ interface DispatchContext {
 	output: OutputFn;
 	uiContext: RpcV2UIContext;
 	hostToolBridge: RpcV2HostToolBridge;
+	idempotency: IdempotencyStore;
+	evidence: EvidenceLedger;
+	resources: ResourceUploadManager;
+	approvalRules: ApprovalRuleStore;
 }
 
 function dispatchMethod(ctx: DispatchContext, method: string, params: unknown): unknown {
@@ -478,23 +487,19 @@ function dispatchMethod(ctx: DispatchContext, method: string, params: unknown): 
 			return { tools: toolNames, uriSchemes: schemes };
 		}
 
-		// Integration catalog
-		case "integration.list":
-			return { integrations: [], revision: 1 };
-		case "integration.get": {
-			const p = params as { integrationId?: string } | undefined;
-			return createRpcError({
-				reason: "INTEGRATION_UNAVAILABLE",
-				category: "not_found",
-				message: `Integration not found: ${p?.integrationId ?? "unknown"}`,
-			});
-		}
-
 		// Subagent / Evidence / Context extras
 		case "subagent.list":
 			return { subagents: [] };
-		case "evidence.list":
-			return { evidence: [], nextCursor: null };
+		case "evidence.list": {
+			const p = params as { kinds?: string[]; verdicts?: string[]; limit?: number; cursor?: string } | undefined;
+			const result = ctx.evidence.list({
+				kinds: p?.kinds as never,
+				verdicts: p?.verdicts as never,
+				limit: p?.limit,
+				offset: p?.cursor ? Number.parseInt(p.cursor, 10) : undefined,
+			});
+			return { evidence: result.evidence, total: result.total, nextCursor: null };
+		}
 		case "context.digests.list":
 			return { digests: [], nextCursor: null };
 		case "context.checkpoints.list":
@@ -518,6 +523,125 @@ function dispatchMethod(ctx: DispatchContext, method: string, params: unknown): 
 			}
 			void session.setSessionName(p.name.trim(), "user");
 			return { renamed: true, title: p.name.trim() };
+		}
+		case "session.recover": {
+			const p = params as { strategy?: string } | undefined;
+			const strategy = (p?.strategy ?? "continue") as "continue" | "mark_aborted" | "read_only";
+			return executeRecovery(session.sessionId, strategy, state.runtimeId);
+		}
+
+		// Resource upload
+		case "resource.upload.begin": {
+			const p = params as
+				| { mediaType?: string; fileName?: string; byteLength?: number; sha256?: string }
+				| undefined;
+			if (!p?.mediaType || !p?.byteLength || !p?.sha256) {
+				return createRpcError({
+					reason: "INVALID_PARAMS",
+					category: "validation",
+					message: "resource.upload.begin requires mediaType, byteLength, sha256",
+				});
+			}
+			return ctx.resources.begin({
+				sessionId: session.sessionId as never,
+				mediaType: p.mediaType,
+				fileName: p.fileName,
+				byteLength: p.byteLength,
+				sha256: p.sha256,
+			});
+		}
+		case "resource.upload.chunk": {
+			const p = params as { uploadId?: string; offset?: number; dataBase64?: string } | undefined;
+			if (!p?.uploadId || p?.offset === undefined || !p?.dataBase64) {
+				return createRpcError({
+					reason: "INVALID_PARAMS",
+					category: "validation",
+					message: "resource.upload.chunk requires uploadId, offset, dataBase64",
+				});
+			}
+			return ctx.resources.chunk({ uploadId: p.uploadId as never, offset: p.offset, dataBase64: p.dataBase64 });
+		}
+		case "resource.upload.commit": {
+			const p = params as { uploadId?: string; sha256?: string } | undefined;
+			if (!p?.uploadId || !p?.sha256) {
+				return createRpcError({
+					reason: "INVALID_PARAMS",
+					category: "validation",
+					message: "resource.upload.commit requires uploadId, sha256",
+				});
+			}
+			return ctx.resources.commit({ uploadId: p.uploadId as never, sha256: p.sha256 });
+		}
+		case "resource.release": {
+			const p = params as { resourceId?: string } | undefined;
+			if (!p?.resourceId)
+				return createRpcError({
+					reason: "INVALID_PARAMS",
+					category: "validation",
+					message: "resource.release requires resourceId",
+				});
+			const released = ctx.resources.release(p.resourceId);
+			return released
+				? { released: true }
+				: createRpcError({
+						reason: "RESOURCE_NOT_FOUND",
+						category: "not_found",
+						message: `Resource ${p.resourceId} not found`,
+					});
+		}
+
+		// Approval rules
+		case "approval.rules.list": {
+			const p = params as { scope?: string } | undefined;
+			return ctx.approvalRules.getPolicy((p?.scope ?? "session") as "session" | "workspace" | "global");
+		}
+		case "approval.rules.revoke": {
+			const p = params as { ruleId?: string } | undefined;
+			if (!p?.ruleId)
+				return createRpcError({
+					reason: "INVALID_PARAMS",
+					category: "validation",
+					message: "approval.rules.revoke requires ruleId",
+				});
+			const revoked = ctx.approvalRules.revoke(p.ruleId);
+			return revoked
+				? { revoked: true, revision: ctx.approvalRules.revision }
+				: createRpcError({
+						reason: "INVALID_PARAMS",
+						category: "conflict",
+						message: `Rule ${p.ruleId} not found or immutable`,
+					});
+		}
+		case "approval.policy.get": {
+			const p = params as { scope?: string } | undefined;
+			return ctx.approvalRules.getPolicy((p?.scope ?? "session") as "session" | "workspace" | "global");
+		}
+
+		// Integration catalog (populated from session skills)
+		case "integration.list": {
+			const skills = session.skills ?? [];
+			const integrations = skills.map((s: { name: string; description?: string }) => ({
+				integrationId: `skill_${s.name}`,
+				kind: "skill",
+				name: s.name,
+				displayName: s.name,
+				source: "user",
+				enabled: true,
+				mutable: true,
+				revision: 1,
+				effect: "immediate",
+				health: { status: "healthy" },
+				auth: { status: "not_required" },
+			}));
+			return { integrations, revision: 1 };
+		}
+		case "integration.get": {
+			const p = params as { integrationId?: string } | undefined;
+			return createRpcError({
+				reason: "INTEGRATION_UNAVAILABLE",
+				category: "not_found",
+				message: `Integration not found: ${p?.integrationId ?? "unknown"}`,
+			});
 		}
 
 		// Stream / Diagnostics / Misc
@@ -590,8 +714,23 @@ export async function runRpcV2Mode(
 	setToolUIContext?.(uiContext, true);
 
 	const hostToolBridge = new RpcV2HostToolBridge(frame => output(frame));
+	const idempotency = new IdempotencyStore();
+	const evidence = new EvidenceLedger();
+	const resources = new ResourceUploadManager();
+	const approvalRules = new ApprovalRuleStore();
 
-	const dispatchCtx: DispatchContext = { state, sessionManager, session, output, uiContext, hostToolBridge };
+	const dispatchCtx: DispatchContext = {
+		state,
+		sessionManager,
+		session,
+		output,
+		uiContext,
+		hostToolBridge,
+		idempotency,
+		evidence,
+		resources,
+		approvalRules,
+	};
 
 	// Emit server.ready notification immediately
 	sendNotification(output, "server.ready", {
