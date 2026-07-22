@@ -142,8 +142,8 @@ export function requiresApproval(
 	args: unknown,
 	mode: ApprovalMode,
 	userConfig: Record<string, unknown> = {},
-): { required: boolean; reason?: string } {
-	const { policy, reason } = resolveApproval(tool, args, mode, userConfig);
+): { required: boolean; tier: ToolTier; override: boolean; reason?: string } {
+	const { policy, reason, tier, override } = resolveApproval(tool, args, mode, userConfig);
 
 	if (policy === "deny") {
 		throw new Error(
@@ -152,8 +152,8 @@ export function requiresApproval(
 		);
 	}
 
-	if (policy === "prompt") return { required: true, reason };
-	return { required: false };
+	if (policy === "prompt") return { required: true, reason, tier, override };
+	return { required: false, tier, override };
 }
 
 export function truncateForPrompt(value: string, maxChars = DEFAULT_PROMPT_TRUNCATE_CHARS): string {

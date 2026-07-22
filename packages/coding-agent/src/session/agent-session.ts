@@ -887,6 +887,8 @@ export interface AgentSessionConfig {
 	agent: Agent;
 	sessionManager: SessionManager;
 	settings: Settings;
+	/** RPC 历史浏览模式；只读期间不得追加任何 Session journal 记录。 */
+	sessionAccess?: "read_write" | "read_only";
 	/** Whether the caller explicitly requested yolo/auto-approve behavior for this session. */
 	autoApprove?: boolean;
 	/** Models to cycle through with Ctrl+P (from --models flag) */
@@ -1844,6 +1846,7 @@ export class AgentSession {
 	#unsubscribeAgent?: () => void;
 	#cancelExitRecorder?: () => void;
 	#exitRecorded = false;
+	#sessionWritesEnabled: boolean;
 	#unsubscribeAppendOnly?: () => void;
 	#unsubscribeModelRoles?: () => void;
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
@@ -2600,6 +2603,7 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
+		this.#sessionWritesEnabled = config.sessionAccess !== "read_only";
 		this.#autoApprove = config.autoApprove === true;
 		// Power assertions are taken per turn (see #beginInFlight); nothing acquired here.
 		this.#evalKernelOwnerId = config.evalKernelOwnerId ?? `agent-session:${Snowflake.next()}`;
@@ -2763,7 +2767,8 @@ export class AgentSession {
 		const persistedSelectedMCPToolNames = this.buildDisplaySessionContext().selectedMCPToolNames;
 		const currentSelectedMCPToolNames = this.getSelectedMCPToolNames();
 		const persistInitialMCPToolSelection =
-			config.persistInitialMCPToolSelection ?? this.sessionManager.getBranch().length === 0;
+			this.#sessionWritesEnabled &&
+			(config.persistInitialMCPToolSelection ?? this.sessionManager.getBranch().length === 0);
 		if (
 			this.#mcpDiscoveryEnabled &&
 			persistInitialMCPToolSelection &&
@@ -2817,6 +2822,7 @@ export class AgentSession {
 				}
 			},
 			persist: (mode, state) => {
+				if (!this.#sessionWritesEnabled) return;
 				if (mode === "none") {
 					this.sessionManager.appendModeChange("none");
 				} else if (state) {
@@ -2835,9 +2841,7 @@ export class AgentSession {
 				);
 			},
 		});
-		this.#cancelExitRecorder = postmortem.register(`agent-session:${this.sessionManager.getSessionId()}`, reason => {
-			this.#recordSessionExit(reason);
-		});
+		if (this.#sessionWritesEnabled) this.#registerExitRecorder();
 
 		this.#advisorEnabled = this.settings.get("advisor.enabled") as boolean;
 		if (this.#advisorEnabled) this.#buildAdvisorRuntime();
@@ -3821,6 +3825,7 @@ export class AgentSession {
 	}
 
 	#recordToolExecutionStart(event: Extract<AgentEvent, { type: "tool_execution_start" }>): void {
+		if (!this.#sessionWritesEnabled) return;
 		const data: ToolExecutionStartData = {
 			toolCallId: event.toolCallId,
 			toolName: event.toolName,
@@ -3835,6 +3840,7 @@ export class AgentSession {
 	}
 
 	#recordSessionExit(reason: postmortem.Reason | "dispose"): void {
+		if (!this.#sessionWritesEnabled) return;
 		if (this.#exitRecorded) return;
 		this.#exitRecorded = true;
 		const pendingToolCalls = collectPendingToolCalls(this.sessionManager.getBranch());
@@ -3879,6 +3885,13 @@ export class AgentSession {
 				error: error instanceof Error ? error.message : String(error),
 			});
 		}
+	}
+
+	#registerExitRecorder(): void {
+		if (this.#cancelExitRecorder) return;
+		this.#cancelExitRecorder = postmortem.register(`agent-session:${this.sessionManager.getSessionId()}`, reason => {
+			this.#recordSessionExit(reason);
+		});
 	}
 
 	#queuedExtensionEvents: Promise<void> = Promise.resolve();
@@ -4081,6 +4094,7 @@ export class AgentSession {
 	}
 
 	#persistSessionMessageIfMissing(message: AgentMessage): void {
+		if (!this.#sessionWritesEnabled) return;
 		if (
 			message.role !== "user" &&
 			message.role !== "developer" &&
@@ -4240,7 +4254,9 @@ export class AgentSession {
 		}
 
 		const messageEndPersistence =
-			event.type === "message_end" ? this.#createMessageEndPersistenceSlot(event.message) : undefined;
+			event.type === "message_end" && this.#sessionWritesEnabled
+				? this.#createMessageEndPersistenceSlot(event.message)
+				: undefined;
 
 		// Deobfuscate assistant message content for display emission — the LLM echoes back
 		// obfuscated placeholders, but listeners (TUI, extensions, exporters) must see real
@@ -4369,7 +4385,7 @@ export class AgentSession {
 		}
 
 		// Handle session persistence
-		if (event.type === "message_end") {
+		if (event.type === "message_end" && this.#sessionWritesEnabled) {
 			const persistMessageEnd = () => {
 				// Check if this is a hook/custom message
 				if (event.message.role === "hookMessage" || event.message.role === "custom") {
@@ -6662,6 +6678,35 @@ export class AgentSession {
 		return this.#isDisposed;
 	}
 
+	/** 恢复流程取得写租约后，允许 Session 继续追加 journal。 */
+	enableSessionWrites(): void {
+		if (this.#sessionWritesEnabled) return;
+		this.#sessionWritesEnabled = true;
+		this.#registerExitRecorder();
+	}
+
+	/** 恢复确认取得写租约后，补写启动阶段刻意延后的中断回合终止记录。 */
+	repairInterruptedTurnAfterRecovery(): void {
+		if (!this.#sessionWritesEnabled)
+			throw new Error("Cannot repair an interrupted turn without Session write access");
+		const model = this.model;
+		const interruptedTurnAbort = createInterruptedTurnAbortMessage(
+			this.sessionManager.getBranch(),
+			model ? { api: model.api, provider: model.provider, model: model.id } : undefined,
+		);
+		if (!interruptedTurnAbort) return;
+		this.sessionManager.appendMessage(interruptedTurnAbort);
+		this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
+	}
+
+	/** 强制关闭在释放租约前调用，阻止异步尾事件继续写 Session journal。 */
+	disableSessionWrites(): void {
+		if (!this.#sessionWritesEnabled) return;
+		this.#sessionWritesEnabled = false;
+		this.#cancelExitRecorder?.();
+		this.#cancelExitRecorder = undefined;
+	}
+
 	markMovedFromEmptySessionFile(sessionFile: string): void {
 		this.#movedFromEmptySessionFile = path.resolve(sessionFile);
 	}
@@ -6707,7 +6752,7 @@ export class AgentSession {
 		this.#cancelExitRecorder?.();
 		this.#cancelExitRecorder = undefined;
 		try {
-			if (this.#extensionRunner?.hasHandlers("session_shutdown")) {
+			if (this.#sessionWritesEnabled && this.#extensionRunner?.hasHandlers("session_shutdown")) {
 				await this.#extensionRunner.emit({ type: "session_shutdown" });
 			}
 		} catch (error) {

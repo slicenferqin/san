@@ -8,6 +8,7 @@
 
 ### Added
 
+- Added persistence-backed San RPC v2 settings for global, workspace, and session scopes, including source attribution, optimistic revision conflicts, and immediate runtime application.
 - Added a cost-tiered public Context Steady benchmark runner with randomized Native/Steady pairs, isolated runtime credentials, Agent/Digest/Compaction usage aggregation, external quality verifiers, reproducible artifacts, a 180-step controlled-stress task, and explicit guards for 30-run Release and 50-run Extended campaigns.
 - Added a sidecar Context Steady probe that records exact per-request usage, cache rate, active/raw context estimates, prefix changes, and the configured native-compaction baseline; `/context` now shows the session ID, session file, probe file, and cumulative cache-read rate.
 - Added San Context Steady Segment maintenance for long logical turns: token/time soft hints trigger mid-turn compaction without limiting execution, recursive Segment checkpoints bound final digest input, active/archive boundaries prevent stale journal refs from causing hard pressure, and maintenance recovery is persisted for audit.
@@ -61,6 +62,7 @@
 
 ### Fixed
 
+- Fixed San RPC v2 read-only and recovery sessions mutating state, stale recovery races removing a newer lease, cross-Runtime approval policy overwrites, non-atomic Run/approval/queue receipts, unleased upload chunks, ignored Run goals/evidence filters/shutdown bounds, and late coalesced frames being dropped.
 - Fixed skills misclassifying San as Codex from shared skill paths or project markers by stamping the San host runtime into user-invoked and autoload prompts; explicit user-selected cross-runtime targets still win.
 - Fixed San Brain capture silently dropping slow but valid LLM TurnDigests behind a hidden 150 ms deadline; digest side requests now honor `san.contextSteady.digest.timeoutMs`, and settled-turn candidates are captured after digest completion.
 - Fixed single-agent benchmark runs reusing one global Settings instance across Native/Steady overlays and retaining JavaScript eval subprocesses after task completion. Public benchmark runs now use an exact tool whitelist, reject process-environment credentials for paid runs, redact in-memory runtime keys from provider/session artifacts, and classify overload, stream-read, and quota failures as invalid pairs.

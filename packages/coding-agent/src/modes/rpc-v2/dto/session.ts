@@ -1,0 +1,147 @@
+/**
+ * San RPC v2 Session DTOs.
+ */
+
+import type { LeaseId, RunId, RuntimeId, SessionId } from "../protocol/ids";
+import type { RecoveryReason, RecoveryStrategy, SessionPersistedStatus, Timestamp } from "../protocol/lifecycle";
+import type { ApprovalRequest } from "./approval";
+import type { ContinuitySnapshot } from "./context";
+import type { EvidenceRecord } from "./evidence";
+import type { SessionRuntimeSettings, SubagentSnapshot } from "./integration";
+import type { InteractionRequest } from "./interaction";
+import type { QueueItem, RunSnapshot } from "./run";
+
+// ============================================================================
+// Session Summary (index entry)
+// ============================================================================
+
+export interface SessionSummary {
+	schemaVersion: 1;
+	sessionId: SessionId;
+	title?: string;
+	cwd: string;
+	parentSessionId?: SessionId;
+	createdAt: Timestamp;
+	updatedAt: Timestamp;
+	persistedStatus: SessionPersistedStatus;
+	access?: "closed" | "read_only" | "read_write" | "locked";
+	attention: SessionAttention[];
+	messageCount: number;
+	sizeBytes: number;
+	lastSequence: number;
+	latestRun?: Pick<RunSnapshot, "runId" | "status" | "startedAt" | "finishedAt">;
+	evidenceCount?: number;
+	checkpoint?: { checkpointId: string; createdAt: Timestamp };
+}
+
+export type SessionAttention = "approval" | "input" | "retry" | "failure" | "recovery";
+
+// ============================================================================
+// Session Snapshot (full state from sync)
+// ============================================================================
+
+export interface SessionSnapshot {
+	schemaVersion: 1;
+	session: SessionSummary;
+	runtimeId: RuntimeId;
+	leaseId: LeaseId;
+	revision: number;
+	asOfSequence: number;
+	lifecycle: "ready" | "recovering" | "read_only" | "corrupt";
+	recovery?: RecoveryDescriptor;
+	activeRun?: RunSnapshot;
+	lastRun?: RunSnapshot;
+	queue: QueueItem[];
+	pendingApprovals: ApprovalRequest[];
+	pendingInteractions: InteractionRequest[];
+	todoPhases: TodoPhaseSnapshot[];
+	goal?: GoalSnapshot;
+	planMode?: PlanModeSnapshot;
+	model?: ModelSnapshot;
+	thinking: { configured?: string; effective?: string };
+	settings: SessionRuntimeSettings;
+	context: ContinuitySnapshot;
+	subagents: SubagentSnapshot[];
+	evidence: EvidenceSummary;
+	commandCatalogRevision: number;
+	activeStreams?: ActiveStreamSnapshot[];
+}
+
+export type ActiveStreamSnapshot =
+	| {
+			kind: "message";
+			messageId: string;
+			role: string;
+			content: string;
+			truncated: boolean;
+	  }
+	| {
+			kind: "tool";
+			toolCallId: string;
+			toolName: string;
+			status: "running";
+	  };
+
+export interface TodoPhaseSnapshot {
+	name: string;
+	status: "pending" | "in_progress" | "completed" | "cancelled" | "blocked";
+	description?: string;
+}
+
+export interface GoalSnapshot {
+	text: string;
+	budget?: { maxTurns?: number; maxTokens?: number; maxCostUsd?: number };
+	progress?: string;
+}
+
+export interface PlanModeSnapshot {
+	enabled: boolean;
+	planFilePath: string;
+	workflow?: "parallel" | "iterative";
+	reentry?: boolean;
+}
+
+export interface ModelSnapshot {
+	provider: string;
+	modelId: string;
+	displayName?: string;
+	contextWindow?: number;
+}
+
+export interface EvidenceSummary {
+	total: number;
+	passed: number;
+	failed: number;
+	latest: EvidenceRecord[];
+}
+
+// ============================================================================
+// Recovery
+// ============================================================================
+
+export interface RecoveryDescriptor {
+	required: boolean;
+	reason: RecoveryReason;
+	previousRuntimeId?: RuntimeId;
+	lastStableSequence: number;
+	interruptedRunId?: RunId;
+	allowedStrategies: RecoveryStrategy[];
+}
+
+// ============================================================================
+// Sync
+// ============================================================================
+
+export interface SyncResult {
+	mode: "snapshot" | "replay";
+	subscriptionId: string;
+	asOfSequence: number;
+	snapshot?: Record<string, unknown>;
+	events?: unknown[];
+}
+
+export interface StreamPolicy {
+	subagents?: "off" | "progress" | "events";
+	thinkingDeltas?: boolean;
+	maxTransientEventsPerSecond?: number;
+}

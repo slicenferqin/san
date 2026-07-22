@@ -122,6 +122,9 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 			result.mode = value;
 		}
 	},
+	"--rpc-protocol": (result, value) => {
+		result.rpcProtocol = value;
+	},
 	"--fork": (result, value) => {
 		result.fork = value;
 	},

@@ -162,23 +162,57 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			}
 
 			const uiContext = this.runner.getUIContext();
-			let choice: string | undefined;
+			let decision: {
+				allowed: boolean;
+				scope?: "once" | "session" | "workspace" | "global";
+				persistRule?: boolean;
+				comment?: string;
+			};
 			try {
-				choice = await uiContext.select(formatApprovalPrompt(this.tool, params, approvalCheck.reason), [
-					"Approve",
-					"Deny",
-				]);
+				const structuredRequest = uiContext.requestToolApproval
+					? {
+							sessionId,
+							toolCallId,
+							toolName: this.tool.name,
+							tier: approvalCheck.tier,
+							requestOverride: approvalCheck.override,
+							arguments: params as Record<string, unknown>,
+							...(approvalCheck.reason ? { reason: approvalCheck.reason } : {}),
+							prompt: formatApprovalPrompt(this.tool, params, approvalCheck.reason),
+							...(context?.sessionManager?.getCwd() ? { cwd: context.sessionManager.getCwd() } : {}),
+						}
+					: undefined;
+				decision = structuredRequest
+					? await uiContext.requestToolApproval!(structuredRequest)
+					: {
+							allowed:
+								(await uiContext.select(formatApprovalPrompt(this.tool, params, approvalCheck.reason), [
+									"Approve",
+									"Deny",
+								])) === "Approve",
+							scope: "once" as const,
+						};
 			} catch (err) {
 				await resolveApproval(false, err instanceof Error ? err.message : "approval aborted");
 				throw err;
 			}
-			const approved = choice === "Approve";
-			await resolveApproval(approved, approved ? undefined : "denied by user");
-			if (!approved) {
+			if (!decision.allowed) {
+				await resolveApproval(false, decision.comment ?? "denied by user");
 				throw new Error(`Tool call denied by user: ${this.tool.name}`);
 			}
+			await resolveApproval(true);
 		}
 
+		return await this.#executeAfterApproval(toolCallId, params, signal, onUpdate, context);
+	}
+
+	async #executeAfterApproval(
+		toolCallId: string,
+		params: Static<TParameters>,
+		signal?: AbortSignal,
+		onUpdate?: AgentToolUpdateCallback<TDetails, TParameters>,
+		context?: AgentToolContext,
+	): Promise<AgentToolResult<TDetails, TParameters>> {
 		// 2. Emit tool_call event - extensions can block execution
 		if (this.runner.hasHandlers("tool_call")) {
 			try {

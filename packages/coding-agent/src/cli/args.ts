@@ -45,6 +45,8 @@ export interface Args {
 	help?: boolean;
 	version?: boolean;
 	mode?: Mode;
+	/** RPC protocol version: "2" for JSON-RPC 2.0 (v2), absent for legacy v1. */
+	rpcProtocol?: string;
 	noSession?: boolean;
 	sessionDir?: string;
 	providerSessionId?: string;

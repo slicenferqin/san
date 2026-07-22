@@ -564,6 +564,8 @@ export interface CreateAgentSessionOptions {
 
 	/** Session manager. Default: session stored under the configured agentDir sessions root */
 	sessionManager?: SessionManager;
+	/** RPC 历史浏览使用；禁止启动阶段修复或追加 Session journal。 */
+	sessionAccess?: "read_write" | "read_only";
 
 	/** Override local:// protocol options for subagent local:// sharing. Default: uses the session's own artifacts dir and session ID. */
 	localProtocolOptions?: LocalProtocolOptions;
@@ -1301,7 +1303,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// partial transcript and append one terminal aborted assistant record before
 	// rebuilding runtime context. The helper is idempotent once that record exists.
 	let existingBranch = logger.time("getSessionBranch", () => sessionManager.getBranch());
-	const interruptedTurnAbort = createInterruptedTurnAbortMessage(existingBranch);
+	const interruptedTurnAbort =
+		options.sessionAccess === "read_only" ? undefined : createInterruptedTurnAbortMessage(existingBranch);
 	if (interruptedTurnAbort) {
 		sessionManager.appendMessage(interruptedTurnAbort);
 		existingBranch = logger.time("getRecoveredSessionBranch", () => sessionManager.getBranch());
@@ -2211,7 +2214,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// A first-turn user tail has no assistant metadata to copy. Once startup
 		// has selected its final model, use that model to terminate the
 		// interrupted turn before the live agent consumes the restored context.
-		if (model) {
+		if (model && options.sessionAccess !== "read_only") {
 			const selectedModelAbort = createInterruptedTurnAbortMessage(existingBranch, {
 				api: model.api,
 				provider: model.provider,
@@ -2896,7 +2899,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// Restore messages if session has existing data
 		if (hasExistingSession) {
 			agent.replaceMessages(existingSession.messages);
-		} else {
+		} else if (options.sessionAccess !== "read_only") {
 			// Save initial model, thinking level, and service tier for new sessions so they can be restored on resume.
 			if (model) {
 				sessionManager.appendModelChange(`${model.provider}/${model.id}`);
@@ -2962,6 +2965,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			planYolo: options.planYolo,
 			serviceTierByFamily: initialServiceTierByFamily,
 			sessionManager,
+			sessionAccess: options.sessionAccess,
 			settings,
 			autoApprove: options.autoApprove,
 			evalKernelOwnerId,

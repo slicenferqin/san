@@ -58,6 +58,8 @@ export interface RawSettings {
 	[key: string]: unknown;
 }
 
+export type SettingSource = "builtin" | "global" | "workspace" | "session";
+
 export interface SettingsOptions {
 	/** Current working directory for project settings discovery */
 	cwd?: string;
@@ -479,6 +481,15 @@ export class Settings {
 	 */
 	isConfigured(path: SettingPath): boolean {
 		return getByPath(this.#merged, SETTING_PATH_SEGMENTS[path]) !== undefined;
+	}
+
+	getSettingSource(path: SettingPath): SettingSource {
+		const segments = SETTING_PATH_SEGMENTS[path];
+		if (getByPath(this.#overrides, segments) !== undefined) return "session";
+		if (getByPath(this.#project, segments) !== undefined) return "workspace";
+		if (getByPath(this.#configOverlay, segments) !== undefined || getByPath(this.#global, segments) !== undefined)
+			return "global";
+		return "builtin";
 	}
 
 	/**

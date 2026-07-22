@@ -55,6 +55,8 @@ import { registerDaemonProjectPresence } from "./launch/presence";
 import type { MCPManager } from "./mcp";
 import { InteractiveMode } from "./modes/interactive-mode";
 import type { PrintModeOptions } from "./modes/print-mode";
+import { runRpcV2Mode } from "./modes/rpc-v2/rpc-v2-mode";
+import type { RpcV2SessionFactory } from "./modes/rpc-v2/session-manager";
 import { CURRENT_SETUP_VERSION } from "./modes/setup-version";
 import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
@@ -393,6 +395,103 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 		}
 		applyExtensionFlags(nextSession.extensionRunner, args.rawArgs);
 		return nextSession;
+	};
+}
+
+export interface RpcV2SessionFactoryOptions {
+	baseOptions: CreateAgentSessionOptions;
+	settings: Settings;
+	sessionDir?: string;
+	authStorage: AuthStorage;
+	modelRegistry: ModelRegistry;
+	parsedArgs: Pick<Args, "apiKey">;
+	rawArgs: string[];
+	createSession: (options: CreateAgentSessionOptions) => Promise<CreateAgentSessionResult>;
+}
+
+/** 构造 RPC v2 的按需 Session factory，启动进程时不预先打开任何 Session。 */
+export function createRpcV2SessionFactory(args: RpcV2SessionFactoryOptions): RpcV2SessionFactory {
+	const buildOptions = async (options: {
+		cwd: string;
+		sessionManager: SessionManager;
+		sessionAccess?: "read_write" | "read_only";
+	}): Promise<CreateAgentSessionOptions> => {
+		const nextSettings = await args.settings.cloneForCwd(options.cwd);
+		const titleSystemPromptSource = discoverTitleSystemPromptFile(options.cwd);
+		const titleSystemPrompt = await resolvePromptInput(titleSystemPromptSource, "title system prompt");
+		const base = { ...args.baseOptions };
+		// Extension instances and the launch EventBus are bound to the original
+		// Session. Each RPC Session must discover/bind its own runtime objects.
+		delete base.sessionManager;
+		delete base.preloadedExtensions;
+		delete base.eventBus;
+		return {
+			...base,
+			cwd: options.cwd,
+			sessionManager: options.sessionManager,
+			...(options.sessionAccess ? { sessionAccess: options.sessionAccess } : {}),
+			settings: nextSettings,
+			authStorage: args.authStorage,
+			modelRegistry: args.modelRegistry,
+			eventBus: new EventBus(),
+			hasUI: false,
+			titleSystemPrompt,
+		};
+	};
+
+	return {
+		getAvailableModels: () => args.modelRegistry.getAvailable(),
+		getAllModels: () => args.modelRegistry.getAll(),
+		hasProviderAuth: providerId => args.authStorage.hasAuth(providerId),
+		hasModelAuth: (providerId, modelId) => {
+			const model = args.modelRegistry
+				.getAll()
+				.find(candidate => candidate.provider === providerId && candidate.id === modelId);
+			return model ? args.modelRegistry.hasConfiguredAuth(model) : false;
+		},
+		loginProvider: async (providerId, callbacks) => {
+			await args.authStorage.login(providerId, callbacks);
+		},
+		refreshModels: async () => {
+			await args.modelRegistry.refresh();
+		},
+		create: async params => {
+			const sessionManager = SessionManager.create(params.cwd, args.sessionDir);
+			if (params.parentSessionPath) await sessionManager.newSession({ parentSession: params.parentSessionPath });
+			const result = await args.createSession(await buildOptions({ cwd: params.cwd, sessionManager }));
+			applyExtensionFlags(result.session.extensionRunner, args.rawArgs);
+			if (args.parsedArgs.apiKey && !args.baseOptions.model && result.session.model) {
+				args.authStorage.setRuntimeApiKey(result.session.model.provider, args.parsedArgs.apiKey);
+			}
+			return {
+				session: result.session,
+				eventBus: result.eventBus,
+				mcpManager: result.mcpManager,
+				setToolUIContext: result.setToolUIContext,
+				dispose: async () => {
+					await result.session.dispose();
+				},
+			};
+		},
+		open: async params => {
+			const sessionAccess = params.access === "read_only" || params.recovering ? "read_only" : "read_write";
+			const sessionManager = await SessionManager.open(params.sessionFile, args.sessionDir, undefined, {
+				suppressBreadcrumb: sessionAccess === "read_only",
+			});
+			const result = await args.createSession(
+				await buildOptions({ cwd: sessionManager.getCwd(), sessionManager, sessionAccess }),
+			);
+			applyExtensionFlags(result.session.extensionRunner, args.rawArgs);
+			return {
+				session: result.session,
+				eventBus: result.eventBus,
+				mcpManager: result.mcpManager,
+				setToolUIContext: result.setToolUIContext,
+				dispose: async () => {
+					await result.session.dispose();
+				},
+			};
+		},
 	};
 }
 
@@ -1384,6 +1483,23 @@ export async function runRootCommand(
 		return result;
 	};
 
+	if ((mode === "rpc" || mode === "rpc-ui") && parsedArgs.rpcProtocol === "2") {
+		const rpcEventBus = new EventBus();
+		const rpcFactory = createRpcV2SessionFactory({
+			baseOptions: { ...sessionOptions, eventBus: rpcEventBus },
+			settings: settingsInstance,
+			sessionDir: parsedArgs.sessionDir,
+			authStorage,
+			modelRegistry,
+			parsedArgs,
+			rawArgs,
+			createSession,
+		});
+		stopStartupWatchdog();
+		await runRpcV2Mode(rpcFactory, rpcEventBus);
+		return;
+	}
+
 	if (mode === "acp") {
 		const createAcpSession = createAcpSessionFactory({
 			baseOptions: sessionOptions,
@@ -1503,10 +1619,15 @@ export async function runRootCommand(
 		}
 
 		if (mode === "rpc" || mode === "rpc-ui") {
-			// Branch-only protocol runner: keep RPC host code out of normal interactive startup.
-			const runRpcMode: RunRpcMode = (await import("./modes/rpc/rpc-mode")).runRpcMode;
 			stopStartupWatchdog();
-			await runRpcMode(session, mode === "rpc-ui" ? setToolUIContext : undefined, eventBus);
+			if (parsedArgs.rpcProtocol === "2") {
+				// RPC v2 is handled before the regular Session bootstrap above.
+				throw new Error("RPC v2 startup branch was not entered");
+			} else {
+				// Branch-only protocol runner: keep RPC host code out of normal interactive startup.
+				const runRpcMode: RunRpcMode = (await import("./modes/rpc/rpc-mode")).runRpcMode;
+				await runRpcMode(session, mode === "rpc-ui" ? setToolUIContext : undefined, eventBus);
+			}
 		} else if (isInteractive) {
 			const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);
 			const changelogMarkdown = await logger.time("main:getChangelogForDisplay", getChangelogForDisplay, parsedArgs);

@@ -80,6 +80,10 @@ export default class Index extends Command {
 			description: "Output mode: text (default), json, rpc, or rpc-ui",
 			options: ["text", "json", "rpc", "acp", "rpc-ui"],
 		}),
+		"rpc-protocol": Flags.string({
+			description: "RPC protocol version (use with --mode rpc): 2 for JSON-RPC 2.0",
+			options: ["2"],
+		}),
 		config: Flags.string({
 			description: "Load an extra config.yml-style overlay for this run (repeatable)",
 			multiple: true,
