@@ -1262,6 +1262,12 @@
             "scope": {
               "type": "string"
             },
+            "sessionId": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            },
             "ruleId": {
               "type": "string"
             },
@@ -1714,6 +1720,12 @@
         "resource.upload.chunk": {
           "type": "object",
           "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "leaseId": {
+              "type": "string"
+            },
             "uploadId": {
               "type": "string"
             },
@@ -1733,6 +1745,8 @@
             }
           },
           "required": [
+            "sessionId",
+            "leaseId",
             "uploadId",
             "offset",
             "dataBase64",
@@ -1744,6 +1758,12 @@
         "resource.upload.commit": {
           "type": "object",
           "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "leaseId": {
+              "type": "string"
+            },
             "uploadId": {
               "type": "string"
             },
@@ -1756,6 +1776,8 @@
             }
           },
           "required": [
+            "sessionId",
+            "leaseId",
             "uploadId",
             "sha256",
             "meta"

@@ -60,6 +60,7 @@ export class ResourceUploadManager {
 	#uploadDir: string | undefined;
 	#manifestPath: string | undefined;
 	#sessionId: SessionId | undefined;
+	#readOnly = false;
 	readonly #chunkLimit: number;
 	readonly #maxResourceBytes: number;
 	readonly #acceptedMediaTypes: ReadonlySet<string>;
@@ -91,14 +92,16 @@ export class ResourceUploadManager {
 		sessionId: SessionId;
 		sessionFile?: string;
 		persistedResources?: readonly Record<string, unknown>[];
+		readOnly?: boolean;
 	}): Promise<void> {
 		await this.close();
 		this.#sessionId = params.sessionId;
+		this.#readOnly = params.readOnly === true;
 		this.#uploadDir = params.sessionFile
 			? `${params.sessionFile}.rpc-v2.resources`
 			: path.join(os.tmpdir(), "san-rpc-v2", params.sessionId, "resources");
 		this.#manifestPath = path.join(this.#uploadDir, "manifest.json");
-		await fs.mkdir(this.#uploadDir, { recursive: true });
+		if (!this.#readOnly) await fs.mkdir(this.#uploadDir, { recursive: true });
 
 		let manifest: ResourceManifest | undefined;
 		try {
@@ -117,7 +120,7 @@ export class ResourceUploadManager {
 			const resource = reviveResource(value, params.sessionId);
 			if (resource && !this.#resources.has(resource.resourceId)) this.#resources.set(resource.resourceId, resource);
 		}
-		await this.#saveManifest();
+		if (!this.#readOnly) await this.#saveManifest();
 	}
 
 	async begin(params: {
@@ -128,6 +131,7 @@ export class ResourceUploadManager {
 		sha256: string;
 	}): Promise<{ uploadId: UploadId; resourceId: ResourceId; chunkLimit: number; acceptedOffset: number }> {
 		this.#assertBoundSession(params.sessionId);
+		this.#assertWritable();
 		if (
 			!Number.isSafeInteger(params.byteLength) ||
 			params.byteLength < 0 ||
@@ -169,6 +173,7 @@ export class ResourceUploadManager {
 		dataBase64: string;
 		chunkSha256?: string;
 	}): Promise<{ acceptedOffset: number }> {
+		this.#assertWritable();
 		const upload = this.#uploads.get(params.uploadId);
 		if (upload?.state !== "uploading") {
 			throw new ResourceUploadError("not_found", `Upload ${params.uploadId} is not active`);
@@ -218,6 +223,7 @@ export class ResourceUploadManager {
 	}
 
 	async commit(params: { uploadId: UploadId; sha256: string }): Promise<InputResourceRef> {
+		this.#assertWritable();
 		const upload = this.#uploads.get(params.uploadId);
 		if (upload?.state !== "uploading") {
 			throw new ResourceUploadError("not_found", `Upload ${params.uploadId} is not active`);
@@ -265,6 +271,7 @@ export class ResourceUploadManager {
 		allowedSchemes: readonly string[];
 	}): Promise<InputResourceRef> {
 		this.#assertBoundSession(params.sessionId);
+		this.#assertWritable();
 		let parsed: URL;
 		try {
 			parsed = new URL(params.uri);
@@ -329,6 +336,7 @@ export class ResourceUploadManager {
 	}
 
 	async release(resourceId: string, sessionId?: SessionId): Promise<boolean> {
+		this.#assertWritable();
 		const resource = this.#resources.get(resourceId);
 		if (!resource || (sessionId && resource.sessionId !== sessionId)) return false;
 		this.#resources.delete(resourceId);
@@ -339,11 +347,12 @@ export class ResourceUploadManager {
 
 	/** 保存上传现场；正常断线不得丢弃可恢复的 partial。 */
 	async close(): Promise<void> {
-		if (this.#manifestPath) await this.#saveManifest();
+		if (this.#manifestPath && !this.#readOnly) await this.#saveManifest();
 	}
 
 	/** 显式清理只用于 Session 删除或不可恢复的 Runtime teardown。 */
 	async cleanup(): Promise<void> {
+		this.#assertWritable();
 		if (!this.#uploadDir) return;
 		for (const upload of this.#uploads.values()) await fs.rm(this.#partPath(upload.uploadId), { force: true });
 		this.#uploads.clear();
@@ -354,6 +363,10 @@ export class ResourceUploadManager {
 		if (!this.#sessionId || this.#sessionId !== sessionId || !this.#uploadDir) {
 			throw new ResourceUploadError("invalid", `Resource manager is not bound to Session ${sessionId}`);
 		}
+	}
+
+	#assertWritable(): void {
+		if (this.#readOnly) throw new ResourceUploadError("invalid", "Resource manager is bound read_only");
 	}
 
 	#partPath(uploadId: UploadId): string {
@@ -368,6 +381,7 @@ export class ResourceUploadManager {
 
 	async #saveManifest(): Promise<void> {
 		if (!this.#manifestPath) return;
+		this.#assertWritable();
 		const manifest: ResourceManifest = {
 			schemaVersion: 1,
 			uploads: [...this.#uploads.values()],

@@ -179,8 +179,18 @@ export const RPC_V2_METHOD_DEFINITIONS: readonly RpcV2MethodDefinition[] = [
 		requiresSession: true,
 		requiresWriteLease: true,
 	}),
-	method("resource.upload.chunk", { capability: "input.resources", mutation: true }),
-	method("resource.upload.commit", { capability: "input.resources", mutation: true }),
+	method("resource.upload.chunk", {
+		capability: "input.resources",
+		mutation: true,
+		requiresSession: true,
+		requiresWriteLease: true,
+	}),
+	method("resource.upload.commit", {
+		capability: "input.resources",
+		mutation: true,
+		requiresSession: true,
+		requiresWriteLease: true,
+	}),
 	method("resource.registerHostUri", {
 		capability: "host.uri",
 		mutation: true,

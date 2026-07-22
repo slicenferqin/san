@@ -414,6 +414,7 @@ export function createRpcV2SessionFactory(args: RpcV2SessionFactoryOptions): Rpc
 	const buildOptions = async (options: {
 		cwd: string;
 		sessionManager: SessionManager;
+		sessionAccess?: "read_write" | "read_only";
 	}): Promise<CreateAgentSessionOptions> => {
 		const nextSettings = await args.settings.cloneForCwd(options.cwd);
 		const titleSystemPromptSource = discoverTitleSystemPromptFile(options.cwd);
@@ -428,6 +429,7 @@ export function createRpcV2SessionFactory(args: RpcV2SessionFactoryOptions): Rpc
 			...base,
 			cwd: options.cwd,
 			sessionManager: options.sessionManager,
+			...(options.sessionAccess ? { sessionAccess: options.sessionAccess } : {}),
 			settings: nextSettings,
 			authStorage: args.authStorage,
 			modelRegistry: args.modelRegistry,
@@ -472,8 +474,13 @@ export function createRpcV2SessionFactory(args: RpcV2SessionFactoryOptions): Rpc
 			};
 		},
 		open: async params => {
-			const sessionManager = await SessionManager.open(params.sessionFile, args.sessionDir);
-			const result = await args.createSession(await buildOptions({ cwd: sessionManager.getCwd(), sessionManager }));
+			const sessionAccess = params.access === "read_only" || params.recovering ? "read_only" : "read_write";
+			const sessionManager = await SessionManager.open(params.sessionFile, args.sessionDir, undefined, {
+				suppressBreadcrumb: sessionAccess === "read_only",
+			});
+			const result = await args.createSession(
+				await buildOptions({ cwd: sessionManager.getCwd(), sessionManager, sessionAccess }),
+			);
 			applyExtensionFlags(result.session.extensionRunner, args.rawArgs);
 			return {
 				session: result.session,

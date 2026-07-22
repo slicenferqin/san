@@ -62,7 +62,7 @@ export class RpcV2UIContext implements ExtensionUIContext {
 		tier: "read" | "write" | "exec";
 		requestOverride: boolean;
 		canPersistRule: boolean;
-	}) => ApprovalPolicyResolution;
+	}) => ApprovalPolicyResolution | Promise<ApprovalPolicyResolution>;
 	#registerInteraction?: (interaction: InteractionRequest) => Promise<void>;
 	#sequence = 0;
 	#closedError: Error | undefined;
@@ -82,7 +82,7 @@ export class RpcV2UIContext implements ExtensionUIContext {
 			tier: "read" | "write" | "exec";
 			requestOverride: boolean;
 			canPersistRule: boolean;
-		}) => ApprovalPolicyResolution;
+		}) => ApprovalPolicyResolution | Promise<ApprovalPolicyResolution>;
 		registerInteraction?: (interaction: InteractionRequest) => Promise<void>;
 	}) {
 		this.#output = options.output;
@@ -311,7 +311,7 @@ export class RpcV2UIContext implements ExtensionUIContext {
 			riskTier: request.tier,
 			workspaceRoot: request.cwd,
 		});
-		const policyResolution = this.#resolveApprovalPolicy?.({
+		const policyResolution = await this.#resolveApprovalPolicy?.({
 			fingerprint,
 			tier: request.tier,
 			requestOverride: request.requestOverride,

@@ -49,3 +49,24 @@ test("RPC v2 resource upload resumes, validates hashes, and releases committed b
 	expect(await resumed.release(resource.resourceId, sessionId)).toBe(true);
 	await expect(resumed.readResource(resource.resourceId, sessionId)).rejects.toThrow("Resource not found");
 });
+
+test("RPC v2 read-only resource binding neither creates storage nor accepts mutations", async () => {
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "san-rpc-v2-resource-read-only-"));
+	tempDirectories.push(directory);
+	const sessionFile = path.join(directory, "session.jsonl");
+	const resourceDirectory = `${sessionFile}.rpc-v2.resources`;
+	const sessionId = "ses_read_only" as SessionId;
+	const manager = new ResourceUploadManager();
+
+	await manager.bind({ sessionId, sessionFile, readOnly: true });
+	await expect(
+		manager.begin({
+			sessionId,
+			mediaType: "text/plain",
+			byteLength: 0,
+			sha256: new Bun.CryptoHasher("sha256").update("").digest("hex"),
+		}),
+	).rejects.toThrow("bound read_only");
+	await expect(fs.stat(resourceDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+	await manager.close();
+});

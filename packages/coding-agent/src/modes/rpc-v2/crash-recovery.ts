@@ -2,6 +2,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
+import { withFileLock } from "../../config/file-lock";
 import type { RecoveryDescriptor } from "./dto/session";
 import type { RuntimeId } from "./protocol/ids";
 import type { RecoveryReason, RecoveryStrategy } from "./protocol/lifecycle";
@@ -14,6 +15,11 @@ export interface LeaseRecord {
 	acquiredAt: string;
 	lastHeartbeat: string;
 	lastStableSequence: number;
+}
+
+interface StoredRecoveryDescriptor extends RecoveryDescriptor {
+	previousLeaseId: string;
+	previousRuntimeId: RuntimeId;
 }
 
 export function leasePathForSession(sessionFile: string): string {
@@ -38,52 +44,72 @@ function processAlive(pid: number): boolean {
 export async function acquireLease(sessionFile: string, record: LeaseRecord, stealExpired = false): Promise<void> {
 	const leasePath = leasePathForSession(sessionFile);
 	await fs.mkdir(path.dirname(leasePath), { recursive: true });
-	try {
-		const handle = await fs.open(leasePath, "wx");
-		try {
-			await handle.writeFile(`${JSON.stringify(record)}\n`, "utf8");
-		} finally {
-			await handle.close();
+	await withFileLock(leasePath, async () => {
+		const existing = await readLeaseRecord(leasePath);
+		if (existing) {
+			if (processAlive(existing.pid) && existing.runtimeId !== record.runtimeId) throw new Error("SESSION_LOCKED");
+			if (!stealExpired && existing.runtimeId !== record.runtimeId) throw new Error("SESSION_LOCKED");
 		}
-		return;
-	} catch (error: unknown) {
-		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-	}
-
-	let existing: LeaseRecord;
-	try {
-		existing = JSON.parse(await Bun.file(leasePath).text()) as LeaseRecord;
-	} catch (error: unknown) {
-		throw new Error(`Invalid RPC v2 lease ${leasePath}: ${String(error)}`);
-	}
-	if (processAlive(existing.pid) && existing.runtimeId !== record.runtimeId) throw new Error("SESSION_LOCKED");
-	if (!stealExpired && existing.runtimeId !== record.runtimeId) throw new Error("SESSION_LOCKED");
-	await fs.rm(leasePath, { force: true });
-	await acquireLease(sessionFile, record, false);
+		await writeJsonAtomically(leasePath, record);
+	});
 }
 
 export async function writeLeaseRecord(record: LeaseRecord, sessionFile?: string): Promise<void> {
 	if (!sessionFile) throw new Error("writeLeaseRecord requires sessionFile");
 	const leasePath = leasePathForSession(sessionFile);
-	await Bun.write(leasePath, `${JSON.stringify(record)}\n`);
+	await fs.mkdir(path.dirname(leasePath), { recursive: true });
+	await withFileLock(leasePath, async () => writeJsonAtomically(leasePath, record));
 }
 
-export async function updateLeaseHeartbeat(sessionFile: string, sequence: number): Promise<void> {
+export async function updateLeaseHeartbeat(
+	sessionFile: string,
+	leaseId: string,
+	runtimeId: string,
+	sequence: number,
+): Promise<void> {
 	const leasePath = leasePathForSession(sessionFile);
-	try {
-		const record = JSON.parse(await Bun.file(leasePath).text()) as LeaseRecord;
+	await withFileLock(leasePath, async () => {
+		const record = await readLeaseRecord(leasePath);
+		if (!record || record.leaseId !== leaseId || record.runtimeId !== runtimeId) throw new Error("SESSION_LOCKED");
 		record.lastHeartbeat = new Date().toISOString();
 		record.lastStableSequence = Math.max(record.lastStableSequence ?? 0, sequence);
-		const temporaryPath = `${leasePath}.${process.pid}.${Date.now()}.tmp`;
-		await Bun.write(temporaryPath, `${JSON.stringify(record)}\n`);
-		await fs.rename(temporaryPath, leasePath);
-	} catch (error: unknown) {
-		throw new Error(`Failed to update RPC v2 lease ${leasePath}: ${String(error)}`);
-	}
+		await writeJsonAtomically(leasePath, record);
+	});
 }
 
-export async function removeLeaseRecord(sessionFile: string): Promise<void> {
-	await fs.rm(leasePathForSession(sessionFile), { force: true });
+export async function removeLeaseRecord(sessionFile: string, leaseId: string, runtimeId: string): Promise<boolean> {
+	const leasePath = leasePathForSession(sessionFile);
+	return await withFileLock(leasePath, async () => {
+		const record = await readLeaseRecord(leasePath);
+		if (!record || record.leaseId !== leaseId || record.runtimeId !== runtimeId) return false;
+		await fs.rm(leasePath, { force: true });
+		return true;
+	});
+}
+
+/** 放弃尚未确认的恢复写租约，恢复为可再次竞争的过期租约。 */
+export async function abandonRecoveryLease(
+	sessionFile: string,
+	leaseId: string,
+	runtimeId: string,
+	sessionId: string,
+): Promise<boolean> {
+	const leasePath = leasePathForSession(sessionFile);
+	return await withFileLock(leasePath, async () => {
+		const [record, recovery] = await Promise.all([readLeaseRecord(leasePath), readStoredRecovery(sessionFile)]);
+		if (!record || !recovery || record.leaseId !== leaseId || record.runtimeId !== runtimeId) return false;
+		const now = new Date().toISOString();
+		await writeJsonAtomically(leasePath, {
+			leaseId: recovery.previousLeaseId,
+			runtimeId: recovery.previousRuntimeId,
+			pid: 2_147_483_647,
+			sessionId,
+			acquiredAt: now,
+			lastHeartbeat: now,
+			lastStableSequence: Math.max(0, recovery.lastStableSequence),
+		} satisfies LeaseRecord);
+		return true;
+	});
 }
 
 export async function detectRecovery(
@@ -93,29 +119,27 @@ export async function detectRecovery(
 ): Promise<RecoveryDescriptor | undefined> {
 	if (!sessionFile) return undefined;
 	const leasePath = leasePathForSession(sessionFile);
-	let record: LeaseRecord;
-	try {
-		record = JSON.parse(await Bun.file(leasePath).text()) as LeaseRecord;
-	} catch (error: unknown) {
-		if (isEnoent(error)) return undefined;
-		throw new Error(`Failed to read RPC v2 lease ${leasePath}: ${String(error)}`);
-	}
-	if (record.runtimeId === currentRuntimeId) return undefined;
-	if (processAlive(record.pid)) throw new Error("SESSION_LOCKED");
-	const recovery: RecoveryDescriptor = {
-		required: true,
-		reason: "runtime_crash" satisfies RecoveryReason,
-		previousRuntimeId: record.runtimeId as RuntimeId,
-		lastStableSequence: Math.max(0, record.lastStableSequence ?? 0),
-		allowedStrategies: ["continue", "mark_aborted", "read_only"] satisfies RecoveryStrategy[],
-	};
-	await Bun.write(recoveryPathForSession(sessionFile), `${JSON.stringify(recovery)}\n`);
-	return recovery;
+	return await withFileLock(leasePath, async () => {
+		const record = await readLeaseRecord(leasePath);
+		if (!record || record.runtimeId === currentRuntimeId) return undefined;
+		if (processAlive(record.pid)) throw new Error("SESSION_LOCKED");
+		const recovery: StoredRecoveryDescriptor = {
+			required: true,
+			reason: "runtime_crash" satisfies RecoveryReason,
+			previousRuntimeId: record.runtimeId as RuntimeId,
+			previousLeaseId: record.leaseId,
+			lastStableSequence: Math.max(0, record.lastStableSequence ?? 0),
+			allowedStrategies: ["continue", "mark_aborted", "read_only"] satisfies RecoveryStrategy[],
+		};
+		await writeJsonAtomically(recoveryPathForSession(sessionFile), recovery);
+		return publicRecoveryDescriptor(recovery);
+	});
 }
 
 export async function readRecovery(sessionFile: string): Promise<RecoveryDescriptor | undefined> {
 	try {
-		return (await Bun.file(recoveryPathForSession(sessionFile)).json()) as RecoveryDescriptor;
+		const recovery = (await Bun.file(recoveryPathForSession(sessionFile)).json()) as StoredRecoveryDescriptor;
+		return publicRecoveryDescriptor(recovery);
 	} catch (error: unknown) {
 		if (isEnoent(error)) return undefined;
 		throw new Error(`Failed to read RPC v2 recovery state for ${sessionFile}: ${String(error)}`);
@@ -129,32 +153,79 @@ export async function executeRecovery(
 	sessionFile?: string,
 	leaseId?: string,
 ): Promise<{ recovered: boolean; lastStableSequence: number }> {
-	const lastStableSequence = sessionFile ? ((await readRecovery(sessionFile))?.lastStableSequence ?? 0) : 0;
-	if (!sessionFile) return { recovered: true, lastStableSequence };
-	if (strategy === "read_only") {
-		await fs.rm(leasePathForSession(sessionFile), { force: true });
+	if (!sessionFile) return { recovered: true, lastStableSequence: 0 };
+	if (strategy !== "read_only" && !leaseId) throw new Error(`${strategy} recovery requires leaseId`);
+	const leasePath = leasePathForSession(sessionFile);
+	return await withFileLock(leasePath, async () => {
+		const recovery = await readStoredRecovery(sessionFile);
+		const current = await readLeaseRecord(leasePath);
+		if (!recovery || !current) throw new Error("SESSION_LOCKED");
+		const ownsPreviousLease =
+			current.leaseId === recovery.previousLeaseId &&
+			current.runtimeId === recovery.previousRuntimeId &&
+			!processAlive(current.pid);
+		const ownsStolenLease = current.leaseId === leaseId && current.runtimeId === currentRuntimeId;
+		if (!ownsPreviousLease && !ownsStolenLease) throw new Error("SESSION_LOCKED");
+		const lastStableSequence = Math.max(0, recovery.lastStableSequence);
+		if (strategy === "read_only") {
+			await fs.rm(leasePath, { force: true });
+		} else {
+			const now = new Date().toISOString();
+			await writeJsonAtomically(leasePath, {
+				leaseId: leaseId as string,
+				runtimeId: currentRuntimeId,
+				pid: process.pid,
+				sessionId,
+				acquiredAt: now,
+				lastHeartbeat: now,
+				lastStableSequence,
+			} satisfies LeaseRecord);
+		}
 		await fs.rm(recoveryPathForSession(sessionFile), { force: true });
 		return { recovered: true, lastStableSequence };
-	}
-	if (!leaseId) throw new Error(`${strategy} recovery requires leaseId`);
-	await fs.rm(leasePathForSession(sessionFile), { force: true });
-	await acquireLease(
-		sessionFile,
-		{
-			leaseId,
-			runtimeId: currentRuntimeId,
-			pid: process.pid,
-			sessionId,
-			acquiredAt: new Date().toISOString(),
-			lastHeartbeat: new Date().toISOString(),
-			lastStableSequence,
-		},
-		false,
-	);
-	await fs.rm(recoveryPathForSession(sessionFile), { force: true });
-	return { recovered: true, lastStableSequence };
+	});
 }
 
 export function leasePath(sessionFile: string): string {
 	return leasePathForSession(sessionFile);
+}
+
+async function readLeaseRecord(leasePath: string): Promise<LeaseRecord | undefined> {
+	try {
+		return (await Bun.file(leasePath).json()) as LeaseRecord;
+	} catch (error: unknown) {
+		if (isEnoent(error)) return undefined;
+		throw new Error(`Invalid RPC v2 lease ${leasePath}: ${String(error)}`);
+	}
+}
+
+async function readStoredRecovery(sessionFile: string): Promise<StoredRecoveryDescriptor | undefined> {
+	try {
+		return (await Bun.file(recoveryPathForSession(sessionFile)).json()) as StoredRecoveryDescriptor;
+	} catch (error: unknown) {
+		if (isEnoent(error)) return undefined;
+		throw new Error(`Failed to read RPC v2 recovery state for ${sessionFile}: ${String(error)}`);
+	}
+}
+
+async function writeJsonAtomically(filePath: string, value: object): Promise<void> {
+	await fs.mkdir(path.dirname(filePath), { recursive: true });
+	const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+	try {
+		await Bun.write(temporaryPath, `${JSON.stringify(value)}\n`);
+		await fs.rename(temporaryPath, filePath);
+	} finally {
+		await fs.rm(temporaryPath, { force: true });
+	}
+}
+
+function publicRecoveryDescriptor(recovery: StoredRecoveryDescriptor): RecoveryDescriptor {
+	return {
+		required: recovery.required,
+		reason: recovery.reason,
+		previousRuntimeId: recovery.previousRuntimeId,
+		lastStableSequence: recovery.lastStableSequence,
+		interruptedRunId: recovery.interruptedRunId,
+		allowedStrategies: [...recovery.allowedStrategies],
+	};
 }

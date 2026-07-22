@@ -86,7 +86,12 @@ import { validateRpcV2Params } from "./protocol/validate";
 import { sanitizeRpcError } from "./redaction";
 import { ResourceUploadError, ResourceUploadManager } from "./resource-upload";
 import { RuntimeSettingsRevisionError } from "./runtime-settings-store";
-import { type ResolvedRunContent, type RpcV2SessionFactory, RpcV2SessionManager } from "./session-manager";
+import {
+	type ResolvedRunContent,
+	type RpcV2SessionFactory,
+	RpcV2SessionManager,
+	type SessionMutationReceipt,
+} from "./session-manager";
 import { RpcV2SubagentController } from "./subagent-controller";
 import { RpcV2UIContext } from "./ui-context";
 
@@ -98,6 +103,7 @@ const PROTOCOL_VERSION = "2.0";
 const SERVER_NAME = "san";
 
 const IDEMPOTENCY_EXEMPT_METHODS = new Set(["server.shutdown", "stream.configure", "host.capabilities.update"]);
+const ATOMIC_SESSION_RECEIPT_METHODS = new Set(["run.start", "approval.decide", "queue.cancel"]);
 
 // ============================================================================
 // Initialize types
@@ -136,6 +142,8 @@ interface ServerState {
 	locale?: string;
 	host?: { platform: string; arch: string };
 	shutdownRequested: boolean;
+	shutdownMode: "graceful" | "force";
+	shutdownTimeoutMs?: number;
 	recentErrors: Array<{ reason: string; category: string; correlationId: string; at: string }>;
 }
 
@@ -426,7 +434,14 @@ function handleGetCapabilities(state: ServerState, params: unknown): object {
 function handleShutdown(state: ServerState, params: unknown): object {
 	const p = params as { mode?: "graceful" | "force"; timeoutMs?: number } | undefined;
 	state.shutdownRequested = true;
-	return { accepted: true, mode: p?.mode ?? "graceful" };
+	state.shutdownMode = p?.mode ?? "graceful";
+	if (p?.timeoutMs === undefined) delete state.shutdownTimeoutMs;
+	else state.shutdownTimeoutMs = p.timeoutMs;
+	return {
+		accepted: true,
+		mode: state.shutdownMode,
+		...(state.shutdownTimeoutMs !== undefined ? { timeoutMs: state.shutdownTimeoutMs } : {}),
+	};
 }
 
 // ============================================================================
@@ -795,6 +810,7 @@ async function dispatchMethod(ctx: DispatchContext, method: string, params: unkn
 	const record = isRecord(params) ? params : undefined;
 	const mutationMeta = record && isRecord(record.meta) ? record.meta : undefined;
 	let idempotencyKey: string | undefined;
+	let idempotencyInput: { method: string; params: unknown } | undefined;
 	let createReservation: SessionCreateReservation | undefined;
 	if (definition.mutation && !IDEMPOTENCY_EXEMPT_METHODS.has(method)) {
 		idempotencyKey =
@@ -808,7 +824,7 @@ async function dispatchMethod(ctx: DispatchContext, method: string, params: unkn
 			});
 		}
 		try {
-			const idempotencyInput = { method, params };
+			idempotencyInput = { method, params };
 			if (method === "session.create") {
 				const createReceipt = await ctx.sessionCreateReceipts.begin(idempotencyKey, idempotencyInput);
 				if (createReceipt.cached) return await ctx.sessionManager.replayCreatedSession(createReceipt.sessionId);
@@ -862,22 +878,26 @@ async function dispatchMethod(ctx: DispatchContext, method: string, params: unkn
 			);
 		}
 
-		const result = await dispatchKnownMethod(ctx, method, params);
+		const receipt =
+			idempotencyKey && idempotencyInput && ATOMIC_SESSION_RECEIPT_METHODS.has(method)
+				? { key: idempotencyKey, params: idempotencyInput }
+				: undefined;
+		const result = await dispatchKnownMethod(ctx, method, params, receipt);
 		if (isRpcError(result)) {
 			if (createReservation) await ctx.sessionCreateReceipts.cancel(createReservation);
 			return result;
 		}
 		if (idempotencyKey && !isRpcError(result)) {
-			const idempotencyInput = { method, params };
+			const completedInput = idempotencyInput ?? { method, params };
 			if (method === "session.create" && createReservation) {
 				if (!isRecord(result) || typeof result.sessionId !== "string") {
 					throw new Error("session.create completed without a sessionId");
 				}
 				await ctx.sessionCreateReceipts.complete(createReservation, result.sessionId);
 			} else {
-				ctx.idempotency.record(idempotencyKey, idempotencyInput, result);
-				if (ctx.sessionManager.currentSession)
-					await ctx.sessionManager.recordIdempotency(idempotencyKey, idempotencyInput, result);
+				ctx.idempotency.record(idempotencyKey, completedInput, result);
+				if (ctx.sessionManager.currentSession && !ATOMIC_SESSION_RECEIPT_METHODS.has(method))
+					await ctx.sessionManager.recordIdempotency(idempotencyKey, completedInput, result);
 			}
 		}
 		return result;
@@ -920,7 +940,12 @@ async function dispatchMethod(ctx: DispatchContext, method: string, params: unkn
 	}
 }
 
-async function dispatchKnownMethod(ctx: DispatchContext, method: string, params: unknown): Promise<unknown> {
+async function dispatchKnownMethod(
+	ctx: DispatchContext,
+	method: string,
+	params: unknown,
+	receipt?: SessionMutationReceipt,
+): Promise<unknown> {
 	const { state, sessionManager } = ctx;
 
 	const session = sessionManager.currentSession;
@@ -1096,13 +1121,28 @@ async function dispatchKnownMethod(ctx: DispatchContext, method: string, params:
 		// Run methods
 		case "run.start": {
 			const p = params as
-				| { content?: unknown; model?: { provider?: string; modelId?: string }; thinking?: string }
+				| { content?: unknown; model?: { provider?: string; modelId?: string }; thinking?: string; goal?: string }
 				| undefined;
 			if (p?.model) await selectModel(activeSession, p.model.provider, p.model.modelId);
 			if (p?.thinking !== undefined) setThinkingLevel(activeSession, p.thinking);
+			if (p?.goal !== undefined) {
+				const objective = p.goal.trim();
+				if (!objective) return invalidParamsError("run.start goal must be non-empty", "goal");
+				const existingGoal = activeSession.getGoalModeState()?.goal;
+				if (!existingGoal || existingGoal.status === "dropped" || existingGoal.status === "complete") {
+					await activeSession.goalRuntime.createGoal({ objective });
+				} else if (existingGoal.objective !== objective) {
+					return createRpcError({
+						reason: "SESSION_STATE_CONFLICT",
+						category: "conflict",
+						message: "run.start goal conflicts with the Session's active goal",
+						details: { activeGoalId: existingGoal.id },
+					});
+				}
+			}
 			const active = sessionManager.assertSession();
 			const { resolved } = await resolveRunContent(ctx, activeSession, active.sessionId, p?.content);
-			const accepted = await sessionManager.startRun(active, resolved);
+			const accepted = await sessionManager.startRun(active, resolved, undefined, receipt);
 			return { runId: accepted.runId, operationId: accepted.operationId, acceptedAt: accepted.acceptedAt };
 		}
 		case "run.abort": {
@@ -1164,12 +1204,13 @@ async function dispatchKnownMethod(ctx: DispatchContext, method: string, params:
 		case "queue.cancel": {
 			const p = params as { queueItemId?: string; expectedStatus?: string } | undefined;
 			if (!p?.queueItemId) return invalidParamsError("queue.cancel requires queueItemId", "queueItemId");
-			const item = await sessionManager.cancelQueueItem(
+			return await sessionManager.cancelQueueItem(
 				sessionManager.assertSession(),
 				p.queueItemId,
 				p.expectedStatus,
+				undefined,
+				receipt,
 			);
-			return { item, revision: sessionManager.currentRevision };
 		}
 
 		// Model / Thinking
@@ -1373,21 +1414,23 @@ async function dispatchKnownMethod(ctx: DispatchContext, method: string, params:
 					scope,
 				});
 			}
-			await sessionManager.resolveApproval(
-				sessionManager.assertSession(),
-				p.approvalId,
-				p.decision,
-				scope,
-				Boolean(p.persistRule),
-			);
-			ctx.getUIContext()?.resolveApproval(p.approvalId, { allowed: p.decision === "allow", scope });
-			return {
+			const resolution = {
 				resolved: true,
 				approvalId: p.approvalId,
 				decision: p.decision,
 				scope,
 				...(persistedRule ? { persistedRule } : {}),
 			};
+			await sessionManager.resolveApproval(
+				sessionManager.assertSession(),
+				p.approvalId,
+				p.decision,
+				scope,
+				Boolean(p.persistRule),
+				receipt ? { ...receipt, result: resolution } : undefined,
+			);
+			ctx.getUIContext()?.resolveApproval(p.approvalId, { allowed: p.decision === "allow", scope });
+			return resolution;
 		}
 
 		// Interaction
@@ -1542,7 +1585,9 @@ async function dispatchKnownMethod(ctx: DispatchContext, method: string, params:
 			}
 		}
 		case "evidence.list": {
-			const p = params as { kinds?: string[]; verdicts?: string[]; limit?: number; cursor?: string } | undefined;
+			const p = params as
+				| { runId?: string; kinds?: string[]; verdicts?: string[]; limit?: number; cursor?: string }
+				| undefined;
 			const ledger = sessionManager.currentEvidence;
 			if (!ledger)
 				return createRpcError({
@@ -1552,6 +1597,7 @@ async function dispatchKnownMethod(ctx: DispatchContext, method: string, params:
 				});
 			const offset = decodePageCursor(p?.cursor);
 			const result = ledger.list({
+				runId: p?.runId,
 				kinds: p?.kinds as EvidenceKind[] | undefined,
 				verdicts: p?.verdicts as EvidenceVerdict[] | undefined,
 				limit: p?.limit,
@@ -1831,6 +1877,7 @@ async function dispatchKnownMethod(ctx: DispatchContext, method: string, params:
 			const scope = parseApprovalPolicyScope(p?.scope ?? "session");
 			if (!scope)
 				return invalidParamsError("approval.rules.list scope must be session, workspace, or global", "scope");
+			await ctx.approvalRules.refresh();
 			return ctx.approvalRules.getPolicy(
 				scope,
 				approvalPolicyContextFromParams(sessionManager, p),
@@ -1870,6 +1917,7 @@ async function dispatchKnownMethod(ctx: DispatchContext, method: string, params:
 			const scope = parseApprovalPolicyScope(p?.scope ?? "session");
 			if (!scope)
 				return invalidParamsError("approval.policy.get scope must be session, workspace, or global", "scope");
+			await ctx.approvalRules.refresh();
 			return ctx.approvalRules.getPolicy(scope, approvalPolicyContextFromParams(sessionManager, p), true);
 		}
 		case "approval.policy.update": {
@@ -2088,6 +2136,7 @@ export async function runRpcV2Mode(factory: RpcV2SessionFactory, _eventBus?: Eve
 		capabilities: buildServerCapabilities(),
 		limits: DEFAULT_LIMITS,
 		shutdownRequested: false,
+		shutdownMode: "graceful",
 		recentErrors: [],
 	};
 
@@ -2121,6 +2170,7 @@ export async function runRpcV2Mode(factory: RpcV2SessionFactory, _eventBus?: Eve
 			sessionId: active.sessionId,
 			sessionFile: active.sessionFile,
 			persistedResources: active.state.resources,
+			readOnly: active.lease?.access === "read_only" || active.state.snapshot?.lifecycle === "recovering",
 		});
 		artifacts.bind({
 			session: active.session,
@@ -2134,8 +2184,10 @@ export async function runRpcV2Mode(factory: RpcV2SessionFactory, _eventBus?: Eve
 			registerApproval: approval => sessionManager.registerApproval(active, approval),
 			resolveRegisteredApproval: (approvalId, decision, scope) =>
 				sessionManager.resolveApproval(active, approvalId, decision, scope, false).then(() => undefined),
-			resolveApprovalPolicy: params =>
-				approvalRules.resolve({ ...params, context: approvalPolicyContext(active.session) }),
+			resolveApprovalPolicy: async params => {
+				await approvalRules.refresh();
+				return approvalRules.resolve({ ...params, context: approvalPolicyContext(active.session) });
+			},
 			registerInteraction: interaction => sessionManager.registerInteraction(active, interaction),
 		});
 		active.handle.setToolUIContext?.(uiContext, true);
@@ -2270,9 +2322,12 @@ export async function runRpcV2Mode(factory: RpcV2SessionFactory, _eventBus?: Eve
 		hostToolBridge.close("RPC client disconnected");
 		try {
 			await auth.close();
-			await sessionManager.shutdown();
-			await subagents.close();
 			await resources.close();
+			await sessionManager.shutdown({
+				force: state.shutdownMode === "force",
+				...(state.shutdownTimeoutMs !== undefined ? { timeoutMs: state.shutdownTimeoutMs } : {}),
+			});
+			await subagents.close();
 			await writer.close();
 		} finally {
 			purityGuard.restore();

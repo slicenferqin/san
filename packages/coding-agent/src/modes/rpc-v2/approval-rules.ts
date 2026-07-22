@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir, isEnoent, Snowflake } from "@oh-my-pi/pi-utils";
+import { withFileLock } from "../../config/file-lock";
 import type { ApprovalPolicySnapshot, ApprovalScope, PermissionPolicySnapshot, PermissionRule } from "./dto/approval";
 import type { ApprovalId } from "./protocol/ids";
 
@@ -55,6 +56,7 @@ export class ApprovalRuleStore {
 	readonly #storagePath: string;
 	#policies: StoredApprovalPolicies = { schemaVersion: 1, policies: {} };
 	#loaded = false;
+	#operationTail: Promise<void> = Promise.resolve();
 
 	constructor(storagePath = path.join(getAgentDir(), "rpc-v2", "approval-policy.json")) {
 		this.#storagePath = storagePath;
@@ -62,6 +64,18 @@ export class ApprovalRuleStore {
 
 	async load(): Promise<void> {
 		if (this.#loaded) return;
+		await this.refresh();
+	}
+
+	/** 重新读取共享策略文件，让长驻 Runtime 看到其他进程提交的规则。 */
+	async refresh(): Promise<void> {
+		await this.#exclusive(async () => {
+			this.#policies = await this.#loadFromDisk();
+			this.#loaded = true;
+		});
+	}
+
+	async #loadFromDisk(): Promise<StoredApprovalPolicies> {
 		try {
 			const value = (await Bun.file(this.#storagePath).json()) as Partial<StoredApprovalPolicies>;
 			if (value.schemaVersion !== 1 || !isRecord(value.policies)) {
@@ -78,12 +92,12 @@ export class ApprovalRuleStore {
 						: [],
 				};
 			}
-			this.#policies = { schemaVersion: 1, policies };
+			return { schemaVersion: 1, policies };
 		} catch (error: unknown) {
 			if (!isEnoent(error))
 				throw new Error(`Failed to load approval policies ${this.#storagePath}: ${String(error)}`);
+			return { schemaVersion: 1, policies: {} };
 		}
-		this.#loaded = true;
 	}
 
 	get revision(): number {
@@ -107,27 +121,37 @@ export class ApprovalRuleStore {
 		sourceApprovalId?: ApprovalId;
 	}): Promise<PermissionRule> {
 		this.#assertLoaded();
-		const scope = params.scope ?? "session";
-		const context = params.context ?? {};
-		const policy = this.#mutablePolicy(scope, context);
-		const rule: PermissionRule = {
-			ruleId: `rule_${Snowflake.next()}`,
-			decision: params.decision,
-			fingerprint: params.fingerprint,
-			toolName: params.toolName,
-			operationKind: params.operationKind,
-			targetPattern: params.targetPattern,
-			riskCeiling: params.riskCeiling,
-			createdAt: new Date().toISOString(),
-			sourceApprovalId: params.sourceApprovalId,
-			mutable: true,
-			sourceScope: scope,
-			sourceScopeId: scopeId(scope, context),
-		};
-		policy.rules.push(rule);
-		policy.revision++;
-		await this.#save();
-		return structuredClone(rule);
+		return await this.#mutate(async () => {
+			const scope = params.scope ?? "session";
+			const context = params.context ?? {};
+			const policy = this.#mutablePolicy(scope, context);
+			if (params.sourceApprovalId) {
+				const existing = policy.rules.find(rule => rule.sourceApprovalId === params.sourceApprovalId);
+				if (existing) {
+					if (existing.decision !== params.decision || existing.fingerprint !== params.fingerprint) {
+						throw new Error(`Approval ${params.sourceApprovalId} already created a different permission rule`);
+					}
+					return structuredClone(existing);
+				}
+			}
+			const rule: PermissionRule = {
+				ruleId: `rule_${Snowflake.next()}`,
+				decision: params.decision,
+				fingerprint: params.fingerprint,
+				toolName: params.toolName,
+				operationKind: params.operationKind,
+				targetPattern: params.targetPattern,
+				riskCeiling: params.riskCeiling,
+				createdAt: new Date().toISOString(),
+				sourceApprovalId: params.sourceApprovalId,
+				mutable: true,
+				sourceScope: scope,
+				sourceScopeId: scopeId(scope, context),
+			};
+			policy.rules.push(rule);
+			policy.revision++;
+			return structuredClone(rule);
+		});
 	}
 
 	/** Revoke a mutable rule with optimistic revision validation. */
@@ -138,15 +162,16 @@ export class ApprovalRuleStore {
 		expectedRevision?: number;
 	}): Promise<boolean> {
 		this.#assertLoaded();
-		const context = params.context ?? {};
-		const policy = this.#mutablePolicy(params.scope, context);
-		assertRevision(policy.revision, params.expectedRevision);
-		const index = policy.rules.findIndex(rule => rule.ruleId === params.ruleId && rule.mutable);
-		if (index === -1) return false;
-		policy.rules.splice(index, 1);
-		policy.revision++;
-		await this.#save();
-		return true;
+		return await this.#mutate(async () => {
+			const context = params.context ?? {};
+			const policy = this.#mutablePolicy(params.scope, context);
+			assertRevision(policy.revision, params.expectedRevision);
+			const index = policy.rules.findIndex(rule => rule.ruleId === params.ruleId && rule.mutable);
+			if (index === -1) return false;
+			policy.rules.splice(index, 1);
+			policy.revision++;
+			return true;
+		});
 	}
 
 	async updateDefaults(params: {
@@ -156,13 +181,14 @@ export class ApprovalRuleStore {
 		expectedRevision?: number;
 	}): Promise<PermissionPolicySnapshot> {
 		this.#assertLoaded();
-		const context = params.context ?? {};
-		const policy = this.#mutablePolicy(params.scope, context);
-		assertRevision(policy.revision, params.expectedRevision);
-		policy.defaults = { ...policy.defaults, ...validateDefaults(params.patch, true) };
-		policy.revision++;
-		await this.#save();
-		return this.getPolicy(params.scope, context, true);
+		return await this.#mutate(async () => {
+			const context = params.context ?? {};
+			const policy = this.#mutablePolicy(params.scope, context);
+			assertRevision(policy.revision, params.expectedRevision);
+			policy.defaults = { ...policy.defaults, ...validateDefaults(params.patch, true) };
+			policy.revision++;
+			return this.getPolicy(params.scope, context, true);
+		});
 	}
 
 	/** Check the most specific matching rule: session, workspace, then global. */
@@ -284,11 +310,38 @@ export class ApprovalRuleStore {
 		return policy;
 	}
 
+	async #mutate<T>(mutation: () => Promise<T>): Promise<T> {
+		return await this.#exclusive(async () => {
+			await fs.mkdir(path.dirname(this.#storagePath), { recursive: true });
+			return await withFileLock(this.#storagePath, async () => {
+				this.#policies = await this.#loadFromDisk();
+				const result = await mutation();
+				await this.#save();
+				return result;
+			});
+		});
+	}
+
+	async #exclusive<T>(operation: () => Promise<T>): Promise<T> {
+		const previous = this.#operationTail;
+		const { promise, resolve } = Promise.withResolvers<void>();
+		this.#operationTail = previous.then(() => promise);
+		await previous;
+		try {
+			return await operation();
+		} finally {
+			resolve();
+		}
+	}
+
 	async #save(): Promise<void> {
-		await fs.mkdir(path.dirname(this.#storagePath), { recursive: true });
 		const tempPath = `${this.#storagePath}.${process.pid}.${Date.now()}.tmp`;
-		await Bun.write(tempPath, `${JSON.stringify(this.#policies)}\n`);
-		await fs.rename(tempPath, this.#storagePath);
+		try {
+			await Bun.write(tempPath, `${JSON.stringify(this.#policies)}\n`);
+			await fs.rename(tempPath, this.#storagePath);
+		} finally {
+			await fs.rm(tempPath, { force: true });
+		}
 	}
 
 	#assertLoaded(): void {

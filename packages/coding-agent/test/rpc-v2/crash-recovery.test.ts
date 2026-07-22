@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	abandonRecoveryLease,
 	acquireLease,
 	detectRecovery,
 	executeRecovery,
@@ -68,5 +69,46 @@ describe("RPC v2 crash recovery", () => {
 		await executeRecovery("ses_1", "read_only", runtimeId, sessionFile);
 		expect(await Bun.file(leasePathForSession(sessionFile)).exists()).toBe(false);
 		expect(await Bun.file(recoveryPathForSession(sessionFile)).exists()).toBe(false);
+	});
+
+	test("a stale recovery cannot remove a lease acquired by another Runtime", async () => {
+		const sessionFile = await staleSessionFile();
+		const firstRuntime = "runtime_first" as RuntimeId;
+		const secondRuntime = "runtime_second" as RuntimeId;
+		await detectRecovery("ses_1", firstRuntime, sessionFile);
+		await detectRecovery("ses_1", secondRuntime, sessionFile);
+
+		await executeRecovery("ses_1", "continue", firstRuntime, sessionFile, "lease_first");
+		await expect(executeRecovery("ses_1", "continue", secondRuntime, sessionFile, "lease_second")).rejects.toThrow(
+			"SESSION_LOCKED",
+		);
+
+		const lease = JSON.parse(await Bun.file(leasePathForSession(sessionFile)).text()) as Record<string, unknown>;
+		expect(lease).toMatchObject({ leaseId: "lease_first", runtimeId: "runtime_first" });
+	});
+
+	test("abandoning a preclaimed recovery lease keeps the Session recoverable", async () => {
+		const sessionFile = await staleSessionFile();
+		const runtimeId = "runtime_preclaimed" as RuntimeId;
+		await detectRecovery("ses_1", runtimeId, sessionFile);
+		await acquireLease(
+			sessionFile,
+			{
+				leaseId: "lease_preclaimed",
+				runtimeId,
+				pid: process.pid,
+				sessionId: "ses_1",
+				acquiredAt: new Date().toISOString(),
+				lastHeartbeat: new Date().toISOString(),
+				lastStableSequence: 42,
+			},
+			true,
+		);
+
+		expect(await abandonRecoveryLease(sessionFile, "lease_preclaimed", runtimeId, "ses_1")).toBe(true);
+		expect(await detectRecovery("ses_1", "runtime_later" as RuntimeId, sessionFile)).toMatchObject({
+			required: true,
+			lastStableSequence: 42,
+		});
 	});
 });

@@ -73,8 +73,8 @@ export class BackpressureWriter {
 	}
 
 	async close(): Promise<void> {
-		await this.flush();
 		this.#closed = true;
+		await this.flush();
 	}
 
 	async #writeLine(frame: object): Promise<void> {
@@ -93,20 +93,19 @@ export class BackpressureWriter {
 	}
 
 	async #flushCoalesced(): Promise<void> {
-		if (this.#draining || this.#coalesced.size === 0) return;
-		const frames = [...this.#coalesced.values()];
-		const replaced = Math.max(0, this.#pendingCoalescedCount - frames.length);
-		this.#coalesced.clear();
-		this.#pendingCoalescedCount = 0;
-		if (replaced > 0) {
-			await this.#writeLine({
-				jsonrpc: "2.0",
-				method: "stream.coalesced",
-				params: { replaced, emitted: frames.length },
-			});
-		}
-		for (const item of frames) {
-			await this.#writeLine(item.frame);
+		while (!this.#draining && this.#coalesced.size > 0) {
+			const frames = [...this.#coalesced.values()];
+			const replaced = Math.max(0, this.#pendingCoalescedCount - frames.length);
+			this.#coalesced.clear();
+			this.#pendingCoalescedCount = 0;
+			if (replaced > 0) {
+				await this.#writeLine({
+					jsonrpc: "2.0",
+					method: "stream.coalesced",
+					params: { replaced, emitted: frames.length },
+				});
+			}
+			for (const item of frames) await this.#writeLine(item.frame);
 		}
 	}
 }

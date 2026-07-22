@@ -539,6 +539,8 @@ const paramsByMethod: Record<string, JsonSchema> = {
 		type: "object",
 		properties: {
 			scope: stringSchema,
+			sessionId: stringSchema,
+			cwd: stringSchema,
 			ruleId: stringSchema,
 			expectedRevision: { type: "integer", minimum: 0 },
 			meta: objectSchema,
@@ -726,19 +728,27 @@ const paramsByMethod: Record<string, JsonSchema> = {
 	"resource.upload.chunk": {
 		type: "object",
 		properties: {
+			sessionId: stringSchema,
+			leaseId: stringSchema,
 			uploadId: stringSchema,
 			offset: { type: "integer", minimum: 0 },
 			dataBase64: stringSchema,
 			chunkSha256: stringSchema,
 			meta: objectSchema,
 		},
-		required: ["uploadId", "offset", "dataBase64", "chunkSha256", "meta"],
+		required: ["sessionId", "leaseId", "uploadId", "offset", "dataBase64", "chunkSha256", "meta"],
 		additionalProperties: false,
 	},
 	"resource.upload.commit": {
 		type: "object",
-		properties: { uploadId: stringSchema, sha256: stringSchema, meta: objectSchema },
-		required: ["uploadId", "sha256", "meta"],
+		properties: {
+			sessionId: stringSchema,
+			leaseId: stringSchema,
+			uploadId: stringSchema,
+			sha256: stringSchema,
+			meta: objectSchema,
+		},
+		required: ["sessionId", "leaseId", "uploadId", "sha256", "meta"],
 		additionalProperties: false,
 	},
 	"resource.registerHostUri": {

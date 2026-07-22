@@ -62,6 +62,7 @@
 
 ### Fixed
 
+- Fixed San RPC v2 read-only and recovery sessions mutating state, stale recovery races removing a newer lease, cross-Runtime approval policy overwrites, non-atomic Run/approval/queue receipts, unleased upload chunks, ignored Run goals/evidence filters/shutdown bounds, and late coalesced frames being dropped.
 - Fixed skills misclassifying San as Codex from shared skill paths or project markers by stamping the San host runtime into user-invoked and autoload prompts; explicit user-selected cross-runtime targets still win.
 - Fixed San Brain capture silently dropping slow but valid LLM TurnDigests behind a hidden 150 ms deadline; digest side requests now honor `san.contextSteady.digest.timeoutMs`, and settled-turn candidates are captured after digest completion.
 - Fixed single-agent benchmark runs reusing one global Settings instance across Native/Steady overlays and retaining JavaScript eval subprocesses after task completion. Public benchmark runs now use an exact tool whitelist, reject process-environment credentials for paid runs, redact in-memory runtime keys from provider/session artifacts, and classify overload, stream-read, and quota failures as invalid pairs.

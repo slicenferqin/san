@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ApprovalRuleStore, generateFingerprint } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/approval-rules";
+import type { ApprovalId } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/protocol/ids";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const tempDirectories: string[] = [];
@@ -85,5 +86,36 @@ describe("RPC v2 approval policy", () => {
 			scope: "once",
 			snapshot: { source: "request_override", effectiveDecision: "ask", canPersistRule: false },
 		});
+	});
+
+	test("merges mutations from concurrently loaded Runtime stores", async () => {
+		const storagePath = await policyPath();
+		const first = new ApprovalRuleStore(storagePath);
+		const second = new ApprovalRuleStore(storagePath);
+		const sourceApprovalId = "approval_shared" as ApprovalId;
+		await Promise.all([first.load(), second.load()]);
+
+		await Promise.all([
+			first.updateDefaults({ scope: "global", patch: { exec: "deny" } }),
+			second.addRule({
+				scope: "workspace",
+				context: { cwd: "/workspace" },
+				decision: "allow",
+				fingerprint: "sha256:workspace-rule",
+				sourceApprovalId,
+			}),
+		]);
+		await first.refresh();
+
+		expect(first.getPolicy("global", {}, false).defaults.exec).toBe("deny");
+		expect(first.getPolicy("workspace", { cwd: "/workspace" }, false).rules).toHaveLength(1);
+		const replayed = await first.addRule({
+			scope: "workspace",
+			context: { cwd: "/workspace" },
+			decision: "allow",
+			fingerprint: "sha256:workspace-rule",
+			sourceApprovalId,
+		});
+		expect(replayed.ruleId).toBe(first.getPolicy("workspace", { cwd: "/workspace" }, false).rules[0]?.ruleId);
 	});
 });

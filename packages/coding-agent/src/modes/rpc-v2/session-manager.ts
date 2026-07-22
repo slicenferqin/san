@@ -8,6 +8,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
+import { logger } from "@oh-my-pi/pi-utils";
 import { collectContextCheckpoints } from "../../context-steady/checkpoint";
 import { listTurnDigests } from "../../context-steady/session";
 import type { ContextCheckpoint } from "../../context-steady/types";
@@ -18,6 +19,7 @@ import type { CompactMode } from "../../session/compact-modes";
 import { listAllSessions, type SessionInfo } from "../../session/session-listing";
 import type { EventBus } from "../../utils/event-bus";
 import {
+	abandonRecoveryLease,
 	acquireLease,
 	detectRecovery,
 	executeRecovery,
@@ -70,7 +72,11 @@ export interface RpcV2SessionHandle {
 
 export interface RpcV2SessionFactory {
 	create(params: { cwd: string; title?: string; parentSessionPath?: string }): Promise<RpcV2SessionHandle>;
-	open(params: { sessionFile: string; access: "read_write" | "read_only" }): Promise<RpcV2SessionHandle>;
+	open(params: {
+		sessionFile: string;
+		access: "read_write" | "read_only";
+		recovering?: boolean;
+	}): Promise<RpcV2SessionHandle>;
 	getAvailableModels(): readonly Model[];
 	getAllModels(): readonly Model[];
 	hasProviderAuth(providerId: string): boolean;
@@ -110,6 +116,11 @@ interface ActiveLease {
 	access: "read_write" | "read_only";
 	acquiredAt: string;
 	held: boolean;
+}
+
+interface PreparedLease {
+	lease: ActiveLease;
+	recovery?: RecoveryDescriptor;
 }
 
 interface ActiveSession {
@@ -167,6 +178,13 @@ export interface ResolvedRunContent {
 	text: string;
 	images: ImageContent[];
 	resourceIds: string[];
+}
+export interface SessionMutationReceipt {
+	key: string;
+	params: unknown;
+}
+interface PersistedSessionMutationReceipt extends SessionMutationReceipt {
+	result: unknown | ((revision: number) => unknown);
 }
 type ContentResolver = (params: {
 	session: AgentSession;
@@ -603,23 +621,51 @@ export class RpcV2SessionManager {
 				message: `Session not found: ${params.sessionId}`,
 				sessionId: params.sessionId,
 			});
-		let handle: RpcV2SessionHandle;
-		if (this.#factory) handle = await this.#factory.open({ sessionFile: info.path, access: params.access });
-		else if (this.#initialHandle?.session.sessionId === params.sessionId) handle = this.#initialHandle;
-		else
-			failRpc({
-				reason: "CAPABILITY_UNAVAILABLE",
-				category: "internal",
-				message: "Session factory is required to open this Session",
-				sessionId: params.sessionId,
-			});
-		const active = await this.#attach(handle, params.access, params.stealExpiredLease === true);
-		return {
-			sessionId: active.sessionId,
-			leaseId: active.lease?.leaseId as LeaseId,
-			summary: this.#summaryFromActive(active),
-			...(active.state.snapshot?.recovery ? { recovery: active.state.snapshot.recovery } : {}),
-		};
+		const prepared =
+			params.access === "read_write"
+				? await this.#prepareWriteLease(params.sessionId as SessionId, info.path, params.stealExpiredLease === true)
+				: undefined;
+		let handle: RpcV2SessionHandle | undefined;
+		try {
+			if (this.#factory) {
+				handle = await this.#factory.open({
+					sessionFile: info.path,
+					access: params.access,
+					recovering: Boolean(prepared?.recovery),
+				});
+			} else if (this.#initialHandle?.session.sessionId === params.sessionId) {
+				handle = this.#initialHandle;
+			} else {
+				failRpc({
+					reason: "CAPABILITY_UNAVAILABLE",
+					category: "internal",
+					message: "Session factory is required to open this Session",
+					sessionId: params.sessionId,
+				});
+			}
+			const active = await this.#attach(handle, params.access, params.stealExpiredLease === true, prepared);
+			return {
+				sessionId: active.sessionId,
+				leaseId: active.lease?.leaseId as LeaseId,
+				summary: this.#summaryFromActive(active),
+				...(active.state.snapshot?.recovery ? { recovery: active.state.snapshot.recovery } : {}),
+			};
+		} catch (error: unknown) {
+			this.#clearFailedAttach(handle);
+			try {
+				await handle?.dispose?.();
+			} finally {
+				await this.#releasePreparedLease(info.path, prepared);
+			}
+			throw error;
+		}
+	}
+
+	#clearFailedAttach(handle: RpcV2SessionHandle | undefined): void {
+		const active = this.#active;
+		if (!active || active.handle !== handle) return;
+		active.unsubscribe();
+		this.#active = undefined;
 	}
 
 	async replayCreatedSession(
@@ -794,7 +840,13 @@ export class RpcV2SessionManager {
 		active: ActiveSession,
 		type: SessionEvent["type"],
 		data: T,
-		options?: { durability?: "durable" | "transient"; runId?: RunId; turnId?: string; operationId?: string },
+		options?: {
+			durability?: "durable" | "transient";
+			runId?: RunId;
+			turnId?: string;
+			operationId?: string;
+			receipt?: PersistedSessionMutationReceipt;
+		},
 	): Promise<SessionEvent<T>> {
 		return await this.#enqueueWork(active, async () => {
 			const event = active.sequencer.emit(type, data, {
@@ -803,7 +855,7 @@ export class RpcV2SessionManager {
 				turnId: options?.turnId as never,
 				causation: options?.operationId ? { operationId: options.operationId as never } : undefined,
 			});
-			await this.#persistAndPublish(active, event);
+			await this.#persistAndPublish(active, event, options?.receipt);
 			return event;
 		});
 	}
@@ -812,6 +864,7 @@ export class RpcV2SessionManager {
 		active: ActiveSession,
 		operationId?: OperationId,
 		resourceIds: readonly string[] = [],
+		receipt?: SessionMutationReceipt,
 	): Promise<{ runId: RunId; operationId: OperationId; userMessageId: string; acceptedAt: string }> {
 		if (active.activeRun && !isTerminalRun(active.activeRun.status))
 			failRpc({
@@ -830,12 +883,12 @@ export class RpcV2SessionManager {
 		active.adapter.currentRunId = runId;
 		active.adapter.currentOperationId = opId;
 		active.adapter.currentRunTerminalStatus = undefined;
-		await this.emitCustom(
-			active,
-			"run.accepted",
-			{ runId, operationId: opId, acceptedAt },
-			{ runId, operationId: opId },
-		);
+		const response = { runId, operationId: opId, acceptedAt };
+		await this.emitCustom(active, "run.accepted", response, {
+			runId,
+			operationId: opId,
+			...(receipt ? { receipt: { ...receipt, result: response } } : {}),
+		});
 		await this.#persistState(active);
 		return { runId, operationId: opId, userMessageId, acceptedAt };
 	}
@@ -844,8 +897,9 @@ export class RpcV2SessionManager {
 		active: ActiveSession,
 		resolved: ResolvedRunContent,
 		operationId?: OperationId,
+		receipt?: SessionMutationReceipt,
 	): Promise<{ runId: RunId; operationId: OperationId; userMessageId: string; acceptedAt: string }> {
-		const accepted = await this.acceptRun(active, operationId, resolved.resourceIds);
+		const accepted = await this.acceptRun(active, operationId, resolved.resourceIds, receipt);
 		this.#launchPrompt(active, accepted.runId, resolved);
 		return accepted;
 	}
@@ -952,7 +1006,8 @@ export class RpcV2SessionManager {
 		queueItemId: string,
 		expectedStatus?: string,
 		operationId?: string,
-	): Promise<QueueItem> {
+		receipt?: SessionMutationReceipt,
+	): Promise<{ item: QueueItem; revision: number }> {
 		const item = active.queue.find(candidate => candidate.queueItemId === queueItemId);
 		if (!item)
 			failRpc({
@@ -977,9 +1032,24 @@ export class RpcV2SessionManager {
 				sessionId: active.sessionId,
 			});
 		item.status = "cancelled";
-		await this.emitCustom(active, "queue.item.cancelled", { item }, { operationId });
+		await this.emitCustom(
+			active,
+			"queue.item.cancelled",
+			{ item },
+			{
+				operationId,
+				...(receipt
+					? {
+							receipt: {
+								...receipt,
+								result: (revision: number) => ({ item: structuredClone(item), revision }),
+							},
+						}
+					: {}),
+			},
+		);
 		await this.#persistState(active);
-		return item;
+		return { item, revision: active.state.revision };
 	}
 
 	async rename(
@@ -1100,6 +1170,7 @@ export class RpcV2SessionManager {
 		decision: "allow" | "deny",
 		scope: string,
 		persistedRule: boolean,
+		receipt?: PersistedSessionMutationReceipt,
 	): Promise<ApprovalRequest> {
 		const approval = active.pendingApprovals.find(item => item.approvalId === approvalId);
 		if (approval?.status !== "pending")
@@ -1115,7 +1186,7 @@ export class RpcV2SessionManager {
 			active,
 			"approval.resolved",
 			{ approvalId: approval.approvalId, decision, scope, persistedRule },
-			{ runId: approval.runId },
+			{ runId: approval.runId, ...(receipt ? { receipt } : {}) },
 		);
 		if (
 			active.activeRun?.runId === approval.runId &&
@@ -1218,17 +1289,33 @@ export class RpcV2SessionManager {
 		strategy: "continue" | "mark_aborted" | "read_only",
 	): Promise<{ recovered: boolean; lastStableSequence: number }> {
 		if (!active.sessionFile) return { recovered: true, lastStableSequence: active.sequencer.currentSequence };
-		const result = await executeRecovery(
-			active.sessionId,
-			strategy,
-			this.#runtimeId as never,
-			active.sessionFile,
-			active.lease?.leaseId,
-		);
+		let result: { recovered: boolean; lastStableSequence: number };
+		try {
+			result = await executeRecovery(
+				active.sessionId,
+				strategy,
+				this.#runtimeId as RuntimeId,
+				active.sessionFile,
+				active.lease?.leaseId,
+			);
+		} catch (error: unknown) {
+			if (error instanceof Error && error.message === "SESSION_LOCKED") {
+				failRpc({
+					reason: "SESSION_LOCKED",
+					category: "conflict",
+					message: `Session recovery lease changed: ${active.sessionId}`,
+					sessionId: active.sessionId,
+					retryable: true,
+				});
+			}
+			throw error;
+		}
 		if (strategy === "read_only") {
 			active.lease = active.lease ? { ...active.lease, access: "read_only", held: false } : undefined;
 		} else if (active.lease) {
 			active.lease = { ...active.lease, held: true };
+			active.session.enableSessionWrites();
+			active.session.repairInterruptedTurnAfterRecovery();
 		}
 		if (strategy === "mark_aborted" && active.lastRun?.status === "interrupted") {
 			active.lastRun = {
@@ -1244,6 +1331,8 @@ export class RpcV2SessionManager {
 				lifecycle: strategy === "read_only" ? "read_only" : "ready",
 				recovery: undefined,
 			};
+		await this.#binder?.(active);
+		if (strategy === "read_only") return result;
 		active.state.revision++;
 		await this.#persistState(active);
 		await this.emitCustom(
@@ -1258,6 +1347,15 @@ export class RpcV2SessionManager {
 	async close(options?: { abortRunning?: boolean }): Promise<void> {
 		const active = this.#active;
 		if (!active) return;
+		if (active.lease?.access === "read_only" || active.state.snapshot?.lifecycle === "recovering") {
+			active.unsubscribe();
+			if (active.sessionFile && active.lease?.held) {
+				await abandonRecoveryLease(active.sessionFile, active.lease.leaseId, this.#runtimeId, active.sessionId);
+			}
+			await active.handle.dispose?.();
+			this.#active = undefined;
+			return;
+		}
 		if (active.activeRun && !isTerminalRun(active.activeRun.status)) {
 			if (!options?.abortRunning)
 				failRpc({
@@ -1269,16 +1367,28 @@ export class RpcV2SessionManager {
 				});
 			await active.session.abort({ reason: "shutdown" });
 		}
+		if (this.#active !== active) return;
 		if (active.backgroundTasks.size > 0) await Promise.allSettled(active.backgroundTasks);
+		if (this.#active !== active) return;
 		await active.eventTail;
+		if (this.#active !== active) return;
 		if (active.activeRun) await this.markRunStatus(active, "aborted", "session_closed");
-		await this.#flushDeferredResourceReleases(active);
-		await active.session.sessionManager.flush();
+		if (this.#active !== active) return;
+		if (active.lease?.access === "read_write") {
+			await this.#flushDeferredResourceReleases(active);
+			if (this.#active !== active) return;
+			await active.session.sessionManager.flush();
+			if (this.#active !== active) return;
+		}
 		active.unsubscribe();
-		if (active.sessionFile && active.lease?.access === "read_write" && active.lease.held)
-			await removeLeaseRecord(active.sessionFile);
-		await active.handle.dispose?.();
-		this.#active = undefined;
+		try {
+			await active.handle.dispose?.();
+		} finally {
+			if (active.sessionFile && active.lease?.access === "read_write" && active.lease.held) {
+				await removeLeaseRecord(active.sessionFile, active.lease.leaseId, this.#runtimeId);
+			}
+			if (this.#active === active) this.#active = undefined;
+		}
 	}
 
 	async deleteSession(
@@ -1362,8 +1472,58 @@ export class RpcV2SessionManager {
 		return { deleted: true, mode, indexRevision: Date.now() };
 	}
 
-	async shutdown(): Promise<void> {
-		await this.close({ abortRunning: true });
+	async shutdown(options?: { force?: boolean; timeoutMs?: number }): Promise<void> {
+		if (options?.force) {
+			await this.#forceShutdown();
+			return;
+		}
+		const graceful = this.close({ abortRunning: true });
+		if (options?.timeoutMs === undefined) {
+			await graceful;
+			return;
+		}
+		let gracefulError: unknown;
+		const settled = graceful.then(
+			() => true,
+			error => {
+				gracefulError = error;
+				return true;
+			},
+		);
+		const completed = await Promise.race([settled, Bun.sleep(options.timeoutMs).then(() => false)]);
+		if (completed) {
+			if (gracefulError !== undefined) throw gracefulError;
+			return;
+		}
+		await this.#forceShutdown();
+	}
+
+	async #forceShutdown(): Promise<void> {
+		const active = this.#active;
+		if (!active) return;
+		active.session.beginDispose();
+		active.session.disableSessionWrites();
+		active.session.abortRetry();
+		active.session.abortCompaction();
+		active.session.abortHandoff();
+		active.session.abortBash();
+		active.session.abortEval();
+		active.session.agent.abort("shutdown");
+		const disconnectMcp = active.handle.mcpManager?.disconnectAll();
+		if (disconnectMcp) {
+			void disconnectMcp.catch(error => {
+				logger.warn("RPC v2 force shutdown failed to disconnect MCP", { error: String(error) });
+			});
+		}
+		active.unsubscribe();
+		this.#active = undefined;
+		if (active.sessionFile && active.lease?.access === "read_write" && active.lease.held) {
+			if (active.state.snapshot?.lifecycle === "recovering") {
+				await abandonRecoveryLease(active.sessionFile, active.lease.leaseId, this.#runtimeId, active.sessionId);
+			} else {
+				await removeLeaseRecord(active.sessionFile, active.lease.leaseId, this.#runtimeId);
+			}
+		}
 	}
 
 	/** 给 UI/Router 使用的当前 Session 快照。 */
@@ -1384,10 +1544,14 @@ export class RpcV2SessionManager {
 		handle: RpcV2SessionHandle,
 		access: "read_write" | "read_only",
 		stealExpiredLease: boolean,
+		prepared?: PreparedLease,
 	): Promise<ActiveSession> {
 		const session = handle.session;
 		const sessionId = session.sessionId as SessionId;
 		const sessionFile = session.sessionFile;
+		if (prepared && prepared.lease.sessionId !== sessionId) {
+			throw new Error(`Opened Session ${sessionId} does not match leased Session ${prepared.lease.sessionId}`);
+		}
 		const store = new RpcV2StateStore(sessionFile, sessionId);
 		const loaded = await store.load();
 		const cwd = session.sessionManager.getCwd();
@@ -1433,7 +1597,10 @@ export class RpcV2SessionManager {
 			pendingResourceReleases: new Set(loaded.state.pendingResourceReleases),
 			maintenance: reviveMaintenance(loaded.state.maintenance, session.sessionManager.getCwd()),
 		};
-		if (access === "read_write") {
+		if (prepared) {
+			active.lease = prepared.lease;
+			if (prepared.recovery) this.#applyRecoveryDescriptor(active, prepared.recovery);
+		} else if (access === "read_write") {
 			let recovery: RecoveryDescriptor | undefined;
 			try {
 				recovery = sessionFile ? await detectRecovery(sessionId, this.#runtimeId as never, sessionFile) : undefined;
@@ -1472,21 +1639,7 @@ export class RpcV2SessionManager {
 				acquiredAt: new Date().toISOString(),
 				held: !sessionFile || !recovery || stealExpiredLease,
 			};
-			if (recovery) {
-				if (active.activeRun && !isTerminalRun(active.activeRun.status)) {
-					const interruptedRun = {
-						...active.activeRun,
-						status: "interrupted" as const,
-						finishedAt: new Date().toISOString(),
-						reason: "runtime_crash",
-					};
-					active.lastRun = interruptedRun;
-					active.activeRun = undefined;
-					active.activeResourceIds.clear();
-					recovery.interruptedRunId = interruptedRun.runId;
-				}
-				active.state.snapshot = { ...(active.state.snapshot ?? {}), lifecycle: "recovering", recovery };
-			}
+			if (recovery) this.#applyRecoveryDescriptor(active, recovery);
 		} else {
 			active.lease = { leaseId: newLeaseId(), sessionId, access, acquiredAt: new Date().toISOString(), held: false };
 		}
@@ -1503,16 +1656,106 @@ export class RpcV2SessionManager {
 		active.unsubscribe = session.subscribe(listener);
 		this.#active = active;
 		await this.#binder?.(active);
-		await this.#persistState(active);
-		if (!active.activeRun) await this.#flushDeferredResourceReleases(active);
+		if (active.lease?.access === "read_write" && active.lease.held && !active.state.snapshot?.recovery) {
+			await this.#persistState(active);
+			if (!active.activeRun) await this.#flushDeferredResourceReleases(active);
+		}
 		return active;
+	}
+
+	async #prepareWriteLease(
+		sessionId: SessionId,
+		sessionFile: string,
+		stealExpiredLease: boolean,
+	): Promise<PreparedLease> {
+		let recovery: RecoveryDescriptor | undefined;
+		try {
+			recovery = await detectRecovery(sessionId, this.#runtimeId as RuntimeId, sessionFile);
+		} catch (error: unknown) {
+			if (error instanceof Error && error.message === "SESSION_LOCKED") {
+				failRpc({
+					reason: "SESSION_LOCKED",
+					category: "conflict",
+					message: `Session is locked by another Runtime: ${sessionId}`,
+					sessionId,
+					retryable: true,
+				});
+			}
+			throw error;
+		}
+		const leaseId = newLeaseId();
+		const acquiredAt = new Date().toISOString();
+		const held = !recovery || stealExpiredLease;
+		if (held) {
+			const loaded = await new RpcV2StateStore(sessionFile, sessionId).load();
+			const lastSequence = Math.max(
+				loaded.state.lastSequence,
+				loaded.events.at(-1)?.sequence ?? 0,
+				recovery?.lastStableSequence ?? 0,
+			);
+			try {
+				await acquireLease(
+					sessionFile,
+					{
+						leaseId,
+						runtimeId: this.#runtimeId,
+						pid: process.pid,
+						sessionId,
+						acquiredAt,
+						lastHeartbeat: acquiredAt,
+						lastStableSequence: lastSequence,
+					},
+					Boolean(recovery && stealExpiredLease),
+				);
+			} catch (error: unknown) {
+				if (error instanceof Error && error.message === "SESSION_LOCKED") {
+					failRpc({
+						reason: "SESSION_LOCKED",
+						category: "conflict",
+						message: `Session is locked by another Runtime: ${sessionId}`,
+						sessionId,
+						retryable: true,
+					});
+				}
+				throw error;
+			}
+		}
+		return {
+			lease: { leaseId, sessionId, access: "read_write", acquiredAt, held },
+			...(recovery ? { recovery } : {}),
+		};
+	}
+
+	#applyRecoveryDescriptor(active: ActiveSession, recovery: RecoveryDescriptor): void {
+		if (active.activeRun && !isTerminalRun(active.activeRun.status)) {
+			const interruptedRun = {
+				...active.activeRun,
+				status: "interrupted" as const,
+				finishedAt: new Date().toISOString(),
+				reason: "runtime_crash",
+			};
+			active.lastRun = interruptedRun;
+			active.activeRun = undefined;
+			active.activeResourceIds.clear();
+			recovery.interruptedRunId = interruptedRun.runId;
+		}
+		active.state.snapshot = { ...(active.state.snapshot ?? {}), lifecycle: "recovering", recovery };
+	}
+
+	async #releasePreparedLease(sessionFile: string, prepared?: PreparedLease): Promise<void> {
+		if (!prepared?.lease.held) return;
+		if (prepared.recovery) {
+			await abandonRecoveryLease(sessionFile, prepared.lease.leaseId, this.#runtimeId, prepared.lease.sessionId);
+		} else {
+			await removeLeaseRecord(sessionFile, prepared.lease.leaseId, this.#runtimeId);
+		}
 	}
 
 	async #rebindSwitchedSession(previous: ActiveSession): Promise<ActiveSession> {
 		await previous.eventTail;
 		previous.unsubscribe();
 		if (previous.sessionFile && previous.lease?.access === "read_write" && previous.lease.held)
-			await removeLeaseRecord(previous.sessionFile);
+			await removeLeaseRecord(previous.sessionFile, previous.lease.leaseId, this.#runtimeId);
 		this.#active = undefined;
 		return await this.#attach(previous.handle, "read_write", false);
 	}
@@ -1652,18 +1895,35 @@ export class RpcV2SessionManager {
 		);
 	}
 
-	async #persistAndPublish(active: ActiveSession, event: SessionEvent): Promise<void> {
+	async #persistAndPublish(
+		active: ActiveSession,
+		event: SessionEvent,
+		receipt?: PersistedSessionMutationReceipt,
+	): Promise<void> {
+		if (!this.#canPersist(active)) {
+			active.events.push(event);
+			if (active.synced) {
+				if (active.syncPending) active.syncBuffer.push(event);
+				else await this.#publishEvent(event);
+			}
+			return;
+		}
 		if (event.durability === "durable") active.state.revision++;
+		active.state.lastSequence = event.sequence;
+		if (receipt) {
+			const result = typeof receipt.result === "function" ? receipt.result(active.state.revision) : receipt.result;
+			active.idempotency.record(receipt.key, receipt.params, result);
+			await this.#persistState(active);
+		}
 		await active.store.appendEvent(event);
 		active.events.push(event);
 		if (active.events.length > this.#retention) {
 			active.events = active.events.slice(-this.#retention);
 			await active.store.replaceEvents(active.events);
 		}
-		active.state.lastSequence = event.sequence;
-		await this.#persistState(active);
+		if (!receipt) await this.#persistState(active);
 		if (active.sessionFile && active.lease?.access === "read_write" && active.lease.held) {
-			await updateLeaseHeartbeat(active.sessionFile, event.sequence);
+			await updateLeaseHeartbeat(active.sessionFile, active.lease.leaseId, this.#runtimeId, event.sequence);
 		}
 		if (active.synced) {
 			if (active.syncPending) {
@@ -1697,6 +1957,7 @@ export class RpcV2SessionManager {
 	}
 
 	async #persistState(active: ActiveSession): Promise<void> {
+		if (!this.#canPersist(active)) return;
 		active.state.updatedAt = new Date().toISOString();
 		active.state.queue = active.queue.map(item => ({
 			...item,
@@ -1712,6 +1973,15 @@ export class RpcV2SessionManager {
 		active.state.receipts = active.idempotency.entries();
 		active.state.evidence = active.evidence.entries();
 		await active.store.saveState(active.state);
+	}
+
+	#canPersist(active: ActiveSession): boolean {
+		return (
+			this.#active === active &&
+			active.lease?.access === "read_write" &&
+			active.lease.held &&
+			active.state.snapshot?.lifecycle !== "recovering"
+		);
 	}
 
 	async #flushDeferredResourceReleases(active: ActiveSession): Promise<void> {
