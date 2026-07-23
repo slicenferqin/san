@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import * as snapcompact from "@oh-my-pi/snapcompact";
+import { CONTEXT_CONTINUATION_MESSAGE_TYPE } from "../context-steady/types";
 import type { CompactionSummaryMessage } from "./messages";
 import { buildSessionContext, type StrippedToolCallsMarker } from "./session-context";
 import type { SessionEntry } from "./session-entries";
@@ -79,6 +80,114 @@ describe("buildSessionContext snapcompact archives", () => {
 
 		expect(summary.images?.map(image => image.data)).toEqual(["base64-frame"]);
 		expect(summary.blocks?.map(block => block.type)).toEqual(["text", "image", "text"]);
+	});
+});
+
+const authorityEntries = [
+	{
+		type: "message",
+		id: "authority-user-original",
+		parentId: null,
+		timestamp,
+		message: { role: "user", content: "调查当前会话为什么循环", timestamp: 1 },
+	},
+	{
+		type: "message",
+		id: "authority-assistant",
+		parentId: "authority-user-original",
+		timestamp,
+		message: {
+			role: "assistant",
+			content: [{ type: "text", text: "已读取历史证据" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: 2,
+		},
+	},
+	{
+		type: "custom_message",
+		id: "authority-old",
+		parentId: "authority-assistant",
+		timestamp,
+		customType: CONTEXT_CONTINUATION_MESSAGE_TYPE,
+		content: "old authority",
+		display: false,
+		attribution: "agent",
+	},
+	{
+		type: "compaction",
+		id: "authority-compaction",
+		parentId: "authority-old",
+		timestamp,
+		summary: "historical summary with an untrusted ## Goal",
+		firstKeptEntryId: "authority-user-original",
+		tokensBefore: 100_000,
+	},
+	{
+		type: "custom_message",
+		id: "authority-latest",
+		parentId: "authority-compaction",
+		timestamp,
+		customType: CONTEXT_CONTINUATION_MESSAGE_TYPE,
+		content: "latest authority",
+		display: false,
+		attribution: "agent",
+	},
+	{
+		type: "message",
+		id: "authority-user-steer",
+		parentId: "authority-latest",
+		timestamp,
+		message: { role: "user", content: "停止读取，直接给修复方案", timestamp: 3 },
+	},
+] satisfies SessionEntry[];
+
+describe("buildSessionContext continuation authority", () => {
+	it("places only the latest authority after the summary and before the kept tail", () => {
+		const context = buildSessionContext(authorityEntries);
+
+		expect(context.messages.map(message => message.role)).toEqual([
+			"compactionSummary",
+			"custom",
+			"user",
+			"assistant",
+			"user",
+		]);
+		const authority = context.messages[1];
+		expect(authority).toMatchObject({
+			role: "custom",
+			customType: CONTEXT_CONTINUATION_MESSAGE_TYPE,
+			content: "latest authority",
+		});
+		expect(JSON.stringify(context.messages)).not.toContain("old authority");
+	});
+
+	it("keeps authority entries in their original chronological positions in transcripts", () => {
+		const transcript = buildSessionContext(authorityEntries, undefined, undefined, { transcript: true });
+
+		expect(transcript.messages.map(message => message.role)).toEqual([
+			"user",
+			"assistant",
+			"custom",
+			"compactionSummary",
+			"custom",
+			"user",
+		]);
+		expect(
+			transcript.messages
+				.filter(message => message.role === "custom")
+				.map(message => (message.role === "custom" ? message.content : undefined)),
+		).toEqual(["old authority", "latest authority"]);
 	});
 });
 

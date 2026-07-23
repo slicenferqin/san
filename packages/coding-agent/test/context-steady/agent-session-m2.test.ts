@@ -36,10 +36,13 @@ import {
 	CONTEXT_PLAN_MESSAGE_TYPE,
 	type ContextPlanAudit,
 } from "../../src/context-steady/plan-types";
+import { type ContextProbeRecord, contextProbeFilePath } from "../../src/context-steady/probe";
 import {
 	CONTEXT_CHECKPOINT_CUSTOM_TYPE,
 	CONTEXT_PACKET_CUSTOM_TYPE,
 	CONTEXT_PACKET_MESSAGE_TYPE,
+	CONTEXT_SEGMENT_CUSTOM_TYPE,
+	type ContextSegment,
 	TURN_DIGEST_CUSTOM_TYPE,
 } from "../../src/context-steady/types";
 import {
@@ -1153,7 +1156,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		expect(JSON.stringify(planMessages[1])).toBe(JSON.stringify(planMessages[0]));
 	});
 
-	it("does not retry a no-op Segment maintenance pass at every provider boundary", async () => {
+	it("appends Segment checkpoints without starting physical compaction", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({
 			responses: [
@@ -1168,9 +1171,10 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 			streamFn: mock.stream,
 			convertToLlm,
 		});
-		const sessionManager = SessionManager.inMemory();
+		const sessionManager = SessionManager.create(tempDir, tempDir);
 		const settings = Settings.isolated({
 			...BASE_SETTINGS,
+			"san.contextSteady.probe.enabled": true,
 			"san.contextSteady.segment.maxTokens": 1,
 			"san.contextSteady.segment.maxDurationMs": 0,
 			"san.contextSteady.qualityWindowTokens": 240_000,
@@ -1192,7 +1196,33 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		await session.waitForIdle();
 
 		expect(mock.calls).toHaveLength(3);
-		expect(maintenanceStarts).toBe(1);
+		expect(maintenanceStarts).toBe(0);
+		const segments = customEntries(sessionManager, CONTEXT_SEGMENT_CUSTOM_TYPE).map(
+			entry => entry.data as ContextSegment,
+		);
+		expect(segments.length).toBeGreaterThanOrEqual(1);
+		expect(segments.every(segment => segment.authority === "checkpoint")).toBe(true);
+		expect(segments.every(segment => segment.maintenance.action === "checkpoint")).toBe(true);
+		const sessionFile = sessionManager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected persistent session file");
+		const probeFile = contextProbeFilePath(sessionFile);
+		let records: ContextProbeRecord[] = [];
+		for (let attempt = 0; attempt < 100; attempt++) {
+			const file = Bun.file(probeFile);
+			if (await file.exists()) records = Bun.JSONL.parse(await file.text()) as ContextProbeRecord[];
+			if (records.some(record => record.request.kind === "maintenance")) break;
+			await Bun.sleep(1);
+		}
+		const maintenanceRecords = records.filter(record => record.request.kind === "maintenance");
+		expect(maintenanceRecords.length).toBeGreaterThanOrEqual(1);
+		expect(
+			maintenanceRecords.every(
+				record =>
+					record.maintenance.primaryTrigger === "segment_tokens" &&
+					record.maintenance.action === "checkpoint" &&
+					record.authority.authorityStateInjected,
+			),
+		).toBe(true);
 	});
 
 	it("rebuilds the active plan after pre-prompt compaction rewrites history", async () => {

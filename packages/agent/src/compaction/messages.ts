@@ -196,7 +196,10 @@ export function convertMessageToLlm(message: AgentMessage): Message | undefined 
 					role: "user",
 					content:
 						message.blocks !== undefined
-							? [{ type: "text" as const, text: message.summary }, ...message.blocks]
+							? [
+									{ type: "text" as const, text: renderCompactionSummaryContext(message.summary) },
+									...message.blocks,
+								]
 							: [
 									{
 										type: "text" as const,

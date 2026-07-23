@@ -3,9 +3,11 @@ import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import {
 	appendContextProbeRecord,
+	buildContextMaintenanceProbeRecord,
 	buildContextProbeRecord,
 	contextProbeFilePath,
 } from "../../src/context-steady/probe";
+import type { ActiveContinuationState } from "../../src/context-steady/types";
 
 function assistant(): AssistantMessage {
 	return {
@@ -48,6 +50,7 @@ describe("Context steady sidecar probe", () => {
 		});
 
 		expect(record.request).toEqual({ kind: "agent", stopReason: "stop" });
+		expect(record.schemaVersion).toBe(3);
 		expect(record.usage).toMatchObject({ promptTokens: 105_000, cacheReadRate: 80_000 / 105_000 });
 		expect(record.context).toMatchObject({
 			steadyEnabled: true,
@@ -86,6 +89,101 @@ describe("Context steady sidecar probe", () => {
 			stopReason: "error",
 			errorStatus: 503,
 			errorMessage: "service unavailable",
+		});
+		expect(record.compaction).toMatchObject({ summaryInputTokens: 105_000, summaryOutputTokens: 500 });
+	});
+
+	test("records one v3 maintenance decision with compaction, authority, and convergence evidence", () => {
+		const authorityState: ActiveContinuationState = {
+			schemaVersion: 1,
+			sessionId: "session-1",
+			logicalTurnId: "turn-1",
+			activeUserEntryId: "user-1",
+			activeUserRequest: "investigate the loop",
+			supersededUserEntryIds: [],
+			promptGeneration: 4,
+			createdAt: "2026-07-23T00:00:00.000Z",
+			summaryAuthority: {
+				summarySource: "deterministic_fallback",
+				forbiddenGoalField: true,
+				executionClaimConflictCount: 2,
+				repairAttempted: true,
+				repairSucceeded: false,
+				fallbackReason: "summary repair remained invalid",
+			},
+			executionEvidence: {
+				successfulMutations: [],
+				successfulVerifications: [],
+				observedResources: [],
+				successfulToolResults: 3,
+				failedToolResults: 0,
+				unclassifiedShellOrEvalResults: 0,
+			},
+		};
+		const record = buildContextMaintenanceProbeRecord({
+			sessionId: "session-1",
+			sessionFile: "/tmp/session-1.jsonl",
+			model: { provider: "anthropic", id: "test" },
+			contextWindow: 500_000,
+			steadyEnabled: true,
+			activeEstimatedTokens: 110_000,
+			rawJournalEstimatedTokens: 260_000,
+			nativeCompactionStrategy: "context-full",
+			nativeCompactionThresholdTokens: 240_000,
+			steadyTargetTokens: 240_000,
+			compactionIds: ["compaction-1"],
+			segmentIds: ["segment-1"],
+			prefixFingerprint: "prefix-b",
+			maintenanceDecision: {
+				maintenanceId: "maintenance-1",
+				primaryTrigger: "steady_target",
+				matchedTriggers: ["steady_target", "segment_tokens"],
+				action: "remote_compaction",
+				segmentDeltaTokens: 48_000,
+				segmentElapsedMs: 120_000,
+			},
+			compaction: {
+				tokensBefore: 260_000,
+				tokensAfter: 110_000,
+				summaryInputTokens: 90_000,
+				summaryOutputTokens: 2_000,
+				summarySource: "deterministic_fallback",
+			},
+			authorityState,
+			convergence: {
+				state: "finalize_required",
+				actionRepeatCount: 4,
+				noEvidenceCount: 3,
+				uniqueResourceCount: 2,
+				softRedirects: 1,
+				forcedFinalizations: 1,
+				mutationCount: 0,
+				verificationCount: 0,
+				observationCount: 8,
+			},
+		});
+
+		expect(record).toMatchObject({
+			schemaVersion: 3,
+			request: { kind: "maintenance" },
+			maintenance: {
+				maintenanceId: "maintenance-1",
+				primaryTrigger: "steady_target",
+				matchedTriggers: ["steady_target", "segment_tokens"],
+				action: "remote_compaction",
+			},
+			compaction: {
+				tokensBefore: 260_000,
+				tokensAfter: 110_000,
+				summarySource: "deterministic_fallback",
+			},
+			authority: {
+				activeUserEntryId: "user-1",
+				authorityStateInjected: true,
+				forbiddenGoalField: true,
+				executionClaimConflictCount: 2,
+			},
+			convergence: { softRedirects: 1, forcedFinalizations: 1 },
 		});
 	});
 

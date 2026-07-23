@@ -5,10 +5,11 @@ import { extractSpanMessages } from "./session";
 import {
 	CONTEXT_SEGMENT_CUSTOM_TYPE,
 	CONTEXT_SEGMENT_SCHEMA_VERSION,
+	type ContextMaintenanceAction,
+	type ContextMaintenanceTrigger,
 	type ContextSegment,
 	type ContextSegmentAuthority,
 	type ContextSegmentMaintenancePhase,
-	type ContextSegmentMaintenanceReason,
 } from "./types";
 
 interface BuildContextSegmentOptions {
@@ -17,13 +18,27 @@ interface BuildContextSegmentOptions {
 	firstKeptEntryId: string;
 	promptGeneration: number;
 	maintenanceId: string;
-	reason: ContextSegmentMaintenanceReason;
+	trigger: ContextMaintenanceTrigger;
+	matchedTriggers?: ContextMaintenanceTrigger[];
 	phase: ContextSegmentMaintenancePhase;
 	authority: ContextSegmentAuthority;
 	summary: string;
 	shortSummary?: string;
 	tokensBefore: number;
 	tokensAfter?: number;
+}
+
+export interface BuildContextSegmentCheckpointOptions {
+	entries: readonly SessionEntry[];
+	sessionId: string;
+	promptGeneration: number;
+	maintenanceId: string;
+	trigger: "segment_tokens" | "segment_duration";
+	matchedTriggers?: ContextMaintenanceTrigger[];
+	phase: ContextSegmentMaintenancePhase;
+	tokensBefore: number;
+	segmentDeltaTokens: number;
+	segmentElapsedMs: number;
 }
 
 export interface ContextSegmentDigestInput {
@@ -57,8 +72,9 @@ function checkpointText(segment: ContextSegment, maxTokens: number): string {
 		"[San Context Segment]",
 		`logicalTurnId: ${segment.logicalTurnId}`,
 		`segmentId: ${segment.segmentId}`,
+		`activeUserEntryId: ${checkpoint.activeUserEntryId}`,
 		`userIntent: ${checkpoint.userIntent}`,
-		`summary: ${segment.summary}`,
+		`historicalSummary: ${segment.historicalSummary ?? "none"}`,
 		`decisions: ${checkpoint.decisions.join(" | ") || "none"}`,
 		`risks: ${checkpoint.risks.join(" | ") || "none"}`,
 		`nextSteps: ${checkpoint.nextSteps.join(" | ") || "none"}`,
@@ -107,9 +123,68 @@ export function collectContextSegmentRefs(
 		const data = entry.data;
 		if (!data || typeof data !== "object") continue;
 		if (!("schemaVersion" in data) || !("segmentId" in data) || !("source" in data)) continue;
-		refs.push({ entryId: entry.id, segment: data as ContextSegment });
+		const segment = normalizeContextSegment(data);
+		if (segment) refs.push({ entryId: entry.id, segment });
 	}
 	return refs;
+}
+
+function maintenanceActionForAuthority(authority: ContextSegmentAuthority): ContextMaintenanceAction {
+	if (authority === "checkpoint") return "checkpoint";
+	if (authority === "snapcompact") return "snapcompact";
+	if (authority === "remote") return "remote_compaction";
+	return "context-full";
+}
+
+/** 将 v1 Segment 只读升级为 v2；不重写用户已有 JSONL。 */
+function normalizeContextSegment(value: object): ContextSegment | undefined {
+	if (!("schemaVersion" in value) || !("segmentId" in value) || !("logicalTurnId" in value)) return undefined;
+	if (value.schemaVersion === CONTEXT_SEGMENT_SCHEMA_VERSION) return value as unknown as ContextSegment;
+	if (value.schemaVersion !== 1) return undefined;
+
+	const legacy = value as unknown as {
+		segmentId: string;
+		logicalTurnId: string;
+		sessionId: string;
+		createdAt: string;
+		status: "closed";
+		authority: Exclude<ContextSegmentAuthority, "checkpoint">;
+		source: ContextSegment["source"] & { firstKeptEntryId: string };
+		maintenance: {
+			maintenanceId: string;
+			reason: "threshold" | "overflow" | "incomplete" | "idle";
+			phase: ContextSegmentMaintenancePhase;
+			tokensBefore: number;
+			tokensAfter?: number;
+		};
+		summary: string;
+		shortSummary?: string;
+		checkpoint: Omit<ContextSegment["checkpoint"], "activeUserEntryId">;
+	};
+	const trigger: ContextMaintenanceTrigger =
+		legacy.maintenance.reason === "threshold" ? "legacy_threshold" : legacy.maintenance.reason;
+	return {
+		schemaVersion: CONTEXT_SEGMENT_SCHEMA_VERSION,
+		segmentId: legacy.segmentId,
+		logicalTurnId: legacy.logicalTurnId,
+		sessionId: legacy.sessionId,
+		createdAt: legacy.createdAt,
+		status: legacy.status,
+		authority: legacy.authority,
+		source: legacy.source,
+		maintenance: {
+			maintenanceId: legacy.maintenance.maintenanceId,
+			trigger,
+			matchedTriggers: [trigger],
+			action: maintenanceActionForAuthority(legacy.authority),
+			phase: legacy.maintenance.phase,
+			tokensBefore: legacy.maintenance.tokensBefore,
+			...(legacy.maintenance.tokensAfter === undefined ? {} : { tokensAfter: legacy.maintenance.tokensAfter }),
+		},
+		historicalSummary: legacy.summary,
+		...(legacy.shortSummary ? { shortSummary: legacy.shortSummary } : {}),
+		checkpoint: { ...legacy.checkpoint, activeUserEntryId: legacy.logicalTurnId },
+	};
 }
 
 /** 在 compaction 提交后持久化一个不带执行预算的 segment 边界。 */
@@ -171,14 +246,114 @@ export function buildContextSegment(options: BuildContextSegmentOptions): Contex
 		},
 		maintenance: {
 			maintenanceId: options.maintenanceId,
-			reason: options.reason,
+			trigger: options.trigger,
+			matchedTriggers: options.matchedTriggers ?? [options.trigger],
+			action: maintenanceActionForAuthority(options.authority),
 			phase: options.phase,
 			tokensBefore: options.tokensBefore,
 			...(options.tokensAfter === undefined ? {} : { tokensAfter: options.tokensAfter }),
 		},
-		summary: options.summary,
+		historicalSummary: options.summary,
 		...(options.shortSummary ? { shortSummary: options.shortSummary } : {}),
 		checkpoint: {
+			activeUserEntryId: logicalTurnId,
+			userIntent,
+			actionsTaken: fallback.actionsTaken,
+			decisions: fallback.decisions,
+			filesTouched: fallback.filesTouched,
+			toolEvidence: fallback.toolEvidence,
+			factsLearned: fallback.factsLearned,
+			openQuestions: fallback.openQuestions,
+			risks: fallback.risks,
+			nextSteps: fallback.nextSteps,
+			...(fallback.tokenStats ? { tokenStats: fallback.tokenStats } : {}),
+		},
+	};
+}
+
+/**
+ * 在 token/time 维护边界同步关闭一个 Segment。
+ *
+ * 该路径不调用摘要模型、不生成 compaction entry，也不改写 provider working set。
+ */
+export function buildContextSegmentCheckpoint(
+	options: BuildContextSegmentCheckpointOptions,
+): ContextSegment | undefined {
+	let userIndex = -1;
+	for (let index = options.entries.length - 1; index >= 0; index--) {
+		const entry = options.entries[index];
+		if (entry?.type === "message" && entry.message.role === "user") {
+			userIndex = index;
+			break;
+		}
+	}
+	if (userIndex < 0) return undefined;
+
+	const activeUserEntry = options.entries[userIndex];
+	if (!activeUserEntry) return undefined;
+	const logicalTurnId = activeUserEntry.id;
+	const previousSegment = collectContextSegmentRefs(options.entries)
+		.filter(ref => ref.segment.logicalTurnId === logicalTurnId)
+		.at(-1);
+	const previousSegmentIndex = previousSegment
+		? options.entries.findIndex(entry => entry.id === previousSegment.entryId)
+		: -1;
+	const fromIndex = previousSegmentIndex > userIndex ? previousSegmentIndex + 1 : userIndex;
+	let toIndex = -1;
+	for (let index = options.entries.length - 1; index >= fromIndex; index--) {
+		const entry = options.entries[index];
+		if (entry?.type === "message" || entry?.type === "custom_message") {
+			toIndex = index;
+			break;
+		}
+	}
+	if (toIndex < fromIndex) return undefined;
+
+	const fromEntryId = options.entries[fromIndex]?.id;
+	const toEntryId = options.entries[toIndex]?.id;
+	if (!fromEntryId || !toEntryId) return undefined;
+	const source = {
+		sessionId: options.sessionId,
+		fromEntryId,
+		toEntryId,
+		promptGeneration: options.promptGeneration,
+		userEntryId: logicalTurnId,
+	};
+	const messages = extractSpanMessages(options.entries, fromEntryId, toEntryId);
+	if (messages.length === 0) return undefined;
+	const segmentId = `segment_${crypto.randomUUID().slice(-12)}`;
+	const fallback = generateFallbackDigest(
+		messages as Parameters<typeof generateFallbackDigest>[0],
+		source,
+		segmentId,
+		options.sessionId,
+	);
+	const userIntent =
+		fallback.userIntent === SYSTEM_DRIVEN_CONTINUATION_INTENT && previousSegment
+			? previousSegment.segment.checkpoint.userIntent
+			: fallback.userIntent;
+
+	return {
+		schemaVersion: CONTEXT_SEGMENT_SCHEMA_VERSION,
+		segmentId,
+		logicalTurnId,
+		sessionId: options.sessionId,
+		createdAt: new Date().toISOString(),
+		status: "closed",
+		authority: "checkpoint",
+		source: { fromEntryId, toEntryId, promptGeneration: options.promptGeneration },
+		maintenance: {
+			maintenanceId: options.maintenanceId,
+			trigger: options.trigger,
+			matchedTriggers: options.matchedTriggers ?? [options.trigger],
+			action: "checkpoint",
+			phase: options.phase,
+			tokensBefore: options.tokensBefore,
+			segmentDeltaTokens: options.segmentDeltaTokens,
+			segmentElapsedMs: options.segmentElapsedMs,
+		},
+		checkpoint: {
+			activeUserEntryId: logicalTurnId,
 			userIntent,
 			actionsTaken: fallback.actionsTaken,
 			decisions: fallback.decisions,
@@ -235,7 +410,17 @@ export function buildContextSegmentDigestInput(
 		customType: CONTEXT_SEGMENT_CUSTOM_TYPE,
 		entryId: latest.entryId,
 	};
-	const tail = extractSpanMessages(entries, latest.segment.source.firstKeptEntryId, toEntryId);
+	const firstKeptEntryId = latest.segment.source.firstKeptEntryId;
+	let tail: unknown[];
+	if (firstKeptEntryId) {
+		tail = extractSpanMessages(entries, firstKeptEntryId, toEntryId);
+	} else {
+		const latestIndex = entries.findIndex(entry => entry.id === latest.entryId);
+		const tailStart = entries
+			.slice(Math.max(0, latestIndex + 1), toIndex + 1)
+			.find(entry => entry.type === "message" || entry.type === "custom_message");
+		tail = tailStart ? extractSpanMessages(entries, tailStart.id, toEntryId) : [];
+	}
 	const selectedTail: unknown[] = [];
 	let used = estimateUnknownTokens(segmentMessage);
 	for (let index = tail.length - 1; index >= 0; index--) {

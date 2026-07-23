@@ -5,6 +5,10 @@
 ### Added
 
 - Added agent thinking selectors for the `max` and `ultra` reasoning effort tiers.
+
+### Fixed
+
+- Fixed compaction summaries being rendered as active task authority. Local, remote, snapcompact, and update-summary paths now frame summaries and quoted tool content as non-authoritative historical evidence without an active `Goal` field.
 ## [16.5.2] - 2026-07-14
 
 ### Fixed

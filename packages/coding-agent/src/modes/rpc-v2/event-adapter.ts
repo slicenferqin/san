@@ -212,7 +212,13 @@ export function adaptSessionEvent(
 		case "auto_compaction_start":
 			return sequencer.emit(
 				"context.maintenance.started",
-				{ kind: event.action, reason: event.reason },
+				{
+					maintenanceId: event.maintenanceId,
+					kind: event.action,
+					reason: event.reason,
+					primaryTrigger: event.trigger,
+					matchedTriggers: event.matchedTriggers,
+				},
 				{ durability: "durable", runId },
 			);
 
@@ -220,6 +226,7 @@ export function adaptSessionEvent(
 			return sequencer.emit(
 				"context.maintenance.completed",
 				{
+					maintenanceId: event.maintenanceId,
 					kind: event.action,
 					aborted: event.aborted,
 					skipped: event.skipped,

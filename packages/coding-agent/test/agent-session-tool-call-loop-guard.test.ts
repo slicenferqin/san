@@ -118,4 +118,308 @@ describe("AgentSession tool-call loop guard", () => {
 		expect(redirects).toHaveLength(1);
 		expect(redirects[0]!.display).toBe(false);
 	});
+
+	it("forces a no-tool answer after an unchanged A/B evidence cycle ignores the redirect", async () => {
+		const responses = Array.from({ length: 8 }, (_, index) => ({
+			content: [
+				{
+					type: "toolCall" as const,
+					id: `cycle-${index + 1}`,
+					name: "read",
+					arguments: { path: index % 2 === 0 ? "a.log" : "b.log" },
+				},
+			],
+		}));
+		const mock = createMockModel({
+			provider: "openai",
+			id: "gpt-progress-cycle",
+			responses: [...responses, { content: ["Concluded from existing evidence."] }],
+		});
+		const modelRegistry = new ModelRegistry(authStorage);
+		const readTool: AgentTool = {
+			name: "read",
+			label: "Read",
+			description: "Mock read tool",
+			parameters: type({ path: "string" }),
+			execute: async (_toolCallId, params) => {
+				const path = typeof params === "object" && params && "path" in params ? String(params.path) : "unknown";
+				return { content: [{ type: "text" as const, text: path === "a.log" ? "same A" : "same B" }] };
+			},
+		};
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			getToolChoice: () => session?.nextToolChoiceDirective(),
+			initialState: { model: mock, systemPrompt: ["Test"], tools: [readTool], messages: [] },
+			convertToLlm,
+			streamFn: mock.stream,
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"todo.enabled": false,
+			"model.toolCallLoopGuard.enabled": false,
+			"model.toolProgressGuard.enabled": true,
+			"model.toolProgressGuard.mode": "hard",
+			"model.toolProgressGuard.repeatThreshold": 3,
+			"model.toolProgressGuard.saturationWindow": 8,
+			"model.toolProgressGuard.saturationMaxResources": 2,
+			"model.toolProgressGuard.finalizeAfterNoProgress": 3,
+		});
+		settings.setModelRole("default", `${mock.provider}/${mock.id}`);
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(tempDir.path()),
+			settings,
+			modelRegistry,
+			toolRegistry: new Map([[readTool.name, readTool]]),
+		});
+
+		await session.prompt("inspect the two logs");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(9);
+		expect(mock.calls.at(-1)?.options?.toolChoice).toBe("none");
+		expect(
+			session.agent.state.messages.filter(
+				message => message.role === "custom" && message.customType === "tool-progress-redirect",
+			),
+		).toHaveLength(1);
+		expect(
+			session.agent.state.messages.filter(
+				message => message.role === "custom" && message.customType === "tool-progress-finalize",
+			),
+		).toHaveLength(1);
+	});
+
+	it("allows repeated observations whose result keeps changing", async () => {
+		const responses = Array.from({ length: 12 }, (_, index) => ({
+			content: [
+				{
+					type: "toolCall" as const,
+					id: `changing-${index + 1}`,
+					name: "read",
+					arguments: { path: "changing.log" },
+				},
+			],
+		}));
+		const mock = createMockModel({
+			provider: "openai",
+			id: "gpt-progress-changing",
+			responses: [...responses, { content: ["All changes inspected."] }],
+		});
+		const modelRegistry = new ModelRegistry(authStorage);
+		let resultVersion = 0;
+		const readTool: AgentTool = {
+			name: "read",
+			label: "Read",
+			description: "Mock changing read tool",
+			parameters: type({ path: "string" }),
+			execute: async () => ({
+				content: [{ type: "text" as const, text: `version-${++resultVersion}` }],
+			}),
+		};
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			getToolChoice: () => session?.nextToolChoiceDirective(),
+			initialState: { model: mock, systemPrompt: ["Test"], tools: [readTool], messages: [] },
+			convertToLlm,
+			streamFn: mock.stream,
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"todo.enabled": false,
+			"model.toolCallLoopGuard.enabled": false,
+			"model.toolProgressGuard.enabled": true,
+			"model.toolProgressGuard.mode": "hard",
+			"model.toolProgressGuard.repeatThreshold": 3,
+			"model.toolProgressGuard.finalizeAfterNoProgress": 3,
+		});
+		settings.setModelRole("default", `${mock.provider}/${mock.id}`);
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(tempDir.path()),
+			settings,
+			modelRegistry,
+			toolRegistry: new Map([[readTool.name, readTool]]),
+		});
+
+		await session.prompt("watch the changing log");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(13);
+		expect(mock.calls.every(call => call.options?.toolChoice !== "none")).toBe(true);
+		expect(
+			session.agent.state.messages.some(
+				message => message.role === "custom" && message.customType.startsWith("tool-progress-"),
+			),
+		).toBe(false);
+	});
+
+	it("delivers a queued user steer before convergence can force finalization", async () => {
+		const responses = Array.from({ length: 6 }, (_, index) => ({
+			content: [
+				{
+					type: "toolCall" as const,
+					id: `steer-cycle-${index + 1}`,
+					name: "read",
+					arguments: { path: index % 2 === 0 ? "a.log" : "b.log" },
+				},
+			],
+		}));
+		const mock = createMockModel({
+			provider: "openai",
+			id: "gpt-progress-steer",
+			responses: [...responses, { content: ["Stopped investigating and returned the conclusion."] }],
+		});
+		const modelRegistry = new ModelRegistry(authStorage);
+		let executionCount = 0;
+		const readTool: AgentTool = {
+			name: "read",
+			label: "Read",
+			description: "Mock read tool",
+			parameters: type({ path: "string" }),
+			execute: async (_toolCallId, params) => {
+				executionCount++;
+				if (executionCount === 6) await session?.steer("停止调查，直接给结论");
+				const path = typeof params === "object" && params && "path" in params ? String(params.path) : "unknown";
+				return { content: [{ type: "text" as const, text: path === "a.log" ? "same A" : "same B" }] };
+			},
+		};
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			getToolChoice: () => session?.nextToolChoiceDirective(),
+			initialState: { model: mock, systemPrompt: ["Test"], tools: [readTool], messages: [] },
+			convertToLlm,
+			streamFn: mock.stream,
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"todo.enabled": false,
+			"model.toolCallLoopGuard.enabled": false,
+			"model.toolProgressGuard.enabled": true,
+			"model.toolProgressGuard.mode": "hard",
+			"model.toolProgressGuard.repeatThreshold": 3,
+			"model.toolProgressGuard.saturationWindow": 8,
+			"model.toolProgressGuard.saturationMaxResources": 2,
+			"model.toolProgressGuard.finalizeAfterNoProgress": 3,
+		});
+		settings.setModelRole("default", `${mock.provider}/${mock.id}`);
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(tempDir.path()),
+			settings,
+			modelRegistry,
+			toolRegistry: new Map([[readTool.name, readTool]]),
+		});
+
+		await session.prompt("inspect the two logs");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(7);
+		expect(mock.calls.at(-1)?.options?.toolChoice).not.toBe("none");
+		expect(JSON.stringify(mock.calls.at(-1)?.context.messages)).toContain("停止调查，直接给结论");
+		expect(
+			session.agent.state.messages.some(
+				message => message.role === "custom" && message.customType === "tool-progress-finalize",
+			),
+		).toBe(false);
+	});
+
+	it("resets pending convergence after a successful mutation", async () => {
+		const observationResponses = (start: number, count: number) =>
+			Array.from({ length: count }, (_, offset) => {
+				const index = start + offset;
+				return {
+					content: [
+						{
+							type: "toolCall" as const,
+							id: `read-${index}`,
+							name: "read",
+							arguments: { path: index % 2 === 0 ? "a.log" : "b.log" },
+						},
+					],
+				};
+			});
+		const mock = createMockModel({
+			provider: "openai",
+			id: "gpt-progress-mutation",
+			responses: [
+				...observationResponses(0, 5),
+				{
+					content: [
+						{
+							type: "toolCall" as const,
+							id: "edit-1",
+							name: "edit",
+							arguments: { path: "src/fix.ts", oldText: "before", newText: "after" },
+						},
+					],
+				},
+				...observationResponses(5, 4),
+				{ content: ["Mutation verified from the available evidence."] },
+			],
+		});
+		const modelRegistry = new ModelRegistry(authStorage);
+		const readTool: AgentTool = {
+			name: "read",
+			label: "Read",
+			description: "Mock read tool",
+			parameters: type({ path: "string" }),
+			execute: async (_toolCallId, params) => {
+				const path = typeof params === "object" && params && "path" in params ? String(params.path) : "unknown";
+				return { content: [{ type: "text" as const, text: path === "a.log" ? "same A" : "same B" }] };
+			},
+		};
+		const editTool: AgentTool = {
+			name: "edit",
+			label: "Edit",
+			description: "Mock edit tool",
+			parameters: type({ path: "string", oldText: "string", newText: "string" }),
+			execute: async () => ({ content: [{ type: "text" as const, text: "Updated src/fix.ts" }] }),
+		};
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			getToolChoice: () => session?.nextToolChoiceDirective(),
+			initialState: { model: mock, systemPrompt: ["Test"], tools: [readTool, editTool], messages: [] },
+			convertToLlm,
+			streamFn: mock.stream,
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"todo.enabled": false,
+			"model.toolCallLoopGuard.enabled": false,
+			"model.toolProgressGuard.enabled": true,
+			"model.toolProgressGuard.mode": "hard",
+			"model.toolProgressGuard.repeatThreshold": 3,
+			"model.toolProgressGuard.saturationWindow": 8,
+			"model.toolProgressGuard.saturationMaxResources": 2,
+			"model.toolProgressGuard.finalizeAfterNoProgress": 3,
+		});
+		settings.setModelRole("default", `${mock.provider}/${mock.id}`);
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(tempDir.path()),
+			settings,
+			modelRegistry,
+			toolRegistry: new Map([
+				[readTool.name, readTool],
+				[editTool.name, editTool],
+			]),
+		});
+
+		await session.prompt("investigate and fix the loop");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(11);
+		expect(mock.calls.every(call => call.options?.toolChoice !== "none")).toBe(true);
+		expect(
+			session.agent.state.messages.filter(
+				message => message.role === "custom" && message.customType === "tool-progress-redirect",
+			),
+		).toHaveLength(1);
+		expect(
+			session.agent.state.messages.some(
+				message => message.role === "custom" && message.customType === "tool-progress-finalize",
+			),
+		).toBe(false);
+	});
 });

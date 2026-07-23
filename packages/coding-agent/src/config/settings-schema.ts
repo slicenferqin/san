@@ -286,6 +286,7 @@ const EMPTY_STRING_RECORD: Record<string, string> = {};
 const EMPTY_NUMBER_RECORD: Record<string, number> = {};
 const DEFAULT_CYCLE_ORDER: string[] = ["smol", "default", "slow"];
 const DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS: string[] = ["job", "irc"];
+const DEFAULT_TOOL_PROGRESS_GUARD_EXEMPT_TOOLS: string[] = ["job", "irc", "yield"];
 const EMPTY_MODEL_TAGS_RECORD: ModelTagsSettings = {};
 const HINDSIGHT_RECALL_TYPES_DEFAULT: string[] = ["world", "experience"];
 export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
@@ -1101,6 +1102,61 @@ export const SETTINGS_SCHEMA = {
 			label: "Tool-Call Loop Exempt Tools",
 			description: "Tool names that may repeat consecutively without triggering the cross-turn loop guard",
 		},
+	},
+
+	"model.toolProgressGuard.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "model",
+			group: "Thinking",
+			label: "Tool Progress Guard",
+			description: "Detect tool cycles that repeat without producing new evidence and converge the turn",
+		},
+	},
+
+	"model.toolProgressGuard.mode": {
+		type: "enum",
+		values: ["observe", "soft", "hard"] as const,
+		default: "hard",
+		description:
+			"observe records saturation only; soft adds one redirect; hard also forces a no-tool conclusion after the redirect is ignored.",
+	},
+
+	"model.toolProgressGuard.repeatThreshold": {
+		type: "number",
+		default: 3,
+		description: "Matching action/result observations required before the soft redirect.",
+	},
+
+	"model.toolProgressGuard.saturationWindow": {
+		type: "number",
+		default: 8,
+		description: "Recent observation window used to detect low-resource evidence saturation.",
+	},
+
+	"model.toolProgressGuard.saturationMaxResources": {
+		type: "number",
+		default: 2,
+		description: "Maximum unique resources in a saturated observation window.",
+	},
+
+	"model.toolProgressGuard.finalizeAfterNoProgress": {
+		type: "number",
+		default: 3,
+		description: "No-evidence observations after the redirect before forcing a no-tool conclusion.",
+	},
+
+	"model.toolProgressGuard.historyLimit": {
+		type: "number",
+		default: 12,
+		description: "Maximum recent action/evidence fingerprints retained for the active user turn.",
+	},
+
+	"model.toolProgressGuard.exemptTools": {
+		type: "array",
+		default: DEFAULT_TOOL_PROGRESS_GUARD_EXEMPT_TOOLS,
+		description: "Polling, waiting, or terminal tools excluded from evidence-saturation detection.",
 	},
 
 	inlineToolDescriptors: {
@@ -2745,7 +2801,12 @@ export const SETTINGS_SCHEMA = {
 	"san.contextSteady.contextPlan.recentExactTokens": { type: "number", default: 16000 },
 	"san.contextSteady.contextPlan.liveTailTokens": { type: "number", default: 24000 },
 	"san.contextSteady.segment.enabled": { type: "boolean", default: true },
-	"san.contextSteady.segment.maxTokens": { type: "number", default: 40000 },
+	"san.contextSteady.segment.maxTokens": {
+		type: "number",
+		default: 0,
+		description:
+			"Maximum token delta per logical Segment. 0 derives an automatic checkpoint interval from the active model's physical maintenance budget; disable Segment maintenance with san.contextSteady.segment.enabled=false.",
+	},
 	"san.contextSteady.segment.maxDurationMs": { type: "number", default: 900000 },
 	"san.contextSteady.segment.maxDigestInputTokens": { type: "number", default: 160000 },
 	"san.contextSteady.probe.enabled": {

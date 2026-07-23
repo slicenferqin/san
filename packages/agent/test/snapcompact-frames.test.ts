@@ -38,6 +38,7 @@ describe("compaction summary message with snapcompact frames", () => {
 		expect(content.length).toBe(3);
 		expect(content[0].type).toBe("text");
 		expect(content[0].text).toContain("the snapcompact archive");
+		expect(content[0].text).toContain("historical-summary");
 		expect(content[1]).toEqual(images[0]);
 		expect(content[2]).toEqual(images[1]);
 	});

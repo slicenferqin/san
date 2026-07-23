@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { buildContextSegment, buildContextSegmentDigestInput } from "../../src/context-steady/segment";
+import {
+	buildContextSegment,
+	buildContextSegmentCheckpoint,
+	buildContextSegmentDigestInput,
+} from "../../src/context-steady/segment";
 import { CONTEXT_SEGMENT_CUSTOM_TYPE, type ContextSegment } from "../../src/context-steady/types";
 import type { SessionEntry } from "../../src/session/session-entries";
 
@@ -55,7 +59,7 @@ function buildSegment(entries: readonly SessionEntry[], firstKeptEntryId: string
 		firstKeptEntryId,
 		promptGeneration: 1,
 		maintenanceId,
-		reason: "threshold",
+		trigger: "steady_target",
 		phase: "mid_turn",
 		authority: "context-full",
 		summary: `recursive summary ${maintenanceId}`,
@@ -82,6 +86,57 @@ describe("ContextSegment", () => {
 		expect(segment?.checkpoint.userIntent).toContain("持续数小时");
 		expect("budget" in (segment as unknown as Record<string, unknown>)).toBe(false);
 		expect("maxSteps" in (segment as unknown as Record<string, unknown>)).toBe(false);
+	});
+
+	test("closes a token Segment as a deterministic checkpoint without compaction fields", () => {
+		const entries = [
+			userEntry("user-1", null, "调查当前会话为什么循环"),
+			assistantEntry("assistant-1", "user-1", "读取第一批证据"),
+		];
+		const segment = buildContextSegmentCheckpoint({
+			entries,
+			sessionId: "session-segment",
+			promptGeneration: 1,
+			maintenanceId: "maintenance-checkpoint",
+			trigger: "segment_tokens",
+			phase: "mid_turn",
+			tokensBefore: 95_000,
+			segmentDeltaTokens: 40_000,
+			segmentElapsedMs: 30_000,
+		});
+
+		expect(segment).toBeDefined();
+		expect(segment?.authority).toBe("checkpoint");
+		expect(segment?.maintenance).toMatchObject({
+			trigger: "segment_tokens",
+			action: "checkpoint",
+			segmentDeltaTokens: 40_000,
+		});
+		expect(segment?.source.firstKeptEntryId).toBeUndefined();
+		expect(segment?.historicalSummary).toBeUndefined();
+		expect(segment?.checkpoint.activeUserEntryId).toBe("user-1");
+	});
+
+	test("records remote physical maintenance as an explicit remote_compaction action", () => {
+		const entries = [
+			userEntry("user-1", null, "继续长任务"),
+			assistantEntry("assistant-1", "user-1", "读取证据"),
+			assistantEntry("assistant-kept", "assistant-1", "保留尾部"),
+		];
+		const segment = buildContextSegment({
+			entries,
+			sessionId: "session-segment",
+			firstKeptEntryId: "assistant-kept",
+			promptGeneration: 1,
+			maintenanceId: "maintenance-remote",
+			trigger: "native_threshold",
+			phase: "mid_turn",
+			authority: "remote",
+			summary: "remote historical summary",
+			tokensBefore: 280_000,
+		});
+
+		expect(segment?.maintenance.action).toBe("remote_compaction");
 	});
 
 	test("starts recursive segments after the previous range while preserving the original user intent", () => {

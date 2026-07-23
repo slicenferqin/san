@@ -20,6 +20,7 @@ import type * as zod from "zod/v4";
 import type { Rule } from "../../capability/rule";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
+import type { ContextMaintenanceTrigger } from "../../context-steady/types";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
 import type { HookUIContext } from "../../extensibility/hooks/types";
 import type * as PiCodingAgent from "../../index";
@@ -113,11 +114,14 @@ export type CustomToolSessionEvent =
 	  }
 	| {
 			reason: "auto_compaction_start";
-			trigger: "threshold" | "overflow" | "idle" | "incomplete";
+			maintenanceId: string;
+			trigger: ContextMaintenanceTrigger;
+			matchedTriggers: ContextMaintenanceTrigger[];
 			action: "context-full" | "handoff" | "shake" | "snapcompact";
 	  }
 	| {
 			reason: "auto_compaction_end";
+			maintenanceId: string;
 			action: "context-full" | "handoff" | "shake" | "snapcompact";
 			result: CompactionResult | undefined;
 			aborted: boolean;

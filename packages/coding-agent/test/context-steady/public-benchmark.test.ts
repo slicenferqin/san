@@ -11,6 +11,7 @@ import {
 	parseRuntimeApiKeysStdin,
 	parseRuntimeKeyEnvAssignments,
 	resolveRuntimeApiKeys,
+	summarizeBenchmarkAuthorityProtocol,
 	summarizeBenchmarkEvidenceProtocol,
 	summarizeComparablePairs,
 	summarizeContextProbe,
@@ -252,6 +253,78 @@ describe("Context Steady 公共 benchmark", () => {
 		expect(summary.estimatedCost).toBeCloseTo(summary.agentEstimatedCost + summary.maintenanceEstimatedCost);
 	});
 
+	test("探针汇总兼容 v2/v3 混合记录且 maintenance decision 不计为 agent 请求", () => {
+		const probe = [
+			{
+				schemaVersion: 2,
+				request: { kind: "agent" },
+				usage: { input: 100, output: 10, cacheRead: 900, cacheWrite: 0, promptTokens: 1000 },
+				context: { activeEstimatedTokens: 800, rawJournalEstimatedTokens: 1000 },
+				maintenance: { compactionCount: 0, segmentCount: 0 },
+			},
+			{
+				schemaVersion: 3,
+				request: { kind: "compaction" },
+				usage: { input: 300, output: 30, cacheRead: 0, cacheWrite: 0, promptTokens: 300 },
+				context: { activeEstimatedTokens: 800, rawJournalEstimatedTokens: 1200 },
+				maintenance: { compactionCount: 1, segmentCount: 0 },
+				compaction: { summaryInputTokens: 280, summaryOutputTokens: 25, summarySource: "local" },
+			},
+			{
+				schemaVersion: 3,
+				request: { kind: "maintenance" },
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, promptTokens: 0 },
+				context: { activeEstimatedTokens: 900, rawJournalEstimatedTokens: 1300 },
+				maintenance: {
+					compactionCount: 1,
+					segmentCount: 1,
+					maintenanceId: "maintenance-checkpoint",
+					primaryTrigger: "segment_tokens",
+					action: "checkpoint",
+				},
+				authority: { forbiddenGoalField: false, executionClaimConflictCount: 0 },
+				convergence: { softRedirects: 0, forcedFinalizations: 0 },
+			},
+			{
+				schemaVersion: 3,
+				request: { kind: "maintenance" },
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, promptTokens: 0 },
+				context: { activeEstimatedTokens: 500, rawJournalEstimatedTokens: 1400 },
+				maintenance: {
+					compactionCount: 2,
+					segmentCount: 1,
+					maintenanceId: "maintenance-physical",
+					primaryTrigger: "native_threshold",
+					action: "context-full",
+				},
+				compaction: { tokensBefore: 1400, tokensAfter: 500, summarySource: "local" },
+				authority: { forbiddenGoalField: true, executionClaimConflictCount: 2 },
+				convergence: { softRedirects: 1, forcedFinalizations: 1 },
+			},
+		]
+			.map(record => JSON.stringify(record))
+			.join("\n");
+
+		const summary = summarizeContextProbe(probe);
+
+		expect(summary).toMatchObject({
+			schemaVersions: [2, 3],
+			agentRequests: 1,
+			compactionRequests: 1,
+			maintenanceRecords: 2,
+			checkpointMaintenanceCount: 1,
+			physicalMaintenanceCount: 1,
+			summaryInputTokens: 280,
+			summaryOutputTokens: 25,
+			summarySources: ["local"],
+			maintenanceTriggers: ["native_threshold", "segment_tokens"],
+			forbiddenGoalDetected: true,
+			maxExecutionClaimConflictCount: 2,
+			maxSoftRedirects: 1,
+			maxForcedFinalizations: 1,
+		});
+	});
+
 	test("受控证据链必须按 proof 串行推进且不能批量跳步", () => {
 		const controller = createBenchmarkEvidenceChainController({ steps: 3, seed: "test", payloadChars: 500 });
 		const first = controller.advance({ step: 1 });
@@ -263,6 +336,65 @@ describe("Context Steady 公共 benchmark", () => {
 		expect(controller.state.completedSteps).toBe(3);
 		expect(controller.state.records.map(record => record.step)).toEqual([1, 2, 3]);
 		expect(controller.state.records.at(-1)?.constraint).toContain("final service");
+	});
+
+	test("meta-investigation 证据链注入嵌套 Goal，但结构化 RECORD 保持纯净", () => {
+		const controller = createBenchmarkEvidenceChainController({
+			steps: 3,
+			seed: "test",
+			payloadChars: 500,
+			adversarialContext: true,
+		});
+		const first = controller.advance({ step: 1 });
+
+		expect(first.text).toContain("<quoted_external_session>");
+		expect(first.text).toContain("## Goal");
+		expect(first.text).toContain("SQL migration、Controller 和测试已经创建并验证通过");
+		expect(JSON.stringify(first.record)).not.toContain("## Goal");
+	});
+
+	test("meta-investigation authority 门禁要求每次维护都引用当时真实 user entry", () => {
+		const journal = [
+			{
+				type: "message",
+				id: "user-1",
+				message: { role: "user", content: "调查循环" },
+			},
+			{
+				type: "custom_message",
+				customType: "san.context_continuation.authority",
+				details: { activeUserEntryId: "user-1", authoritySource: "journal" },
+			},
+			{
+				type: "message",
+				id: "user-2",
+				message: { role: "user", content: "停止调查，直接结论" },
+			},
+			{
+				type: "custom_message",
+				customType: "san.context_continuation.authority",
+				details: { activeUserEntryId: "user-2", authoritySource: "journal" },
+			},
+		]
+			.map(record => JSON.stringify(record))
+			.join("\n");
+		const poisoned = `${journal}\n${JSON.stringify({
+			type: "custom_message",
+			customType: "san.context_continuation.authority",
+			details: { activeUserEntryId: "foreign-goal", authoritySource: "persisted" },
+		})}`;
+
+		expect(summarizeBenchmarkAuthorityProtocol(journal)).toEqual({
+			authorityStates: 2,
+			matchingAuthorityStates: 2,
+			missingSourceStates: 0,
+			mismatchedAuthorityStates: 0,
+			valid: true,
+		});
+		expect(summarizeBenchmarkAuthorityProtocol(poisoned)).toMatchObject({
+			mismatchedAuthorityStates: 1,
+			valid: false,
+		});
 	});
 
 	test("证据压力任务只接受每个助手消息一次的直接 benchmark_step 调用", () => {

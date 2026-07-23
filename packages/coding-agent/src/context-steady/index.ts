@@ -1,5 +1,6 @@
 export * from "./budget";
 export * from "./checkpoint";
+export * from "./continuation";
 export * from "./coverage";
 export * from "./digest";
 export * from "./dogfood";
@@ -24,4 +25,6 @@ export * from "./segment";
 // direct packet-module imports in legacy tests, but the barrel only stars session.
 export * from "./session";
 export * from "./source-index";
+export * from "./summary-authority";
+export * from "./tool-progress-guard";
 export * from "./types";

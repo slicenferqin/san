@@ -252,6 +252,11 @@ describe("Context Steady AgentSession dogfood runtime", () => {
 		expect(segments.length).toBeGreaterThanOrEqual(2);
 		expect(new Set(segments.map(segment => segment.logicalTurnId)).size).toBe(1);
 		expect(segments.every(segment => !("budget" in segment))).toBe(true);
+		expect(
+			segments
+				.filter(segment => segment.authority !== "checkpoint")
+				.every(segment => typeof segment.maintenance.tokensAfter === "number"),
+		).toBe(true);
 		expect(session.messages.at(-1)?.role).toBe("assistant");
 		expect(JSON.stringify(session.messages.at(-1))).toContain("all 60 tool calls completed");
 		expect(customEntries(sessionManager, TURN_DIGEST_CUSTOM_TYPE)).toHaveLength(1);

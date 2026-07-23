@@ -62,6 +62,7 @@
 
 ### Fixed
 
+- Fixed Context Steady long turns treating 40K/15-minute Segment checkpoints as physical compaction, allowing compaction summaries and quoted tool output to replace the active user request, and repeating tool investigations without evidence progress. Maintenance now records real triggers, restores journal-derived continuation authority across compaction and handoff, bounds authority payloads, detects summary conflicts, lets user input preempt advisor/maintenance waits, and converges repeated action/evidence patterns; probe v3 and the adversarial meta-investigation benchmark cover the repaired contracts.
 - Fixed San RPC v2 read-only and recovery sessions mutating state, stale recovery races removing a newer lease, cross-Runtime approval policy overwrites, non-atomic Run/approval/queue receipts, unleased upload chunks, ignored Run goals/evidence filters/shutdown bounds, and late coalesced frames being dropped.
 - Fixed skills misclassifying San as Codex from shared skill paths or project markers by stamping the San host runtime into user-invoked and autoload prompts; explicit user-selected cross-runtime targets still win.
 - Fixed San Brain capture silently dropping slow but valid LLM TurnDigests behind a hidden 150 ms deadline; digest side requests now honor `san.contextSteady.digest.timeoutMs`, and settled-turn candidates are captured after digest completion.

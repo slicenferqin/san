@@ -16,6 +16,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { CompactionPreparation, CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantRetryRecovery, ImageContent, TextContent, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import type { Rule } from "../capability/rule";
+import type { ContextMaintenanceTrigger } from "../context-steady/types";
 import type { Goal, GoalModeState } from "../goals/state";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry } from "../session/session-entries";
 import type { TodoItem } from "../tools/todo";
@@ -215,13 +216,18 @@ export interface TurnEndEvent {
 /** Fired when auto-compaction starts */
 export interface AutoCompactionStartEvent {
 	type: "auto_compaction_start";
+	maintenanceId: string;
 	reason: "threshold" | "overflow" | "idle" | "incomplete";
+	/** 真实容量/维护触发源；`reason` 仅保留兼容语义。 */
+	trigger: ContextMaintenanceTrigger;
+	matchedTriggers: ContextMaintenanceTrigger[];
 	action: "context-full" | "handoff" | "shake" | "snapcompact";
 }
 
 /** Fired when auto-compaction ends */
 export interface AutoCompactionEndEvent {
 	type: "auto_compaction_end";
+	maintenanceId: string;
 	action: "context-full" | "handoff" | "shake" | "snapcompact";
 	result: CompactionResult | undefined;
 	aborted: boolean;

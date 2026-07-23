@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { $ } from "bun";
+import { CONTEXT_CONTINUATION_MESSAGE_TYPE } from "../src/context-steady/types";
 import {
 	BENCHMARK_PATH_SCOPE_EXEMPT_TOOL_NAMES,
 	type BenchmarkEvidenceChainSpec,
@@ -49,11 +50,15 @@ export interface PriceTable {
 }
 
 export interface ProbeSummary {
+	schemaVersions: number[];
 	records: number;
 	billedRequests: number;
 	agentRequests: number;
 	digestRequests: number;
 	compactionRequests: number;
+	maintenanceRecords: number;
+	checkpointMaintenanceCount: number;
+	physicalMaintenanceCount: number;
 	inputTokens: number;
 	outputTokens: number;
 	cacheReadTokens: number;
@@ -68,6 +73,14 @@ export interface ProbeSummary {
 	maxRawTokens: number;
 	compactionCount: number;
 	segmentCount: number;
+	summaryInputTokens: number;
+	summaryOutputTokens: number;
+	summarySources: string[];
+	maintenanceTriggers: string[];
+	forbiddenGoalDetected: boolean;
+	maxExecutionClaimConflictCount: number;
+	maxSoftRedirects: number;
+	maxForcedFinalizations: number;
 	firstNativeThresholdCrossing?: string;
 	estimatedCost: number;
 	agentEstimatedCost: number;
@@ -111,6 +124,7 @@ interface BenchmarkRunResult {
 	agent: SingleAgentRunOutput;
 	probe: ProbeSummary | null;
 	evidenceProtocol: BenchmarkEvidenceProtocolSummary | null;
+	authorityProtocol: BenchmarkAuthorityProtocolSummary | null;
 	verifier: VerifierResult;
 	infrastructure: InfrastructureFailureSummary;
 	qualityPassed: boolean;
@@ -135,6 +149,14 @@ export interface BenchmarkEvidenceProtocolSummary {
 	directCalls: number;
 	assistantMessagesWithCalls: number;
 	maxCallsPerAssistantMessage: number;
+	valid: boolean;
+}
+
+export interface BenchmarkAuthorityProtocolSummary {
+	authorityStates: number;
+	matchingAuthorityStates: number;
+	missingSourceStates: number;
+	mismatchedAuthorityStates: number;
 	valid: boolean;
 }
 
@@ -687,7 +709,15 @@ function parseEvidenceChain(value: unknown, taskId: string): BenchmarkEvidenceCh
 	if (typeof record.payloadChars !== "number" || !Number.isSafeInteger(record.payloadChars)) {
 		throw new Error(`Task ${taskId} evidenceChain.payloadChars must be an integer`);
 	}
-	return { steps: record.steps, seed: record.seed.trim(), payloadChars: record.payloadChars };
+	if (record.adversarialContext !== undefined && typeof record.adversarialContext !== "boolean") {
+		throw new Error(`Task ${taskId} evidenceChain.adversarialContext must be a boolean`);
+	}
+	return {
+		steps: record.steps,
+		seed: record.seed.trim(),
+		payloadChars: record.payloadChars,
+		...(record.adversarialContext === true ? { adversarialContext: true } : {}),
+	};
 }
 
 function parseTask(value: unknown): BenchmarkTaskSpec {
@@ -883,6 +913,48 @@ export function summarizeBenchmarkEvidenceProtocol(
 	};
 }
 
+export function summarizeBenchmarkAuthorityProtocol(text: string): BenchmarkAuthorityProtocolSummary {
+	const parsed: unknown = Bun.JSONL.parse(text);
+	if (!Array.isArray(parsed)) throw new Error("Session journal must contain JSONL records");
+	let latestUserEntryId: string | undefined;
+	let authorityStates = 0;
+	let matchingAuthorityStates = 0;
+	let missingSourceStates = 0;
+	let mismatchedAuthorityStates = 0;
+	for (const entry of parsed) {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+		const record = entry as Record<string, unknown>;
+		if (record.type === "message") {
+			const message = nestedRecord(entry, "message");
+			if (message.role === "user" && typeof record.id === "string") latestUserEntryId = record.id;
+			continue;
+		}
+		if (record.type !== "custom_message" || record.customType !== CONTEXT_CONTINUATION_MESSAGE_TYPE) continue;
+		authorityStates++;
+		const details = nestedRecord(entry, "details");
+		if (details.authoritySource === "authority_source_missing") {
+			missingSourceStates++;
+			continue;
+		}
+		if (latestUserEntryId !== undefined && details.activeUserEntryId === latestUserEntryId) {
+			matchingAuthorityStates++;
+		} else {
+			mismatchedAuthorityStates++;
+		}
+	}
+	return {
+		authorityStates,
+		matchingAuthorityStates,
+		missingSourceStates,
+		mismatchedAuthorityStates,
+		valid:
+			authorityStates > 0 &&
+			matchingAuthorityStates === authorityStates &&
+			missingSourceStates === 0 &&
+			mismatchedAuthorityStates === 0,
+	};
+}
+
 function isInfrastructureFailure(status: number, message: string): boolean {
 	return (
 		status === 429 ||
@@ -893,9 +965,9 @@ function isInfrastructureFailure(status: number, message: string): boolean {
 	);
 }
 
-function requestKind(record: unknown): "agent" | "turn_digest" | "compaction" {
+function requestKind(record: unknown): "agent" | "turn_digest" | "compaction" | "maintenance" {
 	const kind = nestedRecord(record, "request").kind;
-	return kind === "turn_digest" || kind === "compaction" ? kind : "agent";
+	return kind === "turn_digest" || kind === "compaction" || kind === "maintenance" ? kind : "agent";
 }
 
 function estimateUsageCost(
@@ -922,6 +994,9 @@ export function summarizeContextProbe(text: string, priceTable: PriceTable = DEF
 	let agentRequests = 0;
 	let digestRequests = 0;
 	let compactionRequests = 0;
+	let maintenanceRecords = 0;
+	let checkpointMaintenanceCount = 0;
+	let physicalMaintenanceCount = 0;
 	let agentPromptTokens = 0;
 	let maintenancePromptTokens = 0;
 	let agentEstimatedCost = 0;
@@ -932,11 +1007,27 @@ export function summarizeContextProbe(text: string, priceTable: PriceTable = DEF
 	let maxRawTokens = 0;
 	let compactionCount = 0;
 	let segmentCount = 0;
+	let summaryInputTokens = 0;
+	let summaryOutputTokens = 0;
+	let forbiddenGoalDetected = false;
+	let maxExecutionClaimConflictCount = 0;
+	let maxSoftRedirects = 0;
+	let maxForcedFinalizations = 0;
+	const schemaVersions = new Set<number>();
+	const summarySources = new Set<string>();
+	const maintenanceTriggers = new Set<string>();
 	let firstNativeThresholdCrossing: string | undefined;
 	for (const record of parsed) {
 		const usage = nestedRecord(record, "usage");
 		const context = nestedRecord(record, "context");
 		const maintenance = nestedRecord(record, "maintenance");
+		const compaction = nestedRecord(record, "compaction");
+		const authority = nestedRecord(record, "authority");
+		const convergence = nestedRecord(record, "convergence");
+		if (record && typeof record === "object" && !Array.isArray(record)) {
+			const schemaVersion = toFiniteNumber((record as Record<string, unknown>).schemaVersion);
+			if (schemaVersion > 0) schemaVersions.add(schemaVersion);
+		}
 		const input = toFiniteNumber(usage.input);
 		const output = toFiniteNumber(usage.output);
 		const cacheRead = toFiniteNumber(usage.cacheRead);
@@ -953,6 +1044,8 @@ export function summarizeContextProbe(text: string, priceTable: PriceTable = DEF
 			agentPromptTokens += prompt;
 			agentEstimatedCost += cost;
 			if (prompt > 0) agentRequests++;
+		} else if (kind === "maintenance") {
+			maintenanceRecords++;
 		} else {
 			maintenancePromptTokens += prompt;
 			maintenanceEstimatedCost += cost;
@@ -961,6 +1054,32 @@ export function summarizeContextProbe(text: string, priceTable: PriceTable = DEF
 				else compactionRequests++;
 			}
 		}
+		if (kind === "compaction") {
+			summaryInputTokens += toFiniteNumber(compaction.summaryInputTokens) || prompt;
+			summaryOutputTokens += toFiniteNumber(compaction.summaryOutputTokens) || output;
+		}
+		if (kind === "maintenance") {
+			const action = maintenance.action;
+			if (action === "checkpoint") checkpointMaintenanceCount++;
+			else if (
+				action === "context-full" ||
+				action === "snapcompact" ||
+				action === "remote_compaction" ||
+				action === "handoff" ||
+				action === "shake"
+			) {
+				physicalMaintenanceCount++;
+			}
+		}
+		if (typeof maintenance.primaryTrigger === "string") maintenanceTriggers.add(maintenance.primaryTrigger);
+		if (typeof compaction.summarySource === "string") summarySources.add(compaction.summarySource);
+		forbiddenGoalDetected ||= authority.forbiddenGoalField === true;
+		maxExecutionClaimConflictCount = Math.max(
+			maxExecutionClaimConflictCount,
+			toFiniteNumber(authority.executionClaimConflictCount),
+		);
+		maxSoftRedirects = Math.max(maxSoftRedirects, toFiniteNumber(convergence.softRedirects));
+		maxForcedFinalizations = Math.max(maxForcedFinalizations, toFiniteNumber(convergence.forcedFinalizations));
 		maxPromptTokens = Math.max(maxPromptTokens, prompt);
 		if (kind === "agent") maxAgentPromptTokens = Math.max(maxAgentPromptTokens, prompt);
 		maxActiveTokens = Math.max(maxActiveTokens, toFiniteNumber(context.activeEstimatedTokens));
@@ -978,11 +1097,15 @@ export function summarizeContextProbe(text: string, priceTable: PriceTable = DEF
 		priceTable,
 	);
 	return {
+		schemaVersions: [...schemaVersions].sort((left, right) => left - right),
 		records: parsed.length,
 		billedRequests,
 		agentRequests,
 		digestRequests,
 		compactionRequests,
+		maintenanceRecords,
+		checkpointMaintenanceCount,
+		physicalMaintenanceCount,
 		inputTokens,
 		outputTokens,
 		cacheReadTokens,
@@ -997,6 +1120,14 @@ export function summarizeContextProbe(text: string, priceTable: PriceTable = DEF
 		maxRawTokens,
 		compactionCount,
 		segmentCount,
+		summaryInputTokens,
+		summaryOutputTokens,
+		summarySources: [...summarySources].sort(),
+		maintenanceTriggers: [...maintenanceTriggers].sort(),
+		forbiddenGoalDetected,
+		maxExecutionClaimConflictCount,
+		maxSoftRedirects,
+		maxForcedFinalizations,
 		...(firstNativeThresholdCrossing ? { firstNativeThresholdCrossing } : {}),
 		estimatedCost,
 		agentEstimatedCost,
@@ -1366,6 +1497,10 @@ async function runPlanItem(
 					valid: false,
 				}
 		: null;
+	const authorityProtocol = sessionText ? summarizeBenchmarkAuthorityProtocol(sessionText) : null;
+	const metaInvestigationPassed =
+		item.task.evidenceChain?.adversarialContext !== true ||
+		(probe !== null && probe.physicalMaintenanceCount >= 1 && authorityProtocol?.valid === true);
 	await Bun.write(path.join(runDir, "verify.stdout.log"), verifier.stdout);
 	await Bun.write(path.join(runDir, "verify.stderr.log"), verifier.stderr);
 	const result: BenchmarkRunResult = {
@@ -1388,10 +1523,15 @@ async function runPlanItem(
 		agent,
 		probe,
 		evidenceProtocol,
+		authorityProtocol,
 		verifier,
 		infrastructure,
 		qualityPassed:
-			!infrastructure.failed && agent.status === "passed" && verifier.ok && (evidenceProtocol?.valid ?? true),
+			!infrastructure.failed &&
+			agent.status === "passed" &&
+			verifier.ok &&
+			(evidenceProtocol?.valid ?? true) &&
+			metaInvestigationPassed,
 	};
 	await writeJson(resultPath, result);
 	return result;

@@ -12,8 +12,10 @@ export interface ContextSteadyActivation {
 }
 export const TURN_DIGEST_SCHEMA_VERSION = 1;
 export const TURN_DIGEST_CUSTOM_TYPE = "san.turn_digest";
-export const CONTEXT_SEGMENT_SCHEMA_VERSION = 1;
+export const CONTEXT_SEGMENT_SCHEMA_VERSION = 2;
 export const CONTEXT_SEGMENT_CUSTOM_TYPE = "san.context_segment";
+export const CONTEXT_CONTINUATION_SCHEMA_VERSION = 1;
+export const CONTEXT_CONTINUATION_MESSAGE_TYPE = "san.context_continuation.authority";
 export const CONTEXT_MAINTENANCE_SCHEMA_VERSION = 1;
 export const CONTEXT_MAINTENANCE_CUSTOM_TYPE = "san.context_maintenance";
 export const CONTEXT_CHECKPOINT_SCHEMA_VERSION = 2;
@@ -118,9 +120,83 @@ export interface TurnDigest {
 	supersedesEntryId?: string;
 }
 
-export type ContextSegmentMaintenanceReason = "threshold" | "overflow" | "incomplete" | "idle";
+export type ContextMaintenanceTrigger =
+	| "segment_tokens"
+	| "segment_duration"
+	| "steady_target"
+	| "native_threshold"
+	| "hard_pressure"
+	| "overflow"
+	| "incomplete"
+	| "idle"
+	| "manual"
+	| "legacy_threshold";
+/** @deprecated 请改用 ContextMaintenanceTrigger。 */
+export type ContextSegmentMaintenanceReason = ContextMaintenanceTrigger;
 export type ContextSegmentMaintenancePhase = "pre_turn" | "mid_turn" | "post_turn";
-export type ContextSegmentAuthority = "context-full" | "snapcompact" | "extension";
+export type ContextSegmentAuthority = "checkpoint" | "context-full" | "snapcompact" | "remote" | "extension";
+export type ContextMaintenanceAction =
+	| "checkpoint"
+	| "context-full"
+	| "snapcompact"
+	| "remote_compaction"
+	| "handoff"
+	| "none";
+
+export interface ContextContinuationToolEvidence {
+	tool: string;
+	toolCallId: string;
+	resultEntryId: string;
+	path?: string;
+	resource?: string;
+}
+
+export type ContextSummarySource = "local" | "remote" | "snapcompact" | "extension" | "deterministic_fallback";
+
+export interface ContextSummaryAuthorityAudit {
+	summarySource: ContextSummarySource;
+	forbiddenGoalField: boolean;
+	executionClaimConflictCount: number;
+	repairAttempted: boolean;
+	repairSucceeded: boolean;
+	fallbackReason?: string;
+}
+
+export type ContextContinuationAuthoritySource = "journal" | "persisted" | "handoff" | "authority_source_missing";
+
+/**
+ * 当前逻辑 turn 的权威继续执行状态。
+ *
+ * 该状态只能由当前 branch journal 的真实 user/tool entries 同步派生；
+ * compaction summary、assistant 自述和工具输出正文都不能写入这些字段。
+ */
+export interface ActiveContinuationState {
+	schemaVersion: typeof CONTEXT_CONTINUATION_SCHEMA_VERSION;
+	sessionId: string;
+	/** 旧 v1 记录没有该字段，读取时按 journal 处理。 */
+	authoritySource?: ContextContinuationAuthoritySource;
+	/** handoff 场景下，权威 user entry 所在的来源会话。 */
+	sourceSessionId?: string;
+	logicalTurnId: string;
+	activeUserEntryId: string;
+	activeUserRequest: string;
+	activeUserRequestTruncated?: boolean;
+	activeUserRequestOriginalChars?: number;
+	supersededUserEntryIds: string[];
+	promptGeneration: number;
+	createdAt: string;
+	/** 最近一次物理摘要的越权审计；不存在物理摘要时不设置。 */
+	summaryAuthority?: ContextSummaryAuthorityAudit;
+	executionEvidence: {
+		successfulMutations: ContextContinuationToolEvidence[];
+		successfulVerifications: ContextContinuationToolEvidence[];
+		observedResources: ContextContinuationToolEvidence[];
+		successfulToolResults: number;
+		failedToolResults: number;
+		unclassifiedShellOrEvalResults: number;
+		omittedEvidenceRefs?: number;
+	};
+}
 
 /**
  * 长逻辑 turn 内部的上下文维护边界。
@@ -139,18 +215,23 @@ export interface ContextSegment {
 	source: {
 		fromEntryId: string;
 		toEntryId: string;
-		firstKeptEntryId: string;
+		/** 只有物理 compaction Segment 才存在。 */
+		firstKeptEntryId?: string;
 		promptGeneration: number;
 	};
 	maintenance: {
 		maintenanceId: string;
-		reason: ContextSegmentMaintenanceReason;
+		trigger: ContextMaintenanceTrigger;
+		matchedTriggers: ContextMaintenanceTrigger[];
+		action: ContextMaintenanceAction;
 		phase: ContextSegmentMaintenancePhase;
 		tokensBefore: number;
 		tokensAfter?: number;
+		segmentDeltaTokens?: number;
+		segmentElapsedMs?: number;
 	};
-	/** Compaction 生成的递归摘要；覆盖 source 区间并承接更早的摘要。 */
-	summary: string;
+	/** 非权威历史摘要；checkpoint-only Segment 不设置。 */
+	historicalSummary?: string;
 	shortSummary?: string;
 	/** 本地同步生成的最小继续执行状态；摘要模型失败时仍可用于恢复。 */
 	checkpoint: Pick<
@@ -165,7 +246,10 @@ export interface ContextSegment {
 		| "risks"
 		| "nextSteps"
 		| "tokenStats"
-	>;
+	> & {
+		/** 当前会话真实 user entry；压缩模型无权改写。 */
+		activeUserEntryId: string;
+	};
 }
 
 export interface ContextMaintenanceAudit {
@@ -175,7 +259,7 @@ export interface ContextMaintenanceAudit {
 	createdAt: string;
 	promptGeneration: number;
 	state: "maintenance" | "recovered" | "paused_for_context";
-	reason: ContextSegmentMaintenanceReason | "hard_pressure";
+	reason: ContextMaintenanceTrigger;
 	phase: ContextSegmentMaintenancePhase;
 	recoveryAttempt: number;
 	projectedInputTokens?: number;

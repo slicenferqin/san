@@ -6,6 +6,7 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { type ContextProbeRecord, contextProbeFilePath } from "@oh-my-pi/pi-coding-agent/context-steady/probe";
 import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -69,10 +70,13 @@ describe("AgentSession auto-compaction queue resume", () => {
 				'\tpi.on("auto_compaction_start", async (event) => {',
 				`\t\tconst signals = globalThis.${runtimeSignalStoreKey} ?? (globalThis.${runtimeSignalStoreKey} = []);`,
 				'\t\tsignals.push("compaction:start:" + event.reason);',
+				'\t\tsignals.push("compaction:id:start:" + event.maintenanceId);',
+				'\t\tsignals.push("compaction:trigger:" + event.trigger + ":" + event.matchedTriggers.join(","));',
 				"\t});",
 				'\tpi.on("auto_compaction_end", async (event) => {',
 				`\t\tconst signals = globalThis.${runtimeSignalStoreKey} ?? (globalThis.${runtimeSignalStoreKey} = []);`,
 				'\t\tsignals.push("compaction:end:" + (event.aborted ? "aborted" : "ok"));',
+				'\t\tsignals.push("compaction:id:end:" + event.maintenanceId);',
 				"\t});",
 				'\tpi.on("todo_reminder", async (event) => {',
 				`\t\tconst signals = globalThis.${runtimeSignalStoreKey} ?? (globalThis.${runtimeSignalStoreKey} = []);`,
@@ -154,6 +158,9 @@ describe("AgentSession auto-compaction queue resume", () => {
 	});
 
 	it("resumes after threshold compaction when only agent-level queued messages exist", async () => {
+		session.settings.set("san.contextSteady.enabled", true);
+		session.settings.set("san.contextSteady.activationThresholdTokens", 0);
+		session.settings.set("san.contextSteady.probe.enabled", true);
 		session.agent.followUp({
 			role: "custom",
 			customType: "test",
@@ -223,7 +230,41 @@ describe("AgentSession auto-compaction queue resume", () => {
 		expect(continueSpy).toHaveBeenCalledTimes(1);
 		const runtimeSignals = getRuntimeSignals();
 		expect(runtimeSignals).toContain("compaction:start:threshold");
+		expect(runtimeSignals).toContain("compaction:trigger:native_threshold:native_threshold");
 		expect(runtimeSignals.some(signal => signal.startsWith("compaction:end:"))).toBe(true);
+		const startMaintenanceId = runtimeSignals
+			.find(signal => signal.startsWith("compaction:id:start:"))
+			?.split(":")
+			.at(-1);
+		const endMaintenanceId = runtimeSignals
+			.find(signal => signal.startsWith("compaction:id:end:"))
+			?.split(":")
+			.at(-1);
+		expect(startMaintenanceId).toMatch(/^maintenance_[0-9a-f]{12}$/);
+		expect(endMaintenanceId).toBe(startMaintenanceId);
+		const sessionFile = sessionManager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected persistent session file");
+		vi.useRealTimers();
+		const probeFile = contextProbeFilePath(sessionFile);
+		let probeRecords: ContextProbeRecord[] = [];
+		for (let attempt = 0; attempt < 100; attempt++) {
+			const file = Bun.file(probeFile);
+			if (await file.exists()) probeRecords = Bun.JSONL.parse(await file.text()) as ContextProbeRecord[];
+			if (probeRecords.some(record => record.request.kind === "maintenance")) break;
+			await Bun.sleep(1);
+		}
+		const maintenanceRecord = probeRecords.find(record => record.request.kind === "maintenance");
+		expect(maintenanceRecord).toMatchObject({
+			schemaVersion: 3,
+			maintenance: {
+				primaryTrigger: "native_threshold",
+				matchedTriggers: ["native_threshold"],
+				action: "context-full",
+			},
+			compaction: { tokensBefore: 191_000, summarySource: "extension" },
+			authority: { authorityStateInjected: true },
+		});
+		expect(maintenanceRecord?.compaction?.tokensAfter).toBeGreaterThan(0);
 	});
 
 	it("marks manual compaction active before abort teardown can yield", async () => {

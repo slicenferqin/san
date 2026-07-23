@@ -5,6 +5,8 @@
  * envelope with stable identity, ordering, and durability classification.
  */
 
+import type { ContextMaintenanceTrigger } from "../../../context-steady/types";
+
 import type {
 	ApprovalId,
 	EventId,
@@ -191,6 +193,23 @@ export interface ToolCompletedData {
 	durationMs: number;
 	resultSummary?: string;
 	artifactRef?: string;
+}
+
+export interface ContextMaintenanceStartedData {
+	maintenanceId: string;
+	kind: "context-full" | "handoff" | "shake" | "snapcompact";
+	reason: "threshold" | "overflow" | "idle" | "incomplete";
+	primaryTrigger: ContextMaintenanceTrigger;
+	matchedTriggers: ContextMaintenanceTrigger[];
+}
+
+export interface ContextMaintenanceCompletedData {
+	maintenanceId: string;
+	kind: "context-full" | "handoff" | "shake" | "snapcompact";
+	aborted: boolean;
+	skipped?: boolean;
+	willRetry: boolean;
+	errorMessage?: string;
 }
 
 export interface ApprovalRequestedData {

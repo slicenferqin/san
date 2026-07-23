@@ -280,6 +280,11 @@ export class AdvisorRuntime {
 		return promise;
 	}
 
+	/** 用户输入到达时只解除 catch-up 等待，不丢弃 advisor 的待处理增量。 */
+	preemptCatchupWait(): void {
+		this.#wakeAllWaiters();
+	}
+
 	dispose(): void {
 		this.disposed = true;
 		this.#epoch++;

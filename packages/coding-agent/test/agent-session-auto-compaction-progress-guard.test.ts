@@ -418,6 +418,34 @@ describe("AgentSession auto-compaction progress guard", () => {
 		expect(noProgress.length).toBe(0);
 	});
 
+	it("does not recompact a kept assistant when its wall clock is newer than the compaction entry", async () => {
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session.agent, "continue").mockResolvedValue();
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 1000, contextWindow: 200000, percent: 0.5 });
+
+		const notices = collectNotices();
+		const startCount = countCompactionStarts();
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end") onCompactionDone();
+		});
+
+		// 模拟系统时钟回拨：消息时间戳晚于随后写入的 compaction，
+		// 但 journal 中的实际顺序仍是 assistant -> compaction。
+		const assistantMsg = highUsageAssistant();
+		assistantMsg.timestamp = Date.now() + 60_000;
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await compactionDone;
+		await session.waitForIdle();
+
+		expect(startCount()).toBe(1);
+		expect(promptSpy).toHaveBeenCalledTimes(1);
+		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
+		expect(noProgress.length).toBe(0);
+	});
+
 	it("rebases the in-flight prompt snapshot so mid-run compaction is not misread as a dead-end", async () => {
 		// Regression: the pending context snapshot is set once per prompt and
 		// lives for the whole run. A fresh compaction entry hides every earlier

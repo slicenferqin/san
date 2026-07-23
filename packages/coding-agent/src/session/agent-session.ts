@@ -218,6 +218,13 @@ import {
 	validateProviderMaxInFlightRequests,
 } from "../config/settings";
 import { appendContextCheckpoint, buildContextCheckpoint } from "../context-steady/checkpoint";
+import {
+	appendActiveContinuationState,
+	buildActiveContinuationState,
+	findLatestActiveContinuationState,
+	isContinuationAuthoritySourceMissing,
+	rebaseActiveContinuationState,
+} from "../context-steady/continuation";
 import { generateDigest as generateContextSteadyDigest } from "../context-steady/digest";
 import { generateFallbackDigest } from "../context-steady/fallback";
 import { estimateContextPlanProjectedTokens, materializeContextPlanMessages } from "../context-steady/materialize";
@@ -225,7 +232,12 @@ import { type BuiltContextPlan, CONTEXT_PLAN_CUSTOM_TYPE } from "../context-stea
 import { type BuildContextPlanOptions, buildContextPlan } from "../context-steady/planner";
 import {
 	appendContextProbeRecord,
+	type BuildContextProbeSnapshotOptions,
+	buildContextMaintenanceProbeRecord,
 	buildContextProbeRecord,
+	type ContextProbeCompactionObservation,
+	type ContextProbeMaintenanceDecision,
+	type ContextProbeRecord,
 	type ContextProbeRequestKind,
 	contextProbeFilePath,
 } from "../context-steady/probe";
@@ -234,6 +246,7 @@ import { isTopicShiftPrompt } from "../context-steady/relevance";
 import {
 	appendContextSegment,
 	buildContextSegment,
+	buildContextSegmentCheckpoint,
 	buildContextSegmentDigestInput,
 	collectContextSegmentRefs,
 } from "../context-steady/segment";
@@ -243,6 +256,15 @@ import {
 	skipContextPacketPreludeInDigestSource,
 } from "../context-steady/session";
 import {
+	buildContextSummaryAuthorityAudit,
+	COMPACTION_SUMMARY_REPAIR_INSTRUCTIONS,
+	contextSummaryInspectionFailed,
+	inspectContextSummary,
+	renderDeterministicHistoricalFallback,
+} from "../context-steady/summary-authority";
+import { ToolProgressGuard, type ToolProgressGuardDetection } from "../context-steady/tool-progress-guard";
+import {
+	type ActiveContinuationState,
 	CONTEXT_CHECKPOINT_CUSTOM_TYPE,
 	CONTEXT_MAINTENANCE_CUSTOM_TYPE,
 	CONTEXT_MAINTENANCE_SCHEMA_VERSION,
@@ -251,8 +273,12 @@ import {
 	CONTEXT_STEADY_ACTIVATION_SCHEMA_VERSION,
 	type ContextCheckpointRebaseReason,
 	type ContextMaintenanceAudit,
+	type ContextMaintenanceTrigger,
 	type ContextPacketRecallLayer,
+	type ContextSegment,
 	type ContextSteadyActivation,
+	type ContextSummaryAuthorityAudit,
+	type ContextSummarySource,
 	TURN_DIGEST_CUSTOM_TYPE,
 } from "../context-steady/types";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
@@ -318,6 +344,8 @@ import { resolveApprovedPlan } from "../plan-mode/approved-plan";
 import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import type { PlanModeState } from "../plan-mode/state";
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
+import toolProgressFinalizeTemplate from "../prompts/context-steady/tool-progress-finalize.md" with { type: "text" };
+import toolProgressRedirectTemplate from "../prompts/context-steady/tool-progress-redirect.md" with { type: "text" };
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import parentIrcSteerTemplate from "../prompts/steering/parent-irc.md" with { type: "text" };
@@ -580,6 +608,8 @@ const GEMINI_TOOL_REMINDER_TYPE = "gemini-tool-call-reminder";
  *  thinking/response loop. Steers the model off the repeated content; never displayed. */
 const THINKING_LOOP_REDIRECT_TYPE = "thinking-loop-redirect";
 const TOOL_CALL_LOOP_REDIRECT_TYPE = "tool-call-loop-redirect";
+const TOOL_PROGRESS_REDIRECT_TYPE = "tool-progress-redirect";
+const TOOL_PROGRESS_FINALIZE_TYPE = "tool-progress-finalize";
 
 function customMessageContentText(content: string | (TextContent | ImageContent)[]): string {
 	if (typeof content === "string") return content;
@@ -657,11 +687,15 @@ export type AgentSessionEvent =
 	| AgentEvent
 	| {
 			type: "auto_compaction_start";
+			maintenanceId: string;
 			reason: "threshold" | "overflow" | "idle" | "incomplete";
+			trigger: ContextMaintenanceTrigger;
+			matchedTriggers: ContextMaintenanceTrigger[];
 			action: "context-full" | "handoff" | "shake" | "snapcompact";
 	  }
 	| {
 			type: "auto_compaction_end";
+			maintenanceId: string;
 			action: "context-full" | "handoff" | "shake" | "snapcompact";
 			result: CompactionResult | undefined;
 			aborted: boolean;
@@ -741,6 +775,18 @@ type CompactionCheckResult = Readonly<{
 	historyRewritten?: boolean;
 }>;
 
+interface ContextSummaryAuthorityResolution {
+	summary: string;
+	shortSummary?: string;
+	replacement?: CompactionResult;
+	audit: ContextSummaryAuthorityAudit;
+}
+
+interface ContextProbeSnapshot {
+	sessionFile: string;
+	options: BuildContextProbeSnapshotOptions;
+}
+
 const COMPACTION_CHECK_NONE: CompactionCheckResult = {
 	deferredHandoff: false,
 	continuationScheduled: false,
@@ -818,8 +864,6 @@ const RETRY_BACKOFF_JITTER_RATIO = 0.25;
  * most-recent kept turn already exceeds the threshold (the snapcompact thrash).
  */
 const COMPACTION_RECOVERY_BAND = 0.8;
-const MID_RUN_MAINTENANCE_NOOP_RETRY_TOKENS = 8_000;
-const MID_RUN_MAINTENANCE_NOOP_RETRY_MS = 60_000;
 
 function calculateRetryBackoffDelayMs(baseDelayMs: number, attempt: number): number {
 	const cappedDelayMs = Math.min(Math.max(0, baseDelayMs) * 2 ** Math.max(0, attempt - 1), RETRY_BACKOFF_MAX_DELAY_MS);
@@ -1858,6 +1902,7 @@ export class AgentSession {
 	#pendingNextTurnMessages: CustomMessage[] = [];
 	#scheduledHiddenNextTurnGeneration: number | undefined = undefined;
 	#queuedMessageDrainScheduled = false;
+	#pendingUserMessageEnqueueCount = 0;
 	/** Latched true when the user deliberately interrupts (USER_INTERRUPT_LABEL);
 	 *  suppresses advisor concern/blocker auto-resume until the user next resumes.
 	 *  Advisor advice is still recorded into the transcript, just not auto-run. */
@@ -2089,6 +2134,8 @@ export class AgentSession {
 	#geminiHeaderDetector: GeminiHeaderRunDetector | undefined;
 	#toolCallLoopGuard: ToolCallLoopGuard | undefined;
 	#toolCallLoopGuardSettingsKey: string | undefined;
+	#toolProgressGuard: ToolProgressGuard | undefined;
+	#toolProgressGuardSettingsKey: string | undefined;
 	#promptInFlightCount = 0;
 	#abortInProgress = false;
 	// Wire-level agent_end emission deferred until #promptInFlightCount drops to 0.
@@ -2124,9 +2171,10 @@ export class AgentSession {
 	#contextSteadyPendingBudgetPressureRebase = false;
 	#contextSteadyMaintenanceId: string | undefined;
 	#contextSteadyRecoveryAttempt = 0;
-	#midRunMaintenanceNoop: { boundaryId: string; tokens: number; elapsedMs: number } | undefined;
 	#contextProbeWrite: Promise<void> = Promise.resolve();
 	#contextProbeLastPrefixFingerprint: { sessionId: string; value: string } | undefined;
+	#contextProbeActiveMaintenanceDecision: ContextProbeMaintenanceDecision | undefined;
+	#contextProbeActiveCompaction: ContextProbeCompactionObservation | undefined;
 	#sessionStopContinuationCount = 0;
 	#sessionStopHookActive = false;
 	/** When a session_stop continuation is active, holds the original pre-turn
@@ -2695,21 +2743,31 @@ export class AgentSession {
 				this.#pendingRewindReport = undefined;
 				await this.#applyRewind(rewindReport, messages);
 			}
+			const userInputQueued = this.#hasQueuedUserMessage();
 			if (context?.message.role === "assistant") {
-				const detection = this.#activeToolCallLoopGuard()?.recordTurn({
-					message: context.message,
-					toolResults: context.toolResults,
-				});
-				if (detection) this.#maybeInjectToolCallLoopRedirect(messages, detection);
+				if (userInputQueued) {
+					this.#resetToolLoopGuardsForUserInput();
+				} else {
+					const detection = this.#activeToolCallLoopGuard()?.recordTurn({
+						message: context.message,
+						toolResults: context.toolResults,
+					});
+					if (detection) this.#maybeInjectToolCallLoopRedirect(messages, detection);
+					const progressDetection = this.#activeToolProgressGuard()?.recordTurn({
+						message: context.message,
+						toolResults: context.toolResults,
+					});
+					if (progressDetection) this.#maybeInjectToolProgressGuardMessage(messages, progressDetection);
+				}
 			}
-			await this.#advancePrewalk(messages, context);
+			if (!userInputQueued) await this.#advancePrewalk(messages, context);
 			this.#advisorPrimaryTurnsCompleted++;
 			if (this.#advisors.length > 0) {
 				for (const a of this.#advisors) {
 					if (!a.runtime.disposed) a.runtime.onTurnEnd(messages, { willContinue: context?.willContinue });
 				}
 				const syncBacklog = this.settings.get("advisor.syncBacklog");
-				if (syncBacklog !== "off") {
+				if (syncBacklog !== "off" && !this.#hasQueuedUserMessage()) {
 					const threshold = parseInt(syncBacklog, 10);
 					// Parallel so the 30s catch-up budget is shared across advisors, not summed.
 					await Promise.all(this.#advisors.map(a => a.runtime.waitForCatchup(30000, threshold, signal)));
@@ -3588,6 +3646,8 @@ export class AgentSession {
 	 *   3. else undefined.
 	 */
 	nextToolChoiceDirective(): ToolChoiceDirective | undefined {
+		if (this.#hasQueuedUserMessage()) this.#resetToolLoopGuardsForUserInput();
+		if (this.#activeToolProgressGuard()?.consumeForcedFinalization()) return "none";
 		const hard = this.#nextHardToolChoice();
 		if (hard !== undefined) return hard;
 		const head = this.#toolChoiceQueue.peekPendingHead();
@@ -4382,6 +4442,10 @@ export class AgentSession {
 			(event.assistantMessageEvent.type === "toolcall_end" || event.assistantMessageEvent.type === "toolcall_delta")
 		) {
 			this.#maybeAbortStreamingEdit(event);
+		}
+
+		if (event.type === "message_end" && isUserQueuedMessage(event.message)) {
+			this.#resetToolLoopGuardsForUserInput();
 		}
 
 		// Handle session persistence
@@ -5222,7 +5286,14 @@ export class AgentSession {
 		);
 	}
 
-	#scheduleAutoContinuePrompt(generation: number): void {
+	#scheduleAutoContinuePrompt(generation: number): boolean {
+		if (this.#continuationAuthoritySourceMissing()) {
+			logger.warn("Automatic continuation blocked because the active user authority source is missing", {
+				sessionId: this.sessionId,
+				generation,
+			});
+			return false;
+		}
 		const continuePrompt = async () => {
 			// Compaction summarizes away the first-message eager preludes, so re-assert the
 			// delegate-via-tasks / phased-todo reminders on this auto-resumed turn. This runs
@@ -5251,6 +5322,7 @@ export class AgentSession {
 			},
 			{ generation },
 		);
+		return true;
 	}
 
 	async #cancelPostPromptTasks(): Promise<void> {
@@ -5878,6 +5950,52 @@ export class AgentSession {
 		return this.#toolCallLoopGuard;
 	}
 
+	#activeToolProgressGuard(): ToolProgressGuard | undefined {
+		if (this.settings.get("model.toolProgressGuard.enabled") !== true) {
+			this.#toolProgressGuard = undefined;
+			this.#toolProgressGuardSettingsKey = undefined;
+			return undefined;
+		}
+
+		const mode = this.settings.get("model.toolProgressGuard.mode");
+		const repeatThreshold = this.settings.get("model.toolProgressGuard.repeatThreshold");
+		const saturationWindow = this.settings.get("model.toolProgressGuard.saturationWindow");
+		const saturationMaxResources = this.settings.get("model.toolProgressGuard.saturationMaxResources");
+		const finalizeAfterNoProgress = this.settings.get("model.toolProgressGuard.finalizeAfterNoProgress");
+		const historyLimit = this.settings.get("model.toolProgressGuard.historyLimit");
+		const exemptTools = this.settings
+			.get("model.toolProgressGuard.exemptTools")
+			.filter((tool): tool is string => typeof tool === "string" && tool.length > 0);
+		const settingsKey = JSON.stringify({
+			mode,
+			repeatThreshold,
+			saturationWindow,
+			saturationMaxResources,
+			finalizeAfterNoProgress,
+			historyLimit,
+			exemptTools,
+		});
+		if (!this.#toolProgressGuard || this.#toolProgressGuardSettingsKey !== settingsKey) {
+			this.#toolProgressGuard = new ToolProgressGuard({
+				mode,
+				repeatThreshold,
+				saturationWindow,
+				saturationMaxResources,
+				finalizeAfterNoProgress,
+				historyLimit,
+				exemptTools,
+			});
+			this.#toolProgressGuardSettingsKey = settingsKey;
+		}
+		return this.#toolProgressGuard;
+	}
+
+	#resetToolLoopGuardsForUserInput(): void {
+		this.#toolCallLoopGuard = undefined;
+		this.#toolCallLoopGuardSettingsKey = undefined;
+		this.#toolProgressGuard?.reset();
+	}
+
 	#maybeInjectToolCallLoopRedirect(messages: AgentMessage[], detection: RepeatedToolCallDetection): void {
 		const content = prompt.render(toolCallLoopRedirectTemplate, {
 			tool_name: detection.toolName,
@@ -5909,6 +6027,34 @@ export class AgentSession {
 			this.agent.appendMessage(redirectMessage);
 		}
 		this.sessionManager.appendCustomMessageEntry(TOOL_CALL_LOOP_REDIRECT_TYPE, content, false, details, "agent");
+	}
+
+	#maybeInjectToolProgressGuardMessage(messages: AgentMessage[], detection: ToolProgressGuardDetection): void {
+		const template = detection.kind === "soft_redirect" ? toolProgressRedirectTemplate : toolProgressFinalizeTemplate;
+		const content = prompt.render(template, {
+			tools: detection.repeatedTools.join(", ") || "unknown",
+			reason: detection.reason,
+			...detection.snapshot,
+		});
+		const customType = detection.kind === "soft_redirect" ? TOOL_PROGRESS_REDIRECT_TYPE : TOOL_PROGRESS_FINALIZE_TYPE;
+		logger.warn("tool progress guard transition", {
+			kind: detection.kind,
+			reason: detection.reason,
+			tools: detection.repeatedTools,
+			...detection.snapshot,
+		});
+		const message: CustomMessage = {
+			role: "custom",
+			customType,
+			content,
+			display: false,
+			details: detection,
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+		messages.push(message);
+		if (this.agent.state.messages !== messages) this.agent.appendMessage(message);
+		this.sessionManager.appendCustomMessageEntry(customType, content, false, detection, "agent");
 	}
 
 	/**
@@ -6480,12 +6626,16 @@ export class AgentSession {
 		} else if (event.type === "auto_compaction_start") {
 			await this.#extensionRunner.emit({
 				type: "auto_compaction_start",
+				maintenanceId: event.maintenanceId,
 				reason: event.reason,
+				trigger: event.trigger,
+				matchedTriggers: event.matchedTriggers,
 				action: event.action,
 			});
 		} else if (event.type === "auto_compaction_end") {
 			await this.#extensionRunner.emit({
 				type: "auto_compaction_end",
+				maintenanceId: event.maintenanceId,
 				action: event.action,
 				result: event.result,
 				aborted: event.aborted,
@@ -8680,6 +8830,7 @@ export class AgentSession {
 		// re-enables advisor auto-resume that a prior user interrupt suppressed.
 		// Agent-initiated synthetic prompts (auto-continue, plan, reminders) do not.
 		if (options?.userInitiated ?? !options?.synthetic) {
+			this.#resetToolLoopGuardsForUserInput();
 			this.#advisorAutoResumeSuppressed = false;
 			this.#planModeReminderCount = 0;
 			this.#planModeReminderAwaitingProgress = false;
@@ -9166,6 +9317,8 @@ export class AgentSession {
 				await this.#runAutoCompaction("threshold", false, false, false, {
 					autoContinue: false,
 					triggerContextTokens: plan.audit.qualityGate.projectedInputTokens,
+					trigger: "hard_pressure",
+					matchedTriggers: ["hard_pressure"],
 					suppressContinuation: true,
 					phase: "pre_turn",
 				});
@@ -9927,6 +10080,9 @@ export class AgentSession {
 			queueOnly?: boolean;
 		},
 	): Promise<void> {
+		if (message.attribution === "user" && message.display !== false) {
+			this.#resetToolLoopGuardsForUserInput();
+		}
 		const textContent =
 			typeof message.content === "string"
 				? message.content
@@ -10412,39 +10568,44 @@ export class AgentSession {
 		images: ImageContent[] | undefined,
 		mode: "steer" | "followUp",
 	): Promise<void> {
-		// A queued user message (RPC/SDK/collab steer or follow-up, or a typed message
-		// while streaming) is a deliberate resume; re-enable advisor auto-resume that
-		// a user interrupt suppressed.
-		this.#advisorAutoResumeSuppressed = false;
-		const normalizedImages = await this.#normalizeImagesForModel(images);
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		if (normalizedImages?.length) {
-			content.push(...normalizedImages);
+		this.#pendingUserMessageEnqueueCount++;
+		try {
+			// RPC/SDK/collab 或流式输入排队的 user 消息代表用户主动恢复；
+			// 同时解除用户中断留下的 advisor 自动恢复抑制。
+			this.#resetToolLoopGuardsForUserInput();
+			for (const advisor of this.#advisors) advisor.runtime.preemptCatchupWait();
+			this.#advisorAutoResumeSuppressed = false;
+			const normalizedImages = await this.#normalizeImagesForModel(images);
+			const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
+			if (normalizedImages?.length) {
+				content.push(...normalizedImages);
+			}
+			// 文本模型收到图片时，先用视觉模型生成描述，并紧邻 user 消息前注入隐藏伴随消息。
+			const imageDescriptionNotice = normalizedImages?.length
+				? await this.#buildImageDescriptionNotice(normalizedImages)
+				: undefined;
+			if (mode === "followUp") {
+				if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
+				this.agent.followUp({
+					role: "user",
+					content,
+					attribution: "user",
+					timestamp: Date.now(),
+				});
+			} else {
+				if (imageDescriptionNotice) this.agent.steer(imageDescriptionNotice);
+				this.agent.steer({
+					role: "user",
+					content,
+					steering: true,
+					attribution: "user",
+					timestamp: Date.now(),
+				});
+			}
+			this.#scheduleIdleQueueDrain();
+		} finally {
+			this.#pendingUserMessageEnqueueCount--;
 		}
-		// Text-only model + image attachment: describe via a vision model and enqueue the
-		// description as a hidden companion immediately before the user message.
-		const imageDescriptionNotice = normalizedImages?.length
-			? await this.#buildImageDescriptionNotice(normalizedImages)
-			: undefined;
-		if (mode === "followUp") {
-			if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
-			this.agent.followUp({
-				role: "user",
-				content,
-				attribution: "user",
-				timestamp: Date.now(),
-			});
-		} else {
-			if (imageDescriptionNotice) this.agent.steer(imageDescriptionNotice);
-			this.agent.steer({
-				role: "user",
-				content,
-				steering: true,
-				attribution: "user",
-				timestamp: Date.now(),
-			});
-		}
-		this.#scheduleIdleQueueDrain();
 	}
 
 	#scheduleIdleQueueDrain(): void {
@@ -12075,6 +12236,12 @@ export class AgentSession {
 		}
 		const compactionAbortController = new AbortController();
 		this.#compactionAbortController = compactionAbortController;
+		let probeMaintenanceDecision: ContextProbeMaintenanceDecision | undefined;
+		const updateProbeMaintenanceAction = (action: ContextProbeMaintenanceDecision["action"]): void => {
+			if (!probeMaintenanceDecision) return;
+			probeMaintenanceDecision = { ...probeMaintenanceDecision, action };
+			this.#contextProbeActiveMaintenanceDecision = probeMaintenanceDecision;
+		};
 
 		try {
 			this.#disconnectFromAgent();
@@ -12125,6 +12292,17 @@ export class AgentSession {
 				}
 				throw new Error("Nothing to compact (session too small)");
 			}
+			probeMaintenanceDecision = {
+				maintenanceId: `maintenance_${crypto.randomUUID().slice(-12)}`,
+				primaryTrigger: "manual",
+				matchedTriggers: ["manual"],
+				action:
+					effectiveSettings.strategy === "snapcompact" && !customInstructions && !options?.internalGuidance
+						? "snapcompact"
+						: "context-full",
+			};
+			this.#contextProbeActiveMaintenanceDecision = probeMaintenanceDecision;
+			this.#contextProbeActiveCompaction = { tokensBefore: preparation.tokensBefore };
 
 			let hookCompaction: CompactionResult | undefined;
 			let fromExtension = false;
@@ -12140,6 +12318,7 @@ export class AgentSession {
 				})) as SessionBeforeCompactResult | undefined;
 
 				if (result?.cancel) {
+					updateProbeMaintenanceAction("none");
 					throw new CompactionCancelledError();
 				}
 
@@ -12180,10 +12359,11 @@ export class AgentSession {
 				}
 				this.emitNotice(
 					"warning",
-					`snapcompact needs a vision-capable model (${this.model.id} is text-only); falling back to LLM compaction`,
+					`snapcompact needs a vision-capable model (${this.model.id} is text-only); using an LLM context-full fallback`,
 					"compaction",
 				);
 				snapcompactReady = false;
+				updateProbeMaintenanceAction("context-full");
 			} else if (snapcompactReady) {
 				const text = snapcompact.serializeConversation(
 					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
@@ -12214,6 +12394,7 @@ export class AgentSession {
 			let tokensBefore: number;
 			let details: unknown;
 			let codexCompaction: CodexCompactionContext | undefined;
+			let summarySource: ContextSummarySource | undefined;
 
 			// Snapcompact runs locally first. The frame cap is sized from the live
 			// model window via #computeSnapcompactMaxFrames so the post-render context
@@ -12279,6 +12460,7 @@ export class AgentSession {
 			}
 
 			if (compactionPrep.kind === "fromHook") {
+				updateProbeMaintenanceAction("context-full");
 				summary = compactionPrep.summary;
 				shortSummary = compactionPrep.shortSummary;
 				firstKeptEntryId = compactionPrep.firstKeptEntryId;
@@ -12344,6 +12526,65 @@ export class AgentSession {
 				throw new CompactionCancelledError();
 			}
 
+			summarySource = fromExtension
+				? "extension"
+				: snapcompactResult
+					? "snapcompact"
+					: effectiveSettings.remoteEndpoint || preserveData?.openaiRemoteCompaction
+						? "remote"
+						: "local";
+			if (summarySource === "remote") updateProbeMaintenanceAction("remote_compaction");
+			this.#contextProbeActiveCompaction = {
+				...this.#contextProbeActiveCompaction,
+				tokensBefore,
+				summarySource,
+			};
+			const continuationState = buildActiveContinuationState({
+				entries: pathEntries,
+				sessionId: this.sessionId,
+				promptGeneration: this.#promptGeneration,
+			});
+			const authorityResolution = await this.#enforceContextSummaryAuthority({
+				summary,
+				...(shortSummary ? { shortSummary } : {}),
+				summarySource,
+				continuationState,
+				...(compactionPrep.kind === "needsLlm" && !snapcompactResult
+					? {
+							repair: () =>
+								this.#compactWithFallbackModel(
+									preparation,
+									COMPACTION_SUMMARY_REPAIR_INSTRUCTIONS,
+									compactionAbortController.signal,
+									{
+										promptOverride: this.#obfuscateTextForProvider(compactionPrep.hookPrompt),
+										extraContext: compactionPrep.hookContext,
+										remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
+										convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
+										codexCompaction,
+									},
+									compactionCandidates,
+								),
+						}
+					: {}),
+			});
+			summary = authorityResolution.summary;
+			shortSummary = authorityResolution.shortSummary;
+			const summaryAuthority = authorityResolution.audit;
+			summarySource = summaryAuthority.summarySource;
+			if (authorityResolution.replacement) {
+				const replacement = authorityResolution.replacement;
+				firstKeptEntryId = replacement.firstKeptEntryId;
+				tokensBefore = replacement.tokensBefore;
+				details = replacement.details;
+				preserveData = mergeLlmCompactionPreserveData(compactionPrep.preserveData, replacement.preserveData);
+			}
+			this.#contextProbeActiveCompaction = {
+				...this.#contextProbeActiveCompaction,
+				tokensBefore,
+				...(summarySource ? { summarySource } : {}),
+			};
+
 			this.sessionManager.appendCompaction(
 				summary,
 				shortSummary,
@@ -12353,9 +12594,21 @@ export class AgentSession {
 				fromExtension,
 				preserveData,
 			);
+			if (continuationState) {
+				appendActiveContinuationState(this.sessionManager, {
+					...continuationState,
+					...(summaryAuthority ? { summaryAuthority } : {}),
+				});
+			}
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.buildDisplaySessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
+			this.#contextProbeActiveCompaction = {
+				...this.#contextProbeActiveCompaction,
+				tokensBefore,
+				tokensAfter: this.#estimateStoredContextTokens(),
+				...(summarySource ? { summarySource } : {}),
+			};
 			this.#rebasePendingContextSnapshotAfterCompaction();
 			// The active request plan may remain available for the next provider
 			// call to detect the rewrite, but the idle snapshot is no longer valid.
@@ -12400,6 +12653,17 @@ export class AgentSession {
 			options?.onError?.(err);
 			throw error;
 		} finally {
+			if (
+				probeMaintenanceDecision &&
+				this.#contextProbeActiveMaintenanceDecision?.maintenanceId === probeMaintenanceDecision.maintenanceId
+			) {
+				this.#recordContextMaintenanceProbe(
+					this.#contextProbeActiveMaintenanceDecision,
+					this.#contextProbeActiveCompaction,
+				);
+				this.#contextProbeActiveMaintenanceDecision = undefined;
+				this.#contextProbeActiveCompaction = undefined;
+			}
 			if (this.#compactionAbortController === compactionAbortController) {
 				this.#compactionAbortController = undefined;
 			}
@@ -12478,6 +12742,11 @@ export class AgentSession {
 	 */
 	async handoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined> {
 		const entries = this.sessionManager.getBranch();
+		const continuationState = buildActiveContinuationState({
+			entries,
+			sessionId: this.sessionId,
+			promptGeneration: this.#promptGeneration,
+		});
 		const messageCount = entries.filter(e => e.type === "message").length;
 
 		if (messageCount < 2) {
@@ -12628,6 +12897,15 @@ export class AgentSession {
 			// Inject the handoff document as a custom message
 			const handoffContent = createHandoffContext(handoffText);
 			this.sessionManager.appendCustomMessageEntry("handoff", handoffContent, true, undefined, "agent");
+			if (continuationState) {
+				appendActiveContinuationState(
+					this.sessionManager,
+					rebaseActiveContinuationState(continuationState, {
+						sessionId: this.sessionId,
+						promptGeneration: this.#promptGeneration,
+					}),
+				);
+			}
 			await this.sessionManager.ensureOnDisk();
 			let savedPath: string | undefined;
 			if (options?.autoTriggered && this.settings.get("compaction.handoffSaveToDisk")) {
@@ -12685,22 +12963,41 @@ export class AgentSession {
 	 * suppress it.
 	 */
 	async #completeSideRequestWithProbe<TApi extends AssistantMessage["api"]>(
-		requestKind: Exclude<ContextProbeRequestKind, "agent">,
+		requestKind: Exclude<ContextProbeRequestKind, "agent" | "maintenance">,
 		model: Model<TApi>,
 		context: Context,
 		options: SimpleStreamOptions,
 	): Promise<AssistantMessage> {
 		const stream = await this.#sideStreamFn(model, context, options);
 		const assistant = await stream.result();
+		if (requestKind === "compaction" && this.#contextProbeActiveCompaction) {
+			const usage = assistant.usage;
+			this.#contextProbeActiveCompaction = {
+				...this.#contextProbeActiveCompaction,
+				summaryInputTokens: usage.input + usage.cacheRead + usage.cacheWrite,
+				summaryOutputTokens: usage.output,
+			};
+		}
 		this.#recordContextProbe(assistant, requestKind, model.contextWindow);
 		return assistant;
 	}
 
 	#recordContextProbe(
 		assistant: AssistantMessage,
-		requestKind: ContextProbeRequestKind,
+		requestKind: Exclude<ContextProbeRequestKind, "maintenance">,
 		requestContextWindow?: number | null,
 	): void {
+		const snapshot = this.#buildContextProbeSnapshot(requestContextWindow);
+		if (!snapshot) return;
+		const record = buildContextProbeRecord({
+			...snapshot.options,
+			requestKind,
+			assistant,
+		});
+		this.#queueContextProbeRecord(snapshot.sessionFile, record);
+	}
+
+	#buildContextProbeSnapshot(requestContextWindow?: number | null): ContextProbeSnapshot | undefined {
 		if (this.settings.get("san.contextSteady.probe.enabled") !== true) return;
 		const sessionFile = this.sessionManager.getSessionFile();
 		if (!sessionFile) return;
@@ -12735,11 +13032,10 @@ export class AgentSession {
 				}),
 			),
 		);
-		const record = buildContextProbeRecord({
+		const authorityState = findLatestActiveContinuationState(branch);
+		const options: BuildContextProbeSnapshotOptions = {
 			sessionId: this.sessionId,
 			sessionFile,
-			requestKind,
-			assistant,
 			contextWindow,
 			steadyEnabled: this.settings.get("san.contextSteady.enabled") === true,
 			activeEstimatedTokens,
@@ -12750,16 +13046,42 @@ export class AgentSession {
 			compactionIds,
 			segmentIds,
 			prefixFingerprint,
+			...(this.#contextProbeActiveMaintenanceDecision
+				? { maintenanceDecision: this.#contextProbeActiveMaintenanceDecision }
+				: {}),
+			...(this.#contextProbeActiveCompaction ? { compaction: this.#contextProbeActiveCompaction } : {}),
+			...(authorityState ? { authorityState } : {}),
+			...(this.#toolProgressGuard ? { convergence: this.#toolProgressGuard.snapshot() } : {}),
 			...(this.#contextProbeLastPrefixFingerprint?.sessionId === this.sessionId
 				? { previousPrefixFingerprint: this.#contextProbeLastPrefixFingerprint.value }
 				: {}),
-		});
+		};
 		this.#contextProbeLastPrefixFingerprint = { sessionId: this.sessionId, value: prefixFingerprint };
+		return { sessionFile, options };
+	}
+
+	#recordContextMaintenanceProbe(
+		maintenanceDecision: ContextProbeMaintenanceDecision,
+		compaction?: ContextProbeCompactionObservation,
+	): void {
+		const snapshot = this.#buildContextProbeSnapshot();
+		if (!snapshot) return;
+		const model = this.model;
+		const record = buildContextMaintenanceProbeRecord({
+			...snapshot.options,
+			maintenanceDecision,
+			...(compaction ? { compaction } : {}),
+			model: model ? { provider: model.provider, id: model.id } : { provider: "none", id: "none" },
+		});
+		this.#queueContextProbeRecord(snapshot.sessionFile, record);
+	}
+
+	#queueContextProbeRecord(sessionFile: string, record: ContextProbeRecord): void {
 		const probeFile = contextProbeFilePath(sessionFile);
 		const write = this.#contextProbeWrite.then(() => appendContextProbeRecord(sessionFile, record));
 		this.#contextProbeWrite = write.catch(error => {
 			logger.warn("Failed to append context probe record", {
-				sessionId: this.sessionId,
+				sessionId: record.sessionId,
 				probeFile,
 				error: String(error),
 			});
@@ -12828,6 +13150,40 @@ export class AgentSession {
 		});
 	}
 
+	#contextSteadySegmentTokenThreshold(): number {
+		const configured = Math.max(0, Math.floor(this.settings.get("san.contextSteady.segment.maxTokens") as number));
+		if (configured > 0) return configured;
+
+		const contextWindow = this.model?.contextWindow ?? 0;
+		if (contextWindow <= 0) return 40_000;
+		const compactionSettings = this.settings.getGroup("compaction");
+		const nativeThreshold = resolveThresholdTokens(contextWindow, compactionSettings);
+		const configuredSteadyTarget = this.settings.get("san.contextSteady.qualityWindowTokens") as number;
+		const steadyTarget = Math.max(
+			1,
+			Math.min(
+				contextWindow,
+				configuredSteadyTarget > 0 ? configuredSteadyTarget : 240_000,
+				this.#contextSteadyBurstWindowTokens(),
+			),
+		);
+		const physicalTarget = Math.min(steadyTarget, nativeThreshold);
+		const messageBudget = Math.max(0, physicalTarget - computeNonMessageTokens(this));
+		return Math.min(64_000, Math.max(8_000, Math.floor(messageBudget * 0.2)));
+	}
+
+	#hasQueuedUserMessage(): boolean {
+		return (
+			this.#pendingUserMessageEnqueueCount > 0 ||
+			this.agent.peekSteeringQueue().some(isUserQueuedMessage) ||
+			this.agent.peekFollowUpQueue().some(isUserQueuedMessage)
+		);
+	}
+
+	#continuationAuthoritySourceMissing(): boolean {
+		return isContinuationAuthoritySourceMissing(this.sessionManager.getBranch());
+	}
+
 	#contextSteadySegmentMaintenanceHint(): {
 		required: boolean;
 		tokenHint: boolean;
@@ -12863,7 +13219,7 @@ export class AgentSession {
 			latestSegmentIndex > userIndex ? latestSegment?.segment.createdAt : entries[userIndex]?.timestamp;
 		const parsedStartedAt = startedAt ? Date.parse(startedAt) : Number.NaN;
 		const elapsedMs = Number.isFinite(parsedStartedAt) ? Math.max(0, Date.now() - parsedStartedAt) : 0;
-		const maxTokens = Math.max(0, Math.floor(this.settings.get("san.contextSteady.segment.maxTokens") as number));
+		const maxTokens = this.#contextSteadySegmentTokenThreshold();
 		const maxDurationMs = Math.max(
 			0,
 			Math.floor(this.settings.get("san.contextSteady.segment.maxDurationMs") as number),
@@ -12878,6 +13234,62 @@ export class AgentSession {
 			elapsedMs,
 			boundaryId: latestSegmentIndex > userIndex ? latestSegment!.entryId : entries[userIndex]!.id,
 		};
+	}
+
+	#appendContextSteadyCheckpointSegment(
+		segmentHint: {
+			tokenHint: boolean;
+			durationHint: boolean;
+			tokens: number;
+			elapsedMs: number;
+		},
+		contextTokens: number,
+	): boolean {
+		const trigger: "segment_tokens" | "segment_duration" = segmentHint.tokenHint
+			? "segment_tokens"
+			: "segment_duration";
+		const matchedTriggers: ContextMaintenanceTrigger[] = [];
+		if (segmentHint.tokenHint) matchedTriggers.push("segment_tokens");
+		if (segmentHint.durationHint) matchedTriggers.push("segment_duration");
+		const maintenanceId = `maintenance_${crypto.randomUUID().slice(-12)}`;
+		const segment = buildContextSegmentCheckpoint({
+			entries: this.sessionManager.getBranch(),
+			sessionId: this.sessionId,
+			promptGeneration: this.#promptGeneration,
+			maintenanceId,
+			trigger,
+			matchedTriggers,
+			phase: "mid_turn",
+			tokensBefore: contextTokens,
+			segmentDeltaTokens: segmentHint.tokens,
+			segmentElapsedMs: segmentHint.elapsedMs,
+		});
+		if (!segment) return false;
+		appendContextSegment(this.sessionManager, segment);
+		const continuationState = buildActiveContinuationState({
+			entries: this.sessionManager.getBranch(),
+			sessionId: this.sessionId,
+			logicalTurnId: segment.logicalTurnId,
+			promptGeneration: this.#promptGeneration,
+		});
+		if (continuationState) appendActiveContinuationState(this.sessionManager, continuationState);
+		logger.debug("Mid-run Segment checkpoint committed without compaction", {
+			trigger,
+			matchedTriggers,
+			segmentId: segment.segmentId,
+			segmentDeltaTokens: segmentHint.tokens,
+			segmentElapsedMs: segmentHint.elapsedMs,
+			contextTokens,
+		});
+		this.#recordContextMaintenanceProbe({
+			maintenanceId,
+			primaryTrigger: trigger,
+			matchedTriggers,
+			action: "checkpoint",
+			segmentDeltaTokens: segmentHint.tokens,
+			segmentElapsedMs: segmentHint.elapsedMs,
+		});
+		return true;
 	}
 
 	/**
@@ -12910,13 +13322,10 @@ export class AgentSession {
 		if (contextWindow <= 0) return;
 
 		const compactionSettings = this.settings.getGroup("compaction");
-		if (
-			!compactionSettings.enabled ||
-			compactionSettings.strategy === "off" ||
-			compactionSettings.midTurnEnabled === false
-		) {
-			return;
-		}
+		const physicalMaintenanceEnabled =
+			compactionSettings.enabled &&
+			compactionSettings.strategy !== "off" &&
+			compactionSettings.midTurnEnabled !== false;
 
 		const lastAssistant = [...activeMessages]
 			.reverse()
@@ -12942,23 +13351,21 @@ export class AgentSession {
 					),
 				)
 			: Number.POSITIVE_INFINITY;
-		const steadyMaintenanceRequired = contextTokens > contextSteadyTarget;
+		const steadyMaintenanceRequired = physicalMaintenanceEnabled && contextTokens > contextSteadyTarget;
 		const segmentHint = this.#contextSteadySegmentMaintenanceHint();
-		const nativeMaintenanceRequired = shouldCompact(contextTokens, contextWindow, compactionSettings);
+		const nativeMaintenanceRequired =
+			physicalMaintenanceEnabled && shouldCompact(contextTokens, contextWindow, compactionSettings);
 		if (!steadyMaintenanceRequired && !segmentHint.required && !nativeMaintenanceRequired) return;
-		const priorNoop = this.#midRunMaintenanceNoop;
-		if (
-			!steadyMaintenanceRequired &&
-			!nativeMaintenanceRequired &&
-			segmentHint.required &&
-			priorNoop?.boundaryId === segmentHint.boundaryId &&
-			segmentHint.tokens < priorNoop.tokens + MID_RUN_MAINTENANCE_NOOP_RETRY_TOKENS &&
-			segmentHint.elapsedMs < priorNoop.elapsedMs + MID_RUN_MAINTENANCE_NOOP_RETRY_MS
-		) {
-			logger.debug("Skipping repeated mid-run maintenance after a no-op", {
+		const physicalMaintenanceRequired = steadyMaintenanceRequired || nativeMaintenanceRequired;
+		if (this.#hasQueuedUserMessage()) {
+			logger.debug("Deferring context maintenance so queued user input can preempt it", {
+				physicalMaintenanceRequired,
 				segmentHint,
-				priorNoop,
 			});
+			return;
+		}
+		if (!physicalMaintenanceRequired) {
+			this.#appendContextSteadyCheckpointSegment(segmentHint, contextTokens);
 			return;
 		}
 
@@ -12969,6 +13376,7 @@ export class AgentSession {
 		// dead-end on a single oversized turn) on a model that should have just
 		// been promoted to a larger window instead.
 		if (await this.#promoteContextModel()) {
+			if (segmentHint.required) this.#appendContextSteadyCheckpointSegment(segmentHint, contextTokens);
 			logger.debug("Mid-run context promotion avoided compaction", {
 				contextTokens,
 				contextWindow,
@@ -12979,11 +13387,21 @@ export class AgentSession {
 
 		const messagesBefore = activeMessages.length;
 		const compactionBefore = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
+		const matchedTriggers: ContextMaintenanceTrigger[] = [];
+		if (nativeMaintenanceRequired) matchedTriggers.push("native_threshold");
+		if (steadyMaintenanceRequired) matchedTriggers.push("steady_target");
+		if (segmentHint.tokenHint) matchedTriggers.push("segment_tokens");
+		if (segmentHint.durationHint) matchedTriggers.push("segment_duration");
+		const trigger: ContextMaintenanceTrigger = nativeMaintenanceRequired ? "native_threshold" : "steady_target";
 		const maintenanceResult = await this.#runAutoCompaction("threshold", false, false, false, {
 			autoContinue: false,
 			suppressContinuation: true,
 			suppressHandoff: true,
 			triggerContextTokens: contextTokens,
+			trigger,
+			matchedTriggers,
+			segmentDeltaTokens: segmentHint.tokens,
+			segmentElapsedMs: segmentHint.elapsedMs,
 			phase: "mid_turn",
 		});
 
@@ -12996,10 +13414,9 @@ export class AgentSession {
 		const committed =
 			maintenanceResult.historyRewritten === true ||
 			(compactionAfter !== undefined && compactionAfter !== compactionBefore);
-		this.#midRunMaintenanceNoop = committed
-			? undefined
-			: { boundaryId: segmentHint.boundaryId, tokens: segmentHint.tokens, elapsedMs: segmentHint.elapsedMs };
 		logger.debug(committed ? "Mid-run compaction committed between provider calls" : "Mid-run compaction no-op", {
+			trigger,
+			matchedTriggers,
 			contextTokens,
 			contextWindow,
 			contextSteadyTarget,
@@ -13039,6 +13456,35 @@ export class AgentSession {
 	 *   `session_stop` and other agent continuations when `continuationScheduled`
 	 *   is true.
 	 */
+	#assistantPredatesCompaction(
+		assistantMessage: AssistantMessage,
+		compactionEntry: CompactionEntry,
+		branch: readonly SessionEntry[],
+	): boolean {
+		const compactionIndex = branch.findIndex(entry => entry.id === compactionEntry.id);
+		if (compactionIndex >= 0) {
+			const exactIndex = branch.findIndex(entry => entry.type === "message" && entry.message === assistantMessage);
+			if (exactIndex >= 0) return exactIndex < compactionIndex;
+
+			const persistenceKey = sessionMessagePersistenceKey(assistantMessage);
+			if (persistenceKey) {
+				let matchedBefore = false;
+				let matchedAfter = false;
+				for (let index = 0; index < branch.length; index++) {
+					const entry = branch[index];
+					if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+					if (sessionMessagePersistenceKey(entry.message) !== persistenceKey) continue;
+					if (!sameMessageContent(entry.message, assistantMessage)) continue;
+					if (index < compactionIndex) matchedBefore = true;
+					if (index > compactionIndex) matchedAfter = true;
+				}
+				// Journal 顺序是权威来源；只有旧会话缺少可匹配 entry 时才回退到时间戳。
+				if (matchedBefore !== matchedAfter) return matchedBefore;
+			}
+		}
+		return assistantMessage.timestamp < new Date(compactionEntry.timestamp).getTime();
+	}
+
 	async #checkCompaction(
 		assistantMessage: AssistantMessage,
 		skipAbortedCheck = true,
@@ -13064,9 +13510,10 @@ export class AgentSession {
 		// The error shouldn't trigger another compaction since we already compacted.
 		// Example: opus fails -> switch to codex -> compact -> switch back to opus -> opus error
 		// is still in context but shouldn't trigger compaction again.
-		const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
+		const branch = this.sessionManager.getBranch();
+		const compactionEntry = getLatestCompactionEntry(branch);
 		const errorIsFromBeforeCompaction =
-			compactionEntry !== null && assistantMessage.timestamp < new Date(compactionEntry.timestamp).getTime();
+			compactionEntry !== null && this.#assistantPredatesCompaction(assistantMessage, compactionEntry, branch);
 		if (sameModel && !errorIsFromBeforeCompaction && AIError.isContextOverflow(assistantMessage, contextWindow)) {
 			// Clear the failed turn from active context so the retry (or the next
 			// user prompt) does not replay it. The persisted branch entry stays
@@ -14684,6 +15131,79 @@ export class AgentSession {
 		);
 	}
 
+	async #enforceContextSummaryAuthority(options: {
+		summary: string;
+		shortSummary?: string;
+		summarySource: ContextSummarySource;
+		continuationState: ActiveContinuationState | undefined;
+		repair?: () => Promise<CompactionResult>;
+	}): Promise<ContextSummaryAuthorityResolution> {
+		const inspection = inspectContextSummary(options.summary, options.continuationState);
+		if (!contextSummaryInspectionFailed(inspection)) {
+			return {
+				summary: options.summary,
+				...(options.shortSummary ? { shortSummary: options.shortSummary } : {}),
+				audit: buildContextSummaryAuthorityAudit({
+					summarySource: options.summarySource,
+					inspection,
+					repairAttempted: false,
+					repairSucceeded: false,
+				}),
+			};
+		}
+
+		logger.warn("Compaction summary violated the historical-evidence protocol", {
+			summarySource: options.summarySource,
+			forbiddenGoalField: inspection.forbiddenGoalField,
+			executionClaimConflictCount: inspection.executionClaimConflictCount,
+		});
+
+		let fallbackReason = "repair_unavailable";
+		if (options.repair) {
+			try {
+				const replacement = await options.repair();
+				const repairedInspection = inspectContextSummary(replacement.summary, options.continuationState);
+				if (!contextSummaryInspectionFailed(repairedInspection)) {
+					return {
+						summary: replacement.summary,
+						...(replacement.shortSummary ? { shortSummary: replacement.shortSummary } : {}),
+						replacement,
+						audit: buildContextSummaryAuthorityAudit({
+							summarySource: options.summarySource,
+							inspection,
+							repairAttempted: true,
+							repairSucceeded: true,
+						}),
+					};
+				}
+				fallbackReason = `repair_protocol_violation:forbidden_goal=${repairedInspection.forbiddenGoalField};execution_conflicts=${repairedInspection.executionClaimConflictCount}`;
+			} catch (error) {
+				fallbackReason = "repair_request_failed";
+				logger.warn("Compaction summary repair request failed", {
+					summarySource: options.summarySource,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+
+		const summary = renderDeterministicHistoricalFallback({
+			state: options.continuationState,
+			summarySource: options.summarySource,
+			failureReason: fallbackReason,
+		});
+		return {
+			summary,
+			shortSummary: "Historical summary incomplete",
+			audit: buildContextSummaryAuthorityAudit({
+				summarySource: "deterministic_fallback",
+				inspection,
+				repairAttempted: options.repair !== undefined,
+				repairSucceeded: false,
+				fallbackReason,
+			}),
+		};
+	}
+
 	async #compactWithFallbackModel(
 		preparation: CompactionPreparation,
 		customInstructions: string | undefined,
@@ -15090,6 +15610,10 @@ export class AgentSession {
 		options: {
 			autoContinue?: boolean;
 			triggerContextTokens?: number;
+			trigger?: ContextMaintenanceTrigger;
+			matchedTriggers?: readonly ContextMaintenanceTrigger[];
+			segmentDeltaTokens?: number;
+			segmentElapsedMs?: number;
 			suppressContinuation?: boolean;
 			suppressHandoff?: boolean;
 			phase?: CodexCompactionContext["phase"];
@@ -15099,6 +15623,9 @@ export class AgentSession {
 		if (compactionSettings.strategy === "off") return COMPACTION_CHECK_NONE;
 		if (reason !== "idle" && !compactionSettings.enabled) return COMPACTION_CHECK_NONE;
 		const generation = this.#promptGeneration;
+		const trigger: ContextMaintenanceTrigger =
+			options.trigger ?? (reason === "threshold" ? "native_threshold" : reason === "overflow" ? "overflow" : reason);
+		const matchedTriggers = [...(options.matchedTriggers ?? [trigger])];
 		const suppressContinuation = options.suppressContinuation === true;
 		const shouldAutoContinue =
 			!suppressContinuation && options.autoContinue !== false && compactionSettings.autoContinue !== false;
@@ -15113,6 +15640,8 @@ export class AgentSession {
 				willRetry,
 				generation,
 				shouldAutoContinue,
+				trigger,
+				matchedTriggers,
 				options.triggerContextTokens,
 				suppressContinuation,
 			);
@@ -15135,7 +15664,15 @@ export class AgentSession {
 				async signal => {
 					await Promise.resolve();
 					if (signal.aborted) return;
-					await this.#runAutoCompaction(reason, willRetry, true, true, { phase: options.phase });
+					await this.#runAutoCompaction(reason, willRetry, true, true, {
+						phase: options.phase,
+						trigger,
+						matchedTriggers,
+						...(options.segmentDeltaTokens === undefined
+							? {}
+							: { segmentDeltaTokens: options.segmentDeltaTokens }),
+						...(options.segmentElapsedMs === undefined ? {} : { segmentElapsedMs: options.segmentElapsedMs }),
+					});
 				},
 				{ generation },
 			);
@@ -15178,13 +15715,36 @@ export class AgentSession {
 		const autoCompactionAbortController = new AbortController();
 		this.#autoCompactionAbortController = autoCompactionAbortController;
 		const autoCompactionSignal = autoCompactionAbortController.signal;
+		const maintenanceId = this.#contextSteadyMaintenanceId ?? `maintenance_${crypto.randomUUID().slice(-12)}`;
+		let maintenanceDecision: ContextProbeMaintenanceDecision = {
+			maintenanceId,
+			primaryTrigger: trigger,
+			matchedTriggers,
+			action,
+			...(options.segmentDeltaTokens === undefined ? {} : { segmentDeltaTokens: options.segmentDeltaTokens }),
+			...(options.segmentElapsedMs === undefined ? {} : { segmentElapsedMs: options.segmentElapsedMs }),
+		};
+		const updateMaintenanceDecisionAction = (nextAction: ContextProbeMaintenanceDecision["action"]): void => {
+			maintenanceDecision = { ...maintenanceDecision, action: nextAction };
+			this.#contextProbeActiveMaintenanceDecision = maintenanceDecision;
+		};
+		this.#contextProbeActiveMaintenanceDecision = maintenanceDecision;
+		this.#contextProbeActiveCompaction =
+			options.triggerContextTokens === undefined ? undefined : { tokensBefore: options.triggerContextTokens };
 
 		try {
 			// Emit start AFTER the controller is installed so isCompacting is already true
 			// for any listener — and for input routed during this emit's event-loop yield:
 			// a message typed as the compaction loader appears must land in the compaction
 			// queue, not the core steering queue (which handoff's agent.reset() would wipe).
-			await this.#emitSessionEvent({ type: "auto_compaction_start", reason, action });
+			await this.#emitSessionEvent({
+				type: "auto_compaction_start",
+				maintenanceId,
+				reason,
+				trigger,
+				matchedTriggers,
+				action,
+			});
 			if (snapcompactModelIsTextOnly) {
 				this.emitNotice(
 					"warning",
@@ -15207,6 +15767,7 @@ export class AgentSession {
 					if (aborted) {
 						await this.#emitSessionEvent({
 							type: "auto_compaction_end",
+							maintenanceId,
 							action,
 							result: undefined,
 							aborted: true,
@@ -15218,19 +15779,26 @@ export class AgentSession {
 						reason,
 					});
 					action = "context-full";
+					updateMaintenanceDecisionAction(action);
 				}
 				if (handoffResult) {
+					this.#contextProbeActiveCompaction = {
+						...this.#contextProbeActiveCompaction,
+						tokensAfter: this.#estimateStoredContextTokens(),
+					};
 					await this.#emitSessionEvent({
 						type: "auto_compaction_end",
+						maintenanceId,
 						action,
 						result: undefined,
 						aborted: false,
 						willRetry: false,
 					});
-					const continuationScheduled = !autoCompactionSignal.aborted && reason !== "idle" && shouldAutoContinue;
-					if (continuationScheduled) {
+					const continuationScheduled =
+						!autoCompactionSignal.aborted &&
+						reason !== "idle" &&
+						shouldAutoContinue &&
 						this.#scheduleAutoContinuePrompt(generation);
-					}
 					return {
 						...(continuationScheduled ? COMPACTION_CHECK_CONTINUATION : COMPACTION_CHECK_NONE),
 						historyRewritten: true,
@@ -15239,8 +15807,10 @@ export class AgentSession {
 			}
 
 			if (!this.model) {
+				updateMaintenanceDecisionAction("none");
 				await this.#emitSessionEvent({
 					type: "auto_compaction_end",
+					maintenanceId,
 					action,
 					result: undefined,
 					aborted: false,
@@ -15252,8 +15822,10 @@ export class AgentSession {
 
 			const availableModels = this.#modelRegistry.getAvailable();
 			if (availableModels.length === 0) {
+				updateMaintenanceDecisionAction("none");
 				await this.#emitSessionEvent({
 					type: "auto_compaction_end",
+					maintenanceId,
 					action,
 					result: undefined,
 					aborted: false,
@@ -15271,8 +15843,10 @@ export class AgentSession {
 			);
 			const preparation = prepareCompaction(pathEntries, compactionSettings, autoCompactionCandidates);
 			if (!preparation) {
+				updateMaintenanceDecisionAction("none");
 				await this.#emitSessionEvent({
 					type: "auto_compaction_end",
+					maintenanceId,
 					action,
 					result: undefined,
 					aborted: false,
@@ -15299,6 +15873,10 @@ export class AgentSession {
 				if (continuationScheduled) return COMPACTION_CHECK_CONTINUATION;
 				return noProgressDeadEnd ? COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION : COMPACTION_CHECK_NONE;
 			}
+			this.#contextProbeActiveCompaction = {
+				...this.#contextProbeActiveCompaction,
+				tokensBefore: preparation.tokensBefore,
+			};
 
 			let hookCompaction: CompactionResult | undefined;
 			let fromExtension = false;
@@ -15315,8 +15893,10 @@ export class AgentSession {
 				})) as SessionBeforeCompactResult | undefined;
 
 				if (hookResult?.cancel) {
+					updateMaintenanceDecisionAction("none");
 					await this.#emitSessionEvent({
 						type: "auto_compaction_end",
+						maintenanceId,
 						action,
 						result: undefined,
 						aborted: true,
@@ -15328,6 +15908,8 @@ export class AgentSession {
 				if (hookResult?.compaction) {
 					hookCompaction = hookResult.compaction;
 					fromExtension = true;
+					action = "context-full";
+					updateMaintenanceDecisionAction(action);
 				}
 			}
 
@@ -15338,6 +15920,7 @@ export class AgentSession {
 			let firstKeptEntryId: string;
 			let tokensBefore: number;
 			let details: unknown;
+			let summarySource: ContextSummarySource | undefined;
 
 			// Snapcompact runs locally first. The post-compaction context = kept-recent
 			// + a summary message carrying the image archive at FRAME_TOKEN_ESTIMATE per
@@ -15425,6 +16008,7 @@ export class AgentSession {
 				if (snapcompactBlocker) {
 					this.emitNotice("warning", snapcompactBlocker, "compaction");
 					action = "context-full";
+					updateMaintenanceDecisionAction(action);
 				}
 			}
 
@@ -15588,12 +16172,69 @@ export class AgentSession {
 			if (autoCompactionSignal.aborted) {
 				await this.#emitSessionEvent({
 					type: "auto_compaction_end",
+					maintenanceId,
 					action,
 					result: undefined,
 					aborted: true,
 					willRetry: false,
 				});
 				return COMPACTION_CHECK_NONE;
+			}
+
+			summarySource = fromExtension
+				? "extension"
+				: snapcompactResult
+					? "snapcompact"
+					: compactionSettings.remoteEndpoint || preserveData?.openaiRemoteCompaction
+						? "remote"
+						: "local";
+			const remoteMaintenance = summarySource === "remote";
+			if (remoteMaintenance) updateMaintenanceDecisionAction("remote_compaction");
+			this.#contextProbeActiveCompaction = {
+				...this.#contextProbeActiveCompaction,
+				tokensBefore,
+				summarySource,
+			};
+			const contextSteadyCompaction = this.#contextSteadyIsActive();
+			const authorityEvidenceState = buildActiveContinuationState({
+				entries: pathEntries,
+				sessionId: this.sessionId,
+				promptGeneration: this.#promptGeneration,
+			});
+			const authorityResolution = await this.#enforceContextSummaryAuthority({
+				summary,
+				...(shortSummary ? { shortSummary } : {}),
+				summarySource,
+				continuationState: authorityEvidenceState,
+				...(compactionPrep.kind === "needsLlm" && !snapcompactResult
+					? {
+							repair: () =>
+								this.#compactWithFallbackModel(
+									preparation,
+									COMPACTION_SUMMARY_REPAIR_INSTRUCTIONS,
+									autoCompactionSignal,
+									{
+										promptOverride: this.#obfuscateTextForProvider(compactionPrep.hookPrompt),
+										extraContext: compactionPrep.hookContext,
+										remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
+										convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
+										codexCompaction,
+									},
+									this.#getCompactionModelCandidates(availableModels),
+								),
+						}
+					: {}),
+			});
+			summary = authorityResolution.summary;
+			shortSummary = authorityResolution.shortSummary;
+			const summaryAuthority = authorityResolution.audit;
+			summarySource = summaryAuthority.summarySource;
+			if (authorityResolution.replacement) {
+				const replacement = authorityResolution.replacement;
+				firstKeptEntryId = replacement.firstKeptEntryId;
+				tokensBefore = replacement.tokensBefore;
+				details = replacement.details;
+				preserveData = mergeLlmCompactionPreserveData(compactionPrep.preserveData, replacement.preserveData);
 			}
 
 			this.sessionManager.appendCompaction(
@@ -15605,29 +16246,62 @@ export class AgentSession {
 				fromExtension,
 				preserveData,
 			);
-			if (
-				this.#contextSteadyIsActive() &&
-				this.settings.get("san.contextSteady.segment.enabled") === true &&
-				options.phase === "mid_turn"
-			) {
+			const contextSteadyMidTurn = contextSteadyCompaction && options.phase === "mid_turn";
+			let physicalSegment: ContextSegment | undefined;
+			let segmentLogicalTurnId: string | undefined;
+			if (contextSteadyMidTurn && this.settings.get("san.contextSteady.segment.enabled") === true) {
 				const segment = buildContextSegment({
 					entries: pathEntries,
 					sessionId: this.sessionId,
 					firstKeptEntryId,
 					promptGeneration: this.#promptGeneration,
-					maintenanceId: this.#contextSteadyMaintenanceId ?? `maintenance_${crypto.randomUUID().slice(-12)}`,
-					reason,
+					maintenanceId,
+					trigger,
+					matchedTriggers,
 					phase: "mid_turn",
-					authority: fromExtension ? "extension" : action === "snapcompact" ? "snapcompact" : "context-full",
+					authority: fromExtension
+						? "extension"
+						: remoteMaintenance
+							? "remote"
+							: action === "snapcompact"
+								? "snapcompact"
+								: "context-full",
 					summary,
 					...(shortSummary ? { shortSummary } : {}),
 					tokensBefore,
 				});
-				if (segment) appendContextSegment(this.sessionManager, segment);
+				if (segment) {
+					physicalSegment = segment;
+					segmentLogicalTurnId = segment.logicalTurnId;
+				}
 			}
+			const continuationState = buildActiveContinuationState({
+				entries: pathEntries,
+				sessionId: this.sessionId,
+				promptGeneration: this.#promptGeneration,
+				...(segmentLogicalTurnId ? { logicalTurnId: segmentLogicalTurnId } : {}),
+				...(summaryAuthority ? { summaryAuthority } : {}),
+			});
+			if (continuationState) appendActiveContinuationState(this.sessionManager, continuationState);
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.buildDisplaySessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
+			const tokensAfter = this.#estimateStoredContextTokens();
+			if (physicalSegment) {
+				appendContextSegment(this.sessionManager, {
+					...physicalSegment,
+					maintenance: {
+						...physicalSegment.maintenance,
+						tokensAfter,
+					},
+				});
+			}
+			this.#contextProbeActiveCompaction = {
+				...this.#contextProbeActiveCompaction,
+				tokensBefore,
+				tokensAfter,
+				...(summarySource ? { summarySource } : {}),
+			};
 			this.#rebasePendingContextSnapshotAfterCompaction();
 			// Keep the in-flight request plan so the next provider transform can
 			// detect the new compaction entry and rebuild against the rewritten branch.
@@ -15751,36 +16425,54 @@ export class AgentSession {
 				await this.sessionManager.rewriteEntries();
 			}
 
-			await this.#emitSessionEvent({ type: "auto_compaction_end", action, result, aborted: false, willRetry });
+			await this.#emitSessionEvent({
+				type: "auto_compaction_end",
+				maintenanceId,
+				action,
+				result,
+				aborted: false,
+				willRetry,
+			});
 
-			if (retryFits) {
+			const authoritySourceMissing = this.#continuationAuthoritySourceMissing();
+			if (retryFits && !authoritySourceMissing) {
 				this.#scheduleAgentContinue({ delayMs: 100, generation });
 				continuationScheduled = true;
 			} else if (hasHeadroom && shouldAutoContinue) {
-				this.#scheduleAutoContinuePrompt(generation);
-				continuationScheduled = true;
+				continuationScheduled = this.#scheduleAutoContinuePrompt(generation);
 			}
 			if (!continuationScheduled && !suppressContinuation && this.agent.hasQueuedMessages()) {
 				// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
 				// Kick the loop so queued messages are actually delivered. This remains separate
 				// from the no-progress warning: pausing maintenance must not strand user input.
-				this.#scheduleAgentContinue({
-					delayMs: 100,
+				if (!authoritySourceMissing || this.#hasQueuedUserMessage()) {
+					this.#scheduleAgentContinue({
+						delayMs: 100,
+						generation,
+						shouldContinue: () => this.agent.hasQueuedMessages(),
+					});
+					continuationScheduled = true;
+				}
+			}
+			if (authoritySourceMissing && !continuationScheduled) {
+				logger.warn("Context maintenance paused because the active user authority source is missing", {
+					sessionId: this.sessionId,
 					generation,
-					shouldContinue: () => this.agent.hasQueuedMessages(),
 				});
-				continuationScheduled = true;
 			}
 
 			if (deadEndWarning) {
 				this.emitNotice("warning", deadEndWarning, "compaction");
 			}
 			if (continuationScheduled) return COMPACTION_CHECK_CONTINUATION;
-			return noProgressDeadEnd ? COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION : COMPACTION_CHECK_NONE;
+			return noProgressDeadEnd || authoritySourceMissing
+				? COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION
+				: COMPACTION_CHECK_NONE;
 		} catch (error) {
 			if (autoCompactionSignal.aborted) {
 				await this.#emitSessionEvent({
 					type: "auto_compaction_end",
+					maintenanceId,
 					action,
 					result: undefined,
 					aborted: true,
@@ -15791,6 +16483,7 @@ export class AgentSession {
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
 			await this.#emitSessionEvent({
 				type: "auto_compaction_end",
+				maintenanceId,
 				action,
 				result: undefined,
 				aborted: false,
@@ -15803,6 +16496,14 @@ export class AgentSession {
 							: `Auto-compaction failed: ${errorMessage}`,
 			});
 		} finally {
+			if (this.#contextProbeActiveMaintenanceDecision?.maintenanceId === maintenanceId) {
+				this.#recordContextMaintenanceProbe(
+					this.#contextProbeActiveMaintenanceDecision,
+					this.#contextProbeActiveCompaction,
+				);
+				this.#contextProbeActiveMaintenanceDecision = undefined;
+				this.#contextProbeActiveCompaction = undefined;
+			}
 			if (this.#autoCompactionAbortController === autoCompactionAbortController) {
 				this.#autoCompactionAbortController = undefined;
 			}
@@ -15825,6 +16526,8 @@ export class AgentSession {
 		willRetry: boolean,
 		generation: number,
 		autoContinue: boolean,
+		trigger: ContextMaintenanceTrigger,
+		matchedTriggers: ContextMaintenanceTrigger[],
 		triggerContextTokens?: number,
 		suppressContinuation = false,
 	): Promise<CompactionCheckResult | "fallback"> {
@@ -15833,12 +16536,34 @@ export class AgentSession {
 		const controller = new AbortController();
 		this.#autoCompactionAbortController = controller;
 		const signal = controller.signal;
+		const maintenanceId = this.#contextSteadyMaintenanceId ?? `maintenance_${crypto.randomUUID().slice(-12)}`;
+		const maintenanceDecision: ContextProbeMaintenanceDecision = {
+			maintenanceId,
+			primaryTrigger: trigger,
+			matchedTriggers,
+			action,
+		};
+		const tokensBefore = triggerContextTokens ?? this.#estimateStoredContextTokens();
+		this.#contextProbeActiveMaintenanceDecision = maintenanceDecision;
+		this.#contextProbeActiveCompaction = { tokensBefore };
 		try {
-			await this.#emitSessionEvent({ type: "auto_compaction_start", reason, action });
+			await this.#emitSessionEvent({
+				type: "auto_compaction_start",
+				maintenanceId,
+				reason,
+				trigger,
+				matchedTriggers,
+				action,
+			});
 			const result = await this.shake("elide", { config: DEFAULT_SHAKE_CONFIG, signal });
+			this.#contextProbeActiveCompaction = {
+				tokensBefore,
+				tokensAfter: this.#estimateStoredContextTokens(),
+			};
 			if (signal.aborted) {
 				await this.#emitSessionEvent({
 					type: "auto_compaction_end",
+					maintenanceId,
 					action,
 					result: undefined,
 					aborted: true,
@@ -15888,6 +16613,7 @@ export class AgentSession {
 					: "Auto-shake found nothing eligible to drop; falling back to context-full compaction.";
 				await this.#emitSessionEvent({
 					type: "auto_compaction_end",
+					maintenanceId,
 					action,
 					result: undefined,
 					aborted: false,
@@ -15899,6 +16625,7 @@ export class AgentSession {
 			}
 			await this.#emitSessionEvent({
 				type: "auto_compaction_end",
+				maintenanceId,
 				action,
 				result: undefined,
 				aborted: false,
@@ -15907,11 +16634,11 @@ export class AgentSession {
 			});
 
 			let continuationScheduled = false;
+			const authoritySourceMissing = this.#continuationAuthoritySourceMissing();
 			if (!willRetry && reason !== "idle" && autoContinue) {
-				this.#scheduleAutoContinuePrompt(generation);
-				continuationScheduled = true;
+				continuationScheduled = this.#scheduleAutoContinuePrompt(generation);
 			}
-			if (willRetry) {
+			if (willRetry && !authoritySourceMissing) {
 				// The shake rebuild replays every entry, so a trailing error/length
 				// assistant from the failed turn re-enters agent state — drop it before
 				// retrying, same as the context-full tail.
@@ -15926,7 +16653,11 @@ export class AgentSession {
 				}
 				this.#scheduleAgentContinue({ delayMs: 100, generation });
 				continuationScheduled = true;
-			} else if (!suppressContinuation && this.agent.hasQueuedMessages()) {
+			} else if (
+				!suppressContinuation &&
+				this.agent.hasQueuedMessages() &&
+				(!authoritySourceMissing || this.#hasQueuedUserMessage())
+			) {
 				this.#scheduleAgentContinue({
 					delayMs: 100,
 					generation,
@@ -15939,7 +16670,12 @@ export class AgentSession {
 					? { ...COMPACTION_CHECK_CONTINUATION, historyRewritten: true }
 					: continuationScheduled
 						? COMPACTION_CHECK_CONTINUATION
-						: COMPACTION_CHECK_NONE;
+						: authoritySourceMissing
+							? COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION
+							: COMPACTION_CHECK_NONE;
+			}
+			if (authoritySourceMissing && !continuationScheduled) {
+				return { ...COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION, historyRewritten: true };
 			}
 			return {
 				...(continuationScheduled ? COMPACTION_CHECK_CONTINUATION : COMPACTION_CHECK_NONE),
@@ -15949,6 +16685,7 @@ export class AgentSession {
 			if (signal.aborted) {
 				await this.#emitSessionEvent({
 					type: "auto_compaction_end",
+					maintenanceId,
 					action,
 					result: undefined,
 					aborted: true,
@@ -15959,6 +16696,7 @@ export class AgentSession {
 			const message = error instanceof Error ? error.message : "shake failed";
 			await this.#emitSessionEvent({
 				type: "auto_compaction_end",
+				maintenanceId,
 				action,
 				result: undefined,
 				aborted: false,
@@ -15969,6 +16707,14 @@ export class AgentSession {
 			// Overflow still needs recovery even if shake threw.
 			return reason === "overflow" ? "fallback" : COMPACTION_CHECK_NONE;
 		} finally {
+			if (this.#contextProbeActiveMaintenanceDecision?.maintenanceId === maintenanceId) {
+				this.#recordContextMaintenanceProbe(
+					this.#contextProbeActiveMaintenanceDecision,
+					this.#contextProbeActiveCompaction,
+				);
+				this.#contextProbeActiveMaintenanceDecision = undefined;
+				this.#contextProbeActiveCompaction = undefined;
+			}
 			if (this.#autoCompactionAbortController === controller) {
 				this.#autoCompactionAbortController = undefined;
 			}

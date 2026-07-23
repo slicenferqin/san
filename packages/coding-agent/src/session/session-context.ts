@@ -2,7 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { coerceServiceTierByFamily, type ProviderPayload, type ServiceTierByFamily } from "@oh-my-pi/pi-ai";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { CONTEXT_PLAN_MESSAGE_TYPE } from "../context-steady/plan-types";
-import { CONTEXT_PACKET_MESSAGE_TYPE } from "../context-steady/types";
+import { CONTEXT_CONTINUATION_MESSAGE_TYPE, CONTEXT_PACKET_MESSAGE_TYPE } from "../context-steady/types";
 import {
 	createBranchSummaryMessage,
 	createCompactionSummaryMessage,
@@ -277,6 +277,12 @@ export function buildSessionContext(
 	}
 
 	const injectedTtsrRules = Array.from(injectedTtsrRulesSet);
+	const continuationAuthorityEntry =
+		compaction && !options?.transcript
+			? path.findLast(
+					entry => entry.type === "custom_message" && entry.customType === CONTEXT_CONTINUATION_MESSAGE_TYPE,
+				)
+			: undefined;
 
 	// Build messages and collect corresponding entries
 	// When there's a compaction, we need to:
@@ -329,6 +335,9 @@ export function buildSessionContext(
 			}
 			pushMessage(entry.message);
 		} else if (entry.type === "custom_message") {
+			if (!options?.transcript && compaction && entry.customType === CONTEXT_CONTINUATION_MESSAGE_TYPE) {
+				return;
+			}
 			if (!isCustomMessageContent(entry.content)) return;
 			const normalized = normalizeCustomMessagePayload(entry);
 			if (
@@ -410,6 +419,21 @@ export function buildSessionContext(
 		// compacted context before recent messages.
 		if (!options?.transcript) {
 			pushMessage(compactionSummaryMsg);
+			if (continuationAuthorityEntry) {
+				const normalized = normalizeCustomMessagePayload(continuationAuthorityEntry);
+				if (isCustomMessageContent(normalized.content)) {
+					pushMessage(
+						createCustomMessage(
+							normalized.customType,
+							normalized.content,
+							normalized.display,
+							normalized.details,
+							continuationAuthorityEntry.timestamp,
+							normalized.attribution,
+						),
+					);
+				}
+			}
 		}
 
 		// Find compaction index in path

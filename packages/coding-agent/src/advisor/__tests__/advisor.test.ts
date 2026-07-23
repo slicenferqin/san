@@ -1680,6 +1680,51 @@ describe("advisor", () => {
 			await Promise.resolve();
 		});
 
+		it("preempts catch-up waits without discarding pending advisor work", async () => {
+			const promptInputs: string[] = [];
+			const { promise: promptStarted, resolve: startPrompt } = Promise.withResolvers<void>();
+			const { promise: secondPromptStarted, resolve: startSecondPrompt } = Promise.withResolvers<void>();
+			const { promise: promptFinish, resolve: finishPrompt } = Promise.withResolvers<void>();
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					if (promptInputs.length === 1) startPrompt();
+					else startSecondPrompt();
+					await promptFinish;
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "aaa", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd(messages);
+			await promptStarted;
+			messages.push({ role: "user", content: "bbb", timestamp: 2 } as AgentMessage);
+			runtime.onTurnEnd(messages);
+
+			let resolved = false;
+			const wait = runtime.waitForCatchup(30000, 1).then(() => {
+				resolved = true;
+			});
+			await Promise.resolve();
+			expect(resolved).toBe(false);
+
+			runtime.preemptCatchupWait();
+			await wait;
+			expect(resolved).toBe(true);
+
+			finishPrompt();
+			await secondPromptStarted;
+			expect(promptInputs).toHaveLength(2);
+			expect(promptInputs[1]).toContain("bbb");
+		});
+
 		it("retries failed prompts and only decrements backlog on success", async () => {
 			const promptInputs: string[] = [];
 			let fail = true;
