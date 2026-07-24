@@ -217,6 +217,7 @@ import {
 	onModelRolesChanged,
 	validateProviderMaxInFlightRequests,
 } from "../config/settings";
+import { resolveContextPlanBudget } from "../context-steady/budget";
 import { appendContextCheckpoint, buildContextCheckpoint } from "../context-steady/checkpoint";
 import {
 	appendActiveContinuationState,
@@ -8127,7 +8128,7 @@ export class AgentSession {
 		}
 		if (!this.#contextSteadyPlanEnabled()) return transformedMessages;
 		// Re-gate every provider call (including tool-loop steps) against live tail growth.
-		const plan = this.#refreshContextSteadyPlanForProviderCall(transformedMessages);
+		const plan = await this.#refreshContextSteadyPlanForProviderCall(transformedMessages);
 		if (plan) {
 			return materializeContextPlanMessages(transformedMessages, this.sessionManager.getBranch(), plan);
 		}
@@ -9347,7 +9348,9 @@ export class AgentSession {
 	 * changed. Freezes old-history selection from the request-start plan only
 	 * while the source history and non-message context are unchanged.
 	 */
-	#refreshContextSteadyPlanForProviderCall(messages: readonly AgentMessage[]): BuiltContextPlan | undefined {
+	async #refreshContextSteadyPlanForProviderCall(
+		messages: readonly AgentMessage[],
+	): Promise<BuiltContextPlan | undefined> {
 		const existing = this.#contextSteadyRequestPlan;
 		if (!existing) return undefined;
 		const branchEntries = this.sessionManager.getBranch();
@@ -9415,6 +9418,15 @@ export class AgentSession {
 		this.#contextSteadyRequestPlan = plan;
 		this.#contextSteadyLastPlan = plan;
 		if (plan.audit.qualityGate.outcome === "hard_pressure") {
+			// Attempt one bounded recovery (auto-compaction) before pausing. This
+			// covers the case where a model window shrink collapses the budget and
+			// the current input slightly exceeds the new ceiling — compaction can
+			// reclaim enough to continue the tool-loop without user intervention.
+			if (this.#contextSteadyRecoveryAttempt === 0) {
+				this.#contextSteadyRecoveryAttempt++;
+				const recovered = await this.#attemptToolLoopBudgetRecovery(messages, commonOptions);
+				if (recovered) return recovered;
+			}
 			// Only tool-loop hard pressure appends an extra audit (refusal evidence).
 			this.sessionManager.appendCustomEntry(CONTEXT_PLAN_CUSTOM_TYPE, plan.audit);
 			this.#pauseForContextSteadyPressure(
@@ -9429,6 +9441,52 @@ export class AgentSession {
 		// Soft rebuild under control→burst: keep request-start audit as source of truth;
 		// only replace in-memory plan for materialize/status.
 		return plan;
+	}
+
+	/**
+	 * One-shot bounded recovery for tool-loop hard_pressure: run auto-compaction
+	 * and rebuild the ContextPlan. Returns the recovered plan if the gate passes
+	 * after compaction, or undefined to fall through to the pause path.
+	 */
+	async #attemptToolLoopBudgetRecovery(
+		messages: readonly AgentMessage[],
+		commonOptions: Omit<BuildContextPlanOptions, "projectedInputTokens">,
+	): Promise<BuiltContextPlan | undefined> {
+		logger.debug("Context Steady tool-loop budget recovery: attempting auto-compaction", {
+			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
+			contextWindow: this.model?.contextWindow,
+		});
+		const compactionBefore = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
+		await this.#runAutoCompaction("threshold", false, false, false, {
+			autoContinue: false,
+			suppressContinuation: true,
+			suppressHandoff: true,
+			trigger: "hard_pressure",
+			matchedTriggers: ["hard_pressure"],
+			phase: "mid_turn",
+		});
+		const compactionAfter = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
+		if (compactionAfter === compactionBefore) {
+			// Compaction did not commit; no point rebuilding.
+			return undefined;
+		}
+		// Rebuild the plan against the post-compaction state.
+		const rebuiltPlan = this.#buildContextSteadyPlanForProvider(
+			commonOptions,
+			messages,
+			commonOptions.entries,
+			"full",
+		);
+		if (rebuiltPlan.audit.qualityGate.outcome === "hard_pressure") {
+			return undefined;
+		}
+		this.#contextSteadyRequestPlan = rebuiltPlan;
+		this.#contextSteadyLastPlan = rebuiltPlan;
+		logger.debug("Context Steady tool-loop budget recovery: compaction resolved pressure", {
+			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
+			outcome: rebuiltPlan.audit.qualityGate.outcome,
+		});
+		return rebuiltPlan;
 	}
 
 	#contextSteadyLatestUserText(messages: readonly AgentMessage[]): string | undefined {
@@ -13341,16 +13399,22 @@ export class AgentSession {
 		const contextSteadyActive = this.#contextSteadyIsActive(
 			Math.max(calculatePromptTokens(lastAssistant.usage), storedContextTokens),
 		);
-		const configuredSteadyTarget = this.settings.get("san.contextSteady.qualityWindowTokens") as number;
+		// Use the unified budget resolver so the maintenance threshold aligns with
+		// the ContextPlan gate's steadyTarget (which accounts for hardInputCeiling).
+		// The old independent formula could set a target above the gate's ceiling,
+		// causing hard_pressure to fire before maintenance ever triggered.
+		const unifiedBudget = resolveContextPlanBudget({
+			settings: {
+				qualityWindowTokens: this.settings.get("san.contextSteady.qualityWindowTokens") as number,
+				reserveRatio: this.settings.get("san.contextSteady.reserveRatio") as number,
+				planMaxTokens: this.#contextSteadyPlanMaxTokens(),
+				burstWindowTokens: this.#contextSteadyBurstWindowTokens(),
+			},
+			contextWindow,
+			nonMessageTokens: computeNonMessageTokens(this),
+		});
 		const contextSteadyTarget = contextSteadyActive
-			? Math.max(
-					1,
-					Math.min(
-						contextWindow,
-						configuredSteadyTarget > 0 ? configuredSteadyTarget : 240_000,
-						this.#contextSteadyBurstWindowTokens(),
-					),
-				)
+			? Math.max(1, unifiedBudget.steadyTarget)
 			: Number.POSITIVE_INFINITY;
 		const steadyMaintenanceRequired = physicalMaintenanceEnabled && contextTokens > contextSteadyTarget;
 		const segmentHint = this.#contextSteadySegmentMaintenanceHint();
@@ -14726,6 +14790,16 @@ export class AgentSession {
 			this.#closeProviderSessionsForModelSwitch(currentModel, model);
 			if (!modelsAreEqual(currentModel, model)) {
 				this.#clearInheritedProviderPromptCacheKey();
+			}
+			// Invalidate context-steady budget when the window shrinks so the next
+			// provider call rebuilds the plan against the new ceiling instead of
+			// tripping hard_pressure with a stale budget.
+			const oldWindow = currentModel.contextWindow ?? 0;
+			const newWindow = model.contextWindow ?? 0;
+			if (oldWindow > 0 && newWindow > 0 && newWindow < oldWindow) {
+				this.#contextSteadyRequestPlan = undefined;
+				this.#contextSteadyPendingBudgetPressureRebase = true;
+				this.#contextSteadyRecoveryAttempt = 0;
 			}
 		}
 		this.agent.setModel(model);

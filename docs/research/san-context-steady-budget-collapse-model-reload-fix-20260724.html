@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Context Steady 预算坍缩与 Model Reload 熔断修复方案 · 2026-07-24</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --canvas: #eef2f3;
+        --paper: #ffffff;
+        --ink: #17242a;
+        --muted: #5a6b73;
+        --line: #d4dde1;
+        --navy: #102a35;
+        --blue: #1d6488;
+        --blue-soft: #e8f2f7;
+        --green: #24674e;
+        --green-soft: #e8f4ee;
+        --amber: #8b5a09;
+        --amber-soft: #fff3d9;
+        --red: #9d3b35;
+        --red-soft: #fae9e7;
+        --violet: #66528e;
+        --violet-soft: #f0edf8;
+        --shadow: 0 8px 28px rgba(23, 36, 42, 0.07);
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0; color: var(--ink); background: var(--canvas);
+        font-family: "IBM Plex Sans", "Noto Sans CJK SC", "PingFang SC", sans-serif;
+        font-size: 15px; line-height: 1.7;
+      }
+      a { color: var(--blue); text-underline-offset: 3px; }
+      code, pre { font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace; }
+      code { padding: 2px 5px; border-radius: 4px; background: #e8eef0; overflow-wrap: anywhere; }
+      pre {
+        margin: 12px 0 0; padding: 16px 18px; overflow: auto;
+        color: #eaf3f5; border-radius: 6px; background: #19333e;
+        font-size: 13px; line-height: 1.58;
+      }
+      h1, h2, h3, h4 { margin-top: 0; font-family: "Iowan Old Style", "Noto Serif CJK SC", serif; }
+      h1 { margin-bottom: 14px; font-size: 36px; line-height: 1.18; }
+      h2 { margin-bottom: 16px; font-size: 24px; line-height: 1.3; }
+      h3 { margin-bottom: 8px; font-size: 18px; }
+      p { margin: 0 0 12px; }
+      ul, ol { margin: 8px 0 0; padding-left: 22px; }
+      li { margin: 6px 0; }
+      .page { width: min(1180px, calc(100% - 40px)); margin: 0 auto; }
+      .masthead { color: #f4f9fa; background: var(--navy); border-bottom: 7px solid var(--blue); }
+      .masthead-inner {
+        display: grid; grid-template-columns: minmax(0, 1fr) 330px;
+        gap: 46px; align-items: end; padding: 42px 0 36px;
+      }
+      .kicker { color: #9ec8db; font-size: 12px; font-weight: 800; letter-spacing: 0.045em; text-transform: uppercase; }
+      .lede { max-width: 830px; color: #d3e2e7; font-size: 16px; }
+      .snapshot { padding-left: 22px; border-left: 1px solid #48636e; }
+      .snapshot dt { color: #9ec8db; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+      .snapshot dd { margin: 2px 0 12px; font-size: 14px; }
+      .content { padding: 38px 0 60px; }
+      .card {
+        background: var(--paper); border: 1px solid var(--line);
+        border-radius: 10px; padding: 28px 32px; margin-bottom: 26px;
+        box-shadow: var(--shadow);
+      }
+      .tag { display: inline-block; padding: 2px 10px; border-radius: 4px; font-size: 12px; font-weight: 700; }
+      .tag-red { background: var(--red-soft); color: var(--red); }
+      .tag-green { background: var(--green-soft); color: var(--green); }
+      .tag-amber { background: var(--amber-soft); color: var(--amber); }
+      .tag-blue { background: var(--blue-soft); color: var(--blue); }
+      .tag-violet { background: var(--violet-soft); color: var(--violet); }
+      table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+      th, td { padding: 8px 12px; border: 1px solid var(--line); text-align: left; }
+      th { background: var(--blue-soft); font-weight: 700; }
+      .callout { padding: 14px 18px; border-radius: 6px; margin: 14px 0; font-size: 14px; }
+      .callout-red { background: var(--red-soft); border-left: 4px solid var(--red); }
+      .callout-green { background: var(--green-soft); border-left: 4px solid var(--green); }
+      .callout-amber { background: var(--amber-soft); border-left: 4px solid var(--amber); }
+      @media (max-width: 860px) { .masthead-inner { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="page masthead-inner">
+        <div>
+          <p class="kicker">San · Coding Agent · Context Steady</p>
+          <h1>预算坍缩与 Model Reload 熔断修复方案</h1>
+          <p class="lede">
+            同一 AgentSession 内 model reload 导致上下文窗口热缩小，旧 ContextPlan 仍按原预算运行，
+            下一次 Tool-Loop provider call 被新 hard ceiling 直接拦截且无恢复路径。
+            本方案从预算一致性、模型热变更、受限恢复三层修复。
+          </p>
+        </div>
+        <dl class="snapshot">
+          <dt>日期</dt><dd>2026-07-24</dd>
+          <dt>状态</dt><dd><span class="tag tag-green">Approved</span></dd>
+          <dt>影响范围</dt><dd>context-steady/budget.ts · agent-session.ts</dd>
+          <dt>前置文档</dt><dd>san-context-steady-multi-window-adaptation-and-tool-loop-pause-research-20260724.html</dd>
+        </dl>
+      </div>
+    </header>
+
+    <main class="page content">
+
+      <!-- ═══════════════ 1. 根因分析 ═══════════════ -->
+      <section class="card">
+        <h2>1. 根因分析</h2>
+        <h3>1.1 预算坍缩（Budget Collapse）</h3>
+        <p>
+          <code>resolveContextPlanBudget</code> 的推导链：
+        </p>
+        <pre>hardInputCeiling = contextWindow − max(32K, contextWindow × reserveRatio)
+steadyTarget     = min(configuredSteady=240K, hardInputCeiling)
+burstCeiling     = min(max(configuredBurst=320K, steadyTarget), hardInputCeiling)
+controlMax       = min(burstCeiling, steadyTarget × 13/12)</pre>
+        <p>
+          当 <code>hardInputCeiling &lt; 240K</code>（例如 256K 模型 × 20% reserve → 204.8K），
+          steady / control / burst 三者全部重合到 <code>hardInputCeiling</code>，
+          失去 control→burst 缓冲区。任何超出该值的投影输入直接判定 <code>hard_pressure</code>。
+        </p>
+
+        <h3>1.2 Mid-Run 维护阈值与 Gate 分裂</h3>
+        <p>
+          <code>#maintainContextMidRun</code> 使用独立的阈值公式：
+        </p>
+        <pre>contextSteadyTarget = min(contextWindow, configuredSteadyTarget || 240K, burstWindowTokens)</pre>
+        <p>
+          该公式不经过 <code>resolveContextPlanBudget</code>，不考虑 <code>hardInputCeiling</code>。
+          256K 模型下维护目标 = 240K，但 ContextPlan gate 在 204.8K 就熔断。
+          Gate 先于维护触发，维护永远来不及运行。
+        </p>
+
+        <h3>1.3 Model Reload 不失效 ContextPlan</h3>
+        <p>
+          <code>#setModelWithProviderSessionReset</code> 只重置 provider session 和 append-only context，
+          不触碰 <code>#contextSteadyRequestPlan</code>。虽然
+          <code>#contextSteadyPlanInputsChanged</code> 能检测 contextWindow 变化并触发重建，
+          但重建后若命中 <code>hard_pressure</code>，直接 throw 暂停整个 tool-loop，无恢复路径。
+        </p>
+
+        <div class="callout callout-red">
+          <strong>事故链：</strong>model reload → 窗口缩小 → 旧 plan 失效 → 重建 plan →
+          预算坍缩（steady=burst=control=204.8K）→ 当前输入 &gt; 204.8K → hard_pressure →
+          无恢复 → 暂停，需要用户消息才能解套。
+        </div>
+      </section>
+
+      <!-- ═══════════════ 2. 修复方案 ═══════════════ -->
+      <section class="card">
+        <h2>2. 修复方案（三层）</h2>
+
+        <h3>Layer 1 — Model 变更时失效 ContextPlan 预算</h3>
+        <p><span class="tag tag-blue">agent-session.ts</span></p>
+        <p>在 <code>#setModelWithProviderSessionReset</code> 中增加：</p>
+        <ul>
+          <li>比较旧、新模型的 <code>contextWindow</code>。</li>
+          <li>若窗口缩小，将 <code>#contextSteadyRequestPlan</code> 置为 <code>undefined</code>（强制下次 provider call 重建）。</li>
+          <li>设置 <code>#contextSteadyPendingBudgetPressureRebase = true</code>，使重建时走 rebase 路径（带 checkpoint 物化）而非直接熔断。</li>
+          <li>递增 <code>#contextSteadyRecoveryAttempt = 0</code>（重置恢复计数器，给新窗口一次完整恢复机会）。</li>
+        </ul>
+        <pre>#setModelWithProviderSessionReset(model: Model): void {
+  const currentModel = this.model;
+  if (currentModel) {
+    this.#closeProviderSessionsForModelSwitch(currentModel, model);
+    if (!modelsAreEqual(currentModel, model)) {
+      this.#clearInheritedProviderPromptCacheKey();
+    }
+    // ── NEW: invalidate context-steady budget on window shrink ──
+    const oldWindow = currentModel.contextWindow ?? 0;
+    const newWindow = model.contextWindow ?? 0;
+    if (oldWindow > 0 && newWindow > 0 && newWindow < oldWindow) {
+      this.#contextSteadyRequestPlan = undefined;
+      this.#contextSteadyPendingBudgetPressureRebase = true;
+      this.#contextSteadyRecoveryAttempt = 0;
+    }
+  }
+  this.agent.setModel(model);
+  this.#syncAppendOnlyContext(model);
+}</pre>
+
+        <h3>Layer 2 — 统一 Mid-Run 维护阈值到 Budget Resolver</h3>
+        <p><span class="tag tag-violet">agent-session.ts · #maintainContextMidRun</span></p>
+        <p>
+          将 <code>#maintainContextMidRun</code> 中的 <code>contextSteadyTarget</code> 计算
+          替换为调用 <code>resolveContextPlanBudget</code> 取 <code>steadyTarget</code>：
+        </p>
+        <pre>// BEFORE (misaligned):
+const contextSteadyTarget = contextSteadyActive
+  ? Math.max(1, Math.min(contextWindow, configuredSteadyTarget || 240_000, burstWindowTokens))
+  : Number.POSITIVE_INFINITY;
+
+// AFTER (unified):
+const budget = resolveContextPlanBudget({
+  settings: {
+    qualityWindowTokens: this.settings.get("san.contextSteady.qualityWindowTokens"),
+    reserveRatio: this.settings.get("san.contextSteady.reserveRatio"),
+    planMaxTokens: this.#contextSteadyPlanMaxTokens(),
+    burstWindowTokens: this.#contextSteadyBurstWindowTokens(),
+  },
+  contextWindow,
+  nonMessageTokens: computeNonMessageTokens(this),
+});
+const contextSteadyTarget = contextSteadyActive
+  ? Math.max(1, budget.steadyTarget)
+  : Number.POSITIVE_INFINITY;</pre>
+        <p>
+          这确保维护阈值 = 预算解析器的 steadyTarget（已考虑 hardInputCeiling），
+          维护一定在 gate 熔断之前触发。
+        </p>
+
+        <h3>Layer 3 — Tool-Loop 熔断前的一次有界恢复</h3>
+        <p><span class="tag tag-amber">agent-session.ts · #refreshContextSteadyPlanForProviderCall</span></p>
+        <p>
+          当前 <code>#refreshContextSteadyPlanForProviderCall</code> 在 <code>hard_pressure</code> 时
+          直接暂停并 throw。修复后增加一次有界恢复尝试：
+        </p>
+        <ul>
+          <li>条件：<code>hard_pressure</code> 且 <code>#contextSteadyRecoveryAttempt === 0</code>。</li>
+          <li>动作：递增 recoveryAttempt，运行一次同步 auto-compaction（<code>phase: "mid_turn"</code>，<code>trigger: "budget_pressure"</code>）。</li>
+          <li>压缩后重建 plan：若 outcome 不再是 hard_pressure，返回新 plan 继续 tool-loop。</li>
+          <li>若仍为 hard_pressure 或 recoveryAttempt &gt; 0：走原有暂停路径。</li>
+        </ul>
+        <pre>if (plan.audit.qualityGate.outcome === "hard_pressure") {
+  // ── NEW: one bounded recovery attempt before pausing ──
+  if (this.#contextSteadyRecoveryAttempt === 0) {
+    this.#contextSteadyRecoveryAttempt++;
+    const recovered = await this.#attemptToolLoopBudgetRecovery(messages, plan);
+    if (recovered) return recovered;
+  }
+  // Original pause path (unchanged)
+  this.sessionManager.appendCustomEntry(CONTEXT_PLAN_CUSTOM_TYPE, plan.audit);
+  this.#pauseForContextSteadyPressure(plan, "mid_turn", ...);
+  throw new Error(...);
+}</pre>
+        <p>
+          <code>#attemptToolLoopBudgetRecovery</code> 执行：
+        </p>
+        <ol>
+          <li>调用 <code>#runAutoCompaction("threshold", ...)</code>，phase = <code>"mid_turn"</code>，trigger = <code>"budget_pressure"</code>。</li>
+          <li>压缩完成后，用压缩后的 messages 重建 ContextPlan。</li>
+          <li>若新 plan outcome ≠ hard_pressure，更新 <code>#contextSteadyRequestPlan</code> 并返回。</li>
+          <li>否则返回 undefined，走暂停路径。</li>
+        </ol>
+        <div class="callout callout-amber">
+          <strong>注意：</strong><code>#refreshContextSteadyPlanForProviderCall</code> 当前是同步方法。
+          恢复需要 async compaction，因此需将其改为 async 并更新调用方
+          <code>#transformContextForProvider</code>（已经是 async）。
+        </div>
+      </section>
+
+      <!-- ═══════════════ 3. 预算解析器改进 ═══════════════ -->
+      <section class="card">
+        <h2>3. 预算解析器改进（可选，低优先级）</h2>
+        <p>
+          当前 <code>resolveContextPlanBudget</code> 在小窗口下三区坍缩为一点。
+          未来可考虑引入最小缓冲区保证：
+        </p>
+        <pre>// 保证 control → burst 之间至少有 10% 或 8K 的缓冲
+const minBuffer = Math.max(8_000, Math.floor(steadyTarget * 0.1));
+const burstCeiling = Math.min(
+  Math.max(configuredBurst, steadyTarget + minBuffer),
+  hardInputCeiling
+);</pre>
+        <p>
+          但这会改变所有窗口的预算行为，需要完整的回归测试。当前三层修复已解决事故链，
+          此项作为后续优化跟踪。
+        </p>
+      </section>
+
+      <!-- ═══════════════ 4. 测试计划 ═══════════════ -->
+      <section class="card">
+        <h2>4. 测试计划</h2>
+        <table>
+          <tr><th>层级</th><th>测试内容</th><th>验证点</th></tr>
+          <tr>
+            <td>Layer 1</td>
+            <td>模型窗口缩小后 ContextPlan 失效</td>
+            <td>setModel 到更小窗口 → #contextSteadyRequestPlan 被清除，pendingBudgetPressureRebase = true</td>
+          </tr>
+          <tr>
+            <td>Layer 2</td>
+            <td>Mid-run 维护阈值对齐</td>
+            <td>256K 模型下维护在 204.8K 触发（而非 240K），先于 gate 熔断</td>
+          </tr>
+          <tr>
+            <td>Layer 3</td>
+            <td>Tool-loop hard_pressure 恢复</td>
+            <td>首次 hard_pressure 触发压缩 → 压缩后 plan 通过 → tool-loop 继续</td>
+          </tr>
+          <tr>
+            <td>回归</td>
+            <td>现有 context-steady 测试套件</td>
+            <td>所有现有测试通过，无行为退化</td>
+          </tr>
+        </table>
+      </section>
+
+      <!-- ═══════════════ 5. 风险评估 ═══════════════ -->
+      <section class="card">
+        <h2>5. 风险评估</h2>
+        <ul>
+          <li><strong>Layer 1 风险低：</strong>仅在窗口缩小时失效 plan，窗口增大或不变时行为不变。</li>
+          <li><strong>Layer 2 风险低：</strong>将维护阈值从"取 min 的独立公式"改为"消费统一 budget resolver"，逻辑更简单。对大窗口模型（contextWindow ≥ 300K），steadyTarget 仍为 240K，行为不变。</li>
+          <li><strong>Layer 3 风险中：</strong>在 tool-loop 中引入 async compaction 可能增加单次工具调用延迟。但仅在 hard_pressure 且首次恢复时触发，正常路径无影响。压缩失败仍走原有暂停路径，不会死循环。</li>
+        </ul>
+      </section>
+
+    </main>
+  </body>
+</html>
