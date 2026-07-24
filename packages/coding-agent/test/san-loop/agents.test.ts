@@ -139,7 +139,8 @@ describe("San loop bundled agents", () => {
 		expect(byName.get("san-worker")?.tools).toEqual(expect.arrayContaining(["write", "edit", "bash", "yield"]));
 		expect(byName.get("san-supervisor")?.spawns).toEqual(["san-oracle"]);
 		expect(byName.get("san-supervisor")?.model).toEqual(["@slow"]);
-		expect(byName.get("san-supervisor")?.tools).toEqual(expect.arrayContaining(["bash", "yield"]));
+		expect(byName.get("san-supervisor")?.tools).toEqual(expect.arrayContaining(["read", "grep", "glob", "yield"]));
+		expect(byName.get("san-supervisor")?.tools ?? []).not.toContain("bash");
 		expect(byName.get("san-supervisor")?.tools ?? []).not.toContain("write");
 		expect(byName.get("san-oracle")?.spawns).toBeUndefined();
 		expect(byName.get("san-oracle")?.model).toEqual(["@slow"]);
@@ -977,6 +978,68 @@ describe("San loop bundled agents", () => {
 				retryable: false,
 				suggestedFix: "none",
 			}),
+		]);
+	});
+
+	test("forwards exclusive hard-budget leases to concurrent worker subprocesses", async () => {
+		const settings = Settings.isolated({});
+		const bothStarted = Promise.withResolvers<void>();
+		const captured: Array<{
+			id: string;
+			hardTokenLimit?: number;
+			hardCostLimit?: number;
+			hardRequestLimit?: number;
+		}> = [];
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			captured.push({
+				id: options.id,
+				hardTokenLimit: options.hardTokenLimit,
+				hardCostLimit: options.hardCostLimit,
+				hardRequestLimit: options.hardRequestLimit,
+			});
+			if (captured.length === 2) bothStarted.resolve();
+			await bothStarted.promise;
+			return makeResult(options.id, { status: "completed", summary: "lease respected" });
+		});
+		const executor = createSanLoopTaskAgentExecutor({
+			cwd: "/tmp",
+			hardBudget: { maxTokens: 1_000, maxCost: 10, maxProviderRequests: 10 },
+			session: {
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry: { authStorage: {} } as never,
+			},
+		});
+		const secondAssignment = { ...assignment(), assignmentId: "assign-role-models-b" };
+
+		await Promise.all([
+			executor.worker({
+				run: runSnapshot(),
+				mode: "team",
+				assignment: assignment(),
+				budget: { maxTokens: 40, maxCost: 0.4, maxProviderRequests: 1 },
+			}),
+			executor.worker({
+				run: runSnapshot(),
+				mode: "team",
+				assignment: secondAssignment,
+				budget: { maxTokens: 60, maxCost: 0.6, maxProviderRequests: 2 },
+			}),
+		]);
+
+		expect(captured.toSorted((a, b) => a.id.localeCompare(b.id))).toEqual([
+			{
+				id: "assign-role-models",
+				hardTokenLimit: 40,
+				hardCostLimit: 0.4,
+				hardRequestLimit: 1,
+			},
+			{
+				id: "assign-role-models-b",
+				hardTokenLimit: 60,
+				hardCostLimit: 0.6,
+				hardRequestLimit: 2,
+			},
 		]);
 	});
 });

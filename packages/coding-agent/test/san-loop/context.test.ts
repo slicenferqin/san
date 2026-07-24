@@ -4,6 +4,8 @@ import {
 	CONTEXT_PACKET_CUSTOM_TYPE,
 	CONTEXT_PACKET_MESSAGE_TYPE,
 	CONTEXT_PACKET_SCHEMA_VERSION,
+	CONTEXT_PLAN_CUSTOM_TYPE,
+	CONTEXT_PLAN_SCHEMA_VERSION,
 } from "../../src/context-steady";
 import {
 	appendSanLoopEvent,
@@ -105,7 +107,7 @@ describe("San loop role context", () => {
 			runId: "loop_1",
 			sessionId: "session-1",
 			role: "worker",
-			sourceContextPacketRefs: ["ctx-entry", session.getEntries().at(-1)!.id],
+			sourceContextPacketRefs: ["ctx-entry"],
 		});
 		expect(built!.packet.entryRefs).toContain(runEntryId);
 		expect(built!.packet.tokenEstimate).toBeGreaterThan(0);
@@ -124,6 +126,114 @@ describe("San loop role context", () => {
 
 	test("returns null when no loop run exists", () => {
 		expect(buildSanLoopRoleContext([], { role: "commander" })).toBeNull();
+	});
+
+	test("projects only ContextPlan materials bound via run.contextPlanRefs", () => {
+		const session = SessionManager.inMemory();
+		const boundPlanId = session.appendCustomEntry(CONTEXT_PLAN_CUSTOM_TYPE, {
+			schemaVersion: CONTEXT_PLAN_SCHEMA_VERSION,
+			planId: "plan_bound",
+			sessionId: "session-plan",
+			epochId: "epoch_1",
+			promptGeneration: 1,
+			createdAt: "2026-07-01T00:00:00.000Z",
+			budget: {
+				contextWindow: 100000,
+				nonMessageTokens: 1000,
+				steadyTarget: 24000,
+				controlMax: 24000,
+				burstCeiling: 32000,
+				selectedInputLimit: 24000,
+				selectedInputMode: "steady",
+				messageBudget: 20000,
+				planTokenBudget: 2000,
+				reserveTokens: 5000,
+				reserveRatio: 0.2,
+			},
+			qualityGate: {
+				outcome: "pass",
+				reasons: [],
+				protectedEntryRefs: [],
+				missingEntryRefs: [],
+				requiredTokens: 0,
+				selectedInputTokens: 0,
+				activeEntryCount: 0,
+				archivedEntryCount: 0,
+			},
+			materials: [
+				{
+					materialId: "mat_bound",
+					kind: "turn_digest",
+					representation: "digest",
+					entryRefs: ["digest_1"],
+					tokenEstimate: 120,
+					reason: "bound objective digest",
+				},
+			],
+			coverage: [],
+		});
+		// Unrelated later plan must not contaminate this run.
+		session.appendCustomEntry(CONTEXT_PLAN_CUSTOM_TYPE, {
+			schemaVersion: CONTEXT_PLAN_SCHEMA_VERSION,
+			planId: "plan_unrelated",
+			sessionId: "session-plan",
+			epochId: "epoch_2",
+			promptGeneration: 2,
+			createdAt: "2026-07-01T00:01:00.000Z",
+			budget: {
+				contextWindow: 100000,
+				nonMessageTokens: 1000,
+				steadyTarget: 24000,
+				controlMax: 24000,
+				burstCeiling: 32000,
+				selectedInputLimit: 24000,
+				selectedInputMode: "steady",
+				messageBudget: 20000,
+				planTokenBudget: 2000,
+				reserveTokens: 5000,
+				reserveRatio: 0.2,
+			},
+			qualityGate: {
+				outcome: "pass",
+				reasons: [],
+				protectedEntryRefs: [],
+				missingEntryRefs: [],
+				requiredTokens: 0,
+				selectedInputTokens: 0,
+				activeEntryCount: 0,
+				archivedEntryCount: 0,
+			},
+			materials: [
+				{
+					materialId: "mat_unrelated",
+					kind: "checkpoint",
+					representation: "checkpoint",
+					entryRefs: ["cp_1"],
+					tokenEstimate: 99,
+					reason: "unrelated latest plan",
+				},
+			],
+			coverage: [],
+		});
+		appendSanLoopRunSnapshot(
+			session,
+			createSanLoopRunSnapshot({
+				sessionId: "session-plan",
+				objective: "Use ContextPlan materials",
+				runId: "loop-plan",
+				contextPlanRefs: [boundPlanId],
+			}),
+		);
+
+		const built = buildSanLoopRoleContext(session.getEntries(), {
+			role: "worker",
+			runId: "loop-plan",
+		});
+
+		expect(built?.content).toContain("Source ContextPlan materials:");
+		expect(built?.content).toContain("digest (turn_digest, ~120 tok): bound objective digest");
+		expect(built?.content).not.toContain("unrelated latest plan");
+		expect(built?.packet.sourceContextPlanRefs).toEqual([boundPlanId]);
 	});
 
 	test("trims rendered role material to the configured token boundary", () => {

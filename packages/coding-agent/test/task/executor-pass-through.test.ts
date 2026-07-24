@@ -160,6 +160,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 			strictToolNames: true,
 			toolPathScope: "/tmp",
 			hardTokenLimit: 777,
+			hardCostLimit: 0.25,
 		});
 
 		expect(result.exitCode).toBe(0);
@@ -168,6 +169,8 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		expect(forwarded?.strictToolNames).toBe(true);
 		expect(forwarded?.toolPathScope).toBe("/tmp");
 		expect(forwarded?.maxOutputTokens).toBe(777);
+		expect(forwarded?.maxTotalTokens).toBe(777);
+		expect(forwarded?.maxTotalCost).toBe(0.25);
 		expect(forwarded?.disableExtensionDiscovery).toBe(true);
 		expect(forwarded?.preloadedExtensionPaths).toEqual([]);
 		expect(forwarded?.preloadedCustomToolPaths).toEqual([]);

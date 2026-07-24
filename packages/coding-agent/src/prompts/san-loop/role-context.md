@@ -72,6 +72,13 @@ Source ContextPlan refs:
 - none
 {{/each}}
 
+Source ContextPlan materials:
+{{#each contextPlanMaterials}}
+- {{representation}} ({{kind}}, ~{{tokenEstimate}} tok): {{reason}}
+{{else}}
+- none
+{{/each}}
+
 Legacy ContextPacket refs:
 {{#each sourceContextPacketRefs}}
 - {{this}}

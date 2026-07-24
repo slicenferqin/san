@@ -9,8 +9,9 @@ import {
 	rebuildSanLoopLedger,
 	recordSanLoopRunCreated,
 	recordSanLoopTransition,
-	SAN_LOOP_EVENT_CUSTOM_TYPE,
+	recoverSanLoopRun,
 	SAN_LOOP_RUN_CUSTOM_TYPE,
+	SAN_LOOP_TRANSITION_CUSTOM_TYPE,
 	updateSanLoopRunSnapshot,
 } from "../../src/san-loop";
 import { SessionManager } from "../../src/session/session-manager";
@@ -30,16 +31,12 @@ describe("San loop ledger", () => {
 		});
 
 		expect(result.runEntryId).toBeString();
-		expect(result.eventEntryId).toBeString();
+		expect(result.eventEntryId).toBe(result.runEntryId);
 		const entries = session.getEntries();
-		expect(entries).toHaveLength(2);
+		expect(entries).toHaveLength(1);
 		expect(entries[0]).toMatchObject({
 			type: "custom",
-			customType: SAN_LOOP_RUN_CUSTOM_TYPE,
-		});
-		expect(entries[1]).toMatchObject({
-			type: "custom",
-			customType: SAN_LOOP_EVENT_CUSTOM_TYPE,
+			customType: SAN_LOOP_TRANSITION_CUSTOM_TYPE,
 		});
 
 		const ledger = rebuildSanLoopLedger(entries);
@@ -142,7 +139,7 @@ describe("San loop ledger", () => {
 		).toThrow("run id already exists");
 	});
 
-	test("records orchestrator transitions as run snapshots plus events", () => {
+	test("records orchestrator transitions as atomic run/event envelopes", () => {
 		const session = SessionManager.inMemory();
 		const initial = createSanLoopRunSnapshot({
 			sessionId: "session-1",
@@ -161,13 +158,42 @@ describe("San loop ledger", () => {
 			retryExhausted: false,
 		});
 
-		expect(result.runEntryId).toBe(session.getEntries()[0]?.id);
-		expect(result.eventEntryId).toBe(session.getEntries()[1]?.id);
-		expect(result.event.refs).toEqual([result.runEntryId]);
+		expect(result.envelopeEntryId).toBe(session.getEntries()[0]?.id);
+		expect(result.runEntryId).toBe(result.eventEntryId);
+		expect(result.event.refs).toEqual([result.envelopeEntryId]);
 		expect(result.event.data).toMatchObject({ retryExhausted: false });
 		const ledger = rebuildSanLoopLedger(session.getEntries());
 		expect(ledger.latestRun?.data.status).toBe("dispatching");
 		expect(ledger.events[0]?.data.type).toBe("plan_created");
+	});
+
+	test("recoverSanLoopRun freezes active runs as blocked recover-to-blocked", () => {
+		const session = SessionManager.inMemory();
+		const initial = createSanLoopRunSnapshot({
+			sessionId: "session-1",
+			objective: "Recover orphaned run",
+			runId: "loop_recover",
+			createdAt: "2026-07-01T00:00:00.000Z",
+		});
+		appendSanLoopRunSnapshot(session, initial);
+
+		const result = recoverSanLoopRun(session, initial, {
+			reason: "No child process",
+			createdAt: "2026-07-01T00:02:00.000Z",
+		});
+
+		expect(result.run.status).toBe("blocked");
+		expect(result.event).toMatchObject({
+			type: "recovered",
+			summary: "No child process",
+			data: {
+				previousStatus: "planning",
+				recoveryMode: "recover_to_blocked",
+			},
+		});
+		const ledger = rebuildSanLoopLedger(session.getEntries());
+		expect(ledger.latestRun?.data.status).toBe("blocked");
+		expect(ledger.events.at(-1)?.data.data).toMatchObject({ recoveryMode: "recover_to_blocked" });
 	});
 
 	test("aborts an active run with an audit event", () => {
@@ -208,5 +234,33 @@ describe("San loop ledger", () => {
 		expect(ledger.runs).toHaveLength(0);
 		expect(ledger.events).toHaveLength(0);
 		expect(ledger.latestRun).toBeUndefined();
+	});
+
+	test("rejects transition envelopes with mismatched run/event bindings", () => {
+		const session = SessionManager.inMemory();
+		const run = createSanLoopRunSnapshot({
+			sessionId: "session-1",
+			objective: "Reject mismatched envelope",
+			runId: "envelope-run-a",
+			createdAt: "2026-07-01T00:00:00.000Z",
+		});
+		session.appendCustomEntry(SAN_LOOP_TRANSITION_CUSTOM_TYPE, {
+			schemaVersion: 1,
+			run,
+			event: {
+				schemaVersion: 1,
+				eventId: "evt-mismatch",
+				runId: "envelope-run-b",
+				sessionId: "session-1",
+				createdAt: "2026-07-01T00:00:00.000Z",
+				type: "plan_created",
+				summary: "mismatched",
+				refs: [],
+			},
+		});
+
+		const ledger = rebuildSanLoopLedger(session.getEntries());
+		expect(ledger.runs).toHaveLength(0);
+		expect(ledger.events).toHaveLength(0);
 	});
 });

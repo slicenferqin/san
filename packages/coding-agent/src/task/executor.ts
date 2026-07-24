@@ -417,6 +417,10 @@ export interface ExecutorOptions {
 	toolPathScope?: string;
 	/** Hard cumulative total-token cap for this subagent process. */
 	hardTokenLimit?: number;
+	/** Hard cumulative estimated-cost cap for this subagent process. */
+	hardCostLimit?: number;
+	/** Hard cumulative assistant-request cap for this subagent process. */
+	hardRequestLimit?: number;
 }
 
 function parseStringifiedJson(value: unknown): unknown {
@@ -843,6 +847,10 @@ interface RunMonitorArgs {
 	maxRuntimeMs: number;
 	/** Hard cumulative token cap; 0 disables the guard. */
 	hardTokenLimit: number;
+	/** Hard cumulative estimated-cost cap; 0 disables the guard. */
+	hardCostLimit: number;
+	/** Hard cumulative assistant-request cap; 0 disables the guard. */
+	hardRequestLimit: number;
 }
 
 /**
@@ -901,6 +909,8 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		softRequestBudgetNotice,
 		maxRuntimeMs,
 		hardTokenLimit,
+		hardCostLimit,
+		hardRequestLimit,
 	} = args;
 	const startTime = Date.now();
 
@@ -1057,9 +1067,16 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 			return `Subagent runtime limit exceeded (task.maxRuntimeMs=${maxRuntimeMs})`;
 		}
 		if (budgetLimitExceeded) {
-			return hardTokenLimit > 0 && accumulatedUsage.totalTokens >= hardTokenLimit
-				? `Hard token budget exhausted (${accumulatedUsage.totalTokens}/${hardTokenLimit} tokens)`
-				: `Soft request budget exceeded (${progress.requests} requests; budget ${softRequestBudget}) — agent did not yield when force-stopped`;
+			if (hardTokenLimit > 0 && accumulatedUsage.totalTokens >= hardTokenLimit) {
+				return `Hard token budget exhausted (${accumulatedUsage.totalTokens}/${hardTokenLimit} tokens)`;
+			}
+			if (hardCostLimit > 0 && accumulatedUsage.cost.total >= hardCostLimit) {
+				return `Hard cost budget exhausted (${accumulatedUsage.cost.total.toFixed(6)}/${hardCostLimit.toFixed(6)} USD)`;
+			}
+			if (hardRequestLimit > 0 && progress.requests >= hardRequestLimit) {
+				return `Hard provider-request budget exhausted (${progress.requests}/${hardRequestLimit} requests)`;
+			}
+			return `Soft request budget exceeded (${progress.requests} requests; budget ${softRequestBudget}) — agent did not yield when force-stopped`;
 		}
 		if (budgetStopRequested) {
 			return `Soft request budget exceeded (${progress.requests} requests; budget ${softRequestBudget})`;
@@ -1451,7 +1468,13 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 					}
 					// Accumulate tokens for progress display
 					progress.tokens += getUsageTokens(messageUsage);
+					if (hardRequestLimit > 0 && progress.requests >= hardRequestLimit && !abortSent) {
+						requestAbort("budget");
+					}
 					if (hardTokenLimit > 0 && accumulatedUsage.totalTokens >= hardTokenLimit && !abortSent) {
+						requestAbort("budget");
+					}
+					if (hardCostLimit > 0 && accumulatedUsage.cost.total >= hardCostLimit && !abortSent) {
 						requestAbort("budget");
 					}
 					// Track latest per-turn context size so the UI can show
@@ -2069,6 +2092,8 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		softRequestBudgetNotice: false,
 		maxRuntimeMs: options.maxRuntimeMs ?? 0,
 		hardTokenLimit: 0,
+		hardCostLimit: 0,
+		hardRequestLimit: 0,
 	});
 
 	if (options.eventBus) {
@@ -2191,6 +2216,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		Math.trunc(Number(options.maxRuntimeMs ?? settings.get("task.maxRuntimeMs") ?? 0) || 0),
 	);
 	const hardTokenLimit = Math.max(0, Math.trunc(Number(options.hardTokenLimit ?? 0) || 0));
+	const rawHardCostLimit = Number(options.hardCostLimit ?? 0);
+	const hardCostLimit = Number.isFinite(rawHardCostLimit) ? Math.max(0, rawHardCostLimit) : 0;
+	const hardRequestLimit = Math.max(0, Math.trunc(Number(options.hardRequestLimit ?? 0) || 0));
 	// TTL before an adopted idle subagent is parked by the lifecycle manager.
 	// <= 0 disables parking (the session stays live until process teardown).
 	const agentIdleTtlMs = Math.trunc(Number(settings.get("task.agentIdleTtlMs") ?? 420_000) || 0);
@@ -2269,6 +2297,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		softRequestBudgetNotice,
 		maxRuntimeMs,
 		hardTokenLimit,
+		hardCostLimit,
+		hardRequestLimit,
 	});
 	const progress = monitor.progress;
 	let unsubscribe: (() => void) | null = null;
@@ -2494,6 +2524,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				toolPathScope: options.toolPathScope,
 				maxOutputTokens: hardTokenLimit > 0 ? hardTokenLimit : undefined,
 				maxTotalTokens: hardTokenLimit > 0 ? hardTokenLimit : undefined,
+				maxTotalCost: hardCostLimit > 0 ? hardCostLimit : undefined,
 				systemPrompt: defaultPrompt => {
 					const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
 						agent: agent.systemPrompt,

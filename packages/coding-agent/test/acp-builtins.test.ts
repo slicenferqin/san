@@ -308,7 +308,7 @@ describe("ACP builtin slash commands", () => {
 				createdAt: "2026-07-01T00:00:00.000Z",
 				updatedAt: "2026-07-01T00:01:00.000Z",
 				objective: "ship v0.2",
-				mode: "team",
+				mode: "solo",
 				status: "passed",
 				contextPlanRefs: [latestPlanEntryId],
 				contextPacketRefs: [],
@@ -333,6 +333,7 @@ describe("ACP builtin slash commands", () => {
 					runEntryId: "transition-run",
 					event: {} as sanLoopModule.SanLoopEvent,
 					eventEntryId: "transition-event",
+					envelopeEntryId: "transition-envelope",
 				},
 			],
 			reviewEntryIds: ["review-entry"],
@@ -344,9 +345,9 @@ describe("ACP builtin slash commands", () => {
 			expect(runSpy).toHaveBeenCalledTimes(1);
 			expect(runSpy.mock.calls[0]?.[0]).toMatchObject({
 				objective: "ship v0.2",
-				mode: "team",
+				mode: "solo",
 				maxRetries: 2,
-				maxTurns: 8,
+				maxTurns: 3,
 				contextPlanRefs: ["fake-entry-1", latestPlanEntryId],
 			});
 			expect(output[0]).toContain("San execution loop loop-acp finished with status passed.");
@@ -458,13 +459,12 @@ describe("ACP builtin slash commands", () => {
 
 		expect(result).toEqual({ consumed: true });
 		expect(output).toEqual(["San execution loop loop-stop stopped with status aborted."]);
-		expect(fakeSessionManager._customEntries.at(-2)).toMatchObject({
-			customType: sanLoopModule.SAN_LOOP_RUN_CUSTOM_TYPE,
-			data: { runId: "loop-stop", status: "aborted" },
-		});
 		expect(fakeSessionManager._customEntries.at(-1)).toMatchObject({
-			customType: sanLoopModule.SAN_LOOP_EVENT_CUSTOM_TYPE,
-			data: { runId: "loop-stop", type: "aborted" },
+			customType: sanLoopModule.SAN_LOOP_TRANSITION_CUSTOM_TYPE,
+			data: {
+				run: { runId: "loop-stop", status: "aborted" },
+				event: { runId: "loop-stop", type: "aborted" },
+			},
 		});
 	});
 

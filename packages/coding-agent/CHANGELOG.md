@@ -18,6 +18,11 @@
 - Added comment-preserving YAML path patch helpers and a safe `models.yml` writer for custom providers (no API key material in YAML, logs, or errors).
 - Added `/model roles` expert entry for the legacy role/thinking assignment picker.
 - Added `/reload <config|models|plugins|mcp|all>` to refresh disk-backed settings and runtime registries in place without restarting the CLI; runtime setting overrides remain active.
+- Added San execution loop hard budget caps (`maxTokens`, `maxCost`, `maxDurationMs`, `maxProviderRequests`) with settings wiring, production `/san-loop` passthrough, pre/post role-call enforcement, wall-clock timing, and remaining-budget `hardTokenLimit`/`maxRuntimeMs` propagation into role subprocesses.
+- Added San worker host-owned bash receipts: `subprocessToolRegistry` extracts bash tool ends into `extractedToolData.bash`, worker results prefer those receipts (`source: "host"`) over model-claimed `commandsRun`, and the pass gate requires a host receipt with `exitCode: 0`.
+- Added San role pre-call hard provider-request reservation: remaining `maxProviderRequests` is propagated as `hardRequestLimit` into role subprocesses and exhausted remaining budgets abort the role before starting a provider call.
+- Added San execution loop atomic `san.loop_transition` envelopes that bind run snapshot, event, and optional review report in a single custom entry, with legacy separate custom types still rebuildable.
+
 
 ### Changed
 
@@ -25,6 +30,13 @@
 - Changed custom provider validation so `models.yml` may declare `auth: apiKey` without embedding the secret (keys live in AuthStorage).
 - Restored no-argument `/logout` to the dedicated credential-removal selector (provider connect remains `/connect` / `/login`).
 - Custom provider setup now rolls back the newly written `models.yml` entry and any login credential when key storage or first registry load fails, avoiding half-configured providers.
+- Changed San execution loop from fixed Commander→Worker→Supervisor pipeline to mode-driven `pipeline` roles: `solo` runs a single Worker, `team` runs Commander→Worker→Supervisor, and `council` adds Oracle before Supervisor.
+- Changed San Supervisor pass verdicts to require a completed worker host-owned bash receipt with `exitCode: 0`; model-claimed `commandsRun` and testsRun/evidence/verification strings alone no longer unlock pass.
+- Changed San execution loop default mode from `team` to `solo`.
+- Changed San execution loop recovery to an explicit recover-to-blocked contract (`recoveryMode: "recover_to_blocked"`), not in-process resume.
+- Changed San role context to project latest ContextPlan material summaries into role prompts, not only plan entry refs.
+- Changed San execution loop production path to consume `budget.reserveRatio` (turn reserve for review roles) and `roles.oracle.enabledInModes`.
+
 
 - Added ContextPlan request lifecycle hardening for 240K steady: per-provider-call hard-ceiling re-gate (including tool loops), branch-isolated checkpoints, fallback digests that never gain raw coverage via checkpoints, hard-pressure audit+prompt persistence with same-session agent-state recovery, shared plan snapshots for send/status/compaction, bounded semantic required sets, natural + explicit topic-shift relevance, atomic material-level wire caps, stable epoch IDs, SanLoop branch-only plan refs, `burstWindowTokens` settings, real AgentSession multi-turn dogfood, and session-prepared digest side-request transport.
 - Added ContextPlan-backed San context steady runtime wiring with low-authority provider injection, fail-closed coverage validation, v2 checkpoint audit fields, `/context plan` reporting, and deterministic ContextPlan dogfood coverage while retaining legacy ContextPacket reports for old sessions.
@@ -62,6 +74,15 @@
 
 ### Fixed
 
+- Fixed San execution loop terminal budget races so post-review overspend writes a single blocked envelope instead of persisting `passed` then failing on a conflicting `blocked` transition.
+- Fixed San evidence gate to require successful commands from the current assignment batch only; prior-retry successes no longer unlock a new pass.
+- Fixed council mode silently degrading without Oracle: `requireOracle=true` with no Oracle executor (or settings-disabled Oracle) now blocks immediately.
+- Fixed San role context projecting session-global latest ContextPlan materials; only `run.contextPlanRefs` are bound and projected.
+- Fixed `san.loop_transition` rebuild accepting envelopes whose event/review runId or sessionId disagreed with the embedded run snapshot.
+- Fixed San execution-loop concurrent hard budgets: ready worker waves now receive disjoint token, cost, and provider-request leases, and role subprocesses enforce each remaining lease before dispatching a provider request.
+- Fixed San check discovery accepting malformed frontmatter and swallowing unreadable files; YAML parse failures and non-ENOENT filesystem errors now fail closed.
+
+- Fixed San Supervisor bash access: both the bundled `san-supervisor` agent definition and the San-loop strict tool overlay are limited to read, grep, glob, and yield.
 - Fixed Context Steady long turns treating 40K/15-minute Segment checkpoints as physical compaction, allowing compaction summaries and quoted tool output to replace the active user request, and repeating tool investigations without evidence progress. Maintenance now records real triggers, restores journal-derived continuation authority across compaction and handoff, bounds authority payloads, detects summary conflicts, lets user input preempt advisor/maintenance waits, and converges repeated action/evidence patterns; probe v3 and the adversarial meta-investigation benchmark cover the repaired contracts.
 - Fixed San RPC v2 read-only and recovery sessions mutating state, stale recovery races removing a newer lease, cross-Runtime approval policy overwrites, non-atomic Run/approval/queue receipts, unleased upload chunks, ignored Run goals/evidence filters/shutdown bounds, and late coalesced frames being dropped.
 - Fixed skills misclassifying San as Codex from shared skill paths or project markers by stamping the San host runtime into user-invoked and autoload prompts; explicit user-selected cross-runtime targets still win.

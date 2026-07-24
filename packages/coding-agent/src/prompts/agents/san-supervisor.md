@@ -1,7 +1,7 @@
 ---
 name: san-supervisor
 description: San v0.2 supervisor gate for checks, review, retry decisions, and quality evidence.
-tools: read, grep, glob, bash, yield
+tools: read, grep, glob, yield
 spawns: san-oracle
 model: "@slow"
 thinking-level: high

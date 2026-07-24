@@ -91,4 +91,40 @@ appliesTo: ["worker", "supervisor"]
 		expect(rendered).toContain("## supervisor-gate");
 		expect(rendered).toContain("Supervisor gate expectations");
 	});
+
+	test("fails closed when a project check file cannot be read", async () => {
+		const cwd = await tempDir();
+		const checksDir = path.join(cwd, ".san/checks");
+		await fs.mkdir(checksDir, { recursive: true });
+		const blockedPath = path.join(checksDir, "blocked.md");
+		await Bun.write(blockedPath, "---\nname: blocked\n---\n- body\n");
+		await fs.chmod(blockedPath, 0);
+
+		try {
+			await expect(discoverSanLoopChecks({ cwd, includeBuiltins: false })).rejects.toThrow(
+				/Failed to load San check/,
+			);
+		} finally {
+			await fs.chmod(blockedPath, 0o644);
+		}
+	});
+
+	test("fails closed when a project check has malformed frontmatter", async () => {
+		const cwd = await tempDir();
+		await writeCheck(
+			cwd,
+			".san/checks/malformed.md",
+			`---
+name: "unterminated
+severity: blocker
+---
+
+- Invalid metadata must not load.
+`,
+		);
+
+		await expect(discoverSanLoopChecks({ cwd, includeBuiltins: false })).rejects.toThrow(
+			/Failed to load San check.*Failed to parse YAML frontmatter/,
+		);
+	});
 });

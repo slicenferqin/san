@@ -3,7 +3,6 @@ import { type SanLoopCheck, selectSanLoopChecks } from "./checks";
 import {
 	abortSanLoopRun,
 	acknowledgeSanLoopAbort,
-	appendSanLoopReviewReport,
 	findLatestSanLoopRun,
 	isSanLoopTerminalStatus,
 	type RecordSanLoopRunResult,
@@ -27,6 +26,7 @@ import {
 import type {
 	SanLoopMode,
 	SanLoopReviewReport,
+	SanLoopReviewVerdict,
 	SanLoopRunSnapshot,
 	SanLoopTaskNode,
 	SanLoopWorkerAssignment,
@@ -39,12 +39,19 @@ interface SanLoopSessionManager {
 	getSessionId(): string;
 }
 
+export interface SanLoopRoleBudget {
+	maxTokens?: number;
+	maxCost?: number;
+	maxProviderRequests?: number;
+}
+
 export interface SanLoopCommanderInvocation {
 	run: SanLoopRunSnapshot;
 	mode: SanLoopMode;
 	signal?: AbortSignal;
 	latestReview?: SanLoopReviewReport;
 	checks?: readonly SanLoopCheck[];
+	budget?: SanLoopRoleBudget;
 }
 
 export interface SanLoopCommanderResult {
@@ -58,6 +65,7 @@ export interface SanLoopWorkerInvocation {
 	mode: SanLoopMode;
 	signal?: AbortSignal;
 	checks?: readonly SanLoopCheck[];
+	budget?: SanLoopRoleBudget;
 }
 
 export interface SanLoopSupervisorInvocation {
@@ -68,6 +76,7 @@ export interface SanLoopSupervisorInvocation {
 	signal?: AbortSignal;
 	oracleReview?: SanLoopReviewReport;
 	checks?: readonly SanLoopCheck[];
+	budget?: SanLoopRoleBudget;
 }
 
 export interface SanLoopAgentExecutor {
@@ -97,6 +106,18 @@ export interface RunSanLoopOptions {
 	maxRetries?: number;
 	maxWorkers?: number;
 	maxTurns?: number;
+	/** Hard cap on total tokens across all subagent calls in this run. */
+	maxTokens?: number;
+	/** Hard cap on estimated cost (USD) across all subagent calls in this run. */
+	maxCost?: number;
+	/** Hard wall-clock cap (ms) from run start to next role call. */
+	maxDurationMs?: number;
+	/** Hard cap on provider request count across all subagent calls in this run. */
+	maxProviderRequests?: number;
+	/** Fraction of turn budget reserved for review roles (oracle/supervisor). */
+	reserveRatio?: number;
+	/** Modes where Oracle is allowed even if the mode pipeline includes it. */
+	oracleEnabledInModes?: readonly SanLoopMode[];
 	contextPlanRefs?: readonly string[];
 	contextPacketRefs?: readonly string[];
 	runId?: string;
@@ -254,6 +275,103 @@ function budgetBlockedTransition(run: SanLoopRunSnapshot): SanLoopTransition {
 	};
 }
 
+function usageBudgetBlockedTransition(run: SanLoopRunSnapshot, reason: string): SanLoopTransition {
+	const createdAt = new Date().toISOString();
+	return {
+		run: updateSanLoopRunSnapshot(run, {
+			status: "blocked",
+			updatedAt: createdAt,
+			finalVerdict: "blocked",
+			budget: [...run.budget, { createdAt, state: "blocked", remainingTurns: run.budget.at(-1)?.remainingTurns }],
+		}),
+		eventType: "blocked",
+		eventSummary: `San execution loop exhausted usage budget: ${reason}.`,
+		retryExhausted: false,
+	};
+}
+
+interface SanLoopUsageLimits {
+	maxTokens?: number;
+	maxCost?: number;
+	maxDurationMs?: number;
+	maxProviderRequests?: number;
+	startedAtMs: number;
+}
+
+function hasExclusiveUsageBudget(limits: SanLoopUsageLimits): boolean {
+	return limits.maxTokens !== undefined || limits.maxCost !== undefined || limits.maxProviderRequests !== undefined;
+}
+
+function remainingRoleBudget(executor: SanLoopAgentExecutor, limits: SanLoopUsageLimits): SanLoopRoleBudget {
+	const usage = executor.usage?.();
+	return {
+		maxTokens:
+			limits.maxTokens === undefined
+				? undefined
+				: Math.max(0, Math.floor(limits.maxTokens - (usage?.totalTokens ?? 0))),
+		maxCost: limits.maxCost === undefined ? undefined : Math.max(0, limits.maxCost - (usage?.cost ?? 0)),
+		maxProviderRequests:
+			limits.maxProviderRequests === undefined
+				? undefined
+				: Math.max(0, Math.floor(limits.maxProviderRequests - (usage?.providerRequests ?? 0))),
+	};
+}
+
+function splitIntegerBudget(total: number, index: number, count: number): number {
+	const normalized = Math.max(0, Math.floor(total));
+	const base = Math.floor(normalized / count);
+	return base + (index < normalized % count ? 1 : 0);
+}
+
+function splitRoleBudget(budget: SanLoopRoleBudget, index: number, count: number): SanLoopRoleBudget {
+	return {
+		maxTokens: budget.maxTokens === undefined ? undefined : splitIntegerBudget(budget.maxTokens, index, count),
+		maxCost:
+			budget.maxCost === undefined
+				? undefined
+				: index === count - 1
+					? Math.max(0, budget.maxCost - (budget.maxCost / count) * (count - 1))
+					: budget.maxCost / count,
+		maxProviderRequests:
+			budget.maxProviderRequests === undefined
+				? undefined
+				: splitIntegerBudget(budget.maxProviderRequests, index, count),
+	};
+}
+
+function budgetedWorkerWaveSize(readyCount: number, maxWorkers: number, budget: SanLoopRoleBudget): number {
+	let count = Math.min(readyCount, maxWorkers);
+	if (budget.maxTokens !== undefined) count = Math.min(count, Math.floor(budget.maxTokens));
+	if (budget.maxProviderRequests !== undefined) count = Math.min(count, Math.floor(budget.maxProviderRequests));
+	return Math.max(0, count);
+}
+
+function checkUsageBudget(
+	executor: SanLoopAgentExecutor,
+	run: SanLoopRunSnapshot,
+	limits: SanLoopUsageLimits,
+): SanLoopTransition | undefined {
+	const usage = executor.usage?.();
+	const wallClockMs = Date.now() - limits.startedAtMs;
+	if (typeof limits.maxDurationMs === "number" && wallClockMs >= limits.maxDurationMs) {
+		return usageBudgetBlockedTransition(run, `wall-clock ${wallClockMs}ms >= ${limits.maxDurationMs}ms`);
+	}
+	if (!usage) return undefined;
+	if (typeof limits.maxTokens === "number" && usage.totalTokens >= limits.maxTokens) {
+		return usageBudgetBlockedTransition(run, `tokens ${usage.totalTokens} >= ${limits.maxTokens}`);
+	}
+	if (typeof limits.maxCost === "number" && usage.cost >= limits.maxCost) {
+		return usageBudgetBlockedTransition(run, `cost ${usage.cost.toFixed(4)} >= ${limits.maxCost}`);
+	}
+	if (typeof limits.maxProviderRequests === "number" && usage.providerRequests >= limits.maxProviderRequests) {
+		return usageBudgetBlockedTransition(
+			run,
+			`provider requests ${usage.providerRequests} >= ${limits.maxProviderRequests}`,
+		);
+	}
+	return undefined;
+}
+
 function workerGateTransition(
 	run: SanLoopRunSnapshot,
 	workerResults: readonly SanLoopWorkerResult[],
@@ -326,7 +444,12 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 	const mode = options.mode ?? "team";
 	const policy = defaultSanLoopModePolicy(mode);
 	const maxWorkers = positiveInteger(options.maxWorkers, policy.maxWorkers);
-	let remainingTurns = positiveInteger(options.maxTurns, policy.remainingTurns);
+	const totalTurns = positiveInteger(options.maxTurns, policy.remainingTurns);
+	const reserveRatio =
+		options.reserveRatio === undefined || !Number.isFinite(options.reserveRatio)
+			? 0
+			: Math.min(0.9, Math.max(0, options.reserveRatio));
+	let remainingTurns = totalTurns;
 	if (options.runId && activeSanLoopRuns.has(options.runId)) {
 		throw new Error(`Cannot start San execution loop ${options.runId}: another active run already uses this id.`);
 	}
@@ -353,51 +476,170 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 		completion: completion.promise,
 	};
 	activeSanLoopRuns.set(run.runId, activeRun);
+	let reviewReserve = 0;
 	const blockForBudget = () => {
 		const blockedRecord = recordSanLoopTransition(options.sessionManager, budgetBlockedTransition(run), {
 			actor: "commander",
-			data: { remainingTurns },
+			data: { remainingTurns, reserveRatio, reviewReserve },
 		});
 		transitions.push(blockedRecord);
 		run = blockedRecord.run;
 	};
-	const spendTurns = (count: number): boolean => {
+	const spendTurns = (count: number, phase: "work" | "review" = "work"): boolean => {
 		if (remainingTurns < count) return false;
+		if (phase === "work" && remainingTurns - count < reviewReserve) return false;
 		remainingTurns -= count;
+		if (phase === "review") reviewReserve = Math.max(0, reviewReserve - count);
+		return true;
+	};
+	const blockForUsageBudget = (reason: SanLoopTransition) => {
+		const blockedRecord = recordSanLoopTransition(options.sessionManager, reason, {
+			actor: "commander",
+			data: { usage: options.executor.usage?.() },
+		});
+		transitions.push(blockedRecord);
+		run = blockedRecord.run;
+	};
+	const usageLimits: SanLoopUsageLimits = {
+		maxTokens: options.maxTokens,
+		maxCost: options.maxCost,
+		maxDurationMs: options.maxDurationMs,
+		maxProviderRequests: options.maxProviderRequests,
+		startedAtMs: Date.now(),
+	};
+	const tryEnforceUsageBudget = (): boolean => {
+		const blocked = checkUsageBudget(options.executor, run, usageLimits);
+		if (!blocked) return false;
+		blockForUsageBudget(blocked);
 		return true;
 	};
 
 	try {
+		const hasCommander = policy.pipeline.includes("commander");
+		const hasSupervisor = policy.pipeline.includes("supervisor");
+		const oracleAllowedBySettings =
+			options.oracleEnabledInModes === undefined || options.oracleEnabledInModes.includes(mode);
+		const hasOracle =
+			policy.pipeline.includes("oracle") && oracleAllowedBySettings && Boolean(options.executor.oracle);
+		// P1-01: requireOracle=true is an execution constraint. Missing Oracle
+		// executor blocks the run — no silent degradation to team pipeline.
+		if (policy.requireOracle && !hasOracle) {
+			const blockedReason = !oracleAllowedBySettings
+				? `Oracle disabled for mode '${mode}' by oracleEnabledInModes setting`
+				: `Oracle executor not available for mode '${mode}' which requires Oracle (requireOracle=${policy.requireOracle})`;
+			const blocked = recordSanLoopTransition(
+				options.sessionManager,
+				{
+					run: updateSanLoopRunSnapshot(run, {
+						status: "blocked",
+						updatedAt: new Date().toISOString(),
+						finalVerdict: "blocked",
+						budget: [...run.budget, { createdAt: new Date().toISOString(), state: "blocked", remainingTurns }],
+					}),
+					eventType: "blocked",
+					eventSummary: blockedReason,
+					retryExhausted: false,
+				},
+				{
+					actor: "commander",
+					data: {
+						requiresOracle: true,
+						hasExecutor: Boolean(options.executor.oracle),
+						oracleAllowedBySettings,
+					},
+				},
+			);
+			transitions.push(blocked);
+			run = blocked.run;
+			return { run, runCreated, transitions, reviewEntryIds };
+		}
+		reviewReserve = hasSupervisor || hasOracle ? Math.max(0, Math.ceil(totalTurns * reserveRatio)) : 0;
+
 		executionLoop: while (true) {
 			signal.throwIfAborted();
 			if (!spendTurns(1)) {
 				blockForBudget();
 				break;
 			}
-			const commanderResult = await options.executor.commander({
-				run,
-				mode,
-				signal,
-				latestReview: latestReview(run),
-				checks: selectSanLoopChecks(options.checks ?? [], { role: "commander" }),
-			});
-			signal.throwIfAborted();
-			const planned = withExecutorUsage(
-				withBudgetRemaining(applySanLoopPlan(run, commanderResult.plan), remainingTurns),
-				options.executor,
-			);
-			const plannedRecord = recordSanLoopTransition(options.sessionManager, planned, { actor: "commander" });
-			transitions.push(plannedRecord);
-			run = plannedRecord.run;
+			if (tryEnforceUsageBudget()) break;
 
-			const assignmentInputs = deriveAssignments(run, commanderResult);
-			const dispatched = withBudgetRemaining(dispatchSanLoopAssignments(run, assignmentInputs), remainingTurns);
-			const dispatchedRecord = recordSanLoopTransition(options.sessionManager, dispatched, { actor: "commander" });
-			transitions.push(dispatchedRecord);
-			run = dispatchedRecord.run;
-			if (run.status === "blocked") break;
+			let batchAssignments: SanLoopWorkerAssignment[];
 
-			const batchAssignments = run.assignments.slice(-assignmentInputs.length);
+			if (hasCommander) {
+				if (tryEnforceUsageBudget()) break;
+				const commanderResult = await options.executor.commander({
+					run,
+					mode,
+					signal,
+					latestReview: latestReview(run),
+					checks: selectSanLoopChecks(options.checks ?? [], { role: "commander" }),
+					budget: hasExclusiveUsageBudget(usageLimits)
+						? remainingRoleBudget(options.executor, usageLimits)
+						: undefined,
+				});
+				signal.throwIfAborted();
+				const planned = withExecutorUsage(
+					withBudgetRemaining(applySanLoopPlan(run, commanderResult.plan), remainingTurns),
+					options.executor,
+				);
+				const plannedRecord = recordSanLoopTransition(options.sessionManager, planned, { actor: "commander" });
+				transitions.push(plannedRecord);
+				run = plannedRecord.run;
+				if (tryEnforceUsageBudget()) break;
+
+				const assignmentInputs = deriveAssignments(run, commanderResult);
+				const dispatched = withBudgetRemaining(dispatchSanLoopAssignments(run, assignmentInputs), remainingTurns);
+				const dispatchedRecord = recordSanLoopTransition(options.sessionManager, dispatched, {
+					actor: "commander",
+				});
+				transitions.push(dispatchedRecord);
+				run = dispatchedRecord.run;
+				if (run.status === "blocked") break;
+				batchAssignments = run.assignments.slice(-assignmentInputs.length);
+			} else {
+				// Solo / single-agent: synthetic plan and assignment from objective.
+				const planInput: SanLoopPlanInput = {
+					objective: run.objective,
+					acceptanceCriteria: ["Task completed successfully."],
+					taskGraph: [
+						{
+							id: "solo",
+							title: run.objective,
+							status: "pending",
+							dependsOn: [],
+							acceptanceCriteria: ["Task completed successfully."],
+							checkRefs: [],
+						},
+					],
+					riskRegister: [],
+				};
+				const planned = withExecutorUsage(
+					withBudgetRemaining(applySanLoopPlan(run, planInput), remainingTurns),
+					options.executor,
+				);
+				const plannedRecord = recordSanLoopTransition(options.sessionManager, planned, { actor: "commander" });
+				transitions.push(plannedRecord);
+				run = plannedRecord.run;
+
+				const assignmentInputs: SanLoopAssignmentInput[] = [
+					{
+						taskNodeIds: ["solo"],
+						objective: run.objective,
+						instructions: `Complete: ${run.objective}`,
+						acceptanceCriteria: ["Task completed successfully."],
+						checkRefs: [],
+					},
+				];
+				const dispatched = withBudgetRemaining(dispatchSanLoopAssignments(run, assignmentInputs), remainingTurns);
+				const dispatchedRecord = recordSanLoopTransition(options.sessionManager, dispatched, {
+					actor: "commander",
+				});
+				transitions.push(dispatchedRecord);
+				run = dispatchedRecord.run;
+				if (run.status === "blocked") break;
+				batchAssignments = run.assignments.slice(-assignmentInputs.length);
+			}
+
 			const pendingAssignments = [...batchAssignments];
 			const completedTaskIds = new Set(
 				run.plan?.taskGraph.filter(task => task.status === "completed").map(task => task.id),
@@ -417,21 +659,38 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 					run = blockedRecord.run;
 					break executionLoop;
 				}
-				if (!spendTurns(readyAssignments.length)) {
+				const exclusiveBudget = hasExclusiveUsageBudget(usageLimits)
+					? remainingRoleBudget(options.executor, usageLimits)
+					: undefined;
+				const waveSize = exclusiveBudget
+					? budgetedWorkerWaveSize(readyAssignments.length, maxWorkers, exclusiveBudget)
+					: readyAssignments.length;
+				if (waveSize === 0) {
+					blockForUsageBudget(
+						usageBudgetBlockedTransition(run, "remaining usage budget cannot fund another worker"),
+					);
+					break executionLoop;
+				}
+				const waveAssignments = readyAssignments.slice(0, waveSize);
+				if (!spendTurns(waveAssignments.length)) {
 					blockForBudget();
 					break executionLoop;
 				}
+				if (tryEnforceUsageBudget()) break executionLoop;
 				const workerResultInputs = await mapWithLimit(
-					readyAssignments,
+					waveAssignments,
 					maxWorkers,
 					signal,
-					(assignment, _index, workerSignal) =>
+					(assignment, index, workerSignal) =>
 						options.executor.worker({
 							run,
 							assignment,
 							mode,
 							signal: workerSignal,
 							checks: selectSanLoopChecks(options.checks ?? [], { role: "worker" }),
+							budget: exclusiveBudget
+								? splitRoleBudget(exclusiveBudget, index, waveAssignments.length)
+								: undefined,
 						}),
 				);
 				signal.throwIfAborted();
@@ -447,7 +706,8 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 					const workerResult = run.workerResults.at(-1);
 					if (workerResult) batchWorkerResults.push(workerResult);
 				}
-				for (const assignment of readyAssignments) {
+				if (tryEnforceUsageBudget()) break executionLoop;
+				for (const assignment of waveAssignments) {
 					const index = pendingAssignments.findIndex(
 						candidate => candidate.assignmentId === assignment.assignmentId,
 					);
@@ -463,21 +723,22 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 					run = failedRecord.run;
 					break executionLoop;
 				}
-				for (const assignment of readyAssignments) {
+				for (const assignment of waveAssignments) {
 					for (const taskId of assignment.taskNodeIds) completedTaskIds.add(taskId);
 				}
 			}
 
 			let oracleReview: SanLoopReviewReport | undefined;
-			if (policy.requireOracle) {
+			if (hasOracle) {
 				if (!options.executor.oracle) {
 					blockForBudget();
 					break;
 				}
-				if (!spendTurns(1)) {
+				if (!spendTurns(1, "review")) {
 					blockForBudget();
 					break;
 				}
+				if (tryEnforceUsageBudget()) break;
 				const oracleInput = await options.executor.oracle({
 					run,
 					assignments: batchAssignments,
@@ -490,64 +751,179 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 						role: "oracle",
 						paths: run.workerResults.flatMap(result => result.changedFiles),
 					}),
+					budget: hasExclusiveUsageBudget(usageLimits)
+						? remainingRoleBudget(options.executor, usageLimits)
+						: undefined,
 				});
 				signal.throwIfAborted();
 				if (oracleInput.reviewer !== "oracle") {
 					throw new Error(`San Oracle returned reviewer ${oracleInput.reviewer}; expected oracle.`);
 				}
 				const oracleReviewed = withExecutorUsage(
-					withBudgetRemaining(applySanLoopReview(run, oracleInput), remainingTurns),
+					withBudgetRemaining(
+						applySanLoopReview(run, oracleInput, {
+							currentBatchAssignmentIds: batchAssignments.map(a => a.assignmentId),
+						}),
+						remainingTurns,
+					),
 					options.executor,
 				);
 				oracleReview = oracleReviewed.run.reviewReports.at(-1);
-				const oracleReviewEntryId = oracleReview
-					? appendSanLoopReviewReport(options.sessionManager, oracleReview)
-					: undefined;
-				if (oracleReviewEntryId) reviewEntryIds.push(oracleReviewEntryId);
 				const oracleRecord = recordSanLoopTransition(options.sessionManager, oracleReviewed, {
 					actor: "oracle",
-					refs: oracleReviewEntryId ? [oracleReviewEntryId] : undefined,
+					review: oracleReview,
 				});
+				if (oracleRecord.reviewEntryId) reviewEntryIds.push(oracleRecord.reviewEntryId);
 				transitions.push(oracleRecord);
 				run = oracleRecord.run;
+				if (tryEnforceUsageBudget()) break;
 			}
 
-			if (!spendTurns(1)) {
-				blockForBudget();
+			if (hasSupervisor) {
+				if (!spendTurns(1, "review")) {
+					blockForBudget();
+					break;
+				}
+				if (tryEnforceUsageBudget()) break;
+				const reviewInput = await options.executor.supervisor({
+					run,
+					assignments: batchAssignments,
+					workerResults: run.workerResults.filter(result =>
+						batchAssignments.some(assignment => assignment.assignmentId === result.assignmentId),
+					),
+					mode,
+					signal,
+					oracleReview,
+					checks: selectSanLoopChecks(options.checks ?? [], {
+						role: "supervisor",
+						paths: run.workerResults.flatMap(result => result.changedFiles),
+					}),
+					budget: hasExclusiveUsageBudget(usageLimits)
+						? remainingRoleBudget(options.executor, usageLimits)
+						: undefined,
+				});
+				signal.throwIfAborted();
+				if (reviewInput.reviewer !== "supervisor") {
+					throw new Error(`San Supervisor returned reviewer ${reviewInput.reviewer}; expected supervisor.`);
+				}
+				const reviewed = withExecutorUsage(
+					withBudgetRemaining(
+						applySanLoopReview(run, reviewInput, {
+							currentBatchAssignmentIds: batchAssignments.map(a => a.assignmentId),
+						}),
+						remainingTurns,
+					),
+					options.executor,
+				);
+				const review = reviewed.run.reviewReports.at(-1);
+				// P0-01: Budget must be checked BEFORE any terminal pass is written.
+				// If over budget, persist a single blocked envelope (optionally
+				// carrying the review for audit) and never write status=passed.
+				const postReviewBudget = checkUsageBudget(options.executor, run, usageLimits);
+				if (postReviewBudget) {
+					const blockedRecord = recordSanLoopTransition(
+						options.sessionManager,
+						{
+							run: {
+								...reviewed.run,
+								status: "blocked",
+								finalVerdict: "blocked",
+							},
+							eventType: "blocked",
+							eventSummary: postReviewBudget.eventSummary,
+							retryExhausted: false,
+						},
+						{
+							actor: review?.reviewer ?? "supervisor",
+							review,
+							data: { usage: options.executor.usage?.(), blockedBy: "post_review_budget" },
+						},
+					);
+					if (blockedRecord.reviewEntryId) reviewEntryIds.push(blockedRecord.reviewEntryId);
+					transitions.push(blockedRecord);
+					run = blockedRecord.run;
+					break;
+				}
+				const reviewedRecord = recordSanLoopTransition(options.sessionManager, reviewed, {
+					actor: review?.reviewer ?? "supervisor",
+					review,
+				});
+				if (reviewedRecord.reviewEntryId) reviewEntryIds.push(reviewedRecord.reviewEntryId);
+				transitions.push(reviewedRecord);
+				run = reviewedRecord.run;
+				if (run.status !== "retrying") break;
+			} else {
+				// No Supervisor in pipeline: auto-finalize from worker results.
+				if (tryEnforceUsageBudget()) break;
+				const workerResults = run.workerResults.filter(result =>
+					batchAssignments.some(assignment => assignment.assignmentId === result.assignmentId),
+				);
+				const hasFailures = workerResults.some(result => result.status !== "completed");
+				const autoVerdict: SanLoopReviewVerdict = hasFailures ? "blocked" : "pass";
+				const reviewInput: SanLoopReviewInput = {
+					reviewer: "supervisor",
+					verdict: autoVerdict,
+					defects: hasFailures
+						? [
+								{
+									defectId: "solo-worker-failed",
+									severity: "blocker",
+									title: "Worker did not complete successfully.",
+									evidence: workerResults.filter(r => r.status !== "completed").map(r => r.summary),
+									retryable: false,
+								},
+							]
+						: [],
+					testsRun: workerResults.flatMap(result => result.commandsRun.map(c => c.command)),
+					evidence: workerResults.flatMap(result => result.verification),
+					retryable: false,
+					requiredNextActions: [],
+					confidence: hasFailures ? "low" : "high",
+				};
+				const reviewed = withExecutorUsage(
+					withBudgetRemaining(
+						applySanLoopReview(run, reviewInput, {
+							currentBatchAssignmentIds: batchAssignments.map(a => a.assignmentId),
+						}),
+						remainingTurns,
+					),
+					options.executor,
+				);
+				const review = reviewed.run.reviewReports.at(-1);
+				const postReviewBudget = checkUsageBudget(options.executor, run, usageLimits);
+				if (postReviewBudget) {
+					const blockedRecord = recordSanLoopTransition(
+						options.sessionManager,
+						{
+							run: {
+								...reviewed.run,
+								status: "blocked",
+								finalVerdict: "blocked",
+							},
+							eventType: "blocked",
+							eventSummary: postReviewBudget.eventSummary,
+							retryExhausted: false,
+						},
+						{
+							actor: review?.reviewer ?? "supervisor",
+							review,
+							data: { usage: options.executor.usage?.(), blockedBy: "post_review_budget" },
+						},
+					);
+					if (blockedRecord.reviewEntryId) reviewEntryIds.push(blockedRecord.reviewEntryId);
+					transitions.push(blockedRecord);
+					run = blockedRecord.run;
+					break;
+				}
+				const reviewedRecord = recordSanLoopTransition(options.sessionManager, reviewed, {
+					actor: review?.reviewer ?? "supervisor",
+					review,
+				});
+				if (reviewedRecord.reviewEntryId) reviewEntryIds.push(reviewedRecord.reviewEntryId);
+				transitions.push(reviewedRecord);
+				run = reviewedRecord.run;
 				break;
 			}
-			const reviewInput = await options.executor.supervisor({
-				run,
-				assignments: batchAssignments,
-				workerResults: run.workerResults.filter(result =>
-					batchAssignments.some(assignment => assignment.assignmentId === result.assignmentId),
-				),
-				mode,
-				signal,
-				oracleReview,
-				checks: selectSanLoopChecks(options.checks ?? [], {
-					role: "supervisor",
-					paths: run.workerResults.flatMap(result => result.changedFiles),
-				}),
-			});
-			signal.throwIfAborted();
-			if (reviewInput.reviewer !== "supervisor") {
-				throw new Error(`San Supervisor returned reviewer ${reviewInput.reviewer}; expected supervisor.`);
-			}
-			const reviewed = withExecutorUsage(
-				withBudgetRemaining(applySanLoopReview(run, reviewInput), remainingTurns),
-				options.executor,
-			);
-			const review = reviewed.run.reviewReports.at(-1);
-			const reviewEntryId = review ? appendSanLoopReviewReport(options.sessionManager, review) : undefined;
-			if (reviewEntryId) reviewEntryIds.push(reviewEntryId);
-			const reviewedRecord = recordSanLoopTransition(options.sessionManager, reviewed, {
-				actor: review?.reviewer ?? "supervisor",
-				refs: reviewEntryId ? [reviewEntryId] : undefined,
-			});
-			transitions.push(reviewedRecord);
-			run = reviewedRecord.run;
-			if (run.status !== "retrying") break;
 		}
 
 		return { run, runCreated, transitions, reviewEntryIds };

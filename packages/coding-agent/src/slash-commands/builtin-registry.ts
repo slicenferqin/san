@@ -173,6 +173,11 @@ function sanLoopMaxTurnsForMode(settingsSource: Settings, mode: SanLoopMode): nu
 	}
 }
 
+function positiveBudgetLimit(value: number | undefined): number | undefined {
+	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
+	return value;
+}
+
 function latestContextPlanRefs(entries: readonly SessionEntry[], limit = 3): string[] {
 	return entries
 		.filter(entry => entry.type === "custom" && entry.customType === CONTEXT_PLAN_CUSTOM_TYPE)
@@ -203,11 +208,25 @@ async function runConfiguredSanLoop(options: {
 		maxRetries: options.settings.get("san.executionLoop.maxRetries"),
 		maxWorkers: options.settings.get("san.executionLoop.maxWorkers"),
 		maxTurns: sanLoopMaxTurnsForMode(options.settings, options.mode),
+		maxTokens: positiveBudgetLimit(options.settings.get("san.executionLoop.budget.maxTokens")),
+		maxCost: positiveBudgetLimit(options.settings.get("san.executionLoop.budget.maxCost")),
+		maxDurationMs: positiveBudgetLimit(options.settings.get("san.executionLoop.budget.maxDurationMs")),
+		maxProviderRequests: positiveBudgetLimit(options.settings.get("san.executionLoop.budget.maxProviderRequests")),
+		reserveRatio: options.settings.get("san.executionLoop.budget.reserveRatio"),
+		oracleEnabledInModes: options.settings.get("san.executionLoop.roles.oracle.enabledInModes"),
 		contextPlanRefs: latestContextPlanRefs(options.sessionManager.getBranch()),
 		checks,
 		executor: createSanLoopTaskAgentExecutor({
 			session: options.session,
 			cwd: options.cwd,
+			hardBudget: {
+				maxTokens: positiveBudgetLimit(options.settings.get("san.executionLoop.budget.maxTokens")),
+				maxCost: positiveBudgetLimit(options.settings.get("san.executionLoop.budget.maxCost")),
+				maxDurationMs: positiveBudgetLimit(options.settings.get("san.executionLoop.budget.maxDurationMs")),
+				maxProviderRequests: positiveBudgetLimit(
+					options.settings.get("san.executionLoop.budget.maxProviderRequests"),
+				),
+			},
 		}),
 	});
 }

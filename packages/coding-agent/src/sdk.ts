@@ -532,6 +532,8 @@ export interface CreateAgentSessionOptions {
 	maxOutputTokens?: number;
 	/** 已审批程序化子任务的输入与输出累计硬上限。 */
 	maxTotalTokens?: number;
+	/** 已审批程序化子任务的累计估算成本硬上限（美元）。 */
+	maxTotalCost?: number;
 
 	/** Output schema for structured completion (subagents) */
 	outputSchema?: unknown;
@@ -2791,6 +2793,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			createSettingsAwareStreamFn(settings),
 		);
 		let strictUsageTokens = 0;
+		let strictUsageCost = 0;
 		agent = new Agent({
 			initialState: {
 				systemPrompt,
@@ -2819,22 +2822,44 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			thinkingBudgets: settings.getGroup("thinkingBudgets"),
 			maxTokens: options.maxOutputTokens,
 			maxTokensResolver:
-				options.maxOutputTokens === undefined && options.maxTotalTokens === undefined
+				options.maxOutputTokens === undefined &&
+				options.maxTotalTokens === undefined &&
+				options.maxTotalCost === undefined
 					? undefined
 					: () => {
 							const outputRemaining =
-								options.maxOutputTokens === undefined
-									? Number.POSITIVE_INFINITY
-									: options.maxOutputTokens - strictUsageTokens;
+								options.maxOutputTokens === undefined ? Number.POSITIVE_INFINITY : options.maxOutputTokens;
 							const estimatedInputTokens = session?.getContextUsage()?.tokens ?? 0;
 							const totalRemaining =
 								options.maxTotalTokens === undefined
 									? Number.POSITIVE_INFINITY
 									: options.maxTotalTokens - strictUsageTokens - estimatedInputTokens;
-							const remaining = Math.floor(Math.min(outputRemaining, totalRemaining));
+							let costRemaining = Number.POSITIVE_INFINITY;
+							if (options.maxTotalCost !== undefined) {
+								const activeModel = agent?.state.model ?? model;
+								if (!activeModel) {
+									throw new Error("Hard total cost budget requires a resolved model before provider request");
+								}
+								const tierMultiplier =
+									activeModel.provider === "openai" || activeModel.provider === "openai-codex" ? 2.5 : 1;
+								const inputPrice =
+									Math.max(activeModel.cost.input, activeModel.cost.cacheRead, activeModel.cost.cacheWrite) *
+									tierMultiplier;
+								const outputPrice = activeModel.cost.output * tierMultiplier;
+								const estimatedInputCost = (inputPrice / 1_000_000) * estimatedInputTokens;
+								const availableCost = options.maxTotalCost - strictUsageCost - estimatedInputCost;
+								if (availableCost <= 0) {
+									throw new Error(
+										`Hard total cost budget exhausted before provider request (${strictUsageCost.toFixed(6)} used, ${estimatedInputCost.toFixed(6)} estimated input, ${options.maxTotalCost.toFixed(6)} limit)`,
+									);
+								}
+								if (outputPrice > 0) costRemaining = (availableCost * 1_000_000) / outputPrice;
+							}
+							const remaining = Math.floor(Math.min(outputRemaining, totalRemaining, costRemaining));
+							if (!Number.isFinite(remaining)) return undefined;
 							if (remaining < 1) {
 								throw new Error(
-									`Hard total token budget exhausted before provider request (${strictUsageTokens} used, ${estimatedInputTokens} estimated input, ${options.maxTotalTokens ?? options.maxOutputTokens} limit)`,
+									`Hard total budget exhausted before provider request (${strictUsageTokens} tokens and ${strictUsageCost.toFixed(6)} USD used)`,
 								);
 							}
 							return remaining;
@@ -2897,10 +2922,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					: undefined
 				: undefined,
 		});
-		if (options.maxOutputTokens !== undefined || options.maxTotalTokens !== undefined) {
+		if (
+			options.maxOutputTokens !== undefined ||
+			options.maxTotalTokens !== undefined ||
+			options.maxTotalCost !== undefined
+		) {
 			agent.subscribe(event => {
 				if (event.type !== "message_end" || event.message.role !== "assistant") return;
 				strictUsageTokens += event.message.usage.totalTokens;
+				strictUsageCost += event.message.usage.cost.total;
 			});
 		}
 

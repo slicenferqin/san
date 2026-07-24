@@ -1,7 +1,6 @@
 import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { CONTEXT_PLAN_CUSTOM_TYPE, type ContextPlanAudit } from "../context-steady/plan-types";
-import { CONTEXT_PACKET_CUSTOM_TYPE, type ContextPacket } from "../context-steady/types";
 import roleContextTemplate from "../prompts/san-loop/role-context.md" with { type: "text" };
 import type { SessionEntry } from "../session/session-entries";
 import { rebuildSanLoopLedger } from "./ledger";
@@ -51,16 +50,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object";
 }
 
-function isContextPacket(value: unknown): value is ContextPacket {
-	if (!isRecord(value)) return false;
-	return (
-		value.schemaVersion === 1 &&
-		typeof value.packetId === "string" &&
-		typeof value.sessionId === "string" &&
-		Array.isArray(value.digestRefs)
-	);
-}
-
 function isContextPlanAudit(value: unknown): value is ContextPlanAudit {
 	if (!isRecord(value)) return false;
 	return value.schemaVersion === 1 && typeof value.planId === "string" && Array.isArray(value.materials);
@@ -75,26 +64,32 @@ function newId(prefix: string): string {
 	return `${prefix}_${Bun.randomUUIDv7()}`;
 }
 
-function latestContextPacketRefs(entries: readonly SessionEntry[]): string[] {
-	const refs: string[] = [];
-	for (const entry of entries) {
-		if (entry.type !== "custom") continue;
-		if (entry.customType !== CONTEXT_PACKET_CUSTOM_TYPE) continue;
-		if (!isContextPacket(entry.data)) continue;
-		refs.push(entry.id);
-	}
-	return refs.slice(-3);
-}
-
-function latestContextPlanRefs(entries: readonly SessionEntry[]): string[] {
-	const refs: string[] = [];
-	for (const entry of entries) {
+function contextPlanMaterialsForRefs(
+	entries: readonly SessionEntry[],
+	planRefs: readonly string[],
+): Array<{ representation: string; kind: string; reason: string; tokenEstimate: number }> {
+	if (planRefs.length === 0) return [];
+	const refSet = new Set(planRefs);
+	const materials: Array<{ representation: string; kind: string; reason: string; tokenEstimate: number }> = [];
+	// Walk newest-first so later plans for the same ref win, but only emit
+	// materials whose entry id is explicitly bound to the current run.
+	for (let index = entries.length - 1; index >= 0; index -= 1) {
+		const entry = entries[index]!;
 		if (entry.type !== "custom") continue;
 		if (entry.customType !== CONTEXT_PLAN_CUSTOM_TYPE) continue;
+		if (!refSet.has(entry.id)) continue;
 		if (!isContextPlanAudit(entry.data)) continue;
-		refs.push(entry.id);
+		for (const material of entry.data.materials.slice(0, 8)) {
+			materials.push({
+				representation: material.representation,
+				kind: material.kind,
+				reason: material.reason,
+				tokenEstimate: material.tokenEstimate,
+			});
+			if (materials.length >= 8) return materials;
+		}
 	}
-	return refs.slice(-3);
+	return materials;
 }
 
 function roleEvents(events: readonly SanLoopEvent[], role: SanLoopRole, maxEvents: number): SanLoopEvent[] {
@@ -155,8 +150,11 @@ export function buildSanLoopRoleContext(
 		maxEvents,
 	);
 	const decisions = run.decisions.slice(-maxDecisions);
-	const sourceContextPlanRefs = [...new Set([...(run.contextPlanRefs ?? []), ...latestContextPlanRefs(entries)])];
-	const sourceContextPacketRefs = [...new Set([...run.contextPacketRefs, ...latestContextPacketRefs(entries)])];
+	// Only plans explicitly bound on the run are projected. Session-global
+	// "latest plan" must not contaminate this run's role context (P1-02).
+	const sourceContextPlanRefs = [...(run.contextPlanRefs ?? [])];
+	const sourceContextPacketRefs = [...run.contextPacketRefs];
+	const contextPlanMaterials = contextPlanMaterialsForRefs(entries, sourceContextPlanRefs);
 	const rendered = renderRoleContext({
 		role: options.role,
 		run,
@@ -166,6 +164,7 @@ export function buildSanLoopRoleContext(
 		decisions,
 		sourceContextPlanRefs,
 		sourceContextPacketRefs,
+		contextPlanMaterials,
 	});
 	const fitted = fitRoleContextToBudget(rendered, tokenBudget);
 	const content = fitted.content;

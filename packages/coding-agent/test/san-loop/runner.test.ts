@@ -22,6 +22,10 @@ function taskNode(id: string): SanLoopTaskNode {
 	};
 }
 
+function passingCommands(): NonNullable<SanLoopWorkerResultInput["commandsRun"]> {
+	return [{ command: "bun test packages/coding-agent/test/san-loop", exitCode: 0, summary: "passed", source: "host" }];
+}
+
 describe("San loop runner", () => {
 	test("drives a complete commander-worker-supervisor pass loop into the ledger", async () => {
 		const session = SessionManager.inMemory();
@@ -43,6 +47,7 @@ describe("San loop runner", () => {
 					status: "completed",
 					summary: "Worker completed the implementation.",
 					changedFiles: ["packages/coding-agent/src/san-loop/runner.ts"],
+					commandsRun: passingCommands(),
 					verification: ["focused checks pass"],
 				};
 			},
@@ -110,6 +115,7 @@ describe("San loop runner", () => {
 					assignmentId: invocation.assignment.assignmentId,
 					status: "completed",
 					summary: `Worker attempt ${workerCalls} completed.`,
+					commandsRun: passingCommands(),
 					verification: ["focused checks pass"],
 				};
 			},
@@ -146,7 +152,7 @@ describe("San loop runner", () => {
 		const result = await runSanLoop({
 			sessionManager: session,
 			objective: "Retry to pass",
-			mode: "solo",
+			mode: "team",
 			runId: "loop_runner_retry",
 			executor,
 			maxRetries: 2,
@@ -206,7 +212,7 @@ describe("San loop runner", () => {
 		const result = await runSanLoop({
 			sessionManager: session,
 			objective: "Exhaust budget",
-			mode: "solo",
+			mode: "team",
 			runId: "loop_runner_budget",
 			executor,
 			maxTurns: 2,
@@ -246,6 +252,7 @@ describe("San loop runner", () => {
 					assignmentId: invocation.assignment.assignmentId,
 					status: "completed",
 					summary: "Worker completed council-mode task.",
+					commandsRun: passingCommands(),
 					verification: ["worker evidence persisted"],
 				};
 			},
@@ -489,10 +496,16 @@ describe("San loop runner", () => {
 					assignmentId: invocation.assignment.assignmentId,
 					status: "completed",
 					summary: "Normalized limits still execute the assignment.",
+					commandsRun: passingCommands(),
 				};
 			},
 			async supervisor() {
-				return { reviewer: "supervisor", verdict: "pass" };
+				return {
+					reviewer: "supervisor",
+					verdict: "pass",
+					testsRun: ["bun test"],
+					evidence: ["normalized limits verified"],
+				};
 			},
 		};
 
@@ -508,5 +521,267 @@ describe("San loop runner", () => {
 		expect(result.run.status).toBe("passed");
 		expect(result.run.maxRetries).toBe(2);
 		expect(workerCalls).toBe(1);
+	});
+
+	test("blocks after worker overspend even when maxTokens is tiny", async () => {
+		const session = SessionManager.inMemory();
+		let totalTokens = 0;
+		const executor: SanLoopAgentExecutor = {
+			usage: () => ({
+				inputTokens: totalTokens,
+				outputTokens: 0,
+				cacheReadTokens: 0,
+				cacheWriteTokens: 0,
+				totalTokens,
+				cost: 0,
+				durationMs: 0,
+				providerRequests: 1,
+			}),
+			async commander() {
+				return { plan: { taskGraph: [taskNode("token-budget")] } };
+			},
+			async worker(invocation) {
+				totalTokens = 100;
+				return {
+					assignmentId: invocation.assignment.assignmentId,
+					status: "completed",
+					summary: "Worker spent 100 tokens.",
+					commandsRun: passingCommands(),
+				};
+			},
+			async supervisor() {
+				return {
+					reviewer: "supervisor",
+					verdict: "pass",
+					testsRun: ["bun test"],
+					evidence: ["should not finalize"],
+				};
+			},
+		};
+
+		const result = await runSanLoop({
+			sessionManager: session,
+			objective: "Hard token budget must block overspend",
+			mode: "team",
+			runId: "loop_runner_token_budget",
+			maxTokens: 1,
+			executor,
+		});
+
+		expect(result.run.status).toBe("blocked");
+		expect(result.run.finalVerdict).toBe("blocked");
+		expect(result.transitions.map(t => t.event.type)).toContain("blocked");
+		expect(result.transitions.at(-1)?.event.summary).toContain("tokens 100 >= 1");
+	});
+
+	test("solo mode only invokes the worker role", async () => {
+		const session = SessionManager.inMemory();
+		const calls: string[] = [];
+		const executor: SanLoopAgentExecutor = {
+			async commander() {
+				calls.push("commander");
+				throw new Error("commander must not run in solo");
+			},
+			async worker(invocation) {
+				calls.push("worker");
+				return {
+					assignmentId: invocation.assignment.assignmentId,
+					status: "completed",
+					summary: "Solo worker finished.",
+					commandsRun: passingCommands(),
+				};
+			},
+			async supervisor() {
+				calls.push("supervisor");
+				throw new Error("supervisor must not run in solo");
+			},
+		};
+
+		const result = await runSanLoop({
+			sessionManager: session,
+			objective: "Solo single-agent path",
+			mode: "solo",
+			runId: "loop_runner_solo_only_worker",
+			executor,
+		});
+
+		expect(calls).toEqual(["worker"]);
+		expect(result.run.status).toBe("passed");
+	});
+
+	test("does not persist passed when post-review usage exceeds maxTokens", async () => {
+		const session = SessionManager.inMemory();
+		let totalTokens = 0;
+		const executor: SanLoopAgentExecutor = {
+			usage: () => ({
+				inputTokens: totalTokens,
+				outputTokens: 0,
+				cacheReadTokens: 0,
+				cacheWriteTokens: 0,
+				totalTokens,
+				cost: 0,
+				durationMs: 0,
+				providerRequests: 1,
+			}),
+			async commander() {
+				return { plan: { taskGraph: [taskNode("terminal-budget")] } };
+			},
+			async worker(invocation) {
+				// Stay under budget until the supervisor call.
+				totalTokens = 0;
+				return {
+					assignmentId: invocation.assignment.assignmentId,
+					status: "completed",
+					summary: "Worker stayed under budget.",
+					commandsRun: passingCommands(),
+				};
+			},
+			async supervisor() {
+				// Spend during review so the gate only fires after the review is known.
+				totalTokens = 100;
+				return {
+					reviewer: "supervisor",
+					verdict: "pass",
+					testsRun: ["bun test"],
+					evidence: ["must not finalize when over budget"],
+					confidence: "high",
+				};
+			},
+		};
+
+		const result = await runSanLoop({
+			sessionManager: session,
+			objective: "Terminal budget must not write passed then fail",
+			mode: "team",
+			runId: "round2_terminal_budget",
+			maxTokens: 1,
+			executor,
+		});
+
+		expect(result.run.status).toBe("blocked");
+		expect(result.run.finalVerdict).toBe("blocked");
+		const ledger = rebuildSanLoopLedger(session.getEntries());
+		expect(ledger.latestRun?.data.status).toBe("blocked");
+		expect(ledger.latestRun?.data.finalVerdict).toBe("blocked");
+		expect(result.transitions.at(-1)?.event.type).toBe("blocked");
+	});
+
+	test("partitions hard budgets across concurrent workers without launching an unfunded assignment", async () => {
+		const session = SessionManager.inMemory();
+		const usage = {
+			inputTokens: 0,
+			outputTokens: 0,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+			totalTokens: 0,
+			cost: 0,
+			durationMs: 0,
+			providerRequests: 0,
+		};
+		const bothStarted = Promise.withResolvers<void>();
+		const budgets: Array<{ maxTokens?: number; maxCost?: number; maxProviderRequests?: number }> = [];
+		let activeWorkers = 0;
+		let maxActiveWorkers = 0;
+		let supervisorCalls = 0;
+		const executor: SanLoopAgentExecutor = {
+			usage: () => ({ ...usage }),
+			async commander() {
+				return {
+					plan: { taskGraph: [taskNode("lease-a"), taskNode("lease-b"), taskNode("lease-c")] },
+				};
+			},
+			async worker(invocation) {
+				budgets.push({ ...invocation.budget });
+				activeWorkers += 1;
+				maxActiveWorkers = Math.max(maxActiveWorkers, activeWorkers);
+				if (budgets.length === 2) bothStarted.resolve();
+				await bothStarted.promise;
+				usage.totalTokens += invocation.budget?.maxTokens ?? 0;
+				usage.inputTokens = usage.totalTokens;
+				usage.cost += invocation.budget?.maxCost ?? 0;
+				usage.providerRequests += invocation.budget?.maxProviderRequests ?? 0;
+				activeWorkers -= 1;
+				return {
+					assignmentId: invocation.assignment.assignmentId,
+					status: "completed",
+					summary: "Worker stayed within its exclusive lease.",
+					commandsRun: passingCommands(),
+				};
+			},
+			async supervisor() {
+				supervisorCalls += 1;
+				return { reviewer: "supervisor", verdict: "pass" };
+			},
+		};
+
+		const result = await runSanLoop({
+			sessionManager: session,
+			objective: "Partition concurrent hard budgets",
+			mode: "team",
+			runId: "loop_runner_exclusive_usage_budget",
+			maxWorkers: 3,
+			maxTokens: 100,
+			maxCost: 1,
+			maxProviderRequests: 2,
+			executor,
+		});
+
+		expect(maxActiveWorkers).toBe(2);
+		expect(budgets).toEqual([
+			{ maxTokens: 50, maxCost: 0.5, maxProviderRequests: 1 },
+			{ maxTokens: 50, maxCost: 0.5, maxProviderRequests: 1 },
+		]);
+		expect(usage.totalTokens).toBeLessThanOrEqual(100);
+		expect(usage.cost).toBeLessThanOrEqual(1);
+		expect(usage.providerRequests).toBeLessThanOrEqual(2);
+		expect(supervisorCalls).toBe(0);
+		expect(result.run.status).toBe("blocked");
+		expect(result.run.workerResults).toHaveLength(2);
+	});
+
+	test("blocks council runs when Oracle is required but unavailable", async () => {
+		const session = SessionManager.inMemory();
+		const calls: string[] = [];
+		const executor: SanLoopAgentExecutor = {
+			async commander() {
+				calls.push("commander");
+				return { plan: { taskGraph: [taskNode("needs-oracle")] } };
+			},
+			async worker(invocation) {
+				calls.push("worker");
+				return {
+					assignmentId: invocation.assignment.assignmentId,
+					status: "completed",
+					summary: "must not run without oracle",
+					commandsRun: passingCommands(),
+				};
+			},
+			async supervisor() {
+				calls.push("supervisor");
+				return {
+					reviewer: "supervisor",
+					verdict: "pass",
+					testsRun: [],
+					evidence: [],
+					confidence: "high",
+				};
+			},
+			// oracle intentionally omitted
+		};
+
+		const result = await runSanLoop({
+			sessionManager: session,
+			objective: "Council without oracle must block",
+			mode: "council",
+			runId: "loop_council_no_oracle",
+			executor,
+		});
+
+		expect(result.run.status).toBe("blocked");
+		expect(result.run.finalVerdict).toBe("blocked");
+		expect(calls).toEqual([]);
+		expect(result.transitions.at(-1)?.event.summary).toContain("requires Oracle");
+		const ledger = rebuildSanLoopLedger(session.getEntries());
+		expect(ledger.latestRun?.data.status).toBe("blocked");
 	});
 });

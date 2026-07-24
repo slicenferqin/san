@@ -9,6 +9,7 @@ export const SAN_LOOP_SCHEMA_VERSION = 1;
 export const SAN_LOOP_RUN_CUSTOM_TYPE = "san.loop_run";
 export const SAN_LOOP_EVENT_CUSTOM_TYPE = "san.loop_event";
 export const SAN_LOOP_REVIEW_CUSTOM_TYPE = "san.review_report";
+export const SAN_LOOP_TRANSITION_CUSTOM_TYPE = "san.loop_transition";
 export const SAN_LOOP_CONTEXT_PACKET_CUSTOM_TYPE = "san.loop_context_packet";
 
 export const SAN_LOOP_MODES = ["solo", "team", "council"] as const;
@@ -99,6 +100,13 @@ export interface SanLoopCommandEvidence {
 	command: string;
 	exitCode?: number;
 	summary: string;
+	/**
+	 * Provenance of this receipt.
+	 * - `host`: observed from a host-owned tool execution (e.g. bash tool result)
+	 * - `model`: claimed by the worker yield payload (untrusted for pass gates)
+	 * Missing source is treated as untrusted.
+	 */
+	source?: "host" | "model";
 }
 
 export interface SanLoopWorkerResult {
@@ -198,6 +206,14 @@ export interface SanLoopEvent {
 	actor?: SanLoopRole;
 	refs: string[];
 	data?: Record<string, unknown>;
+}
+
+/** Atomic run/event/review binding persisted as a single custom entry. */
+export interface SanLoopTransitionEnvelope {
+	schemaVersion: typeof SAN_LOOP_SCHEMA_VERSION;
+	run: SanLoopRunSnapshot;
+	event: SanLoopEvent;
+	review?: SanLoopReviewReport;
 }
 
 export interface SanLoopRoleContextPacketDebug {

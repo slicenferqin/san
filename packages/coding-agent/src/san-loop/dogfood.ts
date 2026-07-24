@@ -92,7 +92,14 @@ function makeExecutor(options: {
 				status: "completed",
 				summary: `Completed ${invocation.assignment.objective} on attempt ${workerCalls}.`,
 				changedFiles: [`packages/coding-agent/src/san-loop/${options.taskId}.ts`],
-				commandsRun: [{ command: "bun test packages/coding-agent/test/san-loop", exitCode: 0, summary: "passed" }],
+				commandsRun: [
+					{
+						command: "bun test packages/coding-agent/test/san-loop",
+						exitCode: 0,
+						summary: "passed",
+						source: "host",
+					},
+				],
 				verification: ["focused san-loop tests pass"],
 				risks: workerCalls > 1 ? ["retry path exercised"] : [],
 			};
@@ -245,7 +252,7 @@ export async function runSanLoopDogfood(options: SanLoopDogfoodOptions = {}): Pr
 	await runSanLoop({
 		sessionManager: session,
 		objective: "Dogfood hard turn budget",
-		mode: "solo",
+		mode: "team",
 		runId: "loop_dogfood_budget_exhausted",
 		executor: makeExecutor({
 			taskId: "budget-exhausted",
@@ -304,7 +311,7 @@ export async function runSanLoopDogfood(options: SanLoopDogfoodOptions = {}): Pr
 		reportScenario(entries, "solo pass", "loop_dogfood_solo_pass", "solo"),
 		reportScenario(entries, "team retry", "loop_dogfood_team_retry", "team"),
 		reportScenario(entries, "council blocked", "loop_dogfood_council_blocked", "council"),
-		reportScenario(entries, "budget exhausted", "loop_dogfood_budget_exhausted", "solo"),
+		reportScenario(entries, "budget exhausted", "loop_dogfood_budget_exhausted", "team"),
 		reportScenario(entries, "recovery", "loop_dogfood_recovered", "team"),
 		reportScenario(entries, "abort", "loop_dogfood_aborted", "solo"),
 	];

@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { CONFIG_DIR_NAME, parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, isEnoent, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { findAllNearestProjectConfigDirs, getConfigDirs } from "../config";
 import builtinProjectTypescriptContracts from "../prompts/san-loop/checks/project-typescript-contracts.md" with {
 	type: "text",
@@ -93,7 +93,7 @@ function parseScope(value: unknown): SanLoopCheckScope | undefined {
 }
 
 function parseCheck(content: string, filePath: string, source: SanLoopCheckSource): SanLoopCheck | null {
-	const { frontmatter, body } = parseFrontmatter(content, { source: filePath, level: "warn" });
+	const { frontmatter, body } = parseFrontmatter(content, { source: filePath, level: "fatal" });
 	const fm = frontmatter as CheckFrontmatter;
 	const explicitName = typeof fm.name === "string" ? fm.name.trim() : "";
 	const fallbackName = path.basename(filePath).replace(/\.(md|markdown)$/i, "");
@@ -117,8 +117,9 @@ async function readCheckDir(dir: string, source: SanLoopCheckSource): Promise<Sa
 	let files: string[];
 	try {
 		files = await fs.readdir(dir);
-	} catch {
-		return [];
+	} catch (error) {
+		if (isEnoent(error)) return [];
+		throw new Error(`Failed to list San checks in ${dir}: ${String(error)}`);
 	}
 	const checks: SanLoopCheck[] = [];
 	for (const file of files.toSorted()) {
@@ -129,7 +130,10 @@ async function readCheckDir(dir: string, source: SanLoopCheckSource): Promise<Sa
 			if (!stat.isFile()) continue;
 			const parsed = parseCheck(await Bun.file(filePath).text(), filePath, source);
 			if (parsed) checks.push(parsed);
-		} catch {}
+		} catch (error) {
+			if (isEnoent(error)) continue;
+			throw new Error(`Failed to load San check ${filePath}: ${String(error)}`);
+		}
 	}
 	return checks;
 }

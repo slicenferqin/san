@@ -11,6 +11,7 @@ import type { AgentSession } from "../session/agent-session";
 import type { SessionManager } from "../session/session-manager";
 import { getBundledAgent } from "../task/agents";
 import { runSubprocess, type YieldItem } from "../task/executor";
+import { subprocessToolRegistry } from "../task/subprocess-tool-registry";
 import type { AgentDefinition, SingleResult } from "../task/types";
 import type { EventBus } from "../utils/event-bus";
 import { renderSanLoopChecks } from "./checks";
@@ -21,6 +22,7 @@ import type {
 	SanLoopCommanderInvocation,
 	SanLoopCommanderResult,
 	SanLoopExecutorUsage,
+	SanLoopRoleBudget,
 	SanLoopSupervisorInvocation,
 	SanLoopWorkerInvocation,
 } from "./runner";
@@ -54,9 +56,34 @@ type SanLoopRoleName = "commander" | "worker" | "supervisor" | "oracle";
 const SAN_LOOP_ROLE_TOOLS: Record<SanLoopRoleName, readonly string[]> = {
 	commander: ["read", "grep", "glob", "yield"],
 	worker: ["read", "grep", "glob", "write", "edit", "bash", "yield"],
-	supervisor: ["read", "grep", "glob", "bash", "yield"],
+	supervisor: ["read", "grep", "glob", "yield"],
 	oracle: ["read", "grep", "glob", "yield"],
 };
+
+// Host-owned bash receipts for San worker evidence. Registered once so
+// subprocess tool_execution_end events populate extractedToolData.bash.
+subprocessToolRegistry.register<{ command: string; exitCode?: number; summary: string }>("bash", {
+	extractData: event => {
+		const args = event.args;
+		const command =
+			args && typeof args === "object" && "command" in args && typeof args.command === "string"
+				? args.command.trim()
+				: "";
+		if (!command) return undefined;
+		const details = event.result?.details;
+		const exitCode =
+			details && typeof details === "object" && "exitCode" in details && typeof details.exitCode === "number"
+				? details.exitCode
+				: event.isError
+					? 1
+					: 0;
+		return {
+			command,
+			exitCode,
+			summary: event.isError ? `host bash error exit ${exitCode}` : `host bash exit ${exitCode}`,
+		};
+	},
+});
 
 export interface SanLoopTaskAgentExecutorOptions {
 	session: TaskExecutorSession;
@@ -64,6 +91,14 @@ export interface SanLoopTaskAgentExecutorOptions {
 	eventBus?: EventBus;
 	signal?: AbortSignal;
 	parentToolCallId?: string;
+	/** Remaining-aware hard budgets enforced on each role subprocess. */
+	hardBudget?: {
+		maxTokens?: number;
+		maxCost?: number;
+		maxDurationMs?: number;
+		/** Remaining provider-request slots for this role call (hard abort). */
+		maxProviderRequests?: number;
+	};
 }
 
 interface CommanderYieldAssignment {
@@ -620,7 +655,7 @@ function parseCommanderResult(run: SanLoopRunSnapshot, mode: SanLoopMode, data: 
 	};
 }
 
-function parseCommandEvidence(value: unknown): SanLoopCommandEvidence[] {
+function parseCommandEvidence(value: unknown, source: "host" | "model" = "model"): SanLoopCommandEvidence[] {
 	return records(value).map((item): SanLoopCommandEvidence => {
 		const commandRecord = item as WorkerYieldCommand;
 		const command = stringValue(commandRecord.command) ?? "unknown";
@@ -634,8 +669,28 @@ function parseCommandEvidence(value: unknown): SanLoopCommandEvidence[] {
 			command,
 			exitCode,
 			summary: stringValue(commandRecord.summary) ?? command,
+			source,
 		};
 	});
+}
+
+function extractHostBashReceipts(result: SingleResult): SanLoopCommandEvidence[] {
+	const bashData = result.extractedToolData?.bash;
+	if (!Array.isArray(bashData) || bashData.length === 0) return [];
+	const receipts: SanLoopCommandEvidence[] = [];
+	for (const item of bashData) {
+		if (item === null || typeof item !== "object" || Array.isArray(item)) continue;
+		const command = "command" in item && typeof item.command === "string" ? item.command.trim() : "";
+		if (!command) continue;
+		const exitCode = "exitCode" in item && typeof item.exitCode === "number" ? item.exitCode : undefined;
+		const summaryText =
+			"summary" in item && typeof item.summary === "string" && item.summary.trim().length > 0
+				? item.summary.trim()
+				: undefined;
+		const summary = summaryText ?? (exitCode === undefined ? "host bash receipt" : `host bash exit ${exitCode}`);
+		receipts.push({ command, exitCode, summary, source: "host" });
+	}
+	return receipts;
 }
 
 function compactEvidenceValue(value: unknown): string | undefined {
@@ -771,7 +826,11 @@ function workerVerification(record: Record<string, unknown>): string[] {
 	return [...new Set([...explicit, ...facts])];
 }
 
-function parseWorkerResult(assignment: SanLoopWorkerAssignment, data: unknown): SanLoopWorkerResultInput {
+function parseWorkerResult(
+	assignment: SanLoopWorkerAssignment,
+	data: unknown,
+	hostReceipts: readonly SanLoopCommandEvidence[] = [],
+): SanLoopWorkerResultInput {
 	const record =
 		data !== null && typeof data === "object" && !Array.isArray(data) ? (data as Record<string, unknown>) : {};
 	const typedRecord = record as WorkerYieldData;
@@ -785,15 +844,21 @@ function parseWorkerResult(assignment: SanLoopWorkerAssignment, data: unknown): 
 	) {
 		risks.push("Worker reported that modifications were attempted.");
 	}
+	// Model-claimed commands are retained only as untrusted audit noise. The
+	// pass gate exclusively trusts host receipts extracted from bash tool ends.
+	const modelClaims = parseCommandEvidence(recordValue(record, ["commandsRun", "commands_run"]), "model");
+	if (modelClaims.length > 0 && hostReceipts.length === 0) {
+		risks.push("Worker claimed commandsRun without host bash receipts; claims ignored by pass gate.");
+	}
 	return {
 		assignmentId: stringField(record, ["assignmentId", "assignment_id"]) ?? assignment.assignmentId,
 		status: parseWorkerStatusWithFallback(
 			typedRecord.status,
-			summary || verification.length > 0 ? "completed" : "failed",
+			summary || verification.length > 0 || hostReceipts.length > 0 ? "completed" : "failed",
 		),
 		summary: summary ?? "Worker did not provide a summary.",
 		changedFiles: stringArrayField(record, ["changedFiles", "changed_files"]),
-		commandsRun: parseCommandEvidence(recordValue(record, ["commandsRun", "commands_run"])),
+		commandsRun: hostReceipts.length > 0 ? [...hostReceipts] : modelClaims,
 		verification,
 		risks,
 	};
@@ -898,6 +963,7 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 		durationMs: 0,
 		providerRequests: 0,
 	};
+	const startedAtMs = Date.now();
 	const recordUsage = (result: SingleResult): SingleResult => {
 		accumulatedUsage.inputTokens += result.usage?.input ?? 0;
 		accumulatedUsage.outputTokens += result.usage?.output ?? 0;
@@ -931,6 +997,30 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 			assignmentId,
 			settings: roleContextSettings,
 		})?.content ?? "none";
+	const remainingHardTokenLimit = (): number | undefined => {
+		const maxTokens = options.hardBudget?.maxTokens;
+		if (typeof maxTokens !== "number" || maxTokens <= 0) return undefined;
+		return Math.max(0, Math.trunc(maxTokens - accumulatedUsage.totalTokens));
+	};
+	const remainingHardCostLimit = (): number | undefined => {
+		const maxCost = options.hardBudget?.maxCost;
+		if (typeof maxCost !== "number" || maxCost <= 0) return undefined;
+		return Math.max(0, maxCost - accumulatedUsage.cost);
+	};
+	const remainingMaxRuntimeMs = (): number | undefined => {
+		const maxDurationMs = options.hardBudget?.maxDurationMs;
+		if (typeof maxDurationMs !== "number" || maxDurationMs <= 0) return undefined;
+		return Math.max(0, Math.trunc(maxDurationMs - (Date.now() - startedAtMs)));
+	};
+	const remainingHardRequestLimit = (): number | undefined => {
+		const maxProviderRequests = options.hardBudget?.maxProviderRequests;
+		if (typeof maxProviderRequests !== "number" || maxProviderRequests <= 0) return undefined;
+		return Math.max(0, Math.trunc(maxProviderRequests - accumulatedUsage.providerRequests));
+	};
+	const minimumDefined = (...values: Array<number | undefined>): number | undefined => {
+		const defined = values.filter((value): value is number => value !== undefined);
+		return defined.length > 0 ? Math.min(...defined) : undefined;
+	};
 	const runAgent = async (
 		agentName: string,
 		role: SanLoopRoleName,
@@ -938,13 +1028,59 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 		index: number,
 		id: string,
 		signal?: AbortSignal,
+		budget?: SanLoopRoleBudget,
 	): Promise<SingleResult> => {
 		const artifactsDir = options.session.sessionManager.getArtifactsDir() ?? undefined;
 		if (artifactsDir) await fs.mkdir(artifactsDir, { recursive: true });
 		const combinedSignal =
 			options.signal && signal ? AbortSignal.any([options.signal, signal]) : (options.signal ?? signal);
-		const runOnce = (): Promise<SingleResult> =>
-			runSubprocess({
+		const usageAtStart = { ...accumulatedUsage };
+		const roleTokenUsage = () => accumulatedUsage.totalTokens - usageAtStart.totalTokens;
+		const roleCostUsage = () => accumulatedUsage.cost - usageAtStart.cost;
+		const roleRequestUsage = () => accumulatedUsage.providerRequests - usageAtStart.providerRequests;
+		const runOnce = async (): Promise<SingleResult> => {
+			const hardTokenLimit = minimumDefined(
+				remainingHardTokenLimit(),
+				budget?.maxTokens === undefined ? undefined : Math.max(0, Math.trunc(budget.maxTokens - roleTokenUsage())),
+			);
+			const hardCostLimit = minimumDefined(
+				remainingHardCostLimit(),
+				budget?.maxCost === undefined ? undefined : Math.max(0, budget.maxCost - roleCostUsage()),
+			);
+			const maxRuntimeMs = remainingMaxRuntimeMs();
+			const hardRequestLimit = minimumDefined(
+				remainingHardRequestLimit(),
+				budget?.maxProviderRequests === undefined
+					? undefined
+					: Math.max(0, Math.trunc(budget.maxProviderRequests - roleRequestUsage())),
+			);
+			if (hardTokenLimit === 0 || hardCostLimit === 0 || maxRuntimeMs === 0 || hardRequestLimit === 0) {
+				const reasons: string[] = [];
+				if (hardTokenLimit === 0) reasons.push("token budget exhausted");
+				if (hardCostLimit === 0) reasons.push("cost budget exhausted");
+				if (maxRuntimeMs === 0) reasons.push("duration budget exhausted");
+				if (hardRequestLimit === 0) reasons.push("provider-request budget exhausted");
+				const message = `San role aborted before start: ${reasons.join("; ")}`;
+				return {
+					index,
+					id: safeArtifactId(id),
+					agent: agentName,
+					agentSource: "bundled",
+					task,
+					exitCode: 1,
+					output: message,
+					stderr: message,
+					truncated: false,
+					durationMs: 0,
+					tokens: 0,
+					requests: 0,
+					error: message,
+					aborted: true,
+					abortReason: "budget",
+					extractedToolData: {},
+				};
+			}
+			return runSubprocess({
 				cwd: options.cwd,
 				agent: { ...getAgent(agentName), tools: [...SAN_LOOP_ROLE_TOOLS[role]] },
 				task,
@@ -968,7 +1104,12 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 				keepAlive: false,
 				enableLsp: true,
 				strictToolNames: true,
+				...(hardTokenLimit !== undefined ? { hardTokenLimit } : {}),
+				...(hardCostLimit !== undefined ? { hardCostLimit } : {}),
+				...(maxRuntimeMs !== undefined ? { maxRuntimeMs } : {}),
+				...(hardRequestLimit !== undefined ? { hardRequestLimit } : {}),
 			});
+		};
 		const result = recordUsage(await runOnce());
 		if (!shouldRetryTransientSubagentFailure(role, result)) return result;
 		return recordUsage(await runOnce());
@@ -988,6 +1129,7 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 				0,
 				`${invocation.run.runId}_commander`,
 				invocation.signal,
+				invocation.budget,
 			);
 			const data = latestYieldData(result);
 			if (result.exitCode !== 0 || data === undefined) {
@@ -1014,7 +1156,9 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 				1,
 				invocation.assignment.assignmentId,
 				invocation.signal,
+				invocation.budget,
 			);
+			const hostReceipts = extractHostBashReceipts(result);
 			const data = latestYieldData(result);
 			if (result.exitCode !== 0 || data === undefined) {
 				return {
@@ -1022,12 +1166,12 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 					status: "failed",
 					summary: resultFailureSummary(result),
 					changedFiles: [],
-					commandsRun: [],
+					commandsRun: hostReceipts,
 					verification: [],
 					risks: ["Worker failed before yielding structured evidence."],
 				};
 			}
-			return parseWorkerResult(invocation.assignment, data);
+			return parseWorkerResult(invocation.assignment, data, hostReceipts);
 		},
 		async supervisor(invocation) {
 			const result = await runAgent(
@@ -1037,6 +1181,7 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 				2,
 				`${invocation.run.runId}_supervisor`,
 				invocation.signal,
+				invocation.budget,
 			);
 			const data = latestYieldData(result);
 			if (result.exitCode !== 0 || data === undefined) {
@@ -1069,6 +1214,7 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 				3,
 				`${invocation.run.runId}_oracle`,
 				invocation.signal,
+				invocation.budget,
 			);
 			const data = latestYieldData(result);
 			if (result.exitCode !== 0 || data === undefined) {

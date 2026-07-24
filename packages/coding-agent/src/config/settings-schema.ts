@@ -2908,7 +2908,7 @@ export const SETTINGS_SCHEMA = {
 				"Enable San v0.2 execution loop scaffolding: run ledger, role context plans, San Checks, and orchestrator entrypoints.",
 		},
 	},
-	"san.executionLoop.defaultMode": { type: "enum", values: ["solo", "team", "council"] as const, default: "team" },
+	"san.executionLoop.defaultMode": { type: "enum", values: ["solo", "team", "council"] as const, default: "solo" },
 	"san.executionLoop.maxRetries": { type: "number", default: 2 },
 	"san.executionLoop.maxWorkers": { type: "number", default: 3 },
 	"san.executionLoop.ledger.enabled": { type: "boolean", default: true },
@@ -2928,6 +2928,10 @@ export const SETTINGS_SCHEMA = {
 	"san.executionLoop.budget.teamMaxTurns": { type: "number", default: 8 },
 	"san.executionLoop.budget.councilMaxTurns": { type: "number", default: 16 },
 	"san.executionLoop.budget.reserveRatio": { type: "number", default: 0.25 },
+	"san.executionLoop.budget.maxTokens": { type: "number", default: 0 },
+	"san.executionLoop.budget.maxCost": { type: "number", default: 0 },
+	"san.executionLoop.budget.maxDurationMs": { type: "number", default: 0 },
+	"san.executionLoop.budget.maxProviderRequests": { type: "number", default: 0 },
 
 	// Hindsight (https://hindsight.vectorize.io)
 	"hindsight.apiUrl": {

@@ -1249,4 +1249,165 @@ describe("AgentSession message pipeline", () => {
 		expect(result.assistantMessage.content.some(block => block.type === "toolCall")).toBe(false);
 		expect(result.assistantMessage.content.every(block => block.type !== "toolCall")).toBe(true);
 	});
+	it("enforces cumulative hard cost before dispatching the next provider request", async () => {
+		const api = "test-hard-total-cost-budget";
+		const maxTokens: number[] = [];
+		let responseCount = 0;
+		registerCustomApi(api, (_model, _context, options) => {
+			maxTokens.push(options?.maxTokens ?? -1);
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				responseCount += 1;
+				const message = {
+					...createAssistantMessage(`response-${responseCount}`),
+					usage: {
+						input: 0,
+						output: 1,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 1,
+						cost: {
+							input: 0,
+							output: responseCount === 1 ? 6 : 4,
+							cacheRead: 0,
+							cacheWrite: 0,
+							total: responseCount === 1 ? 6 : 4,
+						},
+					},
+				};
+				stream.push({ type: "text_delta", contentIndex: 0, delta: `response-${responseCount}`, partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+
+		using tempDir = TempDir.createSync("@pi-hard-cost-budget-");
+		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
+		authStorage.setRuntimeApiKey("hard-cost-provider", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const model = buildModel({
+			id: "hard-cost-model",
+			name: "Hard Cost Model",
+			api,
+			provider: "hard-cost-provider",
+			baseUrl: "",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} as ModelSpec<Api>) as Model<Api>;
+		const { session } = await createAgentSession({
+			cwd: tempDir.path(),
+			agentDir: tempDir.path(),
+			sessionManager: SessionManager.inMemory(tempDir.path()),
+			authStorage,
+			modelRegistry,
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			model,
+			maxTotalCost: 10,
+			maxOutputTokens: 8,
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+		});
+		try {
+			await session.sendUserMessage("first");
+			await session.sendUserMessage("second");
+			expect(maxTokens).toEqual([8, 4]);
+			await session.sendUserMessage("third");
+			expect(session.agent.state.messages.at(-1)).toMatchObject({
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: expect.stringContaining("Hard total cost budget exhausted before provider request"),
+			});
+			expect(maxTokens).toEqual([8, 4]);
+		} finally {
+			await session.dispose();
+			authStorage.close();
+		}
+	});
+	it("caps provider output against the cumulative hard token budget", async () => {
+		const api = "test-hard-total-token-budget";
+		const totalBudget = 20_000;
+		const maxTokens: number[] = [];
+		registerCustomApi(api, (_model, _context, options) => {
+			const requestCap = options?.maxTokens ?? -1;
+			maxTokens.push(requestCap);
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = {
+					...createAssistantMessage("budgeted response"),
+					usage: {
+						input: totalBudget - requestCap,
+						output: requestCap,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: totalBudget,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+				};
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "budgeted response", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+
+		using tempDir = TempDir.createSync("@pi-hard-token-budget-");
+		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
+		authStorage.setRuntimeApiKey("hard-token-provider", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const model = buildModel({
+			id: "hard-token-model",
+			name: "Hard Token Model",
+			api,
+			provider: "hard-token-provider",
+			baseUrl: "",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 65_536,
+			maxTokens: 32_768,
+		} as ModelSpec<Api>) as Model<Api>;
+		const { session } = await createAgentSession({
+			cwd: tempDir.path(),
+			agentDir: tempDir.path(),
+			sessionManager: SessionManager.inMemory(tempDir.path()),
+			authStorage,
+			modelRegistry,
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			model,
+			maxTotalTokens: totalBudget,
+			maxOutputTokens: totalBudget,
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+		});
+		try {
+			await session.sendUserMessage("first");
+			expect(maxTokens).toHaveLength(1);
+			expect(maxTokens[0]).toBeGreaterThan(0);
+			expect(maxTokens[0]).toBeLessThanOrEqual(totalBudget);
+			await session.sendUserMessage("second");
+			expect(session.agent.state.messages.at(-1)).toMatchObject({
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: expect.stringContaining("Hard total budget exhausted before provider request"),
+			});
+			expect(maxTokens).toHaveLength(1);
+		} finally {
+			await session.dispose();
+			authStorage.close();
+		}
+	});
 });

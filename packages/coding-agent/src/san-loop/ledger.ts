@@ -7,6 +7,7 @@ import {
 	SAN_LOOP_REVIEW_CUSTOM_TYPE,
 	SAN_LOOP_RUN_CUSTOM_TYPE,
 	SAN_LOOP_SCHEMA_VERSION,
+	SAN_LOOP_TRANSITION_CUSTOM_TYPE,
 	type SanLoopEntryRef,
 	type SanLoopEvent,
 	type SanLoopLedger,
@@ -15,6 +16,7 @@ import {
 	type SanLoopRoleContextPacketDebug,
 	type SanLoopRunSnapshot,
 	type SanLoopStatus,
+	type SanLoopTransitionEnvelope,
 } from "./types";
 
 interface AppendCustomEntrySessionManager {
@@ -62,14 +64,12 @@ export interface RecordSanLoopTransitionResult {
 	runEntryId: string;
 	event: SanLoopEvent;
 	eventEntryId: string;
+	review?: SanLoopReviewReport;
+	reviewEntryId?: string;
+	envelopeEntryId: string;
 }
 
-export interface AbortSanLoopRunResult {
-	run: SanLoopRunSnapshot;
-	runEntryId: string;
-	event: SanLoopEvent;
-	eventEntryId: string;
-}
+export type AbortSanLoopRunResult = RecordSanLoopTransitionResult;
 
 function nowIso(): string {
 	return new Date().toISOString();
@@ -200,6 +200,45 @@ export function isSanLoopRoleContextPacketDebug(value: unknown): value is SanLoo
 	);
 }
 
+export function isSanLoopTransitionEnvelope(value: unknown): value is SanLoopTransitionEnvelope {
+	if (!isRecord(value)) return false;
+	if (value.schemaVersion !== SAN_LOOP_SCHEMA_VERSION) return false;
+	if (!isSanLoopRunSnapshot(value.run) || !isSanLoopEvent(value.event)) return false;
+	if (value.review !== undefined && !isSanLoopReviewReport(value.review)) return false;
+	// P1-04: reject envelopes whose internal bindings disagree.
+	const run = value.run;
+	const event = value.event;
+	if (event.runId !== run.runId) return false;
+	if (event.sessionId !== run.sessionId) return false;
+	if (value.review !== undefined && value.review.runId !== run.runId) return false;
+	return true;
+}
+
+function appendSanLoopTransitionEnvelope(
+	sessionManager: AppendCustomEntrySessionManager,
+	envelope: Omit<SanLoopTransitionEnvelope, "schemaVersion">,
+): string {
+	const payload: SanLoopTransitionEnvelope = {
+		schemaVersion: SAN_LOOP_SCHEMA_VERSION,
+		run: envelope.run,
+		event: envelope.event,
+		...(envelope.review ? { review: envelope.review } : {}),
+	};
+	return sessionManager.appendCustomEntry(SAN_LOOP_TRANSITION_CUSTOM_TYPE, payload);
+}
+
+function applyRunSnapshot(
+	latestRuns: Map<string, SanLoopEntryRef<SanLoopRunSnapshot>>,
+	entry: SessionEntry,
+	run: SanLoopRunSnapshot,
+): void {
+	const normalized = normalizeRunSnapshotMode(run);
+	const current = latestRuns.get(normalized.runId);
+	if (!current || normalized.revision >= current.data.revision) {
+		latestRuns.set(normalized.runId, customEntryRef(entry, normalized));
+	}
+}
+
 export function createSanLoopRunSnapshot(options: CreateSanLoopRunOptions): SanLoopRunSnapshot {
 	const createdAt = options.createdAt ?? nowIso();
 	const initialRemainingTurns = clampNonNegativeInteger(options.initialRemainingTurns);
@@ -304,13 +343,16 @@ export function recordSanLoopRunCreated(
 		if (existing) throw new Error(`Cannot create San loop run ${options.runId}: run id already exists.`);
 	}
 	const run = createSanLoopRunSnapshot({ ...options, sessionId });
-	const runEntryId = appendSanLoopRunSnapshot(sessionManager, run);
-	const event = createSanLoopEvent(run, "run_created", `Started San execution loop: ${run.objective}`, {
+	const provisionalEvent = createSanLoopEvent(run, "run_created", `Started San execution loop: ${run.objective}`, {
 		actor: "commander",
-		refs: [runEntryId],
+		refs: [],
 	});
-	const eventEntryId = appendSanLoopEvent(sessionManager, event);
-	return { run, runEntryId, event, eventEntryId };
+	const envelopeEntryId = appendSanLoopTransitionEnvelope(sessionManager, {
+		run,
+		event: provisionalEvent,
+	});
+	const event = { ...provisionalEvent, refs: [envelopeEntryId] };
+	return { run, runEntryId: envelopeEntryId, event, eventEntryId: envelopeEntryId };
 }
 
 export function recordSanLoopTransition(
@@ -320,6 +362,8 @@ export function recordSanLoopTransition(
 		actor?: SanLoopEvent["actor"];
 		refs?: string[];
 		data?: Record<string, unknown>;
+		review?: SanLoopReviewReport;
+		createdAt?: string;
 	} = {},
 ): RecordSanLoopTransitionResult {
 	const entries = sessionManager.getEntries?.();
@@ -334,18 +378,37 @@ export function recordSanLoopTransition(
 			`Cannot record San loop transition ${transition.eventType} for ${transition.run.runId}: run is already terminal with status ${latest.data.status}.`,
 		);
 	}
+	if (options.review && options.review.runId !== transition.run.runId) {
+		throw new Error(
+			`Cannot bind review ${options.review.reportId} to San loop transition for ${transition.run.runId}: review run id mismatch.`,
+		);
+	}
 	const run = { ...transition.run, revision: transition.run.revision + 1 };
-	const runEntryId = appendSanLoopRunSnapshot(sessionManager, run);
-	const event = createSanLoopEvent(run, transition.eventType, transition.eventSummary, {
+	const externalRefs = options.refs ?? [];
+	const provisionalEvent = createSanLoopEvent(run, transition.eventType, transition.eventSummary, {
 		actor: options.actor,
-		refs: options.refs ? [runEntryId, ...options.refs] : [runEntryId],
+		createdAt: options.createdAt,
+		refs: externalRefs,
 		data: {
 			retryExhausted: transition.retryExhausted,
 			...options.data,
 		},
 	});
-	const eventEntryId = appendSanLoopEvent(sessionManager, event);
-	return { run, runEntryId, event, eventEntryId };
+	const envelopeEntryId = appendSanLoopTransitionEnvelope(sessionManager, {
+		run,
+		event: provisionalEvent,
+		review: options.review,
+	});
+	const event = { ...provisionalEvent, refs: [envelopeEntryId, ...externalRefs] };
+	return {
+		run,
+		runEntryId: envelopeEntryId,
+		event,
+		eventEntryId: envelopeEntryId,
+		review: options.review,
+		reviewEntryId: options.review ? envelopeEntryId : undefined,
+		envelopeEntryId,
+	};
 }
 
 export function isSanLoopTerminalStatus(status: SanLoopStatus): boolean {
@@ -404,32 +467,26 @@ export function abortSanLoopRun(
 	run: SanLoopRunSnapshot,
 	options: { reason?: string; createdAt?: string } = {},
 ): AbortSanLoopRunResult {
-	const entries = sessionManager.getEntries?.();
-	const latest = entries ? findLatestSanLoopRun(entries, run.runId) : undefined;
-	if (latest && latest.data.revision !== run.revision) {
-		throw new Error(
-			`Cannot abort San execution loop ${run.runId}: expected revision ${run.revision}, current revision is ${latest.data.revision}.`,
-		);
-	}
-	if (latest && isSanLoopTerminalStatus(latest.data.status)) {
-		throw new Error(`Cannot abort San execution loop ${run.runId}: run is already ${latest.data.status}.`);
-	}
 	const aborted = updateSanLoopRunSnapshot(run, {
 		status: "aborted",
 		updatedAt: options.createdAt,
 		finalVerdict: run.finalVerdict,
 	});
-	const persisted = { ...aborted, revision: run.revision + 1 };
-	const runEntryId = appendSanLoopRunSnapshot(sessionManager, persisted);
 	const reason = options.reason?.trim() || "Operator stopped the San execution loop.";
-	const event = createSanLoopEvent(persisted, "aborted", reason, {
-		createdAt: options.createdAt,
-		actor: "commander",
-		refs: [runEntryId],
-		data: { previousStatus: run.status },
-	});
-	const eventEntryId = appendSanLoopEvent(sessionManager, event);
-	return { run: persisted, runEntryId, event, eventEntryId };
+	return recordSanLoopTransition(
+		sessionManager,
+		{
+			run: aborted,
+			eventType: "aborted",
+			eventSummary: reason,
+			retryExhausted: false,
+		},
+		{
+			actor: "commander",
+			createdAt: options.createdAt,
+			data: { previousStatus: run.status },
+		},
+	);
 }
 
 export function recoverSanLoopRun(
@@ -437,34 +494,39 @@ export function recoverSanLoopRun(
 	run: SanLoopRunSnapshot,
 	options: { reason?: string; createdAt?: string } = {},
 ): RecordSanLoopRunResult {
-	const entries = sessionManager.getEntries?.();
-	const latest = entries ? findLatestSanLoopRun(entries, run.runId) : undefined;
-	if (latest && latest.data.revision !== run.revision) {
-		throw new Error(
-			`Cannot recover San execution loop ${run.runId}: expected revision ${run.revision}, current revision is ${latest.data.revision}.`,
-		);
-	}
-	if (latest && isSanLoopTerminalStatus(latest.data.status)) {
-		throw new Error(`Cannot recover San execution loop ${run.runId}: run is already ${latest.data.status}.`);
-	}
 	const recovered = updateSanLoopRunSnapshot(run, {
 		status: "blocked",
 		updatedAt: options.createdAt,
 		finalVerdict: run.finalVerdict,
 	});
-	const persisted = { ...recovered, revision: run.revision + 1 };
-	const runEntryId = appendSanLoopRunSnapshot(sessionManager, persisted);
 	const reason =
 		options.reason?.trim() ||
-		"Recovered active San execution loop from persisted session without a running child process.";
-	const event = createSanLoopEvent(persisted, "recovered", reason, {
-		createdAt: options.createdAt,
-		actor: "commander",
-		refs: [runEntryId],
-		data: { previousStatus: run.status },
-	});
-	const eventEntryId = appendSanLoopEvent(sessionManager, event);
-	return { run: persisted, runEntryId, event, eventEntryId };
+		"Recovered active San execution loop from persisted session without a running child process (recover-to-blocked).";
+	const recorded = recordSanLoopTransition(
+		sessionManager,
+		{
+			run: recovered,
+			eventType: "recovered",
+			eventSummary: reason,
+			retryExhausted: false,
+		},
+		{
+			actor: "commander",
+			createdAt: options.createdAt,
+			data: {
+				previousStatus: run.status,
+				// Explicit contract: recovery does not resume in-memory agent work.
+				// It freezes the active run as blocked so operators can inspect and re-dispatch.
+				recoveryMode: "recover_to_blocked",
+			},
+		},
+	);
+	return {
+		run: recorded.run,
+		runEntryId: recorded.runEntryId,
+		event: recorded.event,
+		eventEntryId: recorded.eventEntryId,
+	};
 }
 
 function customEntryRef<T>(entry: SessionEntry, data: T): SanLoopEntryRef<T> {
@@ -476,17 +538,44 @@ export function rebuildSanLoopLedger(entries: readonly SessionEntry[]): SanLoopL
 	const events: SanLoopEntryRef<SanLoopEvent>[] = [];
 	const reviews: SanLoopEntryRef<SanLoopReviewReport>[] = [];
 	const rolePackets: SanLoopEntryRef<SanLoopRoleContextPacketDebug>[] = [];
+	const lastRevisionByRun = new Map<string, number>();
 
 	for (const entry of entries) {
 		if (entry.type !== "custom") continue;
 		switch (entry.customType) {
+			case SAN_LOOP_TRANSITION_CUSTOM_TYPE:
+				if (isSanLoopTransitionEnvelope(entry.data)) {
+					const envelope = entry.data;
+					const run = normalizeRunSnapshotMode(envelope.run);
+					const previousRevision = lastRevisionByRun.get(run.runId);
+					if (previousRevision !== undefined && run.revision < previousRevision) {
+						// Ignore out-of-order envelopes; highest revision still wins via applyRunSnapshot.
+					} else if (
+						previousRevision !== undefined &&
+						run.revision > previousRevision + 1 &&
+						// Allow create (revision 0) then first transition (revision 1) only as continuous.
+						// Gaps are tolerated for rebuild of mixed legacy/envelope history but not preferred.
+						run.revision !== previousRevision
+					) {
+						// Keep highest revision; continuity is enforced on write.
+					}
+					lastRevisionByRun.set(run.runId, Math.max(previousRevision ?? Number.NEGATIVE_INFINITY, run.revision));
+					applyRunSnapshot(latestRuns, entry, run);
+					const eventRefs = envelope.event.refs.includes(entry.id)
+						? envelope.event.refs
+						: [entry.id, ...envelope.event.refs];
+					events.push(customEntryRef(entry, { ...envelope.event, refs: eventRefs }));
+					if (envelope.review) reviews.push(customEntryRef(entry, envelope.review));
+				}
+				break;
 			case SAN_LOOP_RUN_CUSTOM_TYPE:
 				if (isSanLoopRunSnapshot(entry.data)) {
 					const run = normalizeRunSnapshotMode(entry.data);
-					const current = latestRuns.get(run.runId);
-					if (!current || run.revision >= current.data.revision) {
-						latestRuns.set(run.runId, customEntryRef(entry, run));
-					}
+					lastRevisionByRun.set(
+						run.runId,
+						Math.max(lastRevisionByRun.get(run.runId) ?? Number.NEGATIVE_INFINITY, run.revision),
+					);
+					applyRunSnapshot(latestRuns, entry, run);
 				}
 				break;
 			case SAN_LOOP_EVENT_CUSTOM_TYPE:

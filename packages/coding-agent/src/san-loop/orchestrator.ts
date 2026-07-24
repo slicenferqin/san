@@ -10,6 +10,7 @@ import {
 	type SanLoopPlan,
 	type SanLoopReviewReport,
 	type SanLoopReviewVerdict,
+	type SanLoopRole,
 	type SanLoopRunSnapshot,
 	type SanLoopStatus,
 	type SanLoopTaskNode,
@@ -23,6 +24,7 @@ export interface SanLoopModePolicy {
 	maxWorkers: number;
 	remainingTurns: number;
 	requireOracle: boolean;
+	pipeline: readonly SanLoopRole[];
 }
 
 export interface SanLoopPlanInput {
@@ -77,14 +79,14 @@ export interface SanLoopTransition {
 	eventSummary: string;
 	retryExhausted: boolean;
 }
-
 const DEFAULT_POLICIES: Record<SanLoopMode, SanLoopModePolicy> = {
 	solo: {
 		mode: "solo",
 		maxRetries: 1,
 		maxWorkers: 1,
-		remainingTurns: 4,
+		remainingTurns: 3,
 		requireOracle: false,
+		pipeline: ["worker"],
 	},
 	team: {
 		mode: "team",
@@ -92,6 +94,7 @@ const DEFAULT_POLICIES: Record<SanLoopMode, SanLoopModePolicy> = {
 		maxWorkers: 4,
 		remainingTurns: 8,
 		requireOracle: false,
+		pipeline: ["commander", "worker", "supervisor"],
 	},
 	council: {
 		mode: "council",
@@ -99,6 +102,7 @@ const DEFAULT_POLICIES: Record<SanLoopMode, SanLoopModePolicy> = {
 		maxWorkers: 6,
 		remainingTurns: 12,
 		requireOracle: true,
+		pipeline: ["commander", "worker", "oracle", "supervisor"],
 	},
 };
 
@@ -180,7 +184,7 @@ function updateTaskStatuses(
 export function defaultSanLoopModePolicy(mode: SanLoopMode | LegacySanLoopMode): SanLoopModePolicy {
 	const normalizedMode = normalizeSanLoopMode(mode) ?? "team";
 	const policy = DEFAULT_POLICIES[normalizedMode];
-	return { ...policy };
+	return { ...policy, pipeline: [...policy.pipeline] };
 }
 
 export function normalizeSanLoopPlan(run: SanLoopRunSnapshot, input: SanLoopPlanInput): SanLoopPlan {
@@ -340,13 +344,74 @@ export function createSanLoopReviewReport(run: SanLoopRunSnapshot, input: SanLoo
 	};
 }
 
+/**
+ * Host-side evidence gate. Pass requires at least one completed worker result
+ * from the CURRENT assignment batch with a command that reported exitCode 0.
+ * Historical worker results from previous retries are excluded — stale
+ * evidence must never unlock a new retry's pass verdict.
+ */
+function validatePassEvidence(
+	report: SanLoopReviewReport,
+	run: SanLoopRunSnapshot,
+	currentBatchAssignmentIds?: readonly string[],
+): boolean {
+	if (report.verdict !== "pass") return true;
+	// Only trust completed results from the CURRENT batch. Historical retries
+	// must never unlock a new pass. When batch IDs are omitted, prefer the
+	// latest assignment, then the latest worker result's assignment — never
+	// the full historical set.
+	const batchIds =
+		currentBatchAssignmentIds && currentBatchAssignmentIds.length > 0
+			? [...currentBatchAssignmentIds]
+			: run.assignments.at(-1)
+				? [run.assignments.at(-1)!.assignmentId]
+				: run.workerResults.at(-1)
+					? [run.workerResults.at(-1)!.assignmentId]
+					: [];
+	if (batchIds.length === 0) return false;
+	const batchSet = new Set(batchIds);
+	const relevantResults = run.workerResults.filter(
+		result => batchSet.has(result.assignmentId) && result.status === "completed",
+	);
+	// P0-03: only host-owned tool receipts unlock pass. Model-claimed
+	// commandsRun entries are untrusted and ignored by the gate.
+	return relevantResults.some(result =>
+		result.commandsRun.some(command => command.source === "host" && command.exitCode === 0),
+	);
+}
+
 export function applySanLoopReview(
 	run: SanLoopRunSnapshot,
 	input: SanLoopReviewInput,
-	options: { createdAt?: string } = {},
+	options: { createdAt?: string; currentBatchAssignmentIds?: readonly string[] } = {},
 ): SanLoopTransition {
 	const createdAt = options.createdAt ?? nowIso();
-	const report = createSanLoopReviewReport(run, { ...input, createdAt: input.createdAt ?? createdAt });
+	const rawReport = createSanLoopReviewReport(run, { ...input, createdAt: input.createdAt ?? createdAt });
+	const evidenceValid = validatePassEvidence(rawReport, run, options.currentBatchAssignmentIds);
+	const report: SanLoopReviewReport = evidenceValid
+		? rawReport
+		: {
+				...rawReport,
+				verdict: "blocked",
+				retryable: false,
+				defects: [
+					...rawReport.defects,
+					{
+						defectId: "host-evidence-gate-blocked",
+						severity: "blocker",
+						title: "Supervisor pass rejected by host evidence gate: no host-owned bash receipt with exitCode 0.",
+						evidence: [
+							`Review testsRun: ${rawReport.testsRun.length}, evidence: ${rawReport.evidence.length}`,
+							`Worker results with host exitCode 0 receipts: ${run.workerResults.filter(r => r.commandsRun.some(c => c.source === "host" && c.exitCode === 0)).length}`,
+						],
+						retryable: false,
+					},
+				],
+				requiredNextActions: [
+					...rawReport.requiredNextActions,
+					"Worker must produce at least one host-owned bash receipt with exitCode 0 before a pass can finalize.",
+				],
+			};
 	if (report.reviewer === "oracle") {
 		return {
 			run: {
