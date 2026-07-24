@@ -39,6 +39,13 @@ import {
 	type ScopedModel,
 } from "./config/model-resolver";
 import { ModelsConfigFile } from "./config/models-config";
+import {
+	addCustomModelConfig,
+	listCustomProviderConfigSummaries,
+	removeCustomProviderConfig,
+	validateCustomProviderConfigDestination,
+	writeCustomProviderConfig,
+} from "./config/models-config-writer";
 import { getDefault, type SettingPath, Settings, settings } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
 import {
@@ -454,6 +461,75 @@ export function createRpcV2SessionFactory(args: RpcV2SessionFactoryOptions): Rpc
 		},
 		refreshModels: async () => {
 			await args.modelRegistry.refresh();
+		},
+		listCustomProviders: async () => listCustomProviderConfigSummaries(),
+		createCustomProvider: async input => {
+			const providerId = input.providerId.trim().toLowerCase();
+			const apiKey = input.apiKey?.trim() ?? "";
+			if (input.auth === "apiKey" && !apiKey) throw new Error("API-key providers require a non-empty API key");
+			if (input.auth === "none" && apiKey) throw new Error("Keyless providers must not include an API key");
+			if (args.authStorage.listStoredCredentials(providerId).length > 0) {
+				throw new Error(`Credentials already exist for provider id "${providerId}"`);
+			}
+			const providerConfig = {
+				name: providerId,
+				baseUrl: input.baseUrl.trim(),
+				...(input.api ? { api: input.api } : {}),
+				auth: input.auth,
+				...(input.discovery ? { discovery: input.discovery } : {}),
+			};
+			await validateCustomProviderConfigDestination(providerConfig);
+			let wroteConfig = false;
+			try {
+				const result = await writeCustomProviderConfig(providerConfig);
+				wroteConfig = true;
+				if (apiKey) await args.authStorage.upsertLoginApiKey(providerId, apiKey);
+				await args.modelRegistry.refresh("offline");
+				if (input.discovery) await args.modelRegistry.refreshProvider(providerId, "online");
+				const modelCount = args.modelRegistry.getAll().filter(model => model.provider === providerId).length;
+				return { providerId, path: result.path, changed: result.changed, modelCount };
+			} catch (error) {
+				if (wroteConfig) {
+					try {
+						await removeCustomProviderConfig(providerId);
+					} catch (cleanupError) {
+						logger.warn("RPC provider config rollback failed", { providerId, error: String(cleanupError) });
+					}
+					try {
+						if (args.authStorage.listStoredCredentials(providerId).length > 0)
+							await args.authStorage.remove(providerId);
+					} catch (cleanupError) {
+						logger.warn("RPC provider credential rollback failed", { providerId, error: String(cleanupError) });
+					}
+					try {
+						await args.modelRegistry.refresh("offline");
+					} catch (cleanupError) {
+						logger.warn("RPC provider catalog rollback refresh failed", {
+							providerId,
+							error: String(cleanupError),
+						});
+					}
+				}
+				throw error;
+			}
+		},
+		addCustomModel: async input => {
+			const providerId = input.providerId.trim().toLowerCase();
+			const modelId = input.modelId.trim();
+			const result = await addCustomModelConfig({
+				provider: providerId,
+				id: modelId,
+				...(input.displayName?.trim() ? { name: input.displayName.trim() } : {}),
+				...(input.api ? { api: input.api } : {}),
+				...(input.contextWindow !== undefined ? { contextWindow: input.contextWindow } : {}),
+				...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
+				...(input.reasoning !== undefined ? { reasoning: input.reasoning } : {}),
+				input: input.supportsImage ? ["text", "image"] : ["text"],
+				...(input.supportsTools !== undefined ? { supportsTools: input.supportsTools } : {}),
+			});
+			await args.modelRegistry.refresh("offline");
+			const modelCount = args.modelRegistry.getAll().filter(model => model.provider === providerId).length;
+			return { providerId, modelId, path: result.path, changed: result.changed, modelCount };
 		},
 		create: async params => {
 			const sessionManager = SessionManager.create(params.cwd, args.sessionDir);

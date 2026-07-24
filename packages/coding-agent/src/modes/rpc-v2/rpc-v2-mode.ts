@@ -11,7 +11,7 @@
  * 4. `server.shutdown` or stdin close → graceful exit
  */
 import * as path from "node:path";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
+import type { Api, ImageContent } from "@oh-my-pi/pi-ai";
 import { logger, prompt, readLines, VERSION } from "@oh-my-pi/pi-utils";
 import { collectContextCheckpoints } from "../../context-steady/checkpoint";
 import { listTurnDigests } from "../../context-steady/session";
@@ -88,12 +88,15 @@ import { ResourceUploadError, ResourceUploadManager } from "./resource-upload";
 import { RuntimeSettingsRevisionError } from "./runtime-settings-store";
 import {
 	type ResolvedRunContent,
+	type RpcV2CustomModelInput,
+	type RpcV2CustomProviderInput,
 	type RpcV2SessionFactory,
 	RpcV2SessionManager,
 	type SessionMutationReceipt,
 } from "./session-manager";
 import { RpcV2SubagentController } from "./subagent-controller";
 import { RpcV2UIContext } from "./ui-context";
+import { buildUsageAnalytics } from "./usage-analytics";
 
 // ============================================================================
 // Protocol constants
@@ -104,6 +107,7 @@ const SERVER_NAME = "san";
 
 const IDEMPOTENCY_EXEMPT_METHODS = new Set(["server.shutdown", "stream.configure", "host.capabilities.update"]);
 const ATOMIC_SESSION_RECEIPT_METHODS = new Set(["run.start", "approval.decide", "queue.cancel"]);
+const RUNTIME_ONLY_IDEMPOTENCY_METHODS = new Set(["provider.config.create", "provider.model.add"]);
 
 // ============================================================================
 // Initialize types
@@ -896,8 +900,13 @@ async function dispatchMethod(ctx: DispatchContext, method: string, params: unkn
 				await ctx.sessionCreateReceipts.complete(createReservation, result.sessionId);
 			} else {
 				ctx.idempotency.record(idempotencyKey, completedInput, result);
-				if (ctx.sessionManager.currentSession && !ATOMIC_SESSION_RECEIPT_METHODS.has(method))
+				if (
+					ctx.sessionManager.currentSession &&
+					!ATOMIC_SESSION_RECEIPT_METHODS.has(method) &&
+					!RUNTIME_ONLY_IDEMPOTENCY_METHODS.has(method)
+				) {
 					await ctx.sessionManager.recordIdempotency(idempotencyKey, completedInput, result);
+				}
 			}
 		}
 		return result;
@@ -969,6 +978,9 @@ async function dispatchKnownMethod(
 		"auth.provider.list",
 		"auth.login.start",
 		"auth.login.cancel",
+		"provider.config.create",
+		"provider.model.add",
+		"usage.stats",
 		"approval.rules.list",
 		"approval.rules.revoke",
 		"approval.policy.get",
@@ -1665,6 +1677,23 @@ async function dispatchKnownMethod(
 		// Session extras
 		case "session.stats":
 			return activeSession.getSessionStats();
+		case "usage.stats": {
+			const p = params as { days?: number; sessionLimit?: number } | undefined;
+			return await buildUsageAnalytics({
+				...(p?.days !== undefined ? { days: p.days } : {}),
+				...(p?.sessionLimit !== undefined ? { sessionLimit: p.sessionLimit } : {}),
+				...(session
+					? {
+							activeSession: {
+								sessionId: sessionManager.currentSessionId!,
+								title: activeSession.sessionName,
+								cwd: activeSession.sessionManager.getCwd(),
+								messages: activeSession.messages,
+							},
+						}
+					: {}),
+			});
+		}
 		case "session.rename": {
 			const p = params as { name?: string } | undefined;
 			if (!p?.name?.trim()) {
@@ -2047,8 +2076,34 @@ async function dispatchKnownMethod(
 				recentErrors: state.recentErrors.slice(-20),
 			};
 		}
-		case "auth.provider.list":
-			return { providers: ctx.auth.listProviders(), logins: ctx.auth.listLogins() };
+		case "auth.provider.list": {
+			const catalog = sessionManager.runtimeCatalog;
+			const providers = ctx.auth.listProviders().map(provider => ({ ...provider, custom: false }));
+			if (catalog) {
+				for (const configuration of await catalog.listCustomProviders()) {
+					const details = {
+						baseUrl: configuration.baseUrl,
+						...(configuration.api ? { api: configuration.api } : {}),
+						auth: configuration.auth,
+						...(configuration.discoveryType ? { discoveryType: configuration.discoveryType } : {}),
+						modelCount: configuration.modelCount,
+						custom: true,
+					};
+					const existing = providers.find(provider => provider.providerId === configuration.providerId);
+					if (existing) Object.assign(existing, details);
+					else {
+						providers.push({
+							providerId: configuration.providerId,
+							name: configuration.providerId,
+							available: true,
+							authenticated: catalog.hasProviderAuth(configuration.providerId),
+							...details,
+						});
+					}
+				}
+			}
+			return { providers, logins: ctx.auth.listLogins() };
+		}
 		case "auth.login.start": {
 			const p = params as { providerId?: string } | undefined;
 			if (!p?.providerId) return invalidParamsError("auth.login.start requires providerId", "providerId");
@@ -2070,6 +2125,79 @@ async function dispatchKnownMethod(
 				return createRpcError({
 					reason: "RESOURCE_NOT_FOUND",
 					category: "not_found",
+					message: sanitizeRpcError(error, { maxChars: 500 }),
+				});
+			}
+		}
+		case "provider.config.create": {
+			const catalog = sessionManager.runtimeCatalog;
+			if (!catalog) return invalidParamsError("Runtime model catalog is unavailable");
+			const p = params as
+				| {
+						providerId?: string;
+						baseUrl?: string;
+						api?: Api;
+						auth?: RpcV2CustomProviderInput["auth"];
+						discovery?: RpcV2CustomProviderInput["discovery"];
+						apiKey?: string;
+				  }
+				| undefined;
+			if (!p?.providerId?.trim())
+				return invalidParamsError("provider.config.create requires providerId", "providerId");
+			if (!p.baseUrl?.trim()) return invalidParamsError("provider.config.create requires baseUrl", "baseUrl");
+			if (!p.auth) return invalidParamsError("provider.config.create requires auth", "auth");
+			try {
+				return await catalog.createCustomProvider({
+					providerId: p.providerId,
+					baseUrl: p.baseUrl,
+					...(p.api ? { api: p.api } : {}),
+					auth: p.auth,
+					...(p.discovery ? { discovery: p.discovery } : {}),
+					...(p.apiKey !== undefined ? { apiKey: p.apiKey } : {}),
+				});
+			} catch (error: unknown) {
+				return createRpcError({
+					reason: "INVALID_PARAMS",
+					category: "validation",
+					message: sanitizeRpcError(error, { maxChars: 500 }),
+				});
+			}
+		}
+		case "provider.model.add": {
+			const catalog = sessionManager.runtimeCatalog;
+			if (!catalog) return invalidParamsError("Runtime model catalog is unavailable");
+			const p = params as
+				| {
+						providerId?: string;
+						modelId?: string;
+						displayName?: string;
+						api?: Api;
+						contextWindow?: number;
+						maxTokens?: number;
+						reasoning?: boolean;
+						supportsImage?: boolean;
+						supportsTools?: boolean;
+				  }
+				| undefined;
+			if (!p?.providerId?.trim()) return invalidParamsError("provider.model.add requires providerId", "providerId");
+			if (!p.modelId?.trim()) return invalidParamsError("provider.model.add requires modelId", "modelId");
+			const input: RpcV2CustomModelInput = {
+				providerId: p.providerId,
+				modelId: p.modelId,
+				...(p.displayName !== undefined ? { displayName: p.displayName } : {}),
+				...(p.api ? { api: p.api } : {}),
+				...(p.contextWindow !== undefined ? { contextWindow: p.contextWindow } : {}),
+				...(p.maxTokens !== undefined ? { maxTokens: p.maxTokens } : {}),
+				...(p.reasoning !== undefined ? { reasoning: p.reasoning } : {}),
+				...(p.supportsImage !== undefined ? { supportsImage: p.supportsImage } : {}),
+				...(p.supportsTools !== undefined ? { supportsTools: p.supportsTools } : {}),
+			};
+			try {
+				return await catalog.addCustomModel(input);
+			} catch (error: unknown) {
+				return createRpcError({
+					reason: "INVALID_PARAMS",
+					category: "validation",
 					message: sanitizeRpcError(error, { maxChars: 500 }),
 				});
 			}

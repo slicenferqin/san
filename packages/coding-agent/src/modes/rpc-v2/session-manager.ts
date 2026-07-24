@@ -7,7 +7,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
+import type { Api, ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import { collectContextCheckpoints } from "../../context-steady/checkpoint";
 import { listTurnDigests } from "../../context-steady/session";
@@ -62,6 +62,44 @@ import {
 } from "./runtime-settings-store";
 import { type PersistedRpcState, RpcV2StateStore, rpcV2StatePaths } from "./state-store";
 
+export interface RpcV2CustomProviderInput {
+	providerId: string;
+	baseUrl: string;
+	api?: Api;
+	auth: "apiKey" | "none";
+	discovery?: { type: "openai-models-list" | "proxy" | "litellm" | "ollama" | "llama.cpp" | "lm-studio" };
+	apiKey?: string;
+}
+
+export interface RpcV2CustomModelInput {
+	providerId: string;
+	modelId: string;
+	displayName?: string;
+	api?: Api;
+	contextWindow?: number;
+	maxTokens?: number;
+	reasoning?: boolean;
+	supportsImage?: boolean;
+	supportsTools?: boolean;
+}
+
+export interface RpcV2CatalogMutationResult {
+	providerId: string;
+	modelId?: string;
+	path: string;
+	changed: boolean;
+	modelCount: number;
+}
+
+export interface RpcV2ProviderConfiguration {
+	providerId: string;
+	baseUrl: string;
+	api?: Api;
+	auth: "apiKey" | "none" | "oauth";
+	discoveryType?: "openai-models-list" | "proxy" | "litellm" | "ollama" | "llama.cpp" | "lm-studio";
+	modelCount: number;
+}
+
 export interface RpcV2SessionHandle {
 	session: AgentSession;
 	eventBus?: EventBus;
@@ -91,6 +129,9 @@ export interface RpcV2SessionFactory {
 		},
 	): Promise<void>;
 	refreshModels(): Promise<void>;
+	listCustomProviders(): Promise<RpcV2ProviderConfiguration[]>;
+	createCustomProvider(input: RpcV2CustomProviderInput): Promise<RpcV2CatalogMutationResult>;
+	addCustomModel(input: RpcV2CustomModelInput): Promise<RpcV2CatalogMutationResult>;
 }
 
 export interface RpcV2RuntimeCatalog {
@@ -108,6 +149,9 @@ export interface RpcV2RuntimeCatalog {
 		},
 	): Promise<void>;
 	refreshModels(): Promise<void>;
+	listCustomProviders(): Promise<RpcV2ProviderConfiguration[]>;
+	createCustomProvider(input: RpcV2CustomProviderInput): Promise<RpcV2CatalogMutationResult>;
+	addCustomModel(input: RpcV2CustomModelInput): Promise<RpcV2CatalogMutationResult>;
 }
 
 interface ActiveLease {
@@ -2363,7 +2407,7 @@ function buildSettings(
 			: undefined;
 	const profile = resolveRuntimeSetting(
 		scope,
-		session?.settings.get("san.executionLoop.defaultMode") ?? "team",
+		session?.settings.get("san.executionLoop.defaultMode") ?? "solo",
 		session?.settings.getSettingSource("san.executionLoop.defaultMode") ?? "builtin",
 		globalSettings.executionProfile,
 		workspaceSettings.executionProfile,

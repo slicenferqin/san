@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>San Context Steady 多窗口模型适配与工具链暂停机制调研报告 · 2026-07-24</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --canvas: #eef2f3;
+        --paper: #ffffff;
+        --ink: #17242a;
+        --muted: #5a6b73;
+        --line: #d4dde1;
+        --navy: #102a35;
+        --blue: #1d6488;
+        --blue-soft: #e8f2f7;
+        --green: #24674e;
+        --green-soft: #e8f4ee;
+        --amber: #8b5a09;
+        --amber-soft: #fff3d9;
+        --red: #9d3b35;
+        --red-soft: #fae9e7;
+        --violet: #66528e;
+        --violet-soft: #f0edf8;
+        --shadow: 0 8px 28px rgba(23, 36, 42, 0.07);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--canvas);
+        font-family: "IBM Plex Sans", "Noto Sans CJK SC", "PingFang SC", sans-serif;
+        font-size: 15px;
+        line-height: 1.7;
+      }
+
+      a {
+        color: var(--blue);
+        text-underline-offset: 3px;
+      }
+
+      code,
+      pre {
+        font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+      }
+
+      code {
+        padding: 2px 5px;
+        border-radius: 4px;
+        background: #e8eef0;
+        overflow-wrap: anywhere;
+      }
+
+      pre {
+        margin: 12px 0 0;
+        padding: 16px 18px;
+        overflow: auto;
+        color: #eaf3f5;
+        border-radius: 6px;
+        background: #19333e;
+        font-size: 13px;
+        line-height: 1.58;
+      }
+
+      h1,
+      h2,
+      h3,
+      h4 {
+        margin-top: 0;
+        font-family: "Iowan Old Style", "Noto Serif CJK SC", serif;
+      }
+
+      h1 {
+        margin-bottom: 14px;
+        font-size: 36px;
+        line-height: 1.18;
+      }
+
+      h2 {
+        margin-bottom: 16px;
+        font-size: 24px;
+        line-height: 1.3;
+      }
+
+      h3 {
+        margin-bottom: 8px;
+        font-size: 18px;
+      }
+
+      p {
+        margin: 0 0 12px;
+      }
+
+      ul,
+      ol {
+        margin: 8px 0 0;
+        padding-left: 22px;
+      }
+
+      li {
+        margin: 6px 0;
+      }
+
+      .page {
+        width: min(1180px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      .masthead {
+        color: #f4f9fa;
+        background: var(--navy);
+        border-bottom: 7px solid var(--blue);
+      }
+
+      .masthead-inner {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 330px;
+        gap: 46px;
+        align-items: end;
+        padding: 42px 0 36px;
+      }
+
+      .kicker {
+        color: #9ec8db;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.045em;
+        text-transform: uppercase;
+      }
+
+      .lede {
+        max-width: 830px;
+        color: #d3e2e7;
+        font-size: 16px;
+      }
+
+      .snapshot {
+        padding-left: 22px;
+        border-left: 1px solid #48636e;
+      }
+
+      .snapshot dl {
+        margin: 0;
+      }
+
+      .snapshot div {
+        padding: 8px 0;
+        border-bottom: 1px solid #2f4a54;
+      }
+
+      .snapshot dt {
+        color: #a1b6be;
+        font-size: 11px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      .snapshot dd {
+        margin: 2px 0 0;
+        overflow-wrap: anywhere;
+      }
+
+      main {
+        padding: 32px 0 64px;
+      }
+
+      section {
+        margin-top: 24px;
+        padding: 26px 28px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--paper);
+        box-shadow: var(--shadow);
+      }
+
+      .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .badge-warn {
+        color: var(--amber);
+        background: var(--amber-soft);
+      }
+
+      .badge-danger {
+        color: var(--red);
+        background: var(--red-soft);
+      }
+
+      .badge-info {
+        color: var(--blue);
+        background: var(--blue-soft);
+      }
+
+      .badge-success {
+        color: var(--green);
+        background: var(--green-soft);
+      }
+
+      table {
+        width: 100%;
+        margin-top: 14px;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+
+      th,
+      td {
+        padding: 10px 14px;
+        text-align: left;
+        border-bottom: 1px solid var(--line);
+      }
+
+      th {
+        color: var(--navy);
+        background: #f4f8fa;
+        font-weight: 700;
+      }
+
+      tr:hover td {
+        background: #f9fbfb;
+      }
+
+      .callout {
+        margin-top: 16px;
+        padding: 16px 20px;
+        border-left: 4px solid var(--blue);
+        border-radius: 0 6px 6px 0;
+        background: var(--blue-soft);
+      }
+
+      .callout-warn {
+        border-left-color: var(--amber);
+        background: var(--amber-soft);
+      }
+
+      .callout-danger {
+        border-left-color: var(--red);
+        background: var(--red-soft);
+      }
+
+      .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 16px;
+        margin-top: 16px;
+      }
+
+      .metric-card {
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #f8fafb;
+      }
+
+      .metric-card .val {
+        margin-top: 4px;
+        color: var(--navy);
+        font-size: 24px;
+        font-weight: 800;
+      }
+
+      .metric-card .sub {
+        color: var(--muted);
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="page masthead-inner">
+        <div>
+          <div class="kicker">San Context Steady Architecture Research</div>
+          <h1>上下文稳态多窗口适配与 Tool-Loop 保护机制调研报告</h1>
+          <p class="lede">
+            针对会话 <code>019f91fc</code> 发生的 <code>hard_pressure</code> 导致上下文维护暂停问题，系统性分析固定 240K 质量窗口在不同上下文尺寸模型下的适配盲区，以及 Tool-Loop 中段对活工具链的 Fail-Closed 保护设计。
+          </p>
+        </div>
+        <div class="snapshot">
+          <dl>
+            <div>
+              <dt>调研目标</dt>
+              <dd>Context Steady 预算模型与停机机制</dd>
+            </div>
+            <div>
+              <dt>触发会话 ID</dt>
+              <dd><code>019f91fc-7459-7000-befd-46e7e1a7be15</code></dd>
+            </div>
+            <div>
+              <dt>报告日期</dt>
+              <dd>2026-07-24</dd>
+            </div>
+            <div>
+              <dt>归属模块</dt>
+              <dd><code>packages/coding-agent/src/context-steady</code></dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+    </header>
+
+    <main class="page">
+      <section>
+        <h2>Executive Summary / 核心结论</h2>
+        <p>
+          在使用过程中，将 GPT-5.6 系列模型的本地 <code>contextWindow</code> 配置从 500K 下调至 256K 后，会话在连续多轮长 Tool-Loop 后触发了以下警告并停止自动续跑：
+        </p>
+        <pre>Warning: context-steady: Context maintenance paused this run after recovery could not fit the provider request. Tool-loop input remains above the burst ceiling (projected_input_exceeds_control_band, projected_input_exceeds_burst_ceiling).</pre>
+
+        <div class="metric-grid">
+          <div class="metric-card">
+            <div class="sub">模型真实上下文窗口</div>
+            <div class="val">256K Tokens</div>
+            <div class="sub">下调前为 500K 误标</div>
+          </div>
+          <div class="metric-card">
+            <div class="sub">硬输入天花板 (hardInputCeiling)</div>
+            <div class="val">192K Tokens</div>
+            <div class="sub">256K × (1 - 0.25 保留率)</div>
+          </div>
+          <div class="metric-card">
+            <div class="sub">Tool-Loop 预估输入</div>
+            <div class="val">192.3K Tokens</div>
+            <div class="sub">溢出 325 tokens 触发硬压</div>
+          </div>
+          <div class="metric-card">
+            <div class="sub">系统反应</div>
+            <div class="val"><span class="badge badge-warn">paused_for_context</span></div>
+            <div class="sub">拦截 Tool-Loop 死循环</div>
+          </div>
+        </div>
+
+        <div class="callout callout-warn">
+          <strong>核心判定：</strong> 会话数据完好，系统处于预期的<strong>安全保护熔断</strong>状态。固定写死 <code>qualityWindowTokens=240000</code> 的策略在 500K 大窗口模型下运作正常，但在 256K 或更小窗口模型下会被硬输入上限强行 Clamp 至 192K，抹平了原本用于应对工具输出突发的 Burst 缓冲带。此外，Tool-Loop 中段为保护未完成的工具交互不被误压碎，采用了 Fail-Closed 暂停策略，需要用户消息或显式命令引入新的 Pre-Turn 恢复点。
+        </div>
+      </section>
+
+      <section>
+        <h2>背景与分层预算数学模型</h2>
+        <p>
+          San 的上下文管理并非单一的“到达 N Token 就砍”的简单阈值，而是由 <strong>Context Steady（稳态质量模型）</strong> 与 <strong>Native Compaction（原生物理压缩）</strong> 构成的双层防御体系：
+        </p>
+
+        <h3>1. 稳态预算推导公式 (`budget.ts`)</h3>
+        <p>输入预算根据配置参数与当前模型的物理窗口动态计算：</p>
+        <pre>
+reserveTokens   = contextWindow × reserveRatio                     // 默认 25% (给输出/思维留白)
+hardInputCeiling= contextWindow - reserveTokens                    // 输入允许的绝对物理上限
+steadyTarget    = min(configuredQualityWindow, hardInputCeiling)   // 质量目标 (默认 240K)
+burstCeiling    = min(max(configuredBurst, steadyTarget), hardInputCeiling) // 突发上限 (默认 320K)
+controlMax      = min(burstCeiling, steadyTarget × 13 / 12)        // 稳态控制线 (1.083×)
+        </pre>
+
+        <h3>2. 不同模型窗口下的预算对比表</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>模型窗口 (CW)</th>
+              <th>qualityWindow</th>
+              <th>reserveTokens (25%)</th>
+              <th>hardInputCeiling</th>
+              <th>steadyTarget</th>
+              <th>burstCeiling</th>
+              <th>缓冲余量 (Burst - Steady)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>500K</strong> (原误标)</td>
+              <td>240K</td>
+              <td>125K</td>
+              <td>375K</td>
+              <td><strong>240K</strong></td>
+              <td><strong>320K</strong></td>
+              <td><span class="badge badge-success">+80K (非常充裕)</span></td>
+            </tr>
+            <tr>
+              <td><strong>300K</strong></td>
+              <td>240K</td>
+              <td>75K</td>
+              <td>225K</td>
+              <td><strong>225K</strong></td>
+              <td><strong>225K</strong></td>
+              <td><span class="badge badge-warn">0K (完全抹平)</span></td>
+            </tr>
+            <tr>
+              <td><strong>256K</strong> (本次配置)</td>
+              <td>240K</td>
+              <td>64K</td>
+              <td>192K</td>
+              <td><strong>192K</strong></td>
+              <td><strong>192K</strong></td>
+              <td><span class="badge badge-danger">0K (极易碰撞)</span></td>
+            </tr>
+            <tr>
+              <td><strong>128K</strong></td>
+              <td>240K</td>
+              <td>32K</td>
+              <td>96K</td>
+              <td><strong>96K</strong></td>
+              <td><strong>96K</strong></td>
+              <td><span class="badge badge-danger">0K (强制按比例缩)</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>核心盲区 1：固定 240K 全局目标的失配分析</h2>
+        <p>
+          从上表可以直观看出固定写死 <code>qualityWindowTokens = 240000</code> 的设计缺陷：
+        </p>
+        <ol>
+          <li>
+            <strong>只做向下 Clamp，抹杀了缓冲设计：</strong> 当物理窗口 ≤300K 时，<code>hardInputCeiling</code> 直接小于 240K，导致 <code>steadyTarget</code>、<code>controlMax</code> 与 <code>burstCeiling</code> 全部坍缩并重合至同一个数值（如 256K 模型下全为 192K）。
+          </li>
+          <li>
+            <strong>失去容忍突发的能力：</strong> 在 500K 模型下，系统允许上下文短期冲到 320K 并在下一轮异步消化；而在 256K 模型下，一旦单次工具吐出大文本导致预计输入达到 192,001 Tokens，系统便<strong>没有任何缓冲阶梯直接判定为 <code>hard_pressure</code></strong>。
+          </li>
+          <li>
+            <strong>静态数值缺乏比例感知：</strong> 240K 是针对 Anthropic Claude 200K+、OpenAI 1M 等超大窗口总结出的“最佳质量/性能平衡点”。对于中小窗口模型，硬套 240K 等于放弃了根据模型能力动态分配稳态比例的能力。
+          </li>
+        </ol>
+      </section>
+
+      <section>
+        <h2>核心盲区 2：Tool-Loop 中段的 Pause 熔断逻辑</h2>
+        <p>
+          用户疑问：“既然超了，为什么系统不自动压缩或重建 Plan，而是要停下来等用户手动操作？”
+        </p>
+        <p>
+          代码审查（<code>agent-session.ts</code> 的 <code>#refreshContextSteadyPlanForProviderCall</code>）显示，系统在生命周期不同阶段对 <code>hard_pressure</code> 的处理策略有严格区分：
+        </p>
+
+        <h3>1. 阶段策略差异对比</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>触发阶段</th>
+              <th>执行逻辑</th>
+              <th>是否自动压缩/重建 Plan</th>
+              <th>失败后行为</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Pre-Turn（用户发起新回合）</strong></td>
+              <td>
+                1. 尝试 <code>#promoteContextModel</code> 切大模型<br />
+                2. 允许最多 <code>maxRecoveryPasses</code> 次 <code>#runAutoCompaction</code><br />
+                3. 重建 ContextPlan
+              </td>
+              <td><span class="badge badge-success">是 (多次重试)</span></td>
+              <td>若仍失败则拒答并标记 <code>paused_for_context</code></td>
+            </tr>
+            <tr>
+              <td><strong>Mid-Turn (Tool-Loop 工具循环中)</strong></td>
+              <td>
+                1. 校验当前 <code>projectedInputTokens > burstCeiling</code><br />
+                2. 追加 <code>paused_for_context</code> 审计日志<br />
+                3. 直接抛出 Error 中断当前 Tool-Loop
+              </td>
+              <td><span class="badge badge-danger">否 (故意不压缩)</span></td>
+              <td>抛出异常，暂停自动 Continuation</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>2. Tool-Loop 拒绝自动压缩的四重安全考量</h3>
+        <div class="callout callout-danger">
+          <p><strong>1. Live Tool-Pair 保护约束：</strong> 在工具调用链中，当前的 <code>toolCall</code> 与未返回/刚返回的 <code>toolResult</code> 属于活上下文（Protected Entry）。如果强行在中段执行 <code>context-full</code> 压缩，可能破坏正在进行的工具调用语义或导致 RPC 协议契约断裂。</p>
+          <p><strong>2. 无法解套的死局（Deadlock）：</strong> 如果 Tool-Loop 膨胀是因为某次命令（如 <code>read</code> 大文件或 <code>bash</code> 打印长日志）产生了一块极大的单体工具输出，这块输出作为 active tail 无法被部分切碎。即使压掉所有历史，单体 tail 依然 > 192K，自动压缩必然失败。</p>
+          <p><strong>3. 预防无限循环（Snapcompact Thrash）：</strong> 若中段允许自动 compact，可能出现“compact 完只腾出 1000 tokens → 下一次工具调用又超 → 再次 compact”的死循环，极大地浪费 Token 并拖垮响应。</p>
+          <p><strong>4. 保护 Provider Prompt Cache 命中率：</strong> 在同一个逻辑 Turn 内，San 故意冻结 ContextPlan 字节。如果每次工具返回都重载/重压缩 plan，会破坏送给 LLM 的 Prefix，导致 Cache Read 命中率骤降为 0。只有突破 <code>controlMax</code> 时才会重新评估；一旦突破又挤不进 <code>burstCeiling</code>，系统选择主动熔断。</p>
+        </div>
+      </section>
+
+      <section>
+        <h2>事故复盘：Session 019f91fc 事故完整推演</h2>
+        <p>通过解析会话存储文件与 Context Probe 审计日记，重现事故过程：</p>
+        <ol>
+          <li><strong>07:32:37 - 用户输入「继续」：</strong> 进入新 Turn，此时 activeContext 仅 ~36K，远低于 192K，通过 Pre-Turn 检查。</li>
+          <li><strong>07:32:43 - 执行工具调用：</strong> Assistant 调用 <code>todo</code> 更新任务状态，生成工具返回。</li>
+          <li><strong>07:34:43 - 累积工具上下文评估：</strong> 多轮复杂工具链交互后，系统计算 <code>projectedInputTokens = 192,325</code>。</li>
+          <li><strong>质量关卡评估 (Quality Gate)：</strong>
+            <ul>
+              <li><code>controlMax = 192,000</code></li>
+              <li><code>burstCeiling = 192,000</code></li>
+              <li>检查发现 <code>192,325 > 192,000</code>，溢出仅 325 tokens。</li>
+            </ul>
+          </li>
+          <li><strong>熔断触发：</strong> 评估判定为 <code>hard_pressure</code>，触发 Reasons: <code>["projected_input_exceeds_control_band", "projected_input_exceeds_burst_ceiling"]</code>。由于处于 Mid-Turn，系统触发 <code>#pauseForContextSteadyPressure</code>，发出 Warning 警告并暂停后续自动 Continuation。</li>
+        </ol>
+      </section>
+
+      <section>
+        <h2>架构优化与修复方案 (Proposal)</h2>
+        <p>为解决“中小窗口模型无 Burst 缓冲”以及“Tool-Loop 遇到轻微溢出即挂起”的问题，提出以下三项优化建议：</p>
+
+        <h3>方案 1：自适应窗口比例推导 (Adaptive Window Ratio)</h3>
+        <p>
+          修改 <code>settings-schema.ts</code> 与 <code>budget.ts</code>，不再将 240K 作为唯一的静态默认值，引入按物理窗口比例计算的推导逻辑：
+        </p>
+        <pre>
+// 当 qualityWindowTokens 未显式配置（或为 0）时：
+const defaultRatio = 0.60; // 默认将物理窗口的 60% 作为稳态质量目标
+const computedSteady = Math.floor(contextWindow * defaultRatio);
+const steadyTarget = Math.min(configuredSteady ?? computedSteady, hardInputCeiling);
+
+// 保持 burst 阶梯空间：
+const burstTarget = Math.floor(contextWindow * 0.75); // 75% 作为 Burst 顶峰
+const burstCeiling = Math.min(configuredBurst ?? burstTarget, hardInputCeiling);
+        </pre>
+        <p>
+          <strong>效果：</strong> 对于 256K 模型，硬上限 192K 下，系统会自动计算出 <code>steadyTarget ≈ 153K</code>、<code>burstCeiling = 192K</code>。此时系统保留了 <strong>39K Tokens 的 Burst 动态缓冲带</strong>，不会因为溢出几百 tokens 就直接触发硬压。
+        </p>
+
+        <h3>方案 2：Tool-Loop 中段受限恢复 (Bounded Mid-Turn Recovery)</h3>
+        <p>
+          在 <code>#refreshContextSteadyPlanForProviderCall</code> 中，当发生 <code>hard_pressure</code> 时，增加一次针对“非活尾部历史（Non-Live History）”的定向轻量压缩或微剪裁（Shake），条件为：
+        </p>
+        <ul>
+          <li>检查 <code>requiredTokens</code>（活尾部+保护条目）是否小于 <code>burstCeiling - 10000</code>。</li>
+          <li>如果活尾部本身未顶爆，允许执行一次限定 1 次的轻量历史 <code>shake</code>，尝试剔除旧的单体长工具输出。</li>
+          <li>若 <code>shake</code> 后成功将 projected input 降至 <code>burstCeiling</code> 以下，则恢复 Tool-Loop 运行，避免直接中断用户体验。</li>
+        </ul>
+
+        <h3>方案 3：UI/CLI 熔断提示强化与一键解套</h3>
+        <p>
+          当触发 <code>paused_for_context</code> 警告时，在前端控制面（San Desktop / CLI）提供明确的操作引导：
+        </p>
+        <ul>
+          <li>明确提示：“上下文达到模型硬上限 (192K/256K)，自动工具链已暂停以保护会话安全。”</li>
+          <li>提供一键快捷操作选项：<code>[压缩历史 (/compact)]</code> | <code>[清理大工具输出]</code> | <code>[临时切换至大窗口模型]</code>。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Action Items & 验证计划</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>事项</th>
+              <th>负责人</th>
+              <th>预期产出</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>更新 `budget.ts` 动态目标计算</td>
+              <td>Agent Core Team</td>
+              <td>支持基于 `contextWindow` 比例的默认 `steadyTarget` 推导</td>
+              <td><span class="badge badge-info">计划中</span></td>
+            </tr>
+            <tr>
+              <td>重构 `settings-schema.ts` 描述</td>
+              <td>Agent Core Team</td>
+              <td>澄清 `qualityWindowTokens` 在不同 CW 下的 Clamp 行为</td>
+              <td><span class="badge badge-info">计划中</span></td>
+            </tr>
+            <tr>
+              <td>增加 Mid-Turn Shake 尝试机制</td>
+              <td>Agent Core Team</td>
+              <td>在 Live Tail 未超标时，允许 1 次 mid-turn 尝试释放历史</td>
+              <td><span class="badge badge-info">评估中</span></td>
+            </tr>
+            <tr>
+              <td>Desktop 熔断交互引导</td>
+              <td>Desktop Team</td>
+              <td>当接收到 `paused_for_context` 通知时提供 UI 解套按钮</td>
+              <td><span class="badge badge-info">计划中</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </body>
+</html>

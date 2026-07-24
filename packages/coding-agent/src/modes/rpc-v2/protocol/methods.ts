@@ -15,6 +15,8 @@ export type RpcV2CapabilityKey =
 	| "subagent.stream"
 	| "model.catalog"
 	| "provider.auth"
+	| "provider.config"
+	| "usage.analytics"
 	| "execution.profiles"
 	| "input.images"
 	| "input.resources"
@@ -78,6 +80,7 @@ export const RPC_V2_METHOD_DEFINITIONS: readonly RpcV2MethodDefinition[] = [
 	method("session.handoff", sessionWrite),
 	method("session.export", sessionWrite),
 	method("session.stats", sessionRead),
+	method("usage.stats", { capability: "usage.analytics" }),
 	method("session.recover", {
 		capability: "session.recovery",
 		mutation: true,
@@ -109,6 +112,8 @@ export const RPC_V2_METHOD_DEFINITIONS: readonly RpcV2MethodDefinition[] = [
 	method("auth.provider.list", { capability: "provider.auth" }),
 	method("auth.login.start", { capability: "provider.auth", mutation: true }),
 	method("auth.login.cancel", { capability: "provider.auth", mutation: true }),
+	method("provider.config.create", { capability: "provider.config", mutation: true }),
+	method("provider.model.add", { capability: "provider.config", mutation: true }),
 	method("command.list", { requiresSession: true }),
 	method("todo.set", sessionWrite),
 

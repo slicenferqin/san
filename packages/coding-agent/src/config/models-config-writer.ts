@@ -14,6 +14,18 @@ import { withFileLock } from "./file-lock";
 import type { ProviderAuthMode, ProviderDiscovery } from "./models-config-schema";
 import { applyYamlPathPatches, patchYamlFile, type YamlPathPatch } from "./yaml-path-patch";
 
+export interface CustomModelWriteInput {
+	provider: string;
+	id: string;
+	name?: string;
+	api?: Api;
+	contextWindow?: number;
+	maxTokens?: number;
+	reasoning?: boolean;
+	input?: Array<"text" | "image">;
+	supportsTools?: boolean;
+}
+
 export interface CustomProviderWriteInput {
 	/** Provider id (YAML key under providers.). */
 	name: string;
@@ -22,7 +34,7 @@ export interface CustomProviderWriteInput {
 	auth?: ProviderAuthMode;
 	discovery?: ProviderDiscovery;
 	/** Explicit model stubs. Prefer discovery when possible. */
-	models?: Array<{ id: string; name?: string; api?: Api; contextWindow?: number; maxTokens?: number }>;
+	models?: Array<Omit<CustomModelWriteInput, "provider">>;
 }
 
 export interface ModelsConfigWriteResult {
@@ -30,6 +42,15 @@ export interface ModelsConfigWriteResult {
 	changed: boolean;
 	/** True when the provider block was written without embedding secrets. */
 	persisted: boolean;
+}
+
+export interface CustomProviderConfigSummary {
+	providerId: string;
+	baseUrl: string;
+	api?: Api;
+	auth: ProviderAuthMode;
+	discoveryType?: ProviderDiscovery["type"];
+	modelCount: number;
 }
 
 function modelsConfigPath(explicit?: string): string {
@@ -88,6 +109,37 @@ function assertProviderExists(source: string, providerId: string): void {
 	}
 }
 
+export function validateCustomModelConfigInput(input: CustomModelWriteInput): void {
+	validateProviderId(input.provider);
+	const modelId = input.id.trim();
+	if (!modelId || modelId.length > 128 || /[\u0000-\u001f\u007f]/.test(modelId)) {
+		throw new Error("Model id must use 1-128 printable characters");
+	}
+	for (const [field, value] of [
+		["contextWindow", input.contextWindow],
+		["maxTokens", input.maxTokens],
+	] as const) {
+		if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) {
+			throw new Error(`${field} must be a positive safe integer`);
+		}
+	}
+	if (input.input && (input.input.length === 0 || new Set(input.input).size !== input.input.length)) {
+		throw new Error("Model input capabilities must be non-empty and unique");
+	}
+}
+
+function buildModelValue(input: Omit<CustomModelWriteInput, "provider">): Record<string, unknown> {
+	const entry: Record<string, unknown> = { id: input.id.trim() };
+	if (input.name) entry.name = input.name.trim();
+	if (input.api) entry.api = input.api;
+	if (input.contextWindow !== undefined) entry.contextWindow = input.contextWindow;
+	if (input.maxTokens !== undefined) entry.maxTokens = input.maxTokens;
+	if (input.reasoning !== undefined) entry.reasoning = input.reasoning;
+	if (input.input) entry.input = input.input;
+	if (input.supportsTools !== undefined) entry.supportsTools = input.supportsTools;
+	return entry;
+}
+
 function buildProviderValue(input: CustomProviderWriteInput): Record<string, unknown> {
 	const auth: ProviderAuthMode = input.auth ?? "apiKey";
 	const value: Record<string, unknown> = {
@@ -97,14 +149,8 @@ function buildProviderValue(input: CustomProviderWriteInput): Record<string, unk
 	if (input.api) value.api = input.api;
 	if (input.discovery) value.discovery = input.discovery;
 	if (input.models && input.models.length > 0) {
-		value.models = input.models.map(model => {
-			const entry: Record<string, unknown> = { id: model.id };
-			if (model.name) entry.name = model.name;
-			if (model.api) entry.api = model.api;
-			if (model.contextWindow !== undefined) entry.contextWindow = model.contextWindow;
-			if (model.maxTokens !== undefined) entry.maxTokens = model.maxTokens;
-			return entry;
-		});
+		for (const model of input.models) validateCustomModelConfigInput({ ...model, provider: input.name });
+		value.models = input.models.map(buildModelValue);
 	}
 	// Never persist apiKey bytes here.
 	return value;
@@ -168,6 +214,109 @@ export async function removeCustomProviderConfig(
 		}),
 	);
 	return { path: configPath, changed: result.changed, removed: result.changed };
+}
+
+/** 读取可安全展示的自定义服务商配置；API Key 永不进入返回值。 */
+export async function listCustomProviderConfigSummaries(options?: {
+	modelsPath?: string;
+}): Promise<CustomProviderConfigSummary[]> {
+	const configPath = modelsConfigPath(options?.modelsPath);
+	let source: string;
+	try {
+		source = await Bun.file(configPath).text();
+	} catch (error) {
+		if (isEnoent(error)) return [];
+		throw error;
+	}
+	const doc = parseDocument(source, { prettyErrors: false });
+	if (doc.errors.length > 0) throw new Error("Invalid models.yml document");
+	const root = doc.toJS();
+	if (!root || typeof root !== "object" || Array.isArray(root)) throw new Error("Invalid models.yml root");
+	const providers = (root as Record<string, unknown>).providers;
+	if (providers === undefined) return [];
+	if (!providers || typeof providers !== "object" || Array.isArray(providers)) {
+		throw new Error("models.yml providers must be an object");
+	}
+	const summaries: CustomProviderConfigSummary[] = [];
+	for (const [providerId, raw] of Object.entries(providers as Record<string, unknown>)) {
+		if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+		const provider = raw as Record<string, unknown>;
+		if (typeof provider.baseUrl !== "string" || !provider.baseUrl) continue;
+		const discovery =
+			provider.discovery && typeof provider.discovery === "object" && !Array.isArray(provider.discovery)
+				? (provider.discovery as Record<string, unknown>).type
+				: undefined;
+		const models = provider.models;
+		summaries.push({
+			providerId,
+			baseUrl: provider.baseUrl,
+			...(typeof provider.api === "string" ? { api: provider.api as Api } : {}),
+			auth: provider.auth === "none" || provider.auth === "oauth" ? provider.auth : "apiKey",
+			...(typeof discovery === "string" ? { discoveryType: discovery as ProviderDiscovery["type"] } : {}),
+			modelCount: Array.isArray(models) ? models.length : 0,
+		});
+	}
+	return summaries.sort((left, right) => left.providerId.localeCompare(right.providerId));
+}
+
+function readProviderModels(source: string, providerId: string): unknown[] {
+	assertProviderExists(source, providerId);
+	const doc = parseDocument(source, { prettyErrors: false });
+	if (doc.errors.length > 0) throw new Error("Invalid models.yml document");
+	const root = doc.toJS();
+	if (!root || typeof root !== "object" || Array.isArray(root)) throw new Error("Invalid models.yml root");
+	const providers = (root as Record<string, unknown>).providers;
+	if (!providers || typeof providers !== "object" || Array.isArray(providers)) {
+		throw new Error("models.yml providers must be an object");
+	}
+	const provider = (providers as Record<string, unknown>)[providerId];
+	if (!provider || typeof provider !== "object" || Array.isArray(provider)) {
+		throw new Error(`Provider id "${providerId}" is not a configurable provider`);
+	}
+	const models = (provider as Record<string, unknown>).models;
+	if (models === undefined) return [];
+	if (!Array.isArray(models)) throw new Error(`Provider "${providerId}" models must be an array`);
+	return models;
+}
+
+/** 向已有自定义服务商追加显式模型，不重写同级配置。 */
+export async function addCustomModelConfig(
+	input: CustomModelWriteInput,
+	options?: { modelsPath?: string },
+): Promise<ModelsConfigWriteResult> {
+	validateCustomModelConfigInput(input);
+	const configPath = modelsConfigPath(options?.modelsPath);
+	const modelValue = buildModelValue(input);
+	const result = await withFileLock(configPath, async () => {
+		let source: string;
+		try {
+			source = await Bun.file(configPath).text();
+		} catch (error) {
+			if (isEnoent(error)) throw new Error(`Provider id "${input.provider}" does not exist in models.yml`);
+			throw error;
+		}
+		const models = readProviderModels(source, input.provider);
+		const duplicate = models.some(candidate => {
+			return Boolean(
+				candidate &&
+					typeof candidate === "object" &&
+					!Array.isArray(candidate) &&
+					(candidate as Record<string, unknown>).id === input.id.trim(),
+			);
+		});
+		if (duplicate) throw new Error(`Model id "${input.id.trim()}" already exists for provider "${input.provider}"`);
+		const patch: YamlPathPatch =
+			models.length === 0
+				? { op: "set", path: ["providers", input.provider, "models"], value: [modelValue] }
+				: { op: "set", path: ["providers", input.provider, "models", models.length], value: modelValue };
+		return patchYamlFile(configPath, [patch], {
+			validateSource: current => {
+				const currentModels = readProviderModels(current, input.provider);
+				if (currentModels.length !== models.length) throw new Error("models.yml changed while adding the model");
+			},
+		});
+	});
+	return { path: configPath, changed: result.changed, persisted: true };
 }
 
 /**

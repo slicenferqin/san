@@ -555,6 +555,22 @@
           ],
           "additionalProperties": false
         },
+        "usage.stats": {
+          "type": "object",
+          "properties": {
+            "days": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 90
+            },
+            "sessionLimit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          "additionalProperties": false
+        },
         "session.recover": {
           "type": "object",
           "properties": {
@@ -1046,6 +1062,121 @@
           },
           "required": [
             "loginId",
+            "meta"
+          ],
+          "additionalProperties": false
+        },
+        "provider.config.create": {
+          "type": "object",
+          "properties": {
+            "providerId": {
+              "type": "string"
+            },
+            "baseUrl": {
+              "type": "string"
+            },
+            "api": {
+              "enum": [
+                "openai-completions",
+                "openai-responses",
+                "openai-codex-responses",
+                "azure-openai-responses",
+                "anthropic-messages",
+                "google-generative-ai",
+                "google-gemini-cli",
+                "google-vertex"
+              ]
+            },
+            "auth": {
+              "enum": [
+                "apiKey",
+                "none"
+              ]
+            },
+            "discovery": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "openai-models-list",
+                    "proxy",
+                    "litellm",
+                    "ollama",
+                    "llama.cpp",
+                    "lm-studio"
+                  ]
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            },
+            "apiKey": {
+              "type": "string"
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "providerId",
+            "baseUrl",
+            "auth",
+            "meta"
+          ],
+          "additionalProperties": false
+        },
+        "provider.model.add": {
+          "type": "object",
+          "properties": {
+            "providerId": {
+              "type": "string"
+            },
+            "modelId": {
+              "type": "string"
+            },
+            "displayName": {
+              "type": "string"
+            },
+            "api": {
+              "enum": [
+                "openai-completions",
+                "openai-responses",
+                "openai-codex-responses",
+                "azure-openai-responses",
+                "anthropic-messages",
+                "google-generative-ai",
+                "google-gemini-cli",
+                "google-vertex"
+              ]
+            },
+            "contextWindow": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxTokens": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "reasoning": {
+              "type": "boolean"
+            },
+            "supportsImage": {
+              "type": "boolean"
+            },
+            "supportsTools": {
+              "type": "boolean"
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "providerId",
+            "modelId",
             "meta"
           ],
           "additionalProperties": false
@@ -2036,6 +2167,7 @@
       "session.handoff",
       "session.export",
       "session.stats",
+      "usage.stats",
       "session.recover",
       "session.delete",
       "session.close",
@@ -2056,6 +2188,8 @@
       "auth.provider.list",
       "auth.login.start",
       "auth.login.cancel",
+      "provider.config.create",
+      "provider.model.add",
       "command.list",
       "todo.set",
       "integration.list",

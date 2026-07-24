@@ -1,0 +1,949 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta
+    name="description"
+    content="San v0.2 Mature Execution Loop 当前实现相对 2026-07-14 最终审计的差量复审。"
+  />
+  <title>San v0.2 当前实现差量复审</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f6f9;
+      --paper: #ffffff;
+      --ink: #172033;
+      --muted: #667085;
+      --line: #d8dee8;
+      --line-strong: #b7c0cf;
+      --navy: #13223a;
+      --blue: #2457c5;
+      --blue-soft: #edf3ff;
+      --green: #067647;
+      --green-soft: #ecfdf3;
+      --amber: #a15c00;
+      --amber-soft: #fff7e8;
+      --red: #b42318;
+      --red-soft: #fff1f1;
+      --violet: #6941c6;
+      --violet-soft: #f4f0ff;
+      --code: #101828;
+      --shadow: 0 16px 44px rgba(23, 32, 51, 0.07);
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 15px/1.68 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    a { color: var(--blue); text-underline-offset: 3px; }
+
+    code,
+    pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    code {
+      padding: 2px 6px;
+      border: 1px solid #e0e5ed;
+      border-radius: 6px;
+      background: #f5f7fa;
+      color: var(--code);
+      font-size: 0.91em;
+    }
+
+    pre {
+      overflow-x: auto;
+      margin: 14px 0 0;
+      padding: 16px 18px;
+      border-radius: 12px;
+      background: #111827;
+      color: #f8fafc;
+      font-size: 13px;
+      line-height: 1.58;
+    }
+
+    pre code {
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font-size: inherit;
+    }
+
+    main {
+      width: min(1240px, calc(100vw - 44px));
+      margin: 0 auto;
+      padding: 44px 0 72px;
+    }
+
+    header,
+    section,
+    nav {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+    }
+
+    header {
+      overflow: hidden;
+      background:
+        linear-gradient(135deg, rgba(36, 87, 197, 0.11), transparent 44%),
+        linear-gradient(180deg, #ffffff 0%, #f9fbff 100%);
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) minmax(300px, 0.7fr);
+      gap: 28px;
+      padding: 40px;
+    }
+
+    .eyebrow,
+    .section-kicker,
+    .finding-id {
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2,
+    h3,
+    p { margin-top: 0; }
+
+    h1 {
+      max-width: 760px;
+      margin-bottom: 16px;
+      font-size: clamp(38px, 5.6vw, 68px);
+      line-height: 1.02;
+      letter-spacing: -0.045em;
+    }
+
+    h2 {
+      margin-bottom: 12px;
+      font-size: 26px;
+      line-height: 1.2;
+      letter-spacing: -0.025em;
+    }
+
+    h3 {
+      margin-bottom: 8px;
+      font-size: 18px;
+      line-height: 1.3;
+    }
+
+    p { margin-bottom: 12px; }
+
+    .lede {
+      max-width: 780px;
+      margin-bottom: 0;
+      color: #475467;
+      font-size: 18px;
+    }
+
+    .verdict-panel {
+      align-self: stretch;
+      padding: 24px;
+      border: 1px solid #f1b4ae;
+      border-radius: 14px;
+      background: var(--red-soft);
+    }
+
+    .verdict-panel strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--red);
+      font-size: 30px;
+      line-height: 1.08;
+    }
+
+    .verdict-panel p { margin-bottom: 0; color: #7a271a; }
+
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      border-top: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.72);
+    }
+
+    .meta div { padding: 16px 22px; }
+    .meta div + div { border-left: 1px solid var(--line); }
+    .meta span { display: block; color: var(--muted); font-size: 12px; }
+    .meta strong { display: block; margin-top: 3px; font-size: 14px; }
+
+    nav {
+      position: sticky;
+      top: 12px;
+      z-index: 10;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+      padding: 12px 14px;
+      box-shadow: 0 8px 24px rgba(23, 32, 51, 0.08);
+    }
+
+    nav a {
+      padding: 7px 10px;
+      border-radius: 8px;
+      color: #344054;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    nav a:hover { background: var(--blue-soft); color: var(--blue); }
+
+    section {
+      margin-top: 20px;
+      padding: 30px 32px;
+    }
+
+    .section-intro { max-width: 900px; color: var(--muted); }
+
+    .metric-grid,
+    .card-grid,
+    .gate-grid {
+      display: grid;
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .metric-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .gate-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+    .metric,
+    .card,
+    .gate {
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: #fbfcfe;
+    }
+
+    .metric { padding: 18px; }
+    .metric strong { display: block; color: var(--navy); font-size: 30px; line-height: 1; }
+    .metric span { display: block; margin-top: 8px; color: var(--muted); font-size: 13px; }
+
+    .card,
+    .gate { padding: 18px 20px; }
+    .card p:last-child,
+    .gate p:last-child { margin-bottom: 0; }
+
+    .status {
+      display: inline-block;
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+
+    .pass { color: var(--green); background: var(--green-soft); }
+    .partial { color: var(--amber); background: var(--amber-soft); }
+    .fail { color: var(--red); background: var(--red-soft); }
+    .info { color: var(--violet); background: var(--violet-soft); }
+
+    .callout {
+      margin-top: 16px;
+      padding: 15px 17px;
+      border-left: 4px solid var(--blue);
+      border-radius: 8px;
+      background: var(--blue-soft);
+    }
+
+    .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    .callout.danger { border-left-color: var(--red); background: var(--red-soft); }
+    .callout.ok { border-left-color: var(--green); background: var(--green-soft); }
+    .callout p:last-child { margin-bottom: 0; }
+
+    .table-wrap {
+      overflow-x: auto;
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 800px;
+    }
+
+    th,
+    td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f3f6fa;
+      color: #344054;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    ul,
+    ol { margin: 8px 0 0; padding-left: 22px; }
+    li { margin: 6px 0; }
+
+    .finding-group { margin-top: 22px; }
+
+    .finding {
+      margin-top: 12px;
+      padding: 19px 20px;
+      border: 1px solid var(--line);
+      border-left-width: 5px;
+      border-radius: 12px;
+      background: #fff;
+    }
+
+    .finding.p0 { border-left-color: var(--red); }
+    .finding.p1 { border-left-color: var(--amber); }
+    .finding.p2 { border-left-color: var(--blue); }
+    .finding.p0 .finding-id { color: var(--red); }
+    .finding.p1 .finding-id { color: var(--amber); }
+    .finding.p2 .finding-id { color: var(--blue); }
+    .finding p:last-child { margin-bottom: 0; }
+
+    .evidence-line {
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: #f6f8fb;
+      color: #344054;
+      font-size: 13px;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: 56px minmax(0, 1fr);
+      gap: 14px;
+      margin-top: 15px;
+      padding-bottom: 15px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .flow:last-child { padding-bottom: 0; border-bottom: 0; }
+    .flow-index {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: var(--navy);
+      color: white;
+      font-weight: 800;
+    }
+
+    .small { color: var(--muted); font-size: 13px; }
+
+    footer {
+      padding: 26px 4px 0;
+      color: var(--muted);
+      text-align: center;
+      font-size: 12px;
+    }
+
+    @media (max-width: 900px) {
+      main { width: min(100vw - 24px, 1240px); padding-top: 20px; }
+      .hero { grid-template-columns: 1fr; padding: 28px 24px; }
+      .meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .meta div:nth-child(3) { border-left: 0; border-top: 1px solid var(--line); }
+      .meta div:nth-child(4) { border-top: 1px solid var(--line); }
+      .metric-grid,
+      .card-grid,
+      .gate-grid { grid-template-columns: 1fr; }
+      section { padding: 24px 20px; }
+      nav { position: static; }
+    }
+
+    @media (max-width: 520px) {
+      .meta { grid-template-columns: 1fr; }
+      .meta div + div { border-left: 0; border-top: 1px solid var(--line); }
+      h1 { font-size: 38px; }
+      .verdict-panel strong { font-size: 25px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="hero">
+        <div>
+          <p class="eyebrow">San v0.2 · Current-state delta review · 2026-07-24</p>
+          <h1>状态机硬化通过，成熟执行闭环仍未成立</h1>
+          <p class="lede">
+            本次复审以 v0.2 原始需求和 2026-07-14 最终审计为基线，核对当前源码、生产入口、测试、dogfood 与 GSAR
+            证据。旧审计中的取消、终态权威、retry 和 Oracle 问题已得到实质修复；但产品模式、证据门禁、权限隔离、硬资源预算、恢复与发布证据仍存在阻断项。
+          </p>
+        </div>
+        <aside class="verdict-panel">
+          <span class="status fail">RELEASE VERDICT</span>
+          <strong>NO-GO</strong>
+          <p>
+            允许继续内部、默认关闭的 dogfood；不接受“v0.2 Mature Execution Loop 已完成”或“准备对外发布”的口径。先关闭 4 个 P0，再补齐 M1–M5 验收链。
+          </p>
+        </aside>
+      </div>
+      <div class="meta">
+        <div><span>Branch</span><strong>main</strong></div>
+        <div><span>HEAD</span><strong><code>d8c357d15ddf</code></strong></div>
+        <div><span>Previous audit</span><strong><code>2616dd4ac</code> · 2026-07-14</strong></div>
+        <div><span>Audit input</span><strong>dirty · v0.2 files clean</strong></div>
+      </div>
+    </header>
+
+    <nav aria-label="报告目录">
+      <a href="#scope">范围</a>
+      <a href="#summary">结论</a>
+      <a href="#delta">旧审计差量</a>
+      <a href="#milestones">M1–M5</a>
+      <a href="#findings">Findings</a>
+      <a href="#product">产品与 ROI</a>
+      <a href="#verification">验证</a>
+      <a href="#gates">修复门槛</a>
+      <a href="#sources">证据索引</a>
+    </nav>
+
+    <section id="scope">
+      <p class="section-kicker">01 · Scope and authority</p>
+      <h2>复审范围与判定口径</h2>
+      <p class="section-intro">
+        这里的 v0.2 指 San 产品路线中的 <strong>Mature Execution Loop</strong>，不是 Desktop 0.2 Alpha。最高权威是原始需求；后续 handoff、README、Changelog 和 dogfood 报告只能提供实现声明，不能覆盖与代码、反例或原始验收条款冲突的事实。
+      </p>
+      <div class="card-grid">
+        <article class="card">
+          <h3>需求基线</h3>
+          <p>
+            <a href="./san-v0.2-requirements-plan.html">san-v0.2-requirements-plan.html</a> 要求任务 DAG、角色硬隔离、Checks Gate、retry、abort/resume、预算、可恢复 ledger、角色化稳态上下文和真实 dogfood。
+          </p>
+        </article>
+        <article class="card">
+          <h3>差量基线</h3>
+          <p>
+            <a href="./san-v0.2-v0.4-final-implementation-audit-20260714.html">2026-07-14 最终审计</a>在快照 <code>2616dd4ac</code> 上判定 v0.2 未验收，并给出可复现的取消、终态权威、retry、Checks、角色上下文、恢复、预算与 dogfood 缺口。
+          </p>
+        </article>
+        <article class="card">
+          <h3>当前实现快照</h3>
+          <p>
+            当前 HEAD 为 <code>d8c357d15ddfb613f5087dbe1cfcdda2885b5f5a</code>。旧审计后，v0.2 相关 15 个文件累计约 <code>+4123/-656</code>；关键硬化提交为 <code>1a94da7f0</code>。
+          </p>
+        </article>
+        <article class="card">
+          <h3>工作区边界</h3>
+          <p>
+            审计开始时存在 8 个已跟踪修改和 2 个未跟踪文件，集中在 RPC v2、provider config 与 usage analytics；<code>src/san-loop</code> 和 <code>test/san-loop</code> 无本地差量。因此 v0.2 代码判定对应 HEAD，静态检查失败另行归因。
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section id="summary">
+      <p class="section-kicker">02 · Executive summary</p>
+      <h2>核心工程状态显著改善，产品合同仍有断层</h2>
+      <div class="metric-grid">
+        <div class="metric"><strong>280 / 0</strong><span>Context Steady + San Loop 测试通过 / 失败</span></div>
+        <div class="metric"><strong>6 / 6</strong><span>确定性 dogfood 场景执行完成</span></div>
+        <div class="metric"><strong>4</strong><span>当前 rollout P0 阻断项</span></div>
+        <div class="metric"><strong>3 / 5</strong><span>M1–M5 达到“部分以上”，无一完整验收</span></div>
+      </div>
+      <div class="callout ok">
+        <strong>已确认的进步：</strong>
+        取消信号会传播到运行中的 Worker；并发 sibling 在异常时被中止并 drain；ledger revision 与 terminal guard 阻止迟到 actor 覆盖终态；Worker failure 与 DAG dependency 会阻断 Supervisor pass；Oracle 已降为 advisory；<code>retryable=false</code> 与 <code>maxRetries=0</code> 语义正确；Checks 已进入生产入口；异常会落成 failed terminal。
+      </div>
+      <div class="callout danger">
+        <strong>仍不能发布：</strong>
+        <code>/solo</code> 实际调用 Commander、Worker、Supervisor，却在 README 中声明为“单 agent 单角色”；Supervisor 可以在零测试、零证据、零缺陷时直接 pass；Supervisor 的 <code>bash</code> 仍可写文件；所谓硬预算只限制角色 turn，不限制 token、cost、provider requests 或 wall time。
+      </div>
+    </section>
+
+    <section id="delta">
+      <p class="section-kicker">03 · Delta from the 2026-07-14 audit</p>
+      <h2>旧 Findings 关闭情况</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>旧 Finding</th><th>当前状态</th><th>当前证据</th><th>剩余边界</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>P0-01 Abort is not cancellation</td>
+              <td><span class="status pass">CLOSED</span></td>
+              <td><code>runner.ts</code> active-run registry、AbortController、abort request/ack；dogfood 真实等待 Worker 收到信号。</td>
+              <td>自定义 executor 若永久忽略信号，stop 层没有独立超时。</td>
+            </tr>
+            <tr>
+              <td>P0-02 Invalid state authority</td>
+              <td><span class="status pass">CLOSED</span></td>
+              <td>Worker failure/DAG gate；Oracle 只写 <code>review_completed</code>；Supervisor reviewer 校验；terminal revision guard。</td>
+              <td>Supervisor 自身的 pass 证据没有 host gate，形成新的 release blocker。</td>
+            </tr>
+            <tr>
+              <td>P1-01 Retry contract</td>
+              <td><span class="status pass">CLOSED</span></td>
+              <td><code>needs_fix &amp;&amp; retryable</code> 才 retry；<code>maxRetries=0</code> 保留零语义；对应 runner 回归通过。</td>
+              <td>task-agent 瞬断重试不消耗 role turn，只进入 usage 统计。</td>
+            </tr>
+            <tr>
+              <td>P1-02 Checks are orphaned</td>
+              <td><span class="status partial">PARTIAL</span></td>
+              <td>生产入口发现 project/user/builtin checks，并按 role/path 传入四类角色 prompt。</td>
+              <td>Checks 仍是提示文本；没有 host-owned 结果、blocker enforcement 或 fail-closed load。</td>
+            </tr>
+            <tr>
+              <td>P1-03 Role context / capability</td>
+              <td><span class="status partial">PARTIAL</span></td>
+              <td>角色工具名单通过 <code>strictToolNames</code> 强制；role context 现在真实注入并硬裁剪到 token budget。</td>
+              <td>Supervisor 的 bash 可写；Worker 无路径范围；ContextPlan 只传 entry ID，不传材料。</td>
+            </tr>
+            <tr>
+              <td>P1-04 Exception / recovery</td>
+              <td><span class="status partial">PARTIAL</span></td>
+              <td>异常会 terminalize 为 failed；并发 sibling 会取消并 drain。</td>
+              <td><code>recoverSanLoopRun()</code> 仍只写 blocked；无 <code>/san-loop resume</code>。</td>
+            </tr>
+            <tr>
+              <td>P1-05 Budget / mode / config</td>
+              <td><span class="status partial">PARTIAL</span></td>
+              <td>input/output/cache/total token、cost、duration、provider request 已累计进 budget snapshot；mode turn 上限接入设置。</td>
+              <td>这些指标只观测不门禁；solo/team 角色路径相同；reserveRatio 和 oracle enabledInModes 无消费者。</td>
+            </tr>
+            <tr>
+              <td>P1-06 Dogfood lifecycle</td>
+              <td><span class="status partial">PARTIAL</span></td>
+              <td>当前 abort 场景运行真实 runner 并等待 Worker 信号；Oracle 不再产生 finalized。</td>
+              <td>recovery 仍手工调用 helper；无真实 restart；真实模型证据不可复查。</td>
+            </tr>
+            <tr>
+              <td>P2-02 Ledger atomicity</td>
+              <td><span class="status fail">OPEN</span></td>
+              <td>revision 与 terminal CAS 已补。</td>
+              <td>snapshot、event、review 仍分次 append；rebuild 接受有 run 无 event 的部分 transition。</td>
+            </tr>
+            <tr>
+              <td>P2-03 Status observability</td>
+              <td><span class="status partial">PARTIAL</span></td>
+              <td>报告展示状态、任务、review、事件、ContextPlan refs。</td>
+              <td>只显示 budget snapshot 数量，不显示 token/cost/duration/provider totals、child identity、cancel ack 或 DAG readiness。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="milestones">
+      <p class="section-kicker">04 · M1–M5 acceptance matrix</p>
+      <h2>按原始里程碑重新验收</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>里程碑</th><th>原始验收</th><th>已实现</th><th>缺口</th><th>判定</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>M1</strong><br />Ledger 与合同</td>
+              <td>完整记录 run 状态、证据、预算和 verdict；resume 后状态可恢复。</td>
+              <td>四类 custom entry、revision、terminal guard、run report、最高 revision 重建。</td>
+              <td>transition 非原子；运行时 guard 浅；部分 entry 被静默接受；恢复不继续执行。</td>
+              <td><span class="status partial">PARTIAL</span></td>
+            </tr>
+            <tr>
+              <td><strong>M2</strong><br />角色与上下文</td>
+              <td>三角色顺序完成；每个角色只见所需上下文；权限硬隔离。</td>
+              <td>四个 bundled agents、model-role routing、工具白名单、角色 prompt、2K token role context。</td>
+              <td>Supervisor bash 可产生写副作用；Worker 无 assignment path scope；ContextPlan 仅 refs；solo 仍三角色。</td>
+              <td><span class="status partial">PARTIAL</span></td>
+            </tr>
+            <tr>
+              <td><strong>M3</strong><br />Checks Gate</td>
+              <td>故意引入缺陷时稳定拦截，并生成修复任务。</td>
+              <td>project/user/builtin discovery、优先级、scope、role filter、prompt rendering。</td>
+              <td>没有确定性 check runner/attestation；read/parse 失败会忽略；空证据 pass 可直接 finalize。</td>
+              <td><span class="status fail">NOT MET</span></td>
+            </tr>
+            <tr>
+              <td><strong>M4</strong><br />成熟 Orchestrator</td>
+              <td>状态机、预算、并发 Worker、retry、abort/resume、report；复杂任务自动收敛。</td>
+              <td>DAG waves、并发限流、失败 gate、bounded retry、Oracle advisory、取消与 terminal CAS、异常 terminalization。</td>
+              <td>无真实 resume；无 token/time/cost hard cap；solo/team 仅 turn budget 不同；ledger 非原子。</td>
+              <td><span class="status partial">PARTIAL</span></td>
+            </tr>
+            <tr>
+              <td><strong>M5</strong><br />Dogfood 与发布</td>
+              <td>确定性合同稳定；真实任务证明质量门禁与成本合理；失败收敛且不污染上下文。</td>
+              <td>280 个联合测试通过；6 场景 deterministic dogfood 通过；旧 GSAR 报告存在。</td>
+              <td>历史 raw evidence 已丢失；无提交的 ground-truth evaluator 输出；单轮数据；README 超出报告结论。</td>
+              <td><span class="status fail">NOT MET</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout warn">
+        <strong>里程碑结论：</strong>
+        v0.2 已从“可运行实验骨架”进化为“状态机核心可 dogfood”，但尚未达到原始需求中的成熟执行闭环。M3 和 M5 仍直接不满足；M1、M2、M4 只部分满足。
+      </div>
+    </section>
+
+    <section id="findings">
+      <p class="section-kicker">05 · Current findings</p>
+      <h2>当前阻断项</h2>
+      <p class="section-intro">
+        P0 表示会造成错误产品行为、错误放行、权限边界突破或资源预算失效；P1 表示阻断原始验收或发布证据；P2 表示会持续扩大维护和诊断成本。
+      </p>
+
+      <div class="finding-group">
+        <h3><span class="status fail">P0 · 4</span> rollout 前必须关闭</h3>
+
+        <article class="finding p0">
+          <p class="finding-id">P0-01 · Evidence-free pass</p>
+          <h3>Supervisor 可以在零测试、零证据、零缺陷时直接把 run 终结为 passed。</h3>
+          <p>
+            <code>SanLoopReviewInput.testsRun</code>、<code>evidence</code> 和 <code>defects</code> 全部可选；<code>createSanLoopReviewReport()</code> 将缺省值变成空数组；<code>applySanLoopReview()</code> 只看 <code>verdict === "pass"</code>。内置 <code>supervisor-gate</code> 只是 prompt 文本，没有 host-owned 证据引用或 check result gate。
+          </p>
+          <p class="evidence-line">运行探针：<code>{status:"passed", calls:["commander","worker","supervisor"], reviewEvidence:[], testsRun:[], defects:[]}</code></p>
+        </article>
+
+        <article class="finding p0">
+          <p class="finding-id">P0-02 · Read-only role is not read-only</p>
+          <h3>Supervisor 虽无 edit/write，却拥有无约束 bash；角色“禁止写代码”的硬隔离不成立。</h3>
+          <p>
+            <code>SAN_LOOP_ROLE_TOOLS.supervisor</code> 为 <code>read/grep/glob/bash/yield</code>。<code>runSubprocess()</code> 的 strict tool whitelist 阻止额外工具，但没有为 bash 设置只读命令集、工作区快照或路径 scope。Supervisor 可通过 shell 改文件；Worker 同样没有 assignment-specific path scope。
+          </p>
+        </article>
+
+        <article class="finding p0">
+          <p class="finding-id">P0-03 · Solo contract mismatch</p>
+          <h3>README 把 solo 定义为“单 agent 单角色”，生产路径却固定运行 Commander、Worker、Supervisor。</h3>
+          <p>
+            <code>/solo</code> 与 <code>/san-loop run --mode solo</code> 都进入同一个 <code>runSanLoop()</code> 主循环。模式只改变 turn budget 和 Oracle；Commander、Worker、Supervisor 在所有模式都会运行。生产设置还把全局 <code>maxWorkers=3</code> 传给 solo，覆盖 policy 中的 1。
+          </p>
+          <p class="evidence-line">README：solo = 单 agent 单角色。运行探针：solo passed，实际 role calls = commander → worker → supervisor。</p>
+        </article>
+
+        <article class="finding p0">
+          <p class="finding-id">P0-04 · Hard budget is turn-only</p>
+          <h3>token、cost、provider request 和 wall time 只被记录，不会在调用前阻止超支。</h3>
+          <p>
+            runner 的唯一消费门禁是 <code>remainingTurns</code>。单个 role agent 内可以发生多次 provider request 和工具循环；瞬断重试也不消耗新的 role turn。usage 最终写入 snapshot，但没有 max token/cost/time/provider settings 或 preflight reservation；<code>budget.reserveRatio</code> 无生产消费者。
+          </p>
+        </article>
+      </div>
+
+      <div class="finding-group">
+        <h3><span class="status partial">P1 · 6</span> 阻断需求验收</h3>
+
+        <article class="finding p1">
+          <p class="finding-id">P1-01 · Recovery is not resume</p>
+          <h3>重启后 active run 被改成 blocked，没有恢复 DAG、pending assignment 或剩余执行。</h3>
+          <p><code>recoverSanLoopRun()</code> 固定写 <code>status: "blocked"</code>；命令面只有 run/status/stop，没有 resume。当前行为可以叫“安全收口”，不能叫原始合同中的 abort/resume。</p>
+        </article>
+
+        <article class="finding p1">
+          <p class="finding-id">P1-02 · ContextPlan references without materials</p>
+          <h3>角色上下文只列出 ContextPlan entry ID，没有把稳定材料投影给角色。</h3>
+          <p>
+            <code>context.ts</code> 验证 ContextPlanAudit 后只收集最近 3 个 entry ID；role template 输出 <code>Source ContextPlan refs</code>。San-loop 目录没有读取 <code>audit.materials</code> 或构造 role-specific material view 的代码。Commander 另有 parent conversation；Worker/Supervisor 主要依赖 assignment、run 和模型生成摘要。
+          </p>
+        </article>
+
+        <article class="finding p1">
+          <p class="finding-id">P1-03 · Non-atomic ledger transition</p>
+          <h3>run snapshot、event 和 review 分开 append，崩溃可留下半个状态转换。</h3>
+          <p>
+            <code>recordSanLoopTransition()</code> 先 append snapshot，再 append event；review 又在 transition 前单独 append。rebuild 只选最高 revision，不校验 snapshot/event/review 对应关系。运行探针表明有 1 个 planning run、0 个 event 的 ledger 会被正常接受。
+          </p>
+        </article>
+
+        <article class="finding p1">
+          <p class="finding-id">P1-04 · Checks fail open</p>
+          <h3>Check 文件读取失败会被静默忽略，severity 也不参与 host 决策。</h3>
+          <p>
+            <code>readCheckDir()</code> 对目录和单文件错误返回空结果；blocker/error 只渲染成文本。没有“配置了 check 但无法加载时拒绝运行”的语义，也没有把 check ID、执行命令、exit code 和 evidence ref 写入 review。
+          </p>
+        </article>
+
+        <article class="finding p1">
+          <p class="finding-id">P1-05 · Release evidence is not reproducible</p>
+          <h3>README 的 5/10、8/10、9/10 结论无法从仓库内证据独立复验。</h3>
+          <p>
+            两份 GSAR run 报告都明确写“证据不完整”，且仅 1 run/mode。报告引用的 <code>/private/tmp/...-evidence</code> 目录当前不存在；仓库没有对应 summary JSON、task outputs 或 ground-truth evaluator 输出。当前 ROI runner 也没有 source commit/dirty provenance，且 summary 引用外部可变 workspace/session 路径，不是自包含 artifact。
+          </p>
+        </article>
+
+        <article class="finding p1">
+          <p class="finding-id">P1-06 · Settings and public contract drift</p>
+          <h3>设置表、推荐配置、模式策略和公开文案没有形成同一份可执行合同。</h3>
+          <p>
+            README 宣称 solo 默认；schema 与推荐配置的 <code>defaultMode</code> 是 team。<code>roles.oracle.enabledInModes</code> 和 <code>budget.reserveRatio</code> 无消费者；<code>ledger.enabled=false</code> 只影响主会话 prelude/recovery，不阻止 run ledger 写入；policy 的 maxWorkers/maxRetries 又被全局设置覆盖。
+          </p>
+        </article>
+      </div>
+
+      <div class="finding-group">
+        <h3><span class="status info">P2</span> 维护性与观测性</h3>
+        <article class="finding p2">
+          <p class="finding-id">P2-01 · Shallow validation and weak report</p>
+          <h3>runtime guard 只校验顶层 shape；报告不汇总实际资源使用。</h3>
+          <p>
+            event type、reviewer、verdict、nested task/assignment/result 并未深校验；错误 entry 可能被当成有效数据。状态报告只输出 budget snapshot 数量，无法看到累计 token/cost/duration/provider requests。failed status 又常搭配 <code>finalVerdict: blocked</code>，增加诊断歧义。
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section id="product">
+      <p class="section-kicker">06 · Product and ROI evidence</p>
+      <h2>当前证据只能支持“内部实验”，不能支持公开质量结论</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>证据</th><th>观察结果</th><th>可支持的结论</th><th>不能支持的结论</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>确定性 dogfood</td>
+              <td>6 runs；2 passed、3 blocked、1 aborted；30 events；PASS。</td>
+              <td>状态机 happy/retry/Oracle/budget-turn/recovery-block/abort 路径可运行。</td>
+              <td>真实模型质量、角色权限、Checks 真实执行、资源 ROI、restart resume。</td>
+            </tr>
+            <tr>
+              <td>GSAR controls</td>
+              <td>Single 5/10；Same Model 8/10；1 run/mode；报告自报 evidence incomplete。</td>
+              <td>形成了一个值得复跑的历史样本。</td>
+              <td>统计显著的 30% 质量提升、稳定 false-pass 改善。</td>
+            </tr>
+            <tr>
+              <td>GSAR heterogeneous</td>
+              <td>9/10；4.48M tokens；单独时段/配置；1 run；raw evidence 缺失。</td>
+              <td>异构组合曾出现更高 agent-reported pass 样本。</td>
+              <td>可复现的最强质量档、可与 controls 严格横向比较。</td>
+            </tr>
+            <tr>
+              <td>Ground-truth evaluator</td>
+              <td>脚本存在；仓库无对应历史输出。</td>
+              <td>未来可按 final workspace 与 ground truth 独立评分。</td>
+              <td>当前 README pass 数已经通过独立 evaluator。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout danger">
+        <strong>README 需要降级：</strong>
+        “team 是质量开关”“能真实捕捉单 agent 漏掉的问题”“council 是当前最强质量样本”均超出可保留证据。复跑前只保留：多角色是默认关闭的高风险实验档，历史单轮样本显示潜在增益，但尚未形成可复现发布证据。
+      </div>
+    </section>
+
+    <section id="verification">
+      <p class="section-kicker">07 · Verification evidence</p>
+      <h2>本次实际执行</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>命令 / 探针</th><th>结果</th><th>证明范围</th><th>边界</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>bun test packages/coding-agent/test/context-steady packages/coding-agent/test/san-loop</code></td>
+              <td><span class="status pass">280 pass · 0 fail</span><br />1395 assertions · 32 files</td>
+              <td>当前 Context Steady 与 San Loop 聚焦合同保持绿色。</td>
+              <td>多数执行器为 fixture，不证明真实 provider 质量。</td>
+            </tr>
+            <tr>
+              <td><code>bun packages/coding-agent/scripts/san-loop-dogfood.ts</code></td>
+              <td><span class="status pass">PASS</span><br />6 runs · 30 events</td>
+              <td>旧取消、Oracle、retry、turn budget 反例已收敛。</td>
+              <td>recovery 仍为 helper → blocked。</td>
+            </tr>
+            <tr>
+              <td><code>bun run check:types</code> in coding-agent</td>
+              <td><span class="status pass">PASS</span></td>
+              <td>当前 coding-agent TypeScript 类型检查通过。</td>
+              <td>不验证状态机语义。</td>
+            </tr>
+            <tr>
+              <td><code>bunx --bun biome check src/san-loop test/san-loop</code></td>
+              <td><span class="status pass">PASS</span></td>
+              <td>v0.2 源码与测试的 focused Biome 检查通过。</td>
+              <td>不覆盖工作区其他文件。</td>
+            </tr>
+            <tr>
+              <td><code>bun check</code></td>
+              <td><span class="status fail">FAIL · unrelated dirty files</span></td>
+              <td>发现 RPC v2 / provider config 本地改动中的 6 个 Biome 错误。</td>
+              <td>无 San-loop 文件报错；并行 Rust check 因 TS job 失败被中止。</td>
+            </tr>
+            <tr>
+              <td>只读合同探针</td>
+              <td><span class="status fail">3 counterexamples</span></td>
+              <td>solo 实际三角色；空证据可 pass；部分 ledger 被接受；recovery → blocked。</td>
+              <td>使用 in-memory SessionManager，不是进程崩溃注入。</td>
+            </tr>
+            <tr>
+              <td>历史 GSAR artifact lookup</td>
+              <td><span class="status fail">NOT FOUND</span></td>
+              <td>两份报告引用的 <code>/private/tmp</code> evidence 目录均不存在。</td>
+              <td>未发起新的付费模型 benchmark。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <pre><code>{
+  "solo": {
+    "status": "passed",
+    "calls": ["commander", "worker", "supervisor"],
+    "reviewEvidence": [],
+    "testsRun": [],
+    "defects": []
+  },
+  "partialLedger": {
+    "runs": 1,
+    "events": 0,
+    "acceptedStatus": "planning"
+  },
+  "recovery": {
+    "status": "blocked",
+    "event": "recovered"
+  }
+}</code></pre>
+    </section>
+
+    <section id="gates">
+      <p class="section-kicker">08 · Repair order and release gates</p>
+      <h2>下一步只修 v0.2，不继续扩展新版本</h2>
+
+      <div class="flow">
+        <div class="flow-index">1</div>
+        <div>
+          <h3>冻结产品合同与模式语义</h3>
+          <p>让 <code>solo</code> 真正成为单 agent 单角色路径，或立即撤回该命名和 README 声明。统一 schema、recommended config、CLI/RPC 默认模式和 policy；删除无消费者设置。</p>
+        </div>
+      </div>
+      <div class="flow">
+        <div class="flow-index">2</div>
+        <div>
+          <h3>建立 host-owned Supervisor Gate</h3>
+          <p>pass 必须引用完成 assignment、required check result、确定性 command/test evidence；blocker/error checks 不得只靠 prompt。check 读取或执行失败要 fail closed。</p>
+        </div>
+      </div>
+      <div class="flow">
+        <div class="flow-index">3</div>
+        <div>
+          <h3>兑现权限与硬预算</h3>
+          <p>为 Supervisor 提供真正只读验证工具或隔离工作区；Worker 绑定 assignment path scope。增加 total/input/output token、cost、provider request、wall-time 硬上限，并在每次 role/provider 调用前预留。</p>
+        </div>
+      </div>
+      <div class="flow">
+        <div class="flow-index">4</div>
+        <div>
+          <h3>补 durable transition 与恢复合同</h3>
+          <p>用单一 transition envelope 或可重放 receipt 原子绑定 snapshot/event/review；rebuild 校验 revision 连续性。选择并兑现一种明确语义：真正 resume，或公开定义为 recover-to-blocked。</p>
+        </div>
+      </div>
+      <div class="flow">
+        <div class="flow-index">5</div>
+        <div>
+          <h3>把 ContextPlan 材料投影给角色</h3>
+          <p>按 role/assignment 选择并裁剪稳定 materials，而不是只显示 entry ID；持久化每次 subagent 实际收到的 role packet hash、refs 和 token accounting。</p>
+        </div>
+      </div>
+      <div class="flow">
+        <div class="flow-index">6</div>
+        <div>
+          <h3>重新建立发布证据</h3>
+          <p>GSAR runner 必须保存 source commit/dirty state、配置 hash、workspace diff、session/probe、host-owned check evidence 和 evaluator output。按同一冻结快照跑至少 3 runs/mode，发布均值、方差和失败样本。</p>
+        </div>
+      </div>
+
+      <div class="gate-grid">
+        <article class="gate">
+          <span class="status fail">Gate A</span>
+          <h3>状态、权限、预算</h3>
+          <p>零证据 pass 被拒绝；solo 角色数符合文案；Supervisor 无写能力；token/cost/time 超限在调用前终止。</p>
+        </article>
+        <article class="gate">
+          <span class="status partial">Gate B</span>
+          <h3>持久执行与上下文</h3>
+          <p>transition 可 crash-replay；resume 语义明确；角色收到可审计的 ContextPlan material view；重启不产生静默半状态。</p>
+        </article>
+        <article class="gate">
+          <span class="status info">Gate C</span>
+          <h3>产品质量与 ROI</h3>
+          <p>false-pass rate 相对 baseline 降低 ≥50%；correction success ≥60%；quality / 1M tokens 不低于 baseline 的 80%；至少 3 轮。</p>
+        </article>
+      </div>
+
+      <div class="callout danger">
+        <strong>最终决定：</strong>
+        Context Steady 可以转入守护模式；v0.2 是下一条唯一主线。保持 <code>san.executionLoop.enabled=false</code> 默认值，回撤“准备对外发布”和已证明质量提升的声明。只有 Gate A–C 全部通过，才能重新标记 v0.2 为 Mature Execution Loop，并继续讨论 v0.3/v0.4 rollout。
+      </div>
+    </section>
+
+    <section id="sources">
+      <p class="section-kicker">09 · Evidence index</p>
+      <h2>主要证据</h2>
+      <div class="card-grid">
+        <article class="card">
+          <h3>需求与历史审计</h3>
+          <ul>
+            <li><a href="./san-v0.2-requirements-plan.html">v0.2 成熟执行闭环需求规划</a></li>
+            <li><a href="./san-v0.2-technical-design.html">v0.2 技术设计</a></li>
+            <li><a href="./san-v0.2-v0.4-final-implementation-audit-20260714.html">v0.2-v0.4 最终实现审计</a></li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>当前核心源码</h3>
+          <ul>
+            <li><a href="../../packages/coding-agent/src/san-loop/runner.ts">runner.ts</a></li>
+            <li><a href="../../packages/coding-agent/src/san-loop/orchestrator.ts">orchestrator.ts</a></li>
+            <li><a href="../../packages/coding-agent/src/san-loop/ledger.ts">ledger.ts</a></li>
+            <li><a href="../../packages/coding-agent/src/san-loop/task-executor.ts">task-executor.ts</a></li>
+            <li><a href="../../packages/coding-agent/src/san-loop/context.ts">context.ts</a></li>
+            <li><a href="../../packages/coding-agent/src/san-loop/checks.ts">checks.ts</a></li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>产品与设置</h3>
+          <ul>
+            <li><a href="../../README.md">README.md</a></li>
+            <li><a href="../../packages/coding-agent/CHANGELOG.md">coding-agent CHANGELOG</a></li>
+            <li><a href="../../packages/coding-agent/examples/config/san-execution-loop-recommended.yml">recommended config</a></li>
+            <li><a href="../../packages/coding-agent/src/config/settings-schema.ts">settings schema</a></li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>测试与 benchmark</h3>
+          <ul>
+            <li><a href="../../packages/coding-agent/test/san-loop/runner.test.ts">runner tests</a></li>
+            <li><a href="../../packages/coding-agent/src/san-loop/dogfood.ts">deterministic dogfood</a></li>
+            <li><a href="./san-gsar-controls-run-20260706-111813.html">GSAR controls report</a></li>
+            <li><a href="./san-gsar-qwen-opus-run-20260706-100034.html">GSAR heterogeneous report</a></li>
+            <li><a href="../../packages/coding-agent/scripts/san-gsar-evaluator.ts">ground-truth evaluator</a></li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <footer>
+      San v0.2 current-state delta review · 2026-07-24 · source snapshot d8c357d15ddf · internal engineering evidence
+    </footer>
+  </main>
+</body>
+</html>

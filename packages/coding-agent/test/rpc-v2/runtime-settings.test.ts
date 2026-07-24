@@ -46,7 +46,7 @@ describe("RPC v2 runtime settings", () => {
 		expect(initial).toMatchObject({
 			schemaVersion: 1,
 			revision: 0,
-			executionProfile: { effective: "team", source: "builtin" },
+			executionProfile: { effective: "solo", source: "builtin" },
 			autoRetry: { effective: { enabled: true }, source: "builtin" },
 			contextMaintenance: { effective: { mode: "automatic" }, source: "builtin" },
 		});

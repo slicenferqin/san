@@ -37,6 +37,8 @@ export interface ServerCapabilities {
 	"subagent.stream": CapabilityDescriptor;
 	"model.catalog": CapabilityDescriptor;
 	"provider.auth": CapabilityDescriptor;
+	"provider.config": CapabilityDescriptor;
+	"usage.analytics": CapabilityDescriptor;
 	"execution.profiles": CapabilityDescriptor;
 	"input.images": CapabilityDescriptor;
 	"input.resources": CapabilityDescriptor;
@@ -63,6 +65,8 @@ export const REQUIRED_CAPABILITIES: ReadonlyArray<keyof ServerCapabilities> = [
 	"subagent.stream",
 	"model.catalog",
 	"provider.auth",
+	"provider.config",
+	"usage.analytics",
 	"execution.profiles",
 	"input.images",
 	"input.resources",
@@ -126,6 +130,8 @@ export function buildServerCapabilities(overrides?: Partial<ServerCapabilities>)
 		"subagent.stream": available(),
 		"model.catalog": available(),
 		"provider.auth": available(),
+		"provider.config": available(),
+		"usage.analytics": available(),
 		"execution.profiles": available(),
 		"input.images": available(),
 		"input.resources": available(),

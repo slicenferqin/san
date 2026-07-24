@@ -5,6 +5,8 @@ import * as path from "node:path";
 import { removeWithRetries } from "../../utils/src/temp";
 import { withFileLock } from "../src/config/file-lock";
 import {
+	addCustomModelConfig,
+	listCustomProviderConfigSummaries,
 	previewCustomProviderConfig,
 	removeCustomProviderConfig,
 	validateCustomProviderConfigDestination,
@@ -235,5 +237,76 @@ other: {a: 1,b: 2}
 		);
 		expect(result.changed).toBe(false);
 		expect(await Bun.file(filePath).text()).toBe(original);
+	});
+
+	it("lists configured providers without secrets and preserves OAuth auth", async () => {
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "san-provider-summary-"));
+		const modelsPath = path.join(tempDir, "models.yml");
+		const legacySecret = "sk-legacy-secret";
+		await Bun.write(
+			modelsPath,
+			`providers:
+  oauth-proxy:
+    baseUrl: https://proxy.example/v1
+    api: openai-completions
+    auth: oauth
+    apiKey: ${legacySecret}
+    discovery:
+      type: openai-models-list
+    models:
+      - id: proxy-model
+`,
+		);
+
+		const summaries = await listCustomProviderConfigSummaries({ modelsPath });
+
+		expect(summaries).toEqual([
+			{
+				providerId: "oauth-proxy",
+				baseUrl: "https://proxy.example/v1",
+				api: "openai-completions",
+				auth: "oauth",
+				discoveryType: "openai-models-list",
+				modelCount: 1,
+			},
+		]);
+		expect(JSON.stringify(summaries)).not.toContain(legacySecret);
+	});
+
+	it("adds an explicit custom model without rewriting the provider", async () => {
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "san-model-add-"));
+		const modelsPath = path.join(tempDir, "models.yml");
+		await Bun.write(
+			modelsPath,
+			`providers:
+  local-proxy:
+    baseUrl: http://127.0.0.1:11434/v1
+    auth: none
+`,
+		);
+
+		const result = await addCustomModelConfig(
+			{
+				provider: "local-proxy",
+				id: "local-model",
+				name: "Local Model",
+				api: "openai-completions",
+				contextWindow: 128000,
+				maxTokens: 8192,
+				reasoning: true,
+				input: ["text", "image"],
+				supportsTools: true,
+			},
+			{ modelsPath },
+		);
+
+		expect(result.persisted).toBe(true);
+		const text = await Bun.file(modelsPath).text();
+		expect(text).toContain("local-proxy:");
+		expect(text).toContain("id: local-model");
+		expect(text).toContain("contextWindow: 128000");
+		await expect(
+			addCustomModelConfig({ provider: "local-proxy", id: "local-model" }, { modelsPath }),
+		).rejects.toThrow('Model id "local-model" already exists');
 	});
 });

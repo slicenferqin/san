@@ -270,6 +270,14 @@ const paramsByMethod: Record<string, JsonSchema> = {
 		required: ["sessionId"],
 		additionalProperties: false,
 	},
+	"usage.stats": {
+		type: "object",
+		properties: {
+			days: { type: "integer", minimum: 1, maximum: 90 },
+			sessionLimit: { type: "integer", minimum: 1, maximum: 500 },
+		},
+		additionalProperties: false,
+	},
 	"session.recover": {
 		type: "object",
 		properties: {
@@ -453,6 +461,66 @@ const paramsByMethod: Record<string, JsonSchema> = {
 		type: "object",
 		properties: { loginId: stringSchema, meta: objectSchema },
 		required: ["loginId", "meta"],
+		additionalProperties: false,
+	},
+	"provider.config.create": {
+		type: "object",
+		properties: {
+			providerId: stringSchema,
+			baseUrl: stringSchema,
+			api: {
+				enum: [
+					"openai-completions",
+					"openai-responses",
+					"openai-codex-responses",
+					"azure-openai-responses",
+					"anthropic-messages",
+					"google-generative-ai",
+					"google-gemini-cli",
+					"google-vertex",
+				],
+			},
+			auth: { enum: ["apiKey", "none"] },
+			discovery: {
+				type: "object",
+				properties: {
+					type: { enum: ["openai-models-list", "proxy", "litellm", "ollama", "llama.cpp", "lm-studio"] },
+				},
+				required: ["type"],
+				additionalProperties: false,
+			},
+			apiKey: stringSchema,
+			meta: objectSchema,
+		},
+		required: ["providerId", "baseUrl", "auth", "meta"],
+		additionalProperties: false,
+	},
+	"provider.model.add": {
+		type: "object",
+		properties: {
+			providerId: stringSchema,
+			modelId: stringSchema,
+			displayName: stringSchema,
+			api: {
+				enum: [
+					"openai-completions",
+					"openai-responses",
+					"openai-codex-responses",
+					"azure-openai-responses",
+					"anthropic-messages",
+					"google-generative-ai",
+					"google-gemini-cli",
+					"google-vertex",
+				],
+			},
+			contextWindow: { type: "integer", minimum: 1 },
+			maxTokens: { type: "integer", minimum: 1 },
+			reasoning: { type: "boolean" },
+			supportsImage: { type: "boolean" },
+			supportsTools: { type: "boolean" },
+			meta: objectSchema,
+		},
+		required: ["providerId", "modelId", "meta"],
 		additionalProperties: false,
 	},
 	"command.list": {
