@@ -10,6 +10,8 @@ const VERIFICATION_CLAIM_RE =
 	/(?:测试|检查|构建|校验).{0,48}(?:通过|成功)|(?:通过|成功).{0,48}(?:测试|检查|构建|校验)|\b(?:tests?|checks?|builds?)\b.{0,48}\b(?:passed|succeeded|successful)\b|\b(?:passed|succeeded|successful)\b.{0,48}\b(?:tests?|checks?|builds?)\b/i;
 const NON_AUTHORITATIVE_CLAIM_RE =
 	/(?:未验证|未经验证|无法确认|尚未|没有|并未|未曾|声称|报告称|缺少|无证据|reported but unverified|unverified|unsupported|not verified|did not|has not|have not|no mutation|no verification|without evidence|claimed|reported|none)/i;
+const CLAIM_PATH_RE = /(?:^|[\s`"'(])((?:\.{0,2}\/|\/|[A-Za-z0-9_.-]+\/)[A-Za-z0-9_./-]+\.[A-Za-z0-9_-]+)/g;
+const CLAIM_COMMAND_RE = /\b(?:bun|npm|pnpm|yarn|pytest|vitest|jest|cargo|go|mvn|gradle)\b[^\n`]+/gi;
 
 export const COMPACTION_SUMMARY_REPAIR_INSTRUCTIONS = repairInstructions;
 
@@ -48,13 +50,58 @@ export function inspectContextSummary(
 
 	const hasMutation = state.executionEvidence.successfulMutations.length > 0;
 	const hasVerification = state.executionEvidence.successfulVerifications.length > 0;
+	const mutationPaths = state.executionEvidence.successfulMutations
+		.flatMap(item => [item.path, item.resource])
+		.filter((value): value is string => typeof value === "string");
+	const verificationPaths = state.executionEvidence.successfulVerifications
+		.flatMap(item => [item.path, item.resource])
+		.filter((value): value is string => typeof value === "string");
+	const verificationCommands = state.executionEvidence.successfulVerifications
+		.map(item => item.command)
+		.filter((value): value is string => typeof value === "string");
+	const claimPaths = (line: string): string[] =>
+		[...line.matchAll(CLAIM_PATH_RE)].map(match => match[1]).filter(Boolean);
+	const claimCommands = (line: string): string[] => [...line.matchAll(CLAIM_COMMAND_RE)].map(match => match[0].trim());
+	const pathMatches = (claim: string, evidence: readonly string[]): boolean =>
+		evidence.some(item => item === claim || item.endsWith(claim) || claim.endsWith(item));
+	const commandMatches = (claim: string, command: string): boolean => {
+		const normalizedClaim = claim.replace(/\s+/g, " ").trim();
+		const normalizedCommand = command.replace(/\s+/g, " ").trim();
+		if (normalizedClaim === normalizedCommand) return true;
+		if (!normalizedClaim.startsWith(normalizedCommand)) return false;
+		const suffix = normalizedClaim.slice(normalizedCommand.length).trim();
+		return /^(?:(?:passed|succeeded|successful)(?:\s+successfully)?|通过|成功)[.!。]?$/i.test(suffix);
+	};
+	const matchesEvidence = (claims: readonly string[], evidence: readonly string[]): boolean =>
+		claims.every(claim => pathMatches(claim, evidence));
+	const matchesCommandEvidence = (claims: readonly string[]): boolean =>
+		claims.every(claim => verificationCommands.some(command => commandMatches(claim, command)));
+	const matchesVerificationPaths = (paths: readonly string[], commands: readonly string[]): boolean =>
+		paths.every(
+			claimPath =>
+				pathMatches(claimPath, verificationPaths) ||
+				commands.some(claimCommand =>
+					verificationCommands.some(
+						command =>
+							commandMatches(claimCommand, command) &&
+							claimCommand.includes(claimPath) &&
+							command.includes(claimPath),
+					),
+				),
+		);
 	let executionClaimConflictCount = 0;
 	for (const { line, section } of lines) {
 		if (!line.trim() || NON_AUTHORITATIVE_CLAIM_RE.test(line) || NON_AUTHORITATIVE_CLAIM_RE.test(section)) {
 			continue;
 		}
-		const mutationConflict = !hasMutation && MUTATION_CLAIM_RE.test(line);
-		const verificationConflict = !hasVerification && VERIFICATION_CLAIM_RE.test(line);
+		const paths = claimPaths(line);
+		const commands = claimCommands(line);
+		const mutationConflict = MUTATION_CLAIM_RE.test(line) && (!hasMutation || !matchesEvidence(paths, mutationPaths));
+		const verificationConflict =
+			VERIFICATION_CLAIM_RE.test(line) &&
+			(!hasVerification ||
+				(paths.length > 0 && !matchesVerificationPaths(paths, commands)) ||
+				(commands.length > 0 && !matchesCommandEvidence(commands)));
 		if (mutationConflict || verificationConflict) executionClaimConflictCount++;
 	}
 	return { forbiddenGoalField, executionClaimConflictCount };

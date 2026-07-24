@@ -641,28 +641,48 @@ const paramsByMethod: Record<string, JsonSchema> = {
 		additionalProperties: false,
 	},
 	"interaction.respond": {
-		type: "object",
-		properties: {
-			sessionId: stringSchema,
-			leaseId: stringSchema,
-			interactionId: stringSchema,
-			response: objectSchema,
-			meta: objectSchema,
-		},
-		required: ["sessionId", "leaseId", "interactionId", "response", "meta"],
-		additionalProperties: false,
+		anyOf: [
+			{
+				type: "object",
+				properties: {
+					sessionId: stringSchema,
+					leaseId: stringSchema,
+					interactionId: stringSchema,
+					response: objectSchema,
+					meta: objectSchema,
+				},
+				required: ["sessionId", "leaseId", "interactionId", "response", "meta"],
+				additionalProperties: false,
+			},
+			{
+				type: "object",
+				properties: { interactionId: stringSchema, response: objectSchema, meta: objectSchema },
+				required: ["interactionId", "response", "meta"],
+				additionalProperties: false,
+			},
+		],
 	},
 	"interaction.cancel": {
-		type: "object",
-		properties: {
-			sessionId: stringSchema,
-			leaseId: stringSchema,
-			interactionId: stringSchema,
-			reason: stringSchema,
-			meta: objectSchema,
-		},
-		required: ["sessionId", "leaseId", "interactionId", "meta"],
-		additionalProperties: false,
+		anyOf: [
+			{
+				type: "object",
+				properties: {
+					sessionId: stringSchema,
+					leaseId: stringSchema,
+					interactionId: stringSchema,
+					reason: stringSchema,
+					meta: objectSchema,
+				},
+				required: ["sessionId", "leaseId", "interactionId", "meta"],
+				additionalProperties: false,
+			},
+			{
+				type: "object",
+				properties: { interactionId: stringSchema, reason: stringSchema, meta: objectSchema },
+				required: ["interactionId", "meta"],
+				additionalProperties: false,
+			},
+		],
 	},
 	"subagent.list": {
 		type: "object",

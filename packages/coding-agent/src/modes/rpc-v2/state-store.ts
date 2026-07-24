@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
+import { withFileLock } from "../../config/file-lock";
 import type { SessionEvent } from "./dto/events";
 import type { EvidenceRecord } from "./dto/evidence";
 import type { SessionSnapshot } from "./dto/session";
@@ -26,6 +27,7 @@ export interface PersistedRpcState {
 	pendingResourceReleases: string[];
 	evidence: EvidenceRecord[];
 	artifacts: Array<Record<string, unknown>>;
+	pendingEvent?: SessionEvent;
 	updatedAt: string;
 }
 
@@ -53,6 +55,7 @@ const EMPTY_STATE: PersistedRpcState = {
 	pendingResourceReleases: [],
 	evidence: [],
 	artifacts: [],
+	pendingEvent: undefined,
 	updatedAt: new Date(0).toISOString(),
 };
 
@@ -77,7 +80,29 @@ export class RpcV2StateStore {
 	async load(): Promise<{ state: PersistedRpcState; events: SessionEvent[] }> {
 		const state = await this.#loadState();
 		const events = await this.#loadEvents();
+		if (state.pendingEvent) {
+			const matchingEvent = events.find(event => event.eventId === state.pendingEvent?.eventId);
+			assertEventCompatible(state.pendingEvent, matchingEvent, events);
+			if (!matchingEvent) events.push(state.pendingEvent);
+			events.sort((left, right) => left.sequence - right.sequence);
+		}
 		return { state, events };
+	}
+
+	async reconcilePendingEvent(state: PersistedRpcState): Promise<void> {
+		const event = state.pendingEvent;
+		await fs.mkdir(path.dirname(this.#eventsPath), { recursive: true });
+		await withFileLock(this.#eventsPath, async () => {
+			await this.#repairEventTail();
+			if (!event) return;
+			const existing = await this.#loadEvents();
+			const matchingEvent = existing.find(candidate => candidate.eventId === event.eventId);
+			assertEventCompatible(event, matchingEvent, existing);
+			if (!matchingEvent) await this.#appendEvent(event);
+		});
+		if (!event) return;
+		state.pendingEvent = undefined;
+		await this.saveState(state);
 	}
 
 	async saveState(state: PersistedRpcState): Promise<void> {
@@ -89,7 +114,19 @@ export class RpcV2StateStore {
 
 	async appendEvent(event: SessionEvent): Promise<void> {
 		await fs.mkdir(path.dirname(this.#eventsPath), { recursive: true });
-		await fs.appendFile(this.#eventsPath, `${JSON.stringify(event)}\n`, "utf8");
+		await this.#appendEvent(event);
+	}
+
+	async appendEventIdempotently(event: SessionEvent): Promise<void> {
+		await fs.mkdir(path.dirname(this.#eventsPath), { recursive: true });
+		await withFileLock(this.#eventsPath, async () => {
+			await this.#repairEventTail();
+			const existing = await this.#loadEvents();
+			const matchingEvent = existing.find(candidate => candidate.eventId === event.eventId);
+			assertEventCompatible(event, matchingEvent, existing);
+			if (matchingEvent) return;
+			await this.#appendEvent(event);
+		});
 	}
 
 	async replaceEvents(events: readonly SessionEvent[]): Promise<void> {
@@ -123,6 +160,7 @@ export class RpcV2StateStore {
 					: [],
 				evidence: Array.isArray(value.evidence) ? value.evidence : [],
 				artifacts: Array.isArray(value.artifacts) ? value.artifacts : [],
+				pendingEvent: value.pendingEvent && typeof value.pendingEvent === "object" ? value.pendingEvent : undefined,
 			};
 		} catch (error: unknown) {
 			if (!isEnoent(error)) throw new Error(`Failed to load RPC v2 state ${this.#statePath}: ${String(error)}`);
@@ -149,22 +187,23 @@ export class RpcV2StateStore {
 			const lines = text.split("\n");
 			for (const [index, line] of lines.entries()) {
 				if (!line.trim()) continue;
+				let event: SessionEvent;
 				try {
-					const event = JSON.parse(line) as SessionEvent;
-					if (
-						!event ||
-						typeof event.sequence !== "number" ||
-						typeof event.eventId !== "string" ||
-						typeof event.sessionId !== "string"
-					) {
-						throw new Error(`event line ${index + 1} has an invalid envelope`);
-					}
-					events.push(event);
+					event = JSON.parse(line) as SessionEvent;
 				} catch (error: unknown) {
-					const isFinalPartialLine = index === lines.length - 1 && !line.endsWith("}");
+					const isFinalPartialLine = index === lines.length - 1 && !text.endsWith("\n");
 					if (isFinalPartialLine) break;
 					throw new Error(`event line ${index + 1} is not valid JSON: ${String(error)}`);
 				}
+				if (
+					!event ||
+					typeof event.sequence !== "number" ||
+					typeof event.eventId !== "string" ||
+					typeof event.sessionId !== "string"
+				) {
+					throw new Error(`event line ${index + 1} has an invalid envelope`);
+				}
+				events.push(event);
 			}
 			events.sort((a, b) => a.sequence - b.sequence);
 			for (let index = 1; index < events.length; index++) {
@@ -177,5 +216,46 @@ export class RpcV2StateStore {
 			if (!isEnoent(error)) throw new Error(`Failed to load RPC v2 events ${this.#eventsPath}: ${String(error)}`);
 			return [];
 		}
+	}
+
+	async #appendEvent(event: SessionEvent): Promise<void> {
+		await fs.appendFile(this.#eventsPath, `${JSON.stringify(event)}\n`, "utf8");
+	}
+
+	async #repairEventTail(): Promise<void> {
+		let text: string;
+		try {
+			text = await Bun.file(this.#eventsPath).text();
+		} catch (error: unknown) {
+			if (isEnoent(error)) return;
+			throw error;
+		}
+		if (text.length === 0 || text.endsWith("\n")) return;
+		const lastNewline = text.lastIndexOf("\n");
+		const tail = text.slice(lastNewline + 1);
+		let complete = true;
+		try {
+			JSON.parse(tail);
+		} catch {
+			complete = false;
+		}
+		if (complete) await fs.appendFile(this.#eventsPath, "\n", "utf8");
+		else await Bun.write(this.#eventsPath, text.slice(0, lastNewline + 1));
+	}
+}
+
+function assertEventCompatible(
+	event: SessionEvent,
+	matchingEvent: SessionEvent | undefined,
+	existing: readonly SessionEvent[],
+): void {
+	if (matchingEvent) {
+		if (matchingEvent.sequence !== event.sequence || !Bun.deepEquals(matchingEvent, event)) {
+			throw new Error(`RPC v2 event identity collision for ${event.eventId}`);
+		}
+		return;
+	}
+	if (existing.some(candidate => candidate.sequence === event.sequence)) {
+		throw new Error(`RPC v2 event sequence collision at ${event.sequence}`);
 	}
 }

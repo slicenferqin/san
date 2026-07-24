@@ -1480,62 +1480,112 @@
           "additionalProperties": false
         },
         "interaction.respond": {
-          "type": "object",
-          "properties": {
-            "sessionId": {
-              "type": "string"
-            },
-            "leaseId": {
-              "type": "string"
-            },
-            "interactionId": {
-              "type": "string"
-            },
-            "response": {
+          "anyOf": [
+            {
               "type": "object",
-              "additionalProperties": true
+              "properties": {
+                "sessionId": {
+                  "type": "string"
+                },
+                "leaseId": {
+                  "type": "string"
+                },
+                "interactionId": {
+                  "type": "string"
+                },
+                "response": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "meta": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "sessionId",
+                "leaseId",
+                "interactionId",
+                "response",
+                "meta"
+              ],
+              "additionalProperties": false
             },
-            "meta": {
+            {
               "type": "object",
-              "additionalProperties": true
+              "properties": {
+                "interactionId": {
+                  "type": "string"
+                },
+                "response": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "meta": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "interactionId",
+                "response",
+                "meta"
+              ],
+              "additionalProperties": false
             }
-          },
-          "required": [
-            "sessionId",
-            "leaseId",
-            "interactionId",
-            "response",
-            "meta"
-          ],
-          "additionalProperties": false
+          ]
         },
         "interaction.cancel": {
-          "type": "object",
-          "properties": {
-            "sessionId": {
-              "type": "string"
-            },
-            "leaseId": {
-              "type": "string"
-            },
-            "interactionId": {
-              "type": "string"
-            },
-            "reason": {
-              "type": "string"
-            },
-            "meta": {
+          "anyOf": [
+            {
               "type": "object",
-              "additionalProperties": true
+              "properties": {
+                "sessionId": {
+                  "type": "string"
+                },
+                "leaseId": {
+                  "type": "string"
+                },
+                "interactionId": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "meta": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "sessionId",
+                "leaseId",
+                "interactionId",
+                "meta"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "interactionId": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "meta": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "interactionId",
+                "meta"
+              ],
+              "additionalProperties": false
             }
-          },
-          "required": [
-            "sessionId",
-            "leaseId",
-            "interactionId",
-            "meta"
-          ],
-          "additionalProperties": false
+          ]
         },
         "subagent.list": {
           "type": "object",

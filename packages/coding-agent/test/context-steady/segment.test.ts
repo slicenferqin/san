@@ -11,11 +11,11 @@ function base(id: string, parentId: string | null) {
 	return { id, parentId, timestamp: "2026-07-16T00:00:00.000Z" };
 }
 
-function userEntry(id: string, parentId: string | null, content: string): SessionEntry {
+function userEntry(id: string, parentId: string | null, content: string, attribution?: "agent"): SessionEntry {
 	return {
 		...base(id, parentId),
 		type: "message",
-		message: { role: "user", content, timestamp: 1 },
+		message: { role: "user", content, timestamp: 1, ...(attribution ? { attribution } : {}) },
 	};
 }
 
@@ -117,6 +117,28 @@ describe("ContextSegment", () => {
 		expect(segment?.checkpoint.activeUserEntryId).toBe("user-1");
 	});
 
+	test("does not treat agent-attributed role:user steering as a Segment boundary", () => {
+		const entries = [
+			userEntry("user-1", null, "真实长任务"),
+			assistantEntry("assistant-1", "user-1", "继续处理"),
+			userEntry("synthetic-user", "assistant-1", "内部 steering", "agent"),
+		];
+		const segment = buildContextSegmentCheckpoint({
+			entries,
+			sessionId: "session-segment",
+			promptGeneration: 1,
+			maintenanceId: "maintenance-attribution",
+			trigger: "segment_tokens",
+			phase: "mid_turn",
+			tokensBefore: 95_000,
+			segmentDeltaTokens: 40_000,
+			segmentElapsedMs: 30_000,
+		});
+
+		expect(segment?.logicalTurnId).toBe("user-1");
+		expect(segment?.checkpoint.userIntent).toBe("真实长任务");
+	});
+
 	test("records remote physical maintenance as an explicit remote_compaction action", () => {
 		const entries = [
 			userEntry("user-1", null, "继续长任务"),
@@ -169,6 +191,52 @@ describe("ContextSegment", () => {
 		expect(second?.source.fromEntryId).not.toBe(first.source.fromEntryId);
 		expect(second.checkpoint.userIntent).toBe("继续同一个长任务");
 		expect(third?.checkpoint.userIntent).toBe("继续同一个长任务");
+	});
+
+	test("carries bounded checkpoint evidence across token boundaries", () => {
+		const initial = [
+			userEntry("user-1", null, "执行一个长任务"),
+			assistantEntry("assistant-1", "user-1", "第一段已完成"),
+		];
+		const first = buildContextSegmentCheckpoint({
+			entries: initial,
+			sessionId: "session-segment",
+			promptGeneration: 1,
+			maintenanceId: "checkpoint-1",
+			trigger: "segment_tokens",
+			phase: "mid_turn",
+			tokensBefore: 100,
+			segmentDeltaTokens: 50,
+			segmentElapsedMs: 10,
+		});
+		if (!first) throw new Error("Expected first checkpoint");
+		first.checkpoint.actionsTaken = ["first action"];
+		first.checkpoint.toolEvidence = [{ tool: "read", summary: "first evidence", entryIds: ["result-1"] }];
+
+		const entries = [
+			...initial,
+			segmentEntry("segment-1", "assistant-1", first),
+			assistantEntry("assistant-2", "segment-1", "第二段已完成"),
+		];
+		const second = buildContextSegmentCheckpoint({
+			entries,
+			sessionId: "session-segment",
+			promptGeneration: 2,
+			maintenanceId: "checkpoint-2",
+			trigger: "segment_duration",
+			phase: "mid_turn",
+			tokensBefore: 100,
+			segmentDeltaTokens: 50,
+			segmentElapsedMs: 10,
+		});
+		if (!second) throw new Error("Expected second checkpoint");
+
+		expect(second.checkpoint.actionsTaken).toContain("first action");
+		expect(second.checkpoint.toolEvidence).toContainEqual({
+			tool: "read",
+			summary: "first evidence",
+			entryIds: ["result-1"],
+		});
 	});
 
 	test("bounds a 500-call logical turn by the latest recursive segment frontier", () => {

@@ -11,6 +11,7 @@
  * which transitively loads native modules via tokenizer → pi-natives.
  */
 
+import { isAuthoritativeUserMessage } from "./session";
 import type { TurnDigest, TurnDigestFile, TurnDigestSource, TurnDigestToolEvidence } from "./types";
 import { TURN_DIGEST_SCHEMA_VERSION } from "./types";
 
@@ -170,7 +171,7 @@ function msgText(m: InlinedMessage): string {
 
 function userIntent(msgs: readonly InlinedMessage[]): string {
 	for (const m of msgs) {
-		if (m.role === "user") {
+		if (isAuthoritativeUserMessage(m)) {
 			const t = msgText(m);
 			return t.length > 200 ? `${t.slice(0, 197)}...` : t;
 		}

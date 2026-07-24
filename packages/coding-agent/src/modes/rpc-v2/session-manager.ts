@@ -28,6 +28,7 @@ import {
 	recoveryPathForSession,
 	removeLeaseRecord,
 	updateLeaseHeartbeat,
+	withLeaseFileLock,
 } from "./crash-recovery";
 import type { ApprovalRequest } from "./dto/approval";
 import type { CheckpointSummary, ContinuitySnapshot, MaintenanceSnapshot } from "./dto/context";
@@ -350,7 +351,15 @@ export class RpcV2SessionManager {
 	}
 
 	async deferResourceRelease(active: ActiveSession, resourceId: string): Promise<boolean> {
-		if (!active.activeRun || !active.activeResourceIds.has(resourceId)) return false;
+		const queuedReference = active.queue
+			.filter(item => item.status === "queued")
+			.some(item =>
+				(active.queueContent.get(item.queueItemId) ?? []).some(part => {
+					if (part.type === "text") return false;
+					return part.resource.resourceId === resourceId;
+				}),
+			);
+		if ((!active.activeRun || !active.activeResourceIds.has(resourceId)) && !queuedReference) return false;
 		active.pendingResourceReleases.add(resourceId);
 		await this.#persistState(active);
 		return true;
@@ -1076,6 +1085,7 @@ export class RpcV2SessionManager {
 				sessionId: active.sessionId,
 			});
 		item.status = "cancelled";
+		active.queueContent.delete(item.queueItemId);
 		await this.emitCustom(
 			active,
 			"queue.item.cancelled",
@@ -1093,6 +1103,7 @@ export class RpcV2SessionManager {
 			},
 		);
 		await this.#persistState(active);
+		await this.#flushDeferredResourceReleases(active);
 		return { item, revision: active.state.revision };
 	}
 
@@ -1333,6 +1344,24 @@ export class RpcV2SessionManager {
 		strategy: "continue" | "mark_aborted" | "read_only",
 	): Promise<{ recovered: boolean; lastStableSequence: number }> {
 		if (!active.sessionFile) return { recovered: true, lastStableSequence: active.sequencer.currentSequence };
+		const persistReadOnlyRecovery = async (): Promise<void> => {
+			active.lease = active.lease ? { ...active.lease, access: "read_only", held: false } : undefined;
+			if (active.activeRun && !isRunTerminal(active.activeRun.status)) {
+				active.lastRun = {
+					...active.activeRun,
+					status: "interrupted",
+					finishedAt: new Date().toISOString(),
+					reason: "runtime_crash",
+				};
+				active.activeRun = undefined;
+			}
+			for (const resourceId of active.activeResourceIds) active.pendingResourceReleases.add(resourceId);
+			active.activeResourceIds.clear();
+			if (active.state.snapshot) {
+				active.state.snapshot = { ...active.state.snapshot, lifecycle: "read_only", recovery: undefined };
+			}
+			await this.#persistState(active, true);
+		};
 		let result: { recovered: boolean; lastStableSequence: number };
 		try {
 			result = await executeRecovery(
@@ -1341,6 +1370,7 @@ export class RpcV2SessionManager {
 				this.#runtimeId as RuntimeId,
 				active.sessionFile,
 				active.lease?.leaseId,
+				strategy === "read_only" ? persistReadOnlyRecovery : undefined,
 			);
 		} catch (error: unknown) {
 			if (error instanceof Error && error.message === "SESSION_LOCKED") {
@@ -1354,12 +1384,11 @@ export class RpcV2SessionManager {
 			}
 			throw error;
 		}
-		if (strategy === "read_only") {
-			active.lease = active.lease ? { ...active.lease, access: "read_only", held: false } : undefined;
-		} else if (active.lease) {
+		if (strategy !== "read_only" && active.lease) {
 			active.lease = { ...active.lease, held: true };
 			active.session.enableSessionWrites();
 			active.session.repairInterruptedTurnAfterRecovery();
+			await active.store.reconcilePendingEvent(active.state);
 		}
 		if (strategy === "mark_aborted" && active.lastRun?.status === "interrupted") {
 			active.lastRun = {
@@ -1369,10 +1398,10 @@ export class RpcV2SessionManager {
 				reason: "recovery_mark_aborted",
 			};
 		}
-		if (active.state.snapshot)
+		if (strategy !== "read_only" && active.state.snapshot)
 			active.state.snapshot = {
 				...active.state.snapshot,
-				lifecycle: strategy === "read_only" ? "read_only" : "ready",
+				lifecycle: "ready",
 				recovery: undefined,
 			};
 		await this.#binder?.(active);
@@ -1455,65 +1484,64 @@ export class RpcV2SessionManager {
 				message: "Close the active Session before deleting it",
 				sessionId,
 			});
-		const sidecar = new RpcV2StateStore(info.path, sessionId);
-		const loaded = await sidecar.load();
-		if (expectedRevision !== undefined && loaded.state.revision !== expectedRevision) {
-			failRpc({
-				reason: "SESSION_STATE_CONFLICT",
-				category: "conflict",
-				message: `Revision conflict: expected ${expectedRevision}, current ${loaded.state.revision}`,
-				sessionId,
-				details: { currentRevision: loaded.state.revision },
-			});
-		}
-		try {
-			const lease = JSON.parse(await Bun.file(leasePath(info.path)).text()) as LeaseRecord;
-			try {
-				process.kill(lease.pid, 0);
+		return await withLeaseFileLock(info.path, async () => {
+			const sidecar = new RpcV2StateStore(info.path, sessionId);
+			const loaded = await sidecar.load();
+			if (expectedRevision !== undefined && loaded.state.revision !== expectedRevision) {
 				failRpc({
-					reason: "SESSION_LOCKED",
+					reason: "SESSION_STATE_CONFLICT",
 					category: "conflict",
-					message: `Session has an active lease: ${sessionId}`,
+					message: `Revision conflict: expected ${expectedRevision}, current ${loaded.state.revision}`,
 					sessionId,
-					retryable: true,
+					details: { currentRevision: loaded.state.revision },
 				});
+			}
+			try {
+				const lease = JSON.parse(await Bun.file(leasePath(info.path)).text()) as LeaseRecord;
+				try {
+					process.kill(lease.pid, 0);
+					failRpc({
+						reason: "SESSION_LOCKED",
+						category: "conflict",
+						message: `Session has an active lease: ${sessionId}`,
+						sessionId,
+						retryable: true,
+					});
+				} catch (error: unknown) {
+					if (error instanceof Error && error.message.includes("active lease")) throw error;
+				}
 			} catch (error: unknown) {
 				if (error instanceof Error && error.message.includes("active lease")) throw error;
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 			}
-		} catch (error: unknown) {
-			if (error instanceof Error && error.message.includes("active lease")) throw error;
-			if (!String(error).includes("ENOENT")) {
-				// A malformed lease is not safe to delete silently.
-				if (!(error as NodeJS.ErrnoException).code) throw error;
-			}
-		}
-		const paths = rpcV2StatePaths(info.path);
-		const artifacts = info.path.endsWith(".jsonl") ? info.path.slice(0, -6) : `${info.path}.artifacts`;
-		const resources = `${info.path}.rpc-v2.resources`;
-		const related = [
-			info.path,
-			paths.state,
-			paths.events,
-			leasePath(info.path),
-			recoveryPathForSession(info.path),
-			artifacts,
-			resources,
-		];
-		if (mode === "permanent") {
-			await Promise.all(related.map(target => fs.rm(target, { recursive: true, force: true })));
-		} else {
-			const trashDir = path.join(path.dirname(info.path), ".trash");
-			const targetDir = path.join(trashDir, `${path.basename(info.path)}.${Date.now()}.${newOperationId()}`);
-			await fs.mkdir(targetDir, { recursive: true });
-			for (const target of related) {
-				try {
-					await fs.rename(target, path.join(targetDir, path.basename(target)));
-				} catch (error: unknown) {
-					if (!String(error).includes("ENOENT")) throw error;
+			const paths = rpcV2StatePaths(info.path);
+			const artifacts = info.path.endsWith(".jsonl") ? info.path.slice(0, -6) : `${info.path}.artifacts`;
+			const resources = `${info.path}.rpc-v2.resources`;
+			const related = [
+				info.path,
+				paths.state,
+				paths.events,
+				leasePath(info.path),
+				recoveryPathForSession(info.path),
+				artifacts,
+				resources,
+			];
+			if (mode === "permanent") {
+				await Promise.all(related.map(target => fs.rm(target, { recursive: true, force: true })));
+			} else {
+				const trashDir = path.join(path.dirname(info.path), ".trash");
+				const targetDir = path.join(trashDir, `${path.basename(info.path)}.${Date.now()}.${newOperationId()}`);
+				await fs.mkdir(targetDir, { recursive: true });
+				for (const target of related) {
+					try {
+						await fs.rename(target, path.join(targetDir, path.basename(target)));
+					} catch (error: unknown) {
+						if (!String(error).includes("ENOENT")) throw error;
+					}
 				}
 			}
-		}
-		return { deleted: true, mode, indexRevision: Date.now() };
+			return { deleted: true, mode, indexRevision: Date.now() };
+		});
 	}
 
 	async shutdown(options?: { force?: boolean; timeoutMs?: number }): Promise<void> {
@@ -1662,19 +1690,31 @@ export class RpcV2SessionManager {
 			}
 			const leaseId = newLeaseId();
 			if (sessionFile && (!recovery || stealExpiredLease)) {
-				await acquireLease(
-					sessionFile,
-					{
-						leaseId,
-						runtimeId: this.#runtimeId,
-						pid: process.pid,
-						sessionId,
-						acquiredAt: new Date().toISOString(),
-						lastHeartbeat: new Date().toISOString(),
-						lastStableSequence: lastSequence,
-					},
-					Boolean(recovery && stealExpiredLease),
-				);
+				try {
+					await acquireLease(
+						sessionFile,
+						{
+							leaseId,
+							runtimeId: this.#runtimeId,
+							pid: process.pid,
+							sessionId,
+							acquiredAt: new Date().toISOString(),
+							lastHeartbeat: new Date().toISOString(),
+							lastStableSequence: lastSequence,
+						},
+						Boolean(recovery && stealExpiredLease),
+					);
+				} catch (error: unknown) {
+					if (error instanceof Error && error.message === "SESSION_NOT_FOUND") {
+						failRpc({
+							reason: "SESSION_NOT_FOUND",
+							category: "not_found",
+							message: `Session disappeared while opening: ${sessionId}`,
+							sessionId,
+						});
+					}
+					throw error;
+				}
 			}
 			active.lease = {
 				leaseId,
@@ -1686,6 +1726,9 @@ export class RpcV2SessionManager {
 			if (recovery) this.#applyRecoveryDescriptor(active, recovery);
 		} else {
 			active.lease = { leaseId: newLeaseId(), sessionId, access, acquiredAt: new Date().toISOString(), held: false };
+		}
+		if (active.lease?.access === "read_write" && active.lease.held) {
+			await active.store.reconcilePendingEvent(active.state);
 		}
 		const listener = (event: AgentSessionEvent): void => {
 			const work = this.#enqueueWork(active, () => this.#handleAgentEvent(active, event));
@@ -1761,6 +1804,14 @@ export class RpcV2SessionManager {
 						retryable: true,
 					});
 				}
+				if (error instanceof Error && error.message === "SESSION_NOT_FOUND") {
+					failRpc({
+						reason: "SESSION_NOT_FOUND",
+						category: "not_found",
+						message: `Session disappeared while opening: ${sessionId}`,
+						sessionId,
+					});
+				}
 				throw error;
 			}
 		}
@@ -1780,9 +1831,10 @@ export class RpcV2SessionManager {
 			};
 			active.lastRun = interruptedRun;
 			active.activeRun = undefined;
-			active.activeResourceIds.clear();
 			recovery.interruptedRunId = interruptedRun.runId;
 		}
+		for (const resourceId of active.activeResourceIds) active.pendingResourceReleases.add(resourceId);
+		active.activeResourceIds.clear();
 		active.state.snapshot = { ...(active.state.snapshot ?? {}), lifecycle: "recovering", recovery };
 	}
 
@@ -1871,6 +1923,7 @@ export class RpcV2SessionManager {
 		const accepted = await this.acceptRun(active, item.sourceOperationId, resolved.resourceIds);
 		item.status = "promoted";
 		item.promotedRunId = accepted.runId;
+		active.queueContent.delete(item.queueItemId);
 		await this.emitCustom(
 			active,
 			"queue.item.promoted",
@@ -1957,9 +2010,15 @@ export class RpcV2SessionManager {
 		if (receipt) {
 			const result = typeof receipt.result === "function" ? receipt.result(active.state.revision) : receipt.result;
 			active.idempotency.record(receipt.key, receipt.params, result);
+			active.state.pendingEvent = event;
 			await this.#persistState(active);
 		}
-		await active.store.appendEvent(event);
+		if (receipt) await active.store.appendEventIdempotently(event);
+		else await active.store.appendEvent(event);
+		if (receipt) {
+			active.state.pendingEvent = undefined;
+			await this.#persistState(active);
+		}
 		active.events.push(event);
 		if (active.events.length > this.#retention) {
 			active.events = active.events.slice(-this.#retention);
@@ -2000,8 +2059,8 @@ export class RpcV2SessionManager {
 		return work;
 	}
 
-	async #persistState(active: ActiveSession): Promise<void> {
-		if (!this.#canPersist(active)) return;
+	async #persistState(active: ActiveSession, force = false): Promise<void> {
+		if (!force && !this.#canPersist(active)) return;
 		active.state.updatedAt = new Date().toISOString();
 		active.state.queue = active.queue.map(item => ({
 			...item,
@@ -2030,7 +2089,15 @@ export class RpcV2SessionManager {
 
 	async #flushDeferredResourceReleases(active: ActiveSession): Promise<void> {
 		if (active.activeRun || active.pendingResourceReleases.size === 0 || !this.#resourceReleaseHandler) return;
-		const resourceIds = [...active.pendingResourceReleases];
+		const queuedResourceIds: Set<string> = new Set(
+			[...active.queue]
+				.filter(item => item.status === "queued")
+				.flatMap(item => active.queueContent.get(item.queueItemId) ?? [])
+				.filter((part): part is Exclude<ContentPart, { type: "text" }> => part.type !== "text")
+				.map(part => part.resource.resourceId),
+		);
+		const resourceIds = [...active.pendingResourceReleases].filter(resourceId => !queuedResourceIds.has(resourceId));
+		if (resourceIds.length === 0) return;
 		await this.#resourceReleaseHandler(resourceIds, active.sessionId);
 		for (const resourceId of resourceIds) active.pendingResourceReleases.delete(resourceId);
 		await this.#persistState(active);

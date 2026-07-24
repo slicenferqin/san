@@ -65,4 +65,45 @@ describe("compaction summary authority", () => {
 		expect(fallback).toContain("Failure reason: repair_protocol_violation");
 		expect(fallback).not.toMatch(/^#{1,6}\s+Goal\s*$/im);
 	});
+
+	test("rejects execution claims whose identifiable path or command is absent from evidence", () => {
+		const state = stateWithNoExecutionEvidence();
+		state.executionEvidence.successfulMutations.push({
+			tool: "write",
+			toolCallId: "write-1",
+			resultEntryId: "result-write-1",
+			path: "/workspace/src/a.ts",
+		});
+		state.executionEvidence.successfulVerifications.push({
+			tool: "bash",
+			toolCallId: "bash-1",
+			resultEntryId: "result-bash-1",
+			command: "bun test a",
+		});
+
+		const mismatch = inspectContextSummary(["- fixed src/b.ts", "- bun test b passed"].join("\n"), state);
+		const match = inspectContextSummary(["- fixed src/a.ts", "- bun test a passed"].join("\n"), state);
+		const partialPathMatch = inspectContextSummary("- fixed src/a.ts and src/b.ts", state);
+		const commandPrefixMismatch = inspectContextSummary("- bun test all passed", state);
+
+		expect(mismatch.executionClaimConflictCount).toBe(2);
+		expect(match.executionClaimConflictCount).toBe(0);
+		expect(partialPathMatch.executionClaimConflictCount).toBe(1);
+		expect(commandPrefixMismatch.executionClaimConflictCount).toBe(1);
+	});
+
+	test("accepts a verified path when it is part of the evidenced command", () => {
+		const state = stateWithNoExecutionEvidence();
+		state.executionEvidence.successfulVerifications.push({
+			tool: "bash",
+			toolCallId: "bash-1",
+			resultEntryId: "result-bash-1",
+			command: "bun test test/context-steady/segment.test.ts",
+		});
+
+		expect(
+			inspectContextSummary("- `bun test test/context-steady/segment.test.ts` passed", state)
+				.executionClaimConflictCount,
+		).toBe(0);
+	});
 });

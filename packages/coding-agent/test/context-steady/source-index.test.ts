@@ -16,13 +16,20 @@ import {
 	type TurnDigest,
 } from "../../src/context-steady/types";
 
-function messageEntry(id: string, content: string): Record<string, unknown> {
+function messageEntry(id: string, content: string, attribution?: "agent"): Record<string, unknown> {
 	return {
 		type: "message",
 		id,
 		parentId: null,
 		timestamp: new Date().toISOString(),
-		message: { role: "user", content, timestamp: Date.now(), provider: "x", model: "x" },
+		message: {
+			role: "user",
+			content,
+			timestamp: Date.now(),
+			provider: "x",
+			model: "x",
+			...(attribution ? { attribution } : {}),
+		},
 	};
 }
 
@@ -153,6 +160,20 @@ const asEntries = (entries: Record<string, unknown>[]) =>
 	entries as unknown as Parameters<typeof buildContextSourceIndex>[0];
 
 describe("buildContextSourceIndex", () => {
+	test("keeps agent-attributed role:user messages inside the active user turn", () => {
+		const index = buildContextSourceIndex(
+			asEntries([
+				messageEntry("u1", "real request"),
+				assistantToolCallEntry("a1", "tc-read", "read"),
+				messageEntry("synthetic-user", "internal steering", "agent"),
+				toolResultEntry("tr1", "tc-read", "read"),
+				messageEntry("u2", "next real request"),
+			]),
+		);
+
+		expect(index.turnBundles.map(bundle => bundle.entryIds)).toEqual([["u1", "a1", "synthetic-user", "tr1"], ["u2"]]);
+	});
+
 	test("indexes exact entries, turn bundles, tool pairs, file evidence, and attachments", () => {
 		const index = buildContextSourceIndex(
 			asEntries([

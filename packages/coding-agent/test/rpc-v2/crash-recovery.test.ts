@@ -9,6 +9,7 @@ import {
 	executeRecovery,
 	leasePathForSession,
 	recoveryPathForSession,
+	withLeaseFileLock,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/crash-recovery";
 import type { RuntimeId } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/protocol/ids";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
@@ -37,6 +38,48 @@ async function staleSessionFile(): Promise<string> {
 }
 
 describe("RPC v2 crash recovery", () => {
+	test("serializes deletion with lease acquisition and rejects an orphan lease", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "san-rpc-v2-delete-lock-"));
+		tempDirectories.push(directory);
+		const sessionFile = path.join(directory, "session.jsonl");
+		await Bun.write(sessionFile, "");
+		const deletionStarted = Promise.withResolvers<void>();
+		const allowDeletion = Promise.withResolvers<void>();
+		const deletion = withLeaseFileLock(sessionFile, async () => {
+			deletionStarted.resolve();
+			await allowDeletion.promise;
+			await fs.rm(sessionFile);
+		});
+		await deletionStarted.promise;
+
+		let acquisitionSettled = false;
+		const acquisition = acquireLease(sessionFile, {
+			leaseId: "lease_racing",
+			runtimeId: "runtime_racing",
+			pid: process.pid,
+			sessionId: "ses_racing",
+			acquiredAt: "2026-07-24T00:00:00.000Z",
+			lastHeartbeat: "2026-07-24T00:00:00.000Z",
+			lastStableSequence: 0,
+		}).then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		void acquisition.finally(() => {
+			acquisitionSettled = true;
+		});
+		await Bun.sleep(25);
+		expect(acquisitionSettled).toBe(false);
+		expect(await Bun.file(leasePathForSession(sessionFile)).exists()).toBe(false);
+
+		allowDeletion.resolve();
+		await deletion;
+		const acquisitionError = await acquisition;
+		expect(acquisitionError).toBeInstanceOf(Error);
+		expect((acquisitionError as Error).message).toBe("SESSION_NOT_FOUND");
+		expect(await Bun.file(leasePathForSession(sessionFile)).exists()).toBe(false);
+	});
+
 	test("detects a stale lease and continue installs the new runtime lease", async () => {
 		const sessionFile = await staleSessionFile();
 		const runtimeId = "runtime_new" as RuntimeId;
@@ -69,6 +112,19 @@ describe("RPC v2 crash recovery", () => {
 		await executeRecovery("ses_1", "read_only", runtimeId, sessionFile);
 		expect(await Bun.file(leasePathForSession(sessionFile)).exists()).toBe(false);
 		expect(await Bun.file(recoveryPathForSession(sessionFile)).exists()).toBe(false);
+	});
+
+	test("read_only recovery retains stale ownership when sidecar persistence fails", async () => {
+		const sessionFile = await staleSessionFile();
+		const runtimeId = "runtime_read_failure" as RuntimeId;
+		await detectRecovery("ses_1", runtimeId, sessionFile);
+		await expect(
+			executeRecovery("ses_1", "read_only", runtimeId, sessionFile, undefined, async () => {
+				throw new Error("sidecar unavailable");
+			}),
+		).rejects.toThrow("sidecar unavailable");
+		expect(await Bun.file(leasePathForSession(sessionFile)).exists()).toBe(true);
+		expect(await Bun.file(recoveryPathForSession(sessionFile)).exists()).toBe(true);
 	});
 
 	test("a stale recovery cannot remove a lease acquired by another Runtime", async () => {

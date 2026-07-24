@@ -5,14 +5,16 @@ import * as path from "node:path";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { leasePathForSession } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/crash-recovery";
+import { acquireLease, leasePathForSession } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/crash-recovery";
 import type { ApprovalRequest } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/dto/approval";
-import { newApprovalId, newRunId } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/protocol/ids";
+import type { InputResourceRef } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/dto/resources";
+import { newApprovalId, newResourceId, newRunId } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/protocol/ids";
 import { RpcV2SessionManager } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/session-manager";
-import { rpcV2StatePaths } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/state-store";
+import { RpcV2StateStore, rpcV2StatePaths } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/state-store";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import * as sessionListing from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
@@ -23,6 +25,7 @@ interface ManagedFixture {
 	manager: RpcV2SessionManager;
 	session: AgentSession;
 	sessionId: string;
+	directory: string;
 }
 
 async function createManagedFixture(): Promise<ManagedFixture> {
@@ -53,7 +56,7 @@ async function createManagedFixture(): Promise<ManagedFixture> {
 		initialHandle: { session: created.session },
 	});
 	const opened = await manager.create({ cwd: directory });
-	return { manager, session: created.session, sessionId: opened.sessionId };
+	return { manager, session: created.session, sessionId: opened.sessionId, directory };
 }
 
 afterEach(async () => {
@@ -104,6 +107,70 @@ describe("RPC v2 atomic Session mutation receipts", () => {
 
 			expect(result.item.status).toBe("cancelled");
 			expect(manager.checkIdempotency("queue-key", params)).toEqual({ cached: true, result });
+		} finally {
+			await manager.shutdown({ force: true });
+			await session.dispose();
+		}
+	});
+
+	test("keeps deferred queued resources through promotion and releases cancelled content", async () => {
+		const { manager, session, sessionId } = await createManagedFixture();
+		const released: string[][] = [];
+		try {
+			const active = manager.assertSession(sessionId);
+			const promotedResource: InputResourceRef = {
+				resourceId: newResourceId(),
+				sessionId: active.sessionId,
+				source: "upload",
+				mediaType: "text/plain",
+				byteLength: 1,
+				sha256: "promoted",
+				state: "committed",
+			};
+			const cancelledResource: InputResourceRef = {
+				resourceId: newResourceId(),
+				sessionId: active.sessionId,
+				source: "upload",
+				mediaType: "text/plain",
+				byteLength: 1,
+				sha256: "cancelled",
+				state: "committed",
+			};
+			manager.setResourceReleaseHandler(async resourceIds => {
+				released.push([...resourceIds]);
+			});
+			manager.setContentResolver(async ({ content }) => ({
+				text: content.map(part => (part.type === "text" ? part.text : part.resource.resourceId)).join("\n"),
+				images: [],
+				resourceIds: content.flatMap(part => (part.type === "text" ? [] : [part.resource.resourceId])),
+			}));
+			vi.spyOn(session, "prompt").mockResolvedValue(true);
+
+			await manager.acceptRun(active);
+			const promoted = await manager.addQueueItem(active, [
+				{ type: "resource", resource: promotedResource, purpose: "input" },
+			]);
+			const cancelled = await manager.addQueueItem(active, [
+				{ type: "resource", resource: cancelledResource, purpose: "input" },
+			]);
+			expect(await manager.deferResourceRelease(active, promotedResource.resourceId)).toBe(true);
+			expect(await manager.deferResourceRelease(active, cancelledResource.resourceId)).toBe(true);
+
+			await manager.cancelQueueItem(active, cancelled.queueItemId, "queued");
+			await manager.markRunStatus(active, "completed");
+			expect(released).toEqual([[cancelledResource.resourceId]]);
+
+			await manager.promoteQueueIfIdle(active);
+			expect(promoted.status).toBe("promoted");
+			expect(released).toEqual([[cancelledResource.resourceId]]);
+			await manager.markRunStatus(active, "completed");
+			expect(released).toEqual([[cancelledResource.resourceId], [promotedResource.resourceId]]);
+
+			const sessionFile = session.sessionFile;
+			if (!sessionFile) throw new Error("RPC Session was not persisted");
+			const persisted = await new RpcV2StateStore(sessionFile, sessionId).load();
+			const cancelledState = persisted.state.queue.find(item => item.queueItemId === cancelled.queueItemId);
+			expect(cancelledState?.content).toEqual([]);
 		} finally {
 			await manager.shutdown({ force: true });
 			await session.dispose();
@@ -169,6 +236,75 @@ describe("RPC v2 atomic Session mutation receipts", () => {
 			expect(await Bun.file(leasePathForSession(sessionFile)).exists()).toBe(false);
 		} finally {
 			abortBlocker.resolve();
+			await manager.shutdown({ force: true });
+			await session.dispose();
+		}
+	});
+
+	test("persists interrupted Run and resource ownership after read-only recovery", async () => {
+		const { manager, session, sessionId, directory } = await createManagedFixture();
+		let recoveryManager: RpcV2SessionManager | undefined;
+		try {
+			const sessionFile = session.sessionFile;
+			if (!sessionFile) throw new Error("RPC Session was not persisted");
+			await manager.shutdown({ force: true });
+
+			const store = new RpcV2StateStore(sessionFile, sessionId);
+			const loaded = await store.load();
+			const interruptedRunId = newRunId();
+			const resourceId = newResourceId();
+			loaded.state.activeRun = {
+				runId: interruptedRunId,
+				userMessageId: "msg_interrupted",
+				status: "running",
+			};
+			loaded.state.lastRun = undefined;
+			loaded.state.activeResourceIds = [resourceId];
+			loaded.state.pendingResourceReleases = [];
+			await store.saveState(loaded.state);
+			await acquireLease(sessionFile, {
+				leaseId: "lease_stale",
+				runtimeId: "runtime_stale",
+				pid: 2_147_483_647,
+				sessionId,
+				acquiredAt: "2026-07-24T00:00:00.000Z",
+				lastHeartbeat: "2026-07-24T00:00:00.000Z",
+				lastStableSequence: loaded.state.lastSequence,
+			});
+			vi.spyOn(sessionListing, "listAllSessions").mockResolvedValue([
+				{
+					path: sessionFile,
+					id: sessionId,
+					cwd: directory,
+					created: new Date("2026-07-24T00:00:00.000Z"),
+					modified: new Date("2026-07-24T00:00:00.000Z"),
+					messageCount: 0,
+					size: Bun.file(sessionFile).size,
+					firstMessage: "",
+					allMessagesText: "",
+				},
+			]);
+
+			recoveryManager = new RpcV2SessionManager({
+				runtimeId: "runtime_recovery",
+				initialHandle: { session },
+			});
+			const opened = await recoveryManager.open({ sessionId, access: "read_write" });
+			expect(opened.recovery).toMatchObject({ required: true, reason: "runtime_crash" });
+			await recoveryManager.recover(recoveryManager.assertSession(sessionId), "read_only");
+
+			const recovered = await new RpcV2StateStore(sessionFile, sessionId).load();
+			expect(recovered.state.activeRun).toBeUndefined();
+			expect(recovered.state.lastRun).toMatchObject({
+				runId: interruptedRunId,
+				status: "interrupted",
+				reason: "runtime_crash",
+			});
+			expect(recovered.state.activeResourceIds).toEqual([]);
+			expect(recovered.state.pendingResourceReleases).toEqual([resourceId]);
+			expect(recoveryManager.currentLease).toMatchObject({ access: "read_only", held: false });
+		} finally {
+			await recoveryManager?.shutdown({ force: true });
 			await manager.shutdown({ force: true });
 			await session.dispose();
 		}

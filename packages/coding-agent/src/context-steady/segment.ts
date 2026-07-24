@@ -1,7 +1,7 @@
 import type { SessionEntry } from "../session/session-entries";
 import type { ReadonlySessionManager } from "../session/session-manager";
 import { generateFallbackDigest, SYSTEM_DRIVEN_CONTINUATION_INTENT } from "./fallback";
-import { extractSpanMessages } from "./session";
+import { extractSpanMessages, isAuthoritativeUserEntry, isAuthoritativeUserMessage } from "./session";
 import {
 	CONTEXT_SEGMENT_CUSTOM_TYPE,
 	CONTEXT_SEGMENT_SCHEMA_VERSION,
@@ -51,7 +51,7 @@ export interface ContextSegmentDigestInput {
 function userEntryIdBefore(entries: readonly SessionEntry[], beforeIndex: number): string | undefined {
 	for (let index = beforeIndex; index >= 0; index--) {
 		const entry = entries[index];
-		if (entry?.type === "message" && entry.message.role === "user") return entry.id;
+		if (entry && isAuthoritativeUserEntry(entry)) return entry.id;
 	}
 	return undefined;
 }
@@ -74,14 +74,58 @@ function checkpointText(segment: ContextSegment, maxTokens: number): string {
 		`segmentId: ${segment.segmentId}`,
 		`activeUserEntryId: ${checkpoint.activeUserEntryId}`,
 		`userIntent: ${checkpoint.userIntent}`,
-		`historicalSummary: ${segment.historicalSummary ?? "none"}`,
+		`actionsTaken: ${checkpoint.actionsTaken.join(" | ") || "none"}`,
 		`decisions: ${checkpoint.decisions.join(" | ") || "none"}`,
+		`toolEvidence: ${checkpoint.toolEvidence.map(item => `${item.tool}:${item.summary}`).join(" | ") || "none"}`,
+		`factsLearned: ${checkpoint.factsLearned.join(" | ") || "none"}`,
+		`openQuestions: ${checkpoint.openQuestions.join(" | ") || "none"}`,
 		`risks: ${checkpoint.risks.join(" | ") || "none"}`,
 		`nextSteps: ${checkpoint.nextSteps.join(" | ") || "none"}`,
 		`files: ${checkpoint.filesTouched.map(file => `${file.action}:${file.path}`).join(" | ") || "none"}`,
+		`historicalSummary: ${segment.historicalSummary ?? "none"}`,
 	].join("\n");
 	const maxChars = Math.max(256, Math.floor(maxTokens) * 4);
 	return content.length <= maxChars ? content : `${content.slice(0, Math.max(0, maxChars - 20))}\n[segment truncated]`;
+}
+
+const CHECKPOINT_ARRAY_LIMIT = 40;
+
+function mergeUnique<T>(previous: readonly T[], current: readonly T[], key: (value: T) => string): T[] {
+	const result: T[] = [];
+	const seen = new Set<string>();
+	const combined = [...previous, ...current];
+	for (let index = combined.length - 1; index >= 0 && result.length < CHECKPOINT_ARRAY_LIMIT; index--) {
+		const value = combined[index]!;
+		const valueKey = key(value);
+		if (seen.has(valueKey)) continue;
+		seen.add(valueKey);
+		result.push(value);
+	}
+	return result.reverse();
+}
+
+function mergeCheckpoint(
+	previous: ContextSegment["checkpoint"] | undefined,
+	current: ContextSegment["checkpoint"],
+): ContextSegment["checkpoint"] {
+	if (!previous) return current;
+	return {
+		activeUserEntryId: current.activeUserEntryId,
+		userIntent: current.userIntent === SYSTEM_DRIVEN_CONTINUATION_INTENT ? previous.userIntent : current.userIntent,
+		actionsTaken: mergeUnique(previous.actionsTaken, current.actionsTaken, value => value),
+		decisions: mergeUnique(previous.decisions, current.decisions, value => value),
+		filesTouched: mergeUnique(previous.filesTouched, current.filesTouched, value => `${value.action}:${value.path}`),
+		toolEvidence: mergeUnique(
+			previous.toolEvidence,
+			current.toolEvidence,
+			value => `${value.tool}:${value.summary}:${value.entryIds?.join(",") ?? ""}`,
+		),
+		factsLearned: mergeUnique(previous.factsLearned, current.factsLearned, value => value),
+		openQuestions: mergeUnique(previous.openQuestions, current.openQuestions, value => value),
+		risks: mergeUnique(previous.risks, current.risks, value => value),
+		nextSteps: mergeUnique(previous.nextSteps, current.nextSteps, value => value),
+		...((current.tokenStats ?? previous.tokenStats) ? { tokenStats: current.tokenStats ?? previous.tokenStats } : {}),
+	};
 }
 
 function boundMessages(messages: readonly unknown[], maxTokens: number): ContextSegmentDigestInput {
@@ -91,7 +135,7 @@ function boundMessages(messages: readonly unknown[], maxTokens: number): Context
 		return { messages: [...messages], estimatedTokens: total, trimmedMessages: 0 };
 	}
 	const firstUserIndex = messages.findIndex(message => {
-		return !!message && typeof message === "object" && "role" in message && message.role === "user";
+		return isAuthoritativeUserMessage(message);
 	});
 	const selected = new Set<number>();
 	let used = 0;
@@ -229,6 +273,19 @@ export function buildContextSegment(options: BuildContextSegmentOptions): Contex
 		fallback.userIntent === SYSTEM_DRIVEN_CONTINUATION_INTENT && previousSegment
 			? previousSegment.checkpoint.userIntent
 			: fallback.userIntent;
+	const checkpoint = {
+		activeUserEntryId: logicalTurnId,
+		userIntent,
+		actionsTaken: fallback.actionsTaken,
+		decisions: fallback.decisions,
+		filesTouched: fallback.filesTouched,
+		toolEvidence: fallback.toolEvidence,
+		factsLearned: fallback.factsLearned,
+		openQuestions: fallback.openQuestions,
+		risks: fallback.risks,
+		nextSteps: fallback.nextSteps,
+		...(fallback.tokenStats ? { tokenStats: fallback.tokenStats } : {}),
+	};
 
 	return {
 		schemaVersion: CONTEXT_SEGMENT_SCHEMA_VERSION,
@@ -255,19 +312,7 @@ export function buildContextSegment(options: BuildContextSegmentOptions): Contex
 		},
 		historicalSummary: options.summary,
 		...(options.shortSummary ? { shortSummary: options.shortSummary } : {}),
-		checkpoint: {
-			activeUserEntryId: logicalTurnId,
-			userIntent,
-			actionsTaken: fallback.actionsTaken,
-			decisions: fallback.decisions,
-			filesTouched: fallback.filesTouched,
-			toolEvidence: fallback.toolEvidence,
-			factsLearned: fallback.factsLearned,
-			openQuestions: fallback.openQuestions,
-			risks: fallback.risks,
-			nextSteps: fallback.nextSteps,
-			...(fallback.tokenStats ? { tokenStats: fallback.tokenStats } : {}),
-		},
+		checkpoint: mergeCheckpoint(previousSegment?.checkpoint, checkpoint),
 	};
 }
 
@@ -282,7 +327,7 @@ export function buildContextSegmentCheckpoint(
 	let userIndex = -1;
 	for (let index = options.entries.length - 1; index >= 0; index--) {
 		const entry = options.entries[index];
-		if (entry?.type === "message" && entry.message.role === "user") {
+		if (entry && isAuthoritativeUserEntry(entry)) {
 			userIndex = index;
 			break;
 		}
@@ -333,6 +378,19 @@ export function buildContextSegmentCheckpoint(
 			? previousSegment.segment.checkpoint.userIntent
 			: fallback.userIntent;
 
+	const checkpoint = {
+		activeUserEntryId: logicalTurnId,
+		userIntent,
+		actionsTaken: fallback.actionsTaken,
+		decisions: fallback.decisions,
+		filesTouched: fallback.filesTouched,
+		toolEvidence: fallback.toolEvidence,
+		factsLearned: fallback.factsLearned,
+		openQuestions: fallback.openQuestions,
+		risks: fallback.risks,
+		nextSteps: fallback.nextSteps,
+		...(fallback.tokenStats ? { tokenStats: fallback.tokenStats } : {}),
+	};
 	return {
 		schemaVersion: CONTEXT_SEGMENT_SCHEMA_VERSION,
 		segmentId,
@@ -352,19 +410,7 @@ export function buildContextSegmentCheckpoint(
 			segmentDeltaTokens: options.segmentDeltaTokens,
 			segmentElapsedMs: options.segmentElapsedMs,
 		},
-		checkpoint: {
-			activeUserEntryId: logicalTurnId,
-			userIntent,
-			actionsTaken: fallback.actionsTaken,
-			decisions: fallback.decisions,
-			filesTouched: fallback.filesTouched,
-			toolEvidence: fallback.toolEvidence,
-			factsLearned: fallback.factsLearned,
-			openQuestions: fallback.openQuestions,
-			risks: fallback.risks,
-			nextSteps: fallback.nextSteps,
-			...(fallback.tokenStats ? { tokenStats: fallback.tokenStats } : {}),
-		},
+		checkpoint: mergeCheckpoint(previousSegment?.segment.checkpoint, checkpoint),
 	};
 }
 

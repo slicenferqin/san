@@ -10,6 +10,17 @@ import type { SessionEntry } from "../session/session-entries";
 import type { ReadonlySessionManager } from "../session/session-manager";
 import { CONTEXT_PACKET_MESSAGE_TYPE, TURN_DIGEST_CUSTOM_TYPE, type TurnDigest, type TurnDigestSource } from "./types";
 
+/** User messages explicitly attributed to the agent are synthetic steering, not user authority. */
+export function isAuthoritativeUserMessage(value: unknown): boolean {
+	if (!value || typeof value !== "object" || !("role" in value)) return false;
+	const message = value as { role?: unknown; attribution?: unknown };
+	return message.role === "user" && message.attribution !== "agent";
+}
+
+export function isAuthoritativeUserEntry(entry: SessionEntry): boolean {
+	return entry.type === "message" && isAuthoritativeUserMessage(entry.message);
+}
+
 function digestSourceKey(source: TurnDigestSource): string {
 	return `${source.sessionId}\0${source.fromEntryId}\0${source.toEntryId}`;
 }
@@ -124,16 +135,10 @@ export function skipContextPacketPreludeInDigestSource(
 		if (entry.type === "custom_message" && entry.customType === CONTEXT_PACKET_MESSAGE_TYPE) continue;
 		if (entry.type === "custom_message" && entry.attribution === "agent") continue;
 		if (entry.type === "custom_message" && entry.attribution === "user") return entry.id;
-		if (entry.type === "message" && messageRole(entry.message) === "user") return entry.id;
+		if (entry.type === "message" && isAuthoritativeUserMessage(entry.message)) return entry.id;
 	}
 
 	return fromEntryId;
-}
-
-function messageRole(message: unknown): string | undefined {
-	if (!message || typeof message !== "object" || !("role" in message)) return undefined;
-	const role = (message as { role?: unknown }).role;
-	return typeof role === "string" ? role : undefined;
 }
 
 // ── Message extraction from branch ──────────────────────────────────────────

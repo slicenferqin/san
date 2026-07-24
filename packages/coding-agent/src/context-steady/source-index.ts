@@ -10,7 +10,7 @@ import type {
 	ContextPlanTurnBundleSource,
 	ContextSourceIndex,
 } from "./plan-types";
-import { collectDigestRefs } from "./session";
+import { collectDigestRefs, isAuthoritativeUserEntry } from "./session";
 import { CONTEXT_PACKET_CUSTOM_TYPE, type TurnDigest } from "./types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -70,7 +70,7 @@ function collectTurnBundles(entries: readonly SessionEntry[]): ContextPlanTurnBu
 	let current: { entryIds: string[]; userEntryId?: string } | undefined;
 	for (const entry of entries) {
 		if (entry.type !== "message" && entry.type !== "custom_message") continue;
-		if (entry.type === "message" && entry.message.role === "user") {
+		if (isAuthoritativeUserEntry(entry)) {
 			if (current && current.entryIds.length > 0) bundles.push({ kind: "turn_bundle", ...current });
 			current = { entryIds: [entry.id], userEntryId: entry.id };
 			continue;

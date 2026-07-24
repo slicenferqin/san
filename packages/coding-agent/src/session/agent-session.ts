@@ -253,6 +253,7 @@ import {
 import {
 	computeTurnSourceSpan,
 	extractSpanMessages,
+	isAuthoritativeUserEntry,
 	skipContextPacketPreludeInDigestSource,
 } from "../context-steady/session";
 import {
@@ -13199,7 +13200,7 @@ export class AgentSession {
 		let userIndex = -1;
 		for (let index = entries.length - 1; index >= 0; index--) {
 			const entry = entries[index];
-			if (entry?.type === "message" && entry.message.role === "user") {
+			if (entry && isAuthoritativeUserEntry(entry)) {
 				userIndex = index;
 				break;
 			}

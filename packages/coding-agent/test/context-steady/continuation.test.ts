@@ -175,6 +175,29 @@ describe("Context Steady continuation authority", () => {
 		});
 	});
 
+	test("ignores an agent-attributed role:user message when deriving authority", () => {
+		const entries: SessionEntry[] = [
+			{
+				...base("user-real", null),
+				type: "message",
+				message: { role: "user", content: "真实请求", timestamp: 1 },
+			},
+			{
+				...base("user-agent", "user-real"),
+				type: "message",
+				message: { role: "user", attribution: "agent", content: "内部 steering", timestamp: 2 },
+			},
+		];
+
+		const state = buildActiveContinuationState({ entries, sessionId: "session-attribution", promptGeneration: 1 });
+
+		expect(state).toMatchObject({
+			activeUserEntryId: "user-real",
+			activeUserRequest: "真实请求",
+			logicalTurnId: "user-real",
+		});
+	});
+
 	test("writes an explicit missing-source authority instead of guessing an active Goal", () => {
 		const state = buildActiveContinuationState({
 			entries: [],

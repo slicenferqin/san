@@ -45,6 +45,7 @@ export async function acquireLease(sessionFile: string, record: LeaseRecord, ste
 	const leasePath = leasePathForSession(sessionFile);
 	await fs.mkdir(path.dirname(leasePath), { recursive: true });
 	await withFileLock(leasePath, async () => {
+		if (!(await Bun.file(sessionFile).exists())) throw new Error("SESSION_NOT_FOUND");
 		const existing = await readLeaseRecord(leasePath);
 		if (existing) {
 			if (processAlive(existing.pid) && existing.runtimeId !== record.runtimeId) throw new Error("SESSION_LOCKED");
@@ -152,6 +153,7 @@ export async function executeRecovery(
 	currentRuntimeId: RuntimeId,
 	sessionFile?: string,
 	leaseId?: string,
+	beforeReadOnlyRelease?: () => Promise<void>,
 ): Promise<{ recovered: boolean; lastStableSequence: number }> {
 	if (!sessionFile) return { recovered: true, lastStableSequence: 0 };
 	if (strategy !== "read_only" && !leaseId) throw new Error(`${strategy} recovery requires leaseId`);
@@ -168,6 +170,7 @@ export async function executeRecovery(
 		if (!ownsPreviousLease && !ownsStolenLease) throw new Error("SESSION_LOCKED");
 		const lastStableSequence = Math.max(0, recovery.lastStableSequence);
 		if (strategy === "read_only") {
+			await beforeReadOnlyRelease?.();
 			await fs.rm(leasePath, { force: true });
 		} else {
 			const now = new Date().toISOString();
@@ -188,6 +191,11 @@ export async function executeRecovery(
 
 export function leasePath(sessionFile: string): string {
 	return leasePathForSession(sessionFile);
+}
+
+/** Run a destructive Session operation under the same lock used by lease acquisition. */
+export async function withLeaseFileLock<T>(sessionFile: string, fn: () => Promise<T>): Promise<T> {
+	return await withFileLock(leasePathForSession(sessionFile), fn);
 }
 
 async function readLeaseRecord(leasePath: string): Promise<LeaseRecord | undefined> {

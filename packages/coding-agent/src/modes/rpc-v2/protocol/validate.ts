@@ -14,6 +14,14 @@ export function validateRpcV2Params(method: string, params: unknown): FieldError
 
 function validateValue(value: unknown, schema: JsonSchema, location: string, errors: FieldError[]): void {
 	if (errors.length >= MAX_FIELD_ERRORS) return;
+	const alternatives = Array.isArray(schema.anyOf) ? schema.anyOf.filter(isSchema) : [];
+	if (alternatives.length > 0) {
+		const results = alternatives.map(candidate => validateCandidate(value, candidate));
+		if (results.some(candidateErrors => candidateErrors.length === 0)) return;
+		const bestErrors = results.reduce((best, candidate) => (candidate.length < best.length ? candidate : best));
+		errors.push(...bestErrors.slice(0, MAX_FIELD_ERRORS - errors.length));
+		return;
+	}
 	const expectedTypes = schemaTypes(schema.type);
 	if (expectedTypes.length > 0 && !expectedTypes.some(type => matchesType(value, type))) {
 		pushError(errors, location, "invalid_type", `Expected ${expectedTypes.join(" or ")}`);
@@ -68,6 +76,16 @@ function validateValue(value: unknown, schema: JsonSchema, location: string, err
 			pushError(errors, `${location}.${key}`, "unknown_field", "Unknown field is not allowed");
 		}
 	}
+}
+
+function validateCandidate(value: unknown, schema: JsonSchema): FieldError[] {
+	const candidateErrors: FieldError[] = [];
+	validateValue(value, schema, "params", candidateErrors);
+	return candidateErrors;
+}
+
+function isSchema(value: JsonSchemaValue): value is JsonSchema {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function schemaTypes(value: JsonSchemaValue | undefined): string[] {

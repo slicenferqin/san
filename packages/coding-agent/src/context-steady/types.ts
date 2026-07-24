@@ -149,6 +149,7 @@ export interface ContextContinuationToolEvidence {
 	resultEntryId: string;
 	path?: string;
 	resource?: string;
+	command?: string;
 }
 
 export type ContextSummarySource = "local" | "remote" | "snapcompact" | "extension" | "deterministic_fallback";

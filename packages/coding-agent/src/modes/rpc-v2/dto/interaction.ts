@@ -95,13 +95,21 @@ export interface InputValidation {
 // Interaction Response
 // ============================================================================
 
-export interface InteractionResponseParams {
+export interface SessionInteractionResponseParams {
 	sessionId: SessionId;
 	leaseId: string;
 	interactionId: InteractionId;
 	response: InteractionResponseUnion;
 	meta: MutationMeta;
 }
+
+export interface AuthInteractionResponseParams {
+	interactionId: InteractionId;
+	response: InteractionResponseUnion;
+	meta: MutationMeta;
+}
+
+export type InteractionResponseParams = SessionInteractionResponseParams | AuthInteractionResponseParams;
 
 export type InteractionResponseUnion =
 	| { kind: "selected"; optionIds: string[] }

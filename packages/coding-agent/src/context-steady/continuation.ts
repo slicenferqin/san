@@ -2,6 +2,7 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import continuationAuthorityTemplate from "../prompts/context-steady/continuation-authority.md" with { type: "text" };
 import type { SessionEntry } from "../session/session-entries";
 import type { SessionManager } from "../session/session-manager";
+import { isAuthoritativeUserEntry } from "./session";
 import {
 	type ActiveContinuationState,
 	CONTEXT_CONTINUATION_MESSAGE_TYPE,
@@ -68,6 +69,10 @@ function evidencePath(call: ToolCallRecord | undefined, details: unknown): strin
 
 function evidenceResource(call: ToolCallRecord | undefined): string | undefined {
 	return stringField(call?.arguments, ["path", "filePath", "file_path", "url", "uri", "cwd", "workdir"]);
+}
+
+function evidenceCommand(call: ToolCallRecord | undefined): string | undefined {
+	return stringField(call?.arguments, ["command"]);
 }
 
 function isVerification(call: ToolCallRecord | undefined, tool: string): boolean {
@@ -197,7 +202,7 @@ export function buildActiveContinuationState(options: {
 	let activeUserIndex = -1;
 	for (let index = options.entries.length - 1; index >= Math.max(0, logicalTurnIndex); index--) {
 		const entry = options.entries[index];
-		if (entry?.type === "message" && entry.message.role === "user") {
+		if (entry && isAuthoritativeUserEntry(entry)) {
 			activeUserIndex = index;
 			break;
 		}
@@ -213,6 +218,7 @@ export function buildActiveContinuationState(options: {
 	const continuesPriorLogicalTurn =
 		activeUserEntry.type === "message" &&
 		activeUserEntry.message.role === "user" &&
+		activeUserEntry.message.attribution !== "agent" &&
 		activeUserEntry.message.steering === true &&
 		priorAuthority !== undefined &&
 		priorAuthority.authoritySource !== AUTHORITY_SOURCE_MISSING;
@@ -231,7 +237,7 @@ export function buildActiveContinuationState(options: {
 		...(continuesPriorLogicalTurn ? [priorAuthority.activeUserEntryId] : []),
 		...options.entries
 			.slice(evidenceStartIndex, activeUserIndex)
-			.filter(entry => entry.type === "message" && entry.message.role === "user")
+			.filter(entry => isAuthoritativeUserEntry(entry))
 			.map(entry => entry.id),
 	]
 		.filter((entryId, index, all) => entryId !== activeUserEntry.id && all.indexOf(entryId) === index)
@@ -260,12 +266,14 @@ export function buildActiveContinuationState(options: {
 		if (UNCLASSIFIED_EXECUTION_TOOLS.has(tool)) unclassifiedShellOrEvalResults++;
 		const path = evidencePath(call, entry.message.details);
 		const resource = evidenceResource(call);
+		const command = evidenceCommand(call);
 		const evidence: ContextContinuationToolEvidence = {
 			tool,
 			toolCallId: entry.message.toolCallId,
 			resultEntryId: entry.id,
 			...(path ? { path } : {}),
 			...(resource && resource !== path ? { resource } : {}),
+			...(command ? { command } : {}),
 		};
 		if (KNOWN_MUTATION_TOOLS.has(tool)) {
 			if (appendBoundedEvidence(successfulMutations, evidence)) omittedEvidenceRefs++;
@@ -371,7 +379,7 @@ function activeContinuationStateFromEntry(entry: SessionEntry | undefined): Acti
 export function isContinuationAuthoritySourceMissing(entries: readonly SessionEntry[]): boolean {
 	for (let index = entries.length - 1; index >= 0; index--) {
 		const entry = entries[index];
-		if (entry?.type === "message" && entry.message.role === "user") return false;
+		if (entry && isAuthoritativeUserEntry(entry)) return false;
 		const state = activeContinuationStateFromEntry(entry);
 		if (state) return state.authoritySource === AUTHORITY_SOURCE_MISSING;
 	}
