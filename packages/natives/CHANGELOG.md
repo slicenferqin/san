@@ -6,6 +6,12 @@
 
 - Fixed long-format `git status` minimization misreporting Git's trailing `no changes added to commit` guidance as an untracked file.
 - Corrected RTK-derived shell minimizer attribution and native package metadata from MIT-only to the applicable Apache-2.0 and MIT license combination, and included the license texts and third-party notice in native distributions.
+## [17.0.0] - 2026-07-15
+
+### Fixed
+
+- Fixed the in-process grep builtin to correctly handle escaped alternation (\|) in default and -G (GNU basic-regex) searches, while preserving the correct regex dialects for -E, -F, and -P.
+
 ## [16.5.2] - 2026-07-14
 
 ### Fixed

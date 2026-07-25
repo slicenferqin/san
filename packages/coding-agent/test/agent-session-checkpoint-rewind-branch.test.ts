@@ -196,7 +196,14 @@ describe("AgentSession checkpoint rewind branch context", () => {
 
 		const activeRoles = session.messages.map(message => message.role);
 		expect(activeRoles).toEqual(["user", "assistant", "toolResult", "branchSummary", "custom", "assistant"]);
-		expect(activeRoles).toEqual(session.sessionManager.buildSessionContext().messages.map(message => message.role));
+		expect(session.sessionManager.buildSessionContext().messages.map(message => message.role)).toEqual([
+			"user",
+			"assistant",
+			"toolResult",
+			"branchSummary",
+			"custom",
+			"assistant",
+		]);
 
 		const finalAssistant = expectLastAssistant(session.messages);
 		const finalThinking = finalAssistant.content.find((block): block is ThinkingContent => block.type === "thinking");
