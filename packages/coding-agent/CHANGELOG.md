@@ -75,6 +75,7 @@
 
 ### Fixed
 
+- Fixed Linux NVIDIA GPU discovery so descendants inheriting the probe's stdout pipe have time to drain without turning a successful probe into a timeout.
 - Fixed San execution loop terminal budget races so post-review overspend writes a single blocked envelope instead of persisting `passed` then failing on a conflicting `blocked` transition.
 - Fixed San evidence gate to require successful commands from the current assignment batch only; prior-retry successes no longer unlock a new pass.
 - Fixed council mode silently degrading without Oracle: `requireOracle=true` with no Oracle executor (or settings-disabled Oracle) now blocks immediately.

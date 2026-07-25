@@ -117,7 +117,7 @@ const SYSTEM_PROMPT_PREP_TIMEOUT_MS = 5000;
 /** Kept below prep timeout so timed-out probes can still write the null cache before fallback. */
 const GPU_PROBE_TIMEOUT_MS = SYSTEM_PROMPT_PREP_TIMEOUT_MS - 500;
 /** Drop stdout from a probe descendant that inherited the pipe after the probe exited. */
-const GPU_PROBE_STDOUT_DRAIN_MS = 250;
+const GPU_PROBE_STDOUT_DRAIN_MS = 1000;
 
 async function runGpuProbe(cmd: string[]): Promise<string | null> {
 	try {
