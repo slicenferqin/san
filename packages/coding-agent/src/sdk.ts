@@ -1595,7 +1595,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			skipPythonPreflight: options.skipPythonPreflight,
 			contextFiles,
 			workspaceTree: resolvedWorkspaceTree,
-			skills,
+			get skills() {
+				return session?.skills ?? skills;
+			},
+			refreshSkills: () => session.refreshSkills(),
 			rules: allRules,
 			eventBus,
 			outputSchema: options.outputSchema,
@@ -2380,7 +2383,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				xdevDocs: toolSession.xdevRegistry?.docsAll() ?? "",
 				autoQaEnabled: isAutoQaEnabled(settings),
 				resolvedCustomPrompt: options.customSystemPrompt,
-				skills,
+				skills: session?.skills ?? skills,
 				contextFiles,
 				tools: promptTools,
 				toolNames,
@@ -2845,6 +2848,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			customCommands: customCommandsResult.commands,
 			skills,
 			skillWarnings,
+			skillsReloadable: options.skills === undefined,
 			skillsSettings: settings.getGroup("skills"),
 			modelRegistry,
 			toolRegistry,

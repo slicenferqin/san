@@ -225,10 +225,9 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 				? planMessage.content
 				: Array.isArray(planMessage?.content)
 					? planMessage.content
-							.filter((block): block is { type: "text"; text: string } => {
-								return block.type === "text" && typeof block.text === "string";
-							})
-							.map(block => block.text)
+							.flatMap(block =>
+								block.type === "text" && "text" in block && typeof block.text === "string" ? [block.text] : [],
+							)
 							.join("\n")
 					: "";
 		expect(estimateTokens({ role: "user", content: planContent, timestamp: Date.now() })).toBeLessThanOrEqual(135);
