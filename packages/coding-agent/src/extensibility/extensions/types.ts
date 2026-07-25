@@ -14,6 +14,7 @@ import type {
 	ThinkingLevel,
 	ToolApproval,
 	ToolLoadMode,
+	ToolTier,
 } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type {

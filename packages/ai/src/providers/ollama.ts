@@ -1,3 +1,4 @@
+import type { EffortName } from "@oh-my-pi/pi-catalog/effort";
 import { fetchWithRetry, parseStreamingJson, readJsonl } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { getEnvApiKey } from "../stream";

@@ -183,6 +183,7 @@ import { ToolContextStore } from "./tools/context";
 import { isIrcEnabled } from "./tools/hub";
 import { getImageGenTools } from "./tools/image-gen";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
+import { authorizeToolArgumentsWithinPathScope } from "./tools/path-scope";
 import { isAutoQaEnabled } from "./tools/report-tool-issue";
 import { queueResolveHandler } from "./tools/resolve";
 import { ttsTool } from "./tools/tts";

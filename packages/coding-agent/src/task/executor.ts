@@ -2132,11 +2132,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const subagentOverrides: Partial<Record<SettingPath, unknown>> = {};
 	if (agent.readSummarize === false) subagentOverrides["read.summarize.enabled"] = false;
 	if (options.strictToolNames) {
-		// A strict programmatic caller has already approved the complete tool set.
-		// Generic discovery would let search_tool_bm25 activate tools outside that
-		// set, so it must be disabled in the child session as part of the boundary.
-		subagentOverrides["tools.discoveryMode"] = "off";
-		subagentOverrides["mcp.discoveryMode"] = false;
+		// 严格调用方已经批准完整工具集；关闭会自行改变目标的自动化。
 		subagentOverrides["goal.enabled"] = false;
 	}
 	const subagentSettings = createSubagentSettings(settings, subagentOverrides, options.parentServiceTier);

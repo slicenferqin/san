@@ -286,6 +286,7 @@ const EMPTY_STRING_RECORD: Record<string, string> = {};
 const EMPTY_NUMBER_RECORD: Record<string, number> = {};
 const DEFAULT_CYCLE_ORDER: string[] = ["smol", "default", "slow"];
 const DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS: string[] = ["hub"];
+const DEFAULT_TOOL_PROGRESS_GUARD_EXEMPT_TOOLS: string[] = ["hub", "yield"];
 const EMPTY_MODEL_TAGS_RECORD: ModelTagsSettings = {};
 const HINDSIGHT_RECALL_TYPES_DEFAULT: string[] = ["world", "experience"];
 export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [

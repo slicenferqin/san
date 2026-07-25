@@ -31,11 +31,7 @@ describe("/model session-only picker", () => {
 		const harness = createRuntime();
 		const handled = await executeBuiltinSlashCommand("/model", harness.runtime);
 		expect(handled).toBe(true);
-		expect(harness.showModelSelector).toHaveBeenCalledWith({
-			temporaryOnly: true,
-			directSelect: true,
-			hideProviderTabs: true,
-		});
+		expect(harness.showModelSelector).toHaveBeenCalledWith();
 		expect(harness.showModelRoleSelector).not.toHaveBeenCalled();
 		expect(harness.setText).toHaveBeenCalledWith("");
 	});
@@ -60,11 +56,7 @@ describe("/model session-only picker", () => {
 		const harness = createRuntime();
 		const handled = await executeBuiltinSlashCommand("/models", harness.runtime);
 		expect(handled).toBe(true);
-		expect(harness.showModelSelector).toHaveBeenCalledWith({
-			temporaryOnly: true,
-			directSelect: true,
-			hideProviderTabs: true,
-		});
+		expect(harness.showModelSelector).toHaveBeenCalledWith();
 	});
 });
 
@@ -73,11 +65,7 @@ describe("/switch compatibility", () => {
 		const harness = createRuntime();
 		const handled = await executeBuiltinSlashCommand("/switch", harness.runtime);
 		expect(handled).toBe(true);
-		expect(harness.showModelSelector).toHaveBeenCalledWith({
-			temporaryOnly: true,
-			directSelect: true,
-			hideProviderTabs: true,
-		});
+		expect(harness.showModelSelector).toHaveBeenCalledWith({ temporaryOnly: true });
 	});
 });
 

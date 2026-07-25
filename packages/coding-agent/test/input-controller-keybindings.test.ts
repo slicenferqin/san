@@ -249,9 +249,9 @@ describe("InputController keybinding setup", () => {
 		editor.onSelectModelTemporary?.();
 		editor.onSelectModel?.();
 
-		const sessionPicker = { temporaryOnly: true, directSelect: true, hideProviderTabs: true };
+		const sessionPicker = { temporaryOnly: true };
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(1, sessionPicker);
-		expect(spies.showModelSelector).toHaveBeenNthCalledWith(2, sessionPicker);
+		expect(spies.showModelSelector).toHaveBeenNthCalledWith(2);
 		expect(spies.resetDisplay).toHaveBeenCalledTimes(1);
 	});
 

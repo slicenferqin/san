@@ -21,6 +21,7 @@ import {
 	saveWatchdogConfigFile,
 } from "../../advisor";
 import { reset as resetCapabilities } from "../../capability";
+import { discoverModelsByProviderType, normalizeOpenAIModelsListBaseUrl } from "../../config/model-discovery";
 import { formatModelSelectorValue, resolveAdvisorRoleSelection } from "../../config/model-resolver";
 import { getRoleInfo } from "../../config/model-roles";
 import {

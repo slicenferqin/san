@@ -24,11 +24,7 @@ describe("/model slash command", () => {
 		const handled = await executeBuiltinSlashCommand("/model", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.showModelSelector).toHaveBeenCalledWith({
-			temporaryOnly: true,
-			directSelect: true,
-			hideProviderTabs: true,
-		});
+		expect(harness.showModelSelector).toHaveBeenCalledWith();
 		expect(harness.setText).toHaveBeenCalledWith("");
 	});
 });
@@ -40,11 +36,7 @@ describe("/switch slash command", () => {
 		const handled = await executeBuiltinSlashCommand("/switch", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.showModelSelector).toHaveBeenCalledWith({
-			temporaryOnly: true,
-			directSelect: true,
-			hideProviderTabs: true,
-		});
+		expect(harness.showModelSelector).toHaveBeenCalledWith({ temporaryOnly: true });
 		expect(harness.setText).toHaveBeenCalledWith("");
 	});
 });

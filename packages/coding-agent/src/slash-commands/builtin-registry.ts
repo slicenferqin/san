@@ -5,6 +5,19 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { type AutocompleteItem, Spacer } from "@oh-my-pi/pi-tui";
 import { APP_NAME, getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
+import { applySanBrainMutation, buildSanBrainConsolidation } from "../brain/commands";
+import { buildSanBrainProjectionReportText, runSanBrainProjections } from "../brain/projection";
+import { rebuildSanBrainStore } from "../brain/rebuild";
+import {
+	buildSanBrainConsolidationReportText,
+	buildSanBrainDebugReportText,
+	buildSanBrainExplanationText,
+	buildSanBrainInboxReportText,
+	buildSanBrainMutationResultText,
+	buildSanBrainProfileReportText,
+} from "../brain/render";
+import { resolveSanBrainRuntimePolicy } from "../brain/runtime-policy";
+import { SanBrainStore } from "../brain/store";
 import { reset as resetCapabilities } from "../capability";
 import { COLLAB_GUEST_ALLOWED_COMMANDS, CollabGuestLink } from "../collab/guest";
 import { CollabHost } from "../collab/host";
