@@ -146,7 +146,7 @@ Loaded via symbolic link.
 
 		expect(session.skills.some((s: Skill) => s.name === "runtime-added-skill")).toBe(false);
 
-		const runtimeSkillDir = path.join(tempDir, ".omp", "skills", "runtime-added-skill");
+		const runtimeSkillDir = path.join(tempDir, ".san", "skills", "runtime-added-skill");
 		fs.mkdirSync(runtimeSkillDir, { recursive: true });
 		fs.writeFileSync(
 			path.join(runtimeSkillDir, "SKILL.md"),

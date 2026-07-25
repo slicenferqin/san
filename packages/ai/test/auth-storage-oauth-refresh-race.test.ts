@@ -9,6 +9,7 @@ import {
 	SqliteAuthCredentialStore,
 } from "@oh-my-pi/pi-ai/auth-storage";
 import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
+import * as anthropicOAuth from "@oh-my-pi/pi-ai/registry/oauth/anthropic";
 import { removeWithRetries } from "../../utils/src/temp";
 import { withEnv } from "./helpers";
 
@@ -136,6 +137,11 @@ describe("AuthStorage OAuth refresh race", () => {
 			return { newCredentials: credential!, apiKey: credential!.access };
 		});
 
+		vi.spyOn(anthropicOAuth, "refreshAnthropicToken").mockRejectedValue(
+			new Error(
+				'HTTP 400 invalid_grant {"error":"invalid_grant","error_description":"Refresh token not found or invalid"}',
+			),
+		);
 		const sharedStore = store;
 		const originalTryDisable = sharedStore.tryDisableAuthCredentialIfMatches.bind(sharedStore);
 		const tryDisableSpy = vi
@@ -191,6 +197,9 @@ describe("AuthStorage OAuth refresh race", () => {
 			throw new Error('invalid_grant {"error":"invalid_grant"}');
 		});
 
+		vi.spyOn(anthropicOAuth, "refreshAnthropicToken").mockRejectedValue(
+			new Error('invalid_grant {"error":"invalid_grant"}'),
+		);
 		await withEnv(SUPPRESS_ANTHROPIC_ENV, async () => {
 			const apiKey = await authStorage!.getApiKey("anthropic", "session-real-failure");
 

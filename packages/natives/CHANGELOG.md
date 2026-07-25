@@ -6,6 +6,14 @@
 
 - Fixed long-format `git status` minimization misreporting Git's trailing `no changes added to commit` guidance as an untracked file.
 - Corrected RTK-derived shell minimizer attribution and native package metadata from MIT-only to the applicable Apache-2.0 and MIT license combination, and included the license texts and third-party notice in native distributions.
+- Fixed Darwin CI native builds producing Mach-O addons that dyld rejected because rustc's link-time symbol stripping emitted a misaligned LINKEDIT string table; builds now use Apple's strip and verify the addon can load before installation.
+## [17.0.2] - 2026-07-17
+
+### Fixed
+
+- Fixed an issue where running `uv run --extra <package> pytest` bypassed native pytest minimization due to a wrapper parsing error.
+- Fixed a bug where timed-out shell pipelines dropped captured output and could cause Windows hosts to terminate during teardown. (#5316)
+
 ## [17.0.1] - 2026-07-16
 
 ### Fixed

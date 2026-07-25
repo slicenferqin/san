@@ -120,7 +120,7 @@ describe("AgentSession manual snapcompact text-only fallback", () => {
 			`${harness.activeModel.provider}/${harness.activeModel.id}`,
 		);
 		expect(harness.notices).toContain(
-			`snapcompact needs a vision-capable model (${harness.activeModel.id} is text-only); falling back to LLM compaction`,
+			`snapcompact needs a vision-capable model (${harness.activeModel.id} is text-only); using an LLM context-full fallback`,
 		);
 		expect(harness.sessionManager.getBranch().find(entry => entry.type === "compaction")).toMatchObject({
 			type: "compaction",

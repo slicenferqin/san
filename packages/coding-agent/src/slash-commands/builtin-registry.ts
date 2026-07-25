@@ -2085,6 +2085,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "new",
+		aliases: ["clear"],
 		description: "Start a new session",
 		handleTui: async (_command, runtime) => {
 			runtime.ctx.editor.setText("");
@@ -2399,6 +2400,11 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				}
 			} catch {
 				return usage(`Directory does not exist: ${resolvedPath}`, runtime);
+			}
+			try {
+				await runtime.settings.flush();
+			} catch (err) {
+				return usage(`Failed to save pending settings: ${errorMessage(err)}`, runtime);
 			}
 			try {
 				await runtime.sessionManager.moveTo(resolvedPath);
@@ -3031,6 +3037,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "quit",
+		aliases: ["q"],
 		description: "Quit the application",
 		handleTui: shutdownHandlerTui,
 	},
