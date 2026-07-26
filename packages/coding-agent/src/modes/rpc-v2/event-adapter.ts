@@ -216,6 +216,7 @@ export function adaptSessionEvent(
 					toolName: event.toolName,
 					outcome: event.isError ? ("error" as const) : ("success" as const),
 					summary: event.isError ? `${event.toolName} failed` : `${event.toolName} completed`,
+					...extractToolResultDetail(event.result),
 				},
 				{ durability: "durable", runId, turnId },
 			);
@@ -348,6 +349,32 @@ function extractThinkingDelta(assistantMessageEvent: unknown): string {
 	const evt = assistantMessageEvent as Record<string, unknown>;
 	if (evt.type === "thinking_delta" && typeof evt.delta === "string") return evt.delta;
 	return "";
+}
+
+const MAX_TOOL_PREVIEW_BYTES = 4096;
+
+/**
+ * Bounded projection of a tool result's renderer details onto `tool.completed`,
+ * so clients can show rich edit/write cards without a follow-up fetch. Lenient
+ * by design: unknown/malformed details contribute nothing.
+ */
+function extractToolResultDetail(result: unknown): { path?: string; preview?: string; previewTruncated?: boolean } {
+	if (typeof result !== "object" || result === null) return {};
+	const details = (result as { details?: unknown }).details;
+	if (typeof details !== "object" || details === null) return {};
+	const record = details as Record<string, unknown>;
+	const path =
+		typeof record.path === "string" && record.path
+			? record.path
+			: typeof record.resolvedPath === "string" && record.resolvedPath
+				? record.resolvedPath
+				: undefined;
+	const preview =
+		typeof record.diff === "string" && record.diff ? truncateUtf8(record.diff, MAX_TOOL_PREVIEW_BYTES) : undefined;
+	return {
+		...(path ? { path } : {}),
+		...(preview ? { preview: preview.value, ...(preview.truncated ? { previewTruncated: true } : {}) } : {}),
+	};
 }
 
 function extractVisibleText(message: unknown): string {

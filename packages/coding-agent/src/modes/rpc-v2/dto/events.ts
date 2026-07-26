@@ -195,6 +195,12 @@ export interface ToolCompletedData {
 	durationMs: number;
 	resultSummary?: string;
 	artifactRef?: string;
+	/** Primary file path the tool touched (edit/write family), when the result reports one. */
+	path?: string;
+	/** Bounded human-readable result preview — a unified diff for edit tools. */
+	preview?: string;
+	/** True when `preview` was truncated to the wire bound. */
+	previewTruncated?: boolean;
 }
 
 export interface ContextMaintenanceStartedData {

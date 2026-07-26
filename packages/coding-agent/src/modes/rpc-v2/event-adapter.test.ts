@@ -81,3 +81,44 @@ describe("event-adapter message_update", () => {
 		expect(data.delta).toBe("answer");
 	});
 });
+
+describe("event-adapter tool_execution_end", () => {
+	function makeToolEnd(result: unknown, isError = false): AgentSessionEvent {
+		return { type: "tool_execution_end", toolCallId: "tc_1", toolName: "edit", result, isError } as AgentSessionEvent;
+	}
+
+	it("projects edit diff and path into a bounded preview", () => {
+		const { ctx, sequencer } = makeContext();
+		const emitted = adaptSessionEvent(
+			makeToolEnd({ content: [], details: { path: "/tmp/a.ts", diff: "--- a\n+++ b\n-x\n+y\n" } }),
+			sequencer,
+			ctx,
+		);
+		const data = (emitted?.data ?? {}) as { path?: string; preview?: string; previewTruncated?: boolean };
+		expect(emitted?.type).toBe("tool.completed");
+		expect(data.path).toBe("/tmp/a.ts");
+		expect(data.preview).toBe("--- a\n+++ b\n-x\n+y\n");
+		expect(data.previewTruncated).toBeUndefined();
+	});
+
+	it("truncates oversized diffs and flags it", () => {
+		const { ctx, sequencer } = makeContext();
+		const emitted = adaptSessionEvent(
+			makeToolEnd({ details: { resolvedPath: "/tmp/b.ts", diff: "x".repeat(10_000) } }),
+			sequencer,
+			ctx,
+		);
+		const data = (emitted?.data ?? {}) as { path?: string; preview?: string; previewTruncated?: boolean };
+		expect(data.path).toBe("/tmp/b.ts");
+		expect(data.preview?.length).toBe(4096);
+		expect(data.previewTruncated).toBe(true);
+	});
+
+	it("emits no detail fields for tools without renderer details", () => {
+		const { ctx, sequencer } = makeContext();
+		const emitted = adaptSessionEvent(makeToolEnd({ content: [{ type: "text", text: "ok" }] }), sequencer, ctx);
+		const data = (emitted?.data ?? {}) as { path?: string; preview?: string };
+		expect(data.path).toBeUndefined();
+		expect(data.preview).toBeUndefined();
+	});
+});
