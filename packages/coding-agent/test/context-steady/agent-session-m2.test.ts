@@ -47,9 +47,9 @@ import {
 } from "../../src/context-steady/types";
 import {
 	findLatestSanLoopRun,
+	rebuildSanLoopLedger,
 	recordSanLoopRunCreated,
 	SAN_LOOP_CONTEXT_PACKET_CUSTOM_TYPE,
-	SAN_LOOP_EVENT_CUSTOM_TYPE,
 } from "../../src/san-loop";
 
 const BASE_SETTINGS = {
@@ -225,10 +225,9 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 				? planMessage.content
 				: Array.isArray(planMessage?.content)
 					? planMessage.content
-							.filter((block): block is { type: "text"; text: string } => {
-								return block.type === "text" && typeof block.text === "string";
-							})
-							.map(block => block.text)
+							.flatMap(block =>
+								block.type === "text" && "text" in block && typeof block.text === "string" ? [block.text] : [],
+							)
 							.join("\n")
 					: "";
 		expect(estimateTokens({ role: "user", content: planContent, timestamp: Date.now() })).toBeLessThanOrEqual(135);
@@ -325,7 +324,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 			status: "blocked",
 			finalVerdict: undefined,
 		});
-		const events = customEntries(sessionManager, SAN_LOOP_EVENT_CUSTOM_TYPE);
+		const events = rebuildSanLoopLedger(sessionManager.getEntries()).events;
 		expect(events.at(-1)?.data).toMatchObject({
 			runId: "loop_recover_session",
 			type: "recovered",

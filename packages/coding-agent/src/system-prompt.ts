@@ -117,7 +117,7 @@ const SYSTEM_PROMPT_PREP_TIMEOUT_MS = 5000;
 /** Kept below prep timeout so timed-out probes can still write the null cache before fallback. */
 const GPU_PROBE_TIMEOUT_MS = SYSTEM_PROMPT_PREP_TIMEOUT_MS - 500;
 /** Drop stdout from a probe descendant that inherited the pipe after the probe exited. */
-const GPU_PROBE_STDOUT_DRAIN_MS = 250;
+const GPU_PROBE_STDOUT_DRAIN_MS = 1000;
 
 async function runGpuProbe(cmd: string[]): Promise<string | null> {
 	try {
@@ -131,6 +131,7 @@ async function runGpuProbe(cmd: string[]): Promise<string | null> {
 			// dies at the deadline and lets getCachedGpu reach the null-cache write.
 			killSignal: "SIGKILL",
 		});
+		proc.unref();
 		const stdoutReader = proc.stdout.getReader();
 		let stdout = "";
 		const decoder = new TextDecoder();
@@ -142,7 +143,24 @@ async function runGpuProbe(cmd: string[]): Promise<string | null> {
 			}
 			stdout += decoder.decode();
 		})();
-		const exitCode = await proc.exited;
+		const probeTimeout = Promise.withResolvers<"timeout">();
+		const probeTimeoutTimer = setTimeout(() => probeTimeout.resolve("timeout"), GPU_PROBE_TIMEOUT_MS);
+		const exitCodeOrTimeout = await Promise.race([proc.exited, probeTimeout.promise]);
+		clearTimeout(probeTimeoutTimer);
+		if (exitCodeOrTimeout === "timeout") {
+			try {
+				proc.kill("SIGKILL");
+			} catch {
+				// The process may have exited in the timeout race.
+			}
+			void stdoutReader.cancel().catch(() => undefined);
+			return null;
+		}
+		if (exitCodeOrTimeout !== 0) {
+			void stdoutReader.cancel().catch(() => undefined);
+			return null;
+		}
+		const exitCode = exitCodeOrTimeout;
 		// Even on exit 0, a probe wrapper can leave a descendant holding stdout open.
 		// Bound the EOF wait so getCachedGpu cannot outlive the probe in either path;
 		// keep whatever bytes the reader already captured before cancelling.
@@ -151,8 +169,9 @@ async function runGpuProbe(cmd: string[]): Promise<string | null> {
 			Bun.sleep(GPU_PROBE_STDOUT_DRAIN_MS).then(() => "timeout" as const),
 		]);
 		if (drained !== "ok") {
-			await stdoutReader.cancel().catch(() => undefined);
-			await stdoutDone.catch(() => undefined);
+			void stdoutReader.cancel().catch(() => undefined);
+			// Do not await stdoutDone here: a descendant may keep the inherited pipe
+			// open after cancellation, but the bytes read so far are already usable.
 		}
 		return exitCode === 0 ? stdout : null;
 	} catch {
@@ -470,15 +489,11 @@ export interface BuildSystemPromptOptions {
 	/** Pre-loaded context files (skips discovery if provided). */
 	contextFiles?: Array<{ path: string; content: string; depth?: number }>;
 	/** Skills provided directly to system prompt construction. */
-	skills?: Skill[];
+	skills?: readonly Skill[];
 	/** Pre-loaded rulebook rules (descriptions, excluding TTSR and always-apply). */
 	rules?: Array<{ name: string; description?: string; path: string; globs?: string[] }>;
 	/** Intent field name injected into every tool schema. If set, explains the field in the prompt. */
 	intentField?: string;
-	/** Whether MCP tool discovery is active for this prompt build. */
-	mcpDiscoveryMode?: boolean;
-	/** Discoverable MCP server summaries to advertise when discovery mode is active. */
-	mcpDiscoveryServerSummaries?: string[];
 	/** Encourage the agent to delegate via tasks unless changes are trivial. */
 	eagerTasks?: boolean;
 	/** When true, the Eager Tasks section uses the hard MUST/ONLY wording (`task.eager: always`) rather than the softer `preferred` nudge. */
@@ -509,6 +524,12 @@ export interface BuildSystemPromptOptions {
 	renderMermaid?: boolean;
 	/** Pre-resolved nested active repo context. Undefined resolves from cwd. */
 	activeRepoContext?: ActiveRepoContext | null;
+	/** Tools mounted under `xd://`; renders the protocol section when non-empty. */
+	xdevTools?: Array<{ name: string; summary: string }>;
+	/** Full docs + JSON schema for every `xd://`-mounted tool, inlined into the protocol section so no discovery `read` is needed. */
+	xdevDocs?: string;
+	/** Whether Auto-QA grievance reporting is enabled; renders the `xd://report_issue` note. */
+	autoQaEnabled?: boolean;
 }
 
 /** Result of building provider-facing system prompt messages. */
@@ -539,8 +560,6 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		rules,
 		alwaysApplyRules,
 		intentField,
-		mcpDiscoveryMode = false,
-		mcpDiscoveryServerSummaries = [],
 		eagerTasks = false,
 		eagerTasksAlways = false,
 		taskBatch = true,
@@ -554,6 +573,9 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		personality = "default",
 		includeWorkspaceTree = false,
 		renderMermaid = true,
+		xdevTools = [],
+		xdevDocs = "",
+		autoQaEnabled = false,
 		activeRepoContext: providedActiveRepoContext,
 	} = options;
 	const inlineToolDescriptors = providedInlineToolDescriptors ?? false;
@@ -634,7 +656,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 						totalLines: 0,
 						agentsMdFiles: [],
 					});
-	const skillsPromise: Promise<Skill[]> =
+	const skillsPromise: Promise<readonly Skill[]> =
 		providedSkills !== undefined
 			? Promise.resolve(providedSkills)
 			: skillsSettings?.enabled !== false
@@ -719,6 +741,12 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 
 	// Build tool descriptions for system prompt rendering.
 	const toolPromptNames = new Map<string, string>(toolNames.map(name => [name, tools?.get(name)?.wireName ?? name]));
+	// xd://-mounted tools count as present for prompt gates ({{#has tools "lsp"}})
+	// and resolve their own name as the reference — the xd:// section explains
+	// the access path. The Tool Inventory list stays limited to real defs.
+	for (const mounted of xdevTools) {
+		if (!toolPromptNames.has(mounted.name)) toolPromptNames.set(mounted.name, mounted.name);
+	}
 	const toolRefs = Object.fromEntries(toolPromptNames.entries());
 	const toolInfo = toolNames.map(name => ({
 		name: toolPromptNames.get(name) ?? name,
@@ -765,7 +793,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		systemPromptCustomization: effectiveSystemPromptCustomization,
 		customPrompt: resolvedCustomPrompt,
 		appendPrompt: resolvedAppendPrompt ?? "",
-		tools: toolNames,
+		tools: [...new Set([...toolNames, ...xdevTools.map(mounted => mounted.name)])],
 		toolInfo,
 		toolInventory,
 		inlineToolDescriptors,
@@ -786,9 +814,6 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		personality: personality === "none" ? "" : PERSONALITY_SPECS[personality].trim(),
 		intentTracing: !!intentField,
 		intentField: intentField ?? "",
-		mcpDiscoveryMode,
-		hasMCPDiscoveryServers: mcpDiscoveryServerSummaries.length > 0,
-		mcpDiscoveryServerSummaries,
 		eagerTasks,
 		eagerTasksAlways,
 		taskBatch,
@@ -799,6 +824,9 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		hasObsidian: hasObsidian(),
 		includeWorkspaceTree,
 		renderMermaid,
+		xdevTools,
+		xdevDocs,
+		autoQaEnabled,
 	};
 	const rendered = prompt.render(resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate, data);
 	const systemPrompt = [rendered];

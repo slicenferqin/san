@@ -102,7 +102,7 @@ export const packages: PublishPackage[] = [
 		extraTypeConfigs: ["tsconfig.publish.client.json"],
 	},
 	{ dir: "packages/agent", kind: "typescript" },
-	{ dir: "packages/coding-agent", kind: "typescript", publishBin: { omp: "dist/cli.js" } },
+	{ dir: "packages/coding-agent", kind: "typescript", publishBin: { san: "dist/cli.js" } },
 ];
 
 function rewriteSrcPath(value: string): string {

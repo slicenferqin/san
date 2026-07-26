@@ -44,6 +44,7 @@ describe("SelectorController login", () => {
 					authStorage,
 					refresh,
 					refreshInBackground,
+					canValidateProviderConnection: vi.fn(() => false),
 				},
 			},
 			// The login flow swaps the editor slot for the cancellable dialog
@@ -83,7 +84,13 @@ describe("SelectorController login", () => {
 		const presentedBlocks: unknown[] = [];
 		const ctx = {
 			oauthManualInput: { waitForInput: vi.fn(), clear: vi.fn() },
-			session: { modelRegistry: { authStorage, refreshInBackground: vi.fn() } },
+			session: {
+				modelRegistry: {
+					authStorage,
+					refreshInBackground: vi.fn(),
+					canValidateProviderConnection: vi.fn(() => false),
+				},
+			},
 			editorContainer: {
 				clear: vi.fn(() => editorSlot.splice(0)),
 				addChild: vi.fn((child: unknown) => editorSlot.push(child)),

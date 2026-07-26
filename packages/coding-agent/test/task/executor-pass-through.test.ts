@@ -31,6 +31,7 @@ function createMockSession(onPrompt: (params: { emit: (event: AgentSessionEvent)
 		extensionRunner: undefined,
 		sessionManager: { appendSessionInit: () => {} },
 		getActiveToolNames: () => ["read", "yield"],
+		getEnabledToolNames: () => ["read", "yield"],
 		setActiveToolsByName: async (_toolNames: string[]) => {},
 		subscribe: (listener: (event: AgentSessionEvent) => void) => {
 			listeners.push(listener);
@@ -145,7 +146,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		expect(forwarded?.preloadedCustomToolPaths).toBeUndefined();
 	});
 
-	it("drops parent discovery and collaboration capabilities for a strict programmatic child", async () => {
+	it("drops parent discovery and MCP capabilities for a strict programmatic child", async () => {
 		const session = yieldEmittingSession();
 		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
 
@@ -165,7 +166,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 
 		expect(result.exitCode).toBe(0);
 		const forwarded = spy.mock.calls[0]?.[0];
-		expect(forwarded?.toolNames).toEqual(["read", "yield"]);
+		expect(forwarded?.toolNames).toEqual(["read", "yield", "hub"]);
 		expect(forwarded?.strictToolNames).toBe(true);
 		expect(forwarded?.toolPathScope).toBe("/tmp");
 		expect(forwarded?.maxOutputTokens).toBe(777);

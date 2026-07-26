@@ -5,21 +5,20 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { type AutocompleteItem, Spacer } from "@oh-my-pi/pi-tui";
 import { APP_NAME, getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
+import { applySanBrainMutation, buildSanBrainConsolidation } from "../brain/commands";
+import { buildSanBrainProjectionReportText, runSanBrainProjections } from "../brain/projection";
+import { rebuildSanBrainStore } from "../brain/rebuild";
 import {
-	applySanBrainMutation,
-	buildSanBrainConsolidation,
 	buildSanBrainConsolidationReportText,
 	buildSanBrainDebugReportText,
 	buildSanBrainExplanationText,
 	buildSanBrainInboxReportText,
 	buildSanBrainMutationResultText,
 	buildSanBrainProfileReportText,
-	buildSanBrainProjectionReportText,
-	rebuildSanBrainStore,
-	resolveSanBrainRuntimePolicy,
-	runSanBrainProjections,
-	SanBrainStore,
-} from "../brain";
+} from "../brain/render";
+import { resolveSanBrainRuntimePolicy } from "../brain/runtime-policy";
+import { SanBrainStore } from "../brain/store";
+import { reset as resetCapabilities } from "../capability";
 import { COLLAB_GUEST_ALLOWED_COMMANDS, CollabGuestLink } from "../collab/guest";
 import { CollabHost } from "../collab/host";
 import { expandRoleAlias, getModelMatchPreferences, resolveCliModel } from "../config/model-resolver";
@@ -1610,7 +1609,11 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				await runtime.output("No tools are available.");
 				return commandConsumed();
 			}
-			await runtime.output(all.map(name => `${active.includes(name) ? "*" : "-"} ${name}`).join("\n"));
+			const lines = all.map(name => `${active.includes(name) ? "*" : "-"} ${name}`);
+			for (const mounted of runtime.session.getXdevToolEntries()) {
+				lines.push(`~ xd://${mounted.name}`);
+			}
+			await runtime.output(lines.join("\n"));
 			return commandConsumed();
 		},
 		handleTui: (_command, runtime) => {
@@ -2082,6 +2085,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "new",
+		aliases: ["clear"],
 		description: "Start a new session",
 		handleTui: async (_command, runtime) => {
 			runtime.ctx.editor.setText("");
@@ -2396,6 +2400,11 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				}
 			} catch {
 				return usage(`Directory does not exist: ${resolvedPath}`, runtime);
+			}
+			try {
+				await runtime.settings.flush();
+			} catch (err) {
+				return usage(`Failed to save pending settings: ${errorMessage(err)}`, runtime);
 			}
 			try {
 				await runtime.sessionManager.moveTo(resolvedPath);
@@ -2947,8 +2956,9 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			// listClaudePluginRoots re-reads from disk on next access.
 			const projectPath = await resolveActiveProjectRegistryPath(runtime.ctx.sessionManager.getCwd());
 			clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
+			await runtime.ctx.refreshSkillState();
 			await runtime.ctx.refreshSlashCommandState();
-			await runtime.ctx.session.refreshSshTool({ activateIfAvailable: true });
+			resetCapabilities();
 			runtime.ctx.showStatus("Plugins reloaded.");
 			runtime.ctx.editor.setText("");
 		},
@@ -3027,6 +3037,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "quit",
+		aliases: ["q"],
 		description: "Quit the application",
 		handleTui: shutdownHandlerTui,
 	},
@@ -3309,8 +3320,9 @@ export async function executeBuiltinSlashCommand(
 			reloadPlugins: async () => {
 				const projectPath = await resolveActiveProjectRegistryPath(ctx.sessionManager.getCwd());
 				clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
+				await ctx.refreshSkillState();
 				await ctx.refreshSlashCommandState();
-				await ctx.session.refreshSshTool({ activateIfAvailable: true });
+				resetCapabilities();
 			},
 			reloadMcp: async () => {
 				await ctx.handleMCPCommand("/mcp reload");

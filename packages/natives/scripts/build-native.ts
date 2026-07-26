@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import * as path from "node:path";
 import { $ } from "bun";
 import { detectHostAvx2Support } from "../../../scripts/host-detect";
@@ -309,8 +310,22 @@ async function runStripTool(addonPath: string): Promise<void> {
 	}
 }
 
+async function stripDarwinSymbols(addonPath: string): Promise<void> {
+	const strip = Bun.which("strip");
+	if (!strip) throw new Error("Apple strip is required for Darwin CI native builds.");
+	const result = await $`${strip} -x ${addonPath}`.quiet().nothrow();
+	if (result.exitCode !== 0) {
+		const stderr = result.stderr.toString("utf8").trim();
+		throw new Error(`Failed to strip Darwin native addon${stderr ? `: ${stderr}` : ""}`);
+	}
+}
+
 async function stripAndVerifyNativeAddon(addonPath: string): Promise<void> {
 	if (profileLabel !== "ci") return;
+	if (useDarwinPostLinkStrip) {
+		await stripDarwinSymbols(addonPath);
+		return;
+	}
 	if (!(await isElfFile(addonPath))) return;
 
 	await runStripTool(addonPath);
@@ -326,6 +341,13 @@ async function stripAndVerifyNativeAddon(addonPath: string): Promise<void> {
 const isCI = Boolean(Bun.env.CI);
 const useLocalProfile = !isCI && !isCrossCompile;
 const profileLabel = useLocalProfile ? "local" : "ci";
+const useDarwinPostLinkStrip = profileLabel === "ci" && process.platform === "darwin" && targetPlatform === "darwin";
+if (useDarwinPostLinkStrip) {
+	// rustc's link-time `strip = "symbols"` can emit a Mach-O string table whose
+	// offset dyld rejects as misaligned. Link unstripped, then let Apple's strip
+	// rewrite LINKEDIT with valid alignment.
+	process.env.CARGO_PROFILE_CI_STRIP = "false";
+}
 const profileSuffix = ` (${profileLabel})`;
 
 const buildOutputDirPrefix = resolveBuildOutputDirPrefix(profileLabel);
@@ -419,6 +441,15 @@ async function runNapiBuildWithSccacheFallback() {
 	return { buildResult, stderr };
 }
 
+function verifyBuiltAddonLoadable(addonPath: string): void {
+	if (isCrossCompile) return;
+	try {
+		createRequire(import.meta.url)(addonPath);
+	} catch (error) {
+		throw new Error(`Built native addon cannot be loaded: ${error instanceof Error ? error.message : String(error)}`);
+	}
+}
+
 try {
 	const { buildResult, stderr } = await runNapiBuildWithSccacheFallback();
 	if (buildResult.exitCode !== 0) {
@@ -427,6 +458,7 @@ try {
 
 	const builtAddonPath = await resolveBuiltAddonPath(buildOutputDir, canonicalAddonFilename);
 	await stripAndVerifyNativeAddon(builtAddonPath);
+	verifyBuiltAddonLoadable(builtAddonPath);
 	if (builtAddonPath !== canonicalAddonPath) {
 		console.log(`Normalizing native addon filename: ${path.basename(builtAddonPath)} → ${canonicalAddonFilename}`);
 		await installBinary(builtAddonPath, canonicalAddonPath);

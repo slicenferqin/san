@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San 同步 OMP v17.1.3+1 上游审查</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0b1020;
+      --panel: #121a2f;
+      --text: #e8edf7;
+      --muted: #a9b4ca;
+      --line: #2b3857;
+      --accent: #75a7ff;
+      --good: #5bd6a2;
+      --warn: #f2c66d;
+      --bad: #ff8e8e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+    }
+    main { max-width: 1180px; margin: 0 auto; padding: 40px 24px 80px; }
+    h1, h2, h3 { line-height: 1.25; }
+    h1 { margin: 0 0 8px; font-size: 2rem; }
+    h2 { margin-top: 34px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+    h3 { margin-bottom: 6px; }
+    p, li { color: var(--text); }
+    .muted { color: var(--muted); }
+    .summary, .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 18px 20px;
+    }
+    .summary { border-left: 4px solid var(--warn); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 12px;
+      margin: 18px 0;
+    }
+    .metric strong { display: block; font-size: 1.55rem; color: var(--accent); }
+    .metric span { color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+    th, td { border: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }
+    th { background: rgba(117, 167, 255, 0.1); }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: rgba(117, 167, 255, 0.12);
+      border-radius: 5px;
+      padding: 0.1em 0.35em;
+    }
+    pre {
+      overflow: auto;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #080d18;
+    }
+    pre code { padding: 0; background: transparent; }
+    .good { color: var(--good); }
+    .warn { color: var(--warn); }
+    .bad { color: var(--bad); }
+    .label {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      font-weight: 650;
+      border: 1px solid currentColor;
+    }
+    ul, ol { padding-left: 1.4rem; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>San 同步 OMP v17.1.3+1 上游审查</h1>
+    <p class="muted">评估日期：2026-07-25；分支：<code>sync/omp-upstream-20260725</code>；San 基线：<code>b8f40148f</code>；上游基线：<code>59619623e</code>。</p>
+  </header>
+
+  <section class="summary">
+    <strong class="warn">结论：可以用一个大 PR 完成，但必须在 PR 内分阶段合并并逐段验证。</strong>
+    <p>本轮已经从官方 <code>upstream</code> 拉取最新引用，并确认当前工作区干净且位于独立分支 <code>sync/omp-upstream-20260725</code>。San 和上游共同基线是 <code>v16.5.2</code>；San 此后有 70 个本地提交，上游到 <code>v17.1.3+1</code> 有 2008 个提交。无副作用合并预演显示一次性合并会修改 2222 个文件，并产生 59 个内容冲突，主要集中在 <code>packages/coding-agent</code> 核心运行时。为保持单个审查入口，同时控制风险，本分支按稳定标签保留阶段性 merge commit，每个阶段完成冲突解析、类型检查和聚焦回归后再进入下一阶段。</p>
+  </section>
+
+  <div class="grid">
+    <div class="card metric"><strong>v16.5.2</strong><span>共同 merge-base / 上次完成同步点</span></div>
+    <div class="card metric"><strong>70</strong><span>San 相对共同基线独有提交</span></div>
+    <div class="card metric"><strong>2008</strong><span>上游相对共同基线独有提交</span></div>
+    <div class="card metric"><strong>2222</strong><span>San main..upstream/main 变更文件</span></div>
+    <div class="card metric"><strong>59</strong><span>全量 merge-tree 内容冲突文件</span></div>
+  </div>
+
+  <h2>1. 已确认的 Git 状态</h2>
+  <table>
+    <thead><tr><th>项目</th><th>值</th></tr></thead>
+    <tbody>
+      <tr><td>当前分支</td><td><code>sync/omp-upstream-20260725</code></td></tr>
+      <tr><td>San main</td><td><code>b8f40148f</code> / <code>v16.5.2-70-gb8f40148f</code></td></tr>
+      <tr><td>上游 main</td><td><code>59619623e</code> / <code>v17.1.3-1-g59619623e</code></td></tr>
+      <tr><td>共同基线</td><td><code>7d02778c60f4b5db60f84bedbca79d6e64cb91f5</code> / <code>v16.5.2</code></td></tr>
+      <tr><td>工作区</td><td><code>git status --short --branch</code> 显示 staged 0、unstaged 0、untracked 0；没有继续在 <code>main</code> 上操作。</td></tr>
+      <tr><td>网络</td><td>首次直连 GitHub 拉取超时；按本机约定使用 <code>127.0.0.1:7897</code> 代理后成功刷新 <code>upstream</code>。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>2. 上游更新概览</h2>
+  <table>
+    <thead><tr><th>维度</th><th>统计</th><th>判断</th></tr></thead>
+    <tbody>
+      <tr><td>提交类型</td><td><code>fix</code> 933、<code>feat</code> 109、<code>chore</code> 84、<code>docs</code> 70、<code>test</code> 122、合并提交 419、其他 257。</td><td>大量是稳定性修复，但不是局部补丁；已经覆盖运行时、工具、模型、TUI、AI provider、CI 和文档。</td></tr>
+      <tr><td>文件规模</td><td><code>2222 files changed, 179702 insertions(+), 171945 deletions(-)</code></td><td>规模等同一次主线重同步，不适合和 San 现有 70 个本地提交一次性混合。</td></tr>
+      <tr><td>热点目录</td><td><code>packages/coding-agent</code> 1416、<code>packages/ai</code> 187、<code>docs</code> 152、<code>packages/snapcompact</code> 81、<code>packages/catalog</code> 48、<code>packages/tui</code> 43。</td><td>主要冲击 San 自身核心包；简单选择 ours/theirs 会破坏类型和运行时协议。</td></tr>
+      <tr><td>最新标签后提交</td><td><code>59619623e feat: enabled cargo target caching and conditional validation in workflows</code></td><td><code>upstream/main</code> 只比 <code>v17.1.3</code> 多一个 CI 缓存提交；真正的大跨度来自 <code>v16.5.2 → v17.1.3</code>。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>3. 最新上游提交</h2>
+  <pre><code>59619623e feat: enabled cargo target caching and conditional validation in workflows
+0491f2961 chore: bump version to 17.1.3
+368ff81ec Merge PR #6525: fix(ai): disable local first-event watchdogs
+bef97a69b Merge PR #6529: fix(coding-agent): guard retain renderer streaming args
+fca3c7b1e Merge PR #6538: fix(cursor): forward write transport so xd:// previews resolve
+8851e93d2 Merge PR #6551: fix(coding-agent): use session settings in file guards
+144043ad4 fix(coding-agent): used session settings in file guards
+f23bc266a feat(natives): enabled per-language rewrite rules for mixed-language paths
+5179b7e34 fix(cursor): forward write transport so xd:// previews resolve
+a569385b8 fix(shell): captured find -exec child stdio into scope streams
+d7c7ca033 fix(coding-agent): guarded retain renderer streaming args
+946b7d9bd fix(ai): preserved disabled first-event sentinel
+a38cd95d7 chore: bump version to 17.1.2
+a421ea8ac fix(ai): disabled local first-event watchdogs
+c55b28a26 chore(coding-agent): format eval display helpers
+3c80e6f9c fix(coding-agent): expose live tool rebuild options
+e0509d5d6 fix(coding-agent): preserve bench catalog-first resolution
+68e76c624 fix(coding-agent): preserve shared live tools across rebuilds
+b0f1b5c0c Merge PR #6496: fix(ai): preserve Anthropic server-tool history</code></pre>
+
+  <h2>4. 全量合并冲突面</h2>
+  <table>
+    <thead><tr><th>区域</th><th>冲突文件数</th><th>代表文件</th></tr></thead>
+    <tbody>
+      <tr><td><code>packages/coding-agent</code></td><td>43</td><td><code>agent-session.ts</code>、<code>model-registry.ts</code>、<code>settings.ts</code>、<code>sdk.ts</code>、<code>task/executor.ts</code>、<code>tools/approval.ts</code>。</td></tr>
+      <tr><td>根目录 / CI / 锁文件</td><td>4</td><td><code>.github/workflows/ci.yml</code>、<code>README.md</code>、<code>bun.lock</code>、<code>scripts/install.sh</code>。</td></tr>
+      <tr><td>文档</td><td>4</td><td><code>docs/auth-broker-gateway.md</code>、<code>docs/environment-variables.md</code>、<code>docs/settings.md</code>、<code>docs/tools/debug.md</code>。</td></tr>
+      <tr><td><code>packages/ai</code></td><td>2</td><td><code>ollama.ts</code>、<code>openai-responses.ts</code>。</td></tr>
+      <tr><td><code>packages/utils</code></td><td>3</td><td><code>dirs.ts</code>、<code>logger.ts</code>、<code>postmortem-cleanup-error.test.ts</code>。</td></tr>
+      <tr><td>其它包</td><td>3</td><td><code>packages/catalog/src/model-cache.ts</code>、<code>packages/natives/README.md</code>、<code>packages/tui/src/components/input.ts</code>。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>5. 为什么不能一次性解决全部冲突</h2>
+  <ul>
+    <li>此前直接合并的尝试已经被回滚到 <code>b8f40148f</code>；当前同步只在独立分支进行，不再污染 <code>main</code>。</li>
+    <li><code>git merge-tree --write-tree --name-only main upstream/main</code> 返回非零，并列出 59 个内容冲突；这不是自动可落地的 merge。</li>
+    <li>冲突集中在 San 正在维护的运行时边界：会话、模型 registry、provider globals、工具 schema、SDK、task executor、settings 与 TUI 控制器。</li>
+    <li>之前“批量取 ours”会留下跨版本 API 不一致，并触发大量类型错误；必须按里程碑逐个解析语义冲突。</li>
+  </ul>
+
+  <h2>6. 单个大 PR 的内部合并顺序</h2>
+  <ol>
+    <li><strong>审查基线提交：</strong>先提交本文档，固定共同基线、目标提交、冲突规模和验证门槛。</li>
+    <li><strong><code>v17.0.0</code>：</strong>完成主要架构迁移，逐文件保留 San RPC / Context Steady / san-loop / selector / worker-host 合约。</li>
+    <li><strong><code>v17.0.5</code>：</strong>吸收首轮发布后的稳定性修复，并再次完成类型检查。</li>
+    <li><strong><code>v17.1.0</code>：</strong>迁移 17.1 的运行时和工具协议变化，解决新增冲突。</li>
+    <li><strong><code>v17.1.3</code>：</strong>吸收当前最新稳定标签。</li>
+    <li><strong><code>upstream/main</code>：</strong>最后合入标签后的单个 CI 缓存提交 <code>59619623e</code>。</li>
+  </ol>
+
+  <h2>7. 后续验证门槛</h2>
+  <p>每个里程碑至少执行对应范围的类型检查和聚焦测试；最终分支再执行全仓 <code>bun check</code>、运行时测试、UI 测试和 smoke probe。只有全部通过后才推送并创建合入 <code>main</code> 的 PR。</p>
+  <pre><code># 审查阶段已执行
+git fetch upstream --tags --prune
+git status --short --branch
+git rev-list --left-right --count main...upstream/main
+git diff --shortstat main..upstream/main
+git merge-tree --write-tree --name-only main upstream/main</code></pre>
+</main>
+</body>
+</html>

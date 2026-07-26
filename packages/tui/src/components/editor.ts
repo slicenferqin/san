@@ -382,6 +382,7 @@ export class Editor implements Component, Focusable {
 
 	#theme: EditorTheme;
 	#useTerminalCursor = false;
+	#imeSafeCursorLayout = false;
 
 	/** When set, replaces the normal cursor glyph at end-of-text with this ANSI-styled string. */
 	cursorOverride: string | undefined;
@@ -403,6 +404,10 @@ export class Editor implements Component, Focusable {
 	#paddingXOverride: number | undefined;
 	#maxHeight?: number;
 	#scrollOffset: number = 0;
+	/** When true, the right border shows a scrollbar track/thumb when content
+	 *  overflows {@link #maxHeight}. Enabled by {@link HookEditorComponent} and
+	 *  other multi-line consumers; single-line consumers are unaffected. */
+	#scrollbarVisible = false;
 
 	// Emacs-style kill ring
 	#killRing = new KillRing();
@@ -539,6 +544,11 @@ export class Editor implements Component, Focusable {
 		this.#useTerminalCursor = useTerminalCursor;
 	}
 
+	/** Render a dedicated bottom border so terminal-local IME preedit cannot shift editor chrome. */
+	setImeSafeCursorLayout(enabled: boolean): void {
+		this.#imeSafeCursorLayout = enabled;
+	}
+
 	getUseTerminalCursor(): boolean {
 		return this.#useTerminalCursor;
 	}
@@ -547,6 +557,11 @@ export class Editor implements Component, Focusable {
 		if (this.#maxHeight === maxHeight) return;
 		this.#maxHeight = maxHeight;
 		// Don't reset scrollOffset — #updateScrollOffset will clamp it on next render
+	}
+
+	/** Enable/disable the right-border scrollbar. Only shown when content overflows. */
+	setScrollbarVisible(visible: boolean): void {
+		this.#scrollbarVisible = visible;
 	}
 
 	setPaddingX(paddingX: number): void {
@@ -825,6 +840,22 @@ export class Editor implements Component, Focusable {
 		const visibleLayoutLines = layoutLines.slice(this.#scrollOffset, this.#scrollOffset + visibleContentHeight);
 
 		const result: string[] = [];
+		// Scrollbar: shown only when content overflows and the caller opted in.
+		const needsScrollbar = this.#scrollbarVisible && layoutLines.length > visibleContentHeight;
+		let scrollbarThumb: { start: number; end: number } | null = null;
+		if (needsScrollbar && visibleContentHeight > 0) {
+			const thumbSize = Math.max(
+				1,
+				Math.min(
+					Math.floor((visibleContentHeight * visibleContentHeight) / layoutLines.length),
+					visibleContentHeight,
+				),
+			);
+			const travel = visibleContentHeight - thumbSize;
+			const maxOffset = Math.max(0, layoutLines.length - visibleContentHeight);
+			const start = maxOffset === 0 ? 0 : Math.round((this.#scrollOffset / maxOffset) * travel);
+			scrollbarThumb = { start, end: start + thumbSize };
+		}
 
 		if (borderVisible) {
 			// Render top border: ╭─ [status content] ────────────────╮
@@ -852,8 +883,9 @@ export class Editor implements Component, Focusable {
 		}
 
 		// Render each layout line
-		// Emit hardware cursor marker only when focused and not showing autocomplete
-		const emitCursorMarker = this.focused && !this.#autocompleteState;
+		// Keep the hardware cursor at the text insertion point while autocomplete
+		// rows render below it; terminals use that position to anchor IME candidates.
+		const emitCursorMarker = this.focused;
 		const lineContentWidth = contentAreaWidth;
 
 		// Compute inline hint text (dim ghost text after cursor)
@@ -866,6 +898,7 @@ export class Editor implements Component, Focusable {
 			let displayWidth = visibleWidth(layoutLine.text);
 			let cursorPaddingOverflow = 0;
 			let decorated = false;
+			let imeSafeCursorTail = false;
 			const showPromptGutter = promptGutter !== undefined && visibleIndex === 0;
 			const gutterText =
 				promptGutter === undefined ? "" : showPromptGutter ? promptGutter.firstLine : promptGutter.continuation;
@@ -922,7 +955,13 @@ export class Editor implements Component, Focusable {
 				if (marker) {
 					const before = displayText.slice(0, layoutLine.cursorPos);
 					const after = displayText.slice(layoutLine.cursorPos);
-					if (after.length === 0 && inlineHint) {
+					if (this.#imeSafeCursorLayout && after.length === 0 && borderVisible) {
+						// Terminal frontends render IME marked text locally before committed bytes
+						// reach the application. Keep the end-of-input cursor row empty to its
+						// right so that insertion cannot shift box chrome onto the next row.
+						displayText = before + marker;
+						imeSafeCursorTail = true;
+					} else if (after.length === 0 && inlineHint) {
 						const availWidth = Math.max(0, lineContentWidth - displayWidth);
 						const hintText = hintStyle(truncateToWidth(inlineHint, availWidth));
 						displayText = before + marker + hintText;
@@ -1022,6 +1061,15 @@ export class Editor implements Component, Focusable {
 			// trailing `─`, but never the corner/vertical bar itself.
 			const isLastLine = visibleIndex === visibleLayoutLines.length - 1;
 			const rightChromeCells = Math.max(1, paddingX + 1 - cursorPaddingOverflow);
+			if (isLastLine && imeSafeCursorTail) {
+				const leftBorder = this.borderColor(`${box.vertical}${padding(paddingX)}`);
+				const bottomBorder = this.borderColor(
+					`${box.bottomLeft}${box.horizontal.repeat(Math.max(0, width - 2))}${box.bottomRight}`,
+				);
+				result.push(leftBorder + displayText);
+				result.push(bottomBorder);
+				continue;
+			}
 			if (isLastLine) {
 				const rightPad = Math.max(0, rightChromeCells - 2);
 				const includeHorizontal = rightChromeCells >= 2;
@@ -1031,7 +1079,11 @@ export class Editor implements Component, Focusable {
 				result.push(`${bottomLeft}${displayText}${linePad}${bottomRightAdjusted}`);
 			} else {
 				const leftBorder = this.borderColor(`${box.vertical}${padding(paddingX)}`);
-				const rightBorder = this.borderColor(`${padding(Math.max(0, rightChromeCells - 1))}${box.vertical}`);
+				// When scrollbar is active, replace the right border vertical with a
+				// thumb glyph (█) on lines inside the thumb range, keeping the track (│) elsewhere.
+				const inThumb = scrollbarThumb && visibleIndex >= scrollbarThumb.start && visibleIndex < scrollbarThumb.end;
+				const rightGlyph = inThumb ? "█" : box.vertical;
+				const rightBorder = this.borderColor(`${padding(Math.max(0, rightChromeCells - 1))}${rightGlyph}`);
 				result.push(leftBorder + displayText + linePad + rightBorder);
 			}
 		}
@@ -1166,11 +1218,12 @@ export class Editor implements Component, Focusable {
 					return;
 				}
 
-				// If Enter was pressed on a slash command (not an absolute-path
-				// completion sharing the leading-slash prefix), apply and submit
+				// If Enter was pressed on a submitted slash command (not an absolute-path
+				// completion sharing the leading-slash prefix), apply and submit.
 				if (
 					(kb.matches(data, "tui.input.submit") || data === "\n") &&
 					findLeadingSlashCommandStart(this.#autocompletePrefix) !== null &&
+					this.#isInSubmittedSlashCommandContext() &&
 					!this.#selectedCompletionIsPath()
 				) {
 					const selected = this.#autocompleteList.getSelectedItem();
@@ -1199,7 +1252,7 @@ export class Editor implements Component, Focusable {
 					}
 					// Don't return - fall through to submission logic
 				}
-				// If Enter was pressed on a file path, apply completion
+				// Otherwise, apply the completion without submitting the surrounding draft.
 				else if (kb.matches(data, "tui.input.submit") || data === "\n") {
 					const selected = this.#autocompleteList.getSelectedItem();
 					// Check for stale autocomplete state due to buffer edits since last refresh.
@@ -2892,8 +2945,8 @@ export class Editor implements Component, Focusable {
 	 *   via the no-command-match fall-through) share the leading-slash prefix shape
 	 *   but must use the live-suffix path rule so the apply slice stays anchored.
 	 * - Mid-prompt skill branch re-anchors when the popup item is a skill and the
-	 *   current text still ends in a trailing slash token, matching the provider's
-	 *   mid-prompt replacement branch.
+	 *   current text still ends in a matching trailing slash token, preventing a
+	 *   stale selection from replacing a newer skill prefix.
 	 * - `@`-file branch re-anchors via `#extractAtPrefix`; safe when the current text
 	 *   still ends in a whitespace-anchored `@<token>`.
 	 * - Everything else is stale — accepting it would corrupt the buffer (issue #4295).

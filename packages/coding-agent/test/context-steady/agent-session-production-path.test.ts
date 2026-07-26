@@ -89,10 +89,9 @@ function messageText(message: Message): string {
 	if (typeof message.content === "string") return message.content;
 	if (!Array.isArray(message.content)) return "";
 	return message.content
-		.filter((block): block is { type: "text"; text: string } => {
-			return block.type === "text" && "text" in block && typeof block.text === "string";
-		})
-		.map(block => block.text)
+		.flatMap(block =>
+			block.type === "text" && "text" in block && typeof block.text === "string" ? [block.text] : [],
+		)
 		.join("\n");
 }
 

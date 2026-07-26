@@ -46,31 +46,65 @@ export const commands: CommandEntry[] = [
 	{ name: "search", load: () => import("./commands/web-search").then(m => m.default), aliases: ["q"] },
 ];
 
-// Documented-looking plugin-management verbs that are NOT registered top-level
-// commands. Without a guard `resolveCliArgv` rewrites e.g. `san list` to
-// `san launch list`, silently forwarding the bare verb to the model as a prompt
-// instead of managing plugins (#2935; same class as the `install` leak fixed in
-// #1496/#1498). A bare (single-arg) use gets a hint pointing at the real
-// `san plugin <action>` command; multi-word invocations still fall through to
-// `launch`, so genuine prompts that merely begin with one of these words work.
-const RESERVED_TOP_LEVEL_WORDS = new Map<string, string>([
-	[
-		"extensions",
+// Documented-looking plugin/marketplace verbs that are NOT registered top-level
+// commands. Without a guard `resolveCliArgv` rewrites e.g. `san marketplace add
+// xyz` to `san launch marketplace add xyz`, silently forwarding the argv to the
+// model as a prompt instead of managing plugins (#4845; same class as the
+// `list`/`remove` leak fixed in #2935 and the `install` leak in #1496/#1498).
+// The real commands live under `san plugin <action>`; each entry maps a verb to
+// a hint pointing there. See {@link reservedTopLevelWordMessage} for when a hint
+// fires vs. when the argv still falls through to `launch`.
+const RESERVED_TOP_LEVEL_WORDS: Record<string, string> = {
+	extensions:
 		'`san extensions` is not a management command. Use `san plugin list` / `san plugin install`, or run `san launch extensions` if you meant to send "extensions" as a prompt.',
-	],
-	[
-		"list",
-		'`san list` is not a top-level command. Use `san plugin list` to list installed plugins, or run `san launch list` if you meant to send "list" as a prompt.',
-	],
-	[
-		"remove",
+	list: '`san list` is not a top-level command. Use `san plugin list` to list installed plugins, or run `san launch list` if you meant to send "list" as a prompt.',
+	remove:
 		'`san remove` is not a top-level command. Use `san plugin uninstall <name>` to remove a plugin, or run `san launch remove` if you meant to send "remove" as a prompt.',
-	],
-]);
+	uninstall:
+		'`san uninstall` is not a top-level command. Use `san plugin uninstall <name@marketplace>` to remove a plugin, or run `san launch uninstall` if you meant to send "uninstall" as a prompt.',
+	marketplace:
+		'`san marketplace` is not a top-level command. Use `san plugin marketplace <add|remove|update|list>` to manage marketplaces, or run `san launch marketplace` if you meant to send "marketplace" as a prompt.',
+	discover:
+		'`san discover` is not a top-level command. Use `san plugin discover [marketplace]` to browse available plugins, or run `san launch discover` if you meant to send "discover" as a prompt.',
+	upgrade:
+		'`san upgrade` is not a top-level command. Use `san plugin upgrade [name@marketplace]` to upgrade plugins, or run `san launch upgrade` if you meant to send "upgrade" as a prompt.',
+	enable:
+		'`san enable` is not a top-level command. Use `san plugin enable <name@marketplace>` to enable a plugin, or run `san launch enable` if you meant to send "enable" as a prompt.',
+	disable:
+		'`san disable` is not a top-level command. Use `san plugin disable <name@marketplace>` to disable a plugin, or run `san launch disable` if you meant to send "disable" as a prompt.',
+};
 
-export function reservedTopLevelWordMessage(first: string | undefined, argc = 1): string | undefined {
-	if (argc !== 1 || !first || first.startsWith("-") || first.startsWith("@")) return undefined;
-	return RESERVED_TOP_LEVEL_WORDS.get(first);
+// Sub-actions that make `omp marketplace <sub>` unambiguously a management
+// command even when multi-word (the reporter's `omp marketplace add xyz`,
+// #4845). Mirrors the switch in `handleMarketplace` (cli/plugin-cli.ts).
+const MARKETPLACE_SUBCOMMANDS: Record<string, true> = { add: true, remove: true, rm: true, update: true, list: true };
+
+/**
+ * Hint for a reserved plugin/marketplace verb used as a top-level command, or
+ * `undefined` when the argv should fall through to `launch`.
+ *
+ * A bare verb (`omp marketplace`) always hints. A multi-word invocation only
+ * hints when the arguments follow the documented plugin grammar — a marketplace
+ * sub-action (`omp marketplace add …`) or a `name@marketplace` plugin id
+ * (`omp uninstall foo@bar`) — so genuine prompts that merely begin with one of
+ * these words (`omp list all my files`, `omp upgrade the deps`) still launch.
+ *
+ * Flags (`-…`) and `@file` arguments in the verb slot are never management
+ * commands; those fall through to the default `launch` command.
+ */
+export function reservedTopLevelWordMessage(argv: readonly string[]): string | undefined {
+	const first = argv[0];
+	if (!first || first.startsWith("-") || first.startsWith("@")) return undefined;
+	const hint = RESERVED_TOP_LEVEL_WORDS[first];
+	if (!hint) return undefined;
+	const second = argv[1];
+	if (second === undefined) return hint;
+	if (first === "marketplace" && MARKETPLACE_SUBCOMMANDS[second]) return hint;
+	for (let index = 1; index < argv.length; index += 1) {
+		const arg = argv[index];
+		if (!arg.startsWith("-") && arg.includes("@")) return hint;
+	}
+	return undefined;
 }
 
 /**
@@ -112,7 +146,7 @@ function leadingSubcommandIndex(argv: string[]): number {
  */
 export function resolveCliArgv(argv: string[]): ResolvedCliArgv {
 	const first = argv[0];
-	const reservedMessage = reservedTopLevelWordMessage(first, argv.length);
+	const reservedMessage = reservedTopLevelWordMessage(argv);
 	if (reservedMessage) return { error: reservedMessage };
 	if (first === "--help" || first === "-h" || first === "--version" || first === "-v" || first === "help") {
 		return { argv };

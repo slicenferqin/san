@@ -31,6 +31,7 @@ import { applyStartupCwd } from "./cli/startup-cwd";
 import { findConfigFile } from "./config";
 import { ModelRegistry } from "./config/model-registry";
 import {
+	DEFAULT_PREWALK_TARGET,
 	expandRoleAlias,
 	getModelMatchPreferences,
 	resolveCliModel,
@@ -67,6 +68,7 @@ import type { RpcV2SessionFactory } from "./modes/rpc-v2/session-manager";
 import { CURRENT_SETUP_VERSION } from "./modes/setup-version";
 import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
+import { createWarpEventBridgeExtension } from "./modes/warp-events";
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import {
 	type CreateAgentSessionOptions,
@@ -84,7 +86,7 @@ import { executeBuiltinSlashCommand } from "./slash-commands/builtin-registry";
 import { shouldShowStartupSplash } from "./startup-splash";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "./system-prompt";
 import { createPersistedSubagentReviverFactory } from "./task/persisted-revive";
-import { initTelemetryExport, isTelemetryExportEnabled } from "./telemetry-export";
+import { createTelemetryExportConfig, initTelemetryExport, isTelemetryExportEnabled } from "./telemetry-export";
 import { concreteThinkingLevel, parseConfiguredThinkingLevel } from "./thinking";
 import type { LspStartupServerInfo } from "./tools";
 import {
@@ -146,6 +148,7 @@ const HOST_DEFAULTED_SETTING_PATHS: SettingPath[] = [
 	"task.maxRecursionDepth",
 	"task.disabledAgents",
 	"task.agentModelOverrides",
+	"task.agentPrewalk",
 	// Memory subsystems are off-by-default for RPC/ACP hosts; embedders that want
 	// memory should opt in explicitly through their own settings layer.
 	"memory.backend",
@@ -1114,13 +1117,13 @@ export async function buildSessionOptions(
 			? true
 			: activeSettings.get("prewalk.enabled");
 	if (prewalkEnabled) {
-		const rolePattern = expandRoleAlias(parsed.prewalkInto ?? "@smol", activeSettings);
+		const rolePattern = expandRoleAlias(parsed.prewalkInto ?? DEFAULT_PREWALK_TARGET, activeSettings);
 		const resolved = resolveCliModel({ cliModel: rolePattern, modelRegistry, preferences: modelMatchPreferences });
 		if (resolved.warning) {
 			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
 		}
 		if (resolved.error || !resolved.model) {
-			throw new Error(resolved.error ?? `Model "${parsed.prewalkInto ?? "@smol"}" not found`);
+			throw new Error(resolved.error ?? `Model "${parsed.prewalkInto ?? DEFAULT_PREWALK_TARGET}" not found`);
 		}
 		if (!modelRegistry.hasConfiguredAuth(resolved.model)) {
 			throw new Error(`No API key for ${resolved.model.provider}/${resolved.model.id}`);
@@ -1525,15 +1528,13 @@ export async function runRootCommand(
 	sessionOptions.hasUI = isInteractive || mode === "rpc-ui";
 	sessionOptions.settings = settingsInstance;
 
-	// OTEL: register the global OTLP trace exporter when an OTLP endpoint is
-	// configured via env, then switch on the agent loop's telemetry so its
-	// GenAI spans (invoke_agent / chat / execute_tool) are actually emitted.
-	// Both are no-ops when OTEL_EXPORTER_OTLP_ENDPOINT is unset. An empty config
-	// is enough to enable telemetry — content capture is governed by the
-	// standard OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT env var.
+	// OTEL: register global OTLP exporters when an endpoint is configured via
+	// env, then switch on the agent loop's telemetry hooks so traces, run-level
+	// metrics, and structured logs have source events to export. Content capture
+	// remains governed by OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT.
 	await logger.time("initTelemetryExport", initTelemetryExport);
 	if (isTelemetryExportEnabled()) {
-		sessionOptions.telemetry = {};
+		sessionOptions.telemetry = createTelemetryExportConfig(sessionOptions.telemetry);
 	}
 
 	// Handle CLI --api-key as runtime override (not persisted)
@@ -1599,6 +1600,10 @@ export async function runRootCommand(
 		// string-flag value such as `--target @notes.md` is the flag's value, not a
 		// file — and the same result is handed to createAgentSession via
 		// `preloadedExtensions` so the discovery work is not repeated.
+		if (isInteractive) {
+			sessionOptions.extensions = [...(sessionOptions.extensions ?? []), createWarpEventBridgeExtension()];
+		}
+
 		const eventBus = new EventBus();
 		const extensionsResult = await loadSessionExtensions(sessionOptions, cwd, settingsInstance, eventBus);
 		const extensionFlagSink: ExtensionFlagSink = {

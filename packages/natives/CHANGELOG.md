@@ -6,6 +6,26 @@
 
 - Fixed long-format `git status` minimization misreporting Git's trailing `no changes added to commit` guidance as an untracked file.
 - Corrected RTK-derived shell minimizer attribution and native package metadata from MIT-only to the applicable Apache-2.0 and MIT license combination, and included the license texts and third-party notice in native distributions.
+- Fixed Darwin CI native builds producing Mach-O addons that dyld rejected because rustc's link-time symbol stripping emitted a misaligned LINKEDIT string table; builds now use Apple's strip and verify the addon can load before installation.
+## [17.0.2] - 2026-07-17
+
+### Fixed
+
+- Fixed an issue where running `uv run --extra <package> pytest` bypassed native pytest minimization due to a wrapper parsing error.
+- Fixed a bug where timed-out shell pipelines dropped captured output and could cause Windows hosts to terminate during teardown. (#5316)
+
+## [17.0.1] - 2026-07-16
+
+### Fixed
+
+- Fixed the pi-natives version sentinel emitting "reinstall to re-sync" when a long-lived process survives an in-place upgrade: the loader now detects that the resident addon exposes a *prior* release's sentinel and reports "omp was upgraded while this session was running — restart to pick up the new version (disk is already consistent)" instead of misdiagnosing it as a stale on-disk file ([#4812](https://github.com/can1357/oh-my-pi/issues/4812)).
+
+## [17.0.0] - 2026-07-15
+
+### Fixed
+
+- Fixed the in-process grep builtin to correctly handle escaped alternation (\|) in default and -G (GNU basic-regex) searches, while preserving the correct regex dialects for -E, -F, and -P.
+
 ## [16.5.2] - 2026-07-14
 
 ### Fixed

@@ -13,11 +13,16 @@ import {
 	type ActiveContinuationState,
 	CONTEXT_CONTINUATION_MESSAGE_TYPE,
 } from "@oh-my-pi/pi-coding-agent/context-steady/types";
-import { ExtensionRunner, loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+import {
+	ExtensionRunner,
+	loadExtensionFromFactory,
+	loadExtensions,
+} from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 
@@ -963,6 +968,7 @@ describe("AgentSession handoff", () => {
 						}
 					: undefined,
 			),
+			clearManagedTimers: vi.fn(),
 		} as unknown as ExtensionRunner;
 		vi.spyOn(compactionModule, "prepareCompaction").mockReturnValue(fixedPreparation);
 		vi.spyOn(compactionModule, "compact").mockResolvedValue({
@@ -1033,6 +1039,7 @@ describe("AgentSession handoff", () => {
 						}
 					: undefined,
 			),
+			clearManagedTimers: vi.fn(),
 		} as unknown as ExtensionRunner;
 		vi.spyOn(compactionModule, "prepareCompaction").mockReturnValue(fixedPreparation);
 		const compactSpy = vi.spyOn(compactionModule, "compact").mockResolvedValue({
@@ -1827,6 +1834,26 @@ describe("AgentSession handoff", () => {
 			streamFn: mock.stream,
 		});
 
+		const agentEndWillContinue: Array<boolean | undefined> = [];
+		const extensionsResult = await loadExtensions([], tempDir.path());
+		const captureAgentEnd = await loadExtensionFromFactory(
+			pi => {
+				pi.on("agent_end", event => {
+					agentEndWillContinue.push(event.willContinue);
+				});
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionsResult.runtime,
+			"capture-agent-end",
+		);
+		const extensionRunner = new ExtensionRunner(
+			[captureAgentEnd],
+			extensionsResult.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
 		session = new AgentSession({
 			agent,
 			sessionManager,
@@ -1837,6 +1864,7 @@ describe("AgentSession handoff", () => {
 				"compaction.thresholdPercent": 1,
 				"contextPromotion.enabled": false,
 			}),
+			extensionRunner,
 			modelRegistry,
 		});
 		session.subscribe(event => {
@@ -1850,6 +1878,7 @@ describe("AgentSession handoff", () => {
 
 		expect(mock.calls).toHaveLength(1);
 		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
+		expect(agentEndWillContinue).toEqual([undefined]);
 		const endEvents = events.filter(event => event.type === "auto_compaction_end");
 		expect(endEvents).toHaveLength(1);
 		expect(endEvents[0]).toMatchObject({ type: "auto_compaction_end", action: "handoff", aborted: false });

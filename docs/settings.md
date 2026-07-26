@@ -8,6 +8,7 @@ Settings are stored as plain YAML mappings. Every key, its type, default, and en
 - For custom model definitions in `models.yml`, see [Models](./models.md).
 - For instruction files discovered into the agent context (`AGENTS.md`, `.san/`, etc.), see [Context files](./context-files.md).
 - For the full catalog of environment variables, see [Environment variables](./environment-variables.md).
+- For prompt words that activate specialized per-turn behavior, see [Magic keywords](./magic-keywords.md).
 
 ## Where settings live
 
@@ -450,7 +451,6 @@ tools:
   approval:
     bash: prompt
     edit: allow
-  discoveryMode: auto
   maxTimeout: 0
   intentTracing: true
 ```
@@ -458,9 +458,7 @@ tools:
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `tools.approvalMode` | enum | `yolo` | `always-ask` (auto-approve read-only), `write` (auto-approve read + workspace-write), `yolo` (auto-approve all tiers). `--approval-mode` and `--auto-approve`/`--yolo` override per run. |
-| `tools.approval` | record | `{}` | Per-tool policy keyed by tool name; each value is `allow`, `deny`, or `prompt`. e.g. `san config set tools.approval '{"bash":"prompt"}'`. |
-| `tools.discoveryMode` | enum | `auto` | `auto`, `off`, `mcp-only`, `all`. Controls dynamic tool discovery. |
-| `tools.essentialOverride` | array | `[]` | Tool names kept available even when tools are narrowed. |
+| `tools.approval` | record | `{}` | Per-tool policy keyed by tool name; each value is `allow`, `deny`, or `prompt`. e.g. `omp config set tools.approval '{"bash":"prompt"}'`. |
 | `tools.maxTimeout` | number | `0` | Max tool runtime in seconds; `0` = no cap. |
 | `tools.intentTracing` | boolean | `true` | Record per-call intent strings. |
 | `tools.outputMaxColumns` | number | `768` | Per-line byte cap for streaming output; `0` disables. |
