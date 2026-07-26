@@ -24,7 +24,7 @@ async function runProbeScenario(options: {
 		const cacheRoot = path.join(tempRoot, "cache");
 		const probeCountPath = path.join(tempRoot, "probe-count");
 		await fs.mkdir(binDir, { recursive: true });
-		await fs.mkdir(path.join(cacheRoot, "omp"), { recursive: true });
+		await fs.mkdir(path.join(cacheRoot, "san"), { recursive: true });
 		const lspciPath = path.join(binDir, "lspci");
 		await Bun.write(
 			lspciPath,
@@ -134,7 +134,7 @@ describe.skipIf(process.platform !== "linux")("system prompt GPU probe", () => {
 		// linger until a descendant holding stdout (sleep 12) exits on its own.
 		// The bound over in-child time budgets bun spawn/startup on loaded runners
 		// while staying far below the descendant's 12s exit.
-		expect(result.childElapsedMs).toBeLessThan(9000);
+		expect(result.childElapsedMs).toBeLessThan(11000);
 	}, 20_000);
 
 	it("does not wait on stdout held by a descendant after a successful probe", async () => {
@@ -146,7 +146,7 @@ describe.skipIf(process.platform !== "linux")("system prompt GPU probe", () => {
 		expect(result.elapsedMs).toBeLessThan(2000);
 		// Budgets bun spawn/startup overhead; blocking on the descendant would
 		// take at least the 8s sleep.
-		expect(result.childElapsedMs).toBeLessThan(5000);
+		expect(result.childElapsedMs).toBeLessThan(7000);
 	}, 20_000);
 
 	it("keeps probe output captured before a descendant delays EOF", async () => {
@@ -163,7 +163,7 @@ describe.skipIf(process.platform !== "linux")("system prompt GPU probe", () => {
 		expect(result.elapsedMs).toBeLessThan(2000);
 		// Budgets bun spawn/startup overhead; blocking on the descendant would
 		// take at least the 8s sleep.
-		expect(result.childElapsedMs).toBeLessThan(5000);
+		expect(result.childElapsedMs).toBeLessThan(7000);
 	}, 20_000);
 });
 

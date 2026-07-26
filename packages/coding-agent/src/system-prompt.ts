@@ -131,6 +131,7 @@ async function runGpuProbe(cmd: string[]): Promise<string | null> {
 			// dies at the deadline and lets getCachedGpu reach the null-cache write.
 			killSignal: "SIGKILL",
 		});
+		proc.unref();
 		const stdoutReader = proc.stdout.getReader();
 		let stdout = "";
 		const decoder = new TextDecoder();
@@ -142,7 +143,24 @@ async function runGpuProbe(cmd: string[]): Promise<string | null> {
 			}
 			stdout += decoder.decode();
 		})();
-		const exitCode = await proc.exited;
+		const probeTimeout = Promise.withResolvers<"timeout">();
+		const probeTimeoutTimer = setTimeout(() => probeTimeout.resolve("timeout"), GPU_PROBE_TIMEOUT_MS);
+		const exitCodeOrTimeout = await Promise.race([proc.exited, probeTimeout.promise]);
+		clearTimeout(probeTimeoutTimer);
+		if (exitCodeOrTimeout === "timeout") {
+			try {
+				proc.kill("SIGKILL");
+			} catch {
+				// The process may have exited in the timeout race.
+			}
+			void stdoutReader.cancel().catch(() => undefined);
+			return null;
+		}
+		if (exitCodeOrTimeout !== 0) {
+			void stdoutReader.cancel().catch(() => undefined);
+			return null;
+		}
+		const exitCode = exitCodeOrTimeout;
 		// Even on exit 0, a probe wrapper can leave a descendant holding stdout open.
 		// Bound the EOF wait so getCachedGpu cannot outlive the probe in either path;
 		// keep whatever bytes the reader already captured before cancelling.
@@ -151,8 +169,9 @@ async function runGpuProbe(cmd: string[]): Promise<string | null> {
 			Bun.sleep(GPU_PROBE_STDOUT_DRAIN_MS).then(() => "timeout" as const),
 		]);
 		if (drained !== "ok") {
-			await stdoutReader.cancel().catch(() => undefined);
-			await stdoutDone.catch(() => undefined);
+			void stdoutReader.cancel().catch(() => undefined);
+			// Do not await stdoutDone here: a descendant may keep the inherited pipe
+			// open after cancellation, but the bytes read so far are already usable.
 		}
 		return exitCode === 0 ? stdout : null;
 	} catch {
