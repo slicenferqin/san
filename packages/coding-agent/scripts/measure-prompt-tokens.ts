@@ -1,8 +1,8 @@
-import { countTokens } from "@oh-my-pi/pi-agent-core";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { estimateToolSchemaTokens } from "@oh-my-pi/pi-coding-agent/modes/utils/context-usage";
-import { buildSystemPrompt } from "@oh-my-pi/pi-coding-agent/system-prompt";
-import { BUILTIN_TOOLS, createTools, type Tool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { countTokens } from "@san/agent";
+import { Settings } from "@san/coding-agent/config/settings";
+import { estimateToolSchemaTokens } from "@san/coding-agent/modes/utils/context-usage";
+import { buildSystemPrompt } from "@san/coding-agent/system-prompt";
+import { BUILTIN_TOOLS, createTools, type Tool, type ToolSession } from "@san/coding-agent/tools";
 
 interface ToolTokenRow {
 	name: string;

@@ -11,8 +11,8 @@ import {
 	getProfileRootDir,
 	getWorktreesDir,
 	setAgentDir,
-} from "@oh-my-pi/pi-utils/dirs";
-import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
+} from "@san/utils/dirs";
+import { Snowflake } from "@san/utils/snowflake";
 
 function restoreEnv(key: string, value: string | undefined): void {
 	if (value === undefined) {

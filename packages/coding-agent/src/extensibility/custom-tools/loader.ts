@@ -1,12 +1,12 @@
 /**
  * Custom tool loader - loads TypeScript tool modules using native Bun import.
  *
- * Dependencies (the zod-backed typebox shim and pi-coding-agent) are injected via the
+ * Dependencies (the Zod-backed TypeBox shim and coding-agent compatibility SDK) are injected via
  * CustomToolAPI to avoid import resolution issues with custom tools loaded from user directories.
  */
 import * as path from "node:path";
-import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { logger } from "@oh-my-pi/pi-utils";
+import type { AgentToolResult } from "@san/agent";
+import { logger } from "@san/utils";
 import { type } from "arktype";
 import * as zodModule from "zod/v4";
 import { toolCapability } from "../../capability/tool";
@@ -225,7 +225,7 @@ export async function loadCustomTools(
 /**
  * Collect the absolute tool-source paths to load, without importing or
  * binding factories. Hot path on session startup — the scan walks
- * `.omp/tools/`, `.claude/tools/`, the plugin tree, and any configured paths.
+ * canonical `.san/tools/`, legacy `.omp/tools/`, `.claude/tools/`, the plugin tree, and any configured paths.
  *
  * Subagents reuse the parent's collected paths via the SDK's
  * `preloadedCustomToolPaths` option, then call `loadCustomTools` themselves
@@ -258,7 +258,7 @@ export async function discoverCustomToolPaths(configuredPaths: string[], cwd: st
 		});
 	}
 
-	// 2. Plugin tools: ~/.omp/plugins/node_modules/*/
+	// 2. Plugin tools: canonical plugin runtime node_modules directory.
 	for (const pluginPath of await getAllPluginToolPaths(cwd)) {
 		addPath(pluginPath, { provider: "plugin", providerName: "Plugin", level: "user" });
 	}
@@ -274,7 +274,7 @@ export async function discoverCustomToolPaths(configuredPaths: string[], cwd: st
 /**
  * Discover and load tools from standard locations via capability system:
  * 1. User and project tools discovered by capability providers
- * 2. Installed plugins (~/.omp/plugins/node_modules/*)
+ * 2. Installed plugins (`~/.san/plugins/node_modules/*`, with profile/XDG resolution)
  * 3. Explicitly configured paths from settings or CLI
  *
  * Composed of {@link discoverCustomToolPaths} (FS scan) + {@link loadCustomTools}

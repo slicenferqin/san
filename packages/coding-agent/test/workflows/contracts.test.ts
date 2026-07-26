@@ -13,7 +13,7 @@ import {
 	WorkflowValidationError,
 	workflowSourceHash,
 	workflowValueHash,
-} from "@oh-my-pi/pi-coding-agent/workflows";
+} from "@san/coding-agent/workflows";
 
 function managedWorkflow(): ManagedWorkflow {
 	const meta = normalizeWorkflowMeta({

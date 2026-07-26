@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage } from "@san/ai";
 import type { ToolProgressGuardSnapshot } from "./tool-progress-guard";
 import type {
 	ActiveContinuationState,

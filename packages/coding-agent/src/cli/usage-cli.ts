@@ -14,8 +14,8 @@ import {
 	type UsageLimit,
 	type UsageReport,
 	type UsageUnit,
-} from "@oh-my-pi/pi-ai";
-import { formatDuration, formatNumber, sanitizeText } from "@oh-my-pi/pi-utils";
+} from "@san/ai";
+import { formatDuration, formatNumber, sanitizeText } from "@san/utils";
 import chalk from "chalk";
 import { ModelRegistry } from "../config/model-registry";
 import { discoverAuthStorage } from "../sdk";

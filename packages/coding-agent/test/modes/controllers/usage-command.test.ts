@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, it, vi } from "bun:test";
-import type { UsageReport } from "@oh-my-pi/pi-ai";
-import { CommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/command-controller";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import type { UsageReport } from "@san/ai";
+import { CommandController } from "@san/coding-agent/modes/controllers/command-controller";
+import { getThemeByName, setThemeInstance } from "@san/coding-agent/modes/theme/theme";
+import type { InteractiveModeContext } from "@san/coding-agent/modes/types";
 
 interface RenderableBlock {
 	render(width: number): string[];

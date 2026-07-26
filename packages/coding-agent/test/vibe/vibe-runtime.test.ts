@@ -17,15 +17,15 @@
  * 5. `kill` cancels the in-flight turn job and releases the worker session.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
-import type { AgentProgress, SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { VibeSessionRegistry } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
+import { AsyncJobManager } from "@san/coding-agent/async/job-manager";
+import { Settings } from "@san/coding-agent/config/settings";
+import { AgentLifecycleManager } from "@san/coding-agent/registry/agent-lifecycle";
+import { AgentRegistry } from "@san/coding-agent/registry/agent-registry";
+import type { AgentSession } from "@san/coding-agent/session/agent-session";
+import * as executorModule from "@san/coding-agent/task/executor";
+import type { AgentProgress, SingleResult } from "@san/coding-agent/task/types";
+import type { ToolSession } from "@san/coding-agent/tools";
+import { VibeSessionRegistry } from "@san/coding-agent/vibe/runtime";
 
 function createSession(options: { manager?: AsyncJobManager } = {}): ToolSession {
 	return {

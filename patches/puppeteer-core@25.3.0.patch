@@ -1,3 +1,6 @@
+diff --git a/node_modules/puppeteer-core/.bun-tag-2041287d628d93c0 b/.bun-tag-2041287d628d93c0
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/puppeteer-core/.bun-tag-2e714b457f0bd8e8 b/.bun-tag-2e714b457f0bd8e8
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
@@ -325,7 +328,7 @@ index 4e27013ad8f9b89ee13913e55bba243cc8bf9662..42c4bf547443aa01955dde6f4e0f4d53
                      // @ts-expect-error: In a different context.
                      globalThis[name] = undefined;
 diff --git a/lib/puppeteer/cdp/FrameManager.js b/lib/puppeteer/cdp/FrameManager.js
-index 2322aa136a47b446e2a7b2c4f0bc751f2fb821d0..2116367ee34bb86948bf956c2afa2f693ce14c96 100644
+index 2322aa136a47b446e2a7b2c4f0bc751f2fb821d0..2d9237c6936a68691ad8a15f68ede37a067504a2 100644
 --- a/lib/puppeteer/cdp/FrameManager.js
 +++ b/lib/puppeteer/cdp/FrameManager.js
 @@ -13,6 +13,7 @@ import { disposeSymbol } from '../util/disposable.js';
@@ -365,7 +368,7 @@ index 2322aa136a47b446e2a7b2c4f0bc751f2fb821d0..2116367ee34bb86948bf956c2afa2f69
 +                client.send('Page.addScriptToEvaluateOnNewDocument', {
 +                    source: `//# sourceURL=${PuppeteerURL.INTERNAL_URL}`,
 +                    worldName: UTILITY_WORLD_NAME,
-+                }).catch(debugCatchError),
++                }).catch(debugError),
                  ...(frame
                      ? Array.from(this.#scriptsToEvaluateOnNewDocument.values())
                      : []).map(script => {
@@ -458,7 +461,7 @@ index 2322aa136a47b446e2a7b2c4f0bc751f2fb821d0..2116367ee34bb86948bf956c2afa2f69
 +                worldName: UTILITY_WORLD_NAME,
 +                grantUniveralAccess: true,
 +            })
-+                .catch(debugCatchError);
++                .catch(debugError);
 +            const utilityId = iso && typeof iso.executionContextId === 'number' ? iso.executionContextId : undefined;
 +            if (utilityId !== undefined) {
 +                this.#onExecutionContextCreated({
@@ -524,7 +527,7 @@ index 2322aa136a47b446e2a7b2c4f0bc751f2fb821d0..2116367ee34bb86948bf956c2afa2f69
 +                expression: 'globalThis',
 +                serializationOptions: { serialization: 'idOnly' },
 +            })
-+                .catch(debugCatchError);
++                .catch(debugError);
 +            return parse(globalThis?.result?.objectId);
 +        }
 +        if (utilityId === undefined) {
@@ -536,21 +539,21 @@ index 2322aa136a47b446e2a7b2c4f0bc751f2fb821d0..2116367ee34bb86948bf956c2afa2f69
 +            contextId: utilityId,
 +            serializationOptions: { serialization: 'idOnly' },
 +        })
-+            .catch(debugCatchError);
++            .catch(debugError);
 +        const utilDocObjectId = utilDoc?.result?.objectId;
 +        if (typeof utilDocObjectId !== 'string') {
 +            return undefined;
 +        }
 +        const described = await session
 +            .send('DOM.describeNode', { objectId: utilDocObjectId })
-+            .catch(debugCatchError);
++            .catch(debugError);
 +        const backendNodeId = described?.node?.backendNodeId;
 +        if (typeof backendNodeId !== 'number') {
 +            return undefined;
 +        }
 +        const mainNode = await session
 +            .send('DOM.resolveNode', { backendNodeId })
-+            .catch(debugCatchError);
++            .catch(debugError);
 +        return parse(mainNode?.object?.objectId);
      }
      async #createIsolatedWorld(session, name) {
@@ -618,7 +621,7 @@ index 3d68f887920ded269eb641273a5a13dee235ae1d..dcdd86c8697c0dbd2dd2162c9a739dd9
 +                this.#world.setContext(new ExecutionContext(client, { id }, this.#world));
 +            }
 +        })
-+            .catch(debugCatchError);
++            .catch(debugError);
          this.#client.once('Inspector.workerScriptLoaded', () => {
              this.#workerLoaded.resolve();
          });

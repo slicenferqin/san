@@ -5,10 +5,10 @@ import type {
 	AgentToolResult,
 	AgentToolUpdateCallback,
 	ToolApprovalDecision,
-} from "@oh-my-pi/pi-agent-core";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
-import { getProjectDir, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
+} from "@san/agent";
+import type { Component } from "@san/tui";
+import { ImageProtocol, TERMINAL } from "@san/tui";
+import { getProjectDir, isEnoent, logger, prompt } from "@san/utils";
 import { type } from "arktype";
 import { type BashResult, executeBash } from "../exec/bash-executor";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -69,7 +69,7 @@ const DEFAULT_AUTO_BACKGROUND_THRESHOLD_MS = 60_000;
  * preserves `bash` tool semantics (`$VAR`, `$(...)`, `source`, POSIX quoting,
  * `-l`) instead of dropping to `cmd.exe` on Windows. The agent host's shell
  * path is used as a proxy for the client's, matching the near-universal
- * ACP deployment shape of an editor spawning omp as a co-hosted subprocess.
+ * ACP deployment shape of an editor spawning San as a co-hosted subprocess.
  */
 export function wrapShellLineForClientTerminal(
 	line: string,
@@ -824,7 +824,7 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 		}
 
 		// A timeout of 0 is an explicit long-running-command contract: the user
-		// must still cancel the call or job, but OMP does not impose a deadline.
+		// must still cancel the call or job, but San does not impose a deadline.
 		const requestedTimeoutSec = rawTimeout;
 		const timeoutDisabled = requestedTimeoutSec === 0;
 		const timeoutSec = timeoutDisabled ? undefined : clampTimeout("bash", requestedTimeoutSec);

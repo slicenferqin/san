@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import * as path from "node:path";
-import { registerCustomApi, unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
+import { registerCustomApi, unregisterCustomApis } from "@san/ai/api-registry";
 import type {
 	Api,
 	Context,
@@ -9,28 +9,20 @@ import type {
 	RemoteCompactionConfig,
 	SimpleStreamOptions,
 	ThinkingConfig,
-} from "@oh-my-pi/pi-ai/types";
-import type { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { isVertexExpressOpenAIUrl } from "@oh-my-pi/pi-catalog/hosts";
-import { readModelCache } from "@oh-my-pi/pi-catalog/model-cache";
-import {
-	createModelManager,
-	type ModelManagerOptions,
-	type ModelRefreshStrategy,
-} from "@oh-my-pi/pi-catalog/model-manager";
-import { getBundledModels, getBundledProviders } from "@oh-my-pi/pi-catalog/models";
+} from "@san/ai/types";
+import type { AssistantMessageEventStream } from "@san/ai/utils/event-stream";
+import { buildModel } from "@san/catalog/build";
+import { isVertexExpressOpenAIUrl } from "@san/catalog/hosts";
+import { readModelCache } from "@san/catalog/model-cache";
+import { createModelManager, type ModelManagerOptions, type ModelRefreshStrategy } from "@san/catalog/model-manager";
+import { getBundledModels, getBundledProviders } from "@san/catalog/models";
 import {
 	googleAntigravityModelManagerOptions,
 	googleGeminiCliModelManagerOptions,
 	openaiCodexModelManagerOptions,
 	PROVIDER_DESCRIPTORS,
-} from "@oh-my-pi/pi-catalog/provider-models";
-import {
-	collapseBuiltModelVariants,
-	getVariantAliasSources,
-	resolveVariantAlias,
-} from "@oh-my-pi/pi-catalog/variant-collapse";
+} from "@san/catalog/provider-models";
+import { collapseBuiltModelVariants, getVariantAliasSources, resolveVariantAlias } from "@san/catalog/variant-collapse";
 
 const SPECIAL_MODEL_MANAGER_PROVIDER_IDS: readonly string[] = [
 	"google-antigravity",
@@ -61,11 +53,11 @@ const RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS = 15_000;
 const BUILT_IN_DISCOVERY_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 const BUILT_IN_DISCOVERY_NON_AUTHORITATIVE_RETRY_MS = 5 * 60 * 1000;
 
-import type { ApiKeyResolver, FetchImpl } from "@oh-my-pi/pi-ai";
-import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
-import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
-import { getBundledModelReferenceIndex, resolveModelReference } from "@oh-my-pi/pi-catalog/identity";
-import { isBunTestRuntime, isRecord, logger, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
+import type { ApiKeyResolver, FetchImpl } from "@san/ai";
+import { registerOAuthProvider, unregisterOAuthProviders } from "@san/ai/oauth";
+import type { OAuthCredentials, OAuthLoginCallbacks } from "@san/ai/oauth/types";
+import { getBundledModelReferenceIndex, resolveModelReference } from "@san/catalog/identity";
+import { isBunTestRuntime, isRecord, logger, wrapFetchForExtraCa } from "@san/utils";
 import { parseModelString, resolveProviderModelReference } from "../config/model-resolver";
 import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";

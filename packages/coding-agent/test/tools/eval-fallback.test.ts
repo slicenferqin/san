@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import * as evalIndex from "@oh-my-pi/pi-coding-agent/eval";
-import * as pyKernel from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { EvalTool } from "@oh-my-pi/pi-coding-agent/tools/eval";
-import { resolveEvalBackends } from "@oh-my-pi/pi-coding-agent/tools/eval-backends";
+import { Settings } from "@san/coding-agent/config/settings";
+import * as evalIndex from "@san/coding-agent/eval";
+import * as pyKernel from "@san/coding-agent/eval/py/kernel";
+import type { ToolSession } from "@san/coding-agent/tools";
+import { EvalTool } from "@san/coding-agent/tools/eval";
+import { resolveEvalBackends } from "@san/coding-agent/tools/eval-backends";
 
 let originalSanPy: string | undefined;
 let originalSanJs: string | undefined;

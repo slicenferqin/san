@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Message } from "@oh-my-pi/pi-ai";
-import { getAgentDir as getDefaultAgentDir, logger, parseJsonlLenient, toError } from "@oh-my-pi/pi-utils";
+import type { Message } from "@san/ai";
+import { getAgentDir as getDefaultAgentDir, logger, parseJsonlLenient, toError } from "@san/utils";
 import { computeDefaultSessionDir } from "./session-paths";
 import { FileSessionStorage, type SessionStorage } from "./session-storage";
 

@@ -1,12 +1,12 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
-import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
-import { TranscriptContainer } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
-import { theme as activeTheme, initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { evalToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/eval-render";
-import { previewWindowRows } from "@oh-my-pi/pi-coding-agent/tools/render-utils";
-import { type Component, TUI } from "@oh-my-pi/pi-tui";
+import type { AssistantMessage } from "@san/ai";
+import { AssistantMessageComponent } from "@san/coding-agent/modes/components/assistant-message";
+import { ToolExecutionComponent } from "@san/coding-agent/modes/components/tool-execution";
+import { TranscriptContainer } from "@san/coding-agent/modes/components/transcript-container";
+import { theme as activeTheme, initTheme } from "@san/coding-agent/modes/theme/theme";
+import { evalToolRenderer } from "@san/coding-agent/tools/eval-render";
+import { previewWindowRows } from "@san/coding-agent/tools/render-utils";
+import { type Component, TUI } from "@san/tui";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 
 // Long, path-like output that wraps at the box's inner width — the case that

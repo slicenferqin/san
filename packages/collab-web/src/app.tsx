@@ -13,7 +13,8 @@ import { useGuestSnapshot } from "./lib/use-guest";
 import type { ToolRenderHost } from "./tool-render";
 import "./components/shell/shell.css";
 
-const NAME_KEY = "omp.collab.name";
+const NAME_KEY = "san.collab.name";
+const LEGACY_NAME_KEY = "omp.collab.name";
 
 interface Creds {
 	link: string;
@@ -22,7 +23,7 @@ interface Creds {
 
 function storedName(): string {
 	try {
-		return localStorage.getItem(NAME_KEY) ?? "guest";
+		return localStorage.getItem(NAME_KEY) ?? localStorage.getItem(LEGACY_NAME_KEY) ?? "guest";
 	} catch {
 		return "guest";
 	}
@@ -104,7 +105,7 @@ export function App(): ReactNode {
 	}, [connect]);
 
 	useEffect(() => {
-		if (!client) document.title = "omp collab";
+		if (!client) document.title = "San collab";
 	}, [client]);
 
 	if (!client) {
@@ -149,7 +150,7 @@ function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
 
 	const title = snap.header?.title ?? snap.state?.sessionName ?? "session";
 	useEffect(() => {
-		document.title = `${title} · omp collab`;
+		document.title = `${title} · San collab`;
 	}, [title]);
 
 	const drawerAgent = selectedId != null ? snap.agents.find(a => a.id === selectedId) : undefined;

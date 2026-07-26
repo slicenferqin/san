@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@san/utils";
 
 const DEFAULT_MCP_TIMEOUT_MS = 30_000;
 const MCP_TIMEOUT_ENV_KEYS = ["SAN_MCP_TIMEOUT_MS", "OMP_MCP_TIMEOUT_MS"] as const;

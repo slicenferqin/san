@@ -25,7 +25,7 @@ import {
 	getBundledModels,
 	getBundledProviders,
 	modelsAreEqual,
-} from "@oh-my-pi/pi-catalog/models";
+} from "@san/catalog/models";
 import { type TSchema, Type } from "./typebox";
 
 export interface StringEnumOptions<T extends string> {
@@ -71,7 +71,7 @@ export function StringEnum<T extends string | number>(
 	return schema;
 }
 
-export * from "@oh-my-pi/pi-ai";
+export * from "@san/ai";
 /**
  * Compatibility re-exports for catalog symbols that pi-ai historically exposed
  * from its own barrel prior to the `refactor(catalog)!: split model catalog

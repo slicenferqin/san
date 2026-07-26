@@ -1,4 +1,4 @@
-import type { ptree } from "@oh-my-pi/pi-utils";
+import type { ptree } from "@san/utils";
 
 export type DapMessage = DapRequestMessage | DapResponseMessage | DapEventMessage;
 export type DapSessionStatus = "launching" | "configuring" | "stopped" | "running" | "terminated";

@@ -8,7 +8,7 @@ import {
 	AppendOnlyContextManager,
 	filterProviderReplayMessages,
 	type ThinkingLevel,
-} from "@oh-my-pi/pi-agent-core";
+} from "@san/agent";
 import type {
 	Context,
 	CredentialDisabledEvent,
@@ -16,16 +16,13 @@ import type {
 	Model,
 	ProviderSessionState,
 	SimpleStreamOptions,
-} from "@oh-my-pi/pi-ai";
-import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
-import {
-	getOpenAICodexTransportDetails,
-	prewarmOpenAICodexResponses,
-} from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
-import { FALLBACK_DIALECT, preferredDialect } from "@oh-my-pi/pi-catalog/identity";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { $env, $flag, getAgentDir, getProjectDir, logger, postmortem, prompt, Snowflake } from "@oh-my-pi/pi-utils";
-import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
+} from "@san/ai";
+import type { Dialect } from "@san/ai/dialect";
+import { getOpenAICodexTransportDetails, prewarmOpenAICodexResponses } from "@san/ai/providers/openai-codex-responses";
+import { FALLBACK_DIALECT, preferredDialect } from "@san/catalog/identity";
+import type { Component } from "@san/tui";
+import { $env, $flag, getAgentDir, getProjectDir, logger, postmortem, prompt, Snowflake } from "@san/utils";
+import { INTENT_FIELD } from "@san/wire";
 import {
 	discoverAdvisorConfigs,
 	discoverWatchdogFiles,
@@ -372,7 +369,7 @@ function applyMCPEnvironment(result: { exaApiKeys: string[] }): void {
 export interface CreateAgentSessionOptions {
 	/** Working directory for project-local discovery. Default: getProjectDir() */
 	cwd?: string;
-	/** Global config directory. Default: ~/.omp/agent */
+	/** Global config directory. Default: ~/.san/agent */
 	agentDir?: string;
 	/** Spawns to allow. Default: "*" */
 	spawns?: string;
@@ -460,7 +457,7 @@ export interface CreateAgentSessionOptions {
 	 */
 	preloadedExtensionPaths?: string[];
 	/**
-	 * Pre-discovered custom-tool source paths from `.omp/tools/`, `.claude/tools/`,
+	 * Pre-discovered custom-tool source paths from canonical `.san/tools/`, legacy `.omp/tools/`, `.claude/tools/`,
 	 * plugins, etc. When provided, the filesystem-scan inside
 	 * `discoverCustomToolPaths()` is skipped — subagents inherit the parent's
 	 * scan result and call `loadCustomTools()` themselves so each session binds
@@ -483,7 +480,7 @@ export interface CreateAgentSessionOptions {
 	contextFiles?: Array<{ path: string; content: string }>;
 	/** Pre-built workspace tree (skips re-scanning; passed by parents to subagents). */
 	workspaceTree?: WorkspaceTree;
-	/** Prompt templates. Default: discovered from cwd/.omp/prompts/ + agentDir/prompts/ */
+	/** Prompt templates. Default: discovered from cwd/.san/prompts/ + agentDir/prompts/ */
 	promptTemplates?: PromptTemplate[];
 	/** File-based slash commands. Default: discovered from commands/ directories */
 	slashCommands?: FileSlashCommand[];
@@ -664,7 +661,7 @@ export {
  *
  * Default: local SQLite store at `<agentDir>/agent.db`.
  *
- * Broker mode: when `OMP_AUTH_BROKER_URL` is set, credentials are pulled from
+ * Broker mode: when `SAN_AUTH_BROKER_URL` is set (or legacy `OMP_AUTH_BROKER_URL`), credentials are pulled from
  * a remote auth-broker over the wire. Refresh tokens never leave the broker;
  * the client receives access tokens with `refresh = "__remote__"` and calls
  * back into the broker through the {@link AuthStorageOptions.refreshOAuthCredential}
@@ -732,11 +729,11 @@ export async function loadSessionExtensions(
 /**
  * Load discovered/configured extensions and register their providers into
  * `modelRegistry`, then discover the dynamic provider catalogs. One-shot CLIs
- * (`omp bench`, dry-balance) build a bare {@link ModelRegistry} that only knows
+ * (`san bench`, dry-balance) build a bare {@link ModelRegistry} that only knows
  * built-in catalog providers; without this, providers contributed by an
  * extension (e.g. a custom OpenAI-compatible provider under
- * `~/.omp/agent/extensions/`) never reach model resolution. Mirrors the
- * session / `omp models` path: drain the queued provider registrations, then
+ * `~/.san/agent/extensions/`) never reach model resolution. Mirrors the
+ * session / `san models` path: drain the queued provider registrations, then
  * `refreshRuntimeProviders` so dynamically-discovered models exist before
  * selectors are resolved.
  */
@@ -1191,7 +1188,7 @@ export function createAutoLearnCaptureRunner(
  * const { session } = await createAgentSession();
  *
  * // With explicit model
- * import { getModel } from '@oh-my-pi/pi-ai';
+ * import { getModel } from '@san/ai';
  * const { session } = await createAgentSession({
  *   model: getModel('anthropic', 'claude-opus-4-5'),
  *   thinkingLevel: 'high',
@@ -1922,7 +1919,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			customTools.push(...getSearchTools());
 		}
 
-		// Discover custom tools from `.omp/tools/`, `.claude/tools/`, plugins, etc.
+		// Discover custom tools from canonical `.san/tools/`, legacy `.omp/tools/`, `.claude/tools/`, plugins, etc.
 		// Subagents reuse the parent's scan via `preloadedCustomToolPaths` to skip
 		// the FS walk, but ALWAYS re-call `loadCustomTools` here so factories bind
 		// to THIS session's `CustomToolAPI` (cwd, exec, pushPendingAction, UI).
@@ -2027,7 +2024,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// Hydrate cached runtime (extension) provider catalogs before model
 		// resolution. Dynamic-only providers have no synchronous registration side
 		// effect, so a cold --model/provider resume must see the same fresh SQLite
-		// cache that `omp models find` uses before the online refresh continues in
+		// cache that `san models find` uses before the online refresh continues in
 		// the background.
 		await modelRegistry.refreshRuntimeProviders("offline");
 		// Continue runtime discovery in the background (cache-aware) so startup is

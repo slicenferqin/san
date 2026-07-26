@@ -1,18 +1,18 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
-import { type Api, type AssistantMessage, Effort, type Model } from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { type CreateAgentSessionResult, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { getRestorableSessionModels } from "@oh-my-pi/pi-coding-agent/session/session-context";
-import { EPHEMERAL_MODEL_CHANGE_ROLE } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { AUTO_THINKING } from "@oh-my-pi/pi-coding-agent/thinking";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { Agent } from "@san/agent";
+import { type Api, type AssistantMessage, Effort, type Model } from "@san/ai";
+import { getBundledModel } from "@san/catalog/models";
+import { ModelRegistry } from "@san/coding-agent/config/model-registry";
+import { Settings } from "@san/coding-agent/config/settings";
+import { type CreateAgentSessionResult, createAgentSession } from "@san/coding-agent/sdk";
+import { AgentSession } from "@san/coding-agent/session/agent-session";
+import { AuthStorage } from "@san/coding-agent/session/auth-storage";
+import { getRestorableSessionModels } from "@san/coding-agent/session/session-context";
+import { EPHEMERAL_MODEL_CHANGE_ROLE } from "@san/coding-agent/session/session-entries";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
+import { AUTO_THINKING } from "@san/coding-agent/thinking";
+import { TempDir } from "@san/utils";
 
 describe("AgentSession model persistence", () => {
 	let tempDir: TempDir;
@@ -469,7 +469,7 @@ describe("AgentSession model persistence", () => {
 			role: "assistant",
 			content: [],
 			stopReason: "aborted",
-			errorMessage: "Previous OMP process exited before completing the turn.",
+			errorMessage: "Previous San process exited before completing the turn.",
 		});
 		expect(
 			messages.some(

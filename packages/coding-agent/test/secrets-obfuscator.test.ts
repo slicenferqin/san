@@ -3,16 +3,16 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, Context, Message } from "@oh-my-pi/pi-ai";
+import type { AgentMessage } from "@san/agent";
+import type { AssistantMessage, Context, Message } from "@san/ai";
 import {
 	deobfuscateAgentMessages,
 	deobfuscateToolArguments,
 	obfuscateMessages,
 	obfuscateProviderContext,
 	SecretObfuscator,
-} from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
-import { compileSecretRegex } from "@oh-my-pi/pi-coding-agent/secrets/regex";
+} from "@san/coding-agent/secrets/obfuscator";
+import { compileSecretRegex } from "@san/coding-agent/secrets/regex";
 import { type } from "arktype";
 
 describe("compileSecretRegex", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { executePythonWithKernel, type PythonKernelExecutor } from "@oh-my-pi/pi-coding-agent/eval/py/executor";
-import type { KernelExecuteOptions, KernelExecuteResult } from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
+import { executePythonWithKernel, type PythonKernelExecutor } from "@san/coding-agent/eval/py/executor";
+import type { KernelExecuteOptions, KernelExecuteResult } from "@san/coding-agent/eval/py/kernel";
 
 class FakeKernel implements PythonKernelExecutor {
 	constructor(

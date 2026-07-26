@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { scheduler } from "node:timers/promises";
-import { streamSimple } from "@oh-my-pi/pi-ai";
+import { streamSimple } from "@san/ai";
 import {
 	getOpenAICodexTransportDetails,
 	getOpenAICodexWebSocketDebugStats,
 	prewarmOpenAICodexResponses,
 	resetOpenAICodexHistoryAfterCompaction,
 	streamOpenAICodexResponses,
-} from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
+} from "@san/ai/providers/openai-codex-responses";
 import type {
 	CodexCompactionRequestContext,
 	Context,
@@ -15,10 +15,10 @@ import type {
 	Model,
 	ModelSpec,
 	ProviderSessionState,
-} from "@oh-my-pi/pi-ai/types";
-import { __resetProxyCache } from "@oh-my-pi/pi-ai/utils/proxy";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import * as piUtils from "@oh-my-pi/pi-utils";
+} from "@san/ai/types";
+import { __resetProxyCache } from "@san/ai/utils/proxy";
+import { buildModel } from "@san/catalog/build";
+import * as piUtils from "@san/utils";
 
 const { getAgentDir, setAgentDir, TempDir } = piUtils;
 

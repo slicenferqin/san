@@ -1,5 +1,5 @@
-import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { estimateTokens } from "@san/agent/compaction";
+import { prompt } from "@san/utils";
 import { CONTEXT_PLAN_CUSTOM_TYPE, type ContextPlanAudit } from "../context-steady/plan-types";
 import roleContextTemplate from "../prompts/san-loop/role-context.md" with { type: "text" };
 import type { SessionEntry } from "../session/session-entries";

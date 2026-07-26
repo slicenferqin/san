@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { runContextSteadyDogfood } from "@oh-my-pi/pi-coding-agent/context-steady/dogfood";
+import { runContextSteadyDogfood } from "@san/coding-agent/context-steady/dogfood";
 
 const summary = runContextSteadyDogfood();
 const lines: string[] = [];

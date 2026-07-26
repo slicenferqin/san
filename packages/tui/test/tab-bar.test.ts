@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { TabBar, type TabBarTheme } from "@oh-my-pi/pi-tui/components/tab-bar";
-import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { TabBar, type TabBarTheme } from "@san/tui/components/tab-bar";
+import { visibleWidth } from "@san/tui/utils";
 
 const ansiTheme: TabBarTheme = {
 	label: text => text,

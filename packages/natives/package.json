@@ -1,5 +1,5 @@
 {
-  "name": "@oh-my-pi/pi-natives",
+  "name": "@san/natives",
   "version": "17.0.2",
   "description": "Native Rust bindings for grep, clipboard, image processing, syntax highlighting, PTY, and shell operations via N-API",
   "type": "module",

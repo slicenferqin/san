@@ -3,10 +3,10 @@
  *
  * Uses brush-core via native bindings for shell execution.
  */
-import { ExponentialYield } from "@oh-my-pi/pi-agent-core/utils/yield";
-import { type MinimizerOptions, Shell, type ShellRunResult } from "@oh-my-pi/pi-natives";
-import { logger } from "@oh-my-pi/pi-utils";
-import { isExecutable, type ShellConfig } from "@oh-my-pi/pi-utils/procmgr";
+import { ExponentialYield } from "@san/agent/utils/yield";
+import { type MinimizerOptions, Shell, type ShellRunResult } from "@san/natives";
+import { logger } from "@san/utils";
+import { isExecutable, type ShellConfig } from "@san/utils/procmgr";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { OutputSink } from "../session/streaming-output";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/output-meta";

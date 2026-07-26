@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as path from "node:path";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { EditTool } from "@oh-my-pi/pi-coding-agent/edit";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { resetSettingsForTest, Settings } from "@san/coding-agent/config/settings";
+import { EditTool } from "@san/coding-agent/edit";
+import type { ToolSession } from "@san/coding-agent/tools";
+import { TempDir } from "@san/utils";
 
 function createToolSession(cwd: string, settings: Settings): ToolSession {
 	return {

@@ -17,11 +17,11 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { clearCache as clearFsCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
-import { type Skill, skillCapability } from "@oh-my-pi/pi-coding-agent/capability/skill";
-import { type SlashCommand, slashCommandCapability } from "@oh-my-pi/pi-coding-agent/capability/slash-command";
-import { loadCapability } from "@oh-my-pi/pi-coding-agent/discovery";
-import { getConfigRootDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { clearCache as clearFsCache } from "@san/coding-agent/capability/fs";
+import { type Skill, skillCapability } from "@san/coding-agent/capability/skill";
+import { type SlashCommand, slashCommandCapability } from "@san/coding-agent/capability/slash-command";
+import { loadCapability } from "@san/coding-agent/discovery";
+import { getConfigRootDir, removeWithRetries, setAgentDir } from "@san/utils";
 
 const originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
 const fallbackAgentDir = path.join(getConfigRootDir(), "agent");

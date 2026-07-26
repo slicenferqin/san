@@ -7,8 +7,8 @@
  * owner instead of a parallel session-id registry.
  */
 
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { logger } from "@oh-my-pi/pi-utils";
+import type { AgentMessage } from "@san/agent";
+import { logger } from "@san/utils";
 import { onHindsightScopeChanged, type Settings } from "../config/settings";
 import { filterMemorySearchItemsByScope } from "../memory-backend/scope";
 import type { MemoryBackend, MemoryBackendSearchItem, MemoryBackendStartOptions } from "../memory-backend/types";

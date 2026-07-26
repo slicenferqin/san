@@ -4,9 +4,9 @@ import {
 	estimateSanBrainInjectionTokens,
 	finalizeSanBrainActivation,
 	planSanBrainGlobalInjection,
-} from "@oh-my-pi/pi-coding-agent/brain/activation";
-import type { SanBrainActiveStateRecord } from "@oh-my-pi/pi-coding-agent/brain/store";
-import type { SanBrainExperienceCandidate, SanBrainProfileCandidate } from "@oh-my-pi/pi-coding-agent/brain/types";
+} from "@san/coding-agent/brain/activation";
+import type { SanBrainActiveStateRecord } from "@san/coding-agent/brain/store";
+import type { SanBrainExperienceCandidate, SanBrainProfileCandidate } from "@san/coding-agent/brain/types";
 
 const createdAt = "2026-07-10T08:00:00.000Z";
 

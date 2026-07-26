@@ -1,19 +1,19 @@
 import { describe, expect, it } from "bun:test";
-import { captureSanBrainTurn } from "@oh-my-pi/pi-coding-agent/brain/capture";
-import { extractSanBrainCandidates } from "@oh-my-pi/pi-coding-agent/brain/extract";
+import { captureSanBrainTurn } from "@san/coding-agent/brain/capture";
+import { extractSanBrainCandidates } from "@san/coding-agent/brain/extract";
 import {
 	BRAIN_EXPERIENCE_CANDIDATE_CUSTOM_TYPE,
 	BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE,
-} from "@oh-my-pi/pi-coding-agent/brain/types";
-import type { TurnDigest } from "@oh-my-pi/pi-coding-agent/context-steady/types";
+} from "@san/coding-agent/brain/types";
+import type { TurnDigest } from "@san/coding-agent/context-steady/types";
 import {
 	SAN_LOOP_REVIEW_CUSTOM_TYPE,
 	SAN_LOOP_RUN_CUSTOM_TYPE,
 	type SanLoopReviewReport,
 	type SanLoopRunSnapshot,
-} from "@oh-my-pi/pi-coding-agent/san-loop/types";
-import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import type { ReadonlySessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+} from "@san/coding-agent/san-loop/types";
+import type { SessionEntry } from "@san/coding-agent/session/session-entries";
+import type { ReadonlySessionManager } from "@san/coding-agent/session/session-manager";
 
 const digest: TurnDigest = {
 	schemaVersion: 1,

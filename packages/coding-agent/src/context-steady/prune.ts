@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage } from "@san/agent";
 import type { CustomMessageEntry, SessionEntry, SessionMessageEntry } from "../session/session-entries";
 import {
 	CONTEXT_CHECKPOINT_CUSTOM_TYPE,

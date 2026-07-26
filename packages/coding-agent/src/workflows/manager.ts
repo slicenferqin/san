@@ -1,4 +1,4 @@
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { Snowflake } from "@san/utils";
 import type { ReadonlySessionManager } from "../session/session-manager";
 import type { WorktreeBaseline } from "../task/worktree";
 import {

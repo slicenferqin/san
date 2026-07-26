@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
-import type { SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { getBlobsDir, TempDir } from "@oh-my-pi/pi-utils";
+import type { AssistantMessage, ImageContent } from "@san/ai";
+import type { SessionMessageEntry } from "@san/coding-agent/session/session-entries";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
+import { getBlobsDir, TempDir } from "@san/utils";
 
 function isAssistantSessionEntry(entry: unknown): entry is SessionMessageEntry & { message: AssistantMessage } {
 	return (

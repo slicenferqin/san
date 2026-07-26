@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { renderDemotedThinking } from "@oh-my-pi/pi-ai/dialect";
-import { convertMessages } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import type { AssistantMessage, Model, ModelSpec, ThinkingContent, ToolCall } from "@oh-my-pi/pi-ai/types";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { renderDemotedThinking } from "@san/ai/dialect";
+import { convertMessages } from "@san/ai/providers/openai-completions";
+import type { AssistantMessage, Model, ModelSpec, ThinkingContent, ToolCall } from "@san/ai/types";
+import { buildModel } from "@san/catalog/build";
+import { Effort } from "@san/catalog/effort";
+import { getBundledModel } from "@san/catalog/models";
 
 interface OpenAICompletionAssistantWireMessage {
 	role: "assistant";

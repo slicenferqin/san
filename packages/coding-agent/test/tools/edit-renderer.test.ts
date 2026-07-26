@@ -2,16 +2,16 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { InMemorySnapshotStore } from "@oh-my-pi/hashline";
-import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import { renderGalleryState, resolveFixture } from "@oh-my-pi/pi-coding-agent/cli/gallery-cli";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { editToolRenderer } from "@oh-my-pi/pi-coding-agent/edit/renderer";
-import { renderDiff } from "@oh-my-pi/pi-coding-agent/modes/components/diff";
-import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
-import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { Text, type TUI, visibleWidth } from "@oh-my-pi/pi-tui";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import type { AgentTool } from "@san/agent";
+import { renderGalleryState, resolveFixture } from "@san/coding-agent/cli/gallery-cli";
+import { resetSettingsForTest, Settings } from "@san/coding-agent/config/settings";
+import { editToolRenderer } from "@san/coding-agent/edit/renderer";
+import { renderDiff } from "@san/coding-agent/modes/components/diff";
+import { ToolExecutionComponent } from "@san/coding-agent/modes/components/tool-execution";
+import * as themeModule from "@san/coding-agent/modes/theme/theme";
+import { InMemorySnapshotStore } from "@san/hashline";
+import { Text, type TUI, visibleWidth } from "@san/tui";
+import { removeWithRetries } from "@san/utils";
 import chalk from "chalk";
 
 beforeAll(async () => {

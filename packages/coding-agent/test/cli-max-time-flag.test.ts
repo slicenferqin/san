@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { runRootCommand } from "@oh-my-pi/pi-coding-agent/main";
-import type { CreateAgentSessionOptions } from "@oh-my-pi/pi-coding-agent/sdk";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { parseArgs } from "@san/coding-agent/cli/args";
+import { Settings } from "@san/coding-agent/config/settings";
+import { runRootCommand } from "@san/coding-agent/main";
+import type { CreateAgentSessionOptions } from "@san/coding-agent/sdk";
+import { AuthStorage } from "@san/coding-agent/session/auth-storage";
+import { TempDir } from "@san/utils";
 import { runCli } from "../src/cli";
 
 describe("parseArgs — --max-time flag", () => {

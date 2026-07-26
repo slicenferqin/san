@@ -4,7 +4,7 @@
  * All IDs are opaque strings with a type prefix for debuggability.
  * Internally backed by Snowflake (time-sortable, unique per process).
  */
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { Snowflake } from "@san/utils";
 
 /** Prefixed ID brands for type safety at boundaries. */
 export type RuntimeId = string & { readonly __brand: "RuntimeId" };

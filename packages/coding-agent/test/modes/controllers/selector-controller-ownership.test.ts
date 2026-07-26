@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "bun:test";
-import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
-import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { Container, Text } from "@oh-my-pi/pi-tui";
+import { SelectorController } from "@san/coding-agent/modes/controllers/selector-controller";
+import type { InteractiveModeContext } from "@san/coding-agent/modes/types";
+import { Container, Text } from "@san/tui";
 
 describe("SelectorController editor-area ownership", () => {
 	it("does not let a stale selector completion replace a newer surface", () => {

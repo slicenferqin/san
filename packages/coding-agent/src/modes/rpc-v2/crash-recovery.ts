@@ -1,7 +1,7 @@
 /** RPC v2 lease 与崩溃恢复。Lease 文件跟随 Session 文件，不写入源码目录。 */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@san/utils";
 import { withFileLock } from "../../config/file-lock";
 import type { RecoveryDescriptor } from "./dto/session";
 import type { RuntimeId } from "./protocol/ids";

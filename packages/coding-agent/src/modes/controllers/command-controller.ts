@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { CompactionCancelledError, type CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
+import { CompactionCancelledError, type CompactionOutcome } from "@san/agent/compaction";
 import {
 	getEnvApiKey,
 	getProviderDetails,
@@ -9,9 +9,9 @@ import {
 	resolveUsedFraction,
 	type UsageLimit,
 	type UsageReport,
-} from "@oh-my-pi/pi-ai";
-import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi/pi-tui";
-import { formatDuration, Snowflake, sanitizeText } from "@oh-my-pi/pi-utils";
+} from "@san/ai";
+import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@san/tui";
+import { formatDuration, Snowflake, sanitizeText } from "@san/utils";
 import { shouldEnableAppendOnlyContext } from "../../config/append-only-context-mode";
 import { type LoadedCustomShare, loadCustomShare } from "../../export/custom-share";
 import { shareSession } from "../../export/share";
@@ -1768,7 +1768,7 @@ export function renderUsageReports(
 			lines.push(`  ${uiTheme.fg("accent", "in use by this session:")} ${activeAccountLabel}`);
 		}
 
-		// Provider-wide disclaimers (e.g. "OMP-observed spend only") render once
+		// Provider-wide disclaimers (e.g. "San-observed spend only") render once
 		// above the per-account sections instead of duplicating onto every limit.
 		const providerNotes = [...new Set(providerReports.flatMap(report => report.notes ?? []))];
 		if (providerNotes.length > 0) {

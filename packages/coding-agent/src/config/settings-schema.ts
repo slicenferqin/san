@@ -1,6 +1,6 @@
-import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
-import { DEFAULT_SHARE_URL } from "@oh-my-pi/pi-wire";
-import { SHAPE_VARIANT_NAMES } from "@oh-my-pi/snapcompact";
+import { THINKING_EFFORTS } from "@san/ai";
+import { SHAPE_VARIANT_NAMES } from "@san/snapcompact";
+import { DEFAULT_SHARE_URL } from "@san/wire";
 import { DEFAULT_RELAY_URL } from "../collab/protocol";
 import { DEFAULT_STT_MODEL_KEY, STT_MODEL_OPTIONS, STT_MODEL_VALUES } from "../stt/models";
 import { STT_SUBMIT_TRIGGER_OPTIONS, STT_SUBMIT_TRIGGER_VALUES } from "../stt/submit-trigger";
@@ -345,7 +345,7 @@ export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 			"^\\s*(?:(?:bun|npm|pnpm|yarn)\\s+(?:run\\s+)?(?:dev|start)(?:\\s|$)|(?:vite|next\\s+dev|nuxt\\s+dev|nodemon|lldb|gdb|tail\\s+-f)(?:\\s|$)|docker\\s+compose\\s+up(?!.*(?:\\s-d(?:\\s|$)|--detach))(?:\\s|$))",
 		tool: "hub",
 		message:
-			'Use the `hub` tool (`op:"start"`) for services, watchers, and debuggers so other omp instances can observe and control them.',
+			'Use the `hub` tool (`op:"start"`) for services, watchers, and debuggers so other San instances can observe and control them.',
 	},
 	{
 		pattern:
@@ -506,7 +506,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Services",
 			label: "Max In-Flight Requests",
 			description:
-				'Maximum concurrent LLM requests per provider id (for example "openai" or "anthropic"), shared across local OMP processes with this config root. Omitted providers are unlimited.',
+				'Maximum concurrent LLM requests per provider id (for example "openai" or "anthropic"), shared across local San processes with this config root. Omitted providers are unlimited.',
 		},
 	},
 
@@ -530,7 +530,7 @@ export const SETTINGS_SCHEMA = {
 				{
 					value: "project",
 					label: "Per-project",
-					description: "Save project role models in .omp/config.yml; missing project roles use global defaults",
+					description: "Save project role models in .san/config.yml; missing project roles use global defaults",
 				},
 			],
 		},

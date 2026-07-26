@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { CONFIG_DIR_NAME, isEnoent, parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, isEnoent, parseFrontmatter } from "@san/utils";
 import { findAllNearestProjectConfigDirs, getConfigDirs } from "../config";
 import builtinProjectTypescriptContracts from "../prompts/san-loop/checks/project-typescript-contracts.md" with {
 	type: "text",

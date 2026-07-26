@@ -3,19 +3,19 @@ import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
-import { isOfficialAnthropicApiUrl } from "@oh-my-pi/pi-catalog/compat/anthropic";
-import type { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { isVertexExpressOpenAIUrl, isVertexRawPredictUrl } from "@oh-my-pi/pi-catalog/hosts";
+import { isOfficialAnthropicApiUrl } from "@san/catalog/compat/anthropic";
+import type { Effort } from "@san/catalog/effort";
+import { isVertexExpressOpenAIUrl, isVertexRawPredictUrl } from "@san/catalog/hosts";
 import {
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
 	minimumSupportedEffort,
 	requireSupportedEffort,
 	resolveWireModelId,
-} from "@oh-my-pi/pi-catalog/model-thinking";
-import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@oh-my-pi/pi-catalog/provider-models";
-import { CODEX_BASE_URL } from "@oh-my-pi/pi-catalog/wire/codex";
-import { $env, $pickenv, getConfigRootDir, isEnoent, logger, withExtraCaFetch } from "@oh-my-pi/pi-utils";
+} from "@san/catalog/model-thinking";
+import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@san/catalog/provider-models";
+import { CODEX_BASE_URL } from "@san/catalog/wire/codex";
+import { $env, $pickenv, getConfigRootDir, isEnoent, logger, withExtraCaFetch } from "@san/utils";
 import { getCustomApi } from "./api-registry";
 import { createAuthRetryKeyState, isApiKeyResolver, resolveNextAuthRetryKey } from "./auth-retry";
 import * as AIError from "./error";
@@ -747,7 +747,7 @@ export function getEnvApiKeyName(provider: string): string | undefined {
 
 /**
  * Enumerate every provider that has an env-var fallback for `getEnvApiKey`.
- * Used by `omp auth-broker migrate --include-env` to discover env-sourced keys
+ * Used by `san auth-broker migrate --include-env` to discover env-sourced keys
  * that should be uploaded to the broker.
  */
 export function listProvidersWithEnvKey(): string[] {

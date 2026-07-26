@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { resizeImage } from "@oh-my-pi/pi-coding-agent/utils/image-resize";
+import { resizeImage } from "@san/coding-agent/utils/image-resize";
 
 // 1x1 red PNG (69 bytes) — used as a Bun.Image seed to synthesize larger fixtures
 // without checking binary blobs into the repo.
@@ -217,18 +217,30 @@ describe("resizeImage minimum dimension", () => {
 });
 
 describe("resizeImage env wiring", () => {
-	const prior = Bun.env.OMP_NO_WEBP;
+	const priorSan = Bun.env.SAN_NO_WEBP;
+	const priorOmp = Bun.env.OMP_NO_WEBP;
 
 	beforeEach(() => {
+		delete (Bun.env as Record<string, string | undefined>).SAN_NO_WEBP;
 		delete (Bun.env as Record<string, string | undefined>).OMP_NO_WEBP;
 	});
 
 	afterEach(() => {
-		if (prior === undefined) delete (Bun.env as Record<string, string | undefined>).OMP_NO_WEBP;
-		else Bun.env.OMP_NO_WEBP = prior;
+		if (priorSan === undefined) delete (Bun.env as Record<string, string | undefined>).SAN_NO_WEBP;
+		else Bun.env.SAN_NO_WEBP = priorSan;
+		if (priorOmp === undefined) delete (Bun.env as Record<string, string | undefined>).OMP_NO_WEBP;
+		else Bun.env.OMP_NO_WEBP = priorOmp;
 	});
 
-	it("treats OMP_NO_WEBP=1 set at call time as exclusion (not baked at module load)", async () => {
+	it("treats SAN_NO_WEBP=1 set at call time as exclusion", async () => {
+		Bun.env.SAN_NO_WEBP = "1";
+
+		const result = await resizeImage({ type: "image", data: smallWebp, mimeType: "image/webp" });
+
+		expect(result.mimeType).not.toBe("image/webp");
+	});
+
+	it("keeps OMP_NO_WEBP as a compatibility fallback", async () => {
 		Bun.env.OMP_NO_WEBP = "1";
 
 		const result = await resizeImage({ type: "image", data: smallWebp, mimeType: "image/webp" });
@@ -236,12 +248,12 @@ describe("resizeImage env wiring", () => {
 		expect(result.mimeType).not.toBe("image/webp");
 	});
 
-	it("treats OMP_NO_WEBP='' / '0' as NOT excluded", async () => {
-		Bun.env.OMP_NO_WEBP = "";
+	it("treats SAN_NO_WEBP='' / '0' as NOT excluded", async () => {
+		Bun.env.SAN_NO_WEBP = "";
 		const empty = await resizeImage({ type: "image", data: smallWebp, mimeType: "image/webp" });
 		expect(empty.mimeType).toBe("image/webp");
 
-		Bun.env.OMP_NO_WEBP = "0";
+		Bun.env.SAN_NO_WEBP = "0";
 		const zero = await resizeImage({ type: "image", data: smallWebp, mimeType: "image/webp" });
 		expect(zero.mimeType).toBe("image/webp");
 	});

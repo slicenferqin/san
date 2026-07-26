@@ -3,16 +3,16 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Effort, type FetchImpl, type Model } from "@oh-my-pi/pi-ai";
-import type { OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
-import type { OpenAICompat } from "@oh-my-pi/pi-catalog/types";
-import { applyLlamaCppQwenThinking } from "@oh-my-pi/pi-coding-agent/config/model-discovery";
-import { kNoAuth, ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import { Effort, type FetchImpl, type Model } from "@san/ai";
+import type { OAuthCredentials } from "@san/ai/oauth/types";
+import { buildModel } from "@san/catalog/build";
+import { writeModelCache } from "@san/catalog/model-cache";
+import type { OpenAICompat } from "@san/catalog/types";
+import { applyLlamaCppQwenThinking } from "@san/coding-agent/config/model-discovery";
+import { kNoAuth, ModelRegistry } from "@san/coding-agent/config/model-registry";
+import { resetSettingsForTest } from "@san/coding-agent/config/settings";
+import { AuthStorage } from "@san/coding-agent/session/auth-storage";
+import { removeSyncWithRetries, Snowflake } from "@san/utils";
 
 describe("ModelRegistry runtime discovery", () => {
 	let tempDir: string;

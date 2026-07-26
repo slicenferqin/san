@@ -1,7 +1,7 @@
 /**
  * Check for and install updates.
  */
-import { Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { Command, Flags } from "@san/utils/cli";
 import * as pluginCli from "../cli/plugin-cli";
 import * as updateCli from "../cli/update-cli";
 import { initTheme } from "../modes/theme/theme";

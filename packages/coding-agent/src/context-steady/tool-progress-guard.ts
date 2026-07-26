@@ -1,5 +1,5 @@
-import type { AssistantMessage, ToolCall, ToolResultMessage } from "@oh-my-pi/pi-ai";
-import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
+import type { AssistantMessage, ToolCall, ToolResultMessage } from "@san/ai";
+import { INTENT_FIELD } from "@san/wire";
 
 const LEGACY_INTENT_FIELD = "__intent";
 const VOLATILE_ARGUMENT_KEYS: ReadonlySet<string> = new Set([INTENT_FIELD, LEGACY_INTENT_FIELD, "toolCallId"]);

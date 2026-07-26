@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage } from "@san/agent";
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
 import { AgentRegistry } from "../../registry/agent-registry";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";

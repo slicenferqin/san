@@ -6,7 +6,7 @@
  * that low-churn layer before the append-only recent digest tail.
  */
 
-import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
+import { estimateTokens } from "@san/agent/compaction";
 import type { SessionEntry } from "../session/session-entries";
 import type { ReadonlySessionManager } from "../session/session-manager";
 import { collectDigestRefs } from "./session";

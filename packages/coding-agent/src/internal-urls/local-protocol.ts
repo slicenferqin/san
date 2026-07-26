@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@san/utils";
 import { AgentRegistry } from "../registry/agent-registry";
 import { buildDirectoryResource } from "./filesystem-resource";
 import { parseInternalUrl } from "./parse";
@@ -39,7 +39,7 @@ function shortLocalRoot(options: LocalProtocolOptions): string {
 	// Derive the short root from the stable session id, never the artifact path,
 	// so `SessionManager.moveTo()` and the resume-after-move flow keep finding
 	// the same `local://` directory the session wrote pre-move.
-	return path.join(os.tmpdir(), "omp-local", safeSessionId(options));
+	return path.join(os.tmpdir(), "san-local", safeSessionId(options));
 }
 
 function getContentType(filePath: string): InternalResource["contentType"] {
@@ -249,7 +249,7 @@ export function resolveLocalRoot(options: LocalProtocolOptions, platform: NodeJS
 		return candidate;
 	}
 
-	return path.join(os.tmpdir(), "omp-local", safeSessionId(options));
+	return path.join(os.tmpdir(), "san-local", safeSessionId(options));
 }
 
 /** Resolve a local:// URL to an on-disk path under the active session's local root. */

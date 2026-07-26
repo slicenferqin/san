@@ -2,14 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { disableProvider, enableProvider } from "@oh-my-pi/pi-coding-agent/capability";
-import { clearCache as clearFsCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
-import {
-	clearOmpExtensionCliRoots,
-	injectOmpExtensionCliRoots,
-} from "@oh-my-pi/pi-coding-agent/discovery/omp-extension-roots";
-import { discoverAgents } from "@oh-my-pi/pi-coding-agent/task/discovery";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { disableProvider, enableProvider } from "@san/coding-agent/capability";
+import { clearCache as clearFsCache } from "@san/coding-agent/capability/fs";
+import { clearSanExtensionCliRoots, injectSanExtensionCliRoots } from "@san/coding-agent/discovery/san-extension-roots";
+import { discoverAgents } from "@san/coding-agent/task/discovery";
+import { removeWithRetries } from "@san/utils";
 
 const SAN_AGENT_MD = [
 	"---",
@@ -69,7 +66,7 @@ describe("discoverAgents", () => {
 
 	afterEach(async () => {
 		enableProvider("omp-plugins");
-		clearOmpExtensionCliRoots();
+		clearSanExtensionCliRoots();
 		clearFsCache();
 		await removeWithRetries(tempHome);
 	});
@@ -111,7 +108,7 @@ describe("discoverAgents", () => {
 	});
 
 	test("CLI extension agents win over project `extensions:` settings on dedup", async () => {
-		// listOmpExtensionRoots returns roots in source-precedence order
+		// listSanExtensionRoots returns roots in source-precedence order
 		// (CLI > project settings > user settings > installed plugins). Agents
 		// must honor that order so the `task` surface dedups identically to
 		// the skills/hooks/tools surface in discovery/omp-plugins.ts.
@@ -130,7 +127,7 @@ describe("discoverAgents", () => {
 
 		await fs.mkdir(path.join(projectDir, ".san"), { recursive: true });
 		await fs.writeFile(path.join(projectDir, ".san", "settings.json"), JSON.stringify({ extensions: [projectExt] }));
-		injectOmpExtensionCliRoots([cliExt], tempHome, projectDir);
+		injectSanExtensionCliRoots([cliExt], tempHome, projectDir);
 
 		const { agents } = await discoverAgents(projectDir, tempHome);
 		const collide = agents.find(agent => agent.name === "collide");

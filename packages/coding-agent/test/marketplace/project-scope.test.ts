@@ -4,9 +4,8 @@
  * resolveActiveProjectRegistryPath: walk-up, .git fallback, null return, canonical path.
  * listClaudePluginRoots: project entries shadow user entries for same plugin ID.
  *
- * Note: helpers.ts imports @oh-my-pi/pi-natives (Rust addon via glob).
- * This file imports from helpers.ts directly — the native addon IS present in the
- * test environment (verified: `bun run import-helpers.ts` succeeds).
+ * The native addon imported transitively by helpers.ts is available in the
+ * package test environment.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
@@ -16,15 +15,15 @@ import {
 	clearClaudePluginRootsCache,
 	listClaudePluginRoots,
 	resolveActiveProjectRegistryPath,
-} from "@oh-my-pi/pi-coding-agent/discovery/helpers";
-import type { InstalledPluginEntry } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
+} from "@san/coding-agent/discovery/helpers";
+import type { InstalledPluginEntry } from "@san/coding-agent/extensibility/plugins/marketplace";
 import {
 	addInstalledPlugin,
 	buildPluginId,
 	readInstalledPluginsRegistry,
 	writeInstalledPluginsRegistry,
-} from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
-import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/extensibility/plugins/marketplace";
+import { removeSyncWithRetries } from "@san/utils";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -44,7 +43,7 @@ describe("resolveActiveProjectRegistryPath", () => {
 	let tmpDir: string;
 
 	beforeEach(() => {
-		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-proj-scope-"));
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "san-proj-scope-"));
 	});
 
 	afterEach(() => {
@@ -56,6 +55,16 @@ describe("resolveActiveProjectRegistryPath", () => {
 		// Layout: tmpDir/.san/   +   tmpDir/sub/nested/  (cwd)
 		// Resolver must climb from cwd → sub → tmpDir and find .san/ there.
 		fs.mkdirSync(path.join(tmpDir, ".san"), { recursive: true });
+		const cwd = path.join(tmpDir, "sub", "nested");
+		fs.mkdirSync(cwd, { recursive: true });
+
+		const result = await resolveActiveProjectRegistryPath(cwd);
+
+		expect(result).toBe(path.join(tmpDir, ".san", "plugins", "installed_plugins.json"));
+	});
+
+	it("legacy .omp directory anchors the canonical .san registry path", async () => {
+		fs.mkdirSync(path.join(tmpDir, ".omp"), { recursive: true });
 		const cwd = path.join(tmpDir, "sub", "nested");
 		fs.mkdirSync(cwd, { recursive: true });
 
@@ -100,7 +109,7 @@ describe("resolveActiveProjectRegistryPath", () => {
 	it("does not treat ~/.git as a project root (pass-2 home-dir guard)", async () => {
 		// Simulate a dotfiles repo managed with a bare-git technique: ~/.git exists.
 		// resolveActiveProjectRegistryPath must NOT return ~/.san/.../installed_plugins.json.
-		const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-proj-scope-home-"));
+		const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "san-proj-scope-home-"));
 		vi.spyOn(os, "homedir").mockReturnValue(homeDir);
 		const fakeHomeGit = path.join(homeDir, ".git");
 		await fs.promises.mkdir(fakeHomeGit, { recursive: true });
@@ -141,8 +150,8 @@ describe("listClaudePluginRoots — project shadows user", () => {
 	let projectRegPath: string;
 
 	beforeEach(() => {
-		tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "omp-shadow-home-"));
-		tmpProject = fs.mkdtempSync(path.join(os.tmpdir(), "omp-shadow-proj-"));
+		tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "san-shadow-home-"));
+		tmpProject = fs.mkdtempSync(path.join(os.tmpdir(), "san-shadow-proj-"));
 
 		// Create .san/ in project so resolveActiveProjectRegistryPath finds it.
 		fs.mkdirSync(path.join(tmpProject, ".san", "plugins"), { recursive: true });

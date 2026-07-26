@@ -1,6 +1,6 @@
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
-import { prompt } from "@oh-my-pi/pi-utils";
+import type { AgentMessage } from "@san/agent";
+import { estimateTokens } from "@san/agent/compaction";
+import { prompt } from "@san/utils";
 import contextPlanTemplate from "../prompts/context-steady/context-plan.md" with { type: "text" };
 import type { CustomMessageEntry, SessionEntry, SessionMessageEntry } from "../session/session-entries";
 import { validateContextPlanCoverage } from "./coverage";

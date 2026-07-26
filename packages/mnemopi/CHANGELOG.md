@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the published package from `@oh-my-pi/pi-mnemopi` to `@san/mnemopi` and its executable from `mnemopi` to `san-mnemopi`.
+
 ## [17.0.1] - 2026-07-16
 
 ### Fixed

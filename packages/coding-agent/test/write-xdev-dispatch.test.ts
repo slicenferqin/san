@@ -2,13 +2,13 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
-import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { writeToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/write";
-import { XdevRegistry } from "@oh-my-pi/pi-coding-agent/tools/xdev";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { Settings } from "@san/coding-agent/config/settings";
+import * as themeModule from "@san/coding-agent/modes/theme/theme";
+import { ToolChoiceQueue } from "@san/coding-agent/session/tool-choice-queue";
+import { createTools, type ToolSession } from "@san/coding-agent/tools";
+import { writeToolRenderer } from "@san/coding-agent/tools/write";
+import { XdevRegistry } from "@san/coding-agent/tools/xdev";
+import { removeWithRetries } from "@san/utils";
 
 // xdev mounting is default-on: discoverable tools like ast_edit unmount into
 // xd://, and a plain `write xd://ast_edit` dispatches them. These guard the

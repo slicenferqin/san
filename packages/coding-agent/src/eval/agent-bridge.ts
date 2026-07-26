@@ -4,8 +4,8 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Usage } from "@oh-my-pi/pi-ai";
-import { prompt, Snowflake } from "@oh-my-pi/pi-utils";
+import type { Usage } from "@san/ai";
+import { prompt, Snowflake } from "@san/utils";
 import { type } from "arktype";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
 import type { LocalProtocolOptions } from "../internal-urls";
@@ -260,7 +260,7 @@ async function getArtifacts(session: ToolSession): Promise<ArtifactPaths> {
 	const sessionFile = session.getSessionFile();
 	const sessionArtifactsDir = sessionFile ? sessionFile.slice(0, -6) : null;
 	const tempArtifactsDir = sessionArtifactsDir === null;
-	const artifactsDir = sessionArtifactsDir ?? path.join(os.tmpdir(), `omp-eval-agent-${Snowflake.next()}`);
+	const artifactsDir = sessionArtifactsDir ?? path.join(os.tmpdir(), `san-eval-agent-${Snowflake.next()}`);
 	await fs.mkdir(artifactsDir, { recursive: true });
 	const unregisterArtifactsDir = tempArtifactsDir ? registerArtifactsDir(artifactsDir) : undefined;
 	return { sessionFile, artifactsDir, unregisterArtifactsDir, tempArtifactsDir };

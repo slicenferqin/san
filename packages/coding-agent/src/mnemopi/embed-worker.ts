@@ -9,8 +9,8 @@
  * in either process.
  */
 
-import type { StandardEmbeddingModel } from "@oh-my-pi/pi-mnemopi/core";
-import { loadFastembed } from "@oh-my-pi/pi-mnemopi/core/fastembed-runtime";
+import type { StandardEmbeddingModel } from "@san/mnemopi/core";
+import { loadFastembed } from "@san/mnemopi/core/fastembed-runtime";
 import type { MnemopiEmbedModelId, MnemopiEmbedTransport, MnemopiEmbedWorkerInbound } from "./embed-protocol";
 
 interface LoadedModel {

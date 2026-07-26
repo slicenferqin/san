@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent";
+import { SessionManager } from "@san/coding-agent";
 import {
 	type DiscoveredWorkflowSource,
 	type WorkflowAgentBridge,
@@ -11,8 +11,8 @@ import {
 	type WorkflowRunHandle,
 	WorkflowStore,
 	workflowSourceHash,
-} from "@oh-my-pi/pi-coding-agent/workflows";
-import { TempDir } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/workflows";
+import { TempDir } from "@san/utils";
 
 let tempDir: TempDir | null = null;
 let store: WorkflowStore | null = null;

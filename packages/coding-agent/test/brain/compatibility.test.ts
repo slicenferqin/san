@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { resolveSanBrainLegacyAutoRetain } from "@oh-my-pi/pi-coding-agent/brain/compatibility";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resolveSanBrainLegacyAutoRetain } from "@san/coding-agent/brain/compatibility";
+import { Settings } from "@san/coding-agent/config/settings";
 
 describe("San Brain legacy auto-retain compatibility", () => {
 	it("disables legacy direct writes whenever projection mode is active", () => {

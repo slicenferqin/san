@@ -639,10 +639,10 @@ def resolve_omp_bin(raw: str | None) -> str:
     repo_bin = resolve_repo_omp_bin()
     if repo_bin:
         return repo_bin
-    found = shutil.which("omp")
+    found = shutil.which("san") or shutil.which("omp")
     if not found:
         raise SystemExit(
-            "Could not find `omp` on PATH and could not resolve the repo CLI. Set --omp-bin or OMP_BIN."
+            "Could not find `san` on PATH and could not resolve the repo CLI. Set --san-bin or SAN_BIN."
         )
     return found
 
@@ -910,9 +910,11 @@ async def run_all(
 def parse_args(description: str) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument(
+        "--san-bin",
         "--omp-bin",
-        default=os.environ.get("OMP_BIN"),
-        help="Executable to launch. Defaults to the repo checkout CLI, then falls back to `omp` on PATH.",
+        dest="omp_bin",
+        default=os.environ.get("SAN_BIN") or os.environ.get("OMP_BIN"),
+        help="Executable to launch. Defaults to the repo checkout CLI, then `san` on PATH; legacy `omp` is a fallback.",
     )
     parser.add_argument(
         "--timeout", type=float, default=60.0, help="Per-turn timeout in seconds."

@@ -2,9 +2,9 @@ import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { SessionId, UploadId } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/protocol/ids";
-import { ResourceUploadManager } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/resource-upload";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import type { SessionId, UploadId } from "@san/coding-agent/modes/rpc-v2/protocol/ids";
+import { ResourceUploadManager } from "@san/coding-agent/modes/rpc-v2/resource-upload";
+import { removeWithRetries } from "@san/utils";
 
 const tempDirectories: string[] = [];
 

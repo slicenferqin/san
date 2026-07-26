@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { LoadContext } from "@oh-my-pi/pi-coding-agent/capability/types";
-import { getConfigDirs } from "@oh-my-pi/pi-coding-agent/config";
-import { getUserPath } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
-import { getAgentDir } from "@oh-my-pi/pi-utils";
+import type { LoadContext } from "@san/coding-agent/capability/types";
+import { getConfigDirs } from "@san/coding-agent/config";
+import { getUserPath } from "@san/coding-agent/discovery/helpers";
+import { getAgentDir } from "@san/utils";
 
 describe("SAN_CONFIG_DIR", () => {
 	const originalSan = process.env.SAN_CONFIG_DIR;
@@ -42,5 +42,19 @@ describe("SAN_CONFIG_DIR", () => {
 		const result = getConfigDirs("commands", { project: false });
 		const expected = path.resolve(path.join(os.homedir(), ".config/san", "agent", "commands"));
 		expect(result[0]).toEqual({ path: expected, source: ".san", level: "user" });
+	});
+
+	test("getConfigDirs places legacy .omp immediately after canonical .san", () => {
+		delete process.env.SAN_CONFIG_DIR;
+		delete process.env.PI_CONFIG_DIR;
+		const result = getConfigDirs("commands", { cwd: "/work/project" });
+
+		expect(result.slice(0, 2).map(entry => entry.source)).toEqual([".san", ".omp"]);
+		expect(result[0].path).toBe(path.join(os.homedir(), ".san", "agent", "commands"));
+		expect(result[1].path).toBe(path.join(os.homedir(), ".omp", "agent", "commands"));
+		expect(result.filter(entry => entry.level === "project").slice(0, 2)).toEqual([
+			{ path: path.resolve("/work/project/.san/commands"), source: ".san", level: "project" },
+			{ path: path.resolve("/work/project/.omp/commands"), source: ".omp", level: "project" },
+		]);
 	});
 });

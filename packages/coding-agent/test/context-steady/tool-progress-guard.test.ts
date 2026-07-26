@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ToolResultMessage } from "@san/ai";
 import { ToolProgressGuard } from "../../src/context-steady/tool-progress-guard";
 
 const usage = {

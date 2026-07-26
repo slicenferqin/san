@@ -2,14 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
-import type { ClientBridge } from "@oh-my-pi/pi-coding-agent/session/client-bridge";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import type { AgentToolResult } from "@san/agent";
+import { Settings } from "@san/coding-agent/config/settings";
+import { resolveLocalUrlToPath } from "@san/coding-agent/internal-urls";
+import type { PlanModeState } from "@san/coding-agent/plan-mode/state";
+import type { ClientBridge } from "@san/coding-agent/session/client-bridge";
+import type { ToolSession } from "@san/coding-agent/tools";
+import { WriteTool } from "@san/coding-agent/tools/write";
+import { removeWithRetries } from "@san/utils";
 
 const FILE_CONTENT = "bridge write content\n";
 

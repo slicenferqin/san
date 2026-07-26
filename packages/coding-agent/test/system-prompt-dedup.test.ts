@@ -7,7 +7,7 @@ import {
 	loadProjectContextFiles,
 	loadSystemPromptFiles,
 	type SystemPromptToolMetadata,
-} from "@oh-my-pi/pi-coding-agent/system-prompt";
+} from "@san/coding-agent/system-prompt";
 import { cleanupTempHome } from "./helpers/temp-home-cleanup";
 
 function escapeRegExp(text: string): string {
@@ -265,5 +265,27 @@ describe("SYSTEM.md prompt assembly", () => {
 		const promptText = systemPrompt.join("\n\n");
 		const matches = promptText.match(new RegExp(escapeRegExp(sharedContent), "g")) ?? [];
 		expect(matches).toHaveLength(1);
+	});
+
+	it("drops normalized duplicate always-apply rules but keeps non-identical rules", async () => {
+		const sharedParagraph = "Keep the canonical path authoritative.";
+		const extendedRule = `${sharedParagraph}\n\nRetain the legacy fallback.`;
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: tempDir,
+			customPrompt: "Base prompt",
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			alwaysApplyRules: [
+				{ name: "canonical", path: "/rules/canonical.md", content: sharedParagraph },
+				{ name: "canonical-copy", path: "/rules/canonical-copy.md", content: `  ${sharedParagraph}\n` },
+				{ name: "canonical-extended", path: "/rules/canonical-extended.md", content: extendedRule },
+			],
+			toolNames: [],
+		});
+
+		const promptText = systemPrompt.join("\n\n");
+		expect(promptText.match(new RegExp(escapeRegExp(sharedParagraph), "g")) ?? []).toHaveLength(2);
+		expect(promptText.match(/Retain the legacy fallback\./g) ?? []).toHaveLength(1);
 	});
 });

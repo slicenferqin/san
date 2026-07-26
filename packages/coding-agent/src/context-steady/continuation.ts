@@ -1,4 +1,4 @@
-import { prompt } from "@oh-my-pi/pi-utils";
+import { prompt } from "@san/utils";
 import continuationAuthorityTemplate from "../prompts/context-steady/continuation-authority.md" with { type: "text" };
 import type { SessionEntry } from "../session/session-entries";
 import type { SessionManager } from "../session/session-manager";

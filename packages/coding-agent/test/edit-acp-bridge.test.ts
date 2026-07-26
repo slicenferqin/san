@@ -2,15 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { DEFAULT_FUZZY_THRESHOLD, executePatchSingle, executeReplaceSingle } from "@oh-my-pi/pi-coding-agent/edit";
-import { HashlineFilesystem } from "@oh-my-pi/pi-coding-agent/edit/hashline/filesystem";
-import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import type { WritethroughCallback } from "@oh-my-pi/pi-coding-agent/lsp";
-import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
-import type { ClientBridge } from "@oh-my-pi/pi-coding-agent/session/client-bridge";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { resetSettingsForTest, Settings } from "@san/coding-agent/config/settings";
+import { DEFAULT_FUZZY_THRESHOLD, executePatchSingle, executeReplaceSingle } from "@san/coding-agent/edit";
+import { HashlineFilesystem } from "@san/coding-agent/edit/hashline/filesystem";
+import { resolveLocalUrlToPath } from "@san/coding-agent/internal-urls";
+import type { WritethroughCallback } from "@san/coding-agent/lsp";
+import type { PlanModeState } from "@san/coding-agent/plan-mode/state";
+import type { ClientBridge } from "@san/coding-agent/session/client-bridge";
+import type { ToolSession } from "@san/coding-agent/tools";
+import { removeWithRetries } from "@san/utils";
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 

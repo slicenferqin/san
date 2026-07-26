@@ -1,6 +1,6 @@
 # San coding agent
 
-Core implementation package for the `san` coding agent. San originated from the `omp` tool-rich coding-agent surface and now moves forward as an independent project focused on the San v0.2 execution loop: long-running context steady state, explicit `solo/team/council` execution modes, role-ledger evidence, San Checks, and benchmarked high-risk review paths.
+Core implementation package for the `san` coding agent. San descends from an earlier tool-rich coding-agent surface and now moves forward as an independent project focused on the San v0.2 execution loop: long-running context steady state, explicit `solo/team/council` execution modes, role-ledger evidence, San Checks, and benchmarked high-risk review paths.
 
 For installation, setup, provider configuration, model roles, slash commands, and full CLI reference, see:
 - [Monorepo README (local)](../../README.md)

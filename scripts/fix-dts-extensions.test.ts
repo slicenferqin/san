@@ -35,7 +35,7 @@ afterEach(async () => {
 describe("resolveDtsSpecifier", () => {
 	it("returns null for bare, scoped, node:, and already-suffixed specifiers", async () => {
 		const root = await makeTree({ "placeholder.d.ts": "export {};\n" });
-		for (const spec of ["@oh-my-pi/pi-tui", "zod/v4", "node:fs", "./x.js", "./data.json", "./m.mjs", "./c.cjs"]) {
+		for (const spec of ["@san/tui", "zod/v4", "node:fs", "./x.js", "./data.json", "./m.mjs", "./c.cjs"]) {
 			expect(await resolveDtsSpecifier(root, spec)).toBeNull();
 		}
 	});

@@ -5,6 +5,7 @@
 ### Breaking Changes
 
 - Changed TUI `/model`, `/models`, Alt+M, and `/switch` so session model select opens an effort step for reasoning models before closing. Non-reasoning models still select immediately. Status notes mention `/effort` and Shift+Tab. Role assignment remains `/model roles`.
+- Renamed the published package from `@oh-my-pi/pi-coding-agent` to `@san/coding-agent`, the CLI binary from `omp` to `san`, and canonical configuration names to `.san` and `SAN_*`; documented legacy inputs remain lower-precedence compatibility fallbacks.
 
 ### Added
 
@@ -93,6 +94,7 @@
 - Fixed San Supervisor bash access: both the bundled `san-supervisor` agent definition and the San-loop strict tool overlay are limited to read, grep, glob, and yield.
 - Fixed Context Steady authority and checkpoint continuity so agent-attributed synthetic user messages cannot replace the real user turn, recursive Segments retain bounded execution evidence, and summary claims require matching file and verification-command evidence.
 - Fixed San RPC v2 lease/delete races, queued resource release ownership, read-only crash-recovery persistence, receipt/event crash reconciliation, and auth interactions that do not belong to a Session lease.
+- Fixed San RPC v2 state persistence racing the session event adapter and idempotency receipt writer on `thinking.set`; state writes are now serialized with collision-proof temporary files.
 - Fixed Context Steady long turns treating 40K/15-minute Segment checkpoints as physical compaction, allowing compaction summaries and quoted tool output to replace the active user request, and repeating tool investigations without evidence progress. Maintenance now records real triggers, restores journal-derived continuation authority across compaction and handoff, bounds authority payloads, detects summary conflicts, lets user input preempt advisor/maintenance waits, and converges repeated action/evidence patterns; probe v3 and the adversarial meta-investigation benchmark cover the repaired contracts.
 - Fixed San RPC v2 read-only and recovery sessions mutating state, stale recovery races removing a newer lease, cross-Runtime approval policy overwrites, non-atomic Run/approval/queue receipts, unleased upload chunks, ignored Run goals/evidence filters/shutdown bounds, and late coalesced frames being dropped.
 - Fixed skills misclassifying San as Codex from shared skill paths or project markers by stamping the San host runtime into user-invoked and autoload prompts; explicit user-selected cross-runtime targets still win.

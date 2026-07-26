@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { buildBrowserNavigationHeaders } from "@oh-my-pi/pi-coding-agent/web/search/providers/browser-headers";
+import { buildBrowserNavigationHeaders } from "@san/coding-agent/web/search/providers/browser-headers";
 
 // The child process owns the mock, so this test never mutates a shared dependency.
 

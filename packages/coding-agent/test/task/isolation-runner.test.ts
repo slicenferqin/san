@@ -2,16 +2,16 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
+import * as executorModule from "@san/coding-agent/task/executor";
 import {
 	applyEligibleNestedPatches,
 	mergeIsolatedChanges,
 	runIsolatedSubprocess,
-} from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
-import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
-import * as worktreeModule from "@oh-my-pi/pi-coding-agent/task/worktree";
-import * as gitModule from "@oh-my-pi/pi-coding-agent/utils/git";
-import * as natives from "@oh-my-pi/pi-natives";
+} from "@san/coding-agent/task/isolation-runner";
+import type { SingleResult } from "@san/coding-agent/task/types";
+import * as worktreeModule from "@san/coding-agent/task/worktree";
+import * as gitModule from "@san/coding-agent/utils/git";
+import * as natives from "@san/natives";
 import { $ } from "bun";
 
 function result(overrides: Partial<SingleResult> = {}): SingleResult {
@@ -136,7 +136,7 @@ describe("runIsolatedSubprocess", () => {
 		expect(await Bun.file(patchPath).text()).toBe(rootPatch);
 		expect(outcome.nestedPatches).toEqual([]);
 		expect(captureSpy).toHaveBeenCalledWith(isolationDir, baseline);
-		expect(deleteSpy).toHaveBeenCalledWith(repoRoot, "omp/task/PreserveBranchFailure");
+		expect(deleteSpy).toHaveBeenCalledWith(repoRoot, "san/task/PreserveBranchFailure");
 		expect(cleanupSpy).toHaveBeenCalledTimes(1);
 	});
 });

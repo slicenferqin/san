@@ -21,14 +21,14 @@ while [ -L "$self" ]; do
 done
 scripts_dir=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd -P)
 cli=$scripts_dir/../src/cli.ts
-preload=$scripts_dir/omp.ts
+preload=$scripts_dir/san.ts
 timing_preload=$scripts_dir/../../utils/src/module-timer.ts
 
 launch_dir=${SAN_DEV_LAUNCH_DIR:-${HOME}/.san/.dev-cwd}
 mkdir -p "$launch_dir"
 
-OMP_LAUNCH_CWD=$PWD
-export OMP_LAUNCH_CWD
+SAN_LAUNCH_CWD=$PWD
+export SAN_LAUNCH_CWD
 cd "$launch_dir"
 if [ -n "${PI_TIMING:-}" ]; then
 	exec bun --preload "$preload" --preload "$timing_preload" "$cli" "$@"

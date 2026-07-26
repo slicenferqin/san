@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $which, logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { $which, logger, Snowflake } from "@san/utils";
 import { $, type Subprocess } from "bun";
 import { ensureTool, getToolPath } from "../utils/tools-manager";
 import { decodePcmS16LE } from "./wav";
@@ -161,14 +161,14 @@ function Mci([string]$cmd) {
     return $r
 }
 
-$r = Mci "open new type waveaudio alias omp_rec"
+$r = Mci "open new type waveaudio alias san_rec"
 if ($r -ne 0) { exit 1 }
 
-Mci "set omp_rec channels 1 samplespersec 16000 bitspersample 16"
+Mci "set san_rec channels 1 samplespersec 16000 bitspersample 16"
 
-$r = Mci "record omp_rec"
+$r = Mci "record san_rec"
 if ($r -ne 0) {
-    Mci "close omp_rec"
+    Mci "close san_rec"
     exit 1
 }
 
@@ -179,13 +179,13 @@ Write-Output "RECORDING"
 try { [Console]::In.ReadLine() | Out-Null } catch {}
 
 # Stop and save
-Mci "stop omp_rec"
-$saveCmd = 'save omp_rec "' + $outPath + '"'
+Mci "stop san_rec"
+$saveCmd = 'save san_rec "' + $outPath + '"'
 $r = Mci $saveCmd
 if ($r -ne 0) {
     [Console]::Error.WriteLine("Save failed for: $saveCmd")
 }
-Mci "close omp_rec"
+Mci "close san_rec"
 
 if (Test-Path $outPath) {
     Write-Output "SAVED"
@@ -197,7 +197,7 @@ if (Test-Path $outPath) {
 
 async function startPowerShellRecording(outputPath: string): Promise<RecordingHandle> {
 	// Write script to temp file — avoids quoting/escaping issues with -Command
-	const scriptPath = path.join(os.tmpdir(), `omp-stt-record-${Snowflake.next()}.ps1`);
+	const scriptPath = path.join(os.tmpdir(), `san-stt-record-${Snowflake.next()}.ps1`);
 	await Bun.write(scriptPath, PS_RECORD_SCRIPT);
 
 	const proc = Bun.spawn(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, outputPath], {
@@ -355,7 +355,7 @@ async function startRecordingWithRecorder(recorder: ResolvedRecorder, outputPath
 export async function startRecording(outputPath: string): Promise<RecordingHandle> {
 	const recorders = detectRecorders();
 	if (recorders.length === 0) {
-		throw new Error("No audio recorder available — run `omp setup speech`");
+		throw new Error("No audio recorder available — run `san setup speech`");
 	}
 
 	const failures: string[] = [];
@@ -372,7 +372,7 @@ export async function startRecording(outputPath: string): Promise<RecordingHandl
 			});
 		}
 	}
-	throw new Error(`No audio recorder could start — run \`omp setup speech\`.\n${failures.join("\n")}`);
+	throw new Error(`No audio recorder could start — run \`san setup speech\`.\n${failures.join("\n")}`);
 }
 
 /**
@@ -515,7 +515,7 @@ export async function startStreamingRecording(
 ): Promise<StreamingRecordingHandle | null> {
 	const recorders = detectRecorders();
 	if (recorders.length === 0) {
-		throw new Error("No audio recorder available — run `omp setup speech`");
+		throw new Error("No audio recorder available — run `san setup speech`");
 	}
 	const streamingRecorders = recorders.filter(recorder => recorder.tool !== "powershell");
 	if (streamingRecorders.length === 0) return null;

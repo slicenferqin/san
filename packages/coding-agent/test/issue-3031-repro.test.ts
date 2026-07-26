@@ -21,11 +21,8 @@ import {
 	createMnemopiEmbedSubprocess,
 	MnemopiEmbedClient,
 	type MnemopiEmbedWorkerHandle,
-} from "@oh-my-pi/pi-coding-agent/mnemopi/embed-client";
-import type {
-	MnemopiEmbedWorkerInbound,
-	MnemopiEmbedWorkerOutbound,
-} from "@oh-my-pi/pi-coding-agent/mnemopi/embed-protocol";
+} from "@san/coding-agent/mnemopi/embed-client";
+import type { MnemopiEmbedWorkerInbound, MnemopiEmbedWorkerOutbound } from "@san/coding-agent/mnemopi/embed-protocol";
 
 describe("issue #3031 — mnemopi embeddings live in an isolated subprocess", () => {
 	it("ping/pongs through the spawned worker subprocess and tears it down cleanly", async () => {

@@ -3,11 +3,11 @@
  *
  * Converts MCP tool definitions to CustomTool format for the agent.
  */
-import type { AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { TSchema } from "@oh-my-pi/pi-ai";
-import { normalizeSchemaForMCP } from "@oh-my-pi/pi-ai/utils/schema";
-import { untilAborted } from "@oh-my-pi/pi-utils";
-import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
+import type { AgentToolUpdateCallback } from "@san/agent";
+import type { TSchema } from "@san/ai";
+import { normalizeSchemaForMCP } from "@san/ai/utils/schema";
+import { untilAborted } from "@san/utils";
+import { INTENT_FIELD } from "@san/wire";
 import type { SourceMeta } from "../capability/types";
 import type {
 	CustomTool,

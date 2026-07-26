@@ -1,4 +1,4 @@
-import type { Usage } from "@oh-my-pi/pi-ai";
+import type { Usage } from "@san/ai";
 import type { NestedRepoPatch, WorktreeBaseline } from "../task/worktree";
 
 /** v0.4 deliberately exposes exactly two product kinds. */

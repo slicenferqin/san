@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { convertTools } from "@oh-my-pi/pi-ai/providers/google-shared";
-import type { Model, TJsonSchema, Tool } from "@oh-my-pi/pi-ai/types";
-import { normalizeSchemaForCCA, normalizeSchemaForGoogle } from "@oh-my-pi/pi-ai/utils/schema";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { convertTools } from "@san/ai/providers/google-shared";
+import type { Model, TJsonSchema, Tool } from "@san/ai/types";
+import { normalizeSchemaForCCA, normalizeSchemaForGoogle } from "@san/ai/utils/schema";
+import { buildModel } from "@san/catalog/build";
 
 function createModel(id: string): Model<"google-gemini-cli"> {
 	return buildModel({

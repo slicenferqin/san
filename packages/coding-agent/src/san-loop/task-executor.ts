@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 
-import { prompt } from "@oh-my-pi/pi-utils";
+import { prompt } from "@san/utils";
 import { extractMessages } from "../hindsight/transcript";
 import commanderTaskTemplate from "../prompts/san-loop/commander-task.md" with { type: "text" };
 import oracleTaskTemplate from "../prompts/san-loop/oracle-task.md" with { type: "text" };

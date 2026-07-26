@@ -8,7 +8,7 @@
  * `launch` — see #1496 for the original "args silently leak to the LLM"
  * regression that motivated the split.
  */
-import type { CommandEntry } from "@oh-my-pi/pi-utils/cli";
+import type { CommandEntry } from "@san/utils/cli";
 import { flagConsumesValue } from "./cli/flag-tables";
 
 export const commands: CommandEntry[] = [
@@ -74,8 +74,8 @@ const RESERVED_TOP_LEVEL_WORDS: Record<string, string> = {
 		'`san disable` is not a top-level command. Use `san plugin disable <name@marketplace>` to disable a plugin, or run `san launch disable` if you meant to send "disable" as a prompt.',
 };
 
-// Sub-actions that make `omp marketplace <sub>` unambiguously a management
-// command even when multi-word (the reporter's `omp marketplace add xyz`,
+// Sub-actions that make `san marketplace <sub>` unambiguously a management
+// command even when multi-word (the reporter's `san marketplace add xyz`,
 // #4845). Mirrors the switch in `handleMarketplace` (cli/plugin-cli.ts).
 const MARKETPLACE_SUBCOMMANDS: Record<string, true> = { add: true, remove: true, rm: true, update: true, list: true };
 
@@ -83,11 +83,11 @@ const MARKETPLACE_SUBCOMMANDS: Record<string, true> = { add: true, remove: true,
  * Hint for a reserved plugin/marketplace verb used as a top-level command, or
  * `undefined` when the argv should fall through to `launch`.
  *
- * A bare verb (`omp marketplace`) always hints. A multi-word invocation only
+ * A bare verb (`san marketplace`) always hints. A multi-word invocation only
  * hints when the arguments follow the documented plugin grammar — a marketplace
- * sub-action (`omp marketplace add …`) or a `name@marketplace` plugin id
- * (`omp uninstall foo@bar`) — so genuine prompts that merely begin with one of
- * these words (`omp list all my files`, `omp upgrade the deps`) still launch.
+ * sub-action (`san marketplace add …`) or a `name@marketplace` plugin id
+ * (`san uninstall foo@bar`) — so genuine prompts that merely begin with one of
+ * these words (`san list all my files`, `san upgrade the deps`) still launch.
  *
  * Flags (`-…`) and `@file` arguments in the verb slot are never management
  * commands; those fall through to the default `launch` command.

@@ -12,7 +12,7 @@ afterEach(async () => {
 });
 
 async function makeProbe(logsDir: string): Promise<string> {
-	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-logger-probe-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "san-logger-probe-"));
 	roots.push(root);
 	const probePath = path.join(root, "probe.ts");
 	await Bun.write(
@@ -29,7 +29,7 @@ async function makeProbe(logsDir: string): Promise<string> {
 
 describe("multiprocess file logging", () => {
 	it("gives concurrent processes independent rotation files and audit state", async () => {
-		const logsDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-logger-output-"));
+		const logsDir = await fs.mkdtemp(path.join(os.tmpdir(), "san-logger-output-"));
 		roots.push(logsDir);
 		const probePath = await makeProbe(logsDir);
 		const processes = [
@@ -50,7 +50,7 @@ describe("multiprocess file logging", () => {
 
 		expect(await Promise.all(processes.map(proc => proc.exited))).toEqual([0, 0]);
 		const entries = await fs.readdir(logsDir);
-		const datedPrefix = `omp.${new Date().toISOString().slice(0, 10)}`;
+		const datedPrefix = `san.${new Date().toISOString().slice(0, 10)}`;
 		for (const proc of processes) {
 			expect(entries).toContain(`${datedPrefix}.${proc.pid}.log`);
 		}
@@ -58,7 +58,7 @@ describe("multiprocess file logging", () => {
 	});
 
 	it("prunes completed PID namespaces across short-lived invocations", async () => {
-		const logsDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-logger-retention-"));
+		const logsDir = await fs.mkdtemp(path.join(os.tmpdir(), "san-logger-retention-"));
 		roots.push(logsDir);
 		const exited = Array.from({ length: 7 }, () =>
 			Bun.spawn([process.execPath, "--version"], { stdout: "ignore", stderr: "ignore" }),
@@ -80,6 +80,6 @@ describe("multiprocess file logging", () => {
 		const entries = await fs.readdir(logsDir);
 		const completedLogs = entries.filter(name => name.startsWith(`omp.${date}.`));
 		expect(completedLogs).toHaveLength(5);
-		expect(entries.filter(name => name.endsWith("-audit.json"))).toEqual([`.omp.${current.pid}-audit.json`]);
+		expect(entries.filter(name => name.endsWith("-audit.json"))).toEqual([`.san.${current.pid}-audit.json`]);
 	});
 });

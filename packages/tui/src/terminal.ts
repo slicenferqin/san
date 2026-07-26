@@ -8,7 +8,7 @@ import {
 	postmortem,
 	restoreTerminalStderr,
 	suppressTerminalStderr,
-} from "@oh-my-pi/pi-utils";
+} from "@san/utils";
 import { setKittyProtocolActive } from "./keys";
 import { StdinBuffer } from "./stdin-buffer";
 import {
@@ -665,7 +665,7 @@ export class ProcessTerminal implements Terminal {
 		// gates the renderer's begin/end markers; 2048 (in-band resize) is enabled
 		// only after the terminal confirms support; 2031 (appearance change
 		// notifications) drives mid-session theme tracking. Xterm ?1010/?1011
-		// are disabled while OMP owns the TTY so typing in the editor does not
+		// are disabled while San owns the TTY so typing in the editor does not
 		// force a reader scrolled into native history back to the tail. Each probe
 		// rides the shared DA1 sentinel, so terminals that ignore DECRQM resolve as
 		// unsupported when the DA1 reply arrives.
@@ -1086,7 +1086,7 @@ export class ProcessTerminal implements Terminal {
 		this.#osc99ResponseBuffer = "";
 		if (this.#dead || !this.#shouldQueryOsc99Support()) return;
 
-		const id = `omp-probe-${nextOsc99ProbeId++}`;
+		const id = `san-probe-${nextOsc99ProbeId++}`;
 		this.#osc99PendingId = id;
 		this.#da1SentinelOwners.push({ kind: "osc99Probe", id });
 		// The probe never runs under a multiplexer (see #shouldQueryOsc99Support),

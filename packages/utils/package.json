@@ -1,8 +1,8 @@
 {
   "type": "module",
-  "name": "@oh-my-pi/pi-utils",
+  "name": "@san/utils",
   "version": "17.0.2",
-  "description": "Shared utilities for pi packages",
+  "description": "Shared utilities for San packages",
   "homepage": "https://github.com/slicenferqin/san",
   "author": "Can Boluk",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "fmt": "biome format --write ."
   },
   "dependencies": {
-    "@oh-my-pi/pi-natives": "catalog:",
+    "@san/natives": "catalog:",
     "handlebars": "catalog:",
     "winston": "catalog:",
     "winston-daily-rotate-file": "catalog:"

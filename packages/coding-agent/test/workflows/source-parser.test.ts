@@ -7,7 +7,7 @@ import {
 	WORKFLOW_MAX_SOURCE_BYTES,
 	WorkflowValidationError,
 	workflowSourceHash,
-} from "@oh-my-pi/pi-coding-agent/workflows";
+} from "@san/coding-agent/workflows";
 
 const fixtures = path.join(import.meta.dir, "..", "fixtures", "workflows");
 

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the published package from `@oh-my-pi/hashline` to `@san/hashline`; consumers must update package dependencies and imports.
+
 ## [17.0.0] - 2026-07-15
 
 ### Added

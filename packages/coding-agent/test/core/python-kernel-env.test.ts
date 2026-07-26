@@ -7,8 +7,8 @@ import {
 	filterEnv,
 	resolveExplicitPythonRuntime,
 	resolvePythonRuntime,
-} from "@oh-my-pi/pi-coding-agent/eval/py/runtime";
-import * as piUtils from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/eval/py/runtime";
+import * as piUtils from "@san/utils";
 
 describe("Python gateway environment filtering", () => {
 	it("filters sensitive and unknown variables from shell env", () => {

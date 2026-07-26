@@ -3,10 +3,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { create, fromBinary } from "@bufbuild/protobuf";
-import type { AgentEvent, AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
-import { type BlockState, handleServerMessage, type ToolCallState } from "@oh-my-pi/pi-ai/providers/cursor";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai/types";
-import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import type { AgentEvent, AgentTool, AgentToolContext } from "@san/agent";
+import { type BlockState, handleServerMessage, type ToolCallState } from "@san/ai/providers/cursor";
+import type { AssistantMessage } from "@san/ai/types";
+import { AssistantMessageEventStream } from "@san/ai/utils/event-stream";
 import {
 	AgentClientMessageSchema,
 	AgentServerMessageSchema,
@@ -15,13 +15,13 @@ import {
 	McpArgsSchema,
 	ReadArgsSchema,
 	ShellArgsSchema,
-} from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { CursorExecHandlers } from "@oh-my-pi/pi-coding-agent/cursor";
-import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
-import { ExtensionToolWrapper } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
-import { GrepTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+} from "@san/catalog/discovery/cursor-gen/agent_pb";
+import { Settings } from "@san/coding-agent/config/settings";
+import { CursorExecHandlers } from "@san/coding-agent/cursor";
+import type { ExtensionRunner } from "@san/coding-agent/extensibility/extensions";
+import { ExtensionToolWrapper } from "@san/coding-agent/extensibility/extensions";
+import { GrepTool, type ToolSession } from "@san/coding-agent/tools";
+import { removeWithRetries } from "@san/utils";
 import { type } from "arktype";
 import { AdviseTool } from "../src/advisor/advise-tool";
 

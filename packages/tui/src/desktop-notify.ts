@@ -20,11 +20,11 @@
 // iTerm2, WezTerm, …) keep working unchanged and the BEL emission still fires
 // for tmux `monitor-bell`, X11 urgency hints, and audible-bell handlers.
 
-import { $which } from "@oh-my-pi/pi-utils";
+import { $which } from "@san/utils";
 import type { TerminalId, TerminalNotification } from "./terminal-capabilities";
 
 /** Application name surfaced as the notification source. */
-const APP_NAME = "Oh My Pi";
+const APP_NAME = "San";
 
 /** Resolved notifier binary used to fan a notification out to D-Bus. */
 export type DesktopNotifierKind = "notify-send" | "gdbus";
@@ -169,7 +169,7 @@ export function sendDesktopNotification(message: string | TerminalNotification):
 	try {
 		// `.unref()` lets the event loop exit while the notifier is still running.
 		// Without it, an unresponsive D-Bus activation (slow `notify-send`, hung
-		// `gdbus` waiting on a stalled session bus) would keep `omp` alive past
+		// `gdbus` waiting on a stalled session bus) would keep San alive past
 		// the renderer's shutdown — a completion toast must never delay process
 		// exit. Ignored stdio alone does not detach the child from the parent's
 		// reference count.

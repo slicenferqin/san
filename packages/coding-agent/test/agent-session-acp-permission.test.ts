@@ -6,23 +6,23 @@
  * behavior they have in the TUI.
  */
 import { afterEach, beforeEach, expect, it, spyOn } from "bun:test";
-import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
-import { createMockModel, type MockModelOptions } from "@oh-my-pi/pi-ai/providers/mock";
-import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { type SettingPath, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { EditTool } from "@oh-my-pi/pi-coding-agent/edit";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { Agent, type AgentTool } from "@san/agent";
+import { createMockModel, type MockModelOptions } from "@san/ai/providers/mock";
+import { AssistantMessageEventStream } from "@san/ai/utils/event-stream";
+import { getBundledModel } from "@san/catalog/models";
+import { type SettingPath, Settings } from "@san/coding-agent/config/settings";
+import { EditTool } from "@san/coding-agent/edit";
+import { AgentSession } from "@san/coding-agent/session/agent-session";
 import type {
 	ClientBridge,
 	ClientBridgePermissionOutcome,
 	ClientBridgePermissionToolCall,
-} from "@oh-my-pi/pi-coding-agent/session/client-bridge";
-import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { XdevRegistry } from "@oh-my-pi/pi-coding-agent/tools/xdev";
-import { TempDir } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/session/client-bridge";
+import { convertToLlm } from "@san/coding-agent/session/messages";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
+import type { ToolSession } from "@san/coding-agent/tools";
+import { XdevRegistry } from "@san/coding-agent/tools/xdev";
+import { TempDir } from "@san/utils";
 import { type } from "arktype";
 
 // ---------------------------------------------------------------------------

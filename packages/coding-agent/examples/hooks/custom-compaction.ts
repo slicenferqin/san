@@ -12,9 +12,9 @@
  * Usage:
  *   san --hook examples/hooks/custom-compaction.ts
  */
-import { complete, getModel } from "@oh-my-pi/pi-ai";
-import type { HookAPI } from "@oh-my-pi/pi-coding-agent";
-import { convertToLlm, serializeConversation } from "@oh-my-pi/pi-coding-agent";
+import { complete, getModel } from "@san/ai";
+import type { HookAPI } from "@san/coding-agent";
+import { convertToLlm, serializeConversation } from "@san/coding-agent";
 
 export default function (pi: HookAPI) {
 	pi.on("session_before_compact", async (event, ctx) => {

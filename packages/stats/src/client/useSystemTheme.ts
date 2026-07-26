@@ -3,12 +3,13 @@ import { useSyncExternalStore } from "react";
 export type SystemTheme = "light" | "dark";
 export type ThemePreference = "system" | "light" | "dark";
 
-const STORAGE_KEY = "omp-stats-theme";
+const STORAGE_KEY = "san-stats-theme";
+const LEGACY_STORAGE_KEY = "omp-stats-theme";
 const DARK_SCHEME_QUERY = "(prefers-color-scheme: dark)";
 
 function readStoredPreference(): ThemePreference {
 	if (typeof localStorage === "undefined") return "system";
-	const stored = localStorage.getItem(STORAGE_KEY);
+	const stored = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
 	return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
 }
 

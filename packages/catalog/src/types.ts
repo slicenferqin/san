@@ -1,8 +1,8 @@
 import type { Effort } from "./effort";
 
-// Re-exported from @oh-my-pi/pi-utils so the whole workspace shares one
+// Re-exported from @san/utils so the whole workspace shares one
 // `fetch`-compatible signature (tls-fetch's wrappers produce/accept it).
-export type { FetchImpl } from "@oh-my-pi/pi-utils";
+export type { FetchImpl } from "@san/utils";
 export type { KnownProvider } from "./provider-models/descriptors";
 
 export type KnownApi =
@@ -717,7 +717,7 @@ export interface Model<TApi extends Api = Api> {
 	input: ("text" | "image")[];
 	/**
 	 * Decoder family used for image inputs when it has narrower format support
-	 * than OMP's general image pipeline. `stb` local backends reject WebP.
+	 * than San's general image pipeline. `stb` local backends reject WebP.
 	 */
 	imageInputDecoder?: "stb";
 	/**
@@ -749,7 +749,7 @@ export interface Model<TApi extends Api = Api> {
 	 * the wire field is suppressed.
 	 *
 	 * Use this for proxies (notably Ollama) that forward to a backend whose true
-	 * output limit OMP cannot discover — sending the wrong value triggers 400s
+	 * output limit San cannot discover — sending the wrong value triggers 400s
 	 * from the upstream provider.
 	 */
 	omitMaxOutputTokens?: boolean;
@@ -758,11 +758,11 @@ export interface Model<TApi extends Api = Api> {
 	 * Streaming transport override. When `"pi-native"`, `streamSimple` routes
 	 * the request to the model's `baseUrl` via the auth-gateway's
 	 * `POST /v1/pi/stream` endpoint instead of dispatching the per-API
-	 * provider client. The `baseUrl` must point at an `omp auth-gateway`
+	 * provider client. The `baseUrl` must point at a `san auth-gateway`
 	 * (or compatible) host; `headers.Authorization` (or `apiKey` resolved by
 	 * the registry) carries the gateway bearer.
 	 *
-	 * Used by containerized omp installs (e.g. robomp slots) to route every
+	 * Used by containerized San installs (e.g. robomp slots) to route every
 	 * LLM call through a sidecar gateway that holds the real provider
 	 * credentials. The model's other metadata (pricing, context window,
 	 * thinking config, …) still resolves locally; only the streaming

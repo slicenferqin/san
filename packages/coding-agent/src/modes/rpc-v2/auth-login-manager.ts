@@ -1,4 +1,4 @@
-import { getOAuthProviders, type OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth";
+import { getOAuthProviders, type OAuthProviderInfo } from "@san/ai/oauth";
 import type { InteractionRequest, InteractionResponseUnion } from "./dto/interaction";
 import { validateInteractionResponse } from "./interaction-validation";
 import { type InteractionId, type LoginId, newInteractionId, newLoginId, type RuntimeId } from "./protocol/ids";

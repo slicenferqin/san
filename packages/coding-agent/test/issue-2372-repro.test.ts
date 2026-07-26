@@ -1,15 +1,15 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
-import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { Agent } from "@san/agent";
+import { ModelRegistry } from "@san/coding-agent/config/model-registry";
+import { resetSettingsForTest, Settings } from "@san/coding-agent/config/settings";
+import { EventController } from "@san/coding-agent/modes/controllers/event-controller";
+import { InteractiveMode } from "@san/coding-agent/modes/interactive-mode";
+import { initTheme } from "@san/coding-agent/modes/theme/theme";
+import { AgentSession } from "@san/coding-agent/session/agent-session";
+import { AuthStorage } from "@san/coding-agent/session/auth-storage";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
+import { TempDir } from "@san/utils";
 
 /**
  * Regression for issue #2372 — pressing Ctrl+T (or any other rebuild path)

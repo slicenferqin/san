@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the published package from `@oh-my-pi/pi-catalog` to `@san/catalog`; consumers must update package dependencies and imports.
+
 ### Added
 
 - Added canonical `max` and `ultra` reasoning efforts for custom model capability surfaces, passing explicit extended ladders through verbatim while leaving inferred provider ladders unchanged.

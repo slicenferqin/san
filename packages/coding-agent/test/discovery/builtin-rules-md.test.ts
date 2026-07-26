@@ -9,13 +9,13 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getCapability } from "@oh-my-pi/pi-coding-agent/capability";
-import { clearCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
-import { type Rule, ruleCapability } from "@oh-my-pi/pi-coding-agent/capability/rule";
-import type { LoadContext } from "@oh-my-pi/pi-coding-agent/capability/types";
+import { getCapability } from "@san/coding-agent/capability";
+import { clearCache } from "@san/coding-agent/capability/fs";
+import { type Rule, ruleCapability } from "@san/coding-agent/capability/rule";
+import type { LoadContext } from "@san/coding-agent/capability/types";
 // Importing discovery registers all providers as a side effect.
-import { loadCapability } from "@oh-my-pi/pi-coding-agent/discovery";
-import { getConfigRootDir, removeSyncWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { loadCapability } from "@san/coding-agent/discovery";
+import { getConfigRootDir, removeSyncWithRetries, setAgentDir } from "@san/utils";
 
 let tempDir: string;
 let home: string;
@@ -79,6 +79,26 @@ test("user ~/.san/agent/RULES.md becomes an alwaysApply rule", async () => {
 	expect(userRule?.content).toContain("beads task tracker");
 });
 
+test("legacy user ~/.omp/agent/RULES.md remains discoverable", async () => {
+	const legacyPath = path.join(home, ".omp", "agent", "RULES.md");
+	writeFile(legacyPath, "Legacy user rule stays active.\n");
+
+	const rules = await loadNativeRules({ cwd: project, home, repoRoot: project });
+	const userRule = rules.find(r => r._source.level === "user" && r.name === "RULES");
+	expect(userRule?.path).toBe(legacyPath);
+	expect(userRule?.content).toContain("Legacy user rule stays active.");
+});
+
+test("canonical user RULES.md wins over the legacy fallback", async () => {
+	writeFile(path.join(home, ".san", "agent", "RULES.md"), "Canonical user rule.\n");
+	writeFile(path.join(home, ".omp", "agent", "RULES.md"), "Legacy user rule.\n");
+
+	const rules = await loadNativeRules({ cwd: project, home, repoRoot: project });
+	const userRules = rules.filter(r => r._source.level === "user" && r.name === "RULES");
+	expect(userRules).toHaveLength(1);
+	expect(userRules[0].content).toContain("Canonical user rule.");
+});
+
 test("project .san/RULES.md becomes an alwaysApply rule", async () => {
 	writeFile(path.join(project, ".san", "RULES.md"), "# Project rule\nAlways say hi.\n");
 
@@ -88,6 +108,48 @@ test("project .san/RULES.md becomes an alwaysApply rule", async () => {
 	expect(projectRule).toBeDefined();
 	expect(projectRule?.alwaysApply).toBe(true);
 	expect(projectRule?.content).toContain("Always say hi.");
+});
+
+test("legacy project .omp/RULES.md remains discoverable", async () => {
+	const legacyPath = path.join(project, ".omp", "RULES.md");
+	writeFile(legacyPath, "Legacy project rule stays active.\n");
+
+	const rules = await loadNativeRules({ cwd: project, home, repoRoot: project });
+	const projectRule = rules.find(r => r._source.level === "project" && r.name === "RULES@project");
+	expect(projectRule?.path).toBe(legacyPath);
+	expect(projectRule?.content).toContain("Legacy project rule stays active.");
+});
+
+test("canonical project RULES.md wins over the legacy fallback", async () => {
+	const canonicalPath = path.join(project, ".san", "RULES.md");
+	writeFile(canonicalPath, "Canonical project rule.\n");
+	writeFile(path.join(project, ".omp", "RULES.md"), "Legacy project rule.\n");
+
+	const rules = await loadNativeRules({ cwd: project, home, repoRoot: project });
+	const projectRules = rules.filter(r => r._source.level === "project" && r.name === "RULES@project");
+	expect(projectRules).toHaveLength(1);
+	expect(projectRules[0].path).toBe(canonicalPath);
+	expect(projectRules[0].content).toContain("Canonical project rule.");
+});
+
+test("legacy project .omp/rules remains discoverable", async () => {
+	const legacyPath = path.join(project, ".omp", "rules", "migration.md");
+	writeFile(legacyPath, "Legacy directory rule.\n");
+
+	const rules = await loadRulesCapability(project);
+	expect(rules.find(rule => rule.name === "migration")?.path).toBe(legacyPath);
+});
+
+test("canonical project rule wins over a same-named legacy directory rule", async () => {
+	const canonicalPath = path.join(project, ".san", "rules", "migration.md");
+	writeFile(canonicalPath, "Canonical directory rule.\n");
+	writeFile(path.join(project, ".omp", "rules", "migration.md"), "Legacy directory rule.\n");
+
+	const rules = await loadRulesCapability(project);
+	const migrationRules = rules.filter(rule => rule.name === "migration");
+	expect(migrationRules).toHaveLength(1);
+	expect(migrationRules[0].path).toBe(canonicalPath);
+	expect(migrationRules[0].content).toContain("Canonical directory rule.");
 });
 
 test("project RULES.md is found walking up from a sub-package cwd", async () => {

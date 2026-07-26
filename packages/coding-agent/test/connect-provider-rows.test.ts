@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import type { Model } from "@oh-my-pi/pi-ai";
+import type { Model } from "@san/ai";
 import type { ModelRegistry } from "../src/config/model-registry";
 import {
 	buildConnectProviderRows,

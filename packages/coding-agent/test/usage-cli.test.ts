@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import type { UsageReport } from "@oh-my-pi/pi-ai";
+import type { UsageReport } from "@san/ai";
 import {
 	buildRedactionMap,
 	collectUnreportedAccounts,
@@ -8,7 +8,7 @@ import {
 	formatUsageBreakdown,
 	formatUsageHistory,
 	type UsageAccountIdentity,
-} from "@oh-my-pi/pi-coding-agent/cli/usage-cli";
+} from "@san/coding-agent/cli/usage-cli";
 
 const HOUR = 3_600_000;
 const FIVE_HOURS = 5 * HOUR;
@@ -274,7 +274,7 @@ describe("formatUsageBreakdown", () => {
 	});
 
 	it("renders provider-level notes once per provider, not duplicated per account or limit", () => {
-		const disclaimer = "OMP-observed spend only; OpenCode usage outside OMP is not included.";
+		const disclaimer = "San-observed spend only; OpenCode usage outside San is not included.";
 		const multiAccount = [
 			makeReport(
 				"opencode-go",

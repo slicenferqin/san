@@ -7,7 +7,7 @@ import type {
 	InstalledPluginsRegistry,
 	MarketplaceRegistryEntry,
 	MarketplacesRegistry,
-} from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
+} from "@san/coding-agent/extensibility/plugins/marketplace";
 import {
 	addInstalledPlugin,
 	addMarketplaceEntry,
@@ -22,8 +22,8 @@ import {
 	removeMarketplaceEntry,
 	writeInstalledPluginsRegistry,
 	writeMarketplacesRegistry,
-} from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
-import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/extensibility/plugins/marketplace";
+import { removeSyncWithRetries } from "@san/utils";
 
 // Inline the parseClaudePluginsRegistry validation logic to avoid pulling
 // in discovery/helpers.ts which transitively imports @oh-my-pi/pi-natives.

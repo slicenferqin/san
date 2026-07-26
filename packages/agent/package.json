@@ -1,6 +1,6 @@
 {
   "type": "module",
-  "name": "@oh-my-pi/pi-agent-core",
+  "name": "@san/agent",
   "version": "17.0.2",
   "description": "General-purpose agent with transport abstraction, state management, and attachment support",
   "homepage": "https://github.com/slicenferqin/san",
@@ -35,12 +35,12 @@
     "fmt": "biome format --write ."
   },
   "dependencies": {
-    "@oh-my-pi/pi-ai": "catalog:",
-    "@oh-my-pi/pi-catalog": "catalog:",
-    "@oh-my-pi/pi-natives": "catalog:",
-    "@oh-my-pi/pi-utils": "catalog:",
-    "@oh-my-pi/pi-wire": "catalog:",
-    "@oh-my-pi/snapcompact": "catalog:",
+    "@san/ai": "catalog:",
+    "@san/catalog": "catalog:",
+    "@san/natives": "catalog:",
+    "@san/utils": "catalog:",
+    "@san/wire": "catalog:",
+    "@san/snapcompact": "catalog:",
     "@opentelemetry/api": "catalog:"
   },
   "devDependencies": {

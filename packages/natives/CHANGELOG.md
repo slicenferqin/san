@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the published package from `@oh-my-pi/pi-natives` to `@san/natives`; consumers must update package dependencies and imports.
+
 ### Fixed
 
 - Fixed long-format `git status` minimization misreporting Git's trailing `no changes added to commit` guidance as an untracked file.

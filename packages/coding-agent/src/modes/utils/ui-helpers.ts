@@ -1,7 +1,7 @@
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ImageContent, Message, Usage } from "@oh-my-pi/pi-ai";
-import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import { type Component, Spacer, Text, TruncatedText } from "@oh-my-pi/pi-tui";
+import type { AgentMessage } from "@san/agent";
+import type { AssistantMessage, ImageContent, Message, Usage } from "@san/ai";
+import { getStreamingPartialJson } from "@san/ai/utils/block-symbols";
+import { type Component, Spacer, Text, TruncatedText } from "@san/tui";
 import type { AdvisorMessageDetails } from "../../advisor";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
 import { settings } from "../../config/settings";
@@ -704,7 +704,7 @@ export class UiHelpers {
 				theme.bold(theme.fg("warning", "Update Available")) +
 					"\n" +
 					theme.fg("muted", `New version ${newVersion} is available. Run: `) +
-					theme.fg("accent", "omp update"),
+					theme.fg("accent", "san update"),
 				1,
 				0,
 			),

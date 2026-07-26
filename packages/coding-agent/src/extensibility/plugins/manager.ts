@@ -10,7 +10,7 @@ import {
 	getProjectPluginOverridesPath,
 	isEnoent,
 	logger,
-} from "@oh-my-pi/pi-utils";
+} from "@san/utils";
 import { withHostGuard } from "../utils";
 import { refreshBunGitCache } from "./bun-git-cache";
 import { type GitSource, parseGitUrl } from "./git-url";
@@ -182,7 +182,7 @@ export class PluginManager {
 					pkgJsonPath,
 					JSON.stringify(
 						{
-							name: "omp-plugins",
+							name: "san-plugins",
 							private: true,
 							dependencies: {},
 						},
@@ -305,7 +305,7 @@ export class PluginManager {
 			throw err;
 		}
 
-		const backupRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "omp-plugin-backup-"));
+		const backupRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "san-plugin-backup-"));
 		const backupPath = path.join(backupRoot, "package");
 		await fs.promises.cp(packagePath, backupPath, { recursive: true, verbatimSymlinks: true });
 		return { actualName, packagePath, backupRoot, backupPath };

@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { Agent, type AgentMessage, type CompactionSummaryMessage, countTokens } from "@oh-my-pi/pi-agent-core";
-import { calculateContextTokens, estimateTokens, resolveThresholdTokens } from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { createMockModel, type MockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { estimateToolSchemaTokens } from "@oh-my-pi/pi-coding-agent/modes/utils/context-usage";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { Agent, type AgentMessage, type CompactionSummaryMessage, countTokens } from "@san/agent";
+import { calculateContextTokens, estimateTokens, resolveThresholdTokens } from "@san/agent/compaction";
+import type { AssistantMessage } from "@san/ai";
+import { createMockModel, type MockModel } from "@san/ai/providers/mock";
+import { ModelRegistry } from "@san/coding-agent/config/model-registry";
+import { Settings } from "@san/coding-agent/config/settings";
+import { estimateToolSchemaTokens } from "@san/coding-agent/modes/utils/context-usage";
+import { AgentSession } from "@san/coding-agent/session/agent-session";
+import { AuthStorage } from "@san/coding-agent/session/auth-storage";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
+import { TempDir } from "@san/utils";
 
 const CONTEXT_WINDOW = 372_000;
 const CACHE_READ_TOKENS = 371_200;

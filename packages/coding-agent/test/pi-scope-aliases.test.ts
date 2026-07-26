@@ -19,20 +19,17 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { loadExtensions } from "@san/coding-agent/extensibility/extensions/loader";
+import { TempDir } from "@san/utils";
 
-const canonicalCodingAgent = Bun.resolveSync("@oh-my-pi/pi-coding-agent", import.meta.dir);
-const canonicalCodingAgentExtensions = Bun.resolveSync(
-	"@oh-my-pi/pi-coding-agent/extensibility/extensions",
-	import.meta.dir,
-);
-const canonicalUtils = Bun.resolveSync("@oh-my-pi/pi-utils", import.meta.dir);
-const canonicalTui = Bun.resolveSync("@oh-my-pi/pi-tui", import.meta.dir);
+const canonicalCodingAgent = Bun.resolveSync("@san/coding-agent", import.meta.dir);
+const canonicalCodingAgentExtensions = Bun.resolveSync("@san/coding-agent/extensibility/extensions", import.meta.dir);
+const canonicalUtils = Bun.resolveSync("@san/utils", import.meta.dir);
+const canonicalTui = Bun.resolveSync("@san/tui", import.meta.dir);
 // Subpath: upstream `pi-ai/oauth` re-exported `utils/oauth/index`; our pi-ai now
 // exposes the same surface at the real `@oh-my-pi/pi-ai/oauth` export, so the
 // legacy `@mariozechner/pi-ai/oauth` specifier canonicalizes straight to it.
-const canonicalAiOauth = Bun.resolveSync("@oh-my-pi/pi-ai/oauth", import.meta.dir);
+const canonicalAiOauth = Bun.resolveSync("@san/ai/oauth", import.meta.dir);
 
 interface AliasCase {
 	id: string;
@@ -51,10 +48,10 @@ const CASES: readonly AliasCase[] = [
 	},
 	// @oh-my-pi self-import — canonical scope must still flow through the shim
 	// so a duplicate copy is never dragged in from a plugin's own node_modules.
-	{ id: "ohmypi-utils", aliasSpecifier: "@oh-my-pi/pi-utils", canonicalPath: canonicalUtils, symbol: "logger" },
+	{ id: "ohmypi-utils", aliasSpecifier: "@san/utils", canonicalPath: canonicalUtils, symbol: "logger" },
 	{
 		id: "ohmypi-coding-agent",
-		aliasSpecifier: "@oh-my-pi/pi-coding-agent",
+		aliasSpecifier: "@san/coding-agent",
 		canonicalPath: canonicalCodingAgent,
 		symbol: "isToolCallEventType",
 	},

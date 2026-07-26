@@ -1,16 +1,16 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as os from "node:os";
-import * as capability from "@oh-my-pi/pi-coding-agent/capability";
-import type { SSHHost } from "@oh-my-pi/pi-coding-agent/capability/ssh";
-import type { CapabilityResult } from "@oh-my-pi/pi-coding-agent/capability/types";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { parseInternalUrl } from "@oh-my-pi/pi-coding-agent/internal-urls/parse";
-import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
-import { SshProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/ssh-protocol";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { GrepTool } from "@oh-my-pi/pi-coding-agent/tools/grep";
-import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
-import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
+import * as capability from "@san/coding-agent/capability";
+import type { SSHHost } from "@san/coding-agent/capability/ssh";
+import type { CapabilityResult } from "@san/coding-agent/capability/types";
+import { Settings } from "@san/coding-agent/config/settings";
+import { parseInternalUrl } from "@san/coding-agent/internal-urls/parse";
+import { InternalUrlRouter } from "@san/coding-agent/internal-urls/router";
+import { SshProtocolHandler } from "@san/coding-agent/internal-urls/ssh-protocol";
+import type { ToolSession } from "@san/coding-agent/tools";
+import { GrepTool } from "@san/coding-agent/tools/grep";
+import { ReadTool } from "@san/coding-agent/tools/read";
+import { WriteTool } from "@san/coding-agent/tools/write";
 
 // Live integration against `ssh localhost`. Skips automatically where key-based
 // localhost SSH is unavailable (CI without sshd). Capability lookup is mocked

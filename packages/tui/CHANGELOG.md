@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the published package from `@oh-my-pi/pi-tui` to `@san/tui`; consumers must update package dependencies and imports.
+
 ### Added
 
 - Added optional masked rendering to the single-line `Input` component while preserving the submitted value.
