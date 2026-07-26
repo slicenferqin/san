@@ -21,8 +21,8 @@
 //!   regardless of `RUST_BACKTRACE`.
 //! - The crash log path mirrors the JS side (`packages/utils/src/dirs.ts`):
 //!   `$XDG_STATE_HOME/san/logs/` on Linux / macOS when the user has migrated to
-//!   XDG (i.e. that directory already exists and `SAN_CODING_AGENT_DIR` / legacy
-//!   `PI_CODING_AGENT_DIR` isn't pointed somewhere custom), otherwise
+//!   XDG (i.e. that directory already exists and `SAN_CODING_AGENT_DIR` /
+//!   legacy `PI_CODING_AGENT_DIR` isn't pointed somewhere custom), otherwise
 //!   `<home>/<SAN_CONFIG_DIR>/logs/` (defaulting to `~/.san/logs/`; legacy
 //!   `PI_CONFIG_DIR` remains a fallback).
 //! - Hook installation is idempotent across repeated module loads.
@@ -46,7 +46,8 @@ use std::{
 };
 
 /// Default directory name for San's per-user state (overridable via
-/// `SAN_CONFIG_DIR` or legacy `PI_CONFIG_DIR`, matching `packages/utils/src/dirs.ts`).
+/// `SAN_CONFIG_DIR` or legacy `PI_CONFIG_DIR`, matching
+/// `packages/utils/src/dirs.ts`).
 const DEFAULT_CONFIG_DIR: &str = ".san";
 
 /// App name used as the XDG-root subdirectory (`$XDG_STATE_HOME/san/`),
@@ -293,13 +294,14 @@ fn resolve_logs_dir(
 
 /// Compute the XDG-state logs dir if the runtime environment matches the
 /// JS-side eligibility rules in `packages/utils/src/dirs.ts`: linux/macos,
-/// `$XDG_STATE_HOME` set, `$XDG_STATE_HOME/san` exists on disk, and the canonical
-/// or legacy coding-agent-dir override is unset or points at the default agent dir.
+/// `$XDG_STATE_HOME` set, `$XDG_STATE_HOME/san` exists on disk, and the
+/// canonical or legacy coding-agent-dir override is unset or points at the
+/// default agent dir.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn xdg_state_logs_from_env(home: &Path, config_dir_override: Option<&OsStr>) -> Option<PathBuf> {
 	let default_agent_dir = default_agent_dir(home, config_dir_override);
-	let agent_override = std::env::var_os("SAN_CODING_AGENT_DIR")
-		.or_else(|| std::env::var_os("PI_CODING_AGENT_DIR"));
+	let agent_override =
+		std::env::var_os("SAN_CODING_AGENT_DIR").or_else(|| std::env::var_os("PI_CODING_AGENT_DIR"));
 	let xdg_state_home = std::env::var_os("XDG_STATE_HOME");
 	xdg_state_logs(
 		xdg_state_home.as_deref(),
@@ -469,8 +471,9 @@ mod tests {
 	#[test]
 	fn resolve_logs_dir_reroots_absolute_config_dir_under_home() {
 		// JS resolves the config root via `path.join(os.homedir(),
-		// getConfigDirName())`, which never honors an absolute config-dir override — it is
-		// always re-rooted under `$HOME` (and `..` components are normalized away).
+		// getConfigDirName())`, which never honors an absolute config-dir override — it
+		// is always re-rooted under `$HOME` (and `..` components are normalized
+		// away).
 		let dir = resolve_logs_dir(
 			Path::new("/tmp/pi-natives-test-home"),
 			Some(OsStr::new("/var/tmp/pi-natives-state")),
@@ -555,8 +558,8 @@ mod tests {
 	#[cfg(any(target_os = "linux", target_os = "macos"))]
 	#[test]
 	fn xdg_state_logs_skipped_when_agent_dir_overridden() {
-		// A coding-agent-dir override pointing elsewhere mirrors the JS `isDefault === false`
-		// branch in `packages/utils/src/dirs.ts` and must disable XDG.
+		// A coding-agent-dir override pointing elsewhere mirrors the JS `isDefault ===
+		// false` branch in `packages/utils/src/dirs.ts` and must disable XDG.
 		let dir = xdg_state_logs(
 			Some(OsStr::new("/xdg/state")),
 			Some(OsStr::new("/some/custom/agent")),
