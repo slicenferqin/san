@@ -258,16 +258,16 @@ async function runIpcSubprocessWorker<In, Out>(
 			};
 		},
 	});
-	const keepalive = setInterval(() => {}, 2 ** 30);
+	// Keep the already-open IPC control channel referenced instead of adding a
+	// synthetic timer handle. The channel is the actual lifetime contract: it
+	// keeps this child alive while connected and emits `disconnect` when the
+	// parent goes away.
+	process.channel?.ref();
 	// Parent went away (crashed, SIGKILL, etc.) — commit suicide so we don't
 	// linger as an orphan. SIGKILL via `process.kill` keeps us symmetrical with
 	// the parent's hard-kill on shutdown: skip every JS/native finalizer.
 	process.on("disconnect", () => shutdown());
-	try {
-		await shuttingDown;
-	} finally {
-		clearInterval(keepalive);
-	}
+	await shuttingDown;
 	process.kill(process.pid, "SIGKILL");
 }
 
