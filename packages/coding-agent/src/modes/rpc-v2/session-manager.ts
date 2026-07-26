@@ -1901,6 +1901,20 @@ export class RpcV2SessionManager {
 			);
 			await this.#persistAndPublish(active, adapted);
 			await this.#persistAndPublish(active, evidenceEvent);
+			// The agent's todo tool is the only in-run source of checklist changes;
+			// mirror its committed result onto the wire so clients track the list
+			// without polling (todo.set RPC covers the client-write path).
+			if (event.toolName === "todo" && event.isError !== true) {
+				const phases = extractTodoPhases(event.result);
+				if (phases) {
+					const todoEvent = active.sequencer.emit(
+						"todo.changed",
+						{ phases },
+						{ runId: active.adapter.currentRunId, turnId: active.adapter.currentTurnId, durability: "durable" },
+					);
+					await this.#persistAndPublish(active, todoEvent);
+				}
+			}
 		} else {
 			await this.#persistAndPublish(active, adapted);
 		}
@@ -2305,6 +2319,34 @@ function safeFileSize(file: string): number {
 	} catch {
 		return 0;
 	}
+}
+
+/**
+ * Lenient projection of a todo tool result's `details.phases` onto the wire
+ * shape shared with `todo.set`. Event emission must never throw on a malformed
+ * tool result, so invalid entries drop instead of erroring; an empty array is
+ * a valid "cleared" signal.
+ */
+export function extractTodoPhases(
+	result: unknown,
+): Array<{ name: string; tasks: Array<{ content: string; status: string }> }> | undefined {
+	if (!isRecord(result) || !isRecord(result.details)) return undefined;
+	const phases = result.details.phases;
+	if (!Array.isArray(phases)) return undefined;
+	const projected: Array<{ name: string; tasks: Array<{ content: string; status: string }> }> = [];
+	for (const rawPhase of phases) {
+		if (!isRecord(rawPhase) || typeof rawPhase.name !== "string" || !Array.isArray(rawPhase.tasks)) continue;
+		const tasks: Array<{ content: string; status: string }> = [];
+		for (const rawTask of rawPhase.tasks) {
+			if (!isRecord(rawTask) || typeof rawTask.content !== "string") continue;
+			tasks.push({
+				content: rawTask.content,
+				status: typeof rawTask.status === "string" ? rawTask.status : "pending",
+			});
+		}
+		projected.push({ name: rawPhase.name, tasks });
+	}
+	return projected;
 }
 
 function reviveQueue(values: Array<Record<string, unknown>>, sessionId: SessionId): QueueItem[] {
