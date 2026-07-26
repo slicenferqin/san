@@ -44,16 +44,32 @@ describe("extractTodoPhases", () => {
 		expect(extractTodoPhases({ details: { phases: "not-an-array" } })).toBeUndefined();
 	});
 
-	it("drops malformed entries and defaults missing statuses instead of throwing", () => {
+	it("drops malformed entries and defaults missing or invalid statuses instead of throwing", () => {
 		const result = {
 			details: {
 				phases: [
 					"garbage",
 					{ name: 42, tasks: [] },
-					{ name: "ok", tasks: [null, { content: "任务" }, { content: 7, status: "completed" }] },
+					{
+						name: "ok",
+						tasks: [
+							null,
+							{ content: "缺省" },
+							{ content: "无效", status: "teleported" },
+							{ content: 7, status: "completed" },
+						],
+					},
 				],
 			},
 		};
-		expect(extractTodoPhases(result)).toEqual([{ name: "ok", tasks: [{ content: "任务", status: "pending" }] }]);
+		expect(extractTodoPhases(result)).toEqual([
+			{
+				name: "ok",
+				tasks: [
+					{ content: "缺省", status: "pending" },
+					{ content: "无效", status: "pending" },
+				],
+			},
+		]);
 	});
 });

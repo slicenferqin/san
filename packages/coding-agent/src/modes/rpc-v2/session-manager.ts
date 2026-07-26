@@ -17,6 +17,7 @@ import type { MCPManager } from "../../mcp/manager";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import type { CompactMode } from "../../session/compact-modes";
 import { listAllSessions, type SessionInfo } from "../../session/session-listing";
+import type { TodoPhase, TodoStatus } from "../../tools/todo";
 import type { EventBus } from "../../utils/event-bus";
 import {
 	abandonRecoveryLease,
@@ -2327,26 +2328,28 @@ function safeFileSize(file: string): number {
  * tool result, so invalid entries drop instead of erroring; an empty array is
  * a valid "cleared" signal.
  */
-export function extractTodoPhases(
-	result: unknown,
-): Array<{ name: string; tasks: Array<{ content: string; status: string }> }> | undefined {
+export function extractTodoPhases(result: unknown): TodoPhase[] | undefined {
 	if (!isRecord(result) || !isRecord(result.details)) return undefined;
 	const phases = result.details.phases;
 	if (!Array.isArray(phases)) return undefined;
-	const projected: Array<{ name: string; tasks: Array<{ content: string; status: string }> }> = [];
+	const projected: TodoPhase[] = [];
 	for (const rawPhase of phases) {
 		if (!isRecord(rawPhase) || typeof rawPhase.name !== "string" || !Array.isArray(rawPhase.tasks)) continue;
-		const tasks: Array<{ content: string; status: string }> = [];
+		const tasks: TodoPhase["tasks"] = [];
 		for (const rawTask of rawPhase.tasks) {
 			if (!isRecord(rawTask) || typeof rawTask.content !== "string") continue;
 			tasks.push({
 				content: rawTask.content,
-				status: typeof rawTask.status === "string" ? rawTask.status : "pending",
+				status: isTodoStatus(rawTask.status) ? rawTask.status : "pending",
 			});
 		}
 		projected.push({ name: rawPhase.name, tasks });
 	}
 	return projected;
+}
+
+function isTodoStatus(value: unknown): value is TodoStatus {
+	return value === "pending" || value === "in_progress" || value === "completed" || value === "abandoned";
 }
 
 function reviveQueue(values: Array<Record<string, unknown>>, sessionId: SessionId): QueueItem[] {
