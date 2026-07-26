@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -64,5 +64,24 @@ describe("RPC v2 state-store recovery", () => {
 		await Bun.write(store.eventsPath, JSON.stringify(event));
 		await store.reconcilePendingEvent(reloaded.state);
 		expect(await Bun.file(store.eventsPath).text()).toBe(`${JSON.stringify(event)}\n`);
+	});
+
+	test("serializes concurrent state writes without temp-file collisions", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "san-rpc-v2-state-concurrent-"));
+		tempDirectories.push(directory);
+		const sessionFile = path.join(directory, "session.jsonl");
+		await Bun.write(sessionFile, "");
+		const sessionId = "ses_concurrent_state" as SessionId;
+		const store = new RpcV2StateStore(sessionFile, sessionId);
+		const state = (await store.load()).state;
+		const nowSpy = spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+		try {
+			const writes = await Promise.all([1, 2, 3, 4].map(revision => store.saveState({ ...state, revision })));
+			expect(writes).toHaveLength(4);
+		} finally {
+			nowSpy.mockRestore();
+		}
+		const persisted = await store.load();
+		expect(persisted.state.revision).toBe(4);
 	});
 });

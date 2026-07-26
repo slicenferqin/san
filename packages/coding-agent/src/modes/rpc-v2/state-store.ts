@@ -1,4 +1,6 @@
 /** Session-scoped RPC v2 state, event watermark and idempotency sidecar。 */
+
+import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -62,6 +64,7 @@ const EMPTY_STATE: PersistedRpcState = {
 export class RpcV2StateStore {
 	readonly #statePath: string;
 	readonly #eventsPath: string;
+	#stateWriteTail: Promise<void> = Promise.resolve();
 
 	constructor(sessionFile: string | undefined, sessionId: string) {
 		const base = sessionFile ? `${sessionFile}.rpc-v2` : path.join(os.tmpdir(), "san-rpc-v2", sessionId);
@@ -106,10 +109,21 @@ export class RpcV2StateStore {
 	}
 
 	async saveState(state: PersistedRpcState): Promise<void> {
-		await fs.mkdir(path.dirname(this.#statePath), { recursive: true });
-		const tempPath = `${this.#statePath}.${process.pid}.${Date.now()}.tmp`;
-		await Bun.write(tempPath, `${JSON.stringify({ ...state, updatedAt: new Date().toISOString() })}\n`);
-		await fs.rename(tempPath, this.#statePath);
+		const body = `${JSON.stringify({ ...state, updatedAt: new Date().toISOString() })}\n`;
+		const scheduled = this.#stateWriteTail
+			.catch(() => undefined)
+			.then(async () => {
+				await fs.mkdir(path.dirname(this.#statePath), { recursive: true });
+				const tempPath = `${this.#statePath}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`;
+				try {
+					await Bun.write(tempPath, body);
+					await fs.rename(tempPath, this.#statePath);
+				} finally {
+					await fs.rm(tempPath, { force: true }).catch(() => undefined);
+				}
+			});
+		this.#stateWriteTail = scheduled.catch(() => undefined);
+		return scheduled;
 	}
 
 	async appendEvent(event: SessionEvent): Promise<void> {
@@ -131,9 +145,13 @@ export class RpcV2StateStore {
 
 	async replaceEvents(events: readonly SessionEvent[]): Promise<void> {
 		await fs.mkdir(path.dirname(this.#eventsPath), { recursive: true });
-		const tempPath = `${this.#eventsPath}.${process.pid}.${Date.now()}.tmp`;
-		await Bun.write(tempPath, events.map(event => JSON.stringify(event)).join("\n") + (events.length ? "\n" : ""));
-		await fs.rename(tempPath, this.#eventsPath);
+		const tempPath = `${this.#eventsPath}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`;
+		try {
+			await Bun.write(tempPath, events.map(event => JSON.stringify(event)).join("\n") + (events.length ? "\n" : ""));
+			await fs.rename(tempPath, this.#eventsPath);
+		} finally {
+			await fs.rm(tempPath, { force: true }).catch(() => undefined);
+		}
 	}
 
 	async clear(): Promise<void> {
