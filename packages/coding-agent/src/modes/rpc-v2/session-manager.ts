@@ -455,6 +455,7 @@ export class RpcV2SessionManager {
 		const active = this.#active;
 		if (active) {
 			active.stream = { ...active.stream, ...policy };
+			active.adapter.emitThinkingDeltas = active.stream.thinkingDeltas === true;
 			await this.#persistState(active);
 			return { ...active.stream };
 		}
@@ -750,6 +751,7 @@ export class RpcV2SessionManager {
 		const active = this.assertLease(params.sessionId, params.leaseId, false);
 		return await this.#enqueueWork(active, async () => {
 			active.stream = params.stream ?? {};
+			active.adapter.emitThinkingDeltas = active.stream.thinkingDeltas === true;
 			active.syncPending = true;
 			active.synced = true;
 			active.syncBuffer = [];

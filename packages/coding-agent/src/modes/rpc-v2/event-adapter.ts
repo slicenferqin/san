@@ -23,6 +23,8 @@ export class AdapterContext {
 	currentTurnId: TurnId | undefined;
 	currentOperationId: string | undefined;
 	currentRunTerminalStatus: "completed" | "failed" | "aborted" | "interrupted" | undefined;
+	/** Mirrors StreamPolicy.thinkingDeltas; kept in sync by SessionManager.configureStream. */
+	emitThinkingDeltas = false;
 	#currentMessageId: MessageId | undefined;
 	#activeMessage: Extract<ActiveStreamSnapshot, { kind: "message" }> | undefined;
 	#activeTools = new Map<string, Extract<ActiveStreamSnapshot, { kind: "tool" }>>();
@@ -144,14 +146,27 @@ export function adaptSessionEvent(
 		case "message_update": {
 			const messageId = ctx.currentMessageId;
 			if (!messageId) return undefined;
-			// Extract text delta from the assistant message event
-			const delta =
-				"assistantMessageEvent" in event && event.assistantMessageEvent
-					? extractTextDelta(event.assistantMessageEvent)
-					: "";
-			if (!delta) return undefined;
-			ctx.appendMessageDelta(delta);
-			return sequencer.emit("message.delta", { messageId, delta }, { durability: "transient", runId, turnId });
+			const source =
+				"assistantMessageEvent" in event && event.assistantMessageEvent ? event.assistantMessageEvent : undefined;
+			if (!source) return undefined;
+			const delta = extractTextDelta(source);
+			if (delta) {
+				ctx.appendMessageDelta(delta);
+				return sequencer.emit("message.delta", { messageId, delta }, { durability: "transient", runId, turnId });
+			}
+			// Thinking deltas are opt-in (stream.configure) and never enter the
+			// visible message buffer — they stream on a separate channel only.
+			if (ctx.emitThinkingDeltas) {
+				const thinking = extractThinkingDelta(source);
+				if (thinking) {
+					return sequencer.emit(
+						"message.delta",
+						{ messageId, delta: thinking, channel: "thinking" },
+						{ durability: "transient", runId, turnId },
+					);
+				}
+			}
+			return undefined;
 		}
 
 		case "message_end": {
@@ -325,6 +340,13 @@ function extractTextDelta(assistantMessageEvent: unknown): string {
 	if (typeof assistantMessageEvent !== "object" || assistantMessageEvent === null) return "";
 	const evt = assistantMessageEvent as Record<string, unknown>;
 	if (evt.type === "text_delta" && typeof evt.delta === "string") return evt.delta;
+	return "";
+}
+
+function extractThinkingDelta(assistantMessageEvent: unknown): string {
+	if (typeof assistantMessageEvent !== "object" || assistantMessageEvent === null) return "";
+	const evt = assistantMessageEvent as Record<string, unknown>;
+	if (evt.type === "thinking_delta" && typeof evt.delta === "string") return evt.delta;
 	return "";
 }
 

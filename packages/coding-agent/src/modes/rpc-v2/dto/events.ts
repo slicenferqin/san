@@ -169,6 +169,8 @@ export interface MessageStartedData {
 export interface MessageDeltaData {
 	messageId: MessageId;
 	delta: string;
+	/** Absent for answer text; "thinking" for reasoning-channel deltas (opt-in via stream.configure). */
+	channel?: "thinking";
 }
 
 export interface MessageCompletedData {
