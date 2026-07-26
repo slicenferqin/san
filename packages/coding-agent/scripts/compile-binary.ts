@@ -155,7 +155,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			},
 			plugins: [
 				...(buildProfile === "core" ? [createCoreExcludedModulePlugin(), createCoreModelCatalogPlugin()] : []),
-				await createLegacyPiVirtualModulePlugin({ bundleHostModules: buildProfile === "full" }),
+				await createLegacyPiVirtualModulePlugin(),
 			],
 			compile: {
 				...(options.target ? { target: options.target } : {}),

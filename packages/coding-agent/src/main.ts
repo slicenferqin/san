@@ -1213,15 +1213,14 @@ export async function buildSessionOptions(
 		options.rules = [];
 	}
 
-	// Additional extension paths from CLI
-	const cliExtensionPaths = parsed.noExtensions ? [] : [...(parsed.extensions ?? []), ...(parsed.hooks ?? [])];
+	// Explicit CLI extension paths remain active when discovery is disabled.
+	const cliExtensionPaths = [...(parsed.extensions ?? []), ...(parsed.hooks ?? [])];
 	if (cliExtensionPaths.length > 0) {
 		options.additionalExtensionPaths = cliExtensionPaths;
 	}
 
 	if (parsed.noExtensions) {
 		options.disableExtensionDiscovery = true;
-		options.additionalExtensionPaths = [];
 	}
 
 	return options;
@@ -1300,12 +1299,10 @@ export async function runRootCommand(
 	// Register CLI-provided extension package paths (`--extension`, `--hook`) so
 	// the plugin discovery provider can surface their `skills/`, `hooks/`,
 	// `tools/`, `commands/`, `rules/`, `prompts/`, and `.mcp.json` sub-trees.
-	// `--no-extensions` short-circuits both the factory load and the sub-discovery.
-	if (!parsedArgs.noExtensions) {
-		const cliExtensions = [...(parsedArgs.extensions ?? []), ...(parsedArgs.hooks ?? [])];
-		if (cliExtensions.length > 0) {
-			injectSanExtensionCliRoots(cliExtensions, home, getProjectDir());
-		}
+	// Explicit extension paths remain active when ambient discovery is disabled.
+	const cliExtensions = [...(parsedArgs.extensions ?? []), ...(parsedArgs.hooks ?? [])];
+	if (cliExtensions.length > 0) {
+		injectSanExtensionCliRoots(cliExtensions, home, getProjectDir());
 	}
 
 	let cwd = getProjectDir();

@@ -24,7 +24,7 @@
 - Added San worker host-owned bash receipts: `subprocessToolRegistry` extracts bash tool ends into `extractedToolData.bash`, worker results prefer those receipts (`source: "host"`) over model-claimed `commandsRun`, and the pass gate requires a host receipt with `exitCode: 0`.
 - Added San role pre-call hard provider-request reservation: remaining `maxProviderRequests` is propagated as `hardRequestLimit` into role subprocesses and exhausted remaining budgets abort the role before starting a provider call.
 - Added San execution loop atomic `san.loop_transition` envelopes that bind run snapshot, event, and optional review report in a single custom entry, with legacy separate custom types still rebuildable.
-- Added a `build:core` binary profile for daily coding paths that omits bundled legacy Pi host namespaces, embedded PDF conversion, harness documentation, and stats dashboard assets while leaving the full release-compatible build unchanged.
+- Added a `build:core` binary profile for daily coding paths that omits embedded PDF conversion, harness documentation, and stats dashboard assets while preserving MCP, plugin, Skills, and legacy Pi extension compatibility; the full release-compatible build remains unchanged.
 - Changed the core binary to reject HTML session export with an explicit full-binary guidance while retaining the export path in full builds.
 - Added optional Bun metafile output to binary and npm bundle build scripts for reproducible bundle-size analysis.
 
@@ -34,6 +34,7 @@
 - Changed San Context Steady to remain native-equivalent below a configurable activation threshold (240K input tokens by default), then latch activation for the session and restore it after resume.
 - Changed the core binary to keep `/autoresearch` discoverable but reject it with explicit full-binary guidance while removing the experiment implementation from the core compile graph; full builds retain the complete workflow.
 - Reduced core binary size with full safe Bun minification, a gzip-compressed lazy model-catalog embed, compile-time PDF converter exclusion, and a type-only Workflow AST guard that removes the `@babel/types` runtime barrel.
+- Changed the core binary to retain the bundled host-module namespaces required by compiled legacy Pi extensions, keeping the plugin ecosystem functional in both binary profiles.
 - Changed custom provider validation so `models.yml` may declare `auth: apiKey` without embedding the secret (keys live in AuthStorage).
 - Restored no-argument `/logout` to the dedicated credential-removal selector (provider connect remains `/connect` / `/login`).
 - Custom provider setup now rolls back the newly written `models.yml` entry and any login credential when key storage or first registry load fails, avoiding half-configured providers.
@@ -82,6 +83,7 @@
 
 ### Fixed
 
+- Fixed `--no-extensions` to disable ambient extension discovery without dropping explicit `--extension`/`-e` paths in root sessions or `san models`.
 - Fixed Linux NVIDIA GPU discovery so descendants inheriting the probe's stdout pipe have time to drain without turning a successful probe into a timeout.
 - Fixed San execution loop terminal budget races so post-review overspend writes a single blocked envelope instead of persisting `passed` then failing on a conflicting `blocked` transition.
 - Fixed San evidence gate to require successful commands from the current assignment batch only; prior-retry successes no longer unlock a new pass.

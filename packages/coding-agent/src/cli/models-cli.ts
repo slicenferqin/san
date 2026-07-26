@@ -350,7 +350,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 		}
 		await modelRegistry.refresh(action === "refresh" ? "online" : "online-if-uncached");
 
-		const cliExtensionPaths = command.flags.noExtensions ? [] : (command.flags.extensions ?? []);
+		const cliExtensionPaths = command.flags.extensions ?? [];
 		await runModelsListing({
 			modelRegistry,
 			cwd,
