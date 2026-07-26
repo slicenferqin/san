@@ -10,7 +10,7 @@
  * touching the persisted settings file.
  */
 
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@san/utils";
 import { resolveSanBrainLegacyAutoRetain } from "../brain/compatibility";
 import type { Settings } from "../config/settings";
 

@@ -7,8 +7,8 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { Api, ImageContent, Model } from "@oh-my-pi/pi-ai";
-import { logger } from "@oh-my-pi/pi-utils";
+import type { Api, ImageContent, Model } from "@san/ai";
+import { logger } from "@san/utils";
 import { collectContextCheckpoints } from "../../context-steady/checkpoint";
 import { listTurnDigests } from "../../context-steady/session";
 import type { ContextCheckpoint } from "../../context-steady/types";

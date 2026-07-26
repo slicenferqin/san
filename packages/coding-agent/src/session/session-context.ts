@@ -1,6 +1,6 @@
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { coerceServiceTierByFamily, type ProviderPayload, type ServiceTierByFamily } from "@oh-my-pi/pi-ai";
-import * as snapcompact from "@oh-my-pi/snapcompact";
+import type { AgentMessage } from "@san/agent";
+import { coerceServiceTierByFamily, type ProviderPayload, type ServiceTierByFamily } from "@san/ai";
+import * as snapcompact from "@san/snapcompact";
 import { CONTEXT_PLAN_MESSAGE_TYPE } from "../context-steady/plan-types";
 import { CONTEXT_CONTINUATION_MESSAGE_TYPE, CONTEXT_PACKET_MESSAGE_TYPE } from "../context-steady/types";
 import {

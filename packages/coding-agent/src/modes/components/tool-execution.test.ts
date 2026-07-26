@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import { type Component, Text } from "@oh-my-pi/pi-tui";
+import type { AgentTool } from "@san/agent";
+import { type Component, Text } from "@san/tui";
 import { Settings } from "../../config/settings";
 import { getThemeByName, setThemeInstance, theme } from "../theme/theme";
 import { ToolExecutionComponent, type ToolExecutionUi } from "./tool-execution";

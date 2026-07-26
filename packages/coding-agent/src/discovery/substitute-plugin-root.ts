@@ -1,16 +1,17 @@
 import * as path from "node:path";
 
 /**
- * Recursively substitute ${CLAUDE_PLUGIN_ROOT} and ${OMP_PLUGIN_ROOT}
- * with the actual plugin root path in strings, arrays, and plain objects.
+ * Recursively substitute ${CLAUDE_PLUGIN_ROOT}, ${SAN_PLUGIN_ROOT}, and the
+ * legacy ${OMP_PLUGIN_ROOT} with the actual plugin root path in strings, arrays, and objects.
  */
 // Use concatenation to avoid noTemplateCurlyInString lint rule on literal placeholder names
 const CLAUDE_VAR = "$" + "{CLAUDE_PLUGIN_ROOT}";
+const SAN_VAR = "$" + "{SAN_PLUGIN_ROOT}";
 const OMP_VAR = "$" + "{OMP_PLUGIN_ROOT}";
 
 export function substitutePluginRoot<T>(value: T, rootPath: string): T {
 	if (typeof value === "string") {
-		return value.replaceAll(CLAUDE_VAR, rootPath).replaceAll(OMP_VAR, rootPath) as T;
+		return value.replaceAll(CLAUDE_VAR, rootPath).replaceAll(SAN_VAR, rootPath).replaceAll(OMP_VAR, rootPath) as T;
 	}
 	if (Array.isArray(value)) {
 		return value.map(v => substitutePluginRoot(v, rootPath)) as T;

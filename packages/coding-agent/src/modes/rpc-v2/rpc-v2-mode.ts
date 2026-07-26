@@ -11,8 +11,8 @@
  * 4. `server.shutdown` or stdin close → graceful exit
  */
 import * as path from "node:path";
-import type { Api, ImageContent } from "@oh-my-pi/pi-ai";
-import { logger, prompt, readLines, VERSION } from "@oh-my-pi/pi-utils";
+import type { Api, ImageContent } from "@san/ai";
+import { logger, prompt, readLines, VERSION } from "@san/utils";
 import { collectContextCheckpoints } from "../../context-steady/checkpoint";
 import { listTurnDigests } from "../../context-steady/session";
 import type { ContextCheckpoint, TurnDigest } from "../../context-steady/types";

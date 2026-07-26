@@ -4,7 +4,14 @@
  * Primary provider for San native configs. Supports all capabilities.
  */
 import * as path from "node:path";
-import { getAgentDir, logger, parseFrontmatter, tryParseJson } from "@oh-my-pi/pi-utils";
+import {
+	getAgentDir,
+	getLegacyConfigPath,
+	LEGACY_CONFIG_DIR_NAME,
+	logger,
+	parseFrontmatter,
+	tryParseJson,
+} from "@san/utils";
 import { YAML } from "bun";
 import { getManagedSkillsDir, MANAGED_SKILLS_PROVIDER_ID } from "../autolearn/managed-skills";
 import { registerProvider } from "../capability";
@@ -41,6 +48,13 @@ const DESCRIPTION = "Native San configuration from ~/.san and .san/";
 const PRIORITY = 100;
 
 const PATHS = SOURCE_PATHS.native;
+const PROJECT_CONFIG_DIR_NAMES = [PATHS.projectDir, LEGACY_CONFIG_DIR_NAME] as const;
+
+function getUserConfigDirPaths(): string[] {
+	const canonical = getAgentDir();
+	const legacy = getLegacyConfigPath(canonical);
+	return legacy ? [canonical, legacy] : [canonical];
+}
 
 async function ifNonEmptyDir(...seg: string[]): Promise<string | null> {
 	let dir = path.join(...seg);
@@ -57,15 +71,15 @@ async function ifNonEmptyDir(...seg: string[]): Promise<string | null> {
 async function getConfigDirs(ctx: LoadContext): Promise<Array<{ dir: string; level: "user" | "project" }>> {
 	const result: Array<{ dir: string; level: "user" | "project" }> = [];
 
-	const projectDir = await ifNonEmptyDir(ctx.cwd, PATHS.projectDir);
-	if (projectDir) {
-		result.push({ dir: projectDir, level: "project" });
+	for (const configDirName of PROJECT_CONFIG_DIR_NAMES) {
+		const projectDir = await ifNonEmptyDir(ctx.cwd, configDirName);
+		if (projectDir) result.push({ dir: projectDir, level: "project" });
 	}
-	// Native user config is profile-scoped: getAgentDir() points at the active
-	// profile's agent dir (~/.san/profiles/<name>/agent), like sessions and MCP.
-	const userDir = await ifNonEmptyDir(getAgentDir());
-	if (userDir) {
-		result.push({ dir: userDir, level: "user" });
+	// Native user config is profile-scoped. The active `.san` agent directory is
+	// authoritative; the matching `.omp` path is a read-only fallback.
+	for (const userConfigDir of getUserConfigDirPaths()) {
+		const userDir = await ifNonEmptyDir(userConfigDir);
+		if (userDir) result.push({ dir: userDir, level: "user" });
 	}
 
 	return result;
@@ -86,13 +100,27 @@ function getAncestorDirs(cwd: string, stopAt?: string | null): Array<{ dir: stri
 	return ancestors;
 }
 
-async function findNearestProjectConfigDir(
+async function findFirstUserFile(filename: string): Promise<{ path: string; content: string } | null> {
+	for (const configDir of getUserConfigDirPaths()) {
+		const filePath = path.join(configDir, filename);
+		const content = await readFile(filePath);
+		if (content !== null) return { path: filePath, content };
+	}
+	return null;
+}
+
+async function findNearestProjectFile(
 	cwd: string,
-	repoRoot?: string | null,
-): Promise<{ dir: string; depth: number } | null> {
-	for (const ancestor of getAncestorDirs(cwd, repoRoot)) {
-		const configDir = await ifNonEmptyDir(ancestor.dir, PATHS.projectDir);
-		if (configDir) return { dir: configDir, depth: ancestor.depth };
+	repoRoot: string | null | undefined,
+	filename: string,
+): Promise<{ path: string; content: string; depth: number } | null> {
+	const ancestors = getAncestorDirs(cwd, repoRoot);
+	for (const configDirName of PROJECT_CONFIG_DIR_NAMES) {
+		for (const ancestor of ancestors) {
+			const filePath = path.join(ancestor.dir, configDirName, filename);
+			const content = await readFile(filePath);
+			if (content !== null) return { path: filePath, content, depth: ancestor.depth };
+		}
 	}
 	return null;
 }
@@ -190,15 +218,12 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 		return result;
 	};
 
-	// User scope tracks the active profile via getAgentDir() (not ctx.home), so it
-	// stays in sync with getMCPConfigPath("user") and the /mcp config writer.
-	const userAgentDir = getAgentDir();
-	const paths = [
-		{ path: path.join(ctx.cwd, PATHS.projectDir, "mcp.json"), level: "project" as const },
-		{ path: path.join(ctx.cwd, PATHS.projectDir, ".mcp.json"), level: "project" as const },
-		{ path: path.join(userAgentDir, "mcp.json"), level: "user" as const },
-		{ path: path.join(userAgentDir, ".mcp.json"), level: "user" as const },
-	];
+	// Native `.san` paths are authoritative. Matching `.omp` project and profile
+	// directories remain read-only sources so existing MCP definitions keep loading.
+	const paths = (await getConfigDirs(ctx)).flatMap(({ dir, level }) => [
+		{ path: path.join(dir, "mcp.json"), level },
+		{ path: path.join(dir, ".mcp.json"), level },
+	]);
 
 	const contents = await Promise.allSettled(
 		paths.map(async p => {
@@ -232,29 +257,24 @@ registerProvider<MCPServer>(mcpCapability.id, {
 async function loadSystemPrompt(ctx: LoadContext): Promise<LoadResult<SystemPrompt>> {
 	const items: SystemPrompt[] = [];
 
-	const userPath = path.join(getAgentDir(), "SYSTEM.md");
-	const userContent = await readFile(userPath);
-	if (userContent) {
+	const userFile = await findFirstUserFile("SYSTEM.md");
+	if (userFile) {
 		items.push({
-			path: userPath,
-			content: userContent,
+			path: userFile.path,
+			content: userFile.content,
 			level: "user",
-			_source: createSourceMeta(PROVIDER_ID, userPath, "user"),
+			_source: createSourceMeta(PROVIDER_ID, userFile.path, "user"),
 		});
 	}
 
-	const nearestProjectConfigDir = await findNearestProjectConfigDir(ctx.cwd, ctx.repoRoot);
-	if (nearestProjectConfigDir) {
-		const projectPath = path.join(nearestProjectConfigDir.dir, "SYSTEM.md");
-		const projectContent = await readFile(projectPath);
-		if (projectContent) {
-			items.push({
-				path: projectPath,
-				content: projectContent,
-				level: "project",
-				_source: createSourceMeta(PROVIDER_ID, projectPath, "project"),
-			});
-		}
+	const projectFile = await findNearestProjectFile(ctx.cwd, ctx.repoRoot, "SYSTEM.md");
+	if (projectFile) {
+		items.push({
+			path: projectFile.path,
+			content: projectFile.content,
+			level: "project",
+			_source: createSourceMeta(PROVIDER_ID, projectFile.path, "project"),
+		});
 	}
 
 	return { items, warnings: [] };
@@ -270,26 +290,29 @@ registerProvider<SystemPrompt>(systemPromptCapability.id, {
 
 // Skills
 async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
-	// Walk up from cwd finding .san/skills/ in ancestors (closest first)
+	// Walk up canonical `.san/skills/` roots first, then legacy `.omp/skills/`.
 	const ancestors = getAncestorDirs(ctx.cwd, ctx.repoRoot ?? ctx.home);
-	const projectScans = ancestors.map(({ dir }) =>
+	const projectScans = PROJECT_CONFIG_DIR_NAMES.flatMap(configDirName =>
+		ancestors.map(({ dir }) =>
+			scanSkillsFromDir(ctx, {
+				dir: path.join(dir, configDirName, "skills"),
+				providerId: PROVIDER_ID,
+				level: "project",
+				requireDescription: true,
+			}),
+		),
+	);
+
+	const userScans = getUserConfigDirPaths().map(userDir =>
 		scanSkillsFromDir(ctx, {
-			dir: path.join(dir, PATHS.projectDir, "skills"),
+			dir: path.join(userDir, "skills"),
 			providerId: PROVIDER_ID,
-			level: "project",
+			level: "user",
 			requireDescription: true,
 		}),
 	);
 
-	// User-level scan from ~/.san/agent/skills/
-	const userScan = scanSkillsFromDir(ctx, {
-		dir: path.join(getAgentDir(), "skills"),
-		providerId: PROVIDER_ID,
-		level: "user",
-		requireDescription: true,
-	});
-
-	const results = await Promise.all([...projectScans, userScan]);
+	const results = await Promise.all([...projectScans, ...userScans]);
 	return {
 		items: results.flatMap(r => r.items),
 		warnings: results.flatMap(r => r.warnings ?? []),
@@ -374,37 +397,26 @@ async function loadRules(ctx: LoadContext): Promise<LoadResult<Rule>> {
 		if (result.warnings) warnings.push(...result.warnings);
 	}
 
-	// Top-level RULES.md is a sticky always-apply rule. Documented in
-	// docs/context-files.md as the file that gets "re-injected near
-	// the current turn so they keep hold across long conversations".
-	// User scope:    ~/.san/agent/RULES.md
-	// Project scope: nearest .san/RULES.md walking up from cwd to repoRoot
-	const userRulesFile = path.join(getAgentDir(), "RULES.md");
-	const userRule = await loadStickyRulesFile(userRulesFile, "user");
-	if (userRule) items.push(userRule);
+	// Top-level RULES.md is a sticky always-apply rule. Canonical `.san` files
+	// win; matching `.omp` files remain read-only migration fallbacks.
+	const userRulesFile = await findFirstUserFile("RULES.md");
+	if (userRulesFile) {
+		items.push(buildStickyRule(userRulesFile.path, userRulesFile.content, "user"));
+	}
 
-	const nearestProjectConfigDir = await findNearestProjectConfigDir(ctx.cwd, ctx.repoRoot);
-	if (nearestProjectConfigDir) {
-		const projectRulesFile = path.join(nearestProjectConfigDir.dir, "RULES.md");
-		const projectRule = await loadStickyRulesFile(projectRulesFile, "project");
-		if (projectRule) items.push(projectRule);
+	const projectRulesFile = await findNearestProjectFile(ctx.cwd, ctx.repoRoot, "RULES.md");
+	if (projectRulesFile) {
+		items.push(buildStickyRule(projectRulesFile.path, projectRulesFile.content, "project"));
 	}
 
 	return { items, warnings };
 }
 
-/**
- * Read a top-level `RULES.md` and synthesize an always-apply rule.
- * Returns null when the file is absent or empty so callers can short-circuit.
- */
-async function loadStickyRulesFile(filePath: string, level: "user" | "project"): Promise<Rule | null> {
-	const content = await readFile(filePath);
-	if (!content) return null;
+/** Build a top-level `RULES.md` as an always-apply rule. */
+function buildStickyRule(filePath: string, content: string, level: "user" | "project"): Rule {
 	const source = createSourceMeta(PROVIDER_ID, filePath, level);
 	const ruleName = level === "project" ? "RULES@project" : "RULES";
 	const rule = buildRuleFromMarkdown("RULES.md", content, filePath, source, { ruleName });
-	// Force alwaysApply regardless of frontmatter — the whole point of RULES.md
-	// is to be reattached every turn.
 	return { ...rule, alwaysApply: true };
 }
 
@@ -897,31 +909,25 @@ async function loadContextFiles(ctx: LoadContext): Promise<LoadResult<ContextFil
 	const items: ContextFile[] = [];
 	const warnings: string[] = [];
 
-	const userPath = path.join(getAgentDir(), "AGENTS.md");
-	const userContent = await readFile(userPath);
-	if (userContent) {
+	const userFile = await findFirstUserFile("AGENTS.md");
+	if (userFile) {
 		items.push({
-			path: userPath,
-			content: userContent,
+			path: userFile.path,
+			content: userFile.content,
 			level: "user",
-			_source: createSourceMeta(PROVIDER_ID, userPath, "user"),
+			_source: createSourceMeta(PROVIDER_ID, userFile.path, "user"),
 		});
 	}
 
-	const nearestProjectConfigDir = await findNearestProjectConfigDir(ctx.cwd, ctx.repoRoot);
-	if (nearestProjectConfigDir) {
-		const projectPath = path.join(nearestProjectConfigDir.dir, "AGENTS.md");
-		const projectContent = await readFile(projectPath);
-		if (projectContent) {
-			items.push({
-				path: projectPath,
-				content: projectContent,
-				level: "project",
-				depth: nearestProjectConfigDir.depth,
-				_source: createSourceMeta(PROVIDER_ID, projectPath, "project"),
-			});
-			return { items, warnings };
-		}
+	const projectFile = await findNearestProjectFile(ctx.cwd, ctx.repoRoot, "AGENTS.md");
+	if (projectFile) {
+		items.push({
+			path: projectFile.path,
+			content: projectFile.content,
+			level: "project",
+			depth: projectFile.depth,
+			_source: createSourceMeta(PROVIDER_ID, projectFile.path, "project"),
+		});
 	}
 	return { items, warnings };
 }
@@ -929,7 +935,7 @@ async function loadContextFiles(ctx: LoadContext): Promise<LoadResult<ContextFil
 registerProvider<ContextFile>(contextFileCapability.id, {
 	id: PROVIDER_ID,
 	displayName: DISPLAY_NAME,
-	description: "Load AGENTS.md from .san directories",
+	description: "Load AGENTS.md from .san directories with legacy .omp fallback",
 	priority: PRIORITY,
 	load: loadContextFiles,
 });

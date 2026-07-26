@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { TempDir } from "@san/utils";
 import { getManagedSkillsDir, writeManagedSkill } from "../autolearn/managed-skills";
 import { normalizeContextSteadyRecallItems } from "../context-steady/recall";
 import { TURN_DIGEST_CUSTOM_TYPE, TURN_DIGEST_SCHEMA_VERSION, type TurnDigest } from "../context-steady/types";

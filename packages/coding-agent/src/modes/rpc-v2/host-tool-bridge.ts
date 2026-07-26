@@ -1,7 +1,7 @@
 /** San RPC v2 Host Tool 与 Host URI 双向桥接。 */
-import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { Static, TSchema } from "@oh-my-pi/pi-ai";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@san/agent";
+import type { Static, TSchema } from "@san/ai";
+import { Snowflake } from "@san/utils";
 import { applyToolProxy } from "../../extensibility/tool-proxy";
 import type { Theme } from "../theme/theme";
 import type { RpcId } from "./protocol/envelope";

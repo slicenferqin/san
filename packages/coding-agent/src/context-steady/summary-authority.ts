@@ -1,4 +1,4 @@
-import { prompt } from "@oh-my-pi/pi-utils";
+import { prompt } from "@san/utils";
 import fallbackTemplate from "../prompts/context-steady/compaction-summary-fallback.md" with { type: "text" };
 import repairInstructions from "../prompts/context-steady/compaction-summary-repair.md" with { type: "text" };
 import type { ActiveContinuationState, ContextSummaryAuthorityAudit, ContextSummarySource } from "./types";

@@ -6,31 +6,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
-import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
-import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
-import type { ProviderSessionState } from "@oh-my-pi/pi-ai";
-import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { applySanBrainMutation } from "@oh-my-pi/pi-coding-agent/brain/commands";
-import { appendSanBrainExperienceCandidate } from "@oh-my-pi/pi-coding-agent/brain/ledger";
-import { SanBrainStore } from "@oh-my-pi/pi-coding-agent/brain/store";
-import type { SanBrainExperienceCandidate } from "@oh-my-pi/pi-coding-agent/brain/types";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import * as memoryBackend from "@oh-my-pi/pi-coding-agent/memory-backend";
+import { Agent, type AgentMessage, type AgentTool } from "@san/agent";
+import * as compactionModule from "@san/agent/compaction";
+import { estimateTokens } from "@san/agent/compaction";
+import type { ProviderSessionState } from "@san/ai";
+import { createMockModel } from "@san/ai/providers/mock";
+import { getBundledModel } from "@san/catalog/models";
+import { applySanBrainMutation } from "@san/coding-agent/brain/commands";
+import { appendSanBrainExperienceCandidate } from "@san/coding-agent/brain/ledger";
+import { SanBrainStore } from "@san/coding-agent/brain/store";
+import type { SanBrainExperienceCandidate } from "@san/coding-agent/brain/types";
+import { ModelRegistry } from "@san/coding-agent/config/model-registry";
+import { Settings } from "@san/coding-agent/config/settings";
+import * as memoryBackend from "@san/coding-agent/memory-backend";
 import type {
 	MemoryBackend,
 	MemoryBackendOperationContext,
 	MemoryBackendSearchOptions,
-} from "@oh-my-pi/pi-coding-agent/memory-backend/types";
-import { computeNonMessageTokens } from "@oh-my-pi/pi-coding-agent/modes/utils/context-usage";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
-import type { CustomEntry, CustomMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/memory-backend/types";
+import { computeNonMessageTokens } from "@san/coding-agent/modes/utils/context-usage";
+import { AgentSession } from "@san/coding-agent/session/agent-session";
+import { AuthStorage } from "@san/coding-agent/session/auth-storage";
+import { convertToLlm } from "@san/coding-agent/session/messages";
+import type { CustomEntry, CustomMessageEntry } from "@san/coding-agent/session/session-entries";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
+import { removeSyncWithRetries, Snowflake } from "@san/utils";
 import {
 	CONTEXT_PLAN_CUSTOM_TYPE,
 	CONTEXT_PLAN_MESSAGE_TYPE,

@@ -7,9 +7,9 @@
  * sub-directories (`skills/`, `hooks/`, `tools/`, `commands/`, `rules/`,
  * `prompts/`, `.mcp.json`) are wired into discovery by `omp-plugins.ts`.
  *
- * CLI-provided paths are injected via {@link injectOmpExtensionCliRoots}
+ * CLI-provided paths are injected via {@link injectSanExtensionCliRoots}
  * before discovery runs; settings paths are read lazily from
- * `<scope>/settings.json` in {@link listOmpExtensionRoots} to mirror what
+ * `<scope>/settings.json` in {@link listSanExtensionRoots} to mirror what
  * `loadExtensionModules` already does.
  *
  * @see ./omp-plugins.ts
@@ -17,7 +17,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { CONFIG_DIR_NAME, getAgentDir, isEnoent, logger, tryParseJson } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, getAgentDir, isEnoent, logger, tryParseJson } from "@san/utils";
 import { readDirEntries, readFile } from "../capability/fs";
 import type { LoadContext } from "../capability/types";
 import { getEnabledPlugins } from "../extensibility/plugins/loader";
@@ -25,7 +25,7 @@ import { expandTilde } from "../tools/path-utils";
 import { listClaudePluginRoots } from "./helpers";
 
 /** A resolved extension package directory wired into the discovery surfaces. */
-export interface OmpExtensionRoot {
+export interface SanExtensionRoot {
 	/** Absolute path to the package directory. */
 	path: string;
 	/** Stable display name (basename of the package directory). */
@@ -48,9 +48,9 @@ let injectedCliRoots: InjectedRoot[] = [];
  * entrypoints have no package sub-tree to scan.
  *
  * Call once during startup before any capability load. Repeated calls extend
- * the registered set; {@link clearOmpExtensionCliRoots} resets for tests.
+ * the registered set; {@link clearSanExtensionCliRoots} resets for tests.
  */
-export function injectOmpExtensionCliRoots(paths: readonly string[], home: string, cwd: string): void {
+export function injectSanExtensionCliRoots(paths: readonly string[], home: string, cwd: string): void {
 	if (paths.length === 0) return;
 	const expanded = paths.map(raw => {
 		const tilde = expandTilde(raw, home);
@@ -66,12 +66,12 @@ export function injectOmpExtensionCliRoots(paths: readonly string[], home: strin
 }
 
 /** Drop every CLI-injected root. Tests use this between cases. */
-export function clearOmpExtensionCliRoots(): void {
+export function clearSanExtensionCliRoots(): void {
 	injectedCliRoots = [];
 }
 
 /** Inspect currently-injected CLI roots (read-only). Exposed for diagnostics + tests. */
-export function getInjectedOmpExtensionCliRoots(): readonly OmpExtensionRoot[] {
+export function getInjectedSanExtensionCliRoots(): readonly SanExtensionRoot[] {
 	return injectedCliRoots.map(({ path: p, level }) => ({ path: p, level, name: path.basename(p) }));
 }
 
@@ -121,7 +121,7 @@ async function isDirectory(p: string): Promise<boolean> {
  * Sources, in order of precedence (later entries with the same absolute path
  * are dropped):
  *
- * 1. CLI roots injected via {@link injectOmpExtensionCliRoots}
+ * 1. CLI roots injected via {@link injectSanExtensionCliRoots}
  * 2. Project `<cwd>/.san/settings.json#extensions`
  * 3. User `~/.san/agent/settings.json#extensions`
  * 4. Enabled npm/link plugins installed under `<plugins>/node_modules/` (for
@@ -133,7 +133,7 @@ async function isDirectory(p: string): Promise<boolean> {
  * `package.json`, etc.) are logged at `debug` and degrade gracefully — the
  * other sources still surface.
  */
-export async function listOmpExtensionRoots(ctx: LoadContext): Promise<OmpExtensionRoot[]> {
+export async function listSanExtensionRoots(ctx: LoadContext): Promise<SanExtensionRoot[]> {
 	const { project, user } = scopeDirs(ctx);
 	const [projectExtensions, userExtensions, installedPlugins] = await Promise.all([
 		readSettingsExtensions(path.join(project, "settings.json")),
@@ -158,7 +158,7 @@ export async function listOmpExtensionRoots(ctx: LoadContext): Promise<OmpExtens
 	}
 
 	const directoryFlags = await Promise.all(unique.map(c => isDirectory(c.path)));
-	const roots: OmpExtensionRoot[] = [];
+	const roots: SanExtensionRoot[] = [];
 	for (let i = 0; i < unique.length; i++) {
 		if (!directoryFlags[i]) continue;
 		const { path: p, level } = unique[i];

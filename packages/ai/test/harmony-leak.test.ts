@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { AssistantMessage, Model, ToolCall, Usage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, Model, ToolCall, Usage } from "@san/ai";
 import {
 	createHarmonyAuditEvent,
 	detectHarmonyLeak,
@@ -8,8 +8,8 @@ import {
 	isHarmonyLeakMitigationTarget,
 	recoverHarmonyToolCall,
 	signalListLabel,
-} from "@oh-my-pi/pi-ai/utils/harmony-leak";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+} from "@san/ai/utils/harmony-leak";
+import { getBundledModel } from "@san/catalog/models";
 import corpus from "./fixtures/harmony-leak-corpus.json" with { type: "json" };
 
 interface CorpusPositive {
@@ -301,5 +301,28 @@ describe("createHarmonyAuditEvent", () => {
 		// non-junk char becomes `·`; marker tokens are kept verbatim).
 		expect(event.removedPreview.length).toBeGreaterThan(0);
 		expect(event.signal).toBe(signalListLabel(detection.signals));
+	});
+
+	it("exposes the raw blob through SAN_HARMONY_DEBUG", () => {
+		const priorSan = Bun.env.SAN_HARMONY_DEBUG;
+		const priorOmp = Bun.env.OMP_HARMONY_DEBUG;
+		try {
+			Bun.env.SAN_HARMONY_DEBUG = "1";
+			delete Bun.env.OMP_HARMONY_DEBUG;
+			const detection = detectHarmonyLeak("analysis to=functions.edit code", "assistant_text")!;
+			const event = createHarmonyAuditEvent({
+				action: "abort_retry",
+				detection,
+				model: codexModel,
+				retryN: 1,
+				removed: "raw harmony tail",
+			});
+			expect(event.removedBlob).toBe("raw harmony tail");
+		} finally {
+			if (priorSan === undefined) delete Bun.env.SAN_HARMONY_DEBUG;
+			else Bun.env.SAN_HARMONY_DEBUG = priorSan;
+			if (priorOmp === undefined) delete Bun.env.OMP_HARMONY_DEBUG;
+			else Bun.env.OMP_HARMONY_DEBUG = priorOmp;
+		}
 	});
 });

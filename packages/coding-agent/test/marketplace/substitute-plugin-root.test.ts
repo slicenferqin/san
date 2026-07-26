@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { substitutePluginRoot } from "@oh-my-pi/pi-coding-agent/discovery/substitute-plugin-root";
+import { substitutePluginRoot } from "@san/coding-agent/discovery/substitute-plugin-root";
 
 // Use concatenation to avoid noTemplateCurlyInString lint rule on literal placeholder names
 const CLAUDE_VAR = "$" + "{CLAUDE_PLUGIN_ROOT}";
+const SAN_VAR = "$" + "{SAN_PLUGIN_ROOT}";
 const OMP_VAR = "$" + "{OMP_PLUGIN_ROOT}";
 
 describe("substitutePluginRoot", () => {
@@ -12,12 +13,18 @@ describe("substitutePluginRoot", () => {
 		expect(substitutePluginRoot(`${CLAUDE_VAR}/bin/server`, ROOT)).toBe("/plugins/my-plugin/bin/server");
 	});
 
+	it("replaces SAN_PLUGIN_ROOT in strings", () => {
+		expect(substitutePluginRoot(`${SAN_VAR}/bin/server`, ROOT)).toBe("/plugins/my-plugin/bin/server");
+	});
+
 	it("replaces OMP_PLUGIN_ROOT in strings", () => {
 		expect(substitutePluginRoot(`${OMP_VAR}/bin/server`, ROOT)).toBe("/plugins/my-plugin/bin/server");
 	});
 
-	it("replaces both variables in same string", () => {
-		expect(substitutePluginRoot(`${CLAUDE_VAR}:${OMP_VAR}`, ROOT)).toBe("/plugins/my-plugin:/plugins/my-plugin");
+	it("replaces canonical and compatibility variables in the same string", () => {
+		expect(substitutePluginRoot(`${CLAUDE_VAR}:${SAN_VAR}:${OMP_VAR}`, ROOT)).toBe(
+			"/plugins/my-plugin:/plugins/my-plugin:/plugins/my-plugin",
+		);
 	});
 
 	it("handles arrays recursively", () => {

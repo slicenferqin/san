@@ -2,8 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { formatHashlineHeader } from "@oh-my-pi/hashline";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@san/coding-agent/config/settings";
 import {
 	canonicalSnapshotKey,
 	DEFAULT_FUZZY_THRESHOLD,
@@ -15,10 +14,11 @@ import {
 	getFileSnapshotStore,
 	MAX_EDIT_SNAPSHOT_TEXT_CHARS,
 	pruneOversizedEditSnapshots,
-} from "@oh-my-pi/pi-coding-agent/edit";
-import { writethroughNoop } from "@oh-my-pi/pi-coding-agent/lsp";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/edit";
+import { writethroughNoop } from "@san/coding-agent/lsp";
+import type { ToolSession } from "@san/coding-agent/tools";
+import { formatHashlineHeader } from "@san/hashline";
+import { removeWithRetries } from "@san/utils";
 
 function makeSession(cwd: string): ToolSession {
 	return {

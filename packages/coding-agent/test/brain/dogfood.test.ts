@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
-import { runSanBrainBackendDogfood } from "@oh-my-pi/pi-coding-agent/brain/backend-dogfood";
-import { runSanBrainDogfood } from "@oh-my-pi/pi-coding-agent/brain/dogfood";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { runSanBrainBackendDogfood } from "@san/coding-agent/brain/backend-dogfood";
+import { runSanBrainDogfood } from "@san/coding-agent/brain/dogfood";
+import { Settings } from "@san/coding-agent/config/settings";
+import { TempDir } from "@san/utils";
 
 describe("San Brain M6 dogfood", () => {
 	test("passes the deterministic 14-turn acceptance contract", async () => {

@@ -7,8 +7,8 @@ import {
 	IdempotencyInProgressError,
 	IdempotencyOutcomeUnknownError,
 	SessionCreateReceiptStore,
-} from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/idempotency";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/modes/rpc-v2/idempotency";
+import { removeWithRetries } from "@san/utils";
 
 const tempDirectories: string[] = [];
 

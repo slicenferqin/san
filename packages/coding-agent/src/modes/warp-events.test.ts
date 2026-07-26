@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import * as terminalCapabilities from "@oh-my-pi/pi-tui/terminal-capabilities";
-import { VERSION } from "@oh-my-pi/pi-utils/dirs";
+import * as terminalCapabilities from "@san/tui/terminal-capabilities";
+import { VERSION } from "@san/utils/dirs";
 import type {
 	AgentEndEvent,
 	AgentStartEvent,
@@ -782,7 +782,7 @@ describe("Warp CLI-agent events", () => {
 		expect(body).toEqual({
 			event: "permission_request",
 			tool_name: "bash",
-			summary: "omp wants to run bash",
+			summary: "San wants to run bash",
 			v: 1,
 			agent: "omp",
 			session_id: "session-123",

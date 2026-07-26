@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, withTimeout } from "@oh-my-pi/pi-utils";
+import { isEnoent, withTimeout } from "@san/utils";
 import {
 	deleteManagedSkill,
 	getManagedSkillsDir,

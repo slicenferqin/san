@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { TaskTool, taskSchema } from "@oh-my-pi/pi-coding-agent/task";
-import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
-import { getTaskSchema, oneLineLabel } from "@oh-my-pi/pi-coding-agent/task/types";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { Settings } from "@san/coding-agent/config/settings";
+import { TaskTool, taskSchema } from "@san/coding-agent/task";
+import * as discoveryModule from "@san/coding-agent/task/discovery";
+import { getTaskSchema, oneLineLabel } from "@san/coding-agent/task/types";
+import type { ToolSession } from "@san/coding-agent/tools";
 import { type } from "arktype";
 
 // Contract: the task tool's wire shape is flat `{ name?, agent?, task, isolated? }`

@@ -1,23 +1,23 @@
 /**
- * OMP extension-package sub-discovery provider.
+ * San extension-package sub-discovery provider.
  *
  * When a user configures an extension via `extensions:` (in settings) or
  * `--extension`/`-e` (on the CLI), the docs promise that the package's
  * sibling directories — `skills/`, `hooks/pre|post/`, `tools/`, `commands/`,
- * `rules/`, `prompts/`, and `.mcp.json` — are picked up by omp's standard
- * discovery surfaces. The native `omp` provider in `builtin.ts` only walks
- * `.omp/` and `~/.omp/agent/`, so without this provider those sub-trees are
- * silently ignored.
+ * `rules/`, `prompts/`, and `.mcp.json` — are picked up by San's standard
+ * discovery surfaces. The native provider in `builtin.ts` walks canonical
+ * `.san/` roots plus legacy `.omp/` fallbacks, while this provider exposes
+ * capabilities shipped inside configured extension packages.
  *
- * Provider priority is set below the native `omp` provider (100) so an
- * extension package never shadows the user's own `.omp/` configuration on
- * dedup.
+ * The legacy provider ID remains stable for existing `disabledProviders`
+ * settings. Priority is lower than the native provider (100), so an extension
+ * package never shadows the user's own configuration on dedup.
  *
- * @see ./omp-extension-roots.ts
+ * @see ./san-extension-roots.ts
  * @see ../../docs/extension-loading.md
  */
 import * as path from "node:path";
-import { logger, parseFrontmatter, tryParseJson } from "@oh-my-pi/pi-utils";
+import { logger, parseFrontmatter, tryParseJson } from "@san/utils";
 import { registerProvider } from "../capability";
 import { readDirEntries, readFile } from "../capability/fs";
 import { type Hook, hookCapability } from "../capability/hook";
@@ -29,11 +29,11 @@ import { type SlashCommand, slashCommandCapability } from "../capability/slash-c
 import { type CustomTool, toolCapability } from "../capability/tool";
 import type { LoadContext, LoadResult } from "../capability/types";
 import { buildRuleFromMarkdown, createSourceMeta, loadFilesFromDir, scanSkillsFromDir } from "./helpers";
-import { listOmpExtensionRoots, type OmpExtensionRoot } from "./omp-extension-roots";
+import { listSanExtensionRoots, type SanExtensionRoot } from "./san-extension-roots";
 import { resolvePluginStdioPaths } from "./substitute-plugin-root";
 
 const PROVIDER_ID = "omp-plugins";
-const DISPLAY_NAME = "OMP Extension Packages";
+const DISPLAY_NAME = "San Extension Packages";
 const DESCRIPTION =
 	"Sub-discovery (skills, hooks, tools, commands, rules, prompts, .mcp.json) inside extension packages";
 const PRIORITY = 90;
@@ -43,7 +43,7 @@ const PRIORITY = 90;
 // =============================================================================
 
 async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
-	const roots = await listOmpExtensionRoots(ctx);
+	const roots = await listSanExtensionRoots(ctx);
 	const results = await Promise.all(
 		roots.map(root =>
 			scanSkillsFromDir(ctx, {
@@ -65,7 +65,7 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 // =============================================================================
 
 async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashCommand>> {
-	const roots = await listOmpExtensionRoots(ctx);
+	const roots = await listSanExtensionRoots(ctx);
 	const results = await Promise.all(
 		roots.map(root =>
 			loadFilesFromDir<SlashCommand>(ctx, path.join(root.path, "commands"), PROVIDER_ID, root.level, {
@@ -91,7 +91,7 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 // =============================================================================
 
 async function loadRules(ctx: LoadContext): Promise<LoadResult<Rule>> {
-	const roots = await listOmpExtensionRoots(ctx);
+	const roots = await listSanExtensionRoots(ctx);
 	const results = await Promise.all(
 		roots.map(root =>
 			loadFilesFromDir<Rule>(ctx, path.join(root.path, "rules"), PROVIDER_ID, root.level, {
@@ -112,7 +112,7 @@ async function loadRules(ctx: LoadContext): Promise<LoadResult<Rule>> {
 // =============================================================================
 
 async function loadPrompts(ctx: LoadContext): Promise<LoadResult<Prompt>> {
-	const roots = await listOmpExtensionRoots(ctx);
+	const roots = await listSanExtensionRoots(ctx);
 	const results = await Promise.all(
 		roots.map(root =>
 			loadFilesFromDir<Prompt>(ctx, path.join(root.path, "prompts"), PROVIDER_ID, root.level, {
@@ -139,8 +139,8 @@ async function loadPrompts(ctx: LoadContext): Promise<LoadResult<Prompt>> {
 const HOOK_TYPES: ReadonlyArray<"pre" | "post"> = ["pre", "post"];
 
 async function loadHooks(ctx: LoadContext): Promise<LoadResult<Hook>> {
-	const roots = await listOmpExtensionRoots(ctx);
-	const tasks: Array<{ root: OmpExtensionRoot; hookType: "pre" | "post" }> = [];
+	const roots = await listSanExtensionRoots(ctx);
+	const tasks: Array<{ root: SanExtensionRoot; hookType: "pre" | "post" }> = [];
 	for (const root of roots) {
 		for (const hookType of HOOK_TYPES) {
 			tasks.push({ root, hookType });
@@ -177,7 +177,7 @@ async function loadHooks(ctx: LoadContext): Promise<LoadResult<Hook>> {
 const TOOL_EXTENSIONS = ["json", "md", "ts", "js", "sh", "bash", "py"];
 
 async function loadTools(ctx: LoadContext): Promise<LoadResult<CustomTool>> {
-	const roots = await listOmpExtensionRoots(ctx);
+	const roots = await listSanExtensionRoots(ctx);
 	const perRoot = await Promise.all(
 		roots.map(async root => {
 			const toolsDir = path.join(root.path, "tools");
@@ -269,11 +269,11 @@ interface RawMcpServer {
 }
 
 async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> {
-	const roots = await listOmpExtensionRoots(ctx);
+	const roots = await listSanExtensionRoots(ctx);
 	const items: MCPServer[] = [];
 	const warnings: string[] = [];
 
-	const tasks: Array<{ root: OmpExtensionRoot; mcpPath: string }> = [];
+	const tasks: Array<{ root: SanExtensionRoot; mcpPath: string }> = [];
 	for (const root of roots) {
 		for (const filename of MCP_FILENAMES) {
 			tasks.push({ root, mcpPath: path.join(root.path, filename) });
@@ -288,8 +288,8 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 
 		const parsed = tryParseJson<{ mcpServers?: Record<string, unknown> }>(raw);
 		if (!parsed) {
-			warnings.push(`[omp-plugins] Invalid JSON in ${mcpPath}`);
-			logger.warn(`[omp-plugins] Invalid JSON in ${mcpPath}`);
+			warnings.push(`[san-plugins] Invalid JSON in ${mcpPath}`);
+			logger.warn(`[san-plugins] Invalid JSON in ${mcpPath}`);
 			continue;
 		}
 		const servers = parsed.mcpServers;
@@ -299,7 +299,7 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 			if (!serverCfg || typeof serverCfg !== "object" || Array.isArray(serverCfg)) continue;
 			const cfg = serverCfg as RawMcpServer;
 			if (typeof cfg.command !== "string" && typeof cfg.url !== "string") {
-				warnings.push(`[omp-plugins] Skipping MCP server "${serverName}" in ${mcpPath}: missing command or url`);
+				warnings.push(`[san-plugins] Skipping MCP server "${serverName}" in ${mcpPath}: missing command or url`);
 				continue;
 			}
 			// Root relative command/cwd at the plugin's config directory, not the

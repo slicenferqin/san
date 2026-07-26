@@ -3,9 +3,9 @@
  *
  * When an ACP client (e.g. Zed) advertises the `fs.writeTextFile` capability,
  * all write-mode tools must route through it so the editor's open buffer is
- * updated immediately. Internal artifacts ('/Users/theo/.omp/agent/sessions/-Projects-oh-my-pi/2026-06-10T09-11-41-506Z_019eb0cd-3ec2-7000-92aa-1b82aa4d78f0/local' plan files, other scheme
- * URLs) are always written directly to disk — those are OMP-owned and should
- * never be pushed into the editor.
+ * updated immediately. Internal artifacts (for example files below
+ * `~/.san/agent/sessions/`) and other scheme URLs are always written directly
+ * to disk — those are San-owned and should never be pushed into the editor.
  */
 
 import { FileChangeType, notifyWorkspaceWatchedFiles } from "../lsp/client";
@@ -18,9 +18,9 @@ import { ToolError } from "./tool-errors";
 /**
  * Return `true` when an ACP client bridge write is appropriate for this path.
  *
- * Returns `false` for internal-URL paths (e.g. `'/Users/theo/.omp/agent/sessions/-Projects-oh-my-pi/2026-06-10T09-11-41-506Z_019eb0cd-3ec2-7000-92aa-1b82aa4d78f0/local/PLAN.md'`) and for the
- * active plan file while plan mode is enabled — both are OMP-internal artifacts
- * that must stay off the editor's buffer.
+ * Returns `false` for internal-URL paths (for example a plan below
+ * `~/.san/agent/sessions/`) and for the active plan file while plan mode is
+ * enabled — both are San-internal artifacts that must stay off the editor buffer.
  */
 export function shouldRouteWriteThroughBridge(
 	session: ToolSession,
@@ -28,7 +28,7 @@ export function shouldRouteWriteThroughBridge(
 	absolutePath: string,
 ): boolean {
 	if (isInternalUrlPath(requestedPath)) return false;
-	// OMP-owned session artifacts (plan files, scratch notes) must stay off the
+	// San-owned session artifacts (plan files, scratch notes) must stay off the
 	// editor buffer even when addressed by their absolute sandbox path — e.g.
 	// after tag-based path recovery rebinds a bare `plan.md#tag` onto the
 	// `local://` artifact, `requestedPath` is the absolute path, not the URL.

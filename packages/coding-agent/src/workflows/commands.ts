@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { sanitizeText } from "@san/utils";
 import { replaceTabs, shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "../tools/render-utils";
 import { createAdHocApprovalKey, createManagedApprovalKey, hashWorkflowApprovalKey } from "./approval";
 import { discoverWorkflowSources, type WorkflowDiscoveryResult } from "./discovery";

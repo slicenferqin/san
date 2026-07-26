@@ -6,11 +6,17 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getPluginsDir, getPluginsLockfile, isEnoent } from "@oh-my-pi/pi-utils";
+import {
+	getLegacyConfigPath,
+	getPluginsDir,
+	isEnoent,
+	LEGACY_PLUGIN_LOCKFILE_NAME,
+	PLUGIN_LOCKFILE_NAME,
+} from "@san/utils";
 import { getConfigDirPaths } from "../../config";
 import { registerPluginCacheInvalidator, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import { installLegacyPiSpecifierShim } from "./legacy-pi-compat";
-import { normalizePluginRuntimeConfig } from "./runtime-config";
+import { loadPluginRuntimeConfig } from "./runtime-config";
 import type { InstalledPlugin, PluginManifest, PluginRuntimeConfig, ProjectPluginOverrides } from "./types";
 
 /** Installed plugin plus the root scope that supplied its runtime metadata. */
@@ -37,25 +43,18 @@ registerPluginCacheInvalidator(clearEnabledPluginsCache);
 // =============================================================================
 
 /**
- * Load plugin runtime config from lock file.
+ * Load plugin runtime config from the canonical plugin root. The canonical
+ * `san-plugins.lock.json` wins; legacy lock names and `.omp` roots are only
+ * consulted when no higher-priority file exists.
  *
- * `home` controls which `<plugins>/omp-plugins.lock.json` is read — pass it
- * through whenever the caller is loading plugins for a tempdir-rooted
- * scenario (tests, discovery sub-surfaces that need to mirror an alternate
- * `LoadContext.home`).
+ * `home` pins the user plugin root for tempdir-backed discovery and tests.
  */
 async function loadRuntimeConfig(home?: string): Promise<PluginRuntimeConfig> {
-	const lockPath = getPluginsLockfile(home);
-	try {
-		return normalizePluginRuntimeConfig(await Bun.file(lockPath).json());
-	} catch (err) {
-		if (isEnoent(err)) return normalizePluginRuntimeConfig({});
-		throw err;
-	}
+	return loadPluginRuntimeConfig(getPluginsDir(home));
 }
 
 /**
- * Load project-local plugin overrides (checks .omp and .pi directories).
+ * Load project-local plugin overrides from canonical `.san` and legacy config directories.
  */
 async function loadProjectOverrides(cwd: string): Promise<ProjectPluginOverrides> {
 	for (const overridesPath of getConfigDirPaths("plugin-overrides.json", { user: false, cwd })) {
@@ -70,7 +69,7 @@ async function loadProjectOverrides(cwd: string): Promise<ProjectPluginOverrides
 }
 /**
  * Per-root enumeration of plugins from `<root>/node_modules`,
- * `<root>/package.json#dependencies`, and `<root>/omp-plugins.lock.json#plugins`.
+ * `<root>/package.json#dependencies`, and the canonical or legacy runtime lock.
  * Honors `projectOverrides.disabled` and `projectOverrides.features`. Returns an
  * empty array when the root has no `node_modules` yet.
  */
@@ -93,14 +92,7 @@ async function collectPluginsAtRoot(
 		if (!isEnoent(err)) throw err;
 	}
 
-	const lockPath = path.join(root, "omp-plugins.lock.json");
-	let runtimeConfig: PluginRuntimeConfig;
-	try {
-		runtimeConfig = normalizePluginRuntimeConfig(await Bun.file(lockPath).json());
-	} catch (err) {
-		if (!isEnoent(err)) throw err;
-		runtimeConfig = normalizePluginRuntimeConfig({});
-	}
+	const runtimeConfig = await loadPluginRuntimeConfig(root);
 
 	// Union: dependencies (npm/marketplace installs) ∪ runtime-config plugins
 	// (links + already-recorded installs). Set preserves first-seen order,
@@ -125,7 +117,7 @@ async function collectPluginsAtRoot(
 
 		const manifest: PluginManifest | undefined = pluginPkg.san || pluginPkg.omp || pluginPkg.pi;
 		if (!manifest) {
-			// Not a San/OMP plugin, skip
+			// Not a San or legacy OMP/Pi plugin, skip
 			continue;
 		}
 		manifest.version = pluginPkg.version;
@@ -158,20 +150,31 @@ async function collectPluginsAtRoot(
 	return plugins;
 }
 
+function hasPluginRootData(root: string): boolean {
+	return [
+		path.join(root, "node_modules"),
+		path.join(root, "package.json"),
+		path.join(root, PLUGIN_LOCKFILE_NAME),
+		path.join(root, LEGACY_PLUGIN_LOCKFILE_NAME),
+	].some(candidate => fs.existsSync(candidate));
+}
+
+function selectReadablePluginRoot(canonicalRoot: string): string {
+	if (hasPluginRootData(canonicalRoot)) return canonicalRoot;
+	const legacyRoot = getLegacyConfigPath(canonicalRoot);
+	return legacyRoot && hasPluginRootData(legacyRoot) ? legacyRoot : canonicalRoot;
+}
+
 /**
  * Get list of enabled plugins with their resolved configurations.
  *
- * Enumerates two plugin roots in order: the user root
- * (`getPluginsDir(home)`) and, when a project anchor (`.omp/` or `.git/`)
- * exists at or above `cwd`, the project root
- * (`<projectAnchor>/.omp/plugins`). Each root contributes the union of its
- * `package.json#dependencies` and `omp-plugins.lock.json#plugins`. Project
- * entries shadow user entries with the same package name, matching the
- * shadow semantics of `MarketplaceManager.listInstalledPlugins`.
+ * Enumerates user and project plugin roots. Canonical `.san` roots win; a
+ * matching legacy `.omp` root is used only when the canonical root has no
+ * plugin data. Project entries shadow user entries with the same package name,
+ * matching `MarketplaceManager.listInstalledPlugins`.
  *
  * The optional `home` parameter pins the user plugins root for callers that
- * need to enumerate plugins relative to a non-default home (tests with a
- * tempdir, discovery loaders threaded with `LoadContext.home`).
+ * need deterministic tempdir-backed discovery.
  */
 export async function getEnabledPlugins(cwd: string, opts: { home?: string } = {}): Promise<ScopedInstalledPlugin[]> {
 	const { home } = opts;
@@ -194,13 +197,13 @@ export async function getEnabledPlugins(cwd: string, opts: { home?: string } = {
 async function loadEnabledPlugins(cwd: string, home?: string): Promise<ScopedInstalledPlugin[]> {
 	const projectOverrides = await loadProjectOverrides(cwd);
 
-	const userRoot = getPluginsDir(home);
+	const userRoot = selectReadablePluginRoot(getPluginsDir(home));
 	const userPlugins = await collectPluginsAtRoot(userRoot, projectOverrides, "user");
 
 	let projectPlugins: ScopedInstalledPlugin[] = [];
 	const projectRegistryPath = await resolveActiveProjectRegistryPath(cwd);
 	if (projectRegistryPath) {
-		const projectRoot = path.dirname(projectRegistryPath);
+		const projectRoot = selectReadablePluginRoot(path.dirname(projectRegistryPath));
 		if (projectRoot !== userRoot) {
 			projectPlugins = await collectPluginsAtRoot(projectRoot, projectOverrides, "project");
 		}
@@ -355,7 +358,7 @@ function resolveDirectoryEntries(dir: string): string[] {
  *     {@link resolveDirectoryEntries} — its own package.json `omp`/`pi`
  *     `extensions`, then a direct index, then a one-level scan of
  *     sub-extensions — matching the pi `extensions/<name>/index.ts` convention
- *     and OMP's configured-directory (`-e`) extension loader
+ *     and San's configured-directory (`-e`) extension loader
  *   - otherwise (tools/hooks/commands) only a direct index.{ts,js,mjs,cjs}.
  *     The sub-extension scan and the `omp`/`pi` `extensions` manifest are
  *     extensions-specific and must not hijack a non-extension directory entry

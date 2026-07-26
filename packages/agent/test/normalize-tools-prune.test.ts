@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { normalizeTools } from "@oh-my-pi/pi-agent-core/agent-loop";
-import type { AgentTool } from "@oh-my-pi/pi-agent-core/types";
-import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
+import { normalizeTools } from "@san/agent/agent-loop";
+import type { AgentTool } from "@san/agent/types";
+import { INTENT_FIELD } from "@san/wire";
 import { type } from "arktype";
 
 const toolSchema = type({

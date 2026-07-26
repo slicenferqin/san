@@ -5,6 +5,7 @@
 ### Breaking Changes
 
 - Changed TUI `/model`, `/models`, Alt+M, and `/switch` so session model select opens an effort step for reasoning models before closing. Non-reasoning models still select immediately. Status notes mention `/effort` and Shift+Tab. Role assignment remains `/model roles`.
+- Renamed the published package from `@oh-my-pi/pi-coding-agent` to `@san/coding-agent`, the CLI binary from `omp` to `san`, and canonical configuration names to `.san` and `SAN_*`; documented legacy inputs remain lower-precedence compatibility fallbacks.
 
 ### Added
 

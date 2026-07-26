@@ -7,7 +7,7 @@
  *   - LLM digest fails or times out
  *   - san.contextSteady.digest.persistFallback forces fallback-only mode
  *
- * All types are inlined to avoid importing @oh-my-pi/pi-agent-core
+ * All types are inlined to avoid importing @san/agent
  * which transitively loads native modules via tokenizer → pi-natives.
  */
 

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import * as url from "node:url";
-import { __buildLegacyPiPackageRootOverrides } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/legacy-pi-compat";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { __buildLegacyPiPackageRootOverrides } from "@san/coding-agent/extensibility/plugins/legacy-pi-compat";
+import { TempDir } from "@san/utils";
 import { __renderLegacyPiVirtualModule, collectBundledPiEntries } from "../../scripts/legacy-pi-virtual-module";
 
 const bundledModuleKeys = new Set((await collectBundledPiEntries()).map(entry => entry.key));
@@ -61,9 +61,9 @@ process.stdout.write(JSON.stringify([
 		expect(JSON.parse(stdout)).toEqual([0, 0, 1, 0, 1, 1]);
 	});
 
-	it("serves @oh-my-pi/pi-ai/oauth through the bundled virtual namespace in compiled mode", () => {
+	it("serves @san/ai/oauth through the bundled virtual namespace in compiled mode", () => {
 		const overrides = __buildLegacyPiPackageRootOverrides(true, bundledModuleKeys);
-		expect(overrides["@oh-my-pi/pi-ai/oauth"]).toBe("omp-legacy-pi-bundled:@oh-my-pi/pi-ai/oauth");
+		expect(overrides["@san/ai/oauth"]).toBe("omp-legacy-pi-bundled:@san/ai/oauth");
 	});
 
 	it("expands wildcard exports for concrete on-disk targets (issue #3442 follow-up)", () => {
@@ -74,22 +74,20 @@ process.stdout.write(JSON.stringify([
 		// fall-through. The generator now globs each wildcard's source pattern
 		// and registers every concrete `.ts` match against the virtual namespace.
 		const overrides = __buildLegacyPiPackageRootOverrides(true, bundledModuleKeys);
-		expect(overrides["@oh-my-pi/pi-ai/oauth/anthropic"]).toBe(
-			"omp-legacy-pi-bundled:@oh-my-pi/pi-ai/oauth/anthropic",
-		);
+		expect(overrides["@san/ai/oauth/anthropic"]).toBe("omp-legacy-pi-bundled:@san/ai/oauth/anthropic");
 		// Sanity: the wildcard expansion also reaches deeper subroots so plugins
 		// pinned to e.g. `@oh-my-pi/pi-ai/providers/openai` keep resolving.
-		expect(bundledModuleKeys.has("@oh-my-pi/pi-ai/oauth/anthropic")).toBe(true);
-		expect(bundledModuleKeys.has("@oh-my-pi/pi-ai/oauth/openai-codex")).toBe(true);
+		expect(bundledModuleKeys.has("@san/ai/oauth/anthropic")).toBe(true);
+		expect(bundledModuleKeys.has("@san/ai/oauth/openai-codex")).toBe(true);
 	});
 
 	it("expands web search provider wildcard exports for compiled plugin imports", () => {
 		const overrides = __buildLegacyPiPackageRootOverrides(true, bundledModuleKeys);
 		const providerKeys = [
-			"@oh-my-pi/pi-coding-agent/web/search/providers/xai",
-			"@oh-my-pi/pi-coding-agent/web/search/providers/tinyfish",
-			"@oh-my-pi/pi-coding-agent/web/search/providers/firecrawl",
-			"@oh-my-pi/pi-coding-agent/web/search/providers/duckduckgo",
+			"@san/coding-agent/web/search/providers/xai",
+			"@san/coding-agent/web/search/providers/tinyfish",
+			"@san/coding-agent/web/search/providers/firecrawl",
+			"@san/coding-agent/web/search/providers/duckduckgo",
 		] as const;
 
 		for (const key of providerKeys) {
@@ -104,8 +102,8 @@ process.stdout.write(JSON.stringify([
 		// binary entry's transitive graph. Plugins almost never import top-level
 		// pi-* files directly, so we keep those routed via `Bun.resolveSync`.
 		// Concrete check: `@oh-my-pi/pi-coding-agent/cli` is NOT bundled.
-		expect(bundledModuleKeys.has("@oh-my-pi/pi-coding-agent/cli")).toBe(false);
-		expect(bundledModuleKeys.has("@oh-my-pi/pi-coding-agent/main")).toBe(false);
+		expect(bundledModuleKeys.has("@san/coding-agent/cli")).toBe(false);
+		expect(bundledModuleKeys.has("@san/coding-agent/main")).toBe(false);
 	});
 
 	it("does not bundle main-thread-unsafe worker entrypoints", () => {
@@ -113,7 +111,7 @@ process.stdout.write(JSON.stringify([
 		// The compiled legacy registry is imported on the main thread while
 		// validating plugin extensions, so enumerating these files recreates the
 		// `js worker-entry: missing parentPort` failure from #3508.
-		expect(bundledModuleKeys.has("@oh-my-pi/pi-coding-agent/eval/js/worker-entry")).toBe(false);
+		expect(bundledModuleKeys.has("@san/coding-agent/eval/js/worker-entry")).toBe(false);
 	});
 
 	it("maps every bundled key (minus shimmed roots + typebox) to its virtual specifier in compiled mode", () => {
@@ -123,7 +121,7 @@ process.stdout.write(JSON.stringify([
 			// pi-ai/pi-coding-agent roots intentionally use the legacy compat shims
 			// (they re-attach `Type`, `defineTool`, etc. dropped from the canonical
 			// package surface); typebox is served via TYPEBOX_SHIM_PATH.
-			if (key === "@oh-my-pi/pi-ai" || key === "@oh-my-pi/pi-coding-agent" || key === "typebox") continue;
+			if (key === "@san/ai" || key === "@san/coding-agent" || key === "typebox") continue;
 			if (overrides[key] !== `omp-legacy-pi-bundled:${key}`) {
 				missing.push(key);
 			}
@@ -135,18 +133,18 @@ process.stdout.write(JSON.stringify([
 		// The shim entries themselves resolve to virtual bundled specifiers in
 		// compiled mode (the shim files are bundled under their own registry
 		// keys); the test asserts only that the roots stay distinct from the
-		// canonical pi-* surface — extensions still see the `Type` /
-		// `defineTool` helpers the canonical entrypoints dropped.
+		// canonical San surface — extensions still see the `Type` / `defineTool`
+		// helpers the canonical entrypoints dropped.
 		const overrides = __buildLegacyPiPackageRootOverrides(true, bundledModuleKeys);
-		expect(overrides["@oh-my-pi/pi-ai"]).toBeDefined();
-		expect(overrides["@oh-my-pi/pi-ai"]).not.toBe("omp-legacy-pi-bundled:@oh-my-pi/pi-ai/oauth");
-		expect(overrides["@oh-my-pi/pi-coding-agent"]).toBeDefined();
+		expect(overrides["@san/ai"]).toBeDefined();
+		expect(overrides["@san/ai"]).not.toBe("omp-legacy-pi-bundled:@san/ai");
+		expect(overrides["@san/coding-agent"]).toBeDefined();
 	});
 
 	it("does not register subpath overrides in dev/install mode", () => {
 		const overrides = __buildLegacyPiPackageRootOverrides(false);
-		expect(overrides).not.toHaveProperty("@oh-my-pi/pi-ai/oauth");
-		expect(overrides).not.toHaveProperty("@oh-my-pi/pi-coding-agent/tools");
+		expect(overrides).not.toHaveProperty("@san/ai/oauth");
+		expect(overrides).not.toHaveProperty("@san/coding-agent/tools");
 		// Dev keeps only the historical shim entries so canonical subpath
 		// imports continue to flow through `Bun.resolveSync` against the live
 		// monorepo / installed `node_modules` tree.

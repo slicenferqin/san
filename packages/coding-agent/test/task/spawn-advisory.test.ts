@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import { buildSpecializationAdvisory, TaskTool } from "@oh-my-pi/pi-coding-agent/task";
-import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
-import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
-import type { AgentDefinition, SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { Settings } from "@san/coding-agent/config/settings";
+import { AgentLifecycleManager } from "@san/coding-agent/registry/agent-lifecycle";
+import { AgentRegistry } from "@san/coding-agent/registry/agent-registry";
+import { buildSpecializationAdvisory, TaskTool } from "@san/coding-agent/task";
+import * as discoveryModule from "@san/coding-agent/task/discovery";
+import * as executorModule from "@san/coding-agent/task/executor";
+import type { AgentDefinition, SingleResult } from "@san/coding-agent/task/types";
+import type { ToolSession } from "@san/coding-agent/tools";
 
 // Contract: the task tool appends an advisory (never a rejection) steering the
 // spawner toward more specific agent types when one call resolves ≥2 items to

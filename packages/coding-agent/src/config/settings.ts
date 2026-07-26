@@ -14,8 +14,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { configureProviderMaxInFlightRequests } from "@oh-my-pi/pi-ai/stream";
+import { configureProviderMaxInFlightRequests } from "@san/ai/stream";
 import {
+	CONFIG_DIR_NAME,
 	getAgentDbPath,
 	getAgentDir,
 	getLastChangelogVersionPath,
@@ -25,7 +26,7 @@ import {
 	MAIN_CONFIG_FILENAMES,
 	procmgr,
 	setWorktreesDir,
-} from "@oh-my-pi/pi-utils";
+} from "@san/utils";
 import { JSONC, YAML } from "bun";
 import { invalidate as invalidateCapabilityFsCache } from "../capability/fs";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
@@ -1202,14 +1203,19 @@ export class Settings {
 	async #loadProjectSettings(): Promise<RawSettings> {
 		try {
 			const result = await loadCapability(settingsCapability.id, { cwd: this.#cwd });
-			// Preserve the pre-San project settings contract as a read-only,
-			// lower-precedence fallback. Canonical .san settings loaded below win.
+			// Preserve pre-San project settings as a read-only, lower-precedence fallback.
 			let merged = (await this.#loadYamlIfPresent(path.join(this.#cwd, ".omp", "settings.json"))) ?? {};
-			const nativeProject = await this.#loadYaml(path.join(this.#cwd, ".omp", MAIN_CONFIG_FILENAMES[0]));
-			merged = this.#deepMerge(merged, nativeProject);
+			merged = this.#deepMerge(merged, await this.#loadYaml(path.join(this.#cwd, ".omp", MAIN_CONFIG_FILENAMES[0])));
+			let nativeProject: RawSettings = {};
+			const canonicalProjectDir = path.resolve(this.#cwd, CONFIG_DIR_NAME);
 			for (const item of result.items as SettingsCapabilityItem[]) {
-				if (item.level === "project") {
-					merged = this.#deepMerge(merged, item.data as RawSettings);
+				if (item.level !== "project") continue;
+				if (item._source.provider === "native" && path.dirname(path.resolve(item.path)) !== canonicalProjectDir)
+					continue;
+				const data = item.data as RawSettings;
+				merged = this.#deepMerge(merged, data);
+				if (item._source.provider === "native") {
+					nativeProject = this.#deepMerge(nativeProject, data);
 				}
 			}
 			const nativeModelRoles = getByPath(nativeProject, ["modelRoles"]);
@@ -1518,6 +1524,7 @@ export class Settings {
 					!("bankId" in hindsightObj) &&
 					typeof agentName === "string" &&
 					agentName.trim().length > 0 &&
+					agentName !== "san" &&
 					agentName !== "omp"
 				) {
 					hindsightObj.bankId = agentName;
@@ -1843,7 +1850,7 @@ export class Settings {
 	async #saveProjectNow(): Promise<void> {
 		if (!this.#persist || this.#modifiedProjectModelRoles.size === 0) return;
 
-		const projectConfigPath = path.join(this.#cwd, ".omp", "config.yml");
+		const projectConfigPath = path.join(this.#cwd, CONFIG_DIR_NAME, "config.yml");
 		const modifiedModelRoles = [...this.#modifiedProjectModelRoles];
 		this.#modifiedProjectModelRoles.clear();
 

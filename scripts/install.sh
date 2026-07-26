@@ -11,7 +11,7 @@ set -e
 #   -r <ref>       Shorthand for --ref
 
 REPO="slicenferqin/san"
-PACKAGE="@oh-my-pi/pi-coding-agent"
+PACKAGE="@san/coding-agent"
 INSTALL_DIR="${SAN_INSTALL_DIR:-${PI_INSTALL_DIR:-$HOME/.local/bin}}"
 MIN_BUN_VERSION="1.3.14"
 

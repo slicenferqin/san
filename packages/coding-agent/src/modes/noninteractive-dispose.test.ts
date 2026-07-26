@@ -3,10 +3,10 @@
  * awaited `session.dispose()` (which contains the bounded browser reaper
  * `releaseTabsForOwner`) before terminating the process. It previously called
  * `process.exit(1)` ahead of the `dispose()` at the end of `runPrintMode`, so
- * an OMP-owned Chromium survived the exit (issue #5643).
+ * a San-owned Chromium survived the exit (issue #5643).
  */
 import { describe, expect, it, spyOn } from "bun:test";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage } from "@san/ai";
 import type { AgentSession } from "../session/agent-session";
 import { runPrintMode } from "./print-mode";
 

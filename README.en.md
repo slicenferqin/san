@@ -243,7 +243,7 @@ The context steady dogfood verifier currently covers digest persistence, Context
 
 San is now an independent repository: [`slicenferqin/san`](https://github.com/slicenferqin/san). The early codebase originated from [`oh-my-pi`](https://github.com/can1357/oh-my-pi), which itself builds on Mario Zechner's Pi work. San inherits the original tool-rich coding-agent surface: file tools, shell execution, LSP, debugger integration, subagents, browser, web search, collaboration, and memory backends.
 
-This README focuses on San-specific work and current acceptance-ready capabilities. Some internal `@oh-my-pi/*` package names remain as compatibility implementation details; the public repository, config directories, command, and release narrative now point to San.
+This README focuses on San-specific work and current acceptance-ready capabilities. The repository retains `@oh-my-pi/*` only in explicit compatibility layers such as legacy plugin resolution; public packages, repository links, config directories, commands, and release narrative use San.
 
 ## License
 

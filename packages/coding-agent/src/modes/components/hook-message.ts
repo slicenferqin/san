@@ -1,5 +1,5 @@
-import type { Component } from "@oh-my-pi/pi-tui";
-import { Box, Container } from "@oh-my-pi/pi-tui";
+import type { Component } from "@san/tui";
+import { Box, Container } from "@san/tui";
 import type { HookMessageRenderer } from "../../extensibility/hooks/types";
 import { theme } from "../../modes/theme/theme";
 import type { HookMessage } from "../../session/messages";

@@ -24,11 +24,11 @@
  * the network and never throws.
  */
 import { Database } from "bun:sqlite";
-import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import type { FetchImpl } from "@oh-my-pi/pi-ai";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { Text } from "@oh-my-pi/pi-tui";
-import { $env, $flag, getAutoQaDbDir, getInstallId, logger, VERSION } from "@oh-my-pi/pi-utils";
+import type { AgentToolResult } from "@san/agent";
+import type { FetchImpl } from "@san/ai";
+import type { Component } from "@san/tui";
+import { Text } from "@san/tui";
+import { $env, $flag, getAutoQaDbDir, getInstallId, logger, VERSION } from "@san/utils";
 import type { Settings } from "..";
 import type { Theme } from "../modes/theme/theme";
 import { renderStatusLine, truncateToWidth } from "../tui";
@@ -233,7 +233,7 @@ let cachedDb: Database | null = null;
 
 /**
  * Open (or return the cached handle for) the auto-QA SQLite database at
- * `~/.omp/agent/autoqa.db`, creating the schema lazily. Returns `null` when
+ * the canonical San agent data directory, creating the schema lazily. Returns `null` when
  * the agent data dir cannot be resolved.
  */
 export function openAutoQaDb(): Database | null {

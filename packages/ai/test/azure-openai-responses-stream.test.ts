@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import {
-	type AzureOpenAIResponsesOptions,
-	streamAzureOpenAIResponses,
-} from "@oh-my-pi/pi-ai/providers/azure-openai-responses";
-import type { Context, FetchImpl, Model, ModelSpec, Tool } from "@oh-my-pi/pi-ai/types";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { type AzureOpenAIResponsesOptions, streamAzureOpenAIResponses } from "@san/ai/providers/azure-openai-responses";
+import type { Context, FetchImpl, Model, ModelSpec, Tool } from "@san/ai/types";
+import { buildModel } from "@san/catalog/build";
 
 const azureModel: Model<"azure-openai-responses"> = buildModel({
 	id: "gpt-5-mini",

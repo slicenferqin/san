@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { resolveSanBrainRuntimePolicy } from "@oh-my-pi/pi-coding-agent/brain/runtime-policy";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resolveSanBrainRuntimePolicy } from "@san/coding-agent/brain/runtime-policy";
+import { Settings } from "@san/coding-agent/config/settings";
 
 describe("San Brain runtime policy", () => {
 	it("keeps every Brain behavior off when the global switch is disabled", () => {

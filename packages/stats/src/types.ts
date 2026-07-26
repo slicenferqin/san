@@ -1,4 +1,4 @@
-import type { AssistantMessage, ServiceTier, ServiceTierByFamily, StopReason, Usage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ServiceTier, ServiceTierByFamily, StopReason, Usage } from "@san/ai";
 import type { AgentType } from "./shared-types";
 
 export * from "./shared-types";

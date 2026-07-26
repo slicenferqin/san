@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import type { Usage } from "@oh-my-pi/pi-ai";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent";
+import type { Usage } from "@san/ai";
+import { SessionManager } from "@san/coding-agent";
 import {
 	type AdHocWorkflowDraft,
 	type DiscoveredWorkflowSource,
@@ -15,8 +15,8 @@ import {
 	WorkflowStore,
 	workflowSourceHash,
 	workflowValueHash,
-} from "@oh-my-pi/pi-coding-agent/workflows";
-import { TempDir } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/workflows";
+import { TempDir } from "@san/utils";
 
 let tempDir: TempDir | null = null;
 let store: WorkflowStore | null = null;

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the published package from `@oh-my-pi/omp-stats` to `@san/stats` and its executable from `omp-stats` to `san-stats`.
+
 ## [17.0.2] - 2026-07-17
 
 ### Fixed

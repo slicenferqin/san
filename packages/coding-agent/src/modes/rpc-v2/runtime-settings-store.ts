@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isEnoent } from "@san/utils";
 import { withFileLock } from "../../config/file-lock";
 
 export type RpcRuntimeSettingsScope = "global" | "workspace";

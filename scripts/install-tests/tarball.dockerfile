@@ -39,7 +39,7 @@ uplinks:
   npmjs:
     url: https://registry.npmjs.org/
 packages:
-  '@oh-my-pi/*':
+  '@san/*':
     access: $all
     publish: $all
     unpublish: $all
@@ -101,7 +101,7 @@ for pkg in "${PACKAGES[@]}"; do
     
     # Show what we're publishing
     echo "Dependencies:"
-    jq '.dependencies | to_entries[] | select(.value | startswith("@oh-my-pi") or startswith("workspace"))' package.json 2>/dev/null || true
+    jq '.dependencies | to_entries[] | select(.value | startswith("@san") or startswith("workspace"))' package.json 2>/dev/null || true
     
     # Publish
     npm publish --registry "$REGISTRY"
@@ -127,9 +127,9 @@ RUN verdaccio --config /root/.config/verdaccio/config.yaml &>/dev/null & \
 WORKDIR /test
 RUN verdaccio --config /root/.config/verdaccio/config.yaml &>/dev/null & \
     sleep 3 && \
-    bun add @oh-my-pi/pi-coding-agent --registry http://localhost:4873 && \
+    bun add @san/coding-agent --registry http://localhost:4873 && \
     pkill -f verdaccio
 
 # Verify the installed package works
 ENV PATH="/test/node_modules/.bin:$PATH"
-RUN omp --version
+RUN san --version

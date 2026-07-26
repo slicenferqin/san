@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { initDb, insertMessageStats } from "@oh-my-pi/omp-stats/db";
-import { dedupeProjects, getGainDashboardStats, normalizeProjectPath } from "@oh-my-pi/omp-stats/gain-aggregator";
-import type { MessageStats } from "@oh-my-pi/omp-stats/types";
-import { getStatsDbPath } from "@oh-my-pi/pi-utils";
+import { initDb, insertMessageStats } from "@san/stats/db";
+import { dedupeProjects, getGainDashboardStats, normalizeProjectPath } from "@san/stats/gain-aggregator";
+import type { MessageStats } from "@san/stats/types";
+import { getStatsDbPath } from "@san/utils";
 import { installStatsTestIsolation } from "./helpers/temp-agent";
 
 installStatsTestIsolation("@pi-stats-gain-");
@@ -55,6 +55,8 @@ describe("gain project normalization", () => {
 			"/Users/me/tool/worktrees/app/packages/stats",
 		);
 		expect(normalizeProjectPath("/tmp/pi-bash-exec/session")).toBeNull();
+		expect(normalizeProjectPath("/Users/me/.san/wt/task/repo")).toBeNull();
+		expect(normalizeProjectPath("/Users/me/.omp/wt/task/repo")).toBeNull();
 	});
 
 	it("dedupes normalized project roots with separator-aware parent matching", () => {

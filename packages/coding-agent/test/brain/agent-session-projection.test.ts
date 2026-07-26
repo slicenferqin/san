@@ -1,18 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
-import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { applySanBrainMutation } from "@oh-my-pi/pi-coding-agent/brain/commands";
-import { appendSanBrainExperienceCandidate, listSanBrainLedgerEntries } from "@oh-my-pi/pi-coding-agent/brain/ledger";
-import { SanBrainStore } from "@oh-my-pi/pi-coding-agent/brain/store";
-import type { SanBrainExperienceCandidate } from "@oh-my-pi/pi-coding-agent/brain/types";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { Agent } from "@san/agent";
+import { createMockModel } from "@san/ai/providers/mock";
+import { applySanBrainMutation } from "@san/coding-agent/brain/commands";
+import { appendSanBrainExperienceCandidate, listSanBrainLedgerEntries } from "@san/coding-agent/brain/ledger";
+import { SanBrainStore } from "@san/coding-agent/brain/store";
+import type { SanBrainExperienceCandidate } from "@san/coding-agent/brain/types";
+import { ModelRegistry } from "@san/coding-agent/config/model-registry";
+import { Settings } from "@san/coding-agent/config/settings";
+import { AgentSession, type AgentSessionEvent } from "@san/coding-agent/session/agent-session";
+import { AuthStorage } from "@san/coding-agent/session/auth-storage";
+import { convertToLlm } from "@san/coding-agent/session/messages";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
+import { TempDir } from "@san/utils";
 
 interface Harness {
 	session: AgentSession;

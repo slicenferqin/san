@@ -1,4 +1,4 @@
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { Snowflake } from "@san/utils";
 import { workflowValueHash } from "./fingerprint";
 import type {
 	AdHocWorkflowApprovalKey,

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { Usage } from "@oh-my-pi/pi-ai";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent";
+import type { Usage } from "@san/ai";
+import { SessionManager } from "@san/coding-agent";
 import {
 	parseManagedWorkflow,
 	rebuildWorkflowLedger,
@@ -12,8 +12,8 @@ import {
 	WorkflowManager,
 	WorkflowStore,
 	workflowSourceHash,
-} from "@oh-my-pi/pi-coding-agent/workflows";
-import { TempDir } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/workflows";
+import { TempDir } from "@san/utils";
 import { $ } from "bun";
 import { captureBaseline } from "../../src/task/worktree";
 import {

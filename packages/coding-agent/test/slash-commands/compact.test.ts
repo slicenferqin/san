@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "bun:test";
-import type { CompactOptions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
-import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import type { CompactMode } from "@oh-my-pi/pi-coding-agent/session/compact-modes";
+import type { CompactOptions } from "@san/coding-agent/extensibility/extensions/types";
+import type { InteractiveModeContext } from "@san/coding-agent/modes/types";
+import type { CompactMode } from "@san/coding-agent/session/compact-modes";
 import {
 	executeAcpBuiltinSlashCommand,
 	getAcpBuiltinSlashCommands,
-} from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
-import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
-import type { SlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
+} from "@san/coding-agent/slash-commands/acp-builtins";
+import { executeBuiltinSlashCommand } from "@san/coding-agent/slash-commands/builtin-registry";
+import type { SlashCommandRuntime } from "@san/coding-agent/slash-commands/types";
 
 function acpRuntime() {
 	const compact = vi.fn(async (_instructions?: string, _options?: CompactOptions) => {});

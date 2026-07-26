@@ -1,5 +1,5 @@
-import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { estimateTokens } from "@san/agent/compaction";
+import { prompt } from "@san/utils";
 import statePreludeTemplate from "../prompts/brain/state-prelude.md" with { type: "text" };
 import type { ReadonlySessionManager } from "../session/session-manager";
 import type { SanBrainActiveStateRecord } from "./store";

@@ -1,14 +1,8 @@
 /**
  * Tool wrappers for extensions.
  */
-import type {
-	AgentTool,
-	AgentToolContext,
-	AgentToolResult,
-	AgentToolUpdateCallback,
-	ToolLoadMode,
-} from "@oh-my-pi/pi-agent-core";
-import type { ImageContent, Static, TextContent, TSchema } from "@oh-my-pi/pi-ai";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback, ToolLoadMode } from "@san/agent";
+import type { ImageContent, Static, TextContent, TSchema } from "@san/ai";
 import type { Settings } from "../../config/settings";
 import type { Theme } from "../../modes/theme/theme";
 import { type ApprovalMode, formatApprovalPrompt, resolveApproval } from "../../tools/approval";

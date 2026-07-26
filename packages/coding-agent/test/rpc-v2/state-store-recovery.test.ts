@@ -2,11 +2,11 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { SessionEvent } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/dto/events";
-import { IdempotencyStore } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/idempotency";
-import { newEventId, type SessionId } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/protocol/ids";
-import { RpcV2StateStore } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/state-store";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import type { SessionEvent } from "@san/coding-agent/modes/rpc-v2/dto/events";
+import { IdempotencyStore } from "@san/coding-agent/modes/rpc-v2/idempotency";
+import { newEventId, type SessionId } from "@san/coding-agent/modes/rpc-v2/protocol/ids";
+import { RpcV2StateStore } from "@san/coding-agent/modes/rpc-v2/state-store";
+import { removeWithRetries } from "@san/utils";
 
 const tempDirectories: string[] = [];
 

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "omp",
+      "name": "san-monorepo",
       "dependencies": {
         "sherpa-onnx": "1.13.2",
         "sherpa-onnx-darwin-arm64": "1.13.3",
@@ -20,16 +20,16 @@
       },
     },
     "packages/agent": {
-      "name": "@oh-my-pi/pi-agent-core",
+      "name": "@san/agent",
       "version": "17.0.2",
       "dependencies": {
-        "@oh-my-pi/pi-ai": "catalog:",
-        "@oh-my-pi/pi-catalog": "catalog:",
-        "@oh-my-pi/pi-natives": "catalog:",
-        "@oh-my-pi/pi-utils": "catalog:",
-        "@oh-my-pi/pi-wire": "catalog:",
-        "@oh-my-pi/snapcompact": "catalog:",
         "@opentelemetry/api": "catalog:",
+        "@san/ai": "catalog:",
+        "@san/catalog": "catalog:",
+        "@san/natives": "catalog:",
+        "@san/snapcompact": "catalog:",
+        "@san/utils": "catalog:",
+        "@san/wire": "catalog:",
       },
       "devDependencies": {
         "@opentelemetry/context-async-hooks": "catalog:",
@@ -38,13 +38,13 @@
       },
     },
     "packages/ai": {
-      "name": "@oh-my-pi/pi-ai",
+      "name": "@san/ai",
       "version": "17.0.2",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
-        "@oh-my-pi/pi-catalog": "catalog:",
-        "@oh-my-pi/pi-utils": "catalog:",
-        "@oh-my-pi/pi-wire": "catalog:",
+        "@san/catalog": "catalog:",
+        "@san/utils": "catalog:",
+        "@san/wire": "catalog:",
         "arktype": "catalog:",
         "zod": "catalog:",
       },
@@ -54,21 +54,21 @@
       },
     },
     "packages/catalog": {
-      "name": "@oh-my-pi/pi-catalog",
+      "name": "@san/catalog",
       "version": "17.0.2",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
-        "@oh-my-pi/pi-utils": "catalog:",
+        "@san/utils": "catalog:",
         "arktype": "catalog:",
         "zod": "catalog:",
       },
       "devDependencies": {
-        "@oh-my-pi/pi-ai": "catalog:",
+        "@san/ai": "catalog:",
         "@types/bun": "catalog:",
       },
     },
     "packages/coding-agent": {
-      "name": "@oh-my-pi/pi-coding-agent",
+      "name": "@san/coding-agent",
       "version": "17.0.2",
       "bin": {
         "san": "src/cli.ts",
@@ -78,17 +78,6 @@
         "@babel/parser": "catalog:",
         "@babel/types": "catalog:",
         "@mozilla/readability": "catalog:",
-        "@oh-my-pi/hashline": "catalog:",
-        "@oh-my-pi/omp-stats": "catalog:",
-        "@oh-my-pi/pi-agent-core": "catalog:",
-        "@oh-my-pi/pi-ai": "catalog:",
-        "@oh-my-pi/pi-catalog": "catalog:",
-        "@oh-my-pi/pi-mnemopi": "catalog:",
-        "@oh-my-pi/pi-natives": "catalog:",
-        "@oh-my-pi/pi-tui": "catalog:",
-        "@oh-my-pi/pi-utils": "catalog:",
-        "@oh-my-pi/pi-wire": "catalog:",
-        "@oh-my-pi/snapcompact": "catalog:",
         "@opentelemetry/api": "catalog:",
         "@opentelemetry/api-logs": "catalog:",
         "@opentelemetry/context-async-hooks": "catalog:",
@@ -101,6 +90,17 @@
         "@opentelemetry/sdk-trace-base": "catalog:",
         "@opentelemetry/sdk-trace-node": "catalog:",
         "@puppeteer/browsers": "catalog:",
+        "@san/agent": "catalog:",
+        "@san/ai": "catalog:",
+        "@san/catalog": "catalog:",
+        "@san/hashline": "catalog:",
+        "@san/mnemopi": "catalog:",
+        "@san/natives": "catalog:",
+        "@san/snapcompact": "catalog:",
+        "@san/stats": "catalog:",
+        "@san/tui": "catalog:",
+        "@san/utils": "catalog:",
+        "@san/wire": "catalog:",
         "@types/turndown": "catalog:",
         "@xterm/headless": "catalog:",
         "arktype": "catalog:",
@@ -129,10 +129,10 @@
       },
     },
     "packages/collab-web": {
-      "name": "@oh-my-pi/collab-web",
+      "name": "@san/collab-web",
       "version": "16.3.6",
       "dependencies": {
-        "@oh-my-pi/pi-wire": "catalog:",
+        "@san/wire": "catalog:",
         "lucide-react": "catalog:",
         "marked": "catalog:",
         "react": "catalog:",
@@ -145,7 +145,7 @@
       },
     },
     "packages/hashline": {
-      "name": "@oh-my-pi/hashline",
+      "name": "@san/hashline",
       "version": "17.0.2",
       "dependencies": {
         "diff": "catalog:",
@@ -156,19 +156,19 @@
       },
     },
     "packages/metaharness": {
-      "name": "@oh-my-pi/pi-metaharness",
+      "name": "@san/metaharness",
       "version": "0.0.1",
       "bin": {
         "metaharness": "src/server.ts",
       },
       "dependencies": {
-        "@oh-my-pi/hashline": "catalog:",
-        "@oh-my-pi/pi-agent-core": "catalog:",
-        "@oh-my-pi/pi-ai": "catalog:",
-        "@oh-my-pi/pi-catalog": "catalog:",
-        "@oh-my-pi/pi-coding-agent": "catalog:",
-        "@oh-my-pi/pi-utils": "catalog:",
-        "@oh-my-pi/typescript-edit-benchmark": "workspace:*",
+        "@san/agent": "catalog:",
+        "@san/ai": "catalog:",
+        "@san/catalog": "catalog:",
+        "@san/coding-agent": "catalog:",
+        "@san/hashline": "catalog:",
+        "@san/typescript-edit-benchmark": "workspace:*",
+        "@san/utils": "catalog:",
         "clsx": "^2.1.1",
         "d3-scale": "^4.0.2",
         "d3-shape": "^3.2.0",
@@ -188,15 +188,15 @@
       },
     },
     "packages/mnemopi": {
-      "name": "@oh-my-pi/pi-mnemopi",
+      "name": "@san/mnemopi",
       "version": "17.0.2",
       "bin": {
-        "mnemopi": "src/cli.ts",
+        "san-mnemopi": "src/cli.ts",
       },
       "dependencies": {
-        "@oh-my-pi/pi-ai": "catalog:",
-        "@oh-my-pi/pi-catalog": "catalog:",
-        "@oh-my-pi/pi-utils": "catalog:",
+        "@san/ai": "catalog:",
+        "@san/catalog": "catalog:",
+        "@san/utils": "catalog:",
         "lru-cache": "catalog:",
       },
       "devDependencies": {
@@ -214,7 +214,7 @@
       ],
     },
     "packages/natives": {
-      "name": "@oh-my-pi/pi-natives",
+      "name": "@san/natives",
       "version": "17.0.2",
       "devDependencies": {
         "@napi-rs/cli": "catalog:",
@@ -222,28 +222,28 @@
       },
     },
     "packages/snapcompact": {
-      "name": "@oh-my-pi/snapcompact",
+      "name": "@san/snapcompact",
       "version": "17.0.2",
       "dependencies": {
-        "@oh-my-pi/pi-ai": "catalog:",
-        "@oh-my-pi/pi-natives": "catalog:",
-        "@oh-my-pi/pi-utils": "catalog:",
-        "@oh-my-pi/pi-wire": "catalog:",
+        "@san/ai": "catalog:",
+        "@san/natives": "catalog:",
+        "@san/utils": "catalog:",
+        "@san/wire": "catalog:",
       },
       "devDependencies": {
         "@types/bun": "catalog:",
       },
     },
     "packages/stats": {
-      "name": "@oh-my-pi/omp-stats",
+      "name": "@san/stats",
       "version": "17.0.2",
       "bin": {
-        "omp-stats": "./src/index.ts",
+        "san-stats": "./src/index.ts",
       },
       "dependencies": {
-        "@oh-my-pi/pi-ai": "catalog:",
-        "@oh-my-pi/pi-catalog": "catalog:",
-        "@oh-my-pi/pi-utils": "catalog:",
+        "@san/ai": "catalog:",
+        "@san/catalog": "catalog:",
+        "@san/utils": "catalog:",
         "@tailwindcss/node": "catalog:",
         "chart.js": "catalog:",
         "date-fns": "catalog:",
@@ -262,27 +262,27 @@
       },
     },
     "packages/swarm-extension": {
-      "name": "@oh-my-pi/swarm-extension",
+      "name": "@san/swarm-extension",
       "version": "17.0.2",
       "bin": {
-        "omp-swarm": "src/cli.ts",
+        "san-swarm": "src/cli.ts",
       },
       "dependencies": {
-        "@oh-my-pi/pi-utils": "workspace:*",
+        "@san/utils": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "^1.3.14",
       },
       "peerDependencies": {
-        "@oh-my-pi/pi-coding-agent": "^16",
+        "@san/coding-agent": "^17",
       },
     },
     "packages/tui": {
-      "name": "@oh-my-pi/pi-tui",
+      "name": "@san/tui",
       "version": "17.0.2",
       "dependencies": {
-        "@oh-my-pi/pi-natives": "catalog:",
-        "@oh-my-pi/pi-utils": "catalog:",
+        "@san/natives": "catalog:",
+        "@san/utils": "catalog:",
         "lru-cache": "catalog:",
         "marked": "catalog:",
       },
@@ -292,19 +292,19 @@
       },
     },
     "packages/typescript-edit-benchmark": {
-      "name": "@oh-my-pi/typescript-edit-benchmark",
+      "name": "@san/typescript-edit-benchmark",
       "version": "0.0.1",
       "dependencies": {
         "@babel/generator": "catalog:",
         "@babel/parser": "catalog:",
         "@babel/traverse": "catalog:",
         "@babel/types": "catalog:",
-        "@oh-my-pi/hashline": "catalog:",
-        "@oh-my-pi/pi-agent-core": "catalog:",
-        "@oh-my-pi/pi-ai": "catalog:",
-        "@oh-my-pi/pi-coding-agent": "catalog:",
-        "@oh-my-pi/pi-tui": "catalog:",
-        "@oh-my-pi/pi-utils": "catalog:",
+        "@san/agent": "catalog:",
+        "@san/ai": "catalog:",
+        "@san/coding-agent": "catalog:",
+        "@san/hashline": "catalog:",
+        "@san/tui": "catalog:",
+        "@san/utils": "catalog:",
         "diff": "catalog:",
         "prettier": "catalog:",
         "regexp-tree": "catalog:",
@@ -316,10 +316,10 @@
       },
     },
     "packages/utils": {
-      "name": "@oh-my-pi/pi-utils",
+      "name": "@san/utils",
       "version": "17.0.2",
       "dependencies": {
-        "@oh-my-pi/pi-natives": "catalog:",
+        "@san/natives": "catalog:",
         "handlebars": "catalog:",
         "winston": "catalog:",
         "winston-daily-rotate-file": "catalog:",
@@ -329,7 +329,7 @@
       },
     },
     "packages/wire": {
-      "name": "@oh-my-pi/pi-wire",
+      "name": "@san/wire",
       "version": "17.0.2",
       "devDependencies": {
         "@types/bun": "catalog:",
@@ -371,18 +371,6 @@
     "@huggingface/transformers": "^4.2.0",
     "@mozilla/readability": "^0.6.0",
     "@napi-rs/cli": "3.7.2",
-    "@oh-my-pi/hashline": "17.0.2",
-    "@oh-my-pi/omp-stats": "17.0.2",
-    "@oh-my-pi/pi-agent-core": "17.0.2",
-    "@oh-my-pi/pi-ai": "17.0.2",
-    "@oh-my-pi/pi-catalog": "17.0.2",
-    "@oh-my-pi/pi-coding-agent": "17.0.2",
-    "@oh-my-pi/pi-mnemopi": "17.0.2",
-    "@oh-my-pi/pi-natives": "17.0.2",
-    "@oh-my-pi/pi-tui": "17.0.2",
-    "@oh-my-pi/pi-utils": "17.0.2",
-    "@oh-my-pi/pi-wire": "17.0.2",
-    "@oh-my-pi/snapcompact": "17.0.2",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/api-logs": "^0.220.0",
     "@opentelemetry/context-async-hooks": "^2.9.0",
@@ -395,6 +383,18 @@
     "@opentelemetry/sdk-trace-base": "^2.9.0",
     "@opentelemetry/sdk-trace-node": "^2.9.0",
     "@puppeteer/browsers": "^3.0.6",
+    "@san/agent": "17.0.2",
+    "@san/ai": "17.0.2",
+    "@san/catalog": "17.0.2",
+    "@san/coding-agent": "17.0.2",
+    "@san/hashline": "17.0.2",
+    "@san/mnemopi": "17.0.2",
+    "@san/natives": "17.0.2",
+    "@san/snapcompact": "17.0.2",
+    "@san/stats": "17.0.2",
+    "@san/tui": "17.0.2",
+    "@san/utils": "17.0.2",
+    "@san/wire": "17.0.2",
     "@tailwindcss/node": "^4.3.2",
     "@tailwindcss/vite": "^4.3.2",
     "@types/babel__generator": "^7.27.0",
@@ -772,38 +772,6 @@
 
     "@octokit/types": ["@octokit/types@16.0.0", "", { "dependencies": { "@octokit/openapi-types": "^27.0.0" } }, "sha512-sKq+9r1Mm4efXW1FCk7hFSeJo4QKreL/tTbR0rz/qx/r1Oa2VV83LTA/H/MuCOX7uCIJmQVRKBcbmWoySjAnSg=="],
 
-    "@oh-my-pi/collab-web": ["@oh-my-pi/collab-web@workspace:packages/collab-web"],
-
-    "@oh-my-pi/hashline": ["@oh-my-pi/hashline@workspace:packages/hashline"],
-
-    "@oh-my-pi/omp-stats": ["@oh-my-pi/omp-stats@workspace:packages/stats"],
-
-    "@oh-my-pi/pi-agent-core": ["@oh-my-pi/pi-agent-core@workspace:packages/agent"],
-
-    "@oh-my-pi/pi-ai": ["@oh-my-pi/pi-ai@workspace:packages/ai"],
-
-    "@oh-my-pi/pi-catalog": ["@oh-my-pi/pi-catalog@workspace:packages/catalog"],
-
-    "@oh-my-pi/pi-coding-agent": ["@oh-my-pi/pi-coding-agent@workspace:packages/coding-agent"],
-
-    "@oh-my-pi/pi-metaharness": ["@oh-my-pi/pi-metaharness@workspace:packages/metaharness"],
-
-    "@oh-my-pi/pi-mnemopi": ["@oh-my-pi/pi-mnemopi@workspace:packages/mnemopi"],
-
-    "@oh-my-pi/pi-natives": ["@oh-my-pi/pi-natives@workspace:packages/natives"],
-
-    "@oh-my-pi/pi-tui": ["@oh-my-pi/pi-tui@workspace:packages/tui"],
-
-    "@oh-my-pi/pi-utils": ["@oh-my-pi/pi-utils@workspace:packages/utils"],
-
-    "@oh-my-pi/pi-wire": ["@oh-my-pi/pi-wire@workspace:packages/wire"],
-
-    "@oh-my-pi/snapcompact": ["@oh-my-pi/snapcompact@workspace:packages/snapcompact"],
-
-    "@oh-my-pi/swarm-extension": ["@oh-my-pi/swarm-extension@workspace:packages/swarm-extension"],
-
-    "@oh-my-pi/typescript-edit-benchmark": ["@oh-my-pi/typescript-edit-benchmark@workspace:packages/typescript-edit-benchmark"],
-
     "@opentelemetry/api": ["@opentelemetry/api@1.9.1", "", {}, "sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q=="],
 
     "@opentelemetry/api-logs": ["@opentelemetry/api-logs@0.220.0", "", { "dependencies": { "@opentelemetry/api": "^1.3.0" } }, "sha512-CmVa4ImJ+ynfrPMNaAXHET6Bhb44SwzmfyVJFq9ni2jgXJR/l7C6gfVFddNmHP+ZOkP9cf4f9DBe68qVLTHc9w=="],
@@ -891,6 +859,38 @@
     "@rolldown/binding-win32-x64-msvc": ["@rolldown/binding-win32-x64-msvc@1.1.5", "", { "os": "win32", "cpu": "x64" }, "sha512-tTZuDBPw85tEN5PQi1pnEBzDy0Z49HtScLAbD5t6hyeU92A95pRWaSMw1GZZi/RwgSgUIl0xrSlXIT/9QzvYSA=="],
 
     "@rolldown/pluginutils": ["@rolldown/pluginutils@1.0.1", "", {}, "sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw=="],
+
+    "@san/agent": ["@san/agent@workspace:packages/agent"],
+
+    "@san/ai": ["@san/ai@workspace:packages/ai"],
+
+    "@san/catalog": ["@san/catalog@workspace:packages/catalog"],
+
+    "@san/coding-agent": ["@san/coding-agent@workspace:packages/coding-agent"],
+
+    "@san/collab-web": ["@san/collab-web@workspace:packages/collab-web"],
+
+    "@san/hashline": ["@san/hashline@workspace:packages/hashline"],
+
+    "@san/metaharness": ["@san/metaharness@workspace:packages/metaharness"],
+
+    "@san/mnemopi": ["@san/mnemopi@workspace:packages/mnemopi"],
+
+    "@san/natives": ["@san/natives@workspace:packages/natives"],
+
+    "@san/snapcompact": ["@san/snapcompact@workspace:packages/snapcompact"],
+
+    "@san/stats": ["@san/stats@workspace:packages/stats"],
+
+    "@san/swarm-extension": ["@san/swarm-extension@workspace:packages/swarm-extension"],
+
+    "@san/tui": ["@san/tui@workspace:packages/tui"],
+
+    "@san/typescript-edit-benchmark": ["@san/typescript-edit-benchmark@workspace:packages/typescript-edit-benchmark"],
+
+    "@san/utils": ["@san/utils@workspace:packages/utils"],
+
+    "@san/wire": ["@san/wire@workspace:packages/wire"],
 
     "@sindresorhus/is": ["@sindresorhus/is@4.6.0", "", {}, "sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw=="],
 

@@ -1,6 +1,6 @@
 import * as stream from "node:stream";
 import { AgentSideConnection, ndJsonStream, type Stream } from "@agentclientprotocol/sdk";
-import { postmortem } from "@oh-my-pi/pi-utils";
+import { postmortem } from "@san/utils";
 import type { AgentSession } from "../../session/agent-session";
 import { AcpAgent } from "./acp-agent";
 
@@ -23,15 +23,15 @@ export function createAcpConnection(
 
 /** Serves ACP over stdio until the peer disconnects, then awaits session teardown before exit. */
 export async function runAcpMode(createSession: AcpSessionFactory, initialSession?: AgentSession): Promise<void> {
-	// Humans who run `omp acp` by hand see a silent process and assume it is
+	// Humans who run `san acp` by hand see a silent process and assume it is
 	// broken (stdout is the JSON-RPC transport, so nothing may be printed
 	// there). When stdin is a TTY no ACP client is attached — say so on stderr
 	// before the transport starts.
 	if (process.stdin.isTTY) {
 		process.stderr.write(
-			"omp acp: ACP server speaking JSON-RPC over stdio.\n" +
+			"san acp: ACP server speaking JSON-RPC over stdio.\n" +
 				'This command is meant to be spawned by an ACP client (e.g. Zed\'s "agent_servers" config), not run directly.\n' +
-				"Waiting for protocol frames on stdin; logs: ~/.omp/logs/\n",
+				"Waiting for protocol frames on stdin; logs: ~/.san/logs/\n",
 		);
 	}
 	let agent: AcpAgent | undefined;

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the published package from `@oh-my-pi/swarm-extension` to `@san/swarm-extension`, its executable from `omp-swarm` to `san-swarm`, and its package manifest field from `omp` to `san`.
+
 ## [16.3.7] - 2026-07-05
 
 ### Fixed

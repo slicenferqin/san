@@ -4,7 +4,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@san/utils";
 import { withFileLock } from "../../config/file-lock";
 import type { SessionEvent } from "./dto/events";
 import type { EvidenceRecord } from "./dto/evidence";

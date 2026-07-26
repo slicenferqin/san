@@ -1,14 +1,14 @@
 import { afterAll, afterEach, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { TempDir } from "@san/utils";
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { AgentSession } from "../../session/agent-session";
 import { ArtifactManager } from "../../session/artifacts";
 import { AgentProtocolHandler } from "../agent-protocol";
 import { resetRegisteredArtifactDirsForTests } from "../registry-helpers";
 
-const tempDir = TempDir.createSync("omp-nested-agent-repro-");
+const tempDir = TempDir.createSync("san-nested-agent-repro-");
 afterEach(() => {
 	AgentRegistry.resetGlobalForTests();
 	resetRegisteredArtifactDirsForTests();

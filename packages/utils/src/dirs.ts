@@ -24,6 +24,14 @@ export const CONFIG_APP_NAME: string = "san";
 
 /** Config directory name (e.g. ".san") */
 export const CONFIG_DIR_NAME: string = ".san";
+/** Legacy config directory name, read only for migration compatibility. */
+export const LEGACY_CONFIG_DIR_NAME: string = ".omp";
+
+/** Canonical plugin runtime lockfile basename. */
+export const PLUGIN_LOCKFILE_NAME: string = "san-plugins.lock.json";
+
+/** Legacy plugin runtime lockfile basename, read only when the canonical file is absent. */
+export const LEGACY_PLUGIN_LOCKFILE_NAME: string = "omp-plugins.lock.json";
 
 /** Ordered main settings filenames: canonical write target first, legacy-compatible YAML fallback second. */
 export const MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"] as const;
@@ -53,7 +61,7 @@ const WINDOWS_RESERVED_BASENAME_RE = /^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\
  * default (empty string, whitespace, or the explicit "default" sentinel) and
  * throws for syntactically invalid or platform-reserved names.
  *
- * Exported so consumers of `@oh-my-pi/pi-utils/dirs` (CLI bootstrap, tests,
+ * Exported so consumers of `@san/utils/dirs` (CLI bootstrap, tests,
  * downstream tools) can validate user input without re-deriving the rules.
  */
 export function normalizeProfileName(profile: string | undefined): string | undefined {
@@ -526,6 +534,19 @@ export function getAgentDir(): string {
 export function getProjectAgentDir(cwd: string = getProjectDir()): string {
 	return path.join(cwd, CONFIG_DIR_NAME);
 }
+/**
+ * Map a canonical path below `.san` to its legacy `.omp` counterpart.
+ * Returns `undefined` when the path is not rooted below the canonical config directory.
+ */
+export function getLegacyConfigPath(canonicalPath: string): string | undefined {
+	const resolved = path.resolve(canonicalPath);
+	const parts = resolved.split(path.sep);
+	const configIndex = parts.lastIndexOf(CONFIG_DIR_NAME);
+	if (configIndex < 0) return undefined;
+	parts[configIndex] = LEGACY_CONFIG_DIR_NAME;
+	const legacyPath = path.normalize(parts.join(path.sep));
+	return legacyPath === resolved ? undefined : legacyPath;
+}
 
 // =============================================================================
 // Config-root subdirectories (~/.san/*)
@@ -573,9 +594,16 @@ export function getPluginsPackageJson(home?: string): string {
 	return path.join(getPluginsDir(home), "package.json");
 }
 
-/** Plugin lock file (~/.san/plugins/omp-plugins.lock.json; legacy basename kept for plugin runtime compatibility). */
+/** Canonical plugin runtime lock file (~/.san/plugins/san-plugins.lock.json). */
 export function getPluginsLockfile(home?: string): string {
-	return path.join(getPluginsDir(home), "omp-plugins.lock.json");
+	return path.join(getPluginsDir(home), PLUGIN_LOCKFILE_NAME);
+}
+
+/** Legacy plugin runtime lock file, used only as a read fallback. */
+export function getLegacyPluginsLockfile(home?: string): string | undefined {
+	const pluginsDir = getPluginsDir(home);
+	const legacyDir = getLegacyConfigPath(pluginsDir);
+	return legacyDir ? path.join(legacyDir, LEGACY_PLUGIN_LOCKFILE_NAME) : undefined;
 }
 
 /** Get the remote mount directory (~/.san/remote). */
@@ -693,11 +721,11 @@ export function getGpuCachePath(): string {
 
 /**
  * Get the GitHub view cache database path (~/.san/cache/github-cache.db).
- * Honors the `OMP_GITHUB_CACHE_DB` env var when set so tests can isolate the
- * cache file without touching the rest of the config root.
+ * Honors `SAN_GITHUB_CACHE_DB`, with legacy `OMP_GITHUB_CACHE_DB` as a fallback,
+ * so tests and operators can isolate the cache without moving the config root.
  */
 export function getGithubCacheDbPath(): string {
-	const override = process.env.OMP_GITHUB_CACHE_DB;
+	const override = process.env.SAN_GITHUB_CACHE_DB ?? process.env.OMP_GITHUB_CACHE_DB;
 	if (override) return override;
 	return dirs.rootSubdir(path.join("cache", "github-cache.db"), "cache");
 }

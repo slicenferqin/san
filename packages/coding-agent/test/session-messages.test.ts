@@ -1,12 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { type AgentMessage, filterProviderReplayMessages } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent, Message, TextContent } from "@oh-my-pi/pi-ai";
-import { inferCopilotInitiator } from "@oh-my-pi/pi-ai/providers/github-copilot-headers";
-import {
-	convertToLlm,
-	SKILL_PROMPT_MESSAGE_TYPE,
-	wrapSteeringForModel,
-} from "@oh-my-pi/pi-coding-agent/session/messages";
+import { type AgentMessage, filterProviderReplayMessages } from "@san/agent";
+import type { ImageContent, Message, TextContent } from "@san/ai";
+import { inferCopilotInitiator } from "@san/ai/providers/github-copilot-headers";
+import { convertToLlm, SKILL_PROMPT_MESSAGE_TYPE, wrapSteeringForModel } from "@san/coding-agent/session/messages";
 import { CONTEXT_PLAN_MESSAGE_TYPE } from "../src/context-steady/plan-types";
 
 function expectAttribution(message: Message | undefined, expected: "user" | "agent" | undefined): void {

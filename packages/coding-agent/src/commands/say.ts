@@ -8,8 +8,8 @@
  * streamed segments into one WAV. The first run downloads the configured local
  * model into the worker's cache.
  */
-import { getProjectDir } from "@oh-my-pi/pi-utils";
-import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { getProjectDir } from "@san/utils";
+import { Args, Command, Flags } from "@san/utils/cli";
 import chalk from "chalk";
 import { Settings, settings } from "../config/settings";
 import { TTS_LOCAL_VOICE_VALUES } from "../tts/models";

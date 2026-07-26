@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { runEvalAgent } from "@oh-my-pi/pi-coding-agent/eval/agent-bridge";
-import type { LocalProtocolOptions } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import type { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp";
-import * as taskDiscovery from "@oh-my-pi/pi-coding-agent/task/discovery";
-import * as taskExecutor from "@oh-my-pi/pi-coding-agent/task/executor";
-import type { AgentDefinition, SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { Settings } from "@san/coding-agent/config/settings";
+import { runEvalAgent } from "@san/coding-agent/eval/agent-bridge";
+import type { LocalProtocolOptions } from "@san/coding-agent/internal-urls";
+import type { MCPManager } from "@san/coding-agent/mcp";
+import * as taskDiscovery from "@san/coding-agent/task/discovery";
+import * as taskExecutor from "@san/coding-agent/task/executor";
+import type { AgentDefinition, SingleResult } from "@san/coding-agent/task/types";
+import type { ToolSession } from "@san/coding-agent/tools";
 
 function createResult(): SingleResult {
 	return {

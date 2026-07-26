@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the published package from `@oh-my-pi/pi-agent-core` to `@san/agent`; consumers must update package dependencies and imports.
+
 ### Added
 
 - Added agent thinking selectors for the `max` and `ultra` reasoning effort tiers.

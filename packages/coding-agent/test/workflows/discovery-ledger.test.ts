@@ -2,14 +2,14 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent";
+import { SessionManager } from "@san/coding-agent";
 import {
 	appendWorkflowEvent,
 	discoverWorkflowSources,
 	rebuildWorkflowLedger,
 	WORKFLOW_MAX_SOURCE_BYTES,
 	type WorkflowEvent,
-} from "@oh-my-pi/pi-coding-agent/workflows";
+} from "@san/coding-agent/workflows";
 
 const tempDirs: string[] = [];
 

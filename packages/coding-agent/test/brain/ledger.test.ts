@@ -4,7 +4,7 @@ import {
 	appendSanBrainExperienceCandidate,
 	appendSanBrainProfileCandidate,
 	listSanBrainLedgerEntries,
-} from "@oh-my-pi/pi-coding-agent/brain/ledger";
+} from "@san/coding-agent/brain/ledger";
 import {
 	BRAIN_DECISION_CUSTOM_TYPE,
 	BRAIN_EXPERIENCE_CANDIDATE_CUSTOM_TYPE,
@@ -12,9 +12,9 @@ import {
 	type SanBrainDecision,
 	type SanBrainExperienceCandidate,
 	type SanBrainProfileCandidate,
-} from "@oh-my-pi/pi-coding-agent/brain/types";
-import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import type { ReadonlySessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+} from "@san/coding-agent/brain/types";
+import type { SessionEntry } from "@san/coding-agent/session/session-entries";
+import type { ReadonlySessionManager } from "@san/coding-agent/session/session-manager";
 
 const profile: SanBrainProfileCandidate = {
 	schemaVersion: 1,

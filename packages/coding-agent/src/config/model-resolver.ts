@@ -15,18 +15,18 @@
  *   CLI flags, scope globs — onto that pipeline.
  */
 
-import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, Effort, KnownProvider, Model, ModelSpec } from "@oh-my-pi/pi-ai";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { modelMatchesHost } from "@oh-my-pi/pi-catalog/hosts";
-import { buildModelProviderPriorityRank } from "@oh-my-pi/pi-catalog/identity";
-import { stripThinkingVariantToken } from "@oh-my-pi/pi-catalog/identity/family";
-import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
-import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
-import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog/provider-models";
-import { resolveBareVariantAlias, resolveVariantAlias } from "@oh-my-pi/pi-catalog/variant-collapse";
-import { fuzzyMatch } from "@oh-my-pi/pi-tui";
-import { logger } from "@oh-my-pi/pi-utils";
+import { ThinkingLevel } from "@san/agent";
+import type { Api, Effort, KnownProvider, Model, ModelSpec } from "@san/ai";
+import { buildModel } from "@san/catalog/build";
+import { modelMatchesHost } from "@san/catalog/hosts";
+import { buildModelProviderPriorityRank } from "@san/catalog/identity";
+import { stripThinkingVariantToken } from "@san/catalog/identity/family";
+import { clampThinkingLevelForModel } from "@san/catalog/model-thinking";
+import { modelsAreEqual } from "@san/catalog/models";
+import { DEFAULT_MODEL_PER_PROVIDER } from "@san/catalog/provider-models";
+import { resolveBareVariantAlias, resolveVariantAlias } from "@san/catalog/variant-collapse";
+import { fuzzyMatch } from "@san/tui";
+import { logger } from "@san/utils";
 import chalk from "chalk";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import {

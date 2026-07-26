@@ -1,15 +1,15 @@
 {
 	"type": "module",
 	"private": true,
-	"name": "@oh-my-pi/pi-metaharness",
+	"name": "@san/metaharness",
 	"version": "0.0.1",
 	"description": "Unified benchmark runners plus Harbor run storage, REST/SSE APIs, and a live web dashboard",
-	"homepage": "https://omp.sh",
+	"homepage": "https://github.com/slicenferqin/san",
 	"author": "Can Boluk",
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/can1357/oh-my-pi.git",
+		"url": "git+https://github.com/slicenferqin/san.git",
 		"directory": "packages/metaharness"
 	},
 	"bin": {
@@ -25,13 +25,13 @@
 		"test": "bun test"
 	},
 	"dependencies": {
-		"@oh-my-pi/hashline": "catalog:",
-		"@oh-my-pi/pi-agent-core": "catalog:",
-		"@oh-my-pi/pi-ai": "catalog:",
-		"@oh-my-pi/pi-catalog": "catalog:",
-		"@oh-my-pi/pi-coding-agent": "catalog:",
-		"@oh-my-pi/pi-utils": "catalog:",
-		"@oh-my-pi/typescript-edit-benchmark": "workspace:*",
+		"@san/hashline": "catalog:",
+		"@san/agent": "catalog:",
+        "@san/ai": "catalog:",
+		"@san/catalog": "catalog:",
+		"@san/coding-agent": "catalog:",
+		"@san/utils": "catalog:",
+		"@san/typescript-edit-benchmark": "workspace:*",
 		"clsx": "^2.1.1",
 		"d3-scale": "^4.0.2",
 		"d3-shape": "^3.2.0",

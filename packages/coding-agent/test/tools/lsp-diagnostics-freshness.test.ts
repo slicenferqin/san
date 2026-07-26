@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createLspWritethrough, type FileDiagnosticsResult } from "@oh-my-pi/pi-coding-agent/lsp";
-import * as lspClient from "@oh-my-pi/pi-coding-agent/lsp/client";
-import * as lspConfig from "@oh-my-pi/pi-coding-agent/lsp/config";
-import type { Diagnostic, LspClient, ServerConfig } from "@oh-my-pi/pi-coding-agent/lsp/types";
-import { fileToUri } from "@oh-my-pi/pi-coding-agent/lsp/utils";
-import type { DeferredDiagnosticsEntry, ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
-import { type ptree, TempDir } from "@oh-my-pi/pi-utils";
+import { Settings } from "@san/coding-agent/config/settings";
+import { createLspWritethrough, type FileDiagnosticsResult } from "@san/coding-agent/lsp";
+import * as lspClient from "@san/coding-agent/lsp/client";
+import * as lspConfig from "@san/coding-agent/lsp/config";
+import type { Diagnostic, LspClient, ServerConfig } from "@san/coding-agent/lsp/types";
+import { fileToUri } from "@san/coding-agent/lsp/utils";
+import type { DeferredDiagnosticsEntry, ToolSession } from "@san/coding-agent/tools";
+import { WriteTool } from "@san/coding-agent/tools/write";
+import { type ptree, TempDir } from "@san/utils";
 
 const TEST_SERVER: ServerConfig = {
 	command: "test-lsp",

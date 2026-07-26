@@ -4,20 +4,20 @@
  * paid for. Regression guard for issue #2190.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Model } from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
-import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { ToolPathWithSource } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools";
-import type { LoadExtensionsResult } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
-import type { CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
-import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
-import type { AgentSession, AgentSessionEvent, PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
-import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
-import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { ThinkingLevel } from "@san/agent";
+import type { Model } from "@san/ai";
+import { getBundledModel } from "@san/catalog/models";
+import type { Rule } from "@san/coding-agent/capability/rule";
+import type { ModelRegistry } from "@san/coding-agent/config/model-registry";
+import { Settings } from "@san/coding-agent/config/settings";
+import type { ToolPathWithSource } from "@san/coding-agent/extensibility/custom-tools";
+import type { LoadExtensionsResult } from "@san/coding-agent/extensibility/extensions/types";
+import type { CreateAgentSessionResult } from "@san/coding-agent/sdk";
+import * as sdkModule from "@san/coding-agent/sdk";
+import type { AgentSession, AgentSessionEvent, PromptOptions } from "@san/coding-agent/session/agent-session";
+import { runSubprocess } from "@san/coding-agent/task/executor";
+import type { AgentDefinition } from "@san/coding-agent/task/types";
+import { EventBus } from "@san/coding-agent/utils/event-bus";
 
 function createMockSession(onPrompt: (params: { emit: (event: AgentSessionEvent) => void }) => void): AgentSession {
 	const listeners: Array<(event: AgentSessionEvent) => void> = [];

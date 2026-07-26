@@ -3,15 +3,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { listOmpExtensionRoots } from "@oh-my-pi/pi-coding-agent/discovery/omp-extension-roots";
-import { getEnabledPlugins } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
-import { PluginManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/manager";
-import {
-	MarketplaceManager,
-	readInstalledPluginsRegistry,
-} from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
-import * as piUtils from "@oh-my-pi/pi-utils";
-import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
+import { listSanExtensionRoots } from "@san/coding-agent/discovery/san-extension-roots";
+import { getEnabledPlugins } from "@san/coding-agent/extensibility/plugins/loader";
+import { PluginManager } from "@san/coding-agent/extensibility/plugins/manager";
+import { MarketplaceManager, readInstalledPluginsRegistry } from "@san/coding-agent/extensibility/plugins/marketplace";
+import * as piUtils from "@san/utils";
+import { removeSyncWithRetries } from "@san/utils";
 
 // Minimal marketplace fixture, built once into a temp dir (see beforeAll). It carries only
 // what these tests assert — one plugin entry plus a plugin.json for the version-fallback path —
@@ -98,7 +95,7 @@ function mockPluginManagerPaths(root: string) {
 		spyOn(piUtils, "getPluginsDir").mockReturnValue(root),
 		spyOn(piUtils, "getPluginsNodeModules").mockReturnValue(path.join(root, "node_modules")),
 		spyOn(piUtils, "getPluginsPackageJson").mockReturnValue(path.join(root, "package.json")),
-		spyOn(piUtils, "getPluginsLockfile").mockReturnValue(path.join(root, "omp-plugins.lock.json")),
+		spyOn(piUtils, "getPluginsLockfile").mockReturnValue(path.join(root, "san-plugins.lock.json")),
 		spyOn(piUtils, "getProjectPluginOverridesPath").mockReturnValue(path.join(root, "plugin-overrides.json")),
 	];
 }
@@ -194,6 +191,34 @@ describe("MarketplaceManager", () => {
 		await expect(ctx.manager.listAvailablePlugins("no-such")).rejects.toThrow(/not found/);
 	});
 
+	it("reads a legacy .omp installed registry only when canonical storage is absent", async () => {
+		const canonicalPath = path.join(ctx.tmpDir, ".san", "plugins", "installed_plugins.json");
+		const legacyPath = path.join(ctx.tmpDir, ".omp", "plugins", "installed_plugins.json");
+		await Bun.write(
+			legacyPath,
+			`${JSON.stringify({
+				version: 2,
+				plugins: {
+					"legacy@test": [
+						{
+							scope: "user",
+							installPath: "/tmp/legacy-plugin",
+							version: "1.0.0",
+							installedAt: "2026-01-01T00:00:00.000Z",
+							lastUpdated: "2026-01-01T00:00:00.000Z",
+						},
+					],
+				},
+			})}\n`,
+		);
+
+		const legacyRegistry = await readInstalledPluginsRegistry(canonicalPath);
+		expect(legacyRegistry.plugins["legacy@test"]).toHaveLength(1);
+
+		await Bun.write(canonicalPath, `${JSON.stringify({ version: 2, plugins: {} })}\n`);
+		const canonicalRegistry = await readInstalledPluginsRegistry(canonicalPath);
+		expect(canonicalRegistry.plugins["legacy@test"]).toBeUndefined();
+	});
 	// ── Install ────────────────────────────────────────────────────────────
 
 	it("installPlugin → plugin in cache + in registry", async () => {
@@ -206,7 +231,7 @@ describe("MarketplaceManager", () => {
 		const linkPath = path.join(ctx.tmpDir, "node_modules", "hello-plugin");
 		expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(instEntry.installPath));
 
-		const runtimeConfig = await Bun.file(path.join(ctx.tmpDir, "omp-plugins.lock.json")).json();
+		const runtimeConfig = await Bun.file(path.join(ctx.tmpDir, "san-plugins.lock.json")).json();
 		expect(runtimeConfig.plugins["hello-plugin"]).toEqual({
 			version: "1.0.0",
 			enabledFeatures: null,
@@ -216,6 +241,31 @@ describe("MarketplaceManager", () => {
 		const installed = await ctx.manager.listInstalledPlugins();
 		expect(installed).toHaveLength(1);
 		expect(installed[0].id).toBe("hello-plugin@test-marketplace");
+	});
+
+	it("migrates a legacy runtime lock into the canonical filename on write", async () => {
+		const legacyLockPath = path.join(ctx.tmpDir, "omp-plugins.lock.json");
+		await Bun.write(
+			legacyLockPath,
+			`${JSON.stringify({
+				plugins: { "legacy-plugin": { version: "0.9.0", enabled: false, enabledFeatures: null } },
+				settings: { "legacy-plugin": { retained: true } },
+			})}\n`,
+		);
+
+		await ctx.manager.addMarketplace(FIXTURE_DIR);
+		await ctx.manager.installPlugin("hello-plugin", "test-marketplace");
+
+		const canonicalLockPath = path.join(ctx.tmpDir, "san-plugins.lock.json");
+		const runtimeConfig = await Bun.file(canonicalLockPath).json();
+		expect(runtimeConfig.plugins["legacy-plugin"]).toEqual({
+			version: "0.9.0",
+			enabled: false,
+			enabledFeatures: null,
+		});
+		expect(runtimeConfig.settings["legacy-plugin"]).toEqual({ retained: true });
+		expect(runtimeConfig.plugins["hello-plugin"].enabled).toBe(true);
+		expect(fs.existsSync(legacyLockPath)).toBe(true);
 	});
 
 	it("installPlugin rejects package names that escape node_modules", async () => {
@@ -362,7 +412,7 @@ describe("MarketplaceManager", () => {
 			await manager.addMarketplace(FIXTURE_DIR);
 			await manager.installPlugin("hello-plugin", "test-marketplace");
 
-			const roots = await listOmpExtensionRoots({ cwd: tmpHome, home: tmpHome, repoRoot: null });
+			const roots = await listSanExtensionRoots({ cwd: tmpHome, home: tmpHome, repoRoot: null });
 			expect(roots.map(root => root.name)).toEqual([]);
 		} finally {
 			fs.rmSync(tmpHome, { recursive: true, force: true });
@@ -397,7 +447,7 @@ describe("MarketplaceManager", () => {
 			expect(fs.realpathSync(projectLink)).toBe(
 				fs.realpathSync(path.join(userPluginsDir, "cache", "plugins", "test-marketplace___hello-plugin___1.0.0")),
 			);
-			const projectLock = await Bun.file(path.join(projectPluginsDir, "omp-plugins.lock.json")).json();
+			const projectLock = await Bun.file(path.join(projectPluginsDir, "san-plugins.lock.json")).json();
 			expect(projectLock.plugins["hello-plugin"]).toEqual({
 				version: "1.0.0",
 				enabledFeatures: null,
@@ -406,7 +456,7 @@ describe("MarketplaceManager", () => {
 
 			// User-scope tree stays untouched.
 			expect(fs.existsSync(path.join(userPluginsDir, "node_modules", "hello-plugin"))).toBe(false);
-			expect(fs.existsSync(path.join(userPluginsDir, "omp-plugins.lock.json"))).toBe(false);
+			expect(fs.existsSync(path.join(userPluginsDir, "san-plugins.lock.json"))).toBe(false);
 		} finally {
 			fs.rmSync(tmpHome, { recursive: true, force: true });
 			fs.rmSync(projectAnchor, { recursive: true, force: true });
@@ -587,7 +637,7 @@ describe("MarketplaceManager", () => {
 		expect(second.installPath).toBe(first.installPath);
 		expect(fs.existsSync(second.installPath)).toBe(true);
 
-		const runtimeConfig = await Bun.file(path.join(ctx.tmpDir, "omp-plugins.lock.json")).json();
+		const runtimeConfig = await Bun.file(path.join(ctx.tmpDir, "san-plugins.lock.json")).json();
 		expect(runtimeConfig.plugins["hello-plugin"].enabled).toBe(false);
 
 		const installed = await ctx.manager.listInstalledPlugins();
@@ -618,7 +668,7 @@ describe("MarketplaceManager", () => {
 		expect(fs.existsSync(instEntry.installPath)).toBe(false);
 		expect(fs.existsSync(path.join(ctx.tmpDir, "node_modules", "hello-plugin"))).toBe(false);
 
-		const runtimeConfig = await Bun.file(path.join(ctx.tmpDir, "omp-plugins.lock.json")).json();
+		const runtimeConfig = await Bun.file(path.join(ctx.tmpDir, "san-plugins.lock.json")).json();
 		expect(runtimeConfig.plugins["hello-plugin"]).toBeUndefined();
 
 		const installed = await ctx.manager.listInstalledPlugins();
@@ -643,12 +693,12 @@ describe("MarketplaceManager", () => {
 
 		const installed = await ctx.manager.listInstalledPlugins();
 		expect(installed[0].entries[0].enabled).toBe(false);
-		let runtimeConfig = await Bun.file(path.join(ctx.tmpDir, "omp-plugins.lock.json")).json();
+		let runtimeConfig = await Bun.file(path.join(ctx.tmpDir, "san-plugins.lock.json")).json();
 		expect(runtimeConfig.plugins["hello-plugin"].enabled).toBe(false);
 
 		await ctx.manager.setPluginEnabled("hello-plugin@test-marketplace", true);
 		const updated = await ctx.manager.listInstalledPlugins();
-		runtimeConfig = await Bun.file(path.join(ctx.tmpDir, "omp-plugins.lock.json")).json();
+		runtimeConfig = await Bun.file(path.join(ctx.tmpDir, "san-plugins.lock.json")).json();
 		expect(runtimeConfig.plugins["hello-plugin"].enabled).toBe(true);
 		expect(updated[0].entries[0].enabled).toBe(true);
 	});

@@ -10,7 +10,7 @@
 import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getStatsDbPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { getStatsDbPath, isEnoent, logger } from "@san/utils";
 import { getTimeRangeConfig } from "./aggregator";
 import { initDb } from "./db";
 import type { GainDashboardStats, GainSourceTotals, GainTimeSeriesPoint } from "./shared-types";
@@ -19,7 +19,8 @@ const BYTES_PER_TOKEN_ESTIMATE = 4;
 const SQLITE_VARIABLE_CHUNK_SIZE = 500;
 
 // Paths that carry no dashboard signal — temp/internal locations.
-const TEMP_PATH_RE = /(?:^|\/)(?:T|tmp|pi-bash-exec|omp-bash-exec|pi-bash-detach)(?:\/|$)|^\/var\/folders(?:\/|$)/;
+const TEMP_PATH_RE =
+	/(?:^|\/)(?:T|tmp|pi-bash-exec|san-bash-exec|omp-bash-exec|pi-bash-detach)(?:\/|$)|^\/var\/folders(?:\/|$)/;
 
 // ---------------------------------------------------------------------------
 // Project-match helper
@@ -59,16 +60,16 @@ function matchesProject(cwd: string | undefined, project: string): boolean {
 /**
  * Collapse conventional worktree sub-paths to their logical project root.
  *
- * Rules are generic: omp internal wt paths are dropped; conventional worktree
- * suffixes (`.wt/`, `-wt/`, `.worktrees/`, `-worktrees/`) are stripped. No
- * author-specific IDE or tool paths are baked in.
+ * Rules are generic: San-managed internal worktrees are dropped; conventional
+ * worktree suffixes (`.wt/`, `-wt/`, `.worktrees/`, `-worktrees/`) are stripped.
+ * No author-specific IDE or tool paths are baked in.
  *
  * Returns null to drop temp/internal paths entirely.
  */
 export function normalizeProjectPath(p: string): string | null {
 	const clean = canonicalProjectPath(p);
 	if (TEMP_PATH_RE.test(clean)) return null;
-	if (/\/\.omp\/wt\//u.test(clean)) return null;
+	if (/\/\.(?:san|omp)\/wt\//u.test(clean)) return null;
 
 	const worktreePatterns = [
 		/^(.+)\/\.wt\/[^/]+(?:\/.*)?$/u,

@@ -16,7 +16,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { createTinyTitleSubprocess } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
+import { createTinyTitleSubprocess } from "@san/coding-agent/tiny/title-client";
 
 describe("issue #1606 — tiny model lives in an isolated subprocess", () => {
 	it("ping/pongs through the spawned worker subprocess and tears it down cleanly", async () => {

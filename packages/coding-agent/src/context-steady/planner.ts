@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
+import type { AgentMessage } from "@san/agent";
+import { estimateTokens } from "@san/agent/compaction";
 import type { SessionEntry } from "../session/session-entries";
 import type { ContextPlanBudgetSettings } from "./budget";
 import { resolveContextPlanBudget } from "./budget";

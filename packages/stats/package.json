@@ -1,8 +1,8 @@
 {
   "type": "module",
-  "name": "@oh-my-pi/omp-stats",
+  "name": "@san/stats",
   "version": "17.0.2",
-  "description": "Local observability dashboard for pi AI usage statistics",
+  "description": "Local observability dashboard for San AI usage statistics",
   "homepage": "https://github.com/slicenferqin/san",
   "author": "Can Boluk",
   "license": "MIT",
@@ -25,7 +25,7 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "bin": {
-    "omp-stats": "./src/index.ts"
+    "san-stats": "./src/index.ts"
   },
   "scripts": {
     "gen:stats": "bun scripts/generate-client-bundle.ts --generate",
@@ -39,9 +39,9 @@
     "fmt": "biome format --write ."
   },
   "dependencies": {
-    "@oh-my-pi/pi-ai": "catalog:",
-    "@oh-my-pi/pi-catalog": "catalog:",
-    "@oh-my-pi/pi-utils": "catalog:",
+    "@san/ai": "catalog:",
+    "@san/catalog": "catalog:",
+    "@san/utils": "catalog:",
     "@tailwindcss/node": "catalog:",
     "chart.js": "catalog:",
     "date-fns": "catalog:",

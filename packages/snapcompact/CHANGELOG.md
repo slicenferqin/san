@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the published package from `@oh-my-pi/snapcompact` to `@san/snapcompact`; consumers must update package dependencies and imports.
+
 ## [16.5.0] - 2026-07-13
 
 ### Changed

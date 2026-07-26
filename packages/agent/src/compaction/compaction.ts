@@ -21,15 +21,15 @@ import {
 	type Tool,
 	type Usage,
 	withAuth,
-} from "@oh-my-pi/pi-ai";
-import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
-import { createOpenAICodexCompactionRequestContext } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
-import { convertTools } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import { buildResponsesInput, resolveOpenAICompatPolicy } from "@oh-my-pi/pi-ai/providers/openai-shared";
-import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
-import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
-import { logger, prompt, stringifyJson } from "@oh-my-pi/pi-utils";
-import * as snapcompact from "@oh-my-pi/snapcompact";
+} from "@san/ai";
+import { ProviderHttpError } from "@san/ai/error";
+import { createOpenAICodexCompactionRequestContext } from "@san/ai/providers/openai-codex-responses";
+import { convertTools } from "@san/ai/providers/openai-responses";
+import { buildResponsesInput, resolveOpenAICompatPolicy } from "@san/ai/providers/openai-shared";
+import { preferredDialect } from "@san/catalog/identity";
+import { clampThinkingLevelForModel } from "@san/catalog/model-thinking";
+import * as snapcompact from "@san/snapcompact";
+import { logger, prompt, stringifyJson } from "@san/utils";
 import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";
 import { ThinkingLevel } from "../thinking";
 import { countTokens } from "../tokenizer";

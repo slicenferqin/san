@@ -2,7 +2,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@san/utils";
 import type { InputResourceRef } from "./dto/resources";
 import type { ResourceId, SessionId, UploadId } from "./protocol/ids";
 import { newResourceId, newUploadId } from "./protocol/ids";

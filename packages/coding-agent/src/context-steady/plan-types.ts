@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage } from "@san/agent";
 import type { ContextCheckpoint, ContextPacketRecallLayer, TurnDigest } from "./types";
 
 export const CONTEXT_PLAN_SCHEMA_VERSION = 1;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import type { Usage } from "@oh-my-pi/pi-ai";
+import type { Usage } from "@san/ai";
 import {
 	RestrictedWorkflowRuntime,
 	type WorkflowAgentBridge,
@@ -9,7 +9,7 @@ import {
 	type WorkflowLimits,
 	WorkflowRuntimeControl,
 	workflowSourceHash,
-} from "@oh-my-pi/pi-coding-agent/workflows";
+} from "@san/coding-agent/workflows";
 
 const fixtures = path.join(import.meta.dir, "..", "fixtures", "workflows");
 const readOnlyPermissions = { writeMode: "read_only", tools: ["read", "grep", "yield"] } as const;

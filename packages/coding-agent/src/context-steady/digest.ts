@@ -13,8 +13,8 @@ import {
 	type Model,
 	type SimpleStreamOptions,
 	type Tool,
-} from "@oh-my-pi/pi-ai";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+} from "@san/ai";
+import { logger, prompt } from "@san/utils";
 
 import type { Settings } from "../config/settings";
 import type { ReadonlySessionManager } from "../session/session-manager";

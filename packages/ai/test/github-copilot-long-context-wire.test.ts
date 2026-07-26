@@ -4,12 +4,12 @@
  * `requestModelId`, never the local variant id, on every Copilot API path.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
-import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import type { Api, Context, Model, ModelSpec } from "@oh-my-pi/pi-ai/types";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { COPILOT_API_HEADERS } from "@oh-my-pi/pi-catalog/wire/github-copilot";
+import { streamAnthropic } from "@san/ai/providers/anthropic";
+import { streamOpenAICompletions } from "@san/ai/providers/openai-completions";
+import { streamOpenAIResponses } from "@san/ai/providers/openai-responses";
+import type { Api, Context, Model, ModelSpec } from "@san/ai/types";
+import { buildModel } from "@san/catalog/build";
+import { COPILOT_API_HEADERS } from "@san/catalog/wire/github-copilot";
 
 afterEach(() => {
 	vi.restoreAllMocks();

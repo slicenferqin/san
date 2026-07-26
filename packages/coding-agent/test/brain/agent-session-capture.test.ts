@@ -1,23 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
-import * as ai from "@oh-my-pi/pi-ai";
-import { type AssistantMessage, z } from "@oh-my-pi/pi-ai";
-import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
+import { Agent, type AgentTool } from "@san/agent";
+import * as ai from "@san/ai";
+import { type AssistantMessage, z } from "@san/ai";
+import { createMockModel, type MockResponse } from "@san/ai/providers/mock";
 import {
 	BRAIN_EXPERIENCE_CANDIDATE_CUSTOM_TYPE,
 	BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE,
 	type SanBrainExperienceCandidate,
-} from "@oh-my-pi/pi-coding-agent/brain/types";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { TURN_DIGEST_CUSTOM_TYPE, type TurnDigest } from "@oh-my-pi/pi-coding-agent/context-steady/types";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
-import type { CustomEntry, SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/brain/types";
+import { ModelRegistry } from "@san/coding-agent/config/model-registry";
+import { Settings } from "@san/coding-agent/config/settings";
+import { TURN_DIGEST_CUSTOM_TYPE, type TurnDigest } from "@san/coding-agent/context-steady/types";
+import { AgentSession } from "@san/coding-agent/session/agent-session";
+import { AuthStorage } from "@san/coding-agent/session/auth-storage";
+import { convertToLlm } from "@san/coding-agent/session/messages";
+import type { CustomEntry, SessionEntry } from "@san/coding-agent/session/session-entries";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
+import { TempDir } from "@san/utils";
 import { resolveRuntimeScopeIdentity } from "../../src/identity";
 
 const failureToolSchema = z.object({ reason: z.string() });

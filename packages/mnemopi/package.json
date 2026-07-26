@@ -1,8 +1,8 @@
 {
   "type": "module",
-  "name": "@oh-my-pi/pi-mnemopi",
+  "name": "@san/mnemopi",
   "version": "17.0.2",
-  "description": "Local SQLite memory engine for Oh My Pi agents",
+  "description": "Local SQLite memory engine for San agents",
   "homepage": "https://github.com/slicenferqin/san",
   "author": "Can Boluk",
   "contributors": [
@@ -28,7 +28,7 @@
   "module": "./src/index.ts",
   "types": "./src/index.ts",
   "bin": {
-    "mnemopi": "src/cli.ts"
+    "san-mnemopi": "src/cli.ts"
   },
   "scripts": {
     "check": "biome check . && bun run check:types",
@@ -39,9 +39,9 @@
     "fmt": "biome format --write ."
   },
   "dependencies": {
-    "@oh-my-pi/pi-ai": "catalog:",
-    "@oh-my-pi/pi-catalog": "catalog:",
-    "@oh-my-pi/pi-utils": "catalog:",
+    "@san/ai": "catalog:",
+    "@san/catalog": "catalog:",
+    "@san/utils": "catalog:",
     "lru-cache": "catalog:"
   },
   "peerDependencies": {

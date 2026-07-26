@@ -14,10 +14,10 @@ import { afterEach, beforeEach, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { MCPServer } from "@oh-my-pi/pi-coding-agent/capability/mcp";
-import { mcpCapability } from "@oh-my-pi/pi-coding-agent/capability/mcp";
-import { loadCapability } from "@oh-my-pi/pi-coding-agent/discovery";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import type { MCPServer } from "@san/coding-agent/capability/mcp";
+import { mcpCapability } from "@san/coding-agent/capability/mcp";
+import { loadCapability } from "@san/coding-agent/discovery";
+import { removeWithRetries } from "@san/utils";
 
 let tempHome = "";
 let tempCwd = "";

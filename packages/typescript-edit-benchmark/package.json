@@ -1,7 +1,7 @@
 {
   "type": "module",
   "private": true,
-  "name": "@oh-my-pi/typescript-edit-benchmark",
+  "name": "@san/typescript-edit-benchmark",
   "version": "0.0.1",
   "description": "Edit benchmark suite using TypeScript source code mutations",
   "homepage": "https://github.com/slicenferqin/san",
@@ -33,15 +33,15 @@
     "@babel/parser": "catalog:",
     "@babel/traverse": "catalog:",
     "@babel/types": "catalog:",
-    "@oh-my-pi/hashline": "catalog:",
-    "@oh-my-pi/pi-agent-core": "catalog:",
-    "@oh-my-pi/pi-coding-agent": "catalog:",
-    "@oh-my-pi/pi-utils": "catalog:",
+    "@san/hashline": "catalog:",
+    "@san/agent": "catalog:",
+    "@san/coding-agent": "catalog:",
+    "@san/utils": "catalog:",
     "diff": "catalog:",
     "prettier": "catalog:",
     "regexp-tree": "catalog:",
-    "@oh-my-pi/pi-ai": "catalog:",
-    "@oh-my-pi/pi-tui": "catalog:"
+    "@san/ai": "catalog:",
+    "@san/tui": "catalog:"
   },
   "devDependencies": {
     "@types/babel__generator": "catalog:",
