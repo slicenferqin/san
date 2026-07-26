@@ -23,11 +23,16 @@
 - Added San worker host-owned bash receipts: `subprocessToolRegistry` extracts bash tool ends into `extractedToolData.bash`, worker results prefer those receipts (`source: "host"`) over model-claimed `commandsRun`, and the pass gate requires a host receipt with `exitCode: 0`.
 - Added San role pre-call hard provider-request reservation: remaining `maxProviderRequests` is propagated as `hardRequestLimit` into role subprocesses and exhausted remaining budgets abort the role before starting a provider call.
 - Added San execution loop atomic `san.loop_transition` envelopes that bind run snapshot, event, and optional review report in a single custom entry, with legacy separate custom types still rebuildable.
+- Added a `build:core` binary profile for daily coding paths that omits bundled legacy Pi host namespaces, embedded PDF conversion, harness documentation, and stats dashboard assets while leaving the full release-compatible build unchanged.
+- Changed the core binary to reject HTML session export with an explicit full-binary guidance while retaining the export path in full builds.
+- Added optional Bun metafile output to binary and npm bundle build scripts for reproducible bundle-size analysis.
 
 
 ### Changed
 
 - Changed San Context Steady to remain native-equivalent below a configurable activation threshold (240K input tokens by default), then latch activation for the session and restore it after resume.
+- Changed the core binary to keep `/autoresearch` discoverable but reject it with explicit full-binary guidance while removing the experiment implementation from the core compile graph; full builds retain the complete workflow.
+- Reduced core binary size with full safe Bun minification, a gzip-compressed lazy model-catalog embed, compile-time PDF converter exclusion, and a type-only Workflow AST guard that removes the `@babel/types` runtime barrel.
 - Changed custom provider validation so `models.yml` may declare `auth: apiKey` without embedding the secret (keys live in AuthStorage).
 - Restored no-argument `/logout` to the dedicated credential-removal selector (provider connect remains `/connect` / `/login`).
 - Custom provider setup now rolls back the newly written `models.yml` entry and any login credential when key storage or first registry load fails, avoiding half-configured providers.
@@ -37,6 +42,7 @@
 - Changed San execution loop recovery to an explicit recover-to-blocked contract (`recoveryMode: "recover_to_blocked"`), not in-process resume.
 - Changed San role context to project latest ContextPlan material summaries into role prompts, not only plan entry refs.
 - Changed San execution loop production path to consume `budget.reserveRatio` (turn reserve for review roles) and `roles.oracle.enabledInModes`.
+- Changed the prompt-token measurement script to load effective global and project settings read-only, apply the runtime discovery filter, report initial/discoverable/total built-in tool schema costs, and emit machine-readable baselines with `--json`.
 
 
 - Added ContextPlan request lifecycle hardening for 240K steady: per-provider-call hard-ceiling re-gate (including tool loops), branch-isolated checkpoints, fallback digests that never gain raw coverage via checkpoints, hard-pressure audit+prompt persistence with same-session agent-state recovery, shared plan snapshots for send/status/compaction, bounded semantic required sets, natural + explicit topic-shift relevance, atomic material-level wire caps, stable epoch IDs, SanLoop branch-only plan refs, `burstWindowTokens` settings, real AgentSession multi-turn dogfood, and session-prepared digest side-request transport.

@@ -54,6 +54,9 @@ export function parseStatsDashboardArgs(args: string): StatsDashboardArgs | { er
 }
 
 export async function launchStatsDashboard(args: StatsDashboardArgs): Promise<StatsDashboardLaunchResult> {
+	if (process.env.SAN_BUILD_PROFILE === "core") {
+		throw new Error("The stats dashboard is not included in the San core binary; use `san stats --summary` instead.");
+	}
 	const { processed, files } = await stats.syncAllSessions();
 	const total = await stats.getTotalMessageCount();
 	let requestedPortIgnored = false;

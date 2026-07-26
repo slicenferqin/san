@@ -37,6 +37,10 @@ export interface BundledPiEntry {
 	/** Package or absolute source specifier compiled into the binary. */
 	readonly importSpecifier: string;
 }
+export interface LegacyPiVirtualModulePluginOptions {
+	/** Retain every host package surface required by legacy compiled extensions. */
+	readonly bundleHostModules?: boolean;
+}
 
 interface WildcardPattern {
 	readonly exportPrefix: string;
@@ -180,8 +184,11 @@ export function __renderLegacyPiVirtualModule(entries: readonly BundledPiEntry[]
  * memory. Literal dynamic imports retain every compile-time edge without
  * evaluating unrelated host modules during extension bootstrap.
  */
-export async function createLegacyPiVirtualModulePlugin(): Promise<Bun.BunPlugin> {
-	const source = __renderLegacyPiVirtualModule(await collectBundledPiEntries());
+export async function createLegacyPiVirtualModulePlugin(
+	options: LegacyPiVirtualModulePluginOptions = {},
+): Promise<Bun.BunPlugin> {
+	const entries = options.bundleHostModules === false ? [] : await collectBundledPiEntries();
+	const source = __renderLegacyPiVirtualModule(entries);
 	return {
 		name: "omp:legacy-pi-modules",
 		setup(build) {

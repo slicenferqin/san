@@ -16,6 +16,13 @@ export interface MarkitConversionResult {
 	error?: string;
 	cache?: MarkitConversionCacheStatus;
 }
+const CORE_PDF_ERROR =
+	"PDF conversion is not included in the San core binary; use the full binary or a dedicated PDF reader.";
+
+function coreBuildConversionError(extension: string): MarkitConversionResult | null {
+	if (process.env.SAN_BUILD_PROFILE !== "core" || extension !== ".pdf") return null;
+	return { content: "", ok: false, error: CORE_PDF_ERROR, cache: "skipped" };
+}
 
 export interface MarkitFileConversionOptions {
 	/**
@@ -161,6 +168,9 @@ export async function convertFileWithMarkit(
 	signal?: AbortSignal,
 	options?: MarkitFileConversionOptions,
 ): Promise<MarkitConversionResult> {
+	const extension = path.extname(filePath).toLowerCase();
+	const coreBuildError = coreBuildConversionError(extension);
+	if (coreBuildError) return coreBuildError;
 	if (options?.imageDir) {
 		// Image extraction writes files into imageDir as a side effect; a
 		// markdown-only cache hit would leave the directory missing members, so
@@ -190,7 +200,7 @@ export async function convertFileWithMarkit(
 	}
 	const streamInfo: StreamInfo = {
 		localPath: filePath,
-		extension: path.extname(filePath).toLowerCase(),
+		extension,
 		filename: path.basename(filePath),
 	};
 	return runCachedBufferConversion(bytes, streamInfo, signal, true);
@@ -203,6 +213,8 @@ export async function convertBufferWithMarkit(
 	options?: { useCache?: boolean },
 ): Promise<MarkitConversionResult> {
 	const normalizedExtension = normalizeExtension(extension);
+	const coreBuildError = coreBuildConversionError(normalizedExtension);
+	if (coreBuildError) return coreBuildError;
 	const streamInfo: StreamInfo = {
 		extension: normalizedExtension,
 		filename: `input${normalizedExtension}`,

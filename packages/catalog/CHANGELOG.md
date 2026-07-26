@@ -6,6 +6,10 @@
 
 - Added canonical `max` and `ultra` reasoning efforts for custom model capability surfaces, passing explicit extended ladders through verbatim while leaving inferred provider ladders unchanged.
 
+### Changed
+
+- Added lazy decoding support for gzip-compressed bundled model catalogs used by the San core binary while preserving ordinary JSON imports for source and full builds.
+
 ### Fixed
 
 - Invalidated legacy model-cache rows that could contain discovery bearer headers.

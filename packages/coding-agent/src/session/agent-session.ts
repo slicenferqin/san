@@ -20197,6 +20197,9 @@ export class AgentSession {
 	 * @returns Path to exported file
 	 */
 	async exportToHtml(outputPath?: string): Promise<string> {
+		if (process.env.SAN_BUILD_PROFILE === "core") {
+			throw new Error("HTML export is not included in the San core binary; use the full binary.");
+		}
 		// Public HTML export ships in the San share/export palette currently matching
 		// the legacy my.omp.sh relay — not the host's terminal theme.
 		// Callers who want a themed export can pass `palette: "theme"` with

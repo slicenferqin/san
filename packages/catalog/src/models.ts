@@ -1,5 +1,5 @@
 import { buildModel } from "./build";
-import MODELS from "./models.json" with { type: "json" };
+import MODELS_EMBED from "./models.json" with { type: "json" };
 import type { Api, KnownProvider, Model, ModelSpec, Usage } from "./types";
 
 /**
@@ -10,13 +10,28 @@ import type { Api, KnownProvider, Model, ModelSpec, Usage } from "./types";
  *
  * For runtime-aware resolution, use `createModelManager()` / `resolveProviderModels()`.
  */
+type BundledModels = Record<string, Record<string, ModelSpec<Api>>>;
+
+let bundledModels: BundledModels | undefined;
 let modelRegistry: Map<string, Map<string, Model<Api>>> | undefined;
+
+function getBundledModelSpecs(): BundledModels {
+	if (bundledModels === undefined) {
+		bundledModels =
+			typeof MODELS_EMBED === "string"
+				? (JSON.parse(
+						new TextDecoder().decode(Bun.gunzipSync(Buffer.from(MODELS_EMBED, "base64"))),
+					) as BundledModels)
+				: (MODELS_EMBED as BundledModels);
+	}
+	return bundledModels;
+}
 
 /** Build (once) and return the enriched bundled-model registry. Lazy: enrichment of ~12K models is deferred off module load. */
 function getModelRegistry(): Map<string, Map<string, Model<Api>>> {
 	if (modelRegistry === undefined) {
 		modelRegistry = new Map();
-		for (const [provider, models] of Object.entries(MODELS)) {
+		for (const [provider, models] of Object.entries(getBundledModelSpecs())) {
 			const providerModels = new Map<string, Model<Api>>();
 			for (const [id, model] of Object.entries(models)) {
 				providerModels.set(id, buildModel(model as ModelSpec<Api>));
@@ -27,7 +42,7 @@ function getModelRegistry(): Map<string, Map<string, Model<Api>>> {
 	return modelRegistry;
 }
 
-export type GeneratedProvider = keyof typeof MODELS;
+export type GeneratedProvider = keyof typeof MODELS_EMBED;
 
 export function getBundledModel<TApi extends Api = Api>(provider: GeneratedProvider, modelId: string): Model<TApi> {
 	const providerModels = getModelRegistry().get(provider);
@@ -35,7 +50,7 @@ export function getBundledModel<TApi extends Api = Api>(provider: GeneratedProvi
 }
 
 export function getBundledProviders(): KnownProvider[] {
-	return Object.keys(MODELS) as KnownProvider[];
+	return Object.keys(getBundledModelSpecs()) as KnownProvider[];
 }
 
 export function getBundledModels(provider: GeneratedProvider): Model<Api>[] {

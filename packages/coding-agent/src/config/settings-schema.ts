@@ -4157,6 +4157,18 @@ export const SETTINGS_SCHEMA = {
 				"Mount rarely-used (discoverable) tools under xd:// device URLs driven via read/write instead of shipping their schemas on every request. Disable to expose every enabled tool top-level.",
 		},
 	},
+	"tools.xdevDocs": {
+		type: "enum",
+		values: ["full", "catalog"] as const,
+		default: "full",
+		ui: {
+			tab: "tools",
+			group: "Discovery & MCP",
+			label: "xd:// Prompt Docs",
+			description:
+				"Full embeds mounted tool docs and schemas in every system prompt; catalog lists names and summaries, with full docs available through read xd://<tool>.",
+		},
+	},
 
 	// MCP
 	"mcp.enableProjectConfig": {

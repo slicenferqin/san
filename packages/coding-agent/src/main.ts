@@ -1266,6 +1266,9 @@ export async function runRootCommand(
 	if (parsedArgs.export) {
 		let result: string;
 		try {
+			if (process.env.SAN_BUILD_PROFILE === "core") {
+				throw new Error("HTML export is not included in the San core binary; use the full binary.");
+			}
 			const outputPath = parsedArgs.messages.length > 0 ? parsedArgs.messages[0] : undefined;
 			const { exportFromFile } = await import("./export/html");
 			result = await exportFromFile(parsedArgs.export, outputPath);

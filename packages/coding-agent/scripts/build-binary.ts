@@ -2,10 +2,44 @@
 
 import { createRequire } from "node:module";
 import * as path from "node:path";
-import { compileCodingAgent } from "./compile-binary";
+import { type CodingAgentBuildProfile, compileCodingAgent } from "./compile-binary";
 
 const packageDir = path.join(import.meta.dir, "..");
 const repoRoot = path.join(packageDir, "..", "..");
+const args = Bun.argv.slice(2);
+
+function readOption(name: string): string | undefined {
+	const inlinePrefix = `${name}=`;
+	const inline = args.find(arg => arg.startsWith(inlinePrefix));
+	if (inline !== undefined) {
+		const value = inline.slice(inlinePrefix.length);
+		if (!value) throw new Error(`${name} requires a value`);
+		return value;
+	}
+	const index = args.indexOf(name);
+	if (index === -1) return undefined;
+	const value = args[index + 1];
+	if (!value || value.startsWith("--")) throw new Error(`${name} requires a value`);
+	return value;
+}
+
+/** Resolve the binary feature profile; full remains the release-compatible default. */
+export function resolveBuildProfile(value: string | undefined): CodingAgentBuildProfile {
+	switch (value) {
+		case undefined:
+		case "":
+		case "full":
+			return "full";
+		case "core":
+			return "core";
+		default:
+			throw new Error(`Unsupported build profile: ${value}`);
+	}
+}
+
+const buildProfile = resolveBuildProfile(readOption("--profile"));
+const metafileValue = readOption("--metafile");
+const metafilePath = metafileValue ? path.resolve(metafileValue) : undefined;
 
 /** Binary cross-compilation settings selected by `CROSS_TARGET`. */
 export interface CrossBuild {
@@ -76,12 +110,13 @@ async function runCommand(
 
 async function main(): Promise<void> {
 	const crossBuild = resolveCrossBuild(Bun.env.CROSS_TARGET);
-	const outName = crossBuild ? `san-${crossBuild.id}` : "san";
+	const binaryName = buildProfile === "core" ? "san-core" : "san";
+	const outName = crossBuild ? `${binaryName}-${crossBuild.id}` : binaryName;
 	const outputPath = path.join(packageDir, "dist", outName);
-	// Generate inside the try so the finally always restores the empty checked-in
-	// placeholders (stats client archive, docs index) even on failure.
+	// Full builds generate optional embedded assets and reset their checked-in
+	// placeholders even when compilation fails. Core builds leave them empty.
 	try {
-		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats"]);
+		if (buildProfile === "full") await runCommand(["bun", "--cwd=../stats", "run", "gen:stats"]);
 		// The in-memory legacy Pi virtual module reaches the coding-agent
 		// `export/html` subpath, whose source imports `tool-views.generated.js`.
 		// Rebuild it before compilation so clean checkouts that skipped install
@@ -91,26 +126,28 @@ async function main(): Promise<void> {
 			["bun", "--cwd=../natives", "run", "gen:native"],
 			crossBuild ? { ...Bun.env, TARGET_PLATFORM: crossBuild.platform, TARGET_ARCH: crossBuild.arch } : Bun.env,
 		);
-		await runCommand(["bun", "run", "gen:mupdf"]);
+		if (buildProfile === "full") await runCommand(["bun", "run", "gen:mupdf"]);
 		try {
 			await compileCodingAgent({
 				repoRoot,
 				entrypoint: path.join(packageDir, "src", "cli.ts"),
 				outfile: outputPath,
 				transformersVersion,
+				buildProfile,
 				target: crossBuild?.target,
 				skipBuiltinCodesign: shouldAdhocSignDarwinBinary(crossBuild),
+				metafilePath,
 			});
 
 			if (shouldAdhocSignDarwinBinary(crossBuild)) {
 				await runCommand(["codesign", "--force", "--sign", "-", outputPath]);
 			}
 		} finally {
-			await runCommand(["bun", "run", "gen:mupdf:reset"]);
+			if (buildProfile === "full") await runCommand(["bun", "run", "gen:mupdf:reset"]);
 			await runCommand(["bun", "--cwd=../natives", "run", "gen:native:reset"]);
 		}
 	} finally {
-		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]);
+		if (buildProfile === "full") await runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]);
 	}
 }
 

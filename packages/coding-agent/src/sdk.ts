@@ -34,6 +34,7 @@ import {
 } from "./advisor";
 import { type AsyncJob, AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
+import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
 import { bucketRules } from "./capability/rule-buckets";
@@ -1946,7 +1947,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		toolSession.customToolPaths = customToolPaths;
 
 		const inlineExtensions: ExtensionFactory[] = options.extensions ? [...options.extensions] : [];
-		inlineExtensions.push((await import("./autoresearch")).createAutoresearchExtension);
+		inlineExtensions.push(createAutoresearchExtension);
 		if (customTools.length > 0) {
 			inlineExtensions.push(createCustomToolsExtension(customTools));
 		}
@@ -2490,7 +2491,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const defaultPrompt = await buildSystemPromptInternal({
 				cwd,
 				xdevTools: toolSession.xdevRegistry?.entries() ?? [],
-				xdevDocs: toolSession.xdevRegistry?.docsAll() ?? "",
+				xdevDocs: toolSession.xdevRegistry?.docsAll(settings.get("tools.xdevDocs")) ?? "",
 				autoQaEnabled: isAutoQaEnabled(settings),
 				resolvedCustomPrompt: options.customSystemPrompt,
 				skills: session?.skills ?? skills,

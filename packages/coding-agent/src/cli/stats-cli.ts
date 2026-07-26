@@ -111,6 +111,13 @@ function normalizePremiumRequests(n: number): number {
 // =============================================================================
 
 export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
+	if (process.env.SAN_BUILD_PROFILE === "core" && !cmd.json && !cmd.summary) {
+		process.stderr.write(
+			"The stats dashboard is not included in the San core binary; use --summary, --json, or the full binary.\n",
+		);
+		process.exitCode = 1;
+		return;
+	}
 	// Lazy import to avoid loading stats module when not needed
 	const { getDashboardStats, syncAllSessions, getTotalMessageCount, startServer, closeDb } = await import(
 		"@oh-my-pi/omp-stats"
