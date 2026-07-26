@@ -352,6 +352,14 @@ export async function runCli(argv: string[]): Promise<void> {
 	// browser workers onto the same-realm inline fallback.
 	if (isProcessEntry) declareWorkerHostEntry();
 
+	// Version queries need profile validation above, but no command registry.
+	// Keep this ahead of the lazy CLI imports: compiled binaries otherwise load
+	// the entire command routing graph only for a constant string.
+	if (resolvedArgv[0] === "--version" || resolvedArgv[0] === "-v") {
+		process.stdout.write(`${APP_NAME}/${VERSION}\n`);
+		return;
+	}
+
 	if (resolvedArgv[0] === "--smoke-test") {
 		await runSmokeTest();
 		return;

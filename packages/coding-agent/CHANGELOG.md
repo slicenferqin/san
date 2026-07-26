@@ -45,6 +45,7 @@
 - Changed San role context to project latest ContextPlan material summaries into role prompts, not only plan entry refs.
 - Changed San execution loop production path to consume `budget.reserveRatio` (turn reserve for review roles) and `roles.oracle.enabledInModes`.
 - Changed the prompt-token measurement script to load effective global and project settings read-only, apply the runtime discovery filter, report initial/discoverable/total built-in tool schema costs, and emit machine-readable baselines with `--json`.
+- Reduced `san --version` startup work by returning after profile validation and before loading the command registry.
 
 
 - Added ContextPlan request lifecycle hardening for 240K steady: per-provider-call hard-ceiling re-gate (including tool loops), branch-isolated checkpoints, fallback digests that never gain raw coverage via checkpoints, hard-pressure audit+prompt persistence with same-session agent-state recovery, shared plan snapshots for send/status/compaction, bounded semantic required sets, natural + explicit topic-shift relevance, atomic material-level wire caps, stable epoch IDs, SanLoop branch-only plan refs, `burstWindowTokens` settings, real AgentSession multi-turn dogfood, and session-prepared digest side-request transport.
