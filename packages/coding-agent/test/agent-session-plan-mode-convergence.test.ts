@@ -11,18 +11,18 @@
  *      user), and either decision tool resets the counter.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Agent, type AgentMessage, type AgentTool, type StreamFn } from "@oh-my-pi/pi-agent-core";
-import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import { IrcBus, type IrcMessage } from "@oh-my-pi/pi-coding-agent/irc/bus";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Snowflake, TempDir } from "@oh-my-pi/pi-utils";
+import { Agent, type AgentMessage, type AgentTool, type StreamFn } from "@san/agent";
+import { createMockModel, type MockModel, type MockResponse } from "@san/ai/providers/mock";
+import { getBundledModel } from "@san/catalog/models";
+import { ModelRegistry } from "@san/coding-agent/config/model-registry";
+import { Settings } from "@san/coding-agent/config/settings";
+import { resolveLocalUrlToPath } from "@san/coding-agent/internal-urls";
+import { IrcBus, type IrcMessage } from "@san/coding-agent/irc/bus";
+import { AgentRegistry } from "@san/coding-agent/registry/agent-registry";
+import { AgentSession } from "@san/coding-agent/session/agent-session";
+import { AuthStorage } from "@san/coding-agent/session/auth-storage";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
+import { Snowflake, TempDir } from "@san/utils";
 import { type } from "arktype";
 import planModeReminderPrompt from "../src/prompts/system/plan-mode-tool-decision-reminder.md" with { type: "text" };
 

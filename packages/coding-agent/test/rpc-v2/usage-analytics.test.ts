@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { buildUsageAnalytics } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/usage-analytics";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { AssistantMessage } from "@san/ai";
+import { buildUsageAnalytics } from "@san/coding-agent/modes/rpc-v2/usage-analytics";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
 import { createAssistantMessage } from "../helpers/agent-session-setup";
 
 afterEach(() => {

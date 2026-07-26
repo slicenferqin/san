@@ -1,10 +1,10 @@
 /**
- * `<omp-tool-view>` — web-component wrapper around ToolView for non-React
+ * `<san-tool-view>` — web-component wrapper around ToolView for non-React
  * hosts (the exported-session HTML page).
  *
  * Payload sources, in priority order:
  * 1. `el.data = {...}` property assignment.
- * 2. `data-key` attribute → lookup in `globalThis.__OMP_TOOL_VIEW_DATA`
+ * 2. `data-key` attribute → lookup in `globalThis.__SAN_TOOL_VIEW_DATA`
  *    (a Map populated by the host before inserting markup via innerHTML;
  *    survives `cloneNode` since only the key attribute is copied).
  * 3. `payload` attribute → inline JSON.
@@ -17,7 +17,7 @@ import { ToolView, type ToolViewProps } from "./ToolView";
 
 type PayloadStore = { get(key: string): ToolViewProps | undefined };
 
-export class OmpToolViewElement extends HTMLElement {
+export class SanToolViewElement extends HTMLElement {
 	#root: Root | null = null;
 	#data: ToolViewProps | null = null;
 
@@ -41,7 +41,7 @@ export class OmpToolViewElement extends HTMLElement {
 		if (this.#data) return this.#data;
 		const key = this.getAttribute("data-key");
 		if (key) {
-			const store = (globalThis as { __OMP_TOOL_VIEW_DATA?: PayloadStore }).__OMP_TOOL_VIEW_DATA;
+			const store = (globalThis as { __SAN_TOOL_VIEW_DATA?: PayloadStore }).__SAN_TOOL_VIEW_DATA;
 			const props = store?.get(key);
 			if (props) return props;
 		}
@@ -66,6 +66,6 @@ export class OmpToolViewElement extends HTMLElement {
 	}
 }
 
-export function defineToolViewElement(tag = "omp-tool-view"): void {
-	if (!customElements.get(tag)) customElements.define(tag, OmpToolViewElement);
+export function defineToolViewElement(tag = "san-tool-view"): void {
+	if (!customElements.get(tag)) customElements.define(tag, SanToolViewElement);
 }

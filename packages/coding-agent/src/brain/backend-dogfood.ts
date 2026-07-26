@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { TempDir } from "@san/utils";
 import { Settings } from "../config/settings";
 import { hindsightBackend } from "../hindsight/backend";
 import { HindsightApi } from "../hindsight/client";

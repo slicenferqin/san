@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { CONFIG_DIR_NAME, getAgentDir, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, getAgentDir, isEnoent, logger, prompt } from "@san/utils";
 import { expandAtImports } from "../discovery/at-imports";
 import activeRepoWatchdogTemplate from "../prompts/advisor/active-repo-watchdog.md" with { type: "text" };
 import contextFilesTemplate from "../prompts/advisor/context-files.md" with { type: "text" };

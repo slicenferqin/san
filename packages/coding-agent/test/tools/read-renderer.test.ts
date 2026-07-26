@@ -1,11 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import * as url from "node:url";
-import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
-import { theme as activeTheme, getThemeByName, initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { readToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/read";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import { resetSettingsForTest, Settings, settings } from "@san/coding-agent/config/settings";
+import { ToolExecutionComponent } from "@san/coding-agent/modes/components/tool-execution";
+import { theme as activeTheme, getThemeByName, initTheme } from "@san/coding-agent/modes/theme/theme";
+import { readToolRenderer } from "@san/coding-agent/tools/read";
+import type { TUI } from "@san/tui";
 
 function extractLinkUris(text: string): string[] {
 	return [...text.matchAll(/\x1b\]8;[^;]*;([^\x1b]+)\x1b\\/g)].map(match => match[1]!);
@@ -37,7 +37,7 @@ describe("readToolRenderer hyperlinks", () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();
 
-		const handoffPath = path.resolve("/tmp/omp-local/handoff.md");
+		const handoffPath = path.resolve("/tmp/san-local/handoff.md");
 		const component = readToolRenderer.renderResult(
 			{
 				content: [{ type: "text", text: "second line" }],

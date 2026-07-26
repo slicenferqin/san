@@ -1,12 +1,12 @@
 import { describe, expect, it } from "bun:test";
-import { buildSanBrainStatePrelude } from "@oh-my-pi/pi-coding-agent/brain/activation";
-import { applySanBrainMutation } from "@oh-my-pi/pi-coding-agent/brain/commands";
-import { appendSanBrainExperienceCandidate } from "@oh-my-pi/pi-coding-agent/brain/ledger";
-import { buildSanBrainRecallPlan } from "@oh-my-pi/pi-coding-agent/brain/recall";
-import { type SanBrainActiveStateRecord, SanBrainStore } from "@oh-my-pi/pi-coding-agent/brain/store";
-import type { SanBrainExperienceCandidate } from "@oh-my-pi/pi-coding-agent/brain/types";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { buildSanBrainStatePrelude } from "@san/coding-agent/brain/activation";
+import { applySanBrainMutation } from "@san/coding-agent/brain/commands";
+import { appendSanBrainExperienceCandidate } from "@san/coding-agent/brain/ledger";
+import { buildSanBrainRecallPlan } from "@san/coding-agent/brain/recall";
+import { type SanBrainActiveStateRecord, SanBrainStore } from "@san/coding-agent/brain/store";
+import type { SanBrainExperienceCandidate } from "@san/coding-agent/brain/types";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
+import { TempDir } from "@san/utils";
 
 const createdAt = "2026-07-11T08:00:00.000Z";
 

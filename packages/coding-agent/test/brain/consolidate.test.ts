@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { applySanBrainMutation, buildSanBrainConsolidation } from "@oh-my-pi/pi-coding-agent/brain/commands";
-import { SanBrainStore } from "@oh-my-pi/pi-coding-agent/brain/store";
+import { applySanBrainMutation, buildSanBrainConsolidation } from "@san/coding-agent/brain/commands";
+import { SanBrainStore } from "@san/coding-agent/brain/store";
 import {
 	BRAIN_DECISION_CUSTOM_TYPE,
 	BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE,
 	type SanBrainDecision,
 	type SanBrainProfileCandidate,
-} from "@oh-my-pi/pi-coding-agent/brain/types";
-import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import type { ReadonlySessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/brain/types";
+import type { SessionEntry } from "@san/coding-agent/session/session-entries";
+import type { ReadonlySessionManager } from "@san/coding-agent/session/session-manager";
+import { TempDir } from "@san/utils";
 
 let tempDir: TempDir | null = null;
 let store: SanBrainStore | null = null;

@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createSessionTeardown } from "@oh-my-pi/pi-coding-agent/modes/session-teardown";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { Agent } from "@san/agent";
+import type { AssistantMessage } from "@san/ai";
+import { getBundledModel } from "@san/catalog/models";
+import { ModelRegistry } from "@san/coding-agent/config/model-registry";
+import { Settings } from "@san/coding-agent/config/settings";
+import { createSessionTeardown } from "@san/coding-agent/modes/session-teardown";
+import { AgentSession } from "@san/coding-agent/session/agent-session";
+import { AuthStorage } from "@san/coding-agent/session/auth-storage";
 import {
 	collectPendingToolCalls,
 	createInterruptedTurnAbortMessage,
@@ -16,10 +16,10 @@ import {
 	SESSION_EXIT_CUSTOM_TYPE,
 	TOOL_EXECUTION_START_CUSTOM_TYPE,
 	type ToolExecutionStartData,
-} from "@oh-my-pi/pi-coding-agent/session/exit-diagnostics";
-import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { postmortem, TempDir } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/session/exit-diagnostics";
+import { convertToLlm } from "@san/coding-agent/session/messages";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
+import { postmortem, TempDir } from "@san/utils";
 
 const pendingAssistant: AssistantMessage = {
 	role: "assistant",

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the published package from `@oh-my-pi/pi-wire` to `@san/wire`; consumers must update package dependencies and imports.
+
 ## [16.3.0] - 2026-07-02
 
 ### Breaking Changes

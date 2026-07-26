@@ -12,7 +12,7 @@ import {
 	Patcher,
 	parsePatch,
 	resolveBlockEdits,
-} from "@oh-my-pi/hashline";
+} from "@san/hashline";
 
 const PATH = "x.ts";
 

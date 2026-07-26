@@ -1,12 +1,12 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
-import type { Model } from "@oh-my-pi/pi-ai";
-import * as modelDiscovery from "@oh-my-pi/pi-coding-agent/config/model-discovery";
-import * as modelsConfigWriter from "@oh-my-pi/pi-coding-agent/config/models-config-writer";
-import { ConnectSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/connect-selector";
-import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
-import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { Container, Input, Text } from "@oh-my-pi/pi-tui";
+import type { Model } from "@san/ai";
+import * as modelDiscovery from "@san/coding-agent/config/model-discovery";
+import * as modelsConfigWriter from "@san/coding-agent/config/models-config-writer";
+import { ConnectSelectorComponent } from "@san/coding-agent/modes/components/connect-selector";
+import { SelectorController } from "@san/coding-agent/modes/controllers/selector-controller";
+import { initTheme } from "@san/coding-agent/modes/theme/theme";
+import type { InteractiveModeContext } from "@san/coding-agent/modes/types";
+import { Container, Input, Text } from "@san/tui";
 
 beforeAll(async () => {
 	await initTheme();

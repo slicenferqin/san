@@ -1,4 +1,4 @@
-import { prompt } from "@oh-my-pi/pi-utils";
+import { prompt } from "@san/utils";
 import riskHistoryTemplate from "../prompts/brain/recall/risk-history-v1.md" with { type: "text" };
 import taskRelevantTemplate from "../prompts/brain/recall/task-relevant-v1.md" with { type: "text" };
 import { isSanBrainHistorySuppressed, sanBrainScopeKey, selectSanBrainActiveStates } from "./activation";

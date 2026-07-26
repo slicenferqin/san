@@ -3,17 +3,8 @@
  *
  * Interactive multi-step wizard for adding MCP servers.
  */
-import {
-	Container,
-	Input,
-	matchesKey,
-	replaceTabs,
-	Spacer,
-	Text,
-	TruncatedText,
-	truncateToWidth,
-} from "@oh-my-pi/pi-tui";
-import { getMCPConfigPath, getProjectDir } from "@oh-my-pi/pi-utils";
+import { Container, Input, matchesKey, replaceTabs, Spacer, Text, TruncatedText, truncateToWidth } from "@san/tui";
+import { getMCPConfigPath, getProjectDir } from "@san/utils";
 import { validateServerName } from "../../mcp/config-writer";
 import { analyzeAuthError, discoverOAuthEndpoints, fetchResourceMetadataScopes } from "../../mcp/oauth-discovery";
 import type { MCPHttpServerConfig, MCPServerConfig, MCPSseServerConfig, MCPStdioServerConfig } from "../../mcp/types";

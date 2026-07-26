@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import * as path from "node:path";
 import * as url from "node:url";
-import { isCompiledBinary, stripWindowsExtendedLengthPathPrefix } from "@oh-my-pi/pi-utils";
+import { isCompiledBinary, stripWindowsExtendedLengthPathPrefix } from "@san/utils";
 import { registerPluginCacheInvalidator } from "../../discovery/helpers";
 
 const IS_COMPILED_BINARY = isCompiledBinary();
@@ -121,23 +121,41 @@ export function __getLegacyPiBundledModulesGlobal(): string {
 	return BUNDLED_MODULES_GLOBAL;
 }
 
-// Canonical scope for in-process pi packages. Plugins published against any of
-// the aliased scopes below (mariozechner's original publish, earendil-works'
-// fork, or the canonical @oh-my-pi scope itself) are remapped to this scope and
-// resolved against the bundled copy that ships inside the omp binary. This
-// keeps plugins running against the exact runtime state of the host (single
-// module registry, single tool registry, etc.) regardless of which historical
-// scope name they happened to declare in their peerDependencies.
-const CANONICAL_PI_SCOPE = "@oh-my-pi";
+// Canonical scope for the San packages bundled into the host runtime. Legacy
+// plugins may still use the historical @mariozechner, @earendil-works, or
+// @oh-my-pi scopes; all recognized spellings resolve to the same in-process
+// module instance.
+const CANONICAL_PI_SCOPE = "@san";
 
-// Scopes that have historically been used to publish (or alias) the same set
-// of internal pi-* packages. `@oh-my-pi` is intentionally included so direct
-// canonical imports still pass through the same host-bundled package resolution
-// path instead of pulling a duplicate copy from plugin node_modules.
-const PI_SCOPE_ALIASES = ["oh-my-pi", "mariozechner", "earendil-works"] as const;
+// Scopes historically used for the internal package family. Values omit the
+// leading @ because the expressions below add it explicitly.
+const PI_SCOPE_ALIASES = ["san", "oh-my-pi", "mariozechner", "earendil-works"] as const;
 
-// Internal pi-* package basenames bundled inside the omp binary.
-const PI_PACKAGE_NAMES = ["pi-agent-core", "pi-ai", "pi-coding-agent", "pi-natives", "pi-tui", "pi-utils"] as const;
+// Legacy pi-* basenames plus current San basenames. The former are rewritten
+// to the latter before filesystem or bundled-module resolution.
+const PI_PACKAGE_NAMES = [
+	"agent",
+	"ai",
+	"coding-agent",
+	"natives",
+	"tui",
+	"utils",
+	"pi-agent-core",
+	"pi-ai",
+	"pi-coding-agent",
+	"pi-natives",
+	"pi-tui",
+	"pi-utils",
+] as const;
+
+const LEGACY_PI_PACKAGE_RENAMES = new Map<string, string>([
+	["pi-agent-core", "agent"],
+	["pi-ai", "ai"],
+	["pi-coding-agent", "coding-agent"],
+	["pi-natives", "natives"],
+	["pi-tui", "tui"],
+	["pi-utils", "utils"],
+]);
 
 const PI_SCOPE_ALTERNATION = PI_SCOPE_ALIASES.join("|");
 const PI_PACKAGE_ALTERNATION = PI_PACKAGE_NAMES.join("|");
@@ -149,8 +167,10 @@ const PI_PACKAGE_ALTERNATION = PI_PACKAGE_NAMES.join("|");
 // bundled copy. Entries ending in `/` rewrite the whole subtree; add new
 // `pkg/from -> pkg/to` pairs whenever an upstream-only subpath breaks resolution.
 const PI_SUBPATH_REMAPS: ReadonlyMap<string, string> = new Map<string, string>([
-	["pi-ai/utils/oauth", "pi-ai/oauth"],
-	["pi-ai/utils/oauth/", "pi-ai/oauth/"],
+	["pi-ai/utils/oauth", "ai/oauth"],
+	["pi-ai/utils/oauth/", "ai/oauth/"],
+	["ai/utils/oauth", "ai/oauth"],
+	["ai/utils/oauth/", "ai/oauth/"],
 ]);
 
 function remapLegacyPiSubpath(rest: string): string {
@@ -295,7 +315,7 @@ const TYPEBOX_SHIM_PATH = __resolveTypeBoxShimPath(IS_COMPILED_BINARY, sourceShi
 // imports such as `@oh-my-pi/pi-ai/oauth` continue to resolve directly
 // against the bundled pi-ai package.
 const LEGACY_PI_AI_SHIM_PATH = IS_COMPILED_BINARY
-	? bundledModuleVirtualSpecifier(`${CANONICAL_PI_SCOPE}/pi-ai`)
+	? bundledModuleVirtualSpecifier(`${CANONICAL_PI_SCOPE}/ai`)
 	: sourceShimPath("legacy-pi-ai-shim.ts");
 
 // The coding-agent's own `./src/index.ts` cannot be listed as an extra
@@ -306,7 +326,7 @@ const LEGACY_PI_AI_SHIM_PATH = IS_COMPILED_BINARY
 // sibling source shim whose distinct file path avoids the #1474 collision
 // while still re-exporting the canonical package surface.
 const LEGACY_PI_CODING_AGENT_SHIM_PATH = IS_COMPILED_BINARY
-	? bundledModuleVirtualSpecifier(`${CANONICAL_PI_SCOPE}/pi-coding-agent`)
+	? bundledModuleVirtualSpecifier(`${CANONICAL_PI_SCOPE}/coding-agent`)
 	: sourceShimPath("legacy-pi-coding-agent-shim.ts");
 
 // Package-root overrides. Shim entries (`pi-ai`, `pi-coding-agent`) always
@@ -359,8 +379,8 @@ export function __buildLegacyPiPackageRootOverrides(
 	bundledModuleKeys: Iterable<string> = [],
 ): Record<string, string> {
 	const candidates: Record<string, string> = {
-		[`${CANONICAL_PI_SCOPE}/pi-ai`]: LEGACY_PI_AI_SHIM_PATH,
-		[`${CANONICAL_PI_SCOPE}/pi-coding-agent`]: LEGACY_PI_CODING_AGENT_SHIM_PATH,
+		[`${CANONICAL_PI_SCOPE}/ai`]: LEGACY_PI_AI_SHIM_PATH,
+		[`${CANONICAL_PI_SCOPE}/coding-agent`]: LEGACY_PI_CODING_AGENT_SHIM_PATH,
 	};
 	if (isCompiled) {
 		for (const key of bundledModuleKeys) {
@@ -398,13 +418,15 @@ function remapLegacyPiSpecifier(specifier: string): string | null {
 		return null;
 	}
 	const slashIdx = specifier.indexOf("/", 1);
-	// Filter guarantees a slash exists, but guard anyway to keep the type narrow.
 	if (slashIdx === -1) {
 		return null;
 	}
-	const rest = specifier.slice(slashIdx + 1);
-	const remappedSubpath = remapLegacyPiSubpath(rest);
-	return `${CANONICAL_PI_SCOPE}/${remappedSubpath}`;
+	const rest = remapLegacyPiSubpath(specifier.slice(slashIdx + 1));
+	const packageEnd = rest.indexOf("/");
+	const packageName = packageEnd === -1 ? rest : rest.slice(0, packageEnd);
+	const canonicalPackageName = LEGACY_PI_PACKAGE_RENAMES.get(packageName) ?? packageName;
+	const suffix = packageEnd === -1 ? "" : rest.slice(packageEnd);
+	return `${CANONICAL_PI_SCOPE}/${canonicalPackageName}${suffix}`;
 }
 
 function getResolvedSpecifier(specifier: string): string {
@@ -419,7 +441,7 @@ function getResolvedSpecifier(specifier: string): string {
 }
 
 /**
- * Resolve a canonical `@oh-my-pi/*` specifier to a filesystem path, preferring
+ * Resolve a canonical `@san/*` specifier to a filesystem path, preferring
  * a bundled compat shim when one is registered for the package root.
  *
  * Falls back to `getResolvedSpecifier` (which may throw under compiled binary
@@ -472,7 +494,7 @@ function rewriteLegacyPiImports(source: string): string {
 const TYPEBOX_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["'])(@sinclair\/typebox|typebox)(["'])/g;
 
 /**
- * Rewrite the extension-owned specifiers OMP must host-resolve — legacy
+ * Rewrite the extension-owned specifiers San must host-resolve — legacy
  * `@(scope)/pi-*`, bare TypeBox packages, package `imports` aliases like
  * `#src/*`, and extension-local bare dependencies — to absolute `file://` URLs
  * or compiled-mode virtual specifiers. Relative siblings and built-in modules
@@ -1207,7 +1229,7 @@ async function realpathOrSelfUncached(p: string): Promise<string> {
 
 /**
  * Walk the extension's import graph starting at `entryRealPath`, returning the
- * realpath of every reachable source module OMP must rewrite at load time.
+ * realpath of every reachable source module San must rewrite at load time.
  * Relative imports and package `imports` aliases are always graph-owned.
  * Extension-local bare dependency entries are also included so their relative
  * children receive the reload mtime tag; bare imports inside those dependencies
@@ -1378,7 +1400,7 @@ function synthesizeCommonJsDefaultModule(modulePath: string, source: string, tar
 }
 
 /**
- * Linkedom's canvas bridge uses its bundled fallback because OMP does not ship
+ * Linkedom's canvas bridge uses its bundled fallback because San does not ship
  * native canvas.
  */
 async function prepareCommonJsDefaultModule(modulePath: string, source: string): Promise<string> {
@@ -1617,7 +1639,7 @@ function resolveLegacyPiSpecifier(args: { path: string; importer: string }): { p
 		return undefined;
 	}
 
-	// Primary: resolve the canonical @oh-my-pi/* specifier from the host binary
+	// Primary: resolve the canonical @san/* specifier from the host binary
 	// location. Works in dev mode and in source-link installs.
 	try {
 		return { path: resolveCanonicalPiSpecifier(remappedSpecifier) };

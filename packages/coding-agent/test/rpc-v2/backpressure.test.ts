@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { BackpressureWriter, type RpcWritable } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/backpressure-writer";
+import { BackpressureWriter, type RpcWritable } from "@san/coding-agent/modes/rpc-v2/backpressure-writer";
 
 class ControlledWritable implements RpcWritable {
 	readonly lines: string[] = [];

@@ -10,8 +10,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { isEnoent, logger, pathIsWithin } from "@oh-my-pi/pi-utils";
-import { normalizePluginRuntimeConfig } from "../runtime-config";
+import { isEnoent, logger, PLUGIN_LOCKFILE_NAME, pathIsWithin } from "@san/utils";
+import { loadPluginRuntimeConfig, normalizePluginRuntimeConfig } from "../runtime-config";
 import type { PluginRuntimeConfig } from "../types";
 
 import { cachePlugin } from "./cache";
@@ -765,17 +765,16 @@ export class MarketplaceManager {
 	}
 
 	#runtimeLockPath(scope: "user" | "project"): string {
-		return path.join(this.#runtimeRoot(scope), "omp-plugins.lock.json");
+		return path.join(this.#runtimeRoot(scope), PLUGIN_LOCKFILE_NAME);
 	}
 
 	async #loadRuntimeConfig(scope: "user" | "project"): Promise<PluginRuntimeConfig> {
 		try {
-			return normalizePluginRuntimeConfig(await Bun.file(this.#runtimeLockPath(scope)).json());
-		} catch (err) {
-			if (isEnoent(err)) return normalizePluginRuntimeConfig({});
+			return await loadPluginRuntimeConfig(this.#runtimeRoot(scope));
+		} catch (error) {
 			logger.warn("Failed to load marketplace plugin runtime config", {
 				path: this.#runtimeLockPath(scope),
-				error: String(err),
+				error: String(error),
 			});
 			return normalizePluginRuntimeConfig({});
 		}

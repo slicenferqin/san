@@ -18,8 +18,8 @@ import {
 	stripClaudeToolPrefix,
 	withAuth,
 	wrapFetchForCch,
-} from "@oh-my-pi/pi-ai";
-import { $env } from "@oh-my-pi/pi-utils";
+} from "@san/ai";
+import { $env } from "@san/utils";
 import type {
 	AnthropicApiResponse,
 	AnthropicCitation,

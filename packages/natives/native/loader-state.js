@@ -8,7 +8,7 @@ import packageJson from "../package.json" with { type: "json" };
 import { embeddedAddon } from "./embedded-addon.js";
 
 /**
- * Native addon loader for `@oh-my-pi/pi-natives`.
+ * Native addon loader for `@san/natives`.
  *
  * Owns every step between "Node imports `native/index.js`" and "the right
  * `pi_natives.<platform>-<arch>*.node` is required, validated, and returned":
@@ -50,16 +50,13 @@ function startupMarker(text) {
 
 function getNativesDir() {
 	const xdgDataHome = process.env.XDG_DATA_HOME;
-	if (xdgDataHome && fs.existsSync(path.join(xdgDataHome, "omp"))) {
-		return path.join(xdgDataHome, "omp", "natives");
-	}
-	return path.join(os.homedir(), ".omp", "natives");
+	return xdgDataHome ? path.join(xdgDataHome, "san", "natives") : path.join(os.homedir(), ".san", "natives");
 }
 
 function resolveLeafPackageDir(platformTag) {
 	try {
 		const require_ = createRequire(import.meta.url);
-		return path.dirname(require_.resolve(`@oh-my-pi/pi-natives-${platformTag}/package.json`));
+		return path.dirname(require_.resolve(`@san/natives-${platformTag}/package.json`));
 	} catch {
 		return null;
 	}
@@ -105,14 +102,14 @@ export function getAddonFilenames({ tag, arch, variant }) {
 
 /**
  * Decide whether the loader should mirror the package's `native/<filename>.node`
- * into the per-version cache directory (`~/.omp/natives/<version>/`) before loading.
+ * into the per-version cache directory (`~/.san/natives/<version>/`) before loading.
  *
- * Windows-only safety net for `bun install -g` updates: when a previous `omp`
+ * Windows-only safety net for `bun install -g` updates: when a previous San
  * process is running, bun cannot overwrite the locked `.node` inside
- * `node_modules/@oh-my-pi/pi-natives/native/`, leaving an old binary next to a
+ * `node_modules/@san/natives/native/`, leaving an old binary next to a
  * newer `index.js` and producing `<sym> is not a function` crashes on the next
  * launch. Staging into the version-pinned cache:
- *   1. Gives every package version its own filesystem path, so concurrent omp
+ *   1. Gives every package version its own filesystem path, so concurrent San
  *      processes never collide on the same file.
  *   2. Makes the running process keep its handle on the cache copy, freeing bun
  *      to overwrite the `node_modules` copy on subsequent updates.
@@ -618,16 +615,16 @@ export function validateLoadedBindings(ctx, bindings, candidate) {
 	if (residentSentinel && diskHasExpectedSentinel) {
 		const residentVersion = residentSentinel.slice("__piNativesV".length).replace(/_/g, ".");
 		throw new Error(
-			`Loaded ${candidate}, which exposes the @oh-my-pi/pi-natives@${residentVersion} version ` +
+			`Loaded ${candidate}, which exposes the @san/natives@${residentVersion} version ` +
 				`sentinel \`${residentSentinel}\` but not the @${ctx.packageVersion} sentinel ` +
-				`\`${ctx.versionSentinelExport}\` this loader expects. omp was upgraded to ` +
+				`\`${ctx.versionSentinelExport}\` this loader expects. San was upgraded to ` +
 				`${ctx.packageVersion} while this session was running; the ${residentVersion} addon is ` +
-				"still resident in this process. Disk is already consistent — restart omp to pick up " +
+				"still resident in this process. Disk is already consistent — restart San to pick up " +
 				`${ctx.packageVersion} (reinstalling changes nothing).`,
 		);
 	}
 	throw new Error(
-		`Loaded ${candidate} but it does not expose the @oh-my-pi/pi-natives@${ctx.packageVersion} ` +
+		`Loaded ${candidate} but it does not expose the @san/natives@${ctx.packageVersion} ` +
 			`version sentinel \`${ctx.versionSentinelExport}\`. The .node file on disk is from a different ` +
 			"release than this loader — reinstall to re-sync.",
 	);
@@ -658,7 +655,7 @@ function buildHelpMessage(ctx) {
 		const expectedPaths = ctx.addonFilenames.map(filename => `  ${path.join(ctx.versionedDir, filename)}`).join("\n");
 		const downloadHints = ctx.addonFilenames
 			.map(filename => {
-				const downloadUrl = `https://github.com/can1357/oh-my-pi/releases/latest/download/${filename}`;
+				const downloadUrl = `https://github.com/slicenferqin/san/releases/latest/download/${filename}`;
 				const targetPath = path.join(ctx.versionedDir, filename);
 				return `  curl -fsSL "${downloadUrl}" -o "${targetPath}"`;
 			})
@@ -669,7 +666,7 @@ function buildHelpMessage(ctx) {
 		);
 	}
 	return (
-		"If installed via npm/bun, try reinstalling: bun install @oh-my-pi/pi-natives\n" +
+		"If installed via npm/bun, try reinstalling: bun install @san/natives\n" +
 		"If developing locally, build with: bun --cwd=packages/natives run build\n" +
 		"Optional x64 variants: TARGET_VARIANT=baseline|modern bun --cwd=packages/natives run build"
 	);
@@ -690,7 +687,7 @@ function initLoaderContext() {
 	const versionedDir = path.join(nativesDir, packageVersion);
 	const userDataDir =
 		process.platform === "win32"
-			? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "omp")
+			? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "san")
 			: path.join(os.homedir(), ".local", "bin");
 
 	const isCompiledBinary = detectCompiledBinary({

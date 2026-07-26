@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { calculateContextTokens, calculatePromptTokens } from "@oh-my-pi/pi-agent-core/compaction";
-import type { Usage } from "@oh-my-pi/pi-ai";
+import { calculateContextTokens, calculatePromptTokens } from "@san/agent/compaction";
+import type { Usage } from "@san/ai";
 
 function usage(overrides: Partial<Usage>): Usage {
 	return {

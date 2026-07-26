@@ -10,11 +10,11 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { usageReportSchema } from "@oh-my-pi/pi-ai";
-import { usageResponseSchema } from "@oh-my-pi/pi-ai/auth-broker/wire-schemas";
+import { usageReportSchema } from "@san/ai";
+import { usageResponseSchema } from "@san/ai/auth-broker/wire-schemas";
 import { type } from "arktype";
 
-const DISCLAIMER = "OMP-observed spend only; OpenCode usage outside OMP is not included.";
+const DISCLAIMER = "San-observed spend only; OpenCode usage outside San is not included.";
 
 function reportWithNotes() {
 	return {

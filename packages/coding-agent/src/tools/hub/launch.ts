@@ -5,10 +5,10 @@
  * `list`, and `send`/`wait` route here when they carry a process `name`.
  */
 
-import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { Text } from "@oh-my-pi/pi-tui";
-import { sanitizeText } from "@oh-my-pi/pi-utils";
+import type { AgentToolResult } from "@san/agent";
+import type { Component } from "@san/tui";
+import { Text } from "@san/tui";
+import { sanitizeText } from "@san/utils";
 import type { RenderResultOptions } from "../../extensibility/custom-tools/types";
 import { daemonClientForProject } from "../../launch/client";
 import type { DaemonOperation, DaemonRpcResult, DaemonSnapshot, DaemonSpec, DaemonState } from "../../launch/protocol";

@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDir, isEnoent, Snowflake } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isEnoent, Snowflake } from "@san/utils";
 import { withFileLock } from "../../config/file-lock";
 import type { ApprovalPolicySnapshot, ApprovalScope, PermissionPolicySnapshot, PermissionRule } from "./dto/approval";
 import type { ApprovalId } from "./protocol/ids";

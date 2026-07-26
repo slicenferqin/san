@@ -1,13 +1,14 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { CONFIG_DIR_NAME, getConfigAgentDirName, getProjectDir } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, getConfigAgentDirName, getProjectDir, LEGACY_CONFIG_DIR_NAME } from "@san/utils";
 import { expandTilde } from "./tools/path-utils";
 
 export * from "./config/config-file";
 
 const priorityList = [
 	{ dir: CONFIG_DIR_NAME, globalAgentDir: getConfigAgentDirName },
+	{ dir: LEGACY_CONFIG_DIR_NAME, globalAgentDir: () => path.join(LEGACY_CONFIG_DIR_NAME, "agent") },
 	{ dir: ".claude" },
 	{ dir: ".codex" },
 	{ dir: ".gemini" },
@@ -77,8 +78,8 @@ export function getChangelogPath(): string | undefined {
 
 /**
  * Config directory bases in priority order (highest first).
- * User-level: ~/.san/agent, ~/.claude, ~/.codex, ~/.gemini
- * Project-level: .san, .claude, .codex, .gemini
+ * User-level: ~/.san/agent, ~/.omp/agent, ~/.claude, ~/.codex, ~/.gemini
+ * Project-level: .san, .omp, .claude, .codex, .gemini
  */
 const USER_CONFIG_BASES = priorityList.map(({ dir, globalAgentDir }) => ({
 	base: () => path.join(os.homedir(), globalAgentDir ? globalAgentDir() : dir),
@@ -92,14 +93,14 @@ const PROJECT_CONFIG_BASES = priorityList.map(({ dir }) => ({
 
 export interface ConfigDirEntry {
 	path: string;
-	source: string; // e.g., ".omp", ".claude"
+	source: string; // e.g., ".san", ".omp", ".claude"
 	level: "user" | "project";
 }
 
 export interface GetConfigDirsOptions {
-	/** Include user-level directories (~/.omp/agent/...). Default: true */
+	/** Include user-level directories (~/.san/agent/..., then legacy/tool fallbacks). Default: true */
 	user?: boolean;
-	/** Include project-level directories (.omp/...). Default: true */
+	/** Include project-level directories (.san/..., then legacy/tool fallbacks). Default: true */
 	project?: boolean;
 	/** Current working directory for project paths. Default: getProjectDir() */
 	cwd?: string;
@@ -207,7 +208,7 @@ export function findConfigFileWithMeta(
 
 /**
  * Find all nearest config directories by walking up from cwd.
- * Returns one entry per config base (.omp, .claude) - the nearest one found.
+ * Returns one entry per config base (.san, .omp, .claude, ...) — the nearest one found.
  * Results are in priority order (highest first).
  */
 export function findAllNearestProjectConfigDirs(subpath: string, cwd: string = getProjectDir()): ConfigDirEntry[] {

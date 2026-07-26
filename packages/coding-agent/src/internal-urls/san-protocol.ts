@@ -16,7 +16,7 @@ import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } fr
  *
  * Resolves documentation file names to their content, or lists available docs.
  */
-export class OmpProtocolHandler implements ProtocolHandler {
+export class SanProtocolHandler implements ProtocolHandler {
 	readonly scheme: "san" | "omp";
 	readonly immutable = true;
 

@@ -1,12 +1,12 @@
 /**
  * Custom command loader - loads TypeScript command modules using native Bun import.
  *
- * Dependencies (the arktype validation and pi-coding-agent) are injected via the
+ * Dependencies (ArkType validation and the coding-agent compatibility SDK) are injected via
  * CustomCommandAPI to avoid import resolution issues with custom commands loaded from user directories.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getAgentDir, getProjectDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { getAgentDir, getProjectDir, isEnoent, logger } from "@san/utils";
 import * as arktype from "arktype";
 import * as zodModule from "zod/v4";
 import { getConfigDirs } from "../../config";
@@ -146,7 +146,7 @@ export interface LoadCustomCommandsOptions {
 }
 
 /**
- * Load bundled commands (shipped with pi-coding-agent).
+ * Load bundled commands shipped with San.
  */
 function loadBundledCommands(sharedApi: CustomCommandAPI): LoadedCustomCommand[] {
 	const bundled: LoadedCustomCommand[] = [];

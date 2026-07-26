@@ -1,10 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
-import { type AutocompleteItem, Spacer } from "@oh-my-pi/pi-tui";
-import { APP_NAME, getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
+import { ThinkingLevel } from "@san/agent";
+import { getOAuthProviders } from "@san/ai/oauth";
+import { type AutocompleteItem, Spacer } from "@san/tui";
+import { APP_NAME, getProjectDir, setProjectDir } from "@san/utils";
 import { applySanBrainMutation, buildSanBrainConsolidation } from "../brain/commands";
 import { buildSanBrainProjectionReportText, runSanBrainProjections } from "../brain/projection";
 import { rebuildSanBrainStore } from "../brain/rebuild";

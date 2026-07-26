@@ -1,5 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { buildSessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
+import { buildSessionContext } from "@san/coding-agent/session/session-context";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
@@ -8,8 +8,8 @@ import type {
 	SessionEntry,
 	SessionMessageEntry,
 	ThinkingLevelChangeEntry,
-} from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import * as snapcompact from "@oh-my-pi/snapcompact";
+} from "@san/coding-agent/session/session-entries";
+import * as snapcompact from "@san/snapcompact";
 import { CONTEXT_PLAN_MESSAGE_TYPE } from "../../src/context-steady/plan-types";
 import { CONTEXT_PACKET_MESSAGE_TYPE } from "../../src/context-steady/types";
 

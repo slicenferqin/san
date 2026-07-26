@@ -1,30 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import {
-	deleteManagedSkill,
-	getManagedSkillsDir,
-	writeManagedSkill,
-} from "@oh-my-pi/pi-coding-agent/autolearn/managed-skills";
-import { applySanBrainMutation } from "@oh-my-pi/pi-coding-agent/brain/commands";
+import { deleteManagedSkill, getManagedSkillsDir, writeManagedSkill } from "@san/coding-agent/autolearn/managed-skills";
+import { applySanBrainMutation } from "@san/coding-agent/brain/commands";
 import {
 	appendSanBrainExperienceCandidate,
 	appendSanBrainProfileCandidate,
 	appendSanBrainProjection,
-} from "@oh-my-pi/pi-coding-agent/brain/ledger";
-import { runSanBrainProjections } from "@oh-my-pi/pi-coding-agent/brain/projection";
-import { SanBrainStore } from "@oh-my-pi/pi-coding-agent/brain/store";
+} from "@san/coding-agent/brain/ledger";
+import { runSanBrainProjections } from "@san/coding-agent/brain/projection";
+import { SanBrainStore } from "@san/coding-agent/brain/store";
 import type {
 	SanBrainAction,
 	SanBrainExperienceCandidate,
 	SanBrainExperienceCandidateType,
 	SanBrainProfileCandidate,
-} from "@oh-my-pi/pi-coding-agent/brain/types";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import * as memoryBackend from "@oh-my-pi/pi-coding-agent/memory-backend";
-import type { MemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/types";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/brain/types";
+import { Settings } from "@san/coding-agent/config/settings";
+import * as memoryBackend from "@san/coding-agent/memory-backend";
+import type { MemoryBackend } from "@san/coding-agent/memory-backend/types";
+import type { AgentSession } from "@san/coding-agent/session/agent-session";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
+import { TempDir } from "@san/utils";
 
 function experienceCandidate(
 	candidateId: string,

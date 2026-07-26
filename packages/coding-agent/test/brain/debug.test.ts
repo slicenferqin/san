@@ -1,16 +1,16 @@
 import { describe, expect, it } from "bun:test";
 import * as os from "node:os";
-import { applySanBrainMutation } from "@oh-my-pi/pi-coding-agent/brain/commands";
+import { applySanBrainMutation } from "@san/coding-agent/brain/commands";
 import {
 	appendSanBrainProfileCandidate,
 	appendSanBrainProjection,
 	appendSanBrainProjectionNotification,
-} from "@oh-my-pi/pi-coding-agent/brain/ledger";
-import { buildSanBrainDebugReportText } from "@oh-my-pi/pi-coding-agent/brain/render";
-import { SanBrainStore } from "@oh-my-pi/pi-coding-agent/brain/store";
-import type { SanBrainProfileCandidate } from "@oh-my-pi/pi-coding-agent/brain/types";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/brain/ledger";
+import { buildSanBrainDebugReportText } from "@san/coding-agent/brain/render";
+import { SanBrainStore } from "@san/coding-agent/brain/store";
+import type { SanBrainProfileCandidate } from "@san/coding-agent/brain/types";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
+import { TempDir } from "@san/utils";
 
 const profile: SanBrainProfileCandidate = {
 	schemaVersion: 1,

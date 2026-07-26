@@ -8,7 +8,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@san/utils";
 import { Document, isMap, isNode, isScalar, parseDocument, type YAMLMap } from "yaml";
 
 export type YamlPathSegment = string | number;

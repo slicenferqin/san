@@ -11,11 +11,11 @@
  * after `onExit`, it drains the pipe, keeps the last 16 KiB in a bounded ring,
  * and appends that tail to the `Error` surfaced to `onError` handlers. These
  * tests pin that contract so the exit-code-7 crash (and the next one) actually
- * shows up in `~/.omp/logs/omp.log` without regressing idle-worker shutdown.
+ * shows up in `~/.san/logs/san.YYYY-MM-DD.PID.log` without regressing idle-worker shutdown.
  */
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { createWorkerSubprocess, type SpawnedSubprocess } from "@oh-my-pi/pi-coding-agent/subprocess/worker-client";
+import { createWorkerSubprocess, type SpawnedSubprocess } from "@san/coding-agent/subprocess/worker-client";
 
 interface FakeWorkerOutbound {
 	type: "pong";

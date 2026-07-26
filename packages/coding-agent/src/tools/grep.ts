@@ -1,18 +1,12 @@
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { formatHashlineHeader } from "@oh-my-pi/hashline";
-import type {
-	AgentTool,
-	AgentToolContext,
-	AgentToolResult,
-	AgentToolUpdateCallback,
-	ToolTier,
-} from "@oh-my-pi/pi-agent-core";
-import { type GrepMatch, GrepOutputMode, type GrepResult, grep } from "@oh-my-pi/pi-natives";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { Text } from "@oh-my-pi/pi-tui";
-import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback, ToolTier } from "@san/agent";
+import { formatHashlineHeader } from "@san/hashline";
+import { type GrepMatch, GrepOutputMode, type GrepResult, grep } from "@san/natives";
+import type { Component } from "@san/tui";
+import { Text } from "@san/tui";
+import { prompt, untilAborted } from "@san/utils";
 import { type } from "arktype";
 import { recordFileSnapshot, recordSeenLinesFromBody } from "../edit/file-snapshot-store";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -326,7 +320,7 @@ async function resolveArchiveSearchPaths(
 		}
 
 		if (!tempDir) {
-			tempDir = await mkdtemp(path.join(tmpdir(), "omp-search-archive-"));
+			tempDir = await mkdtemp(path.join(tmpdir(), "san-search-archive-"));
 		}
 		// Per-entry filename keeps the scratch path unique even when two selectors
 		// resolve to members with the same basename.
@@ -713,7 +707,7 @@ async function searchVirtualResources(
 	// `[[:digit:]]`) behaves identically on virtual/remote resources. The JS helpers
 	// below then rebuild the exact forward-only, range-trimmed context windows the
 	// virtual-search contract requires.
-	const dir = await mkdtemp(path.join(tmpdir(), "omp-search-virtual-"));
+	const dir = await mkdtemp(path.join(tmpdir(), "san-search-virtual-"));
 	try {
 		for (let idx = 0; idx < resources.length; idx++) {
 			const resource = resources[idx];

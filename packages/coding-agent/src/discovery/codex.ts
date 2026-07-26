@@ -7,7 +7,7 @@
  * User directory: ~/.codex
  */
 import * as path from "node:path";
-import { logger, parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { logger, parseFrontmatter } from "@san/utils";
 import { registerProvider } from "../capability";
 import type { ContextFile } from "../capability/context-file";
 import { contextFileCapability } from "../capability/context-file";
@@ -352,8 +352,8 @@ async function loadHooks(ctx: LoadContext): Promise<LoadResult<Hook>> {
 	const codexDir = getProjectCodexDir(ctx);
 	const projectHooksDir = path.join(codexDir, "hooks");
 
-	// OMP hooks must be named `pre-<tool>.<ts|js>` or `post-<tool>.<ts|js>`.
-	// Files without that prefix are not OMP hooks (e.g. the standalone Codex
+	// San hooks must be named `pre-<tool>.<ts|js>` or `post-<tool>.<ts|js>`.
+	// Files without that prefix are not San hooks (e.g. the standalone Codex
 	// hook scripts users keep alongside) — silently dropping the prefix and
 	// defaulting to `pre:<basename>` caused those scripts to be imported as
 	// extension factories and any top-level `process.exit()` killed startup

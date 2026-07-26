@@ -4,12 +4,12 @@ import {
 	BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE,
 	type SanBrainDecision,
 	type SanBrainProfileCandidate,
-} from "@oh-my-pi/pi-coding-agent/brain/types";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
-import { TempDir } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/brain/types";
+import { Settings } from "@san/coding-agent/config/settings";
+import type { InteractiveModeContext } from "@san/coding-agent/modes/types";
+import type { SessionEntry } from "@san/coding-agent/session/session-entries";
+import { executeBuiltinSlashCommand } from "@san/coding-agent/slash-commands/builtin-registry";
+import { TempDir } from "@san/utils";
 
 let tempDir: TempDir | null = null;
 

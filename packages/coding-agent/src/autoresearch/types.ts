@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import type { AgentToolResult } from "@san/agent";
 import type { ExtensionAPI, ExtensionContext } from "../extensibility/extensions";
 import type { SessionEntry } from "../session/session-entries";
 import type { TruncationResult } from "../session/streaming-output";

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>San 品牌迁移审计与实施报告 · 2026-07-26</title>
+  <style>
+    :root { color-scheme: light; --ink:#172033; --muted:#5d687b; --line:#d9e0eb; --bg:#f4f7fb; --card:#fff; --ok:#16794a; --warn:#a65c00; --risk:#b42318; --accent:#3157d5; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.62 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(1120px,calc(100% - 32px)); margin:36px auto 72px; }
+    header, section { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:24px 28px; margin:0 0 18px; box-shadow:0 7px 24px rgb(20 39 80 / .05); }
+    h1 { margin:0 0 8px; font-size:30px; line-height:1.25; }
+    h2 { margin:0 0 14px; font-size:21px; }
+    h3 { margin:20px 0 8px; font-size:16px; }
+    p { margin:8px 0; }
+    code { background:#eef2f9; border-radius:5px; padding:.08em .36em; font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+    table { width:100%; border-collapse:collapse; margin:12px 0; }
+    th,td { border-bottom:1px solid var(--line); padding:10px 9px; text-align:left; vertical-align:top; }
+    th { color:#34405a; background:#f8faff; }
+    ul,ol { padding-left:22px; }
+    li + li { margin-top:5px; }
+    .meta { color:var(--muted); }
+    .status { display:inline-block; border-radius:999px; padding:2px 9px; font-size:12px; font-weight:700; }
+    .ok { color:var(--ok); background:#e9f7ef; }
+    .warn { color:var(--warn); background:#fff3df; }
+    .risk { color:var(--risk); background:#feecea; }
+    .accent { color:var(--accent); background:#edf1ff; }
+    .decision { border-left:4px solid var(--accent); padding:11px 14px; background:#f6f8ff; margin:12px 0; }
+    .evidence { color:var(--muted); font-size:13px; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>San 品牌迁移审计与实施报告</h1>
+    <p class="meta">审计基线：2026-07-26 · 仓库：<code>slicenferqin/san</code> · 主包：<code>packages/coding-agent</code></p>
+    <p>结论：公开身份、工作区包名、CLI 主命令、配置目录、运行时指引、插件锁文件和包级 README 已完成 San 迁移；旧 scope、旧环境变量、旧目录、插件清单字段、内部协议标识与中继域名仅保留为显式兼容层。系统提示词与配置发现已补齐 canonical 优先级和去重契约。</p>
+  </header>
+
+  <section>
+    <h2>1. 已落地基线</h2>
+    <table>
+      <thead><tr><th>表面</th><th>当前状态</th><th>证据</th></tr></thead>
+      <tbody>
+        <tr><td>仓库与公开元数据</td><td><span class="status ok">已迁移</span></td><td>根 <code>package.json</code> 与 <code>@san/coding-agent</code> 均指向 <code>github.com/slicenferqin/san</code>。</td></tr>
+        <tr><td>CLI</td><td><span class="status ok">已迁移</span></td><td><code>@san/coding-agent</code> 仅发布 <code>san</code> binary；源码安装脚本也建立 <code>san</code> 链接。</td></tr>
+        <tr><td>工作区 npm scope</td><td><span class="status ok">已迁移</span></td><td>catalog 与 workspace package names 使用 <code>@san/*</code>；<code>bun install --ignore-scripts</code> 已成功刷新锁文件。</td></tr>
+        <tr><td>本地配置写入</td><td><span class="status ok">已迁移</span></td><td><code>getConfigDirName()</code> 默认 <code>.san</code>；<code>getAgentDir()</code> 默认 <code>~/.san/agent</code>；项目配置默认 <code>.san</code>。</td></tr>
+        <tr><td>旧 npm scope 兼容</td><td><span class="status ok">已保留</span></td><td><code>legacy-pi-compat.ts</code> 仍识别 <code>@oh-my-pi</code>、<code>@mariozechner</code>、<code>@earendil-works</code>，并映射到 <code>@san</code> canonical packages。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>2. 审计问题与落地结果</h2>
+    <table>
+      <thead><tr><th>优先级</th><th>问题</th><th>影响</th><th>处理决定</th></tr></thead>
+      <tbody>
+        <tr><td><span class="status risk">P0</span></td><td>包级 README 仍教用户安装和导入 <code>@oh-my-pi/pi-*</code>。</td><td>新用户复制后直接安装错误包；公开 API 与已发布 <code>@san/*</code> 不一致。</td><td>全部改成当前 package.json 中的 <code>@san/*</code> 名称。</td></tr>
+        <tr><td><span class="status risk">P0</span></td><td>运行时错误/帮助文字仍出现 <code>omp auth-broker</code>、<code>omp marketplace</code> 等。</td><td>用户执行不存在或不再公开的命令。</td><td>只改用户可见命令为 <code>san</code>；协议字段和兼容常量不改。</td></tr>
+        <tr><td><span class="status warn">P1</span></td><td><code>~/.san/plugins/omp-plugins.lock.json</code> 仍是旧文件名。</td><td>新安装持续写入旧品牌文件；文档与实现不一致。</td><td>新写 <code>san-plugins.lock.json</code>，读取时在新文件缺失时回退旧文件。</td></tr>
+        <tr><td><span class="status warn">P1</span></td><td>项目插件注册与 native config 只寻找 <code>.san</code>，旧项目 <code>.omp</code> 的迁移读取不完整。</td><td>升级后旧项目级插件和配置可能不可见。</td><td><code>.san</code> 优先；仅在 canonical 文件/目录不存在时读取 <code>.omp</code>。所有新写仍指向 <code>.san</code>。</td></tr>
+        <tr><td><span class="status warn">P1</span></td><td>系统提示词可从 custom prompt、<code>SYSTEM.md</code>、always-apply rules、context files 多路注入同一内容。</td><td>规则重复，浪费上下文并放大措辞权重。</td><td>保留来源优先级；按规范化段落去除完全包含的重复规则，并对字节相同的 context files 保留最近一份；补行为测试。</td></tr>
+        <tr><td><span class="status accent">P2</span></td><td>根 README 后半段仍以 omp/Pi 口吻描述继承能力。</td><td>公开品牌叙事断裂。</td><td>命令和产品称呼改 San；旧媒体 URL 暂不伪造替代域名，标明是历史托管资源。</td></tr>
+        <tr><td><span class="status accent">P2</span></td><td>源码注释、测试 fixture、已发布 changelog 中仍有旧品牌。</td><td>主要是历史或兼容证据，不影响用户路径。</td><td>运行时注释可清理；fixture、协议/hash domain、已发布 changelog、真实上游 issue 链接保留。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>3. 兼容边界</h2>
+    <div class="decision"><strong>Canonical 写入：</strong><code>@san/*</code>、<code>san</code>、<code>~/.san</code>、<code>.san</code>、<code>SAN_*</code>、<code>san-plugins.lock.json</code>。</div>
+    <div class="decision"><strong>Legacy 只读/回退：</strong><code>@oh-my-pi/*</code> 等旧 scopes、<code>~/.omp</code>/<code>.omp</code>、<code>OMP_*</code>/<code>PI_*</code>、<code>omp-plugins.lock.json</code>。新值始终优先。</div>
+    <ul>
+      <li><code>omp-legacy-pi-bundled:</code> 是编译模式插件解析协议的一部分，不是用户品牌文字，继续保留。</li>
+      <li>Claude device-id hash domain、session/message type discriminator、数据库键、网络协议字段不得因品牌清理而改变；改变会破坏已有数据或身份稳定性。</li>
+      <li><code>my.omp.sh</code> 当前仍是实际 relay/share 服务。没有已部署 San 域名前，代码和文档保留域名并明确 legacy service。</li>
+      <li>已发布 changelog 不改；旧仓库 issue/PR 链接是来源证据，不重写成不存在的 San issue。</li>
+      <li><code>PI_*</code> 中部分变量属于底层库公开契约。新增 <code>SAN_*</code> 时使用 San 优先、PI/OMP 回退；不做静默删除。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>4. 包名迁移影响</h2>
+    <p>当前 workspace package family 已采用：</p>
+    <p><code>@san/agent</code>、<code>@san/ai</code>、<code>@san/catalog</code>、<code>@san/coding-agent</code>、<code>@san/hashline</code>、<code>@san/mnemopi</code>、<code>@san/natives</code>、<code>@san/snapcompact</code>、<code>@san/stats</code>、<code>@san/tui</code>、<code>@san/utils</code>、<code>@san/wire</code>。</p>
+    <p>主要爆炸半径：workspace imports、package exports、README 示例、插件 peerDependencies、编译态 bundled alias、锁文件。源码 imports 和包元数据已切换；剩余重点是公开文档和 legacy plugin resolver。旧插件必须继续可解析，但 resolver 的最终 canonical specifier 应是 <code>@san/*</code>。</p>
+  </section>
+
+  <section>
+    <h2>5. 配置发现与系统提示词数据流</h2>
+    <ol>
+      <li><code>getConfigDirName()</code>：<code>SAN_CONFIG_DIR</code> → <code>PI_CONFIG_DIR</code> → <code>.san</code>。</li>
+      <li><code>getAgentDir()</code>：由 profile-aware dirs resolver 生成 <code>~/.san/agent</code> 或 <code>~/.san/profiles/&lt;name&gt;/agent</code>；<code>SAN_PROFILE</code> 优先于旧 profile vars。</li>
+      <li>native discovery：从最近的项目 <code>.san</code> 和 active profile agent dir 载入 SYSTEM、skills、rules、commands、plugins 等；Claude/Codex/Gemini 等 provider 目录是外部工具兼容来源，不应重命名。</li>
+      <li><code>loadProjectContextFiles()</code>：通过 capability 聚合 AGENTS/CLAUDE 等 context，再展开 <code>@path</code> imports，按 depth 排序，最后去除内容完全相同的重复项。</li>
+      <li><code>buildSystemPrompt()</code>：组合 base/custom prompt、SYSTEM.md、project prompt、context files、always-apply rules、skills、工具清单和工作站信息；重复规则必须在渲染前按规范化段落消除。</li>
+      <li><code>discoverTitleSystemPromptFile()</code>：项目配置优先于用户配置；路径来源使用统一 config resolver，保证 profile 与项目优先级一致。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>6. 实施顺序与验收</h2>
+    <ol>
+      <li>修正公开 package README、根 README 和运行时文案。</li>
+      <li>迁移插件锁文件：canonical 新名写入、legacy 旧名读取回退。</li>
+      <li>补齐项目 <code>.omp</code> 只读 fallback，且证明 <code>.san</code> 优先。</li>
+      <li>锁定系统提示词去重行为：重复 always-apply rule 不重复；非完全相同规则保留；相同 context file 保留最近一份。</li>
+      <li>运行 focused tests、<code>bun check:ts</code> 和 CLI smoke；审计用户可见旧命令。</li>
+      <li>仅在行为验证通过后更新受影响 package 的 <code>[Unreleased]</code> changelog。</li>
+    </ol>
+    <div class="decision"><strong>实施状态：</strong>上述项目均已落地。验证通过：全部 <code>packages/coding-agent/test</code> 根级与分目录测试、<code>packages/coding-agent/src</code> 内 521 项测试（514 通过、7 跳过）、<code>bun run check:ts</code>，以及包含 <code>san --version</code>、<code>san --help</code>、stats 帮助和 worker probe 的 <code>bun run ci:test:smoke</code>。</div>
+    <h3>验收标准</h3>
+    <ul>
+      <li><code>san --help</code>、auth-broker/marketplace/plugin 错误指引不再建议运行 <code>omp</code>。</li>
+      <li>新安装只创建 canonical San 路径；已有旧锁文件和旧项目配置仍可读。</li>
+      <li><code>.san</code> 与 <code>.omp</code> 同时存在时，canonical 内容胜出，不合并成重复配置。</li>
+      <li>package README 示例全部可对应当前 <code>@san/*</code> exports。</li>
+      <li>legacy scope resolver 测试与新增配置/提示词行为测试通过；TypeScript workspace 检查通过。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>7. 证据索引</h2>
+    <ul class="evidence">
+      <li><code>package.json</code>、<code>packages/coding-agent/package.json</code>：仓库、workspace catalog、binary 与 package identity。</li>
+      <li><code>packages/coding-agent/src/extensibility/plugins/legacy-pi-compat.ts</code>：旧 scope 和 subpath 兼容。</li>
+      <li><code>packages/utils/src/dirs.ts</code>：目录、profile、环境变量优先级与插件锁路径。</li>
+      <li><code>packages/coding-agent/src/discovery/helpers.ts</code>、<code>builtin.ts</code>：项目插件 registry 和 native capability discovery。</li>
+      <li><code>packages/coding-agent/src/system-prompt.ts</code>：SYSTEM/context/rule 组合与去重。</li>
+      <li><code>README.md</code>、<code>README.en.md</code>、<code>packages/*/README.md</code>：公开品牌表面。</li>
+      <li>验证结果：完整 coding-agent 测试分片、TypeScript workspace 检查、legacy scope/config resolver focused tests 与 San CLI smoke 均通过。</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

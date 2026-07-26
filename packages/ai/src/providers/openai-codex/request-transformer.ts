@@ -1,6 +1,6 @@
-import { Effort, type EffortName } from "@oh-my-pi/pi-catalog/effort";
-import { supportsAllTurnsReasoningContext, supportsCodexReasoningSummary } from "@oh-my-pi/pi-catalog/identity";
-import { requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
+import { Effort, type EffortName } from "@san/catalog/effort";
+import { supportsAllTurnsReasoningContext, supportsCodexReasoningSummary } from "@san/catalog/identity";
+import { requireSupportedEffort } from "@san/catalog/model-thinking";
 import type { Model } from "../../types";
 import { mapOpenAIReasoningEffort } from "../openai-shared";
 

@@ -1,4 +1,4 @@
-import type { Component } from "@oh-my-pi/pi-tui";
+import type { Component } from "@san/tui";
 import { fgOrPlain, theme } from "../../modes/theme/theme";
 
 /**

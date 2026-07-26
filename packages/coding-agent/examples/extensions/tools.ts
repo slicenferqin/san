@@ -8,9 +8,9 @@
  * 1. Copy this file to ~/.san/agent/extensions/ (legacy: ~/.pi/agent/extensions/) or your project's .san/extensions/
  * 2. Use /tools to open the tool selector
  */
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { getSettingsListTheme } from "@oh-my-pi/pi-coding-agent";
-import { Container, type SettingItem, SettingsList } from "@oh-my-pi/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@san/coding-agent";
+import { getSettingsListTheme } from "@san/coding-agent";
+import { Container, type SettingItem, SettingsList } from "@san/tui";
 
 // State persisted to session
 interface ToolsState {

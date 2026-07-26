@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAgentDir } from "@oh-my-pi/pi-utils";
+import { getAgentDir } from "@san/utils";
 import { findRepoRoot } from "../capability/fs";
 import { workflowSourceHash } from "./fingerprint";
 import { WORKFLOW_MAX_SOURCE_BYTES } from "./source-parser";

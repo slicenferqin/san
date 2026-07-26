@@ -44,7 +44,7 @@ export function shouldHideKernelWindow(opts: {
  * Keep eval kernels outside the host's POSIX terminal session.
  *
  * User code can start an interactive shell which calls `tcsetpgrp(3)`. If the
- * kernel shares OMP's session, that shell can replace OMP as the controlling
+ * kernel shares San's session, that shell can replace San as the controlling
  * terminal's foreground process group and the host is then stopped by SIGTTIN
  * on its next stdin read. Bun implements `detached: true` with `setsid(2)` on
  * POSIX, making the kernel a session leader with no controlling terminal.
@@ -58,7 +58,7 @@ export function shouldDetachKernel(platform: NodeJS.Platform): boolean {
  *
  * Returns `true` if any of stdin/stdout/stderr is currently a TTY. This
  * correctly detects the common interactive launches and the partial-
- * redirection cases (`omp -p > out.txt`, `< in.txt`, `2> err.log`) where at
+ * redirection cases (`san -p > out.txt`, `< in.txt`, `2> err.log`) where at
  * least one stream stays bound to the terminal. The all-stdio-redirected
  * case (`< in > out 2> err` from a console) is the reason we prefer the
  * Win32 probe over this fallback whenever possible.
@@ -81,7 +81,7 @@ export function consoleAttachedViaTTY(opts: {
  * A `null` return means "don't trust me, use the TTY fallback".
  *
  * Cached on first call because in practice the console attachment of a
- * long-lived OMP host never changes for the lifetime of the process, and
+ * long-lived San host never changes for the lifetime of the process, and
  * we don't want to re-dlopen kernel32 on every kernel spawn.
  */
 type ConsoleProbeResult = boolean | null;
@@ -119,7 +119,7 @@ export function __resetWindowsConsoleProbeCache(): void {
  *
  * - On Windows, the authoritative signal is `GetConsoleWindow()`. It returns
  *   a non-NULL HWND whenever the process has a console attached, regardless
- *   of how the standard streams are redirected — so an `omp -p ... < in.txt
+ *   of how the standard streams are redirected — so a `san -p ... < in.txt
  *   > out.txt 2> err.log` launched from a real Windows Terminal session is
  *   correctly classified as console-attached and the kernel keeps its
  *   inheritable console.

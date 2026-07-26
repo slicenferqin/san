@@ -1,21 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
-import { createMockModel, type MockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { BRAIN_STATE_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/brain/activation";
+import { Agent } from "@san/agent";
+import { createMockModel, type MockModel } from "@san/ai/providers/mock";
+import { BRAIN_STATE_MESSAGE_TYPE } from "@san/coding-agent/brain/activation";
 import {
 	appendSanBrainDecision,
 	appendSanBrainProfileCandidate,
 	listSanBrainLedgerEntries,
-} from "@oh-my-pi/pi-coding-agent/brain/ledger";
-import type { SanBrainDecision, SanBrainProfileCandidate } from "@oh-my-pi/pi-coding-agent/brain/types";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/brain/ledger";
+import type { SanBrainDecision, SanBrainProfileCandidate } from "@san/coding-agent/brain/types";
+import { ModelRegistry } from "@san/coding-agent/config/model-registry";
+import { Settings } from "@san/coding-agent/config/settings";
+import { AgentSession } from "@san/coding-agent/session/agent-session";
+import { AuthStorage } from "@san/coding-agent/session/auth-storage";
+import { convertToLlm } from "@san/coding-agent/session/messages";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
+import { TempDir } from "@san/utils";
 
 interface Harness {
 	session: AgentSession;

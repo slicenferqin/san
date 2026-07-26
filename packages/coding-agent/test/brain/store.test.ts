@@ -1,15 +1,15 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { rebuildSanBrainStore } from "@oh-my-pi/pi-coding-agent/brain/rebuild";
-import { SanBrainStore } from "@oh-my-pi/pi-coding-agent/brain/store";
+import { rebuildSanBrainStore } from "@san/coding-agent/brain/rebuild";
+import { SanBrainStore } from "@san/coding-agent/brain/store";
 import {
 	BRAIN_DECISION_CUSTOM_TYPE,
 	BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE,
 	type SanBrainDecision,
 	type SanBrainProfileCandidate,
-} from "@oh-my-pi/pi-coding-agent/brain/types";
-import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { TempDir } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/brain/types";
+import type { SessionEntry } from "@san/coding-agent/session/session-entries";
+import { TempDir } from "@san/utils";
 
 let tempDir: TempDir | null = null;
 const openStores = new Set<SanBrainStore>();

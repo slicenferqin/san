@@ -1,6 +1,6 @@
-import type { EffortName } from "@oh-my-pi/pi-catalog/effort";
-import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
-import { $flag, logger, structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import type { EffortName } from "@san/catalog/effort";
+import { hostMatchesUrl } from "@san/catalog/hosts";
+import { $flag, logger, structuredCloneJSON } from "@san/utils";
 import * as AIError from "../error";
 import { getEnvApiKey } from "../stream";
 import type {

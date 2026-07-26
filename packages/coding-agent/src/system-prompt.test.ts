@@ -18,7 +18,7 @@ async function runProbeScenario(options: {
 	descendantHoldsStdout?: boolean;
 	validOutput?: string;
 }): Promise<ProbeRunResult> {
-	const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gpu-probe-"));
+	const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "san-gpu-probe-"));
 	try {
 		const binDir = path.join(tempRoot, "bin");
 		const cacheRoot = path.join(tempRoot, "cache");
@@ -28,7 +28,7 @@ async function runProbeScenario(options: {
 		const lspciPath = path.join(binDir, "lspci");
 		await Bun.write(
 			lspciPath,
-			'#!/usr/bin/env sh\nprintf x >> "$OMP_GPU_PROBE_COUNT"\nif [ -n "$OMP_GPU_PROBE_VALID_OUTPUT" ]; then printf "%s\\n" "$OMP_GPU_PROBE_VALID_OUTPUT"; fi\nif [ "$OMP_GPU_PROBE_DESCENDANT_HOLDS_STDOUT" = "true" ]; then sleep "$OMP_GPU_PROBE_SLEEP" & exit 0; fi\nif [ "$OMP_GPU_PROBE_HOLD_STDOUT_OPEN" = "true" ]; then sleep "$OMP_GPU_PROBE_SLEEP" & wait "$!"; fi\nif [ -n "$OMP_GPU_PROBE_SLEEP" ]; then exec sleep "$OMP_GPU_PROBE_SLEEP"; fi\nexit 0\n',
+			'#!/usr/bin/env sh\nprintf x >> "$SAN_GPU_PROBE_COUNT"\nif [ -n "$SAN_GPU_PROBE_VALID_OUTPUT" ]; then printf "%s\\n" "$SAN_GPU_PROBE_VALID_OUTPUT"; fi\nif [ "$SAN_GPU_PROBE_DESCENDANT_HOLDS_STDOUT" = "true" ]; then sleep "$SAN_GPU_PROBE_SLEEP" & exit 0; fi\nif [ "$SAN_GPU_PROBE_HOLD_STDOUT_OPEN" = "true" ]; then sleep "$SAN_GPU_PROBE_SLEEP" & wait "$!"; fi\nif [ -n "$SAN_GPU_PROBE_SLEEP" ]; then exec sleep "$SAN_GPU_PROBE_SLEEP"; fi\nexit 0\n',
 		);
 		await fs.chmod(lspciPath, 0o755);
 
@@ -53,12 +53,12 @@ const buildOptions = {
 	activeRepoContext: null,
 };
 const startedAt = performance.now();
-for (let index = 0; index < Number(process.env.OMP_GPU_PROBE_RUNS ?? "1"); index += 1) {
+for (let index = 0; index < Number(process.env.SAN_GPU_PROBE_RUNS ?? "1"); index += 1) {
 	await buildSystemPrompt(buildOptions);
 }
 const cacheFile = Bun.file(getGpuCachePath());
 const cached = await cacheFile.exists() ? await cacheFile.json() : null;
-const countFile = Bun.file(process.env.OMP_GPU_PROBE_COUNT ?? "");
+const countFile = Bun.file(process.env.SAN_GPU_PROBE_COUNT ?? "");
 const count = await countFile.exists() ? (await countFile.text()).length : 0;
 console.log(JSON.stringify({ elapsedMs: Math.round(performance.now() - startedAt), cached, count }));
 `,
@@ -68,33 +68,41 @@ console.log(JSON.stringify({ elapsedMs: Math.round(performance.now() - startedAt
 			...process.env,
 			PATH: `${binDir}:${process.env.PATH ?? ""}`,
 			XDG_CACHE_HOME: cacheRoot,
-			OMP_GPU_PROBE_COUNT: probeCountPath,
-			OMP_GPU_PROBE_RUNS: String(options.runs),
+			SAN_GPU_PROBE_COUNT: probeCountPath,
+			SAN_GPU_PROBE_RUNS: String(options.runs),
 		};
 		// Strip inherited dirs-resolver overrides so XDG_CACHE_HOME above wins and
 		// the test cannot touch the developer/CI profile's real gpu_cache.json.
-		for (const key of ["PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE", "PI_CONFIG_DIR"]) {
+		for (const key of [
+			"SAN_CODING_AGENT_DIR",
+			"PI_CODING_AGENT_DIR",
+			"SAN_PROFILE",
+			"OMP_PROFILE",
+			"PI_PROFILE",
+			"SAN_CONFIG_DIR",
+			"PI_CONFIG_DIR",
+		]) {
 			delete env[key];
 		}
 		if (options.sleepSeconds === undefined) {
-			delete env.OMP_GPU_PROBE_SLEEP;
+			delete env.SAN_GPU_PROBE_SLEEP;
 		} else {
-			env.OMP_GPU_PROBE_SLEEP = String(options.sleepSeconds);
+			env.SAN_GPU_PROBE_SLEEP = String(options.sleepSeconds);
 		}
 		if (options.holdStdoutOpen) {
-			env.OMP_GPU_PROBE_HOLD_STDOUT_OPEN = "true";
+			env.SAN_GPU_PROBE_HOLD_STDOUT_OPEN = "true";
 		} else {
-			delete env.OMP_GPU_PROBE_HOLD_STDOUT_OPEN;
+			delete env.SAN_GPU_PROBE_HOLD_STDOUT_OPEN;
 		}
 		if (options.descendantHoldsStdout) {
-			env.OMP_GPU_PROBE_DESCENDANT_HOLDS_STDOUT = "true";
+			env.SAN_GPU_PROBE_DESCENDANT_HOLDS_STDOUT = "true";
 		} else {
-			delete env.OMP_GPU_PROBE_DESCENDANT_HOLDS_STDOUT;
+			delete env.SAN_GPU_PROBE_DESCENDANT_HOLDS_STDOUT;
 		}
 		if (options.validOutput !== undefined) {
-			env.OMP_GPU_PROBE_VALID_OUTPUT = options.validOutput;
+			env.SAN_GPU_PROBE_VALID_OUTPUT = options.validOutput;
 		} else {
-			delete env.OMP_GPU_PROBE_VALID_OUTPUT;
+			delete env.SAN_GPU_PROBE_VALID_OUTPUT;
 		}
 
 		const childStartedAt = performance.now();

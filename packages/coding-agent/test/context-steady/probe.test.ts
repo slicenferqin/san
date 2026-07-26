@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import type { AssistantMessage } from "@san/ai";
+import { TempDir } from "@san/utils";
 import {
 	appendContextProbeRecord,
 	buildContextMaintenanceProbeRecord,

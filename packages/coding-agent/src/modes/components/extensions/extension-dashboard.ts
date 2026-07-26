@@ -23,8 +23,8 @@ import {
 	TabBar,
 	truncateToWidth,
 	visibleWidth,
-} from "@oh-my-pi/pi-tui";
-import { getMCPConfigPath, logger } from "@oh-my-pi/pi-utils";
+} from "@san/tui";
+import { getMCPConfigPath, logger } from "@san/utils";
 import { Settings } from "../../../config/settings";
 import { setMcpServerEnabled } from "../../../mcp/config-writer";
 import { getTabBarTheme } from "../../../modes/shared";
@@ -265,9 +265,8 @@ export class ExtensionDashboard implements Component {
 		const sm = this.settings ?? Settings.instance;
 		if (!sm) return;
 
-		// MCP toggles route through the canonical denylist in
-		// `~/.omp/agent/mcp.json` so `/mcp list`, the MCP runtime, and this
-		// dashboard agree on every server's enabled state (issue #3827).
+		// MCP toggles route through the canonical San MCP config so `/mcp list`,
+		// the MCP runtime, and this dashboard agree on every server's enabled state.
 		if (extensionId.startsWith("mcp:")) {
 			void this.#toggleMcpExtension(extensionId, enabled, sm);
 			return;

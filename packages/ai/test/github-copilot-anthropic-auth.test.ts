@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { buildAnthropicClientOptions, streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
-import type { Context, Model } from "@oh-my-pi/pi-ai/types";
-import { buildAnthropicUrl } from "@oh-my-pi/pi-ai/utils/anthropic-auth";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { OPENCODE_HEADERS } from "@oh-my-pi/pi-catalog/wire/github-copilot";
+import { buildAnthropicClientOptions, streamAnthropic } from "@san/ai/providers/anthropic";
+import type { Context, Model } from "@san/ai/types";
+import { buildAnthropicUrl } from "@san/ai/utils/anthropic-auth";
+import { buildModel } from "@san/catalog/build";
+import { OPENCODE_HEADERS } from "@san/catalog/wire/github-copilot";
 
 afterEach(() => {
 	vi.restoreAllMocks();

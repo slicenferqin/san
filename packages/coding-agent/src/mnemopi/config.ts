@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { MnemopiOptions } from "@oh-my-pi/pi-mnemopi";
-import { getMemoriesDir, logger } from "@oh-my-pi/pi-utils";
+import type { MnemopiOptions } from "@san/mnemopi";
+import { getMemoriesDir, logger } from "@san/utils";
 import { resolveSanBrainLegacyAutoRetain } from "../brain/compatibility";
 import type { Settings } from "../config/settings";
 

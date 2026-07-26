@@ -15,7 +15,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import { getConfigRootDir, getPluginsDir, isEnoent, logger, tryParseJson } from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, getLegacyConfigPath, getPluginsDir, isEnoent, logger, tryParseJson } from "@san/utils";
 
 import type {
 	InstalledPluginEntry,
@@ -73,6 +73,23 @@ async function atomicWriteJson(filePath: string, data: unknown): Promise<void> {
 	}
 }
 
+async function readCompatibleText(filePath: string): Promise<{ content: string; path: string } | null> {
+	try {
+		return { content: await Bun.file(filePath).text(), path: filePath };
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+
+	const legacyPath = getLegacyConfigPath(filePath);
+	if (!legacyPath) return null;
+	try {
+		return { content: await Bun.file(legacyPath).text(), path: legacyPath };
+	} catch (error) {
+		if (isEnoent(error)) return null;
+		throw error;
+	}
+}
+
 // ── Marketplaces registry ────────────────────────────────────────────
 
 function emptyMarketplacesRegistry(): MarketplacesRegistry {
@@ -80,18 +97,14 @@ function emptyMarketplacesRegistry(): MarketplacesRegistry {
 }
 
 export async function readMarketplacesRegistry(filePath: string): Promise<MarketplacesRegistry> {
-	try {
-		const content = await Bun.file(filePath).text();
-		const data = tryParseJson<MarketplacesRegistry>(content);
-		if (!data || typeof data !== "object" || data.version !== 1 || !Array.isArray(data.marketplaces)) {
-			logger.warn("Invalid marketplaces registry, returning empty", { path: filePath });
-			return emptyMarketplacesRegistry();
-		}
-		return data;
-	} catch (err) {
-		if (isEnoent(err)) return emptyMarketplacesRegistry();
-		throw err;
+	const source = await readCompatibleText(filePath);
+	if (!source) return emptyMarketplacesRegistry();
+	const data = tryParseJson<MarketplacesRegistry>(source.content);
+	if (!data || typeof data !== "object" || data.version !== 1 || !Array.isArray(data.marketplaces)) {
+		logger.warn("Invalid marketplaces registry, returning empty", { path: source.path });
+		return emptyMarketplacesRegistry();
 	}
+	return data;
 }
 
 export async function writeMarketplacesRegistry(filePath: string, reg: MarketplacesRegistry): Promise<void> {
@@ -105,26 +118,22 @@ function emptyInstalledPluginsRegistry(): InstalledPluginsRegistry {
 }
 
 export async function readInstalledPluginsRegistry(filePath: string): Promise<InstalledPluginsRegistry> {
-	try {
-		const content = await Bun.file(filePath).text();
-		const data = tryParseJson<InstalledPluginsRegistry>(content);
-		if (
-			!data ||
-			typeof data !== "object" ||
-			typeof data.version !== "number" ||
-			!data.plugins ||
-			typeof data.plugins !== "object" ||
-			Array.isArray(data.plugins)
-		) {
-			logger.warn("Invalid installed plugins registry, returning empty", { path: filePath });
-			return emptyInstalledPluginsRegistry();
-		}
-		// Accept any numeric version — forward compatible reads
-		return { ...data, version: 2 };
-	} catch (err) {
-		if (isEnoent(err)) return emptyInstalledPluginsRegistry();
-		throw err;
+	const source = await readCompatibleText(filePath);
+	if (!source) return emptyInstalledPluginsRegistry();
+	const data = tryParseJson<InstalledPluginsRegistry>(source.content);
+	if (
+		!data ||
+		typeof data !== "object" ||
+		typeof data.version !== "number" ||
+		!data.plugins ||
+		typeof data.plugins !== "object" ||
+		Array.isArray(data.plugins)
+	) {
+		logger.warn("Invalid installed plugins registry, returning empty", { path: source.path });
+		return emptyInstalledPluginsRegistry();
 	}
+	// Accept any numeric version — forward compatible reads
+	return { ...data, version: 2 };
 }
 
 export async function writeInstalledPluginsRegistry(filePath: string, reg: InstalledPluginsRegistry): Promise<void> {

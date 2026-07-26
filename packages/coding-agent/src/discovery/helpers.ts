@@ -1,16 +1,18 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { FileType, glob } from "@oh-my-pi/pi-natives";
+import { FileType, glob } from "@san/natives";
 import {
 	CONFIG_DIR_NAME,
 	getAgentDir,
 	getConfigDirName,
+	getLegacyConfigPath,
 	getPluginsDir,
 	getProjectDir,
+	LEGACY_CONFIG_DIR_NAME,
 	parseFrontmatter,
 	tryParseJson,
-} from "@oh-my-pi/pi-utils";
+} from "@san/utils";
 import type { ExtensionModule } from "../capability/extension-module";
 import { invalidate as invalidateFsCache, readDirEntries, readFile } from "../capability/fs";
 import { parseRuleConditionAndScope, type Rule, type RuleFrontmatter } from "../capability/rule";
@@ -800,64 +802,56 @@ export function parseClaudePluginsRegistry(content: string): ClaudePluginsRegist
 }
 
 /**
- * Resolve the active project registry path by walking up from `cwd`.
- *
- * Walk order:
- * 1. Walk up from `cwd` looking for the nearest directory containing `.omp/`.
- *    The first match returns `<dir>/.omp/plugins/installed_plugins.json`.
- * 2. If no `.omp/` is found, rescan from `cwd` upward looking for `.git`.
- *    The git root is used as an anchor: `<gitRoot>/.omp/plugins/installed_plugins.json`.
- * 3. If neither is found, return `null` — no project context is active.
- *
- * This is the single source of truth for "active project root" used by install,
- * uninstall, list, upgrade, discovery, and doctor. Deterministic for a given `cwd`.
+ * Resolve the canonical active-project plugin registry path by walking up from
+ * `cwd`. An existing legacy `.omp` directory may establish the project anchor,
+ * but the returned path always uses the canonical config directory so writes
+ * never recreate legacy storage.
  */
 export async function resolveActiveProjectRegistryPath(cwd: string): Promise<string | null> {
-	// Pass 1: walk up looking for an existing .omp/ directory (nearest wins).
-	// Stop before os.homedir() — ~/.omp/ is the user-level config dir, not a project root.
 	const homeDir = os.homedir();
+	const canonicalDirName = getConfigDirName();
+	const anchorDirNames = [...new Set([canonicalDirName, LEGACY_CONFIG_DIR_NAME])];
 	let dir = path.resolve(cwd);
 	while (dir !== homeDir) {
-		try {
-			const stat = await fs.promises.stat(path.join(dir, getConfigDirName()));
-			if (stat.isDirectory()) {
-				return path.join(dir, getConfigDirName(), "plugins", "installed_plugins.json");
+		for (const configDirName of anchorDirNames) {
+			try {
+				const stat = await fs.promises.stat(path.join(dir, configDirName));
+				if (stat.isDirectory()) {
+					return path.join(dir, canonicalDirName, "plugins", "installed_plugins.json");
+				}
+			} catch {
+				// Not found at this level — continue.
 			}
-		} catch {
-			// not found at this level — continue up
 		}
 		const parent = path.dirname(dir);
-		if (parent === dir) break; // filesystem root
+		if (parent === dir) break;
 		dir = parent;
 	}
 
-	// Pass 2: walk up looking for .git as a fallback anchor.
+	// A git root anchors a fresh canonical project config directory.
 	dir = path.resolve(cwd);
 	while (dir !== homeDir) {
 		try {
 			await fs.promises.stat(path.join(dir, ".git"));
-			return path.join(dir, getConfigDirName(), "plugins", "installed_plugins.json");
+			return path.join(dir, canonicalDirName, "plugins", "installed_plugins.json");
 		} catch {
-			// not found at this level — continue up
+			// Not found at this level — continue.
 		}
 		const parent = path.dirname(dir);
-		if (parent === dir) break; // filesystem root
+		if (parent === dir) break;
 		dir = parent;
 	}
 
-	return null; // not inside any project
+	return null;
 }
 
 /**
- * Like resolveActiveProjectRegistryPath, but falls back to `<cwd>/.omp/plugins/installed_plugins.json`
- * when no project anchor (.omp/ or .git/) is found.
+ * Like `resolveActiveProjectRegistryPath`, but falls back to the canonical
+ * `<cwd>/.san/plugins/installed_plugins.json` path when no project anchor is
+ * present. The registry writer creates the directory tree on first write.
  *
- * Use this when the caller accepts an explicit --scope project so that installing into a freshly
- * bootstrapped directory (no .omp/ or .git/ yet) works: writeInstalledPluginsRegistry auto-creates
- * the directory tree on first write.
- *
- * Returns undefined when cwd is os.homedir() — that path is already the user registry and must
- * never alias as the project registry.
+ * Returns undefined when cwd is the home directory because that path belongs
+ * to the user registry and must never be treated as project scope.
  */
 export async function resolveOrDefaultProjectRegistryPath(cwd: string): Promise<string | undefined> {
 	const resolved = await resolveActiveProjectRegistryPath(cwd);
@@ -893,6 +887,15 @@ export function registerPluginCacheInvalidator(invalidator: () => void): void {
  *
  * Results are cached per home, project registry, and canonical active project.
  */
+async function readCanonicalOrLegacyFile(canonicalPath: string): Promise<{ content: string; path: string } | null> {
+	const canonicalContent = await readFile(canonicalPath);
+	if (canonicalContent !== null) return { content: canonicalContent, path: canonicalPath };
+	const legacyPath = getLegacyConfigPath(canonicalPath);
+	if (!legacyPath) return null;
+	const legacyContent = await readFile(legacyPath);
+	return legacyContent === null ? null : { content: legacyContent, path: legacyPath };
+}
+
 export async function listClaudePluginRoots(
 	home: string,
 	cwd?: string,
@@ -962,15 +965,16 @@ export async function listClaudePluginRoots(
 		}
 	}
 
-	// ── OMP installed plugins registry ───────────────────────────────────────
-	// OMP registry is authoritative: its entries replace Claude's entries for the same plugin ID.
-	// In production `home` is `os.homedir()`, so `getPluginsDir(home)` resolves to the
-	// same XDG-aware path the marketplace writer uses (reads and writes always agree).
-	// Tests pass a temp dir, which short-circuits the resolver for deterministic isolation.
-	const ompRegistryPath = path.join(getPluginsDir(home), "installed_plugins.json");
-	const ompContent = await readFile(ompRegistryPath);
-	if (ompContent) {
-		const ompRegistry = parseClaudePluginsRegistry(ompContent);
+	// ── San installed plugins registry ───────────────────────────────────────
+	// Canonical `.san` storage is authoritative; `.omp` is a read-only fallback.
+	// In production `home` is `os.homedir()`, so `getPluginsDir(home)` resolves to
+	// the same XDG-aware path the marketplace writer uses. Tests pass a temp dir
+	// for deterministic isolation.
+	const sanRegistryPath = path.join(getPluginsDir(home), "installed_plugins.json");
+	const sanRegistrySource = await readCanonicalOrLegacyFile(sanRegistryPath);
+	if (sanRegistrySource) {
+		const ompRegistryPath = sanRegistrySource.path;
+		const ompRegistry = parseClaudePluginsRegistry(sanRegistrySource.content);
 		if (ompRegistry) {
 			for (const [pluginId, entries] of Object.entries(ompRegistry.plugins)) {
 				if (!Array.isArray(entries) || entries.length === 0) continue;
@@ -983,7 +987,7 @@ export async function listClaudePluginRoots(
 				const pluginName = pluginId.slice(0, atIndex);
 				const marketplace = pluginId.slice(atIndex + 1);
 
-				// OMP is authoritative: drop all Claude-sourced entries for this plugin ID
+				// San is authoritative: drop all Claude-sourced entries for this plugin ID
 				const filtered = roots.filter(r => r.id !== pluginId);
 				roots.length = 0;
 				roots.push(...filtered);
@@ -1008,17 +1012,16 @@ export async function listClaudePluginRoots(
 				}
 			}
 		} else {
-			warnings.push(`Failed to parse OMP plugin registry: ${ompRegistryPath}`);
+			warnings.push(`Failed to parse San plugin registry: ${ompRegistryPath}`);
 		}
 	}
 
-	// ── Project-scoped OMP registry ────────────────────────────────────────
-	// Loaded from the nearest .omp/plugins/installed_plugins.json relative to cwd.
+	// ── Project-scoped San registry ──────────────────────────────────────────
 	// Project entries take precedence over user entries for the same plugin ID.
 	if (resolvedProjectPath) {
-		const projectContent = await readFile(resolvedProjectPath);
-		if (projectContent) {
-			const projectRegistry = parseClaudePluginsRegistry(projectContent);
+		const projectSource = await readCanonicalOrLegacyFile(resolvedProjectPath);
+		if (projectSource) {
+			const projectRegistry = parseClaudePluginsRegistry(projectSource.content);
 			if (projectRegistry) {
 				for (const [pluginId, entries] of Object.entries(projectRegistry.plugins)) {
 					if (!Array.isArray(entries) || entries.length === 0) continue;
@@ -1128,7 +1131,7 @@ export function getPreloadedPluginRoots(): readonly ClaudePluginRoot[] {
 
 /**
  * Inject synthetic plugin roots from --plugin-dir paths.
- * These are prepended to the cache with highest precedence (before OMP/Claude entries).
+ * These are prepended to the cache with highest precedence (before San/Claude entries).
  * Must be called before any listClaudePluginRoots() access.
  */
 export async function injectPluginDirRoots(home: string, dirs: string[], cwd?: string): Promise<void> {

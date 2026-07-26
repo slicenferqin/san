@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { RPC_V2_METHODS } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/protocol/methods";
-import { paramsSchemaForMethod, RPC_V2_SCHEMA } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/protocol/schema";
-import { validateRpcV2Params } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/protocol/validate";
+import { RPC_V2_METHODS } from "@san/coding-agent/modes/rpc-v2/protocol/methods";
+import { paramsSchemaForMethod, RPC_V2_SCHEMA } from "@san/coding-agent/modes/rpc-v2/protocol/schema";
+import { validateRpcV2Params } from "@san/coding-agent/modes/rpc-v2/protocol/validate";
 
 describe("RPC v2 schema contract", () => {
 	test("publishes params schemas for every routed method", () => {

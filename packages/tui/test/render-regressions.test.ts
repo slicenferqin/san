@@ -1,14 +1,7 @@
 process.env.PI_TUI_SCROLLBACK_REBUILD = "true";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import {
-	type Component,
-	CURSOR_MARKER,
-	type Focusable,
-	setTerminalScreenToScrollback,
-	TERMINAL,
-	TUI,
-} from "@oh-my-pi/pi-tui";
+import { type Component, CURSOR_MARKER, type Focusable, setTerminalScreenToScrollback, TERMINAL, TUI } from "@san/tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class MutableLinesComponent implements Component {

@@ -1,6 +1,6 @@
 {
   "type": "module",
-  "name": "@oh-my-pi/pi-ai",
+  "name": "@san/ai",
   "version": "17.0.2",
   "description": "Unified LLM API with automatic model discovery and provider configuration",
   "homepage": "https://github.com/slicenferqin/san",
@@ -38,9 +38,9 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "catalog:",
-    "@oh-my-pi/pi-catalog": "catalog:",
-    "@oh-my-pi/pi-utils": "catalog:",
-    "@oh-my-pi/pi-wire": "catalog:",
+    "@san/catalog": "catalog:",
+    "@san/utils": "catalog:",
+    "@san/wire": "catalog:",
     "arktype": "catalog:",
     "zod": "catalog:"
   },

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the published package from `@oh-my-pi/pi-ai` to `@san/ai`; consumers must update package dependencies and imports.
+
 ### Added
 
 - Added OpenAI-compatible request support for explicit `max` and `ultra` reasoning efforts advertised by custom models, including provider-error fallback from unsupported `ultra` to `max`.

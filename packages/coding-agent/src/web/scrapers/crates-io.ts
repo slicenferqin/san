@@ -1,4 +1,4 @@
-import { tryParseJson } from "@oh-my-pi/pi-utils";
+import { tryParseJson } from "@san/utils";
 import type { RenderResult, SpecialHandler } from "./types";
 import { buildResult, formatNumber, loadPage, looksLikeHtml } from "./types";
 
@@ -26,7 +26,7 @@ export const handleCratesIo: SpecialHandler = async (
 		const result = await loadPage(apiUrl, {
 			timeout,
 			signal,
-			headers: { "User-Agent": "omp-web-fetch/1.0 (https://github.com/anthropics)" },
+			headers: { "User-Agent": "san-web-fetch/1.0 (https://github.com/slicenferqin/san)" },
 		});
 
 		if (!result.ok) return null;

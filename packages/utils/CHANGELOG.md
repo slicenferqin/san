@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the published package from `@oh-my-pi/pi-utils` to `@san/utils`; consumers must update package dependencies and imports.
+
 ## [17.0.2] - 2026-07-17
 
 ### Added

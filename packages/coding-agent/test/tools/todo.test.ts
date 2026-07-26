@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { Settings } from "@san/coding-agent/config/settings";
+import { initTheme, theme } from "@san/coding-agent/modes/theme/theme";
+import type { ToolSession } from "@san/coding-agent/tools";
 import {
 	nextActionableTask,
 	resolveTodoMarkdownPath,
@@ -11,8 +11,8 @@ import {
 	TodoTool,
 	todoMatchesAnyDescription,
 	todoToolRenderer,
-} from "@oh-my-pi/pi-coding-agent/tools";
-import type { Component } from "@oh-my-pi/pi-tui";
+} from "@san/coding-agent/tools";
+import type { Component } from "@san/tui";
 import { type } from "arktype";
 
 function createSession(initialPhases: TodoPhase[] = []): ToolSession {

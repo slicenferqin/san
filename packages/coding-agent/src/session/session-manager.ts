@@ -1,13 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type {
-	ImageContent,
-	Message,
-	MessageAttribution,
-	ServiceTierByFamily,
-	TextContent,
-	Usage,
-} from "@oh-my-pi/pi-ai";
+import type { ImageContent, Message, MessageAttribution, ServiceTierByFamily, TextContent, Usage } from "@san/ai";
 import {
 	directoryExists,
 	getBlobsDir,
@@ -17,7 +10,7 @@ import {
 	logger,
 	stringifyJson,
 	toError,
-} from "@oh-my-pi/pi-utils";
+} from "@san/utils";
 import { ArtifactManager } from "./artifacts";
 import { type BlobPutOptions, type BlobPutResult, BlobStore } from "./blob-store";
 import {

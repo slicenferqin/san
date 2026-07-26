@@ -8,13 +8,13 @@
  * sibling SQLite store and never POSTs the broker sentinel to a Google token
  * endpoint.
  */
-import { type AuthStorage, type FetchImpl, type OAuthAccess, withOAuthAccess } from "@oh-my-pi/pi-ai";
+import { type AuthStorage, type FetchImpl, type OAuthAccess, withOAuthAccess } from "@san/ai";
 import {
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
 	getAntigravityUserAgent,
 	getGeminiCliHeaders,
-} from "@oh-my-pi/pi-catalog/wire/gemini-headers";
-import { fetchWithRetry } from "@oh-my-pi/pi-utils";
+} from "@san/catalog/wire/gemini-headers";
+import { fetchWithRetry } from "@san/utils";
 
 import type { SearchCitation, SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
@@ -330,8 +330,8 @@ async function callGeminiSearch(
 				requestId: `agent-${crypto.randomUUID()}`,
 			}
 		: {
-				userAgent: "pi-coding-agent",
-				requestId: `pi-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+				userAgent: "san-coding-agent",
+				requestId: `san-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
 			};
 
 	const normalizedSystemPrompt = systemPrompt?.toWellFormed();
@@ -549,7 +549,7 @@ export async function searchGemini(params: GeminiSearchParams): Promise<SearchRe
 		});
 		if (!apiKey) {
 			throw new Error(
-				"No Gemini credentials found. Set GEMINI_API_KEY, configure an API key for provider \"google\", or login with 'omp /login google-gemini-cli' / 'omp /login google-antigravity' to enable Gemini web search.",
+				"No Gemini credentials found. Set GEMINI_API_KEY, configure an API key for provider \"google\", or login with 'san /login google-gemini-cli' / 'san /login google-antigravity' to enable Gemini web search.",
 			);
 		}
 		result = await callGeminiDeveloperSearch(

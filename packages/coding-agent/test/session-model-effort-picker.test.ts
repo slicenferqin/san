@@ -1,14 +1,14 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { Effort, type Model } from "@oh-my-pi/pi-ai";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { ModelHubComponent, resetProviderAutoRefreshGuard } from "@oh-my-pi/pi-coding-agent/modes/components/model-hub";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-coding-agent/thinking";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import { ThinkingLevel } from "@san/agent";
+import { Effort, type Model } from "@san/ai";
+import { buildModel } from "@san/catalog/build";
+import type { ModelRegistry } from "@san/coding-agent/config/model-registry";
+import { Settings } from "@san/coding-agent/config/settings";
+import { ModelHubComponent, resetProviderAutoRefreshGuard } from "@san/coding-agent/modes/components/model-hub";
+import { getThemeByName, setThemeInstance } from "@san/coding-agent/modes/theme/theme";
+import type { ConfiguredThinkingLevel } from "@san/coding-agent/thinking";
+import type { TUI } from "@san/tui";
 
 const openHubs: ModelHubComponent[] = [];
 

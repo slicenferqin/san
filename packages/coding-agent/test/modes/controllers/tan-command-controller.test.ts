@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
-import type { AsyncJobRegisterOptions } from "@oh-my-pi/pi-coding-agent/async/job-manager";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { TanCommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/tan-command-controller";
-import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import type { CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
-import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import type { AssistantMessage, Model } from "@san/ai";
+import type { AsyncJobRegisterOptions } from "@san/coding-agent/async/job-manager";
+import { Settings } from "@san/coding-agent/config/settings";
+import { TanCommandController } from "@san/coding-agent/modes/controllers/tan-command-controller";
+import type { InteractiveModeContext } from "@san/coding-agent/modes/types";
+import { AgentRegistry, MAIN_AGENT_ID } from "@san/coding-agent/registry/agent-registry";
+import type { CreateAgentSessionResult } from "@san/coding-agent/sdk";
+import * as sdkModule from "@san/coding-agent/sdk";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
+import { TempDir } from "@san/utils";
 
 interface CapturedJobRunContext {
 	jobId: string;

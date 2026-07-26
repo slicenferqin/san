@@ -1,5 +1,5 @@
-import type { Component } from "@oh-my-pi/pi-tui";
-import { Box, Container } from "@oh-my-pi/pi-tui";
+import type { Component } from "@san/tui";
+import { Box, Container } from "@san/tui";
 import type { MessageRenderer } from "../../extensibility/extensions/types";
 import { theme } from "../../modes/theme/theme";
 import type { CustomMessage } from "../../session/messages";

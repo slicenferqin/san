@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "bun:test";
-import type { AgentMessage, AgentTelemetryConfig } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import * as AIError from "@oh-my-pi/pi-ai/error";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import type { AgentMessage, AgentTelemetryConfig } from "@san/agent";
+import type { AssistantMessage } from "@san/ai";
+import * as AIError from "@san/ai/error";
+import type { TUI } from "@san/tui";
 import { type } from "arktype";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";

@@ -1,11 +1,11 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { scheduler } from "node:timers/promises";
-import { clearCustomApis } from "@oh-my-pi/pi-ai/api-registry";
-import * as AIError from "@oh-my-pi/pi-ai/error";
-import { createMockModel, type MockContent, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
-import { complete, completeSimple, stream, streamSimple } from "@oh-my-pi/pi-ai/stream";
-import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model } from "@oh-my-pi/pi-ai/types";
-import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { clearCustomApis } from "@san/ai/api-registry";
+import * as AIError from "@san/ai/error";
+import { createMockModel, type MockContent, registerMockApi } from "@san/ai/providers/mock";
+import { complete, completeSimple, stream, streamSimple } from "@san/ai/stream";
+import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model } from "@san/ai/types";
+import { AssistantMessageEventStream } from "@san/ai/utils/event-stream";
 import {
 	GEMINI_HEADER_RUNAWAY_THRESHOLD,
 	GeminiHeaderRunDetector,
@@ -16,8 +16,8 @@ import {
 	THINKING_LOOP_ERROR_MARKER,
 	ThinkingLoopDetector,
 	withGeminiThinkingLoopGuard,
-} from "@oh-my-pi/pi-ai/utils/thinking-loop";
-import { isRetryableError } from "@oh-my-pi/pi-utils";
+} from "@san/ai/utils/thinking-loop";
+import { isRetryableError } from "@san/utils";
 
 function context(): Context {
 	return { systemPrompt: [], messages: [{ role: "user", content: "go", timestamp: 0 }] };

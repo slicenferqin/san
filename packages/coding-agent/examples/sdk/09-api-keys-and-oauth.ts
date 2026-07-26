@@ -10,7 +10,7 @@ import {
 	discoverModels,
 	ModelRegistry,
 	SessionManager,
-} from "@oh-my-pi/pi-coding-agent";
+} from "@san/coding-agent";
 
 // Default: discoverAuthStorage() uses ~/.san/agent/agent.db
 // discoverModels() loads built-in + custom models from ~/.san/agent/models.json

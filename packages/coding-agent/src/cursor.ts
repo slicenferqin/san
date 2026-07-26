@@ -1,19 +1,13 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
-import type {
-	AgentEvent,
-	AgentTool,
-	AgentToolContext,
-	AgentToolResult,
-	AgentToolUpdateCallback,
-} from "@oh-my-pi/pi-agent-core";
+import type { AgentEvent, AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@san/agent";
 import type {
 	CursorMcpCall,
 	CursorShellStreamCallbacks,
 	CursorExecHandlers as ICursorExecHandlers,
 	ToolResultMessage,
-} from "@oh-my-pi/pi-ai";
-import { sanitizeText } from "@oh-my-pi/pi-utils";
+} from "@san/ai";
+import { sanitizeText } from "@san/utils";
 import { resolveToCwd } from "./tools/path-utils";
 
 interface CursorExecBridgeOptions {

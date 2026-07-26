@@ -1,7 +1,7 @@
-import type { InMemorySnapshotStore } from "@oh-my-pi/hashline";
-import type { AgentTelemetryConfig, AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { FetchImpl, ImageContent, Model, ServiceTierByFamily, ToolChoice } from "@oh-my-pi/pi-ai";
-import { logger } from "@oh-my-pi/pi-utils";
+import type { AgentTelemetryConfig, AgentTool } from "@san/agent";
+import type { FetchImpl, ImageContent, Model, ServiceTierByFamily, ToolChoice } from "@san/ai";
+import type { InMemorySnapshotStore } from "@san/hashline";
+import { logger } from "@san/utils";
 import type { AsyncJobManager } from "../async/job-manager";
 import type { Rule } from "../capability/rule";
 import type { PromptTemplate } from "../config/prompt-templates";
@@ -178,7 +178,7 @@ export interface ToolSession {
 	 */
 	extensionPaths?: string[];
 	/**
-	 * Pre-discovered custom-tool source paths from `.omp/tools/`, `.claude/tools/`,
+	 * Pre-discovered custom-tool source paths from canonical `.san/tools/`, legacy `.omp/tools/`, `.claude/tools/`,
 	 * plugins, etc. Forwarded to subagents so they skip the FS scan but still
 	 * re-bind tools to their own session-scoped `CustomToolAPI`.
 	 */

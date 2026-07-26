@@ -5,9 +5,9 @@
  * - `san -p "prompt"` - text output
  * - `san --mode json "prompt"` - JSON event stream
  */
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
-import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
+import type { AgentMessage } from "@san/agent";
+import type { AssistantMessage, ImageContent } from "@san/ai";
+import { logger, sanitizeText } from "@san/utils";
 import { type AgentSession, type AgentSessionEvent, SHUTDOWN_CONSOLIDATE_BUDGET_MS } from "../session/agent-session";
 import { isSilentAbort } from "../session/messages";
 import { flushTelemetryExport } from "../telemetry-export";
@@ -149,7 +149,7 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 				// HERE so error spans reach the exporter (the postmortem `exit`
 				// handler can't await) and the browser reaper installed in
 				// `dispose()` (releaseTabsForOwner) actually runs — otherwise an
-				// OMP-owned Chromium survives this exit (issue #5643). `dispose()`
+				// San-owned Chromium survives this exit (issue #5643). `dispose()`
 				// is idempotent, so the unreachable call below is a harmless no-op.
 				await flushTelemetryExport();
 				await session.dispose({ mnemopiConsolidateTimeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS });

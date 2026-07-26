@@ -1,17 +1,10 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-
-import { formatHashlineHeader, stripHashlinePrefixes } from "@oh-my-pi/hashline";
-import type {
-	AgentTool,
-	AgentToolContext,
-	AgentToolResult,
-	AgentToolUpdateCallback,
-	ToolTier,
-} from "@oh-my-pi/pi-agent-core";
-import { type Component, Text } from "@oh-my-pi/pi-tui";
-import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback, ToolTier } from "@san/agent";
+import { formatHashlineHeader, stripHashlinePrefixes } from "@san/hashline";
+import { type Component, Text } from "@san/tui";
+import { isEnoent, isRecord, prompt, untilAborted } from "@san/utils";
 import { type } from "arktype";
 
 import { canonicalSnapshotKey, getFileSnapshotStore } from "../edit/file-snapshot-store";
@@ -1141,7 +1134,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			emitWriteProgress(onUpdate, cleanContent, displayPath, absolutePath);
 
 			// Try ACP bridge first for editor-visible filesystem paths. Internal
-			// artifacts such as local:// plans are owned by OMP, not the editor.
+			// artifacts such as local:// plans are owned by San, not the editor.
 			if (await routeWriteThroughBridge(this.session, path, absolutePath, cleanContent, signal)) {
 				const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, cleanContent);
 				const header = maybeWriteSnapshotHeader(this.session, absolutePath, cleanContent);

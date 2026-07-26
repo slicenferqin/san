@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from "bun:test";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { disposeAllVmContexts } from "@oh-my-pi/pi-coding-agent/eval/js/context-manager";
-import { executeJs, type JsResult } from "@oh-my-pi/pi-coding-agent/eval/js/executor";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { Settings } from "@san/coding-agent/config/settings";
+import { disposeAllVmContexts } from "@san/coding-agent/eval/js/context-manager";
+import { executeJs, type JsResult } from "@san/coding-agent/eval/js/executor";
+import type { ToolSession } from "@san/coding-agent/tools";
+import { TempDir } from "@san/utils";
 
 // JS eval cold-starts a Bun worker; under --isolate + high CI concurrency that startup
 // can exceed Bun's 5s default per-test timeout, flaking the suite. Give the worker-backed

@@ -1,9 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import {
-	BUILTIN_SLASH_COMMANDS,
-	lookupBuiltinSlashCommand,
-} from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
-import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
+import { BUILTIN_SLASH_COMMANDS, lookupBuiltinSlashCommand } from "@san/coding-agent/slash-commands/builtin-registry";
+import { CombinedAutocompleteProvider } from "@san/tui/autocomplete";
 
 describe("/clear slash command alias", () => {
 	it("ranks the new-session action above fuzzy description matches", async () => {

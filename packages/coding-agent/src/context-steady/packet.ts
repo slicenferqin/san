@@ -5,8 +5,8 @@
  * a hidden context message for the next real user turn and a debug payload.
  */
 
-import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { estimateTokens } from "@san/agent/compaction";
+import { prompt } from "@san/utils";
 import packetTemplate from "../prompts/context-steady/context-packet.md" with { type: "text" };
 import type { SessionEntry } from "../session/session-entries";
 import type { ReadonlySessionManager } from "../session/session-manager";

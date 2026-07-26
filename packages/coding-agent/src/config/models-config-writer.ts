@@ -6,9 +6,9 @@
  */
 
 import * as path from "node:path";
-import type { Api } from "@oh-my-pi/pi-ai/types";
-import { getBundledProviders } from "@oh-my-pi/pi-catalog/models";
-import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
+import type { Api } from "@san/ai/types";
+import { getBundledProviders } from "@san/catalog/models";
+import { getAgentDir, isEnoent } from "@san/utils";
 import { parseDocument } from "yaml";
 import { withFileLock } from "./file-lock";
 import type { ProviderAuthMode, ProviderDiscovery } from "./models-config-schema";

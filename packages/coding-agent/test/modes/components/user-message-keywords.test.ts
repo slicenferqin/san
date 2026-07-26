@@ -1,14 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import * as url from "node:url";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { CustomEditor } from "@oh-my-pi/pi-coding-agent/modes/components/custom-editor";
-import { UserMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/user-message";
-import { getEditorTheme, initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
-import { Container } from "@oh-my-pi/pi-tui";
+import type { AgentMessage } from "@san/agent";
+import { resetSettingsForTest, Settings } from "@san/coding-agent/config/settings";
+import { CustomEditor } from "@san/coding-agent/modes/components/custom-editor";
+import { UserMessageComponent } from "@san/coding-agent/modes/components/user-message";
+import { getEditorTheme, initTheme } from "@san/coding-agent/modes/theme/theme";
+import type { InteractiveModeContext } from "@san/coding-agent/modes/types";
+import { UiHelpers } from "@san/coding-agent/modes/utils/ui-helpers";
+import { Container } from "@san/tui";
 
 beforeAll(async () => {
 	resetSettingsForTest();

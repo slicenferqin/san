@@ -16,23 +16,20 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getCapability } from "@oh-my-pi/pi-coding-agent/capability";
-import { clearCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
-import { hookCapability } from "@oh-my-pi/pi-coding-agent/capability/hook";
-import { mcpCapability } from "@oh-my-pi/pi-coding-agent/capability/mcp";
-import { promptCapability } from "@oh-my-pi/pi-coding-agent/capability/prompt";
-import { ruleCapability } from "@oh-my-pi/pi-coding-agent/capability/rule";
-import { skillCapability } from "@oh-my-pi/pi-coding-agent/capability/skill";
-import { slashCommandCapability } from "@oh-my-pi/pi-coding-agent/capability/slash-command";
-import { toolCapability } from "@oh-my-pi/pi-coding-agent/capability/tool";
-import type { LoadContext, Provider } from "@oh-my-pi/pi-coding-agent/capability/types";
+import { getCapability } from "@san/coding-agent/capability";
+import { clearCache } from "@san/coding-agent/capability/fs";
+import { hookCapability } from "@san/coding-agent/capability/hook";
+import { mcpCapability } from "@san/coding-agent/capability/mcp";
+import { promptCapability } from "@san/coding-agent/capability/prompt";
+import { ruleCapability } from "@san/coding-agent/capability/rule";
+import { skillCapability } from "@san/coding-agent/capability/skill";
+import { slashCommandCapability } from "@san/coding-agent/capability/slash-command";
+import { toolCapability } from "@san/coding-agent/capability/tool";
+import type { LoadContext, Provider } from "@san/coding-agent/capability/types";
 // Register all discovery providers as a side effect.
-import "@oh-my-pi/pi-coding-agent/discovery";
-import {
-	clearOmpExtensionCliRoots,
-	injectOmpExtensionCliRoots,
-} from "@oh-my-pi/pi-coding-agent/discovery/omp-extension-roots";
-import { getConfigRootDir, removeSyncWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import "@san/coding-agent/discovery";
+import { clearSanExtensionCliRoots, injectSanExtensionCliRoots } from "@san/coding-agent/discovery/san-extension-roots";
+import { getConfigRootDir, removeSyncWithRetries, setAgentDir } from "@san/utils";
 
 const PROVIDER_ID = "omp-plugins";
 
@@ -87,7 +84,7 @@ function buildExtensionPackage(packageDir: string): void {
 
 beforeEach(() => {
 	clearCache();
-	clearOmpExtensionCliRoots();
+	clearSanExtensionCliRoots();
 	tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-plugins-"));
 	home = path.join(tempDir, "home");
 	project = path.join(tempDir, "project");
@@ -101,7 +98,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	clearCache();
-	clearOmpExtensionCliRoots();
+	clearSanExtensionCliRoots();
 	if (originalAgentDirEnv) {
 		setAgentDir(originalAgentDirEnv);
 	} else {
@@ -147,7 +144,7 @@ test("user settings.json#extensions also feeds sub-discovery", async () => {
 
 test("`--extension` CLI injection is wired through the same provider", async () => {
 	// Empty settings on disk; rely purely on CLI injection.
-	injectOmpExtensionCliRoots([ext], home, project);
+	injectSanExtensionCliRoots([ext], home, project);
 
 	const skills = await loadFromPlugin<{ name: string }>(skillCapability.id, ctx());
 	const tools = await loadFromPlugin<{ name: string }>(toolCapability.id, ctx());
@@ -240,15 +237,31 @@ test("installed plugins under `<plugins>/node_modules/` are surfaced (e.g. via `
 	fs.cpSync(ext, installed, { recursive: true });
 	writeFile(
 		path.join(pluginsDir, "package.json"),
-		JSON.stringify({ name: "omp-plugins", dependencies: { "my-installed-ext": "1.0.0" } }),
+		JSON.stringify({ name: "san-plugins", dependencies: { "my-installed-ext": "1.0.0" } }),
 	);
-	// Plugin's own package.json must carry an `omp`/`pi` manifest for the
-	// loader to recognise it; the buildExtensionPackage fixture already wrote
-	// one with `san.extensions`, which is sufficient.
+	// The plugin package manifest declares `san.extensions`, which is sufficient
+	// for the loader to recognize its extension entrypoint.
 
 	const skills = await loadFromPlugin<{ name: string; path: string }>(skillCapability.id, ctx());
 	const found = skills.find(s => s.name === "my-skill" && s.path.includes("my-installed-ext"));
 	expect(found).toBeDefined();
+});
+
+test("legacy ~/.omp plugin root and lockfile remain discoverable", async () => {
+	const pluginsDir = path.join(home, ".omp", "plugins");
+	const installed = path.join(pluginsDir, "node_modules", "my-legacy-ext");
+	fs.mkdirSync(installed, { recursive: true });
+	fs.cpSync(ext, installed, { recursive: true });
+	writeFile(
+		path.join(pluginsDir, "omp-plugins.lock.json"),
+		JSON.stringify({
+			plugins: { "my-legacy-ext": { version: "1.0.0", enabled: true, enabledFeatures: null } },
+			settings: {},
+		}),
+	);
+
+	const skills = await loadFromPlugin<{ name: string; path: string }>(skillCapability.id, ctx());
+	expect(skills.find(s => s.name === "my-skill" && s.path.includes("my-legacy-ext"))).toBeDefined();
 });
 
 test("project-scoped installed plugins surface project-level sub-discovery", async () => {
@@ -257,7 +270,7 @@ test("project-scoped installed plugins surface project-level sub-discovery", asy
 	fs.mkdirSync(installed, { recursive: true });
 	fs.cpSync(ext, installed, { recursive: true });
 	writeFile(
-		path.join(pluginsDir, "omp-plugins.lock.json"),
+		path.join(pluginsDir, "san-plugins.lock.json"),
 		JSON.stringify({
 			plugins: { "my-project-ext": { version: "1.0.0", enabled: true, enabledFeatures: null } },
 			settings: {},
@@ -279,10 +292,10 @@ test("disabled installed plugins do not contribute sub-discovery", async () => {
 	fs.cpSync(ext, installed, { recursive: true });
 	writeFile(
 		path.join(pluginsDir, "package.json"),
-		JSON.stringify({ name: "omp-plugins", dependencies: { "my-disabled-ext": "1.0.0" } }),
+		JSON.stringify({ name: "san-plugins", dependencies: { "my-disabled-ext": "1.0.0" } }),
 	);
 	writeFile(
-		path.join(pluginsDir, "omp-plugins.lock.json"),
+		path.join(pluginsDir, "san-plugins.lock.json"),
 		JSON.stringify({ plugins: { "my-disabled-ext": { enabled: false } }, settings: {} }),
 	);
 
@@ -305,7 +318,7 @@ test("linked plugins (only in lockfile, not in package.json#dependencies) are su
 	// Intentionally NO `<plugins>/package.json` — matches a fresh `plugin link`
 	// against a setup that has never run `plugin install`.
 	writeFile(
-		path.join(pluginsDir, "omp-plugins.lock.json"),
+		path.join(pluginsDir, "san-plugins.lock.json"),
 		JSON.stringify({
 			plugins: { "my-linked-ext": { version: "1.0.0", enabled: true, enabledFeatures: null } },
 			settings: {},

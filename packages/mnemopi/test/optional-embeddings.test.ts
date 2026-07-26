@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { getFastembedCacheDir } from "@oh-my-pi/pi-utils";
+import { getFastembedCacheDir } from "@san/utils";
 import "./setup";
 import {
 	available,
@@ -9,9 +9,9 @@ import {
 	resetEmbeddingProviderForTests,
 	setEmbeddingProviderForTests,
 	setLocalModelInitializerForTests,
-} from "@oh-my-pi/pi-mnemopi/core/embeddings";
-import { Mnemopi } from "@oh-my-pi/pi-mnemopi/core/memory";
-import { withMnemopiRuntimeOptions } from "@oh-my-pi/pi-mnemopi/core/runtime-options";
+} from "@san/mnemopi/core/embeddings";
+import { Mnemopi } from "@san/mnemopi/core/memory";
+import { withMnemopiRuntimeOptions } from "@san/mnemopi/core/runtime-options";
 import packageJson from "../package.json" with { type: "json" };
 
 const ENV_KEYS = [

@@ -1,8 +1,8 @@
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessage, ImageContent, TextContent } from "@oh-my-pi/pi-ai";
-import * as AIError from "@oh-my-pi/pi-ai/error";
-import { logger } from "@oh-my-pi/pi-utils";
+import type { AgentMessage } from "@san/agent";
+import { estimateTokens } from "@san/agent/compaction";
+import type { AssistantMessage, ImageContent, TextContent } from "@san/ai";
+import * as AIError from "@san/ai/error";
+import { logger } from "@san/utils";
 import { obfuscateToolArguments, type SecretObfuscator } from "../secrets/obfuscator";
 import { formatSessionHistoryMarkdown, PRIMARY_CONTEXT_CUSTOM_TYPES } from "../session/session-history-format";
 

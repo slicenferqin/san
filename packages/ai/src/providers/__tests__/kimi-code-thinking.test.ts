@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-catalog";
+import { getBundledModel } from "@san/catalog";
 import * as kimiOauth from "../../registry/oauth/kimi";
 import type { Context } from "../../types";
 import type { MessageCreateParamsStreaming } from "../anthropic-wire";

@@ -4,7 +4,7 @@
  * Numeric codes follow JSON-RPC 2.0 reserved ranges for standard errors
  * and use -320xx for San-specific domain errors.
  */
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { Snowflake } from "@san/utils";
 import type { FieldError, RpcErrorBody, RpcErrorCategory, RpcErrorData } from "./envelope";
 
 // ============================================================================

@@ -6,7 +6,7 @@ import {
 	DEFAULT_COMPACTION_SETTINGS,
 	prepareCompaction,
 	type SessionEntry,
-} from "@oh-my-pi/pi-agent-core/compaction";
+} from "@san/agent/compaction";
 import {
 	buildCompactionV2Request,
 	buildOpenAiNativeHistory,
@@ -16,9 +16,9 @@ import {
 	requestRemoteCompaction,
 	shouldUseCompactionV2Streaming,
 	shouldUseOpenAiRemoteCompaction,
-} from "@oh-my-pi/pi-agent-core/compaction/openai";
-import * as ai from "@oh-my-pi/pi-ai";
-import { getOpenAICodexTransportDetails } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
+} from "@san/agent/compaction/openai";
+import * as ai from "@san/ai";
+import { getOpenAICodexTransportDetails } from "@san/ai/providers/openai-codex-responses";
 import type {
 	AssistantMessage,
 	CodexCompactionContext,
@@ -26,10 +26,10 @@ import type {
 	Model,
 	ProviderSessionState,
 	ToolResultMessage,
-} from "@oh-my-pi/pi-ai/types";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
-import * as piUtils from "@oh-my-pi/pi-utils";
+} from "@san/ai/types";
+import { buildModel } from "@san/catalog/build";
+import type { ModelSpec } from "@san/catalog/types";
+import * as piUtils from "@san/utils";
 
 const { isRecord } = piUtils;
 const TEST_INSTALLATION_ID = "00000000-0000-4000-8000-000000000001";

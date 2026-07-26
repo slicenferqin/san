@@ -1,4 +1,4 @@
-# @oh-my-pi/hashline
+# @san/hashline
 
 A compact, line-anchored patch language and applier.
 
@@ -16,7 +16,7 @@ import {
 	InMemorySnapshotStore,
 	Patcher,
 	Patch,
-} from "@oh-my-pi/hashline";
+} from "@san/hashline";
 
 const fs = new InMemoryFilesystem();
 const snapshots = new InMemorySnapshotStore();

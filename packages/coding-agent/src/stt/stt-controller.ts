@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { logger, Snowflake } from "@san/utils";
 import { settings } from "../config/settings";
 import { type SttStreamHandle, sttClient } from "./asr-client";
 import { downloadSttModel, isSttModelCached } from "./downloader";
@@ -310,7 +310,7 @@ export class STTController {
 
 	async #startBatchRecording(options: ToggleOptions): Promise<void> {
 		const id = Snowflake.next();
-		this.#tempFile = path.join(os.tmpdir(), `omp-stt-${id}.wav`);
+		this.#tempFile = path.join(os.tmpdir(), `san-stt-${id}.wav`);
 		try {
 			this.#recordingHandle = await startRecording(this.#tempFile);
 			this.#setState("recording", options);

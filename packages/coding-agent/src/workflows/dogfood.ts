@@ -1,5 +1,5 @@
-import type { Usage } from "@oh-my-pi/pi-ai";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import type { Usage } from "@san/ai";
+import { TempDir } from "@san/utils";
 import { SessionManager } from "../session/session-manager";
 import { WorkflowCommandService } from "./commands";
 import adHocReviewSource from "./dogfood-sops/ad-hoc-review.js" with { type: "text" };

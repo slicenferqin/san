@@ -5,21 +5,21 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { discoverAndLoadExtensions, ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import type { AgentMessage, AgentTool } from "@san/agent";
+import type { ImageContent, TextContent } from "@san/ai";
+import { ModelRegistry } from "@san/coding-agent/config/model-registry";
+import { discoverAndLoadExtensions, ExtensionRuntime } from "@san/coding-agent/extensibility/extensions/loader";
 import {
 	EXTENSION_HANDLER_TIMEOUT_MS,
 	ExtensionRunner,
 	testSetExtensionHandlerTimeoutMs,
-} from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
-import type { ExtensionError } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
-import { ExtensionToolWrapper } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/wrapper";
-import { Type } from "@oh-my-pi/pi-coding-agent/extensibility/typebox";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { getProjectAgentDir, logger, TempDir } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/extensibility/extensions/runner";
+import type { ExtensionError } from "@san/coding-agent/extensibility/extensions/types";
+import { ExtensionToolWrapper } from "@san/coding-agent/extensibility/extensions/wrapper";
+import { Type } from "@san/coding-agent/extensibility/typebox";
+import { AuthStorage } from "@san/coding-agent/session/auth-storage";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
+import { getProjectAgentDir, logger, TempDir } from "@san/utils";
 
 describe("ExtensionRunner", () => {
 	let tempDir: TempDir;

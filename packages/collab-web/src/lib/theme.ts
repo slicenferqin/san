@@ -3,12 +3,14 @@ import { useSyncExternalStore } from "react";
 export type SystemTheme = "light" | "dark";
 export type ThemePreference = "system" | "light" | "dark";
 
-const STORAGE_KEY = "omp-collab-theme";
+const STORAGE_KEY = "san-collab-theme";
+const LEGACY_STORAGE_KEY = "omp-collab-theme";
 const DARK_SCHEME_QUERY = "(prefers-color-scheme: dark)";
 
 function readStoredPreference(): ThemePreference {
 	try {
-		const stored = globalThis.localStorage.getItem(STORAGE_KEY);
+		const stored =
+			globalThis.localStorage.getItem(STORAGE_KEY) ?? globalThis.localStorage.getItem(LEGACY_STORAGE_KEY);
 		return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
 	} catch {
 		// Private-mode or blocked storage: fall back to following the system.

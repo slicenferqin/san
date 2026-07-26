@@ -3,10 +3,10 @@
  */
 
 import * as os from "node:os";
-import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { ToolExample, TSchema } from "@oh-my-pi/pi-ai";
-import { renderToolInventory } from "@oh-my-pi/pi-ai/dialect";
-import { $env, getGpuCachePath, getProjectDir, hasFsCode, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
+import type { AgentTool } from "@san/agent";
+import type { ToolExample, TSchema } from "@san/ai";
+import { renderToolInventory } from "@san/ai/dialect";
+import { $env, getGpuCachePath, getProjectDir, hasFsCode, isEnoent, logger, prompt } from "@san/utils";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
 import { findConfigFile } from "./config";
@@ -75,9 +75,15 @@ function dedupeAlwaysApplyRules(
 ): AlwaysApplyRule[] {
 	if (!alwaysApplyRules || alwaysApplyRules.length === 0) return [];
 
-	return alwaysApplyRules.filter(
-		rule => !promptSources.some(source => promptSourceContainsRule(source, rule.content)),
-	);
+	const seenRuleContent = new Set<string>();
+	return alwaysApplyRules.filter(rule => {
+		if (promptSources.some(source => promptSourceContainsRule(source, rule.content))) return false;
+
+		const comparableContent = splitComparablePromptBlocks(rule.content).join("\n\n");
+		if (seenRuleContent.has(comparableContent)) return false;
+		seenRuleContent.add(comparableContent);
+		return true;
+	});
 }
 
 function dedupePromptSource(source: string | null | undefined, otherSources: Array<string | null | undefined>): string {

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import type { AgentToolCall } from "@oh-my-pi/pi-agent-core";
-import type { SessionMessageEntry } from "@oh-my-pi/pi-agent-core/compaction/entries";
-import { DEFAULT_PRUNE_CONFIG, pruneToolOutputs } from "@oh-my-pi/pi-agent-core/compaction/pruning";
-import { AGGRESSIVE_SHAKE_CONFIG, collectShakeRegions } from "@oh-my-pi/pi-agent-core/compaction/shake";
-import type { ProtectedToolContext } from "@oh-my-pi/pi-agent-core/compaction/tool-protection";
-import type { AssistantMessage, TextContent, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai";
-import { createPlanReadMatcher } from "@oh-my-pi/pi-coding-agent/plan-mode/plan-protection";
+import type { AgentToolCall } from "@san/agent";
+import type { SessionMessageEntry } from "@san/agent/compaction/entries";
+import { DEFAULT_PRUNE_CONFIG, pruneToolOutputs } from "@san/agent/compaction/pruning";
+import { AGGRESSIVE_SHAKE_CONFIG, collectShakeRegions } from "@san/agent/compaction/shake";
+import type { ProtectedToolContext } from "@san/agent/compaction/tool-protection";
+import type { AssistantMessage, TextContent, ToolResultMessage, Usage } from "@san/ai";
+import { createPlanReadMatcher } from "@san/coding-agent/plan-mode/plan-protection";
 
 function context(opts: { toolName?: string; callName?: string | undefined; path?: string }): ProtectedToolContext {
 	const toolResult = {

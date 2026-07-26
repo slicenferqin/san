@@ -1,4 +1,4 @@
-import { getKeybindings, type KeyId, matchesKey } from "@oh-my-pi/pi-tui";
+import { getKeybindings, type KeyId, matchesKey } from "@san/tui";
 
 /**
  * Match the coding-agent interrupt key.

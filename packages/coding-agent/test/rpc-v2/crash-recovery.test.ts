@@ -10,9 +10,9 @@ import {
 	leasePathForSession,
 	recoveryPathForSession,
 	withLeaseFileLock,
-} from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/crash-recovery";
-import type { RuntimeId } from "@oh-my-pi/pi-coding-agent/modes/rpc-v2/protocol/ids";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/modes/rpc-v2/crash-recovery";
+import type { RuntimeId } from "@san/coding-agent/modes/rpc-v2/protocol/ids";
+import { removeWithRetries } from "@san/utils";
 
 const tempDirectories: string[] = [];
 

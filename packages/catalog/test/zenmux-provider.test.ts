@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
-import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
-import { DEFAULT_MODEL_PER_PROVIDER, PROVIDER_DESCRIPTORS } from "@oh-my-pi/pi-catalog/provider-models/descriptors";
-import { zenmuxModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
-import type { FetchImpl } from "@oh-my-pi/pi-catalog/types";
+import { getOAuthProviders } from "@san/ai/registry/oauth";
+import { getEnvApiKey } from "@san/ai/stream";
+import { DEFAULT_MODEL_PER_PROVIDER, PROVIDER_DESCRIPTORS } from "@san/catalog/provider-models/descriptors";
+import { zenmuxModelManagerOptions } from "@san/catalog/provider-models/openai-compat";
+import type { FetchImpl } from "@san/catalog/types";
 
 const originalZenMuxApiKey = Bun.env.ZENMUX_API_KEY;
 

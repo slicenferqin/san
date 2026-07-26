@@ -17,8 +17,8 @@ import {
 	resolveProfileEnv,
 	setAgentDir,
 	setProfile,
-} from "@oh-my-pi/pi-utils/dirs";
-import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
+} from "@san/utils/dirs";
+import { Snowflake } from "@san/utils/snowflake";
 
 async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
 	const reader = stream.getReader();
@@ -346,7 +346,7 @@ describe("dirs module import behavior", () => {
 	it("exposes worker-host without loading agent env", async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-utils-worker-host-import-"));
 		try {
-			const workerHostUrl = import.meta.resolve("@oh-my-pi/pi-utils/worker-host");
+			const workerHostUrl = import.meta.resolve("@san/utils/worker-host");
 			const agentDir = path.join(root, "agent");
 			await fs.mkdir(agentDir, { recursive: true });
 			await Bun.write(path.join(agentDir, ".env"), "OMP_WORKER_HOST_PROBE=from-agent-env\n");

@@ -5,10 +5,10 @@
  * sort first with origin + model count. Does not include web search / STT / TTS.
  */
 
-import { PROVIDER_REGISTRY } from "@oh-my-pi/pi-ai/registry/registry";
-import type { ProviderDefinition } from "@oh-my-pi/pi-ai/registry/types";
-import type { ProviderCatalogEntry } from "@oh-my-pi/pi-catalog/provider-models/descriptor-types";
-import { CATALOG_PROVIDERS } from "@oh-my-pi/pi-catalog/provider-models/descriptors";
+import { PROVIDER_REGISTRY } from "@san/ai/registry/registry";
+import type { ProviderDefinition } from "@san/ai/registry/types";
+import type { ProviderCatalogEntry } from "@san/catalog/provider-models/descriptor-types";
+import { CATALOG_PROVIDERS } from "@san/catalog/provider-models/descriptors";
 import {
 	Container,
 	fuzzyFilter,
@@ -19,7 +19,7 @@ import {
 	Text,
 	TruncatedText,
 	truncateToWidth,
-} from "@oh-my-pi/pi-tui";
+} from "@san/tui";
 import type { ModelRegistry } from "../../config/model-registry";
 import { settings } from "../../config/settings";
 import { sanitizeStatusText } from "../../modes/shared";

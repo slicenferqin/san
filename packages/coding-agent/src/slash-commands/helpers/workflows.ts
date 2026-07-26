@@ -1,5 +1,5 @@
 import * as os from "node:os";
-import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { sanitizeText } from "@san/utils";
 import { getWorkflowToolSession } from "../../session/workflow-host";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
 import {

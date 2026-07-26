@@ -2,16 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import { Agent, type AgentMessage } from "@san/agent";
+import type { AssistantMessage } from "@san/ai";
+import { getBundledModel } from "@san/catalog/models";
+import { ModelRegistry } from "@san/coding-agent/config/model-registry";
+import { Settings } from "@san/coding-agent/config/settings";
+import { AgentSession } from "@san/coding-agent/session/agent-session";
+import { AuthStorage } from "@san/coding-agent/session/auth-storage";
+import { SessionManager } from "@san/coding-agent/session/session-manager";
+import { createTools, type ToolSession } from "@san/coding-agent/tools";
+import { removeSyncWithRetries, Snowflake } from "@san/utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 describe("AgentSession persistence-keys cache", () => {

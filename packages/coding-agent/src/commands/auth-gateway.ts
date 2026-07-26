@@ -1,7 +1,7 @@
 /**
  * `san auth-gateway` — run a forward proxy that injects auth from the broker.
  */
-import { Args, Command, Flags, renderCommandHelp } from "@oh-my-pi/pi-utils/cli";
+import { Args, Command, Flags, renderCommandHelp } from "@san/utils/cli";
 import {
 	AUTH_GATEWAY_ACTIONS,
 	type AuthGatewayAction,

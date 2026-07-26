@@ -4,8 +4,8 @@
  * Handles `san grep` subcommand for testing grep tool on Windows.
  */
 import * as path from "node:path";
-import { GrepOutputMode, grep } from "@oh-my-pi/pi-natives";
-import { APP_NAME } from "@oh-my-pi/pi-utils";
+import { GrepOutputMode, grep } from "@san/natives";
+import { APP_NAME } from "@san/utils";
 import chalk from "chalk";
 import { expandPath } from "../tools/path-utils";
 
@@ -158,7 +158,7 @@ ${chalk.bold("Options:")}
 
 ${chalk.bold("Environment:")}
   SAN_GREP_WORKERS=N   Set filesystem walker workers (default 4, 0 = auto)
-  PI_WALK_WORKERS=N    Legacy OMP name (older alias: PI_GREP_WORKERS)
+  PI_WALK_WORKERS=N    Legacy Pi/OMP compatibility name (older alias: PI_GREP_WORKERS)
 
 ${chalk.bold("Examples:")}
   ${APP_NAME} grep "import" src/

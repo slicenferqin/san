@@ -1,12 +1,7 @@
 process.env.PI_TUI_SCROLLBACK_REBUILD = "true";
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import {
-	type Component,
-	type NativeScrollbackCommittedRows,
-	type NativeScrollbackLiveRegion,
-	TUI,
-} from "@oh-my-pi/pi-tui";
+import { type Component, type NativeScrollbackCommittedRows, type NativeScrollbackLiveRegion, TUI } from "@san/tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Law-encoding suite for native-scrollback commits.

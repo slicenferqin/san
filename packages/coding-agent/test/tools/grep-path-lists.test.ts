@@ -2,25 +2,22 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test"
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { canonicalSnapshotKey } from "@oh-my-pi/pi-coding-agent/edit/file-snapshot-store";
-import type { RenderResultOptions } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
-import { AgentTranscriptViewer } from "@oh-my-pi/pi-coding-agent/modes/components/agent-transcript-viewer";
-import { TreeSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tree-selector";
-import type {
-	ObservableSession,
-	SessionObserverRegistry,
-} from "@oh-my-pi/pi-coding-agent/modes/session-observer-registry";
-import type { Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import type { SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
-import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { Text } from "@oh-my-pi/pi-tui";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import type { AgentMessage } from "@san/agent";
+import { validateToolArguments } from "@san/ai/utils/validation";
+import { resetSettingsForTest, Settings } from "@san/coding-agent/config/settings";
+import { canonicalSnapshotKey } from "@san/coding-agent/edit/file-snapshot-store";
+import type { RenderResultOptions } from "@san/coding-agent/extensibility/custom-tools/types";
+import { AgentTranscriptViewer } from "@san/coding-agent/modes/components/agent-transcript-viewer";
+import { TreeSelectorComponent } from "@san/coding-agent/modes/components/tree-selector";
+import type { ObservableSession, SessionObserverRegistry } from "@san/coding-agent/modes/session-observer-registry";
+import type { Theme } from "@san/coding-agent/modes/theme/theme";
+import { initTheme } from "@san/coding-agent/modes/theme/theme";
+import { AgentRegistry } from "@san/coding-agent/registry/agent-registry";
+import type { SessionEntry, SessionTreeNode } from "@san/coding-agent/session/session-entries";
+import { ToolChoiceQueue } from "@san/coding-agent/session/tool-choice-queue";
+import { createTools, type ToolSession } from "@san/coding-agent/tools";
+import { Text } from "@san/tui";
+import { removeWithRetries } from "@san/utils";
 import { grepToolRenderer } from "../../src/tools/grep";
 
 function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {

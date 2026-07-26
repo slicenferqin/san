@@ -17,7 +17,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $Repo = "slicenferqin/san"
-$Package = "@oh-my-pi/pi-coding-agent"
+$Package = "@san/coding-agent"
 $InstallDir = if ($env:SAN_INSTALL_DIR) { $env:SAN_INSTALL_DIR } elseif ($env:PI_INSTALL_DIR) { $env:PI_INSTALL_DIR } else { "$env:LOCALAPPDATA\san" }
 $BinaryName = "san-windows-x64.exe"
 $MinimumBunVersion = "1.3.14"

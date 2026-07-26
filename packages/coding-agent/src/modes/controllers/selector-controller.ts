@@ -1,18 +1,18 @@
-import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Model } from "@oh-my-pi/pi-ai";
-import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai";
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
-import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
-import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
-import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
-import { Input, Loader, Spacer, setTuiTight, Text } from "@oh-my-pi/pi-tui";
+import { ThinkingLevel } from "@san/agent";
+import type { Model } from "@san/ai";
+import { PASTE_CODE_LOGIN_PROVIDERS } from "@san/ai";
+import { getOAuthProviders } from "@san/ai/oauth";
+import type { OAuthProvider } from "@san/ai/oauth/types";
+import { getSupportedEfforts } from "@san/catalog/model-thinking";
+import type { Component, OverlayHandle } from "@san/tui";
+import { Input, Loader, Spacer, setTuiTight, Text } from "@san/tui";
 import {
 	getAgentDbPath,
 	getAgentDir,
 	getProjectDir,
 	normalizePathForComparison,
 	wrapFetchForExtraCa,
-} from "@oh-my-pi/pi-utils";
+} from "@san/utils";
 import {
 	type AdvisorConfigScope,
 	discoverAdvisorConfigs,

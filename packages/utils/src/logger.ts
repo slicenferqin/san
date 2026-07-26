@@ -1,7 +1,6 @@
 /**
  * Centralized logger for San.
  *
-/**
  * Default: rotating `~/.san/logs/san.<DATE>.<PID>.log`, no console output (writing
  * to stdout/stderr would corrupt the TUI). Long-running headless services
  * (the auth broker, etc.) call {@link setTransports} to swap in a console
@@ -54,8 +53,8 @@ function emitToSinks(level: LogLevel, message: string, context: Record<string, u
 	}
 }
 
-const PROCESS_LOG_PATTERN = /^omp\.\d{4}-\d{2}-\d{2}\.(\d+)\.log(?:\.\d+)?$/;
-const PROCESS_AUDIT_PATTERN = /^\.omp\.(\d+)-audit\.json$/;
+const PROCESS_LOG_PATTERN = /^(?:san|omp)\.\d{4}-\d{2}-\d{2}\.(\d+)\.log(?:\.\d+)?$/;
+const PROCESS_AUDIT_PATTERN = /^\.(?:san|omp)\.(\d+)-audit\.json$/;
 const RETAINED_STALE_LOG_FILES = 5;
 
 function processIsRunning(pid: number): boolean {
@@ -175,12 +174,12 @@ function makeFileTransport(dir?: string): winston.transport {
 	pruneStaleProcessLogs(logsDir);
 	return new DailyRotateFile({
 		dirname: logsDir,
-		filename: `omp.%DATE%.${process.pid}.log`,
+		filename: `san.%DATE%.${process.pid}.log`,
 		datePattern: "YYYY-MM-DD",
 		maxSize: "10m",
 		maxFiles: 5,
 		zippedArchive: false,
-		auditFile: path.join(logsDir, `.omp.${process.pid}-audit.json`),
+		auditFile: path.join(logsDir, `.san.${process.pid}-audit.json`),
 	});
 }
 

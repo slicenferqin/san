@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the published package from `@oh-my-pi/collab-web` to `@san/collab-web`; consumers must update package dependencies and imports.
+
 ## [17.0.1] - 2026-07-16
 
 ### Fixed

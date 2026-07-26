@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import type { Usage } from "@oh-my-pi/pi-ai";
+import type { Usage } from "@san/ai";
 import { Settings } from "../../src/config/settings";
 import { runEvalAgentExecution } from "../../src/eval/agent-bridge";
 import * as taskDiscovery from "../../src/task/discovery";

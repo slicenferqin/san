@@ -12,8 +12,8 @@ import {
 	WorkflowStoreConflictError,
 	workflowSourceHash,
 	workflowValueHash,
-} from "@oh-my-pi/pi-coding-agent/workflows";
-import { TempDir } from "@oh-my-pi/pi-utils";
+} from "@san/coding-agent/workflows";
+import { TempDir } from "@san/utils";
 
 let tempDir: TempDir | null = null;
 const stores = new Set<WorkflowStore>();

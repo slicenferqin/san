@@ -14,9 +14,9 @@
  */
 
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
-import * as ai from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import type { Api, AssistantMessage, Model } from "@san/ai";
+import * as ai from "@san/ai";
+import { getBundledModel } from "@san/catalog/models";
 import { generateDigest } from "../../src/context-steady/digest";
 import { generateFallbackDigest, generateTurnId } from "../../src/context-steady/fallback";
 import { normalizeDigest } from "../../src/context-steady/normalize";

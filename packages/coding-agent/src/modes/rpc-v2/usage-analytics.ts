@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
+import type { AgentMessage } from "@san/agent";
+import type { AssistantMessage, Usage } from "@san/ai";
 import type { FileEntry, SessionMessageEntry } from "../../session/session-entries";
 import type { SessionInfo, SessionStatus } from "../../session/session-listing";
 import { loadEntriesFromFile } from "../../session/session-loader";
