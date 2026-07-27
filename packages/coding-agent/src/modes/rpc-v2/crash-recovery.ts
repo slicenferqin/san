@@ -138,13 +138,8 @@ export async function detectRecovery(
 }
 
 export async function readRecovery(sessionFile: string): Promise<RecoveryDescriptor | undefined> {
-	try {
-		const recovery = (await Bun.file(recoveryPathForSession(sessionFile)).json()) as StoredRecoveryDescriptor;
-		return publicRecoveryDescriptor(recovery);
-	} catch (error: unknown) {
-		if (isEnoent(error)) return undefined;
-		throw new Error(`Failed to read RPC v2 recovery state for ${sessionFile}: ${String(error)}`);
-	}
+	const recovery = await readStoredRecovery(sessionFile);
+	return recovery ? publicRecoveryDescriptor(recovery) : undefined;
 }
 
 export async function executeRecovery(
@@ -200,7 +195,7 @@ export async function withLeaseFileLock<T>(sessionFile: string, fn: () => Promis
 
 async function readLeaseRecord(leasePath: string): Promise<LeaseRecord | undefined> {
 	try {
-		return (await Bun.file(leasePath).json()) as LeaseRecord;
+		return parseLeaseRecord(await Bun.file(leasePath).json());
 	} catch (error: unknown) {
 		if (isEnoent(error)) return undefined;
 		throw new Error(`Invalid RPC v2 lease ${leasePath}: ${String(error)}`);
@@ -209,11 +204,67 @@ async function readLeaseRecord(leasePath: string): Promise<LeaseRecord | undefin
 
 async function readStoredRecovery(sessionFile: string): Promise<StoredRecoveryDescriptor | undefined> {
 	try {
-		return (await Bun.file(recoveryPathForSession(sessionFile)).json()) as StoredRecoveryDescriptor;
+		return parseStoredRecoveryDescriptor(await Bun.file(recoveryPathForSession(sessionFile)).json());
 	} catch (error: unknown) {
 		if (isEnoent(error)) return undefined;
 		throw new Error(`Failed to read RPC v2 recovery state for ${sessionFile}: ${String(error)}`);
 	}
+}
+
+function parseLeaseRecord(value: unknown): LeaseRecord {
+	if (!isRecord(value)) throw new Error("expected a JSON object");
+	if (!isNonEmptyString(value.leaseId) || !isNonEmptyString(value.runtimeId) || !isNonEmptyString(value.sessionId)) {
+		throw new Error("lease identity fields must be non-empty strings");
+	}
+	if (!Number.isSafeInteger(value.pid) || (value.pid as number) <= 0)
+		throw new Error("pid must be a positive integer");
+	if (!isNonEmptyString(value.acquiredAt) || !isNonEmptyString(value.lastHeartbeat)) {
+		throw new Error("lease timestamps must be non-empty strings");
+	}
+	if (!Number.isSafeInteger(value.lastStableSequence) || (value.lastStableSequence as number) < 0) {
+		throw new Error("lastStableSequence must be a non-negative safe integer");
+	}
+	return value as unknown as LeaseRecord;
+}
+
+function parseStoredRecoveryDescriptor(value: unknown): StoredRecoveryDescriptor {
+	if (!isRecord(value)) throw new Error("expected a JSON object");
+	if (value.required !== true) throw new Error("recovery descriptor must be required");
+	if (!RECOVERY_REASONS.has(value.reason as RecoveryReason)) throw new Error("invalid recovery reason");
+	if (!isNonEmptyString(value.previousLeaseId) || !isNonEmptyString(value.previousRuntimeId)) {
+		throw new Error("previous lease identity must be present");
+	}
+	if (!Number.isSafeInteger(value.lastStableSequence) || (value.lastStableSequence as number) < 0) {
+		throw new Error("lastStableSequence must be a non-negative safe integer");
+	}
+	if (
+		!Array.isArray(value.allowedStrategies) ||
+		value.allowedStrategies.length === 0 ||
+		!value.allowedStrategies.every(strategy => RECOVERY_STRATEGIES.has(strategy as RecoveryStrategy))
+	) {
+		throw new Error("invalid recovery strategies");
+	}
+	if (value.interruptedRunId !== undefined && !isNonEmptyString(value.interruptedRunId)) {
+		throw new Error("interruptedRunId must be a non-empty string");
+	}
+	return value as unknown as StoredRecoveryDescriptor;
+}
+
+const RECOVERY_REASONS = new Set<RecoveryReason>([
+	"runtime_crash",
+	"unclean_shutdown",
+	"stale_lease",
+	"incomplete_run",
+	"journal_repair",
+]);
+const RECOVERY_STRATEGIES = new Set<RecoveryStrategy>(["continue", "mark_aborted", "read_only"]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0;
 }
 
 async function writeJsonAtomically(filePath: string, value: object): Promise<void> {

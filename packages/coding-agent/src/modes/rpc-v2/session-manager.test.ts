@@ -5,7 +5,9 @@
  * event handling — and an empty phases array is a valid "cleared" signal.
  */
 import { describe, expect, it } from "bun:test";
-import { extractTodoPhases } from "./session-manager";
+import type { SessionEvent } from "./dto/events";
+import type { EventId, MessageId, SessionId, ToolCallId } from "./protocol/ids";
+import { extractTodoPhases, getEventCoalesceKey } from "./session-manager";
 
 describe("extractTodoPhases", () => {
 	it("projects well-formed phases with task statuses", () => {
@@ -71,5 +73,43 @@ describe("extractTodoPhases", () => {
 				],
 			},
 		]);
+	});
+});
+
+describe("getEventCoalesceKey", () => {
+	const baseEvent = {
+		schemaVersion: 1,
+		eventId: "evt-1" as EventId,
+		sessionId: "session-1" as SessionId,
+		sequence: 1,
+		timestamp: "2026-07-26T00:00:00.000Z",
+		durability: "transient",
+	} as const;
+
+	it("keeps visible and thinking message streams independent", () => {
+		const visible = {
+			...baseEvent,
+			type: "message.delta",
+			data: { messageId: "message-1" as MessageId, delta: "answer" },
+		} satisfies SessionEvent;
+		const thinking = {
+			...visible,
+			data: { ...visible.data, channel: "thinking" },
+		} satisfies SessionEvent;
+
+		expect(getEventCoalesceKey(visible)).toBe("message.delta:::");
+		expect(getEventCoalesceKey(thinking)).toBe("message.delta:::thinking");
+	});
+
+	it("keeps concurrent tool progress streams independent", () => {
+		const progress = (toolCallId: string) =>
+			({
+				...baseEvent,
+				type: "tool.progress",
+				data: { toolCallId: toolCallId as ToolCallId, toolName: "bash" },
+			}) satisfies SessionEvent;
+
+		expect(getEventCoalesceKey(progress("tool-1"))).toBe("tool.progress:::tool-1");
+		expect(getEventCoalesceKey(progress("tool-2"))).toBe("tool.progress:::tool-2");
 	});
 });

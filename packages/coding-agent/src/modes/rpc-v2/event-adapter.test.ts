@@ -82,6 +82,26 @@ describe("event-adapter message_update", () => {
 	});
 });
 
+describe("event-adapter message_end", () => {
+	it("projects bounded visible content and clears the active stream", () => {
+		const { ctx, sequencer } = makeContext();
+		const message = {
+			...assistant,
+			content: [{ type: "text" as const, text: "final answer" }],
+		};
+		const emitted = adaptSessionEvent({ type: "message_end", message } as AgentSessionEvent, sequencer, ctx);
+		expect(emitted?.type).toBe("message.completed");
+		expect(emitted?.data).toEqual({
+			messageId: expect.any(String),
+			role: "assistant",
+			content: "final answer",
+			contentLength: 12,
+			truncated: false,
+		});
+		expect(ctx.activeStreams).toEqual([]);
+	});
+});
+
 describe("event-adapter tool_execution_end", () => {
 	function makeToolEnd(result: unknown, isError = false): AgentSessionEvent {
 		return { type: "tool_execution_end", toolCallId: "tc_1", toolName: "edit", result, isError } as AgentSessionEvent;
@@ -94,11 +114,17 @@ describe("event-adapter tool_execution_end", () => {
 			sequencer,
 			ctx,
 		);
-		const data = (emitted?.data ?? {}) as { path?: string; preview?: string; previewTruncated?: boolean };
+		const data = (emitted?.data ?? {}) as {
+			path?: string;
+			preview?: string;
+			previewTruncated?: boolean;
+			summary?: string;
+		};
 		expect(emitted?.type).toBe("tool.completed");
 		expect(data.path).toBe("/tmp/a.ts");
 		expect(data.preview).toBe("--- a\n+++ b\n-x\n+y\n");
 		expect(data.previewTruncated).toBeUndefined();
+		expect(data.summary).toBe("edit completed");
 	});
 
 	it("truncates oversized diffs and flags it", () => {
@@ -120,5 +146,56 @@ describe("event-adapter tool_execution_end", () => {
 		const data = (emitted?.data ?? {}) as { path?: string; preview?: string };
 		expect(data.path).toBeUndefined();
 		expect(data.preview).toBeUndefined();
+	});
+
+	it("redacts credentials and local home paths from tool result projections", () => {
+		const { ctx, sequencer } = makeContext();
+		const home = process.env.HOME ?? "/Users/tester";
+		const secret = "sk-abcdefghijklmnopqrstuvwx";
+		const emitted = adaptSessionEvent(
+			makeToolEnd({
+				details: {
+					resolvedPath: `${home}/private/a.ts`,
+					diff: `+authorization=${secret}\n+file=${home}/private/a.ts`,
+				},
+			}),
+			sequencer,
+			ctx,
+		);
+		const data = (emitted?.data ?? {}) as { path?: string; preview?: string };
+		expect(data.path).toBe("~/private/a.ts");
+		expect(data.preview).toBe("+authorization=[REDACTED]\n+file=~/private/a.ts");
+		expect(data.preview).not.toContain(secret);
+		expect(data.preview).not.toContain(home);
+	});
+});
+
+describe("event-adapter diagnostic metadata", () => {
+	it("redacts retry errors, tool intents, and notices before emission", () => {
+		const home = process.env.HOME ?? "/Users/tester";
+		const secret = "sk-abcdefghijklmnopqrstuvwx";
+		const raw = `failed at ${home}/private authorization=${secret}`;
+		const cases: AgentSessionEvent[] = [
+			{
+				type: "tool_execution_start",
+				toolCallId: "tc_2",
+				toolName: "bash",
+				args: {},
+				intent: raw,
+			},
+			{ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 100, errorMessage: raw },
+			{ type: "auto_retry_end", success: false, attempt: 1, finalError: raw },
+			{ type: "notice", level: "error", message: raw, source: "test" },
+		] as AgentSessionEvent[];
+
+		for (const event of cases) {
+			const { ctx, sequencer } = makeContext();
+			const emitted = adaptSessionEvent(event, sequencer, ctx);
+			const serialized = JSON.stringify(emitted?.data);
+			expect(serialized).toContain("[REDACTED]");
+			expect(serialized).toContain("~/private");
+			expect(serialized).not.toContain(secret);
+			expect(serialized).not.toContain(home);
+		}
 	});
 });

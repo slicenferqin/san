@@ -66,6 +66,8 @@ describe("RPC v2 backpressure writer", () => {
 		await Promise.resolve();
 		const firstProgress = writer.write({ id: "progress-1" }, { durability: "transient", coalesceKey: "run:1" });
 		const latestProgress = writer.write({ id: "progress-2" }, { durability: "transient", coalesceKey: "run:1" });
+		expect(writer.pendingCount).toBe(1);
+		expect(writer.queuedTransientCount).toBe(1);
 
 		stream.release();
 		await Promise.all([durable, firstProgress, latestProgress]);
@@ -78,12 +80,26 @@ describe("RPC v2 backpressure writer", () => {
 			{ id: "progress-2" },
 		]);
 		expect(writer.coalescedCount).toBe(2);
+		expect(writer.pendingCount).toBe(0);
+		expect(writer.queuedTransientCount).toBe(0);
 	});
 
 	test("rejects a frame larger than one MiB", async () => {
 		const stream: RpcWritable = { write: () => true, once: () => undefined };
 		const writer = new BackpressureWriter({ stream });
 		await expect(writer.write({ text: "x".repeat(1_048_576) })).rejects.toThrow("RPC frame exceeds 1048576 bytes");
+	});
+
+	test("releases pending capacity when serialization fails", async () => {
+		const stream: RpcWritable = { write: () => true, once: () => undefined };
+		const writer = new BackpressureWriter({ stream, maxQueueSize: 1 });
+		const circular: Record<string, unknown> = {};
+		circular.self = circular;
+
+		await expect(writer.write(circular)).rejects.toThrow();
+		expect(writer.pendingCount).toBe(0);
+		await expect(writer.write({ id: "after-failure" })).rejects.toThrow();
+		expect(writer.pendingCount).toBe(0);
 	});
 
 	test("flushes transient frames that arrive while a coalesced frame is draining", async () => {
@@ -105,5 +121,30 @@ describe("RPC v2 backpressure writer", () => {
 			{ id: "progress-1" },
 			{ id: "progress-2" },
 		]);
+	});
+
+	test("bounds distinct transient stream keys and evicts the oldest pending stream", async () => {
+		const stream = new ControlledWritable();
+		const writer = new BackpressureWriter({ stream, maxQueueSize: 1, maxCoalescedKeys: 2 });
+		const durable = writer.write({ id: "durable" });
+		await Promise.resolve();
+		const writes = [
+			writer.write({ id: "progress-1" }, { durability: "transient", coalesceKey: "run:1" }),
+			writer.write({ id: "progress-2" }, { durability: "transient", coalesceKey: "run:2" }),
+			writer.write({ id: "progress-3" }, { durability: "transient", coalesceKey: "run:3" }),
+		];
+		expect(writer.queuedTransientCount).toBe(2);
+		expect(writer.droppedCoalescedCount).toBe(1);
+
+		stream.release();
+		await Promise.all([durable, ...writes]);
+		await writer.close();
+		expect(stream.lines.map(line => JSON.parse(line))).toEqual([
+			{ id: "durable" },
+			{ jsonrpc: "2.0", method: "stream.coalesced", params: { replaced: 0, dropped: 1, emitted: 2 } },
+			{ id: "progress-2" },
+			{ id: "progress-3" },
+		]);
+		expect(writer.droppedCoalescedCount).toBe(1);
 	});
 });

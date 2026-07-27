@@ -128,6 +128,14 @@ export interface DiagnosticsSnapshot {
 	runtime: { version: string; protocolVersion: string; uptimeMs: DurationMs; exitState?: string };
 	capabilities: { revision: number; enabled: string[]; unavailable: string[] };
 	sessions: { activeCount: number; lockedCount: number; lastSequences: Record<string, number> };
+	output: {
+		pendingFrames: number;
+		queuedTransientFrames: number;
+		coalescedFrames: number;
+		blockedStdoutWrites: number;
+		droppedTransientFrames: number;
+		droppedTransientEvents: number;
+	};
 	integrations: Array<{
 		integrationId: string;
 		kind: string;

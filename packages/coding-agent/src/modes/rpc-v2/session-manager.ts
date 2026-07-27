@@ -63,6 +63,7 @@ import {
 	type StoredRpcRuntimeSettings,
 } from "./runtime-settings-store";
 import { type PersistedRpcState, RpcV2StateStore, rpcV2StatePaths } from "./state-store";
+import { TransientEventLimiter } from "./transient-event-limiter";
 
 export interface RpcV2CustomProviderInput {
 	providerId: string;
@@ -187,6 +188,8 @@ interface ActiveSession {
 	syncBuffer: SessionEvent[];
 	synced: boolean;
 	stream: StreamPolicy;
+	transientLimiter: TransientEventLimiter;
+	transientFlushTask?: Promise<void>;
 	eventTail: Promise<void>;
 	fatalError?: Error;
 	activeRun?: RunSnapshot;
@@ -313,6 +316,10 @@ export class RpcV2SessionManager {
 
 	get currentLastSequence(): number {
 		return this.#active?.sequencer.currentSequence ?? 0;
+	}
+
+	get droppedTransientEventCount(): number {
+		return this.#active?.transientLimiter.droppedPendingCount ?? 0;
 	}
 
 	get currentSubscriptionId(): SubscriptionId | undefined {
@@ -456,6 +463,9 @@ export class RpcV2SessionManager {
 		const active = this.#active;
 		if (active) {
 			active.stream = { ...active.stream, ...policy };
+			if (policy.maxTransientEventsPerSecond !== undefined) {
+				active.transientLimiter.configure(policy.maxTransientEventsPerSecond);
+			}
 			active.adapter.emitThinkingDeltas = active.stream.thinkingDeltas === true;
 			await this.#persistState(active);
 			return { ...active.stream };
@@ -754,6 +764,7 @@ export class RpcV2SessionManager {
 			active.stream = params.stream ?? {};
 			active.adapter.emitThinkingDeltas = active.stream.thinkingDeltas === true;
 			active.syncPending = true;
+			active.transientLimiter.configure(active.stream.maxTransientEventsPerSecond ?? 200);
 			active.synced = true;
 			active.syncBuffer = [];
 			active.subscriptionId = newSubscriptionId();
@@ -801,6 +812,7 @@ export class RpcV2SessionManager {
 			active.syncAsOfSequence = undefined;
 			active.syncBuffer = [];
 			active.subscriptionId = undefined;
+			active.transientLimiter.clear();
 			return { unsynced: true };
 		});
 	}
@@ -1656,6 +1668,7 @@ export class RpcV2SessionManager {
 			syncBuffer: [],
 			synced: false,
 			stream: {},
+			transientLimiter: new TransientEventLimiter(),
 			eventTail: Promise.resolve(),
 			queue: reviveQueue(loaded.state.queue, sessionId),
 			queueContent: reviveQueueContent(loaded.state.queue),
@@ -2055,12 +2068,44 @@ export class RpcV2SessionManager {
 	}
 
 	async #publishEvent(event: SessionEvent): Promise<void> {
+		const active = this.#active;
+		if (!active) {
+			await this.#writeEvent(event, getEventCoalesceKey(event));
+			return;
+		}
+		await this.#flushTransientEvents(active);
+		const coalesceKey = getEventCoalesceKey(event);
+		for (const emitted of active.transientLimiter.select(event, coalesceKey)) {
+			await this.#writeEvent(emitted, getEventCoalesceKey(emitted));
+		}
+		this.#scheduleTransientFlush(active);
+	}
+
+	async #flushTransientEvents(active: ActiveSession): Promise<void> {
+		for (const pending of active.transientLimiter.flush()) {
+			await this.#writeEvent(pending, getEventCoalesceKey(pending));
+		}
+	}
+
+	#scheduleTransientFlush(active: ActiveSession): void {
+		if (active.transientFlushTask || active.transientLimiter.pendingCount === 0) return;
+		const delay = active.transientLimiter.millisecondsUntilNextWindow ?? 0;
+		const task = (async () => {
+			await Bun.sleep(delay);
+			if (this.#active !== active || !active.synced) return;
+			await this.#enqueueWork(active, async () => this.#flushTransientEvents(active));
+		})().finally(() => {
+			active.transientFlushTask = undefined;
+			this.#scheduleTransientFlush(active);
+		});
+		active.transientFlushTask = task;
+		this.#trackBackgroundTask(active, task);
+	}
+
+	async #writeEvent(event: SessionEvent, coalesceKey: string): Promise<void> {
 		await this.#output(
 			{ jsonrpc: "2.0", method: "session.event", params: event },
-			{
-				durability: event.durability,
-				coalesceKey: `${event.type}:${event.runId ?? ""}:${event.turnId ?? ""}`,
-			},
+			{ durability: event.durability, coalesceKey },
 		);
 	}
 
@@ -2448,6 +2493,16 @@ function isContentPart(value: unknown): value is ContentPart {
 		isRecord(value.resource) &&
 		(value.purpose === "input" || value.purpose === "reference")
 	);
+}
+
+export function getEventCoalesceKey(event: SessionEvent): string {
+	let streamKey = "";
+	if (isRecord(event.data)) {
+		if (event.type === "message.delta" && typeof event.data.channel === "string") streamKey = event.data.channel;
+		if (event.type === "tool.progress" && typeof event.data.toolCallId === "string")
+			streamKey = event.data.toolCallId;
+	}
+	return `${event.type}:${event.runId ?? ""}:${event.turnId ?? ""}:${streamKey}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
