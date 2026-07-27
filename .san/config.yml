@@ -18,16 +18,8 @@ startup:
   setupWizard: false
 
 tools:
-  discoveryMode: all
-  essentialOverride:
-    - read
-    - bash
-    - edit
-    - write
-    - glob
-    - eval
-    - grep
-    - lsp
+  xdev: true
+  xdevDocs: catalog
 
 san:
   contextSteady:

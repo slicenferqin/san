@@ -59,6 +59,11 @@ async function loadBundledModule(moduleKey: string): Promise<void> {
 	const loaders = await ensureBundledModuleLoadersLoaded();
 	const loader = loaders[moduleKey];
 	if (!loader) {
+		if (process.env.SAN_BUILD_PROFILE === "core") {
+			throw new Error(
+				`omp:legacy-pi-shim: ${moduleKey} is not included in the San core binary; use the full binary for legacy Pi extensions`,
+			);
+		}
 		throw new Error(`omp:legacy-pi-shim: no bundled module registered for ${moduleKey}`);
 	}
 	loadedBundledModules[moduleKey] = await loader();

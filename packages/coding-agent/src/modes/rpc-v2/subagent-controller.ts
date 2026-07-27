@@ -7,7 +7,7 @@ import { RpcSubagentRegistry, readRpcSubagentTranscript } from "../rpc/rpc-subag
 import type { RpcSubagentFrame, RpcSubagentSnapshot, RpcSubagentSubscriptionLevel } from "../rpc/rpc-types";
 import type { SubagentSnapshot } from "./dto/integration";
 import type { ToolCallId } from "./protocol/ids";
-import { sanitizeRpcError } from "./redaction";
+import { sanitizeRpcError, sanitizeRpcText } from "./redaction";
 
 type SessionEventOutput = (
 	type:
@@ -41,7 +41,7 @@ export class RpcV2SubagentController {
 	}
 
 	list(): SubagentSnapshot[] {
-		return (this.#registry?.getSubagents() ?? []).map(projectSnapshot);
+		return (this.#registry?.getSubagents() ?? []).map(projectSubagentSnapshot);
 	}
 
 	async messages(params: { subagentId: string; cursor?: string; limit?: number }): Promise<{
@@ -87,7 +87,11 @@ export class RpcV2SubagentController {
 	async abort(subagentId: string, reason?: string): Promise<{ accepted: true; subagentId: string }> {
 		const ref = assertControllableSubagent(subagentId);
 		if (ref.session) await ref.session.abort({ reason: reason?.trim() || USER_INTERRUPT_LABEL });
-		this.#output?.("subagent.aborted", { subagentId, reason: reason?.trim() || "client_abort" }, "durable");
+		this.#output?.(
+			"subagent.aborted",
+			{ subagentId, reason: sanitizeRpcText(reason?.trim() || "client_abort", { maxChars: 500 }) },
+			"durable",
+		);
 		return { accepted: true, subagentId };
 	}
 
@@ -122,7 +126,9 @@ export class RpcV2SubagentController {
 					agent: frame.payload.agent,
 					agentSource: frame.payload.agentSource,
 					status: frame.payload.status === "started" ? "running" : frame.payload.status,
-					...(frame.payload.description ? { description: frame.payload.description } : {}),
+					...(frame.payload.description
+						? { description: sanitizeRpcText(frame.payload.description, { maxChars: 2_000 }) }
+						: {}),
 					...(frame.payload.parentToolCallId ? { parentToolCallId: frame.payload.parentToolCallId } : {}),
 				},
 				"durable",
@@ -181,16 +187,16 @@ export class RpcV2SubagentController {
 	}
 }
 
-function projectSnapshot(snapshot: RpcSubagentSnapshot): SubagentSnapshot {
+export function projectSubagentSnapshot(snapshot: RpcSubagentSnapshot): SubagentSnapshot {
 	return {
 		subagentId: snapshot.id,
 		index: snapshot.index,
 		agent: snapshot.agent,
 		agentSource: snapshot.agentSource,
-		...(snapshot.description ? { description: snapshot.description } : {}),
+		...(snapshot.description ? { description: sanitizeRpcText(snapshot.description, { maxChars: 2_000 }) } : {}),
 		status: snapshot.status,
-		...(snapshot.task ? { task: snapshot.task } : {}),
-		...(snapshot.assignment ? { assignment: snapshot.assignment } : {}),
+		...(snapshot.task ? { task: sanitizeRpcText(snapshot.task, { maxChars: 10_000 }) } : {}),
+		...(snapshot.assignment ? { assignment: sanitizeRpcText(snapshot.assignment, { maxChars: 10_000 }) } : {}),
 		...(snapshot.parentToolCallId ? { parentToolCallId: snapshot.parentToolCallId as ToolCallId } : {}),
 		lastUpdate: new Date(snapshot.lastUpdate).toISOString(),
 		...(snapshot.progress

@@ -456,6 +456,14 @@ interface DispatchContext {
 	state: ServerState;
 	sessionManager: RpcV2SessionManager;
 	output: OutputFn;
+	outputDiagnostics: () => {
+		pendingFrames: number;
+		queuedTransientFrames: number;
+		coalescedFrames: number;
+		blockedStdoutWrites: number;
+		droppedTransientFrames: number;
+		droppedTransientEvents: number;
+	};
 	getUIContext: () => RpcV2UIContext | undefined;
 	hostToolBridge: RpcV2HostToolBridge;
 	idempotency: IdempotencyStore;
@@ -2072,6 +2080,7 @@ async function dispatchKnownMethod(
 						? { [sessionManager.currentSessionId]: sessionManager.currentLastSequence }
 						: {},
 				},
+				output: ctx.outputDiagnostics(),
 				integrations,
 				recentErrors: state.recentErrors.slice(-20),
 			};
@@ -2335,6 +2344,14 @@ export async function runRpcV2Mode(factory: RpcV2SessionFactory, _eventBus?: Eve
 		state,
 		sessionManager,
 		output,
+		outputDiagnostics: () => ({
+			pendingFrames: writer.pendingCount,
+			queuedTransientFrames: writer.queuedTransientCount,
+			coalescedFrames: writer.coalescedCount,
+			blockedStdoutWrites: purityGuard.violations(),
+			droppedTransientFrames: writer.droppedCoalescedCount,
+			droppedTransientEvents: sessionManager.droppedTransientEventCount,
+		}),
 		getUIContext: () => uiContext,
 		hostToolBridge,
 		idempotency,

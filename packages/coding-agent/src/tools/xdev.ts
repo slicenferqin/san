@@ -15,9 +15,8 @@
  * the write tool's existing incremental `content` decoding for live render
  * previews. Compared to a dispatcher def this still costs zero *schema
  * duplication* — one wire schema per tool instead of one per dispatcher
- * branch — but full docs + schema for every mounted device are inlined into
- * the system prompt (`XdevRegistry.docsAll()`) so no discovery `read` is
- * needed before first use; `read xd://<tool>` remains for on-demand re-fetch.
+ * branch. The system prompt can embed either full docs or a compact catalog;
+ * `read xd://<tool>` always returns the complete docs and schema on demand.
  *
  * Rendering: the write renderer draws NOTHING until the streamed `path` is
  * known and provably does not target `xd://`; device writes then delegate to
@@ -34,6 +33,8 @@ import type { Tool } from "./index";
 import { replaceTabs } from "./render-utils";
 import type { ToolRenderer } from "./renderers";
 import { ToolError } from "./tool-errors";
+
+export type XdevDocsMode = "full" | "catalog";
 
 /**
  * Discoverable built-ins that must stay top-level even when xdev mounting is
@@ -259,14 +260,15 @@ export class XdevRegistry {
 	static readonly EXTERNAL_DESCRIPTION_CAP = 200;
 
 	/**
-	 * Docs + schema for mounted devices, nested under `##` headings for
-	 * system-prompt embedding. Inlines full docs in catalog order (built-ins
-	 * first) until {@link DOCS_TOTAL_BUDGET} is spent; the rest are listed by
-	 * name + summary with a pointer to on-demand `read xd://<tool>` docs.
+	 * Render mounted-device guidance for the system prompt. Catalog mode emits
+	 * only names and summaries; callers can fetch complete docs with
+	 * `read xd://<tool>`. Full mode inlines docs and schemas in catalog order
+	 * until {@link DOCS_TOTAL_BUDGET} is spent, then lists the overflow.
 	 * Dynamic mounts embed at most {@link EXTERNAL_DESCRIPTION_CAP} description
-	 * chars (schema always intact); `read xd://<tool>` returns the full text.
+	 * chars in full mode; `read xd://<tool>` always returns the full text.
 	 */
-	docsAll(): string {
+	docsAll(mode: XdevDocsMode = "full"): string {
+		if (mode === "catalog") return this.listing();
 		const sections: string[] = [];
 		const overflow: Tool[] = [];
 		let used = 0;

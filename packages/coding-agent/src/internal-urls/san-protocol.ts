@@ -25,6 +25,9 @@ export class SanProtocolHandler implements ProtocolHandler {
 	}
 
 	async resolve(url: InternalUrl): Promise<InternalResource> {
+		if (process.env.SAN_BUILD_PROFILE === "core") {
+			throw new Error("Embedded harness documentation is not included in the San core binary; use the full binary.");
+		}
 		// Extract filename from host + path
 		const host = url.rawHost || url.hostname;
 		const pathname = url.rawPathname ?? url.pathname;
@@ -38,6 +41,7 @@ export class SanProtocolHandler implements ProtocolHandler {
 	}
 
 	async complete(): Promise<UrlCompletion[]> {
+		if (process.env.SAN_BUILD_PROFILE === "core") return [];
 		return getDocFilenames().map(value => ({ value }));
 	}
 

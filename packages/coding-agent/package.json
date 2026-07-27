@@ -32,6 +32,7 @@
   },
   "scripts": {
     "build": "bun scripts/build-binary.ts",
+    "build:core": "bun scripts/build-binary.ts --profile core",
     "check": "biome check . && bun run check:types",
     "check:types": "tsgo -p tsconfig.json --noEmit",
     "lint": "biome lint .",

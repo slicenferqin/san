@@ -163,26 +163,29 @@ export interface RunTerminalData {
 
 export interface MessageStartedData {
 	messageId: MessageId;
-	role: "user" | "assistant";
+	role: string;
 }
 
 export interface MessageDeltaData {
 	messageId: MessageId;
 	delta: string;
+	/** Absent for answer text; "thinking" for reasoning-channel deltas (opt-in via stream.configure). */
+	channel?: "thinking";
 }
 
 export interface MessageCompletedData {
 	messageId: MessageId;
-	role: "user" | "assistant";
-	finishReason?: string;
+	role: string;
+	/** Visible text persisted with the completion event, bounded by the active-message wire limit. */
+	content: string;
 	contentLength: number;
-	artifactRef?: string;
+	truncated: boolean;
 }
 
 export interface ToolStartedData {
 	toolCallId: ToolCallId;
 	toolName: string;
-	category: string;
+	category?: string;
 	intent?: string;
 }
 
@@ -190,9 +193,15 @@ export interface ToolCompletedData {
 	toolCallId: ToolCallId;
 	toolName: string;
 	outcome: "success" | "error" | "cancelled";
-	durationMs: number;
-	resultSummary?: string;
+	/** Stable bounded completion label emitted by the adapter. */
+	summary: string;
 	artifactRef?: string;
+	/** Primary file path the tool touched (edit/write family), when the result reports one. */
+	path?: string;
+	/** Bounded human-readable result preview — a unified diff for edit tools. */
+	preview?: string;
+	/** True when `preview` was truncated to the wire bound. */
+	previewTruncated?: boolean;
 }
 
 export interface ContextMaintenanceStartedData {

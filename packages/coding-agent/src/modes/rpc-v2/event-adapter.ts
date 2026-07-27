@@ -8,11 +8,19 @@
  * generates and tracks them as events flow through.
  */
 import type { AgentSessionEvent } from "../../session/agent-session";
-import type { SessionEvent } from "./dto/events";
+import type {
+	ContextMaintenanceCompletedData,
+	MessageCompletedData,
+	SessionEvent,
+	SessionNoticeData,
+	ToolCompletedData,
+	ToolStartedData,
+} from "./dto/events";
 import type { ActiveStreamSnapshot } from "./dto/session";
 import type { EventSequencer } from "./event-sequencer";
-import type { MessageId, RunId, TurnId } from "./protocol/ids";
+import type { MessageId, RunId, ToolCallId, TurnId } from "./protocol/ids";
 import { newMessageId, newTurnId } from "./protocol/ids";
+import { sanitizeRpcText } from "./redaction";
 
 /**
  * Tracks the current run/turn/message context so the adapter can tag events
@@ -23,6 +31,8 @@ export class AdapterContext {
 	currentTurnId: TurnId | undefined;
 	currentOperationId: string | undefined;
 	currentRunTerminalStatus: "completed" | "failed" | "aborted" | "interrupted" | undefined;
+	/** Mirrors StreamPolicy.thinkingDeltas; kept in sync by SessionManager.configureStream. */
+	emitThinkingDeltas = false;
 	#currentMessageId: MessageId | undefined;
 	#activeMessage: Extract<ActiveStreamSnapshot, { kind: "message" }> | undefined;
 	#activeTools = new Map<string, Extract<ActiveStreamSnapshot, { kind: "tool" }>>();
@@ -144,14 +154,27 @@ export function adaptSessionEvent(
 		case "message_update": {
 			const messageId = ctx.currentMessageId;
 			if (!messageId) return undefined;
-			// Extract text delta from the assistant message event
-			const delta =
-				"assistantMessageEvent" in event && event.assistantMessageEvent
-					? extractTextDelta(event.assistantMessageEvent)
-					: "";
-			if (!delta) return undefined;
-			ctx.appendMessageDelta(delta);
-			return sequencer.emit("message.delta", { messageId, delta }, { durability: "transient", runId, turnId });
+			const source =
+				"assistantMessageEvent" in event && event.assistantMessageEvent ? event.assistantMessageEvent : undefined;
+			if (!source) return undefined;
+			const delta = extractTextDelta(source);
+			if (delta) {
+				ctx.appendMessageDelta(delta);
+				return sequencer.emit("message.delta", { messageId, delta }, { durability: "transient", runId, turnId });
+			}
+			// Thinking deltas are opt-in (stream.configure) and never enter the
+			// visible message buffer — they stream on a separate channel only.
+			if (ctx.emitThinkingDeltas) {
+				const thinking = extractThinkingDelta(source);
+				if (thinking) {
+					return sequencer.emit(
+						"message.delta",
+						{ messageId, delta: thinking, channel: "thinking" },
+						{ durability: "transient", runId, turnId },
+					);
+				}
+			}
+			return undefined;
 		}
 
 		case "message_end": {
@@ -159,17 +182,14 @@ export function adaptSessionEvent(
 			if (!messageId) return undefined;
 			const role = "role" in event.message ? event.message.role : "assistant";
 			const visibleText = truncateUtf8(extractVisibleText(event.message), MAX_ACTIVE_TEXT_BYTES);
-			const completed = sequencer.emit(
-				"message.completed",
-				{
-					messageId,
-					role,
-					content: visibleText.value,
-					contentLength: estimateContentLength(event.message),
-					truncated: visibleText.truncated,
-				},
-				{ durability: "durable", runId, turnId },
-			);
+			const data = {
+				messageId,
+				role,
+				content: visibleText.value,
+				contentLength: estimateContentLength(event.message),
+				truncated: visibleText.truncated,
+			} satisfies MessageCompletedData;
+			const completed = sequencer.emit("message.completed", data, { durability: "durable", runId, turnId });
 			ctx.clearMessage();
 			return completed;
 		}
@@ -177,13 +197,15 @@ export function adaptSessionEvent(
 		// =================================================================
 		// Tool lifecycle
 		// =================================================================
-		case "tool_execution_start":
+		case "tool_execution_start": {
 			ctx.startTool(event.toolCallId, event.toolName);
-			return sequencer.emit(
-				"tool.started",
-				{ toolCallId: event.toolCallId, toolName: event.toolName, intent: event.intent },
-				{ durability: "durable", runId, turnId },
-			);
+			const data = {
+				toolCallId: event.toolCallId as ToolCallId,
+				toolName: event.toolName,
+				intent: sanitizeOptionalText(event.intent),
+			} satisfies ToolStartedData;
+			return sequencer.emit("tool.started", data, { durability: "durable", runId, turnId });
+		}
 
 		case "tool_execution_update":
 			return sequencer.emit(
@@ -194,16 +216,14 @@ export function adaptSessionEvent(
 
 		case "tool_execution_end": {
 			ctx.finishTool(event.toolCallId);
-			return sequencer.emit(
-				"tool.completed",
-				{
-					toolCallId: event.toolCallId,
-					toolName: event.toolName,
-					outcome: event.isError ? ("error" as const) : ("success" as const),
-					summary: event.isError ? `${event.toolName} failed` : `${event.toolName} completed`,
-				},
-				{ durability: "durable", runId, turnId },
-			);
+			const data = {
+				toolCallId: event.toolCallId as ToolCallId,
+				toolName: event.toolName,
+				outcome: event.isError ? ("error" as const) : ("success" as const),
+				summary: event.isError ? `${event.toolName} failed` : `${event.toolName} completed`,
+				...extractToolResultDetail(event.result),
+			} satisfies ToolCompletedData;
+			return sequencer.emit("tool.completed", data, { durability: "durable", runId, turnId });
 		}
 
 		// =================================================================
@@ -222,19 +242,17 @@ export function adaptSessionEvent(
 				{ durability: "durable", runId },
 			);
 
-		case "auto_compaction_end":
-			return sequencer.emit(
-				"context.maintenance.completed",
-				{
-					maintenanceId: event.maintenanceId,
-					kind: event.action,
-					aborted: event.aborted,
-					skipped: event.skipped,
-					willRetry: event.willRetry,
-					errorMessage: event.errorMessage,
-				},
-				{ durability: "durable", runId },
-			);
+		case "auto_compaction_end": {
+			const data = {
+				maintenanceId: event.maintenanceId,
+				kind: event.action,
+				aborted: event.aborted,
+				skipped: event.skipped,
+				willRetry: event.willRetry,
+				errorMessage: sanitizeOptionalText(event.errorMessage),
+			} satisfies ContextMaintenanceCompletedData;
+			return sequencer.emit("context.maintenance.completed", data, { durability: "durable", runId });
+		}
 
 		// =================================================================
 		// Retry
@@ -246,7 +264,7 @@ export function adaptSessionEvent(
 					attempt: event.attempt,
 					maxAttempts: event.maxAttempts,
 					delayMs: event.delayMs,
-					errorMessage: event.errorMessage,
+					errorMessage: sanitizeOptionalText(event.errorMessage),
 				},
 				{ durability: "durable", runId },
 			);
@@ -254,7 +272,7 @@ export function adaptSessionEvent(
 		case "auto_retry_end":
 			return sequencer.emit(
 				"retry.completed",
-				{ success: event.success, attempt: event.attempt, finalError: event.finalError },
+				{ success: event.success, attempt: event.attempt, finalError: sanitizeOptionalText(event.finalError) },
 				{ durability: "durable", runId },
 			);
 
@@ -292,12 +310,18 @@ export function adaptSessionEvent(
 		// =================================================================
 		// Notice
 		// =================================================================
-		case "notice":
-			return sequencer.emit(
-				"session.notice",
-				{ level: event.level, code: "notice", message: event.message, source: event.source },
-				{ durability: event.level === "info" ? "transient" : "durable", runId },
-			);
+		case "notice": {
+			const data = {
+				level: event.level,
+				code: "notice",
+				message: sanitizeRpcText(event.message),
+				source: event.source,
+			} satisfies SessionNoticeData;
+			return sequencer.emit("session.notice", data, {
+				durability: event.level === "info" ? "transient" : "durable",
+				runId,
+			});
+		}
 
 		// =================================================================
 		// 未知事件必须进入可诊断的协议事件，不能静默丢弃。
@@ -326,6 +350,55 @@ function extractTextDelta(assistantMessageEvent: unknown): string {
 	const evt = assistantMessageEvent as Record<string, unknown>;
 	if (evt.type === "text_delta" && typeof evt.delta === "string") return evt.delta;
 	return "";
+}
+
+function extractThinkingDelta(assistantMessageEvent: unknown): string {
+	if (typeof assistantMessageEvent !== "object" || assistantMessageEvent === null) return "";
+	const evt = assistantMessageEvent as Record<string, unknown>;
+	if (evt.type === "thinking_delta" && typeof evt.delta === "string") return evt.delta;
+	return "";
+}
+
+const MAX_TOOL_PREVIEW_BYTES = 4096;
+
+/**
+ * Bounded projection of a tool result's renderer details onto `tool.completed`,
+ * so clients can show rich edit/write cards without a follow-up fetch. Lenient
+ * by design: unknown/malformed details contribute nothing.
+ */
+function extractToolResultDetail(result: unknown): { path?: string; preview?: string; previewTruncated?: boolean } {
+	if (typeof result !== "object" || result === null || !("details" in result)) return {};
+	const details = result.details;
+	if (typeof details !== "object" || details === null) return {};
+	const pathValue = "path" in details ? details.path : undefined;
+	const resolvedPathValue = "resolvedPath" in details ? details.resolvedPath : undefined;
+	const rawPath =
+		typeof pathValue === "string" && pathValue
+			? pathValue
+			: typeof resolvedPathValue === "string" && resolvedPathValue
+				? resolvedPathValue
+				: undefined;
+	const path = rawPath ? sanitizeRpcText(rawPath, { maxChars: 2_000 }) : undefined;
+	const diffValue = "diff" in details ? details.diff : undefined;
+	const rawPreview =
+		typeof diffValue === "string" && diffValue ? truncateUtf8(diffValue, MAX_TOOL_PREVIEW_BYTES) : undefined;
+	const preview = rawPreview
+		? sanitizeRpcText(rawPreview.value, { maxChars: MAX_TOOL_PREVIEW_BYTES, trim: false })
+		: undefined;
+	const previewTruncated = rawPreview?.truncated ?? false;
+	return {
+		...(path ? { path } : {}),
+		...(preview
+			? {
+					preview,
+					...(previewTruncated ? { previewTruncated: true } : {}),
+				}
+			: {}),
+	};
+}
+
+function sanitizeOptionalText(value: string | undefined): string | undefined {
+	return typeof value === "string" ? sanitizeRpcText(value) : undefined;
 }
 
 function extractVisibleText(message: unknown): string {

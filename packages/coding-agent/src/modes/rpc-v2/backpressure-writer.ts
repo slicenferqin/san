@@ -18,16 +18,26 @@ export class BackpressureWriter {
 	readonly #stream: RpcWritable;
 	readonly #maxQueueSize: number;
 	#tail: Promise<void> = Promise.resolve();
+	readonly #maxCoalescedKeys: number;
 	#pending = 0;
 	#closed = false;
 	#draining = false;
 	#coalesced = new Map<string, CoalescedFrame>();
 	#coalescedCount = 0;
 	#pendingCoalescedCount = 0;
+	#droppedCoalescedCount = 0;
+	#pendingDroppedCoalescedCount = 0;
 
-	constructor(options?: { stream?: RpcWritable; maxQueueSize?: number }) {
+	constructor(options?: { stream?: RpcWritable; maxQueueSize?: number; maxCoalescedKeys?: number }) {
 		this.#stream = options?.stream ?? process.stdout;
 		this.#maxQueueSize = options?.maxQueueSize ?? 4096;
+		this.#maxCoalescedKeys = options?.maxCoalescedKeys ?? this.#maxQueueSize;
+		if (!Number.isSafeInteger(this.#maxQueueSize) || this.#maxQueueSize < 1) {
+			throw new Error("RPC output maxQueueSize must be a positive integer");
+		}
+		if (!Number.isSafeInteger(this.#maxCoalescedKeys) || this.#maxCoalescedKeys < 1) {
+			throw new Error("RPC output maxCoalescedKeys must be a positive integer");
+		}
 	}
 
 	/**
@@ -39,6 +49,15 @@ export class BackpressureWriter {
 		const durability = options.durability ?? "durable";
 		if (durability === "transient" && (this.#draining || this.#pending >= this.#maxQueueSize)) {
 			const key = options.coalesceKey ?? inferCoalesceKey(frame);
+			const existing = this.#coalesced.delete(key);
+			if (!existing && this.#coalesced.size >= this.#maxCoalescedKeys) {
+				const oldestKey = this.#coalesced.keys().next().value;
+				if (oldestKey !== undefined) {
+					this.#coalesced.delete(oldestKey);
+					this.#droppedCoalescedCount++;
+					this.#pendingDroppedCoalescedCount++;
+				}
+			}
 			this.#coalesced.set(key, { key, frame });
 			this.#coalescedCount++;
 			this.#pendingCoalescedCount++;
@@ -47,11 +66,10 @@ export class BackpressureWriter {
 
 		this.#pending++;
 		const write = this.#tail.then(() => this.#writeLine(frame));
-		this.#tail = write
-			.then(() => this.#flushCoalesced())
-			.finally(() => {
-				this.#pending--;
-			});
+		const settled = write.finally(() => {
+			this.#pending--;
+		});
+		this.#tail = settled.then(() => this.#flushCoalesced());
 		return this.#tail;
 	}
 
@@ -68,8 +86,16 @@ export class BackpressureWriter {
 		return this.#coalescedCount;
 	}
 
+	get droppedCoalescedCount(): number {
+		return this.#droppedCoalescedCount;
+	}
+
 	get pendingCount(): number {
 		return this.#pending;
+	}
+
+	get queuedTransientCount(): number {
+		return this.#coalesced.size;
 	}
 
 	async close(): Promise<void> {
@@ -95,14 +121,16 @@ export class BackpressureWriter {
 	async #flushCoalesced(): Promise<void> {
 		while (!this.#draining && this.#coalesced.size > 0) {
 			const frames = [...this.#coalesced.values()];
-			const replaced = Math.max(0, this.#pendingCoalescedCount - frames.length);
+			const dropped = this.#pendingDroppedCoalescedCount;
+			const replaced = Math.max(0, this.#pendingCoalescedCount - frames.length - dropped);
 			this.#coalesced.clear();
 			this.#pendingCoalescedCount = 0;
-			if (replaced > 0) {
+			this.#pendingDroppedCoalescedCount = 0;
+			if (replaced > 0 || dropped > 0) {
 				await this.#writeLine({
 					jsonrpc: "2.0",
 					method: "stream.coalesced",
-					params: { replaced, emitted: frames.length },
+					params: { replaced, ...(dropped > 0 ? { dropped } : {}), emitted: frames.length },
 				});
 			}
 			for (const item of frames) await this.#writeLine(item.frame);

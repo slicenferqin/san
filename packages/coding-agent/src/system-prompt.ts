@@ -532,7 +532,7 @@ export interface BuildSystemPromptOptions {
 	activeRepoContext?: ActiveRepoContext | null;
 	/** Tools mounted under `xd://`; renders the protocol section when non-empty. */
 	xdevTools?: Array<{ name: string; summary: string }>;
-	/** Full docs + JSON schema for every `xd://`-mounted tool, inlined into the protocol section so no discovery `read` is needed. */
+	/** Rendered `xd://` guidance: either full docs/schema or a compact on-demand catalog. */
 	xdevDocs?: string;
 	/** Whether Auto-QA grievance reporting is enabled; renders the `xd://report_issue` note. */
 	autoQaEnabled?: boolean;

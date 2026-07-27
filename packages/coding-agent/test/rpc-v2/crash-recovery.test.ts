@@ -8,6 +8,7 @@ import {
 	detectRecovery,
 	executeRecovery,
 	leasePathForSession,
+	readRecovery,
 	recoveryPathForSession,
 	withLeaseFileLock,
 } from "@san/coding-agent/modes/rpc-v2/crash-recovery";
@@ -166,5 +167,39 @@ describe("RPC v2 crash recovery", () => {
 			required: true,
 			lastStableSequence: 42,
 		});
+	});
+	test("rejects malformed lease and recovery sidecars", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "san-rpc-v2-invalid-recovery-"));
+		tempDirectories.push(directory);
+		const sessionFile = path.join(directory, "session.jsonl");
+		await Bun.write(sessionFile, "");
+		await Bun.write(
+			leasePathForSession(sessionFile),
+			JSON.stringify({
+				leaseId: "lease_bad",
+				runtimeId: "runtime_bad",
+				sessionId: "ses_1",
+				pid: "not-a-pid",
+				acquiredAt: "2026-07-26T00:00:00.000Z",
+				lastHeartbeat: "2026-07-26T00:00:00.000Z",
+				lastStableSequence: 0,
+			}),
+		);
+		await expect(detectRecovery("ses_1", "runtime_new" as RuntimeId, sessionFile)).rejects.toThrow(
+			"pid must be a positive integer",
+		);
+
+		await Bun.write(
+			recoveryPathForSession(sessionFile),
+			JSON.stringify({
+				required: true,
+				reason: "runtime_crash",
+				previousLeaseId: "lease_old",
+				previousRuntimeId: "runtime_old",
+				lastStableSequence: 0,
+				allowedStrategies: ["delete_everything"],
+			}),
+		);
+		await expect(readRecovery(sessionFile)).rejects.toThrow("invalid recovery strategies");
 	});
 });

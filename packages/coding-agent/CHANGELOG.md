@@ -24,11 +24,17 @@
 - Added San worker host-owned bash receipts: `subprocessToolRegistry` extracts bash tool ends into `extractedToolData.bash`, worker results prefer those receipts (`source: "host"`) over model-claimed `commandsRun`, and the pass gate requires a host receipt with `exitCode: 0`.
 - Added San role pre-call hard provider-request reservation: remaining `maxProviderRequests` is propagated as `hardRequestLimit` into role subprocesses and exhausted remaining budgets abort the role before starting a provider call.
 - Added San execution loop atomic `san.loop_transition` envelopes that bind run snapshot, event, and optional review report in a single custom entry, with legacy separate custom types still rebuildable.
+- Added a `build:core` binary profile for daily coding paths that omits embedded PDF conversion, harness documentation, and stats dashboard assets while preserving MCP, plugin, Skills, and legacy Pi extension compatibility; the full release-compatible build remains unchanged.
+- Changed the core binary to reject HTML session export with an explicit full-binary guidance while retaining the export path in full builds.
+- Added optional Bun metafile output to binary and npm bundle build scripts for reproducible bundle-size analysis.
 
 
 ### Changed
 
 - Changed San Context Steady to remain native-equivalent below a configurable activation threshold (240K input tokens by default), then latch activation for the session and restore it after resume.
+- Changed the core binary to keep `/autoresearch` discoverable but reject it with explicit full-binary guidance while removing the experiment implementation from the core compile graph; full builds retain the complete workflow.
+- Reduced core binary size with full safe Bun minification, a gzip-compressed lazy model-catalog embed, compile-time PDF converter exclusion, and a type-only Workflow AST guard that removes the `@babel/types` runtime barrel.
+- Changed the core binary to retain the bundled host-module namespaces required by compiled legacy Pi extensions, keeping the plugin ecosystem functional in both binary profiles.
 - Changed custom provider validation so `models.yml` may declare `auth: apiKey` without embedding the secret (keys live in AuthStorage).
 - Restored no-argument `/logout` to the dedicated credential-removal selector (provider connect remains `/connect` / `/login`).
 - Custom provider setup now rolls back the newly written `models.yml` entry and any login credential when key storage or first registry load fails, avoiding half-configured providers.
@@ -38,6 +44,9 @@
 - Changed San execution loop recovery to an explicit recover-to-blocked contract (`recoveryMode: "recover_to_blocked"`), not in-process resume.
 - Changed San role context to project latest ContextPlan material summaries into role prompts, not only plan entry refs.
 - Changed San execution loop production path to consume `budget.reserveRatio` (turn reserve for review roles) and `roles.oracle.enabledInModes`.
+- Changed the prompt-token measurement script to load effective global and project settings read-only, apply the runtime discovery filter, report initial/discoverable/total built-in tool schema costs, and emit machine-readable baselines with `--json`.
+- Reduced `san --version` startup work by returning after profile validation and before loading the command registry.
+- Removed the synthetic keepalive timer from isolated worker subprocesses by retaining their existing IPC control channel instead.
 
 
 - Added ContextPlan request lifecycle hardening for 240K steady: per-provider-call hard-ceiling re-gate (including tool loops), branch-isolated checkpoints, fallback digests that never gain raw coverage via checkpoints, hard-pressure audit+prompt persistence with same-session agent-state recovery, shared plan snapshots for send/status/compaction, bounded semantic required sets, natural + explicit topic-shift relevance, atomic material-level wire caps, stable epoch IDs, SanLoop branch-only plan refs, `burstWindowTokens` settings, real AgentSession multi-turn dogfood, and session-prepared digest side-request transport.
@@ -76,6 +85,7 @@
 
 ### Fixed
 
+- Fixed `--no-extensions` to disable ambient extension discovery without dropping explicit `--extension`/`-e` paths in root sessions or `san models`.
 - Fixed Linux NVIDIA GPU discovery so descendants inheriting the probe's stdout pipe have time to drain without turning a successful probe into a timeout.
 - Fixed San execution loop terminal budget races so post-review overspend writes a single blocked envelope instead of persisting `passed` then failing on a conflicting `blocked` transition.
 - Fixed San evidence gate to require successful commands from the current assignment batch only; prior-retry successes no longer unlock a new pass.
@@ -89,8 +99,10 @@
 - Fixed Context Steady authority and checkpoint continuity so agent-attributed synthetic user messages cannot replace the real user turn, recursive Segments retain bounded execution evidence, and summary claims require matching file and verification-command evidence.
 - Fixed San RPC v2 lease/delete races, queued resource release ownership, read-only crash-recovery persistence, receipt/event crash reconciliation, and auth interactions that do not belong to a Session lease.
 - Fixed San RPC v2 state persistence racing the session event adapter and idempotency receipt writer on `thinking.set`; state writes are now serialized with collision-proof temporary files.
+- Fixed San RPC v2 diagnostic projections leaking credentials and local home paths through tool previews, retry errors, notices, intents, and subagent metadata; event DTOs now match emitted message/tool completion payloads and are checked at adapter compile time.
 - Fixed Context Steady long turns treating 40K/15-minute Segment checkpoints as physical compaction, allowing compaction summaries and quoted tool output to replace the active user request, and repeating tool investigations without evidence progress. Maintenance now records real triggers, restores journal-derived continuation authority across compaction and handoff, bounds authority payloads, detects summary conflicts, lets user input preempt advisor/maintenance waits, and converges repeated action/evidence patterns; probe v3 and the adversarial meta-investigation benchmark cover the repaired contracts.
 - Fixed San RPC v2 read-only and recovery sessions mutating state, stale recovery races removing a newer lease, cross-Runtime approval policy overwrites, non-atomic Run/approval/queue receipts, unleased upload chunks, ignored Run goals/evidence filters/shutdown bounds, and late coalesced frames being dropped.
+- Fixed San RPC v2 backpressure accounting after frame serialization failures, enforced `maxTransientEventsPerSecond` with latest-per-stream coalescing, bounded high-cardinality transient queues with observable eviction counters, prevented visible/thinking message deltas or concurrent tool progress streams from merging, exposed bounded writer/purity counters in strict diagnostics, and rejected corrupt state, event, lease, and recovery sidecars before activation.
 - Fixed skills misclassifying San as Codex from shared skill paths or project markers by stamping the San host runtime into user-invoked and autoload prompts; explicit user-selected cross-runtime targets still win.
 - Fixed San Brain capture silently dropping slow but valid LLM TurnDigests behind a hidden 150 ms deadline; digest side requests now honor `san.contextSteady.digest.timeoutMs`, and settled-turn candidates are captured after digest completion.
 - Fixed single-agent benchmark runs reusing one global Settings instance across Native/Steady overlays and retaining JavaScript eval subprocesses after task completion. Public benchmark runs now use an exact tool whitelist, reject process-environment credentials for paid runs, redact in-memory runtime keys from provider/session artifacts, and classify overload, stream-read, and quota failures as invalid pairs.

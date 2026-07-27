@@ -86,6 +86,35 @@ test("omp models surfaces extension-registered providers (issue #905)", async ()
 	}
 });
 
+test("models command keeps explicit extensions when ambient discovery is disabled", async () => {
+	const authStorage = await AuthStorage.create(":memory:");
+	try {
+		const modelRegistry = new ModelRegistry(authStorage);
+		const captured: string[] = [];
+		const originalWrite = process.stdout.write;
+		Reflect.set(process.stdout, "write", (chunk: string | Uint8Array) => {
+			captured.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+			return true;
+		});
+
+		try {
+			await runModelsListing({
+				modelRegistry,
+				cwd: tmp.path(),
+				action: "ls",
+				additionalExtensionPaths: [extPath],
+				disableExtensionDiscovery: true,
+			});
+		} finally {
+			process.stdout.write = originalWrite;
+		}
+
+		expect(captured.join("")).toContain("test-gw");
+	} finally {
+		authStorage.close();
+	}
+});
+
 test("omp models prints invalid models.yml schema errors before listing output", async () => {
 	const modelsPath = tmp.join("invalid-models.yml");
 	await fs.writeFile(

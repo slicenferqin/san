@@ -10,6 +10,16 @@ const outDir = path.join(packageDir, "dist");
 const cliPath = path.join(outDir, "cli.js");
 const shebang = "#!/usr/bin/env bun\n";
 
+function parseMetafilePath(args: string[]): string | undefined {
+	if (args.length === 0) return undefined;
+	if (args.length !== 2 || args[0] !== "--metafile" || !args[1]) {
+		throw new Error("Usage: bun scripts/bundle-dist.ts [--metafile <path>]");
+	}
+	return path.resolve(process.cwd(), args[1]);
+}
+
+const metafilePath = parseMetafilePath(Bun.argv.slice(2));
+
 // Native / optional / platform-specific deps are loaded from installed files.
 // `omp-legacy-pi-modules` exists only in compiled binaries via the build plugin;
 // the npm bundle never executes that `isCompiledBinary()` branch.
@@ -96,6 +106,7 @@ async function main(): Promise<void> {
 			outdir: outDir,
 			target: "bun",
 			external: [...ALWAYS_EXTERNAL, ...RUNTIME_EXTERNAL],
+			metafile: metafilePath !== undefined,
 			define: {
 				"process.env.PI_BUNDLED": JSON.stringify("true"),
 				"process.env.PI_DOCS_EMBED": JSON.stringify((await buildDocsIndexPayload()).payload),
@@ -110,6 +121,9 @@ async function main(): Promise<void> {
 		});
 		if (!output.success) {
 			throw new Error(`CLI bundle failed:\n${output.logs.map(log => log.message).join("\n")}`);
+		}
+		if (metafilePath && output.metafile) {
+			await Bun.write(metafilePath, JSON.stringify(output.metafile, null, 2));
 		}
 	} finally {
 		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]);

@@ -176,6 +176,23 @@ describe("read and write route xd:// device URLs", () => {
 		}
 	});
 
+	it("catalog docs mode lists every device without embedding schemas", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-xdev-catalog-"));
+		try {
+			const session = xdevSession(tempDir);
+			await createTools(session);
+			const registry = session.xdevRegistry;
+			if (!registry) throw new Error("expected xdev registry");
+
+			const docs = registry.docsAll("catalog");
+			for (const tool of registry.list()) expect(docs).toContain(`xd://${tool.name}`);
+			expect(docs).toContain("Read xd://<tool> for docs + JSON schema");
+			expect(docs).not.toContain("## Schema");
+		} finally {
+			await removeWithRetries(tempDir);
+		}
+	});
+
 	it("docsAll truncates external (dynamic-mount) descriptions to the cap; built-ins and read xd:// stay full", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-xdev-external-"));
 		try {

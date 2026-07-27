@@ -17,6 +17,7 @@ import type { MCPManager } from "../../mcp/manager";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import type { CompactMode } from "../../session/compact-modes";
 import { listAllSessions, type SessionInfo } from "../../session/session-listing";
+import type { TodoPhase, TodoStatus } from "../../tools/todo";
 import type { EventBus } from "../../utils/event-bus";
 import {
 	abandonRecoveryLease,
@@ -62,6 +63,7 @@ import {
 	type StoredRpcRuntimeSettings,
 } from "./runtime-settings-store";
 import { type PersistedRpcState, RpcV2StateStore, rpcV2StatePaths } from "./state-store";
+import { TransientEventLimiter } from "./transient-event-limiter";
 
 export interface RpcV2CustomProviderInput {
 	providerId: string;
@@ -186,6 +188,8 @@ interface ActiveSession {
 	syncBuffer: SessionEvent[];
 	synced: boolean;
 	stream: StreamPolicy;
+	transientLimiter: TransientEventLimiter;
+	transientFlushTask?: Promise<void>;
 	eventTail: Promise<void>;
 	fatalError?: Error;
 	activeRun?: RunSnapshot;
@@ -312,6 +316,10 @@ export class RpcV2SessionManager {
 
 	get currentLastSequence(): number {
 		return this.#active?.sequencer.currentSequence ?? 0;
+	}
+
+	get droppedTransientEventCount(): number {
+		return this.#active?.transientLimiter.droppedPendingCount ?? 0;
 	}
 
 	get currentSubscriptionId(): SubscriptionId | undefined {
@@ -455,6 +463,10 @@ export class RpcV2SessionManager {
 		const active = this.#active;
 		if (active) {
 			active.stream = { ...active.stream, ...policy };
+			if (policy.maxTransientEventsPerSecond !== undefined) {
+				active.transientLimiter.configure(policy.maxTransientEventsPerSecond);
+			}
+			active.adapter.emitThinkingDeltas = active.stream.thinkingDeltas === true;
 			await this.#persistState(active);
 			return { ...active.stream };
 		}
@@ -750,7 +762,9 @@ export class RpcV2SessionManager {
 		const active = this.assertLease(params.sessionId, params.leaseId, false);
 		return await this.#enqueueWork(active, async () => {
 			active.stream = params.stream ?? {};
+			active.adapter.emitThinkingDeltas = active.stream.thinkingDeltas === true;
 			active.syncPending = true;
+			active.transientLimiter.configure(active.stream.maxTransientEventsPerSecond ?? 200);
 			active.synced = true;
 			active.syncBuffer = [];
 			active.subscriptionId = newSubscriptionId();
@@ -798,6 +812,7 @@ export class RpcV2SessionManager {
 			active.syncAsOfSequence = undefined;
 			active.syncBuffer = [];
 			active.subscriptionId = undefined;
+			active.transientLimiter.clear();
 			return { unsynced: true };
 		});
 	}
@@ -1653,6 +1668,7 @@ export class RpcV2SessionManager {
 			syncBuffer: [],
 			synced: false,
 			stream: {},
+			transientLimiter: new TransientEventLimiter(),
 			eventTail: Promise.resolve(),
 			queue: reviveQueue(loaded.state.queue, sessionId),
 			queueContent: reviveQueueContent(loaded.state.queue),
@@ -1899,6 +1915,20 @@ export class RpcV2SessionManager {
 			);
 			await this.#persistAndPublish(active, adapted);
 			await this.#persistAndPublish(active, evidenceEvent);
+			// The agent's todo tool is the only in-run source of checklist changes;
+			// mirror its committed result onto the wire so clients track the list
+			// without polling (todo.set RPC covers the client-write path).
+			if (event.toolName === "todo" && event.isError !== true) {
+				const phases = extractTodoPhases(event.result);
+				if (phases) {
+					const todoEvent = active.sequencer.emit(
+						"todo.changed",
+						{ phases },
+						{ runId: active.adapter.currentRunId, turnId: active.adapter.currentTurnId, durability: "durable" },
+					);
+					await this.#persistAndPublish(active, todoEvent);
+				}
+			}
 		} else {
 			await this.#persistAndPublish(active, adapted);
 		}
@@ -2038,12 +2068,44 @@ export class RpcV2SessionManager {
 	}
 
 	async #publishEvent(event: SessionEvent): Promise<void> {
+		const active = this.#active;
+		if (!active) {
+			await this.#writeEvent(event, getEventCoalesceKey(event));
+			return;
+		}
+		await this.#flushTransientEvents(active);
+		const coalesceKey = getEventCoalesceKey(event);
+		for (const emitted of active.transientLimiter.select(event, coalesceKey)) {
+			await this.#writeEvent(emitted, getEventCoalesceKey(emitted));
+		}
+		this.#scheduleTransientFlush(active);
+	}
+
+	async #flushTransientEvents(active: ActiveSession): Promise<void> {
+		for (const pending of active.transientLimiter.flush()) {
+			await this.#writeEvent(pending, getEventCoalesceKey(pending));
+		}
+	}
+
+	#scheduleTransientFlush(active: ActiveSession): void {
+		if (active.transientFlushTask || active.transientLimiter.pendingCount === 0) return;
+		const delay = active.transientLimiter.millisecondsUntilNextWindow ?? 0;
+		const task = (async () => {
+			await Bun.sleep(delay);
+			if (this.#active !== active || !active.synced) return;
+			await this.#enqueueWork(active, async () => this.#flushTransientEvents(active));
+		})().finally(() => {
+			active.transientFlushTask = undefined;
+			this.#scheduleTransientFlush(active);
+		});
+		active.transientFlushTask = task;
+		this.#trackBackgroundTask(active, task);
+	}
+
+	async #writeEvent(event: SessionEvent, coalesceKey: string): Promise<void> {
 		await this.#output(
 			{ jsonrpc: "2.0", method: "session.event", params: event },
-			{
-				durability: event.durability,
-				coalesceKey: `${event.type}:${event.runId ?? ""}:${event.turnId ?? ""}`,
-			},
+			{ durability: event.durability, coalesceKey },
 		);
 	}
 
@@ -2305,6 +2367,36 @@ function safeFileSize(file: string): number {
 	}
 }
 
+/**
+ * Lenient projection of a todo tool result's `details.phases` onto the wire
+ * shape shared with `todo.set`. Event emission must never throw on a malformed
+ * tool result, so invalid entries drop instead of erroring; an empty array is
+ * a valid "cleared" signal.
+ */
+export function extractTodoPhases(result: unknown): TodoPhase[] | undefined {
+	if (!isRecord(result) || !isRecord(result.details)) return undefined;
+	const phases = result.details.phases;
+	if (!Array.isArray(phases)) return undefined;
+	const projected: TodoPhase[] = [];
+	for (const rawPhase of phases) {
+		if (!isRecord(rawPhase) || typeof rawPhase.name !== "string" || !Array.isArray(rawPhase.tasks)) continue;
+		const tasks: TodoPhase["tasks"] = [];
+		for (const rawTask of rawPhase.tasks) {
+			if (!isRecord(rawTask) || typeof rawTask.content !== "string") continue;
+			tasks.push({
+				content: rawTask.content,
+				status: isTodoStatus(rawTask.status) ? rawTask.status : "pending",
+			});
+		}
+		projected.push({ name: rawPhase.name, tasks });
+	}
+	return projected;
+}
+
+function isTodoStatus(value: unknown): value is TodoStatus {
+	return value === "pending" || value === "in_progress" || value === "completed" || value === "abandoned";
+}
+
 function reviveQueue(values: Array<Record<string, unknown>>, sessionId: SessionId): QueueItem[] {
 	return values
 		.map(value => (isRecord(value.item) ? value.item : value))
@@ -2401,6 +2493,16 @@ function isContentPart(value: unknown): value is ContentPart {
 		isRecord(value.resource) &&
 		(value.purpose === "input" || value.purpose === "reference")
 	);
+}
+
+export function getEventCoalesceKey(event: SessionEvent): string {
+	let streamKey = "";
+	if (isRecord(event.data)) {
+		if (event.type === "message.delta" && typeof event.data.channel === "string") streamKey = event.data.channel;
+		if (event.type === "tool.progress" && typeof event.data.toolCallId === "string")
+			streamKey = event.data.toolCallId;
+	}
+	return `${event.type}:${event.runId ?? ""}:${event.turnId ?? ""}:${streamKey}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

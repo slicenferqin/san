@@ -76,16 +76,18 @@ async function runSmokeTest(): Promise<void> {
 	const { smokeTestDaemonBroker } = await import("./launch/client");
 	await smokeTestSyncWorker();
 
-	const statsServer = await startServer(0);
-	try {
-		const response = await fetch(`http://127.0.0.1:${statsServer.port}/`);
-		if (!response.ok) throw new Error(`stats dashboard smoke failed: HTTP ${response.status}`);
-		const html = await response.text();
-		if (!html.includes('<div id="root"></div>') || !html.includes("index.js")) {
-			throw new Error("stats dashboard smoke failed: dashboard HTML was not served");
+	if (process.env.SAN_BUILD_PROFILE !== "core") {
+		const statsServer = await startServer(0);
+		try {
+			const response = await fetch(`http://127.0.0.1:${statsServer.port}/`);
+			if (!response.ok) throw new Error(`stats dashboard smoke failed: HTTP ${response.status}`);
+			const html = await response.text();
+			if (!html.includes('<div id="root"></div>') || !html.includes("index.js")) {
+				throw new Error("stats dashboard smoke failed: dashboard HTML was not served");
+			}
+		} finally {
+			statsServer.stop();
 		}
-	} finally {
-		statsServer.stop();
 	}
 
 	await smokeTestTinyTitleWorker();
@@ -256,16 +258,16 @@ async function runIpcSubprocessWorker<In, Out>(
 			};
 		},
 	});
-	const keepalive = setInterval(() => {}, 2 ** 30);
+	// Keep the already-open IPC control channel referenced instead of adding a
+	// synthetic timer handle. The channel is the actual lifetime contract: it
+	// keeps this child alive while connected and emits `disconnect` when the
+	// parent goes away.
+	process.channel?.ref();
 	// Parent went away (crashed, SIGKILL, etc.) — commit suicide so we don't
 	// linger as an orphan. SIGKILL via `process.kill` keeps us symmetrical with
 	// the parent's hard-kill on shutdown: skip every JS/native finalizer.
 	process.on("disconnect", () => shutdown());
-	try {
-		await shuttingDown;
-	} finally {
-		clearInterval(keepalive);
-	}
+	await shuttingDown;
 	process.kill(process.pid, "SIGKILL");
 }
 
@@ -349,6 +351,14 @@ export async function runCli(argv: string[]): Promise<void> {
 	// poison `workerHostEntry()` for the whole test process, forcing eval/stats/
 	// browser workers onto the same-realm inline fallback.
 	if (isProcessEntry) declareWorkerHostEntry();
+
+	// Version queries need profile validation above, but no command registry.
+	// Keep this ahead of the lazy CLI imports: compiled binaries otherwise load
+	// the entire command routing graph only for a constant string.
+	if (resolvedArgv[0] === "--version" || resolvedArgv[0] === "-v") {
+		process.stdout.write(`${APP_NAME}/${VERSION}\n`);
+		return;
+	}
 
 	if (resolvedArgv[0] === "--smoke-test") {
 		await runSmokeTest();

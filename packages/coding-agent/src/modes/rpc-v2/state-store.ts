@@ -64,10 +64,12 @@ const EMPTY_STATE: PersistedRpcState = {
 export class RpcV2StateStore {
 	readonly #statePath: string;
 	readonly #eventsPath: string;
+	readonly #sessionId: string;
 	#stateWriteTail: Promise<void> = Promise.resolve();
 
 	constructor(sessionFile: string | undefined, sessionId: string) {
 		const base = sessionFile ? `${sessionFile}.rpc-v2` : path.join(os.tmpdir(), "san-rpc-v2", sessionId);
+		this.#sessionId = sessionId;
 		this.#statePath = `${base}.state.json`;
 		this.#eventsPath = `${base}.events.ndjson`;
 	}
@@ -83,11 +85,20 @@ export class RpcV2StateStore {
 	async load(): Promise<{ state: PersistedRpcState; events: SessionEvent[] }> {
 		const state = await this.#loadState();
 		const events = await this.#loadEvents();
+		const foreignEvent = events.find(event => event.sessionId !== this.#sessionId);
+		if (foreignEvent) throw new Error(`RPC v2 event ${foreignEvent.eventId} belongs to another Session`);
 		if (state.pendingEvent) {
+			if (state.pendingEvent.sessionId !== this.#sessionId) {
+				throw new Error(`RPC v2 pending event ${state.pendingEvent.eventId} belongs to another Session`);
+			}
 			const matchingEvent = events.find(event => event.eventId === state.pendingEvent?.eventId);
 			assertEventCompatible(state.pendingEvent, matchingEvent, events);
 			if (!matchingEvent) events.push(state.pendingEvent);
 			events.sort((left, right) => left.sequence - right.sequence);
+		}
+		const journalSequence = events.at(-1)?.sequence ?? 0;
+		if (state.lastSequence > journalSequence) {
+			throw new Error(`RPC v2 state watermark ${state.lastSequence} exceeds event journal ${journalSequence}`);
 		}
 		return { state, events };
 	}
@@ -160,15 +171,23 @@ export class RpcV2StateStore {
 
 	async #loadState(): Promise<PersistedRpcState> {
 		try {
-			const value = (await Bun.file(this.#statePath).json()) as Partial<PersistedRpcState>;
+			const value: unknown = await Bun.file(this.#statePath).json();
+			if (!isRecord(value)) throw new Error("expected a JSON object");
+			if (value.schemaVersion !== 1) throw new Error("expected schemaVersion 1");
+			if (!Number.isSafeInteger(value.revision) || (value.revision as number) < 0) {
+				throw new Error("revision must be a non-negative safe integer");
+			}
+			if (!Number.isSafeInteger(value.lastSequence) || (value.lastSequence as number) < 0) {
+				throw new Error("lastSequence must be a non-negative safe integer");
+			}
 			return {
 				...EMPTY_STATE,
 				...value,
 				queue: Array.isArray(value.queue) ? value.queue : [],
 				pendingApprovals: Array.isArray(value.pendingApprovals) ? value.pendingApprovals : [],
 				pendingInteractions: Array.isArray(value.pendingInteractions) ? value.pendingInteractions : [],
-				settings: value.settings && typeof value.settings === "object" ? value.settings : {},
-				receipts: Array.isArray(value.receipts) ? value.receipts : [],
+				settings: isRecord(value.settings) ? value.settings : {},
+				receipts: Array.isArray(value.receipts) ? value.receipts.filter(isIdempotencyReceipt) : [],
 				resources: Array.isArray(value.resources) ? value.resources : [],
 				activeResourceIds: Array.isArray(value.activeResourceIds)
 					? value.activeResourceIds.filter((item): item is string => typeof item === "string")
@@ -176,9 +195,9 @@ export class RpcV2StateStore {
 				pendingResourceReleases: Array.isArray(value.pendingResourceReleases)
 					? value.pendingResourceReleases.filter((item): item is string => typeof item === "string")
 					: [],
-				evidence: Array.isArray(value.evidence) ? value.evidence : [],
+				evidence: Array.isArray(value.evidence) ? value.evidence.filter(isEvidenceRecord) : [],
 				artifacts: Array.isArray(value.artifacts) ? value.artifacts : [],
-				pendingEvent: value.pendingEvent && typeof value.pendingEvent === "object" ? value.pendingEvent : undefined,
+				pendingEvent: isSessionEvent(value.pendingEvent) ? value.pendingEvent : undefined,
 			};
 		} catch (error: unknown) {
 			if (!isEnoent(error)) throw new Error(`Failed to load RPC v2 state ${this.#statePath}: ${String(error)}`);
@@ -205,23 +224,16 @@ export class RpcV2StateStore {
 			const lines = text.split("\n");
 			for (const [index, line] of lines.entries()) {
 				if (!line.trim()) continue;
-				let event: SessionEvent;
+				let parsed: unknown;
 				try {
-					event = JSON.parse(line) as SessionEvent;
+					parsed = JSON.parse(line);
 				} catch (error: unknown) {
 					const isFinalPartialLine = index === lines.length - 1 && !text.endsWith("\n");
 					if (isFinalPartialLine) break;
 					throw new Error(`event line ${index + 1} is not valid JSON: ${String(error)}`);
 				}
-				if (
-					!event ||
-					typeof event.sequence !== "number" ||
-					typeof event.eventId !== "string" ||
-					typeof event.sessionId !== "string"
-				) {
-					throw new Error(`event line ${index + 1} has an invalid envelope`);
-				}
-				events.push(event);
+				if (!isSessionEvent(parsed)) throw new Error(`event line ${index + 1} has an invalid envelope`);
+				events.push(parsed);
 			}
 			events.sort((a, b) => a.sequence - b.sequence);
 			for (let index = 1; index < events.length; index++) {
@@ -276,4 +288,69 @@ function assertEventCompatible(
 	if (existing.some(candidate => candidate.sequence === event.sequence)) {
 		throw new Error(`RPC v2 event sequence collision at ${event.sequence}`);
 	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isIdempotencyReceipt(value: unknown): value is IdempotencyReceipt {
+	return (
+		isRecord(value) &&
+		typeof value.key === "string" &&
+		value.key.trim().length > 0 &&
+		typeof value.paramsHash === "string" &&
+		value.paramsHash.length > 0 &&
+		Number.isSafeInteger(value.createdAt) &&
+		(value.createdAt as number) >= 0 &&
+		"result" in value
+	);
+}
+
+const EVIDENCE_KINDS = new Set([
+	"command_result",
+	"test_result",
+	"file_change",
+	"tool_result",
+	"approval_decision",
+	"checkpoint",
+	"subagent_report",
+	"host_observation",
+]);
+const EVIDENCE_VERDICTS = new Set(["passed", "failed", "informational", "unknown"]);
+const EVIDENCE_SOURCE_KINDS = new Set(["deterministic_tool", "san_runtime", "model_summary", "desktop_host"]);
+
+function isEvidenceRecord(value: unknown): value is EvidenceRecord {
+	return (
+		isRecord(value) &&
+		value.schemaVersion === 1 &&
+		typeof value.evidenceId === "string" &&
+		value.evidenceId.length > 0 &&
+		typeof value.sessionId === "string" &&
+		value.sessionId.length > 0 &&
+		typeof value.createdAt === "string" &&
+		EVIDENCE_KINDS.has(value.kind as string) &&
+		EVIDENCE_VERDICTS.has(value.verdict as string) &&
+		typeof value.title === "string" &&
+		typeof value.summary === "string" &&
+		isRecord(value.source) &&
+		EVIDENCE_SOURCE_KINDS.has(value.source.kind as string)
+	);
+}
+
+function isSessionEvent(value: unknown): value is SessionEvent {
+	return (
+		isRecord(value) &&
+		value.schemaVersion === 1 &&
+		typeof value.eventId === "string" &&
+		value.eventId.length > 0 &&
+		typeof value.sessionId === "string" &&
+		value.sessionId.length > 0 &&
+		Number.isSafeInteger(value.sequence) &&
+		(value.sequence as number) > 0 &&
+		typeof value.timestamp === "string" &&
+		typeof value.type === "string" &&
+		(value.durability === "durable" || value.durability === "transient") &&
+		"data" in value
+	);
 }

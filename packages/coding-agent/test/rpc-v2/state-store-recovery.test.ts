@@ -84,4 +84,93 @@ describe("RPC v2 state-store recovery", () => {
 		const persisted = await store.load();
 		expect(persisted.state.revision).toBe(4);
 	});
+	test("rejects corrupt state metadata and event envelopes", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "san-rpc-v2-state-invalid-"));
+		tempDirectories.push(directory);
+		const sessionFile = path.join(directory, "session.jsonl");
+		await Bun.write(sessionFile, "");
+		const sessionId = "ses_invalid_state" as SessionId;
+		const store = new RpcV2StateStore(sessionFile, sessionId);
+
+		await Bun.write(store.statePath, JSON.stringify({ schemaVersion: 2, revision: 0, lastSequence: 0 }));
+		await expect(store.load()).rejects.toThrow("expected schemaVersion 1");
+
+		await Bun.write(store.statePath, JSON.stringify({ schemaVersion: 1, revision: -1, lastSequence: 0 }));
+		await expect(store.load()).rejects.toThrow("revision must be a non-negative safe integer");
+
+		await fs.rm(store.statePath, { force: true });
+		await Bun.write(
+			store.eventsPath,
+			`${JSON.stringify({
+				schemaVersion: 1,
+				eventId: "evt_invalid",
+				sessionId,
+				sequence: 1,
+				timestamp: "2026-07-26T00:00:00.000Z",
+				type: "run.accepted",
+				durability: "unknown",
+				data: {},
+			})}\n`,
+		);
+		await expect(store.load()).rejects.toThrow("event line 1 has an invalid envelope");
+
+		const validEvent = {
+			schemaVersion: 1,
+			eventId: "evt_valid",
+			sessionId,
+			sequence: 1,
+			timestamp: "2026-07-26T00:00:00.000Z",
+			type: "run.accepted",
+			durability: "durable",
+			data: {},
+		};
+		await Bun.write(store.eventsPath, `${JSON.stringify({ ...validEvent, sessionId: "ses_foreign" })}\n`);
+		await expect(store.load()).rejects.toThrow("belongs to another Session");
+
+		await Bun.write(store.eventsPath, `${JSON.stringify(validEvent)}\n`);
+		await Bun.write(store.statePath, JSON.stringify({ schemaVersion: 1, revision: 0, lastSequence: 2 }));
+		await expect(store.load()).rejects.toThrow("state watermark 2 exceeds event journal 1");
+	});
+	test("filters malformed receipts and evidence from the state sidecar", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "san-rpc-v2-state-sanitize-"));
+		tempDirectories.push(directory);
+		const sessionFile = path.join(directory, "session.jsonl");
+		await Bun.write(sessionFile, "");
+		const sessionId = "ses_sanitize_state" as SessionId;
+		const store = new RpcV2StateStore(sessionFile, sessionId);
+		await Bun.write(
+			store.statePath,
+			JSON.stringify({
+				schemaVersion: 1,
+				revision: 0,
+				lastSequence: 0,
+				receipts: [
+					{ key: "valid", paramsHash: "hash", result: { ok: true }, createdAt: 1 },
+					{ key: "missing-result", paramsHash: "hash", createdAt: 1 },
+					{ key: "bad-time", paramsHash: "hash", result: null, createdAt: -1 },
+				],
+				evidence: [
+					{
+						schemaVersion: 1,
+						evidenceId: "ev_valid",
+						sessionId,
+						createdAt: "2026-07-26T00:00:00.000Z",
+						kind: "tool_result",
+						verdict: "informational",
+						title: "Tool",
+						summary: "Completed",
+						source: { kind: "san_runtime" },
+					},
+					{ schemaVersion: 1, evidenceId: "ev_bad", sessionId, kind: "made_up", source: {} },
+				],
+			}),
+		);
+		await fs.rm(store.eventsPath, { force: true });
+		const sanitized = await store.load();
+		expect(sanitized.state.receipts).toEqual([
+			{ key: "valid", paramsHash: "hash", result: { ok: true }, createdAt: 1 },
+		]);
+		expect(sanitized.state.evidence).toHaveLength(1);
+		expect(String(sanitized.state.evidence[0]?.evidenceId)).toBe("ev_valid");
+	});
 });
