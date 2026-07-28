@@ -69,11 +69,10 @@ export interface ProfileBootstrapResult {
  * and the captured flag values.
  *
  * Global flag extraction stops only when the first residual argv token names a
- * registered command that owns its own flags (e.g. `grep`): everything from
+ * registered command that owns its own flags (e.g. `models`): everything from
  * that token onward is forwarded verbatim so a subcommand's own flags and
- * positionals are never stolen (`san grep --profile <path>` greps for
- * `--profile`; it does not select a profile). `launch` and `acp` are explicit
- * spellings of launch-shaped commands, so `san launch --profile work` and
+ * positionals are never stolen. `launch` and `acp` are explicit spellings of
+ * launch-shaped commands, so `san launch --profile work` and
  * `san acp --profile work` still select profile `work`.
  *
  * Throws when either flag is supplied without a value.

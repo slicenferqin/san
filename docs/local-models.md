@@ -1,12 +1,10 @@
-# Embedded Local Tiny-Model Experiments
+# Embedded Local Models for Memory and Classification
 
-This document summarizes the experiments behind the optional **local** tiny-model paths for
-session-title generation (`providers.tinyModel`), Mnemopi memory extraction/consolidation
-(`providers.memoryModel`), and the `auto` thinking-level difficulty classifier
-(`providers.autoThinkingModel`, which reuses the memory-model registry). It is a factual engineering
-record for maintainers: what we measured, which recipes won, and which models we shipped. All three
-settings default to `online`, so existing users incur no downloads or on-device inference cost unless
-they opt in.
+This document summarizes the experiments behind the optional local tiny-model paths for Mnemopi
+memory extraction/consolidation (`providers.memoryModel`) and the `auto` thinking-level difficulty
+classifier (`providers.autoThinkingModel`, which reuses the memory-model registry). Both settings
+default to `online`, so existing users incur no downloads or on-device inference cost unless they
+opt in.
 
 ## Runtime / environment findings
 
@@ -15,22 +13,22 @@ they opt in.
 - **Device policy**: local tiny models default to CPU-only inference and retry once on CPU if an
   explicit accelerated provider cannot initialize.
   - Pick a provider persistently with the `providers.tinyModelDevice` setting (`default` keeps CPU),
-    or per-run with the `PI_TINY_DEVICE` env var (which overrides the setting).
+    or per-run with `SAN_TINY_DEVICE` (legacy `PI_TINY_DEVICE` also works and is lower precedence).
   - Accepted values are `cpu`, `gpu`, `metal`/`webgpu`, `auto`, `cuda`, `dml`, `coreml`, `wasm`,
     `webnn`, `webnn-gpu`, `webnn-cpu`, and `webnn-npu`.
-  - Direct `coreml` remains opt-in via `PI_TINY_DEVICE=coreml`; it is not part of the default because
+  - Direct `coreml` remains opt-in via `SAN_TINY_DEVICE=coreml`; it is not part of the default because
     cached decoder-LLM ONNX loads can fail during session initialization.
   - WebGPU/Metal works for the single-process eval harness, but the production worker forces
     Darwin `gpu`/`webgpu`/`auto` requests back to CPU because ONNX Runtime/Bun currently
     hard-crashes on worker teardown after WebGPU inference.
-  - Use `providers.tinyModelDevice` or `PI_TINY_DEVICE` only when explicitly opting out of the CPU
+  - Use `providers.tinyModelDevice` or `SAN_TINY_DEVICE` only when explicitly opting out of the CPU
     default.
 - **Quantization: q4 is the sweet spot** — smaller on disk, faster to load, and fast at inference.
   q8/int8 loads slower _and_ infers slower on CPU. Every shipped model defaults to `q4`; override the
   precision persistently with the `providers.tinyModelDtype` setting (`default` keeps `q4`, e.g. `fp16`
-  for higher fidelity), or per-run with `PI_TINY_DTYPE` (which overrides the setting). Accepts `auto`,
-  `fp32`, `fp16`, `q8`, `int8`, `uint8`, `q4`, `bnb4`, `q4f16`, `q2`, `q2f16`, `q1`, `q1f16`; an
-  unrecognized value fails loudly at worker startup.
+  for higher fidelity), or per-run with `SAN_TINY_DTYPE` (legacy `PI_TINY_DTYPE` also works and is
+  lower precedence). Accepted values are `auto`, `fp32`, `fp16`, `q8`, `int8`, `uint8`, `q4`, `bnb4`,
+  `q4f16`, `q2`, `q2f16`, `q1`, and `q1f16`; an unrecognized value fails loudly at worker startup.
 - **Load-time correction (important).** An earlier belief that "q4 >=1B models take minutes to load"
   was a **measurement artifact** caused by running ~5 multi-GB HuggingFace downloads in parallel
   (I/O saturation). Clean, isolated **warm** loads are all sub-3s:
@@ -43,48 +41,18 @@ they opt in.
   - Conclusion: **1B–1.7B models are viable on CPU.**
 - **`session_options.graphOptimizationLevel`** trades load vs inference speed: `disabled` = fastest
   load, slightly slower inference; `all` = default.
-- **First run** downloads weights from the HF Hub to a cache dir (q4 weights ~200MB–1.1GB depending
+- **First run** downloads weights from the HF Hub to a cache dir (q4 weights ~600MB–1.1GB depending
   on model); subsequent **warm** loads are sub-second to ~3s. Inference is async and
-  background-friendly for memory tasks; titles are semi-interactive.
+  background-friendly for memory tasks.
 
-## Task 1: Session title generation (`providers.tinyModel`)
-
-**Task**: turn the first user message into a 3–6 word title. Tiny models (sub-1B) suffice.
-
-**Winning recipe**:
-
-- Plain system prompt (no few-shot).
-- **Prefill** the assistant turn with `<title>` and **stop at `</title>`**, then take the first line.
-- Greedy decoding (`do_sample:false`), `enable_thinking:false` in the chat template.
-
-**What we learned**:
-
-- **Few-shot examples HURT sub-0.6B models** for titles; the tag-prefill rescues even 270M models.
-- **Token biasing (`bad_words_ids`) is a confirmed no-op** here — the prefill already controls the
-  opener.
-
-**Leaderboard** (tag trick, CPU, warm):
-
-| Model         | Verdict                             |
-| ------------- | ----------------------------------- |
-| LFM2-350M     | Best speed/quality balance (~212MB) |
-| Qwen3-0.6B    | Most robust                         |
-| gemma-3-270m  | Smallest viable                     |
-| Qwen2.5-0.5B  | Acceptable                          |
-| SmolLM2-135M  | Too small                           |
-| flan-t5-small | Rejected — just echoes the input    |
-
-**Shipped local options**: `lfm2-350m`, `qwen3-0.6b`, `gemma-270m`, `qwen2.5-0.5b`, `lfm2-700m`.
-**Default**: `online` (@smol).
-
-## Task 2: Mnemopi memory (`providers.memoryModel`)
+## Mnemopi memory (`providers.memoryModel`)
 
 Mnemopi runs two small-LLM tasks:
 
 1. **Extraction** — pull durable, structured items from a single message.
 2. **Consolidation** — summarize a list of memories into 1–3 faithful sentences.
 
-These need **bigger models than titles: 1B–1.7B**. We tested LFM2-1.2B, Qwen2.5-1.5B, Qwen3-1.7B,
+These tasks use 1B–1.7B models. We tested LFM2-1.2B, Qwen2.5-1.5B, Qwen3-1.7B,
 and gemma-3-1b (q4, CPU) via four parallel agents each running 27–31 experiments.
 
 ### Extraction findings
@@ -99,7 +67,7 @@ The robust fix is a **one-item-per-line output format** (consumed by Mnemopi's p
 or a **flat JSON array of strings**. Every model also over-extracts pure small talk; an explicit
 chit-chat → NONE example is the best mitigation.
 
-### Technique polarity flips vs titles
+### Prompting findings
 
 - At 1B+, **few-shot is the dominant quality lever**: e.g. Qwen2.5-1.5B extraction F1 0.52 → 0.83
   going 1 → 3 shots; gemma recall 0.65 → 0.92 with 2 shots.
@@ -138,8 +106,8 @@ wins that task.
 
 ## Integration notes
 
-- `providers.tinyModel`, `providers.memoryModel`, and `providers.autoThinkingModel` default to
-  `online`, so existing users get **no downloads or on-device inference cost** unless they opt in.
+- `providers.memoryModel` and `providers.autoThinkingModel` default to `online`, so existing users get
+  **no downloads or on-device inference cost** unless they opt in.
 - Local inference runs **in a worker** (off the main thread); models are cached on disk and
   downloaded on first use.
 - The memory local path applies the refined recipes (line-format + small-talk-guarded extraction

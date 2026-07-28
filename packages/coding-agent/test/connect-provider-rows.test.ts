@@ -63,7 +63,7 @@ describe("buildConnectProviderRows", () => {
 		const openai = rows.find(row => row.id === "openai");
 		expect(openai?.modelCount).toBe(2);
 		expect(openai?.connected).toBe(true);
-		// Web search / STT / TTS ids must not appear as connect targets.
+		// Web-search service ids must not appear as model-provider targets.
 		expect(rows.some(row => row.id === "tavily" || row.id === "kagi" || row.id === "parallel")).toBe(false);
 	});
 

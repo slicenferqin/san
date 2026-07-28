@@ -22,8 +22,8 @@ import {
 	parseThinkingLevel,
 	resolveProvisionalAutoLevel,
 } from "@san/coding-agent/thinking";
+import { tinyModelClient } from "@san/coding-agent/tiny/client";
 import type { TinyMemoryLocalModelKey } from "@san/coding-agent/tiny/models";
-import { tinyModelClient } from "@san/coding-agent/tiny/title-client";
 import { TempDir } from "@san/utils";
 
 describe("auto thinking classifier helpers", () => {

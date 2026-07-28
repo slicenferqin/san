@@ -14,10 +14,9 @@ const expectedDocPaths = (name: string): string[] => [
 	path.join(docsToolsDir, `${name.replace(/_/g, "-")}.md`),
 ];
 
-// Custom tools injected by the SDK (`packages/coding-agent/src/sdk.ts`) when
-// their settings are enabled. Built-in tool factories live in BUILTIN_TOOLS but
-// these custom tools are not present there, so the coverage list is explicit.
-const CUSTOM_TOOL_NAMES = ["generate_image", "tts"] as const;
+// Custom tools injected by the SDK when enabled. Built-in tool factories live
+// in BUILTIN_TOOLS, so coverage for injected tools is explicit.
+const CUSTOM_TOOL_NAMES = ["generate_image"] as const;
 
 describe("omp:// root docs coverage", () => {
 	it.each([...BUILTIN_TOOL_NAMES])("documents builtin tool %s", name => {

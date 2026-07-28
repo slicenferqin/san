@@ -198,4 +198,31 @@ describe("event-adapter diagnostic metadata", () => {
 			expect(serialized).not.toContain(home);
 		}
 	});
+
+	it("exposes and sanitizes context-maintenance failure diagnostics", () => {
+		const home = process.env.HOME ?? "/Users/tester";
+		const secret = "sk-abcdefghijklmnopqrstuvwx";
+		const { ctx, sequencer } = makeContext();
+		const emitted = adaptSessionEvent(
+			{
+				type: "auto_compaction_end",
+				maintenanceId: "maintenance_test",
+				action: "context-full",
+				result: undefined,
+				aborted: false,
+				willRetry: false,
+				skipped: true,
+				failureStage: "preparation",
+				failureReason: `no settled history at ${home}/private authorization=${secret}`,
+			} as AgentSessionEvent,
+			sequencer,
+			ctx,
+		);
+
+		expect(emitted?.type).toBe("context.maintenance.completed");
+		expect(emitted?.data).toMatchObject({
+			failureStage: "preparation",
+			failureReason: "no settled history at ~/private authorization=[REDACTED]",
+		});
+	});
 });

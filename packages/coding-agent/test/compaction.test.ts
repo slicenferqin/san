@@ -1172,6 +1172,90 @@ describe("findCutPoint", () => {
 			expect(result.turnStartIndex).toBe(2); // Turn 2 starts at index 2
 		}
 	});
+
+	it("does not treat an agent-authored custom message after compaction as a turn boundary", () => {
+		const oldUser = createMessageEntry(createUserMessage("Old turn"));
+		const oldAssistant = createMessageEntry(createAssistantMessage("Old answer"));
+		const compaction = createCompactionEntry("Old turn summary", oldAssistant.id);
+		const customMessageId = `test-id-${entryCounter++}`;
+		const agentSteering: SessionEntry = {
+			type: "custom_message",
+			id: customMessageId,
+			parentId: compaction.id,
+			timestamp: new Date().toISOString(),
+			customType: "san.context_continuation.authority",
+			content: "Continue the active user request.",
+			display: false,
+			attribution: "agent",
+		};
+		lastId = customMessageId;
+		const assistant = createMessageEntry(createAssistantMessage("Working"));
+		const entries: SessionEntry[] = [oldUser, oldAssistant, compaction, agentSteering, assistant];
+
+		const cutPoint = findCutPoint(entries, 3, entries.length, 1);
+
+		expect(cutPoint.firstKeptEntryIndex).toBe(3);
+		expect(cutPoint.isSplitTurn).toBe(false);
+		expect(cutPoint.turnStartIndex).toBe(-1);
+	});
+
+	it("keeps the assistant tool call when trailing tool results exceed the recent-history budget", () => {
+		const oldUser = createMessageEntry(createUserMessage("Old turn"));
+		const oldAssistant = createMessageEntry(createAssistantMessage("Old answer"));
+		const activeUser = createMessageEntry(createUserMessage("Inspect the repository"));
+		const toolCall = createMessageEntry({
+			...createAssistantMessage(""),
+			content: [
+				{
+					type: "toolCall",
+					id: "call_read",
+					name: "read",
+					arguments: { path: "large.log" },
+				},
+			],
+			stopReason: "toolUse",
+		});
+		const customMessageId = `test-id-${entryCounter++}`;
+		const agentSteering: SessionEntry = {
+			type: "custom_message",
+			id: customMessageId,
+			parentId: toolCall.id,
+			timestamp: new Date().toISOString(),
+			customType: "san.context_continuation.authority",
+			content: "Continue after these tool results.",
+			display: false,
+			attribution: "agent",
+		};
+		lastId = customMessageId;
+		const toolResult = createMessageEntry({
+			role: "toolResult",
+			toolCallId: "call_read",
+			toolName: "read",
+			content: [{ type: "text", text: "large result ".repeat(10_000) }],
+			isError: false,
+			timestamp: Date.now(),
+		});
+		const entries: SessionEntry[] = [oldUser, oldAssistant, activeUser, toolCall, agentSteering, toolResult];
+
+		const preparation = prepareCompaction(entries, {
+			...DEFAULT_COMPACTION_SETTINGS,
+			keepRecentTokens: 20_000,
+		});
+
+		expect(preparation).toBeDefined();
+		if (!preparation) throw new Error("Expected compaction preparation");
+		expect(preparation.firstKeptEntryId).toBe(toolCall.id);
+		expect(preparation.messagesToSummarize).toEqual([oldUser.message, oldAssistant.message]);
+		expect(preparation.turnPrefixMessages).toEqual([activeUser.message]);
+		expect(preparation.recentMessages).toHaveLength(3);
+		expect(preparation.recentMessages[0]).toBe(toolCall.message);
+		expect(preparation.recentMessages[1]).toMatchObject({
+			role: "custom",
+			customType: "san.context_continuation.authority",
+			attribution: "agent",
+		});
+		expect(preparation.recentMessages[2]).toBe(toolResult.message);
+	});
 });
 
 describe("buildSessionContext", () => {

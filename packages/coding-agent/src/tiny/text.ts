@@ -119,10 +119,9 @@ const COMMON_TITLE_ACRONYMS = new Set<string>([
  * True when a first user message is too low-signal to title (greeting, ack,
  * bare number, or empty once code/punctuation/emoji are stripped).
  *
- * Deterministic pre-filter: the default tiny title model (~350M local) cannot
- * reliably follow a "respond with none" instruction and tends to hallucinate a
- * title for trivial input, so we never ask it — the caller defers titling to
- * the next message instead.
+ * Deterministic pre-filter: title models may hallucinate a title for trivial
+ * input instead of returning the no-title sentinel, so we never ask them — the
+ * caller defers titling to the next message instead.
  */
 export function isLowSignalTitleInput(message: string): boolean {
 	// Preformatted replan contexts are already cleaned per turn; only the

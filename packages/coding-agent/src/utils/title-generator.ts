@@ -13,9 +13,7 @@ import type { Settings } from "../config/settings";
 import titleMarkerInstruction from "../prompts/system/title-marker-instruction.md" with { type: "text" };
 import titleSystemPrompt from "../prompts/system/title-system.md" with { type: "text" };
 import { formatTitleUserMessage } from "../tiny/message-preproc";
-import { isTinyTitleLocalModelKey, ONLINE_TINY_TITLE_MODEL_KEY } from "../tiny/models";
 import { isLowSignalTitleInput, normalizeGeneratedTitle } from "../tiny/text";
-import { tinyTitleClient } from "../tiny/title-client";
 
 const TITLE_SYSTEM_PROMPT = prompt.render(titleSystemPrompt);
 const TITLE_MARKER_INSTRUCTION = prompt.render(titleMarkerInstruction);
@@ -80,74 +78,23 @@ export async function generateSessionTitle(
 	customSystemPrompt?: string,
 	signal?: AbortSignal,
 ): Promise<string | null> {
-	// Defer titling for greetings / acknowledgements / empty input. The default
-	// tiny title model can't reliably decline trivial input, so this happens
-	// deterministically before any model is invoked; the caller retries on the
-	// next user message while the session stays unnamed.
+	// Defer titling for greetings / acknowledgements / empty input before any
+	// provider request. The caller retries on the next message while unnamed.
 	if (isLowSignalTitleInput(firstMessage)) {
 		logger.debug("title-generator: skipped low-signal input", { sessionId, reason: "low-signal" });
 		return null;
 	}
 
-	const titleSystemPrompt = customSystemPrompt?.trim() || undefined;
-	const tinyModel = settings.get("providers.tinyModel");
-	if (tinyModel === ONLINE_TINY_TITLE_MODEL_KEY) {
-		return generateTitleOnline(
-			firstMessage,
-			registry,
-			settings,
-			sessionId,
-			currentModel,
-			metadataResolver,
-			signal,
-			titleSystemPrompt,
-		);
-	}
-
-	// User explicitly picked a local tiny model. NEVER fall back to the online
-	// smol path (issue #3187): the smol role resolves through priority.json and
-	// silently bills whatever provider holds the resolved API key — OpenRouter
-	// in the reporter's case, leaking real credits without consent. If the
-	// local worker fails (unknown key, download missing, transformers.js
-	// crash, abort), leave the session untitled; the next user turn retries.
-	if (!isTinyTitleLocalModelKey(tinyModel)) {
-		logger.warn("title-generator: unknown local tiny model; skipping title (will not fall back to online)", {
-			sessionId,
-			model: tinyModel,
-			reason: "unknown-local-model",
-		});
-		return null;
-	}
-	try {
-		let localTitle: string | null;
-		if (signal) {
-			localTitle = await tinyTitleClient.generate(
-				tinyModel,
-				firstMessage,
-				titleSystemPrompt ? { signal, systemPrompt: titleSystemPrompt } : { signal },
-			);
-		} else if (titleSystemPrompt) {
-			localTitle = await tinyTitleClient.generate(tinyModel, firstMessage, { systemPrompt: titleSystemPrompt });
-		} else {
-			localTitle = await tinyTitleClient.generate(tinyModel, firstMessage);
-		}
-		if (!localTitle) {
-			logger.warn("title-generator: local tiny model produced no title; skipping (no online fallback)", {
-				sessionId,
-				model: tinyModel,
-				reason: "local-no-output",
-			});
-			return null;
-		}
-		return localTitle;
-	} catch (err) {
-		logger.warn("title-generator: local tiny model errored; skipping (no online fallback)", {
-			sessionId,
-			model: tinyModel,
-			error: err instanceof Error ? err.message : String(err),
-		});
-		return null;
-	}
+	return generateTitleOnline(
+		firstMessage,
+		registry,
+		settings,
+		sessionId,
+		currentModel,
+		metadataResolver,
+		signal,
+		customSystemPrompt?.trim() || undefined,
+	);
 }
 
 export async function generateTitleOnline(

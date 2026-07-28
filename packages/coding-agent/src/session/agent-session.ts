@@ -274,6 +274,7 @@ import {
 	CONTEXT_STEADY_ACTIVATION_SCHEMA_VERSION,
 	type ContextCheckpointRebaseReason,
 	type ContextMaintenanceAudit,
+	type ContextMaintenanceFailureStage,
 	type ContextMaintenanceTrigger,
 	type ContextPacketRecallLayer,
 	type ContextSegment,
@@ -412,8 +413,8 @@ import {
 	shouldDisableReasoning,
 	toReasoningEffort,
 } from "../thinking";
+import { shutdownTinyModelClient } from "../tiny/client";
 import { formatTitleConversationContext, type TitleConversationTurn } from "../tiny/message-preproc";
-import { shutdownTinyTitleClient } from "../tiny/title-client";
 import { assertEditableFile } from "../tools/auto-generated-guard";
 import { releaseTabsForOwner } from "../tools/browser/tab-supervisor";
 import { isMCPToolName, normalizeToolNames } from "../tools/builtin-names";
@@ -770,6 +771,8 @@ export type AgentSessionEvent =
 			errorMessage?: string;
 			/** True when compaction was skipped for a benign reason (no model, no candidates, nothing to compact). */
 			skipped?: boolean;
+			failureStage?: ContextMaintenanceFailureStage;
+			failureReason?: string;
 	  }
 	| {
 			type: "auto_retry_start";
@@ -840,7 +843,15 @@ type CompactionCheckResult = Readonly<{
 	continuationScheduled: boolean;
 	automaticContinuationBlocked?: boolean;
 	historyRewritten?: boolean;
+	failureStage?: ContextMaintenanceAudit["failureStage"];
+	failureReason?: string;
 }>;
+
+interface ToolLoopBudgetRecoveryResult {
+	plan?: BuiltContextPlan;
+	failureStage?: ContextMaintenanceAudit["failureStage"];
+	failureReason?: string;
+}
 
 interface ContextSummaryAuthorityResolution {
 	summary: string;
@@ -7044,6 +7055,8 @@ export class AgentSession {
 				willRetry: event.willRetry,
 				errorMessage: event.errorMessage,
 				skipped: event.skipped,
+				failureStage: event.failureStage,
+				failureReason: event.failureReason,
 			});
 		} else if (event.type === "auto_retry_start") {
 			await this.#extensionRunner.emit({
@@ -7418,7 +7431,6 @@ export class AgentSession {
 				logger.warn("Failed to release owned browser tabs during dispose", { error: String(error) });
 			}
 		}
-		await shutdownTinyTitleClient();
 		this.#releasePowerAssertion();
 		// Clean up an empty session created by this session's /move so it doesn't accumulate.
 		await cleanupEmptyMoveSession(this.sessionManager, this.#movedFromEmptySessionFile);
@@ -7468,6 +7480,7 @@ export class AgentSession {
 		// memories, and that round-trips through the worker we are about to
 		// hard-kill (issue #3031).
 		await shutdownMnemopiEmbedClient();
+		await shutdownTinyModelClient();
 		this.#disconnectFromAgent();
 		if (this.#unsubscribeAppendOnly) {
 			this.#unsubscribeAppendOnly();
@@ -9319,6 +9332,7 @@ export class AgentSession {
 		plan: BuiltContextPlan,
 		phase: ContextMaintenanceAudit["phase"],
 		detail?: string,
+		failureStage?: ContextMaintenanceAudit["failureStage"],
 	): void {
 		const gate = plan.audit.qualityGate;
 		const maintenanceId = this.#contextSteadyMaintenanceId ?? `maintenance_${crypto.randomUUID().slice(-12)}`;
@@ -9338,6 +9352,7 @@ export class AgentSession {
 			activeEntryCount: gate.activeEntryCount,
 			archivedEntryCount: gate.archivedEntryCount,
 			...(detail ? { detail } : {}),
+			...(failureStage ? { failureStage } : {}),
 		};
 		this.sessionManager.appendCustomEntry(CONTEXT_MAINTENANCE_CUSTOM_TYPE, audit);
 	}
@@ -9346,8 +9361,9 @@ export class AgentSession {
 		plan: BuiltContextPlan,
 		phase: ContextMaintenanceAudit["phase"],
 		detail: string,
+		failureStage?: ContextMaintenanceAudit["failureStage"],
 	): void {
-		this.#appendContextSteadyMaintenanceAudit("paused_for_context", plan, phase, detail);
+		this.#appendContextSteadyMaintenanceAudit("paused_for_context", plan, phase, detail, failureStage);
 		this.emitNotice(
 			"warning",
 			`Context maintenance paused this run after recovery could not fit the provider request. ${detail}`,
@@ -9612,11 +9628,14 @@ export class AgentSession {
 			Math.floor(this.settings.get("san.contextSteady.hardPressure.maxRecoveryPasses") as number),
 		);
 		this.#contextSteadyMaintenanceId = `maintenance_${crypto.randomUUID().slice(-12)}`;
+		let recoveryFailureStage: ContextMaintenanceAudit["failureStage"];
+		let recoveryFailureDetail: string | undefined =
+			maxRecoveryPasses === 0 ? "Hard-pressure recovery is disabled by configuration." : undefined;
 		try {
 			for (let attempt = 1; attempt <= maxRecoveryPasses; attempt++) {
 				this.#contextSteadyRecoveryAttempt = attempt;
 				this.#appendContextSteadyMaintenanceAudit("maintenance", plan, "pre_turn");
-				await this.#runAutoCompaction("threshold", false, false, false, {
+				const recovery = await this.#runAutoCompaction("threshold", false, false, false, {
 					autoContinue: false,
 					triggerContextTokens: plan.audit.qualityGate.projectedInputTokens,
 					trigger: "hard_pressure",
@@ -9624,6 +9643,8 @@ export class AgentSession {
 					suppressContinuation: true,
 					phase: "pre_turn",
 				});
+				recoveryFailureStage = recovery.failureStage;
+				recoveryFailureDetail = recovery.failureReason;
 				plan = await this.#buildContextSteadyRequestPlan(messages, expandedText, {
 					persistAudit: false,
 					throwOnHardPressure: false,
@@ -9635,7 +9656,19 @@ export class AgentSession {
 			}
 
 			// 最终构建保留正常的审计、拒绝提示和显式 paused_for_context 状态。
-			return await this.#buildContextSteadyRequestPlan(messages, expandedText);
+			const refused = await this.#buildContextSteadyRequestPlan(messages, expandedText, {
+				persistAudit: true,
+				throwOnHardPressure: false,
+			});
+			if (!refused) return refused;
+			const pressureDetail = `Projected input remains above the burst ceiling (${refused.audit.qualityGate.reasons.join(", ") || "unknown"}).`;
+			const detail = recoveryFailureDetail
+				? `${pressureDetail} Recovery stopped: ${recoveryFailureDetail}`
+				: pressureDetail;
+			this.#pauseForContextSteadyPressure(refused, "pre_turn", detail, recoveryFailureStage);
+			throw new Error(
+				`San ContextPlan hard pressure: projected input exceeds burst ceiling (${refused.audit.qualityGate.reasons.join(", ") || "unknown"}).`,
+			);
 		} finally {
 			this.#contextSteadyMaintenanceId = undefined;
 			this.#contextSteadyRecoveryAttempt = 0;
@@ -9718,6 +9751,8 @@ export class AgentSession {
 		this.#contextSteadyRequestPlan = plan;
 		this.#contextSteadyLastPlan = plan;
 		if (plan.audit.qualityGate.outcome === "hard_pressure") {
+			let recoveryFailureStage: ContextMaintenanceAudit["failureStage"];
+			let recoveryFailureReason: string | undefined;
 			// Attempt one bounded recovery (auto-compaction) before pausing. This
 			// covers the case where a model window shrink collapses the budget and
 			// the current input slightly exceeds the new ceiling — compaction can
@@ -9725,15 +9760,17 @@ export class AgentSession {
 			if (this.#contextSteadyRecoveryAttempt === 0) {
 				this.#contextSteadyRecoveryAttempt++;
 				const recovered = await this.#attemptToolLoopBudgetRecovery(messages, commonOptions);
-				if (recovered) return recovered;
+				if (recovered.plan) return recovered.plan;
+				recoveryFailureStage = recovered.failureStage;
+				recoveryFailureReason = recovered.failureReason;
 			}
 			// Only tool-loop hard pressure appends an extra audit (refusal evidence).
 			this.sessionManager.appendCustomEntry(CONTEXT_PLAN_CUSTOM_TYPE, plan.audit);
-			this.#pauseForContextSteadyPressure(
-				plan,
-				"mid_turn",
-				`Tool-loop input remains above the burst ceiling (${plan.audit.qualityGate.reasons.join(", ") || "tool_loop_overflow"}).`,
-			);
+			const pressureDetail = `Tool-loop input remains above the burst ceiling (${plan.audit.qualityGate.reasons.join(", ") || "tool_loop_overflow"}).`;
+			const detail = recoveryFailureReason
+				? `${pressureDetail} Recovery stopped: ${recoveryFailureReason}`
+				: pressureDetail;
+			this.#pauseForContextSteadyPressure(plan, "mid_turn", detail, recoveryFailureStage);
 			throw new Error(
 				`San ContextPlan hard pressure: projected input exceeds burst ceiling (${plan.audit.qualityGate.reasons.join(", ") || "tool_loop_overflow"}).`,
 			);
@@ -9744,20 +9781,19 @@ export class AgentSession {
 	}
 
 	/**
-	 * One-shot bounded recovery for tool-loop hard_pressure: run auto-compaction
-	 * and rebuild the ContextPlan. Returns the recovered plan if the gate passes
-	 * after compaction, or undefined to fall through to the pause path.
+	 * 工具循环 hard_pressure 的单次有界恢复：自动压缩后重建 ContextPlan。
+	 * 恢复成功时返回 plan，否则返回维护阶段产生的失败诊断。
 	 */
 	async #attemptToolLoopBudgetRecovery(
 		messages: readonly AgentMessage[],
 		commonOptions: Omit<BuildContextPlanOptions, "projectedInputTokens">,
-	): Promise<BuiltContextPlan | undefined> {
+	): Promise<ToolLoopBudgetRecoveryResult> {
 		logger.debug("Context Steady tool-loop budget recovery: attempting auto-compaction", {
 			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
 			contextWindow: this.model?.contextWindow,
 		});
 		const compactionBefore = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
-		await this.#runAutoCompaction("threshold", false, false, false, {
+		const recovery = await this.#runAutoCompaction("threshold", false, false, false, {
 			autoContinue: false,
 			suppressContinuation: true,
 			suppressHandoff: true,
@@ -9768,7 +9804,10 @@ export class AgentSession {
 		const compactionAfter = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
 		if (compactionAfter === compactionBefore) {
 			// Compaction did not commit; no point rebuilding.
-			return undefined;
+			return {
+				failureStage: recovery.failureStage,
+				failureReason: recovery.failureReason,
+			};
 		}
 		// Rebuild the plan against the post-compaction state.
 		const rebuiltPlan = this.#buildContextSteadyPlanForProvider(
@@ -9778,7 +9817,7 @@ export class AgentSession {
 			"full",
 		);
 		if (rebuiltPlan.audit.qualityGate.outcome === "hard_pressure") {
-			return undefined;
+			return {};
 		}
 		this.#contextSteadyRequestPlan = rebuiltPlan;
 		this.#contextSteadyLastPlan = rebuiltPlan;
@@ -9786,7 +9825,7 @@ export class AgentSession {
 			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
 			outcome: rebuiltPlan.audit.qualityGate.outcome,
 		});
-		return rebuiltPlan;
+		return { plan: rebuiltPlan };
 	}
 
 	#contextSteadyLatestUserText(messages: readonly AgentMessage[]): string | undefined {
@@ -11488,9 +11527,9 @@ export class AgentSession {
 	}
 
 	/**
-	 * Generate an automatic session title tied to this session's lifecycle.
-	 * Input and replan callers share the signal so disposal cancels provider and
-	 * local-worker requests instead of leaving background inference alive.
+	 * Generate an automatic online session title tied to this session's lifecycle.
+	 * Input and replan callers share the signal so disposal cancels the provider
+	 * request instead of leaving background inference alive.
 	 */
 	generateTitle(firstMessage: string): Promise<string | null> {
 		return generateSessionTitle(
@@ -16158,9 +16197,23 @@ export class AgentSession {
 			maintenanceDecision = { ...maintenanceDecision, action: nextAction };
 			this.#contextProbeActiveMaintenanceDecision = maintenanceDecision;
 		};
+		const failMaintenance = (
+			failureStage: NonNullable<CompactionCheckResult["failureStage"]>,
+			failureReason: string,
+		): CompactionCheckResult => {
+			maintenanceDecision = {
+				...maintenanceDecision,
+				action: "none",
+				failureStage,
+				failureReason,
+			};
+			this.#contextProbeActiveMaintenanceDecision = maintenanceDecision;
+			return { ...COMPACTION_CHECK_NONE, failureStage, failureReason };
+		};
 		this.#contextProbeActiveMaintenanceDecision = maintenanceDecision;
 		this.#contextProbeActiveCompaction =
 			options.triggerContextTokens === undefined ? undefined : { tokensBefore: options.triggerContextTokens };
+		let terminalFailure: CompactionCheckResult = COMPACTION_CHECK_NONE;
 
 		try {
 			// Emit start AFTER the controller is installed so isCompacting is already true
@@ -16241,7 +16294,10 @@ export class AgentSession {
 			}
 
 			if (!this.model) {
-				updateMaintenanceDecisionAction("none");
+				const failure = failMaintenance(
+					"model_unavailable",
+					"No active model is selected for context maintenance.",
+				);
 				await this.#emitSessionEvent({
 					type: "auto_compaction_end",
 					maintenanceId,
@@ -16250,13 +16306,18 @@ export class AgentSession {
 					aborted: false,
 					willRetry: false,
 					skipped: true,
+					failureStage: failure.failureStage,
+					failureReason: failure.failureReason,
 				});
-				return COMPACTION_CHECK_NONE;
+				return failure;
 			}
 
 			const availableModels = this.#modelRegistry.getAvailable();
 			if (availableModels.length === 0) {
-				updateMaintenanceDecisionAction("none");
+				const failure = failMaintenance(
+					"model_unavailable",
+					"No authenticated model is available for context maintenance.",
+				);
 				await this.#emitSessionEvent({
 					type: "auto_compaction_end",
 					maintenanceId,
@@ -16265,8 +16326,10 @@ export class AgentSession {
 					aborted: false,
 					willRetry: false,
 					skipped: true,
+					failureStage: failure.failureStage,
+					failureReason: failure.failureReason,
 				});
-				return COMPACTION_CHECK_NONE;
+				return failure;
 			}
 
 			const pathEntries = this.sessionManager.getBranch();
@@ -16277,7 +16340,10 @@ export class AgentSession {
 			);
 			const preparation = prepareCompaction(pathEntries, compactionSettings, autoCompactionCandidates);
 			if (!preparation) {
-				updateMaintenanceDecisionAction("none");
+				const failure = failMaintenance(
+					"preparation",
+					"Compaction preparation found no settled history that can be rewritten.",
+				);
 				await this.#emitSessionEvent({
 					type: "auto_compaction_end",
 					maintenanceId,
@@ -16286,6 +16352,8 @@ export class AgentSession {
 					aborted: false,
 					willRetry: false,
 					skipped: true,
+					failureStage: failure.failureStage,
+					failureReason: failure.failureReason,
 				});
 				const noProgressDeadEnd = reason !== "idle";
 				let continuationScheduled = false;
@@ -16304,8 +16372,8 @@ export class AgentSession {
 						"compaction",
 					);
 				}
-				if (continuationScheduled) return COMPACTION_CHECK_CONTINUATION;
-				return noProgressDeadEnd ? COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION : COMPACTION_CHECK_NONE;
+				if (continuationScheduled) return { ...failure, ...COMPACTION_CHECK_CONTINUATION };
+				return noProgressDeadEnd ? { ...COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION, ...failure } : failure;
 			}
 			this.#contextProbeActiveCompaction = {
 				...this.#contextProbeActiveCompaction,
@@ -16327,7 +16395,10 @@ export class AgentSession {
 				})) as SessionBeforeCompactResult | undefined;
 
 				if (hookResult?.cancel) {
-					updateMaintenanceDecisionAction("none");
+					const failure = failMaintenance(
+						"extension_cancelled",
+						"A session_before_compact extension cancelled automatic context maintenance.",
+					);
 					await this.#emitSessionEvent({
 						type: "auto_compaction_end",
 						maintenanceId,
@@ -16335,8 +16406,10 @@ export class AgentSession {
 						result: undefined,
 						aborted: true,
 						willRetry: false,
+						failureStage: failure.failureStage,
+						failureReason: failure.failureReason,
 					});
-					return COMPACTION_CHECK_NONE;
+					return failure;
 				}
 
 				if (hookResult?.compaction) {
@@ -16903,6 +16976,8 @@ export class AgentSession {
 				return COMPACTION_CHECK_NONE;
 			}
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
+			const failure = failMaintenance("compaction_failed", errorMessage);
+			terminalFailure = failure;
 			await this.#emitSessionEvent({
 				type: "auto_compaction_end",
 				maintenanceId,
@@ -16910,6 +16985,8 @@ export class AgentSession {
 				result: undefined,
 				aborted: false,
 				willRetry: false,
+				failureStage: failure.failureStage,
+				failureReason: failure.failureReason,
 				errorMessage:
 					reason === "overflow"
 						? `Context overflow recovery failed: ${errorMessage}`
@@ -16930,7 +17007,7 @@ export class AgentSession {
 				this.#autoCompactionAbortController = undefined;
 			}
 		}
-		return COMPACTION_CHECK_NONE;
+		return terminalFailure;
 	}
 
 	/**

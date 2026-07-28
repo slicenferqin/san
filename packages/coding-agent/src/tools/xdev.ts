@@ -185,7 +185,7 @@ export class XdevRegistry {
 	/** Discoverable built-ins mounted at construction; never reconciled away. */
 	#builtins = new Map<string, Tool>();
 	/**
-	 * Dynamic mounts (custom, MCP, extension, autoresearch) — replaced wholesale
+	 * Dynamic mounts (custom, MCP, extensions) — replaced wholesale
 	 * by {@link reconcile} as the active tool set changes, so a deactivated or
 	 * disconnected tool is no longer callable through a stale device.
 	 */

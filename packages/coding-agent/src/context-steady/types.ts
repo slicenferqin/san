@@ -143,6 +143,12 @@ export type ContextMaintenanceAction =
 	| "handoff"
 	| "none";
 
+export type ContextMaintenanceFailureStage =
+	| "preparation"
+	| "extension_cancelled"
+	| "model_unavailable"
+	| "compaction_failed";
+
 export interface ContextContinuationToolEvidence {
 	tool: string;
 	toolCallId: string;
@@ -268,6 +274,7 @@ export interface ContextMaintenanceAudit {
 	activeEntryCount?: number;
 	archivedEntryCount?: number;
 	detail?: string;
+	failureStage?: ContextMaintenanceFailureStage;
 }
 
 /** Minimal context-steady settings (subset of full settings schema). */

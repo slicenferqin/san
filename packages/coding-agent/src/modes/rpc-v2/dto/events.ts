@@ -5,7 +5,7 @@
  * envelope with stable identity, ordering, and durability classification.
  */
 
-import type { ContextMaintenanceTrigger } from "../../../context-steady/types";
+import type { ContextMaintenanceFailureStage, ContextMaintenanceTrigger } from "../../../context-steady/types";
 
 import type {
 	ApprovalId,
@@ -219,6 +219,8 @@ export interface ContextMaintenanceCompletedData {
 	skipped?: boolean;
 	willRetry: boolean;
 	errorMessage?: string;
+	failureStage?: ContextMaintenanceFailureStage;
+	failureReason?: string;
 }
 
 export interface ApprovalRequestedData {

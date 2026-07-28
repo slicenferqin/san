@@ -52,8 +52,8 @@ describe("issue #3031 — mnemopi embeddings live in an isolated subprocess", ()
 		// onnxruntime's NAPI fault (the original Windows shutdown bug, now
 		// relocated to the child), an OOM SIGKILL, or an operator `kill -9`
 		// — the subprocess wrapper must fault every in-flight request via
-		// the `errors` channel. Without this contract a `TinyTitleClient`-
-		// style swallow would leave callers waiting forever on `await embed`.
+		// the `errors` channel. Without this contract the client would leave
+		// callers waiting forever on `await embed`.
 		const sub = createMnemopiEmbedSubprocess();
 		try {
 			const { promise, resolve } = Promise.withResolvers<Error>();

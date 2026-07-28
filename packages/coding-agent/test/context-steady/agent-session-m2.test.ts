@@ -18,6 +18,7 @@ import { SanBrainStore } from "@san/coding-agent/brain/store";
 import type { SanBrainExperienceCandidate } from "@san/coding-agent/brain/types";
 import { ModelRegistry } from "@san/coding-agent/config/model-registry";
 import { Settings } from "@san/coding-agent/config/settings";
+import type { ExtensionRunner } from "@san/coding-agent/extensibility/extensions";
 import * as memoryBackend from "@san/coding-agent/memory-backend";
 import type {
 	MemoryBackend,
@@ -1002,6 +1003,15 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		authStorages.push(authStorage);
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const emit = vi.fn(async (event: { type: string }) => {
+			if (event.type === "session_before_compact") return { cancel: true };
+			return undefined;
+		});
+		const extensionRunner = {
+			hasHandlers: (eventType: string) => eventType === "session_before_compact",
+			emit,
+			emitBeforeAgentStart: async () => undefined,
+		} as unknown as ExtensionRunner;
 
 		// Oversized tool result forces second provider projection past burst ceiling.
 		const largeEcho: AgentTool<typeof echoToolSchema, { value: string }> = {
@@ -1015,7 +1025,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 			},
 		};
 		agent.setTools([largeEcho]);
-		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
 
 		await session.prompt("tool loop ceiling probe");
 		await session.waitForIdle();
@@ -1030,6 +1040,18 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 			qualityGate: { projectedInputTokens?: number; projectedInputLimit?: number };
 		};
 		expect((gate.qualityGate.projectedInputTokens ?? 0) > (gate.qualityGate.projectedInputLimit ?? 0)).toBe(true);
+		const maintenance = customEntries(sessionManager, "san.context_maintenance").at(-1)?.data as {
+			state: string;
+			phase: string;
+			failureStage?: string;
+			detail?: string;
+		};
+		expect(maintenance).toMatchObject({
+			state: "paused_for_context",
+			phase: "mid_turn",
+			failureStage: "extension_cancelled",
+		});
+		expect(maintenance.detail).toContain("session_before_compact");
 	});
 
 	it("does not double-count stored history when re-gating a legal tool-loop tail", async () => {
@@ -1396,6 +1418,128 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		expect(userEntries.some(entry => JSON.stringify(entry).includes("HARD_PRESSURE_PROMPT"))).toBe(true);
 		// Same-session agent state must also retain the refused prompt for recovery.
 		expect(JSON.stringify(session.messages).includes("HARD_PRESSURE_PROMPT")).toBe(true);
+	});
+
+	it("records the extension cancellation that leaves hard-pressure recovery paused", async () => {
+		const bundledModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const model = { ...bundledModel, contextWindow: 100_000, maxTokens: 16_000 };
+		const mock = createMockModel({ handler: () => ({ content: ["should not run"] }) });
+		const seedUser: AgentMessage = {
+			role: "user",
+			content: [{ type: "text", text: "settled history ".repeat(3_000) }],
+			timestamp: Date.now() - 2,
+		};
+		const seedAssistant: AgentMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "settled" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 3_000,
+				output: 100,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 3_100,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now() - 1,
+		};
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [seedUser, seedAssistant] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendMessage(seedUser);
+		sessionManager.appendMessage(seedAssistant);
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"compaction.enabled": true,
+			"compaction.strategy": "context-full",
+			"compaction.keepRecentTokens": 1,
+			"contextPromotion.enabled": false,
+			"san.contextSteady.qualityWindowTokens": 2_000,
+			"san.contextSteady.burstWindowTokens": 3_000,
+			"san.contextSteady.contextPlan.maxTokens": 500,
+			"san.contextSteady.hardPressure.maxRecoveryPasses": 1,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const emit = vi.fn(async (event: { type: string }) => {
+			if (event.type === "session_before_compact") return { cancel: true };
+			return undefined;
+		});
+		const extensionRunner = {
+			hasHandlers: (eventType: string) => eventType === "session_before_compact",
+			emit,
+			emitBeforeAgentStart: async () => undefined,
+		} as unknown as ExtensionRunner;
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+		await expect(session.prompt("continue after maintenance cancellation")).rejects.toThrow(/hard pressure/i);
+
+		expect(mock.calls).toHaveLength(0);
+		expect(emit.mock.calls.some(([event]) => event.type === "session_before_compact")).toBe(true);
+		const maintenance = customEntries(sessionManager, "san.context_maintenance").at(-1)?.data as {
+			state: string;
+			failureStage?: string;
+			detail?: string;
+		};
+		expect(maintenance.state).toBe("paused_for_context");
+		expect(maintenance.failureStage).toBe("extension_cancelled");
+		expect(maintenance.detail).toContain("session_before_compact");
+	});
+
+	it("records preparation no-op when one oversized active turn cannot be compacted", async () => {
+		const bundledModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const model = { ...bundledModel, contextWindow: 100_000, maxTokens: 16_000 };
+		const mock = createMockModel({ handler: () => ({ content: ["should not run"] }) });
+		const seedUser: AgentMessage = {
+			role: "user",
+			content: [{ type: "text", text: "single oversized turn ".repeat(3_000) }],
+			timestamp: Date.now() - 1,
+		};
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [seedUser] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendMessage(seedUser);
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"compaction.enabled": true,
+			"compaction.strategy": "context-full",
+			"compaction.keepRecentTokens": 20_000,
+			"contextPromotion.enabled": false,
+			"san.contextSteady.qualityWindowTokens": 2_000,
+			"san.contextSteady.burstWindowTokens": 3_000,
+			"san.contextSteady.contextPlan.maxTokens": 500,
+			"san.contextSteady.hardPressure.maxRecoveryPasses": 1,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		await expect(session.prompt("continue the oversized turn")).rejects.toThrow(/hard pressure/i);
+
+		expect(mock.calls).toHaveLength(0);
+		const maintenance = customEntries(sessionManager, "san.context_maintenance").at(-1)?.data as {
+			state: string;
+			failureStage?: string;
+			detail?: string;
+		};
+		expect(maintenance.state).toBe("paused_for_context");
+		expect(maintenance.failureStage).toBe("preparation");
+		expect(maintenance.detail).toContain("no settled history");
 	});
 
 	it("keeps refused hard-pressure prompt visible to the next same-session provider call", async () => {

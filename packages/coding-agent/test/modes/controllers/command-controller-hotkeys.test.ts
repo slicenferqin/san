@@ -23,7 +23,6 @@ describe("buildHotkeysMarkdown", () => {
 			"app.editor.external": "Ctrl+G",
 			"app.retry": "Alt+R",
 			"app.clipboard.pasteImage": "Ctrl+V",
-			"app.stt.toggle": "Alt+H",
 		};
 		const markdown = buildHotkeysMarkdown({
 			keybindings: {

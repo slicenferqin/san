@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentTool } from "@san/agent";
-import { renderGalleryState, resolveFixture } from "@san/coding-agent/cli/gallery-cli";
 import { resetSettingsForTest, Settings } from "@san/coding-agent/config/settings";
 import { editToolRenderer } from "@san/coding-agent/edit/renderer";
 import { renderDiff } from "@san/coding-agent/modes/components/diff";
@@ -520,21 +519,43 @@ describe("editToolRenderer", () => {
 		expect(rendered).not.toContain("WRONG");
 	});
 
-	it("renders the delete gallery fixture as a Delete card without a no-change body", async () => {
-		await getUiTheme();
-		const text = (await renderGalleryState("edit_delete", resolveFixture("edit_delete"), "success", 160))
-			.map(line => Bun.stripANSI(line))
-			.join("\n");
+	it("renders a delete result as a Delete card without a no-change body", async () => {
+		const uiTheme = await getUiTheme();
+		const component = editToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "Deleted scripts/prune-changelogs.ts" }],
+				details: { op: "delete", path: "scripts/prune-changelogs.ts", diff: "", oldText: "obsolete\n" },
+			},
+			{ expanded: false, isPartial: false, renderContext: { editMode: "replace" } },
+			uiTheme,
+			{ file_path: "scripts/prune-changelogs.ts", op: "delete" },
+		);
+		const text = Bun.stripANSI(component.render(160).join("\n"));
 		expect(text).toContain("Delete");
 		expect(text).toContain("scripts/prune-changelogs.ts");
 		expect(text).not.toContain("No changes");
 	});
 
-	it("renders the move gallery fixture as source → destination", async () => {
-		await getUiTheme();
-		const text = (await renderGalleryState("edit_move", resolveFixture("edit_move"), "success", 160))
-			.map(line => Bun.stripANSI(line))
-			.join("\n");
+	it("renders a move result as source → destination", async () => {
+		const uiTheme = await getUiTheme();
+		const component = editToolRenderer.renderResult(
+			{
+				content: [
+					{ type: "text", text: "Moved scripts/prune-changelogs.ts to scripts/archived/prune-changelogs.ts" },
+				],
+				details: {
+					op: "update",
+					path: "scripts/archived/prune-changelogs.ts",
+					move: "scripts/archived/prune-changelogs.ts",
+					sourcePath: "scripts/prune-changelogs.ts",
+					diff: "",
+				},
+			},
+			{ expanded: false, isPartial: false, renderContext: { editMode: "replace" } },
+			uiTheme,
+			{ file_path: "scripts/prune-changelogs.ts", rename: "scripts/archived/prune-changelogs.ts" },
+		);
+		const text = Bun.stripANSI(component.render(160).join("\n"));
 		expect(text).toContain("scripts/prune-changelogs.ts");
 		expect(text).toContain("scripts/archived/prune-changelogs.ts");
 		expect(text).toContain("→");

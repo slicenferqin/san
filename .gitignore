@@ -11,6 +11,8 @@ target/
 *.tsbuildinfo
 *.node
 *.b64.js
+/.tmp-bun-linux-*/
+/.tmp-pi-natives-native/
 
 # Environment
 .env
@@ -32,6 +34,7 @@ target/
 *.log
 tui-debug.log
 *.cpuprofile
+/qemu_bun_*.core
 
 # Test & coverage
 coverage/

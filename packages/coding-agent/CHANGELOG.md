@@ -6,6 +6,7 @@
 
 - Changed TUI `/model`, `/models`, Alt+M, and `/switch` so session model select opens an effort step for reasoning models before closing. Non-reasoning models still select immediately. Status notes mention `/effort` and Shift+Tab. Role assignment remains `/model roles`.
 - Renamed the published package from `@oh-my-pi/pi-coding-agent` to `@san/coding-agent`, the CLI binary from `omp` to `san`, and canonical configuration names to `.san` and `SAN_*`; documented legacy inputs remain lower-precedence compatibility fallbacks.
+- Removed the public `loadCliExtensionProviders` SDK helper alongside the one-shot benchmark commands that used it.
 
 ### Added
 
@@ -32,7 +33,6 @@
 ### Changed
 
 - Changed San Context Steady to remain native-equivalent below a configurable activation threshold (240K input tokens by default), then latch activation for the session and restore it after resume.
-- Changed the core binary to keep `/autoresearch` discoverable but reject it with explicit full-binary guidance while removing the experiment implementation from the core compile graph; full builds retain the complete workflow.
 - Reduced core binary size with full safe Bun minification, a gzip-compressed lazy model-catalog embed, compile-time PDF converter exclusion, and a type-only Workflow AST guard that removes the `@babel/types` runtime barrel.
 - Changed the core binary to retain the bundled host-module namespaces required by compiled legacy Pi extensions, keeping the plugin ecosystem functional in both binary profiles.
 - Changed custom provider validation so `models.yml` may declare `auth: apiKey` without embedding the secret (keys live in AuthStorage).
@@ -85,6 +85,9 @@
 
 ### Fixed
 
+- Fixed Context Steady recovery stalling when agent-authored continuation messages were treated as user turn boundaries or an oversized tail of tool results left no valid cut point; maintenance audits, probes, extension events, and RPC v2 now also expose the failed recovery stage and reason.
+- Fixed queued no-op auto-compaction reporting no continuation after scheduling a queue drain, preventing session-stop and digest work from racing the pending turn.
+- Fixed settings migration to drop removed local speech and tiny-title keys instead of preserving dead configuration on later saves.
 - Fixed `--no-extensions` to disable ambient extension discovery without dropping explicit `--extension`/`-e` paths in root sessions or `san models`.
 - Fixed Linux NVIDIA GPU discovery so descendants inheriting the probe's stdout pipe have time to drain without turning a successful probe into a timeout.
 - Fixed San execution loop terminal budget races so post-review overspend writes a single blocked envelope instead of persisting `passed` then failing on a conflicting `blocked` transition.
@@ -117,6 +120,12 @@
 
 - Fixed San context steady state quality issues: ContextPacket now enforces a total injected packet budget, fallback digests retain source entry IDs and collect decisions from every assistant message in the turn, memory candidate importance normalizes to a 0-1 score, and skipped digest spans emit debug logs.
 - Fixed `/team`, `/solo`, and `/council` treating shorthand objectives as context-free tasks: Commander now receives a bounded view of the current conversation, resolves continuation references such as milestone names, and infers worker scope and acceptance criteria from conversation and repository evidence.
+
+### Removed
+
+- Removed local speech input/output from the coding-agent runtime (`stt`, `tts`, `say`, `setup speech`, recording shortcuts, and bundled media workers); voice input now belongs to San Desktop.
+- Removed the Autoresearch experiment and low-value developer/diagnostic top-level commands (`bench`, `dry-balance`, `gallery`, `grep`, `grievances`, `read`, `shell`, `tiny-models`, and `web-search`). Agent tools and normal interactive workflows are unchanged.
+- Removed local session-title inference and the `providers.tinyModel` setting. Automatic session and task labels now always use the configured online title model; the shared local tiny-model runtime remains for memory and classification features.
 ## [17.0.1] - 2026-07-16
 ## [17.0.2] - 2026-07-17
 

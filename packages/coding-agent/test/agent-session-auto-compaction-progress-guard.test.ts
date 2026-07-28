@@ -37,6 +37,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 	let sessionManager: SessionManager;
 	let authStorage: AuthStorage;
 	let modelRegistry: ModelRegistry;
+	let extensionRunner: ExtensionRunner;
 
 	const NOTICE_SOURCE = "compaction";
 	const NO_PROGRESS_FRAGMENT = "Compaction freed too little context to make progress";
@@ -75,7 +76,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
 		const extensionsResult = await loadExtensions([extensionPath], tempDir.path());
-		const extensionRunner = new ExtensionRunner(
+		extensionRunner = new ExtensionRunner(
 			extensionsResult.extensions,
 			extensionsResult.runtime,
 			tempDir.path(),
@@ -793,6 +794,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 		});
 		vi.spyOn(compactionModule, "prepareCompaction").mockReturnValue(undefined);
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		const extensionEmitSpy = vi.spyOn(extensionRunner, "emit");
 		const continueSpy = vi.spyOn(session.agent, "continue").mockImplementation(async () => {
 			expect(sessionManager.getBranch()).toContainEqual(
 				expect.objectContaining({
@@ -826,6 +828,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 
 		expect(promptSpy).not.toHaveBeenCalled();
 		expect(continueSpy).toHaveBeenCalledTimes(1);
+		expect(extensionEmitSpy).toHaveBeenCalledWith(expect.objectContaining({ type: "agent_end", willContinue: true }));
 		expect(session.agent.hasQueuedMessages()).toBe(false);
 		expect(sessionManager.getBranch()).toContainEqual(
 			expect.objectContaining({

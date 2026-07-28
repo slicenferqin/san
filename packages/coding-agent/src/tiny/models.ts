@@ -1,9 +1,8 @@
-/** Default session-title model: the online @smol path (no local download / on-device inference). */
-export const ONLINE_TINY_TITLE_MODEL_KEY = "online";
-/** Local model the `tiny-models` CLI downloads when none is named. Not the session-title default — that is {@link ONLINE_TINY_TITLE_MODEL_KEY}. */
-export const DEFAULT_TINY_TITLE_LOCAL_MODEL_KEY = "lfm2-700m";
-
-export interface TinyTitleLocalModelSpec {
+/** Default memory model: the online path (the configured smol / remote LLM; no local download). */
+export const ONLINE_MEMORY_MODEL_KEY = "online";
+/** Recommended local model for memory tasks when none is named. */
+export const DEFAULT_MEMORY_LOCAL_MODEL_KEY = "lfm2-1.2b";
+export interface TinyMemoryLocalModelSpec {
 	key: string;
 	repo: string;
 	dtype: "q4";
@@ -16,108 +15,10 @@ export interface TinyTitleLocalModelSpec {
 	unsupportedReason?: string;
 }
 
-export const TINY_TITLE_LOCAL_MODELS = [
-	{
-		key: "lfm2-350m",
-		repo: "onnx-community/LFM2-350M-ONNX",
-		dtype: "q4",
-		label: "LFM2 350M",
-		description: "Recommended local model; best speed/quality balance, about 212 MB cached.",
-		contextNote: "Best local default from the title-generation spike.",
-	},
-	{
-		key: "qwen3-0.6b",
-		repo: "onnx-community/Qwen3-0.6B-ONNX",
-		dtype: "q4",
-		label: "Qwen3 0.6B",
-		description: "Most robust local option; slower first load, about 500 MB cached.",
-		contextNote: "Use when title quality matters more than local startup cost.",
-		reasoning: true,
-	},
-	{
-		key: "gemma-270m",
-		repo: "onnx-community/gemma-3-270m-it-ONNX",
-		dtype: "q4",
-		label: "Gemma 270M",
-		description: "Smallest viable local option; lower quality, lowest cache footprint.",
-		contextNote: "Use on constrained machines that still need local titles.",
-	},
-	{
-		key: "qwen2.5-0.5b",
-		repo: "onnx-community/Qwen2.5-0.5B-Instruct",
-		dtype: "q4",
-		label: "Qwen2.5 0.5B",
-		description: "Balanced local fallback; moderate quality and cache footprint.",
-		contextNote: "Useful when Qwen3 is too heavy but Gemma quality is insufficient.",
-	},
-	{
-		key: "lfm2-700m",
-		repo: "onnx-community/LFM2-700M-ONNX",
-		dtype: "q4",
-		label: "LFM2 700M",
-		description: "Highest-quality local option; larger and slower than LFM2 350M.",
-		contextNote: "Use when local title quality is preferred over startup cost.",
-	},
-] as const satisfies readonly TinyTitleLocalModelSpec[];
-
-export const TINY_TITLE_MODEL_VALUES = [
-	ONLINE_TINY_TITLE_MODEL_KEY,
-	"lfm2-350m",
-	"qwen3-0.6b",
-	"gemma-270m",
-	"qwen2.5-0.5b",
-	"lfm2-700m",
-] as const;
-
-export type TinyTitleModelKey = (typeof TINY_TITLE_MODEL_VALUES)[number];
-export type TinyTitleLocalModelKey = (typeof TINY_TITLE_LOCAL_MODELS)[number]["key"];
-
-type MissingTinyTitleModelValue = Exclude<
-	typeof ONLINE_TINY_TITLE_MODEL_KEY | TinyTitleLocalModelKey,
-	TinyTitleModelKey
->;
-type ExtraTinyTitleModelValue = Exclude<TinyTitleModelKey, typeof ONLINE_TINY_TITLE_MODEL_KEY | TinyTitleLocalModelKey>;
-const TINY_TITLE_MODEL_VALUES_MATCH_REGISTRY: MissingTinyTitleModelValue extends never
-	? ExtraTinyTitleModelValue extends never
-		? true
-		: never
-	: never = true;
-void TINY_TITLE_MODEL_VALUES_MATCH_REGISTRY;
-
-export const TINY_TITLE_MODEL_OPTIONS = [
-	{
-		value: ONLINE_TINY_TITLE_MODEL_KEY,
-		label: "Online (TINY role, else @smol)",
-		description:
-			"Online title generation: the TINY model role (set one in /models) when assigned, otherwise the online fallback (commit role, then @smol). No local download or on-device inference.",
-	},
-	...TINY_TITLE_LOCAL_MODELS.map(model => ({
-		value: model.key,
-		label: model.label,
-		description: model.description,
-	})),
-] satisfies ReadonlyArray<{ value: TinyTitleModelKey; label: string; description: string }>;
-
-export function isTinyTitleLocalModelKey(value: string): value is TinyTitleLocalModelKey {
-	return TINY_TITLE_LOCAL_MODELS.some(model => model.key === value);
-}
-
-export function getTinyTitleModelSpec(key: TinyTitleLocalModelKey): (typeof TINY_TITLE_LOCAL_MODELS)[number] {
-	const spec = TINY_TITLE_LOCAL_MODELS.find(model => model.key === key);
-	if (!spec) throw new Error(`Unknown tiny title model: ${key}`);
-	return spec;
-}
-
-/** Default memory model: the online path (the configured smol / remote LLM; no local download). */
-export const ONLINE_MEMORY_MODEL_KEY = "online";
-/** Recommended local model for memory tasks when none is named. */
-export const DEFAULT_MEMORY_LOCAL_MODEL_KEY = "lfm2-1.2b";
-
 /**
- * Local models for Mnemopi memory tasks (fact extraction + consolidation).
- * These are larger (1B-1.7B) than the title models: structured extraction and
- * faithful summarization need more capacity than 3-6 word titles. All q4.
- * Ranking/recipe rationale lives in docs/local-models.md.
+ * Local models for Mnemopi memory extraction/consolidation and local
+ * classifiers. All shipped weights use q4. Ranking and recipe rationale live
+ * in docs/local-models.md.
  */
 export const TINY_MEMORY_LOCAL_MODELS = [
 	{
@@ -165,7 +66,7 @@ export const TINY_MEMORY_LOCAL_MODELS = [
 		description: "Fastest load; solid all-rounder, slightly noisier extraction labels.",
 		contextNote: "Use when local startup cost is the priority.",
 	},
-] as const satisfies readonly TinyTitleLocalModelSpec[];
+] as const satisfies readonly TinyMemoryLocalModelSpec[];
 
 export const TINY_MEMORY_MODEL_VALUES = [
 	ONLINE_MEMORY_MODEL_KEY,
@@ -221,33 +122,23 @@ export function isTinyMemoryReasoningModelKey(key: TinyMemoryLocalModelKey): boo
 	return "reasoning" in spec && spec.reasoning === true;
 }
 
-/** Any local model key (title or memory), used by the shared inference worker. */
-export type TinyLocalModelKey = TinyTitleLocalModelKey | TinyMemoryLocalModelKey;
+/** Any local memory/classifier model key used by the inference worker. */
+export type TinyLocalModelKey = TinyMemoryLocalModelKey;
 
-/** Resolve a local model spec by key across both the title and memory registries. */
-export function getTinyLocalModelSpec(key: string): TinyTitleLocalModelSpec | undefined {
-	return (
-		TINY_TITLE_LOCAL_MODELS.find(model => model.key === key) ??
-		TINY_MEMORY_LOCAL_MODELS.find(model => model.key === key)
-	);
+/** Resolve a local memory/classifier model spec by key. */
+export function getTinyLocalModelSpec(key: string): TinyMemoryLocalModelSpec | undefined {
+	return TINY_MEMORY_LOCAL_MODELS.find(model => model.key === key);
 }
 
-export function isTinyLocalModelKey(value: string): value is TinyLocalModelKey {
-	return getTinyLocalModelSpec(value) !== undefined;
-}
+export const isTinyLocalModelKey = isTinyMemoryLocalModelKey;
 
-/** Combined local model registry (title + memory) for the shared tiny-models CLI. */
-export const TINY_LOCAL_MODELS = [
-	...TINY_TITLE_LOCAL_MODELS,
-	...TINY_MEMORY_LOCAL_MODELS,
-] as const satisfies readonly TinyTitleLocalModelSpec[];
+/** Local memory/classifier models accepted by the shared inference worker. */
+export const TINY_LOCAL_MODELS = TINY_MEMORY_LOCAL_MODELS;
 
 /**
  * Difficulty-classifier model for the `auto` thinking level. Defaults to the
- * online smol path; the local options reuse the memory-model registry because
- * the shared worker's `complete()` only accepts memory local keys, and the
- * 1B+ memory models classify coding difficulty far more reliably than the
- * sub-1B title models.
+ * online smol path; local options reuse the memory-model registry because
+ * structured classification needs the same 1B+ models.
  */
 export const ONLINE_AUTO_THINKING_MODEL_KEY = ONLINE_MEMORY_MODEL_KEY;
 export const AUTO_THINKING_MODEL_VALUES = TINY_MEMORY_MODEL_VALUES;

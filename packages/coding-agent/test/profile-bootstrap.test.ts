@@ -145,17 +145,17 @@ describe("extractProfileFlags", () => {
 	});
 
 	it("stops extracting global flags at a subcommand boundary", () => {
-		// `omp grep --profile <path>` must reach the grep subcommand intact; the
-		// bootstrap must not treat `--profile <path>` as a profile selection.
-		const result = extractProfileFlags(["grep", "--profile", "packages/coding-agent/src/cli.ts"]);
+		// `san models --profile <value>` must reach the models subcommand intact;
+		// the bootstrap must not treat `--profile <value>` as profile selection.
+		const result = extractProfileFlags(["models", "--profile", "custom"]);
 		expect(result.profile).toBeUndefined();
-		expect(result.argv).toEqual(["grep", "--profile", "packages/coding-agent/src/cli.ts"]);
+		expect(result.argv).toEqual(["models", "--profile", "custom"]);
 	});
 
 	it("extracts a global --profile that precedes a subcommand", () => {
-		const result = extractProfileFlags(["--profile", "work", "grep", "foo"]);
+		const result = extractProfileFlags(["--profile", "work", "models", "custom"]);
 		expect(result.profile).toBe("work");
-		expect(result.argv).toEqual(["grep", "foo"]);
+		expect(result.argv).toEqual(["models", "custom"]);
 	});
 
 	it("treats explicit launch as the default command and keeps extracting globals", () => {

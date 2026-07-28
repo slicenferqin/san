@@ -141,6 +141,8 @@ describe("Context steady sidecar probe", () => {
 				action: "remote_compaction",
 				segmentDeltaTokens: 48_000,
 				segmentElapsedMs: 120_000,
+				failureStage: "extension_cancelled",
+				failureReason: "session_before_compact cancelled maintenance",
 			},
 			compaction: {
 				tokensBefore: 260_000,
@@ -171,6 +173,8 @@ describe("Context steady sidecar probe", () => {
 				primaryTrigger: "steady_target",
 				matchedTriggers: ["steady_target", "segment_tokens"],
 				action: "remote_compaction",
+				failureStage: "extension_cancelled",
+				failureReason: "session_before_compact cancelled maintenance",
 			},
 			compaction: {
 				tokensBefore: 260_000,

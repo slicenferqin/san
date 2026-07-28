@@ -3,7 +3,9 @@ import * as fs from "node:fs/promises";
 import * as Module from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as url from "node:url";
 import {
+	ensureRuntimeInstalled,
 	installRuntimeModuleResolver,
 	resolveRuntimeModule,
 	splitBareSpecifier,
@@ -171,6 +173,55 @@ describe("installRuntimeModuleResolver", () => {
 			path.join(nodeModules, "@huggingface", "transformers", "dist", "transformers.node.cjs"),
 		);
 		expect(resolver._resolveFilename("sharp", runtimeParent, false)).toBe(sharpStub);
+	});
+});
+
+describe("ensureRuntimeInstalled", () => {
+	async function makeLocalPackage(version: string): Promise<string> {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-runtime-package-"));
+		tempDirs.push(dir);
+		await Bun.write(path.join(dir, "package.json"), JSON.stringify({ name: "runtime-probe", version }));
+		return dir;
+	}
+
+	test("reinstalls an existing runtime when its pinned dependencies change", async () => {
+		const runtimeDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-runtime-cache-"));
+		tempDirs.push(runtimeDir);
+		const firstPackage = await makeLocalPackage("1.0.0");
+		const secondPackage = await makeLocalPackage("2.0.0");
+		const firstSpec = url.pathToFileURL(firstPackage).href;
+		const secondSpec = url.pathToFileURL(secondPackage).href;
+
+		await ensureRuntimeInstalled({
+			runtimeDir,
+			install: { dependencies: { "runtime-probe": firstSpec } },
+		});
+		expect(
+			(await Bun.file(path.join(runtimeDir, "node_modules", "runtime-probe", "package.json")).json()) as {
+				version: string;
+			},
+		).toMatchObject({ version: "1.0.0" });
+
+		const upgradePhases: string[] = [];
+		await ensureRuntimeInstalled({
+			runtimeDir,
+			install: { dependencies: { "runtime-probe": secondSpec } },
+			onPhase: phase => upgradePhases.push(phase),
+		});
+		expect(upgradePhases).toEqual(["initiate", "download", "done"]);
+		expect(
+			(await Bun.file(path.join(runtimeDir, "node_modules", "runtime-probe", "package.json")).json()) as {
+				version: string;
+			},
+		).toMatchObject({ version: "2.0.0" });
+
+		const cachedPhases: string[] = [];
+		await ensureRuntimeInstalled({
+			runtimeDir,
+			install: { dependencies: { "runtime-probe": secondSpec } },
+			onPhase: phase => cachedPhases.push(phase),
+		});
+		expect(cachedPhases).toEqual([]);
 	});
 });
 

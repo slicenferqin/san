@@ -16,7 +16,7 @@ import type { AgentMessage } from "@san/agent";
 import type { CompactionPreparation, CompactionResult } from "@san/agent/compaction";
 import type { AssistantRetryRecovery, ImageContent, TextContent, ToolResultMessage } from "@san/ai";
 import type { Rule } from "../capability/rule";
-import type { ContextMaintenanceTrigger } from "../context-steady/types";
+import type { ContextMaintenanceFailureStage, ContextMaintenanceTrigger } from "../context-steady/types";
 import type { Goal, GoalModeState } from "../goals/state";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry } from "../session/session-entries";
 import type { TodoItem } from "../tools/todo";
@@ -241,6 +241,10 @@ export interface AutoCompactionEndEvent {
 	errorMessage?: string;
 	/** True when compaction was skipped for a benign reason (no model, no candidates, nothing to compact). */
 	skipped?: boolean;
+	/** 未重写历史时，维护停止阶段的机器可读标识。 */
+	failureStage?: ContextMaintenanceFailureStage;
+	/** 维护停止的具体原因。 */
+	failureReason?: string;
 }
 
 /** Fired when auto-retry starts */

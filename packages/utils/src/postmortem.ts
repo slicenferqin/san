@@ -227,7 +227,7 @@ if (isMainThread) {
 			// and the next `proc.send()` — a race window that Bun surfaces as an
 			// async rejection rather than the synchronous "cannot be used after
 			// the process has exited" guard. Every `send()` target is an optional
-			// worker subsystem (TTS, STT, tiny-title, MCP servers), so a broken
+			// worker subsystem (media, tiny models, MCP servers), so a broken
 			// send pipe must never take down the whole session. Log and continue
 			// instead of exiting; the owning client detects the dead worker via
 			// its own `onExit`/error path and respawns or disables it. See #2997.

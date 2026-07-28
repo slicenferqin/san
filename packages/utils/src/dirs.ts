@@ -762,26 +762,6 @@ export function getStatsDbPath(): string {
 	return dirs.rootSubdir("stats.db", "data");
 }
 
-/** Get the autoresearch state directory (~/.san/autoresearch). */
-export function getAutoresearchDir(): string {
-	return dirs.rootSubdir("autoresearch", "state");
-}
-
-/** Get the per-project autoresearch state directory (~/.san/autoresearch/<encoded-project>). */
-export function getAutoresearchProjectDir(encodedProject: string): string {
-	return path.join(getAutoresearchDir(), encodedProject);
-}
-
-/** Get the per-project autoresearch SQLite database path (~/.san/autoresearch/<encoded-project>.db). */
-export function getAutoresearchDbPath(encodedProject: string): string {
-	return path.join(getAutoresearchDir(), `${encodedProject}.db`);
-}
-
-/** Get the per-run artifact directory (~/.san/autoresearch/<encoded-project>/runs/<runId>). */
-export function getAutoresearchRunDir(encodedProject: string, runId: number): string {
-	return path.join(getAutoresearchProjectDir(encodedProject), "runs", String(runId).padStart(4, "0"));
-}
-
 // =============================================================================
 // Agent subdirectories (~/.san/agent/*)
 // =============================================================================
@@ -806,7 +786,7 @@ export function getModelDbPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "models.db", "data");
 }
 
-/** Get the tiny title model cache directory (~/.san/agent/cache/tiny-models). */
+/** Get the local tiny-model cache directory (~/.san/agent/cache/tiny-models). */
 export function getTinyModelsCacheDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, path.join("cache", "tiny-models"), "cache");
 }

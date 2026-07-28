@@ -286,6 +286,45 @@ function isErrnoCode(error: unknown, code: string): boolean {
 	return typeof error === "object" && error !== null && "code" in error && error.code === code;
 }
 
+function stringRecordMatches(value: unknown, expected: Record<string, string> | undefined): boolean {
+	const expectedEntries = Object.entries(expected ?? {});
+	if (expectedEntries.length === 0) {
+		return value === undefined || (isRecord(value) && Object.keys(value).length === 0);
+	}
+	if (!isRecord(value) || Object.keys(value).length !== expectedEntries.length) return false;
+	return expectedEntries.every(([name, version]) => value[name] === version);
+}
+
+function stringArrayMatches(value: unknown, expected: string[] | undefined): boolean {
+	if (!expected || expected.length === 0) return value === undefined || (Array.isArray(value) && value.length === 0);
+	return (
+		Array.isArray(value) &&
+		value.length === expected.length &&
+		expected.every((entry, index) => value[index] === entry)
+	);
+}
+
+async function runtimeInstallIsCurrent(
+	runtimeDir: string,
+	probePackage: string,
+	install: RuntimeInstallSpec,
+): Promise<boolean> {
+	const probeManifest = Bun.file(path.join(runtimeDir, "node_modules", ...probePackage.split("/"), "package.json"));
+	if (!(await probeManifest.exists())) return false;
+	try {
+		const manifest: unknown = await Bun.file(path.join(runtimeDir, "package.json")).json();
+		return (
+			isRecord(manifest) &&
+			stringRecordMatches(manifest.dependencies, install.dependencies) &&
+			stringRecordMatches(manifest.overrides, install.overrides) &&
+			stringArrayMatches(manifest.trustedDependencies, install.trustedDependencies)
+		);
+	} catch (error) {
+		if (error instanceof SyntaxError || isErrnoCode(error, "ENOENT")) return false;
+		throw error;
+	}
+}
+
 async function acquireInstallLock(runtimeDir: string, attempts: number, sleepMs: number): Promise<() => Promise<void>> {
 	const lockDir = `${runtimeDir}.lock`;
 	await fsp.mkdir(path.dirname(lockDir), { recursive: true });
@@ -354,13 +393,12 @@ export async function ensureRuntimeInstalled(options: EnsureRuntimeInstalledOpti
 		}
 	}
 	if (!probePackage) throw new Error(`Runtime install at ${runtimeDir} declares no dependencies`);
-	const probeManifest = Bun.file(path.join(runtimeDir, "node_modules", ...probePackage.split("/"), "package.json"));
-	if (await probeManifest.exists()) return runtimeDir;
+	if (await runtimeInstallIsCurrent(runtimeDir, probePackage, install)) return runtimeDir;
 
 	onPhase?.("initiate");
 	const releaseLock = await acquireInstallLock(runtimeDir, lockAttempts, lockSleepMs);
 	try {
-		if (await probeManifest.exists()) return runtimeDir;
+		if (await runtimeInstallIsCurrent(runtimeDir, probePackage, install)) return runtimeDir;
 		await writeRuntimeManifest(runtimeDir, install);
 		onPhase?.("download");
 		await runRuntimeInstall(runtimeDir);

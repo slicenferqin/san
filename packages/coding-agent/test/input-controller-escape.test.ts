@@ -4,7 +4,6 @@ import { resetSettingsForTest, Settings } from "@san/coding-agent/config/setting
 import { InputController } from "@san/coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext, SubmittedUserInput } from "@san/coding-agent/modes/types";
 import { USER_INTERRUPT_LABEL } from "@san/coding-agent/session/messages";
-import { vocalizer } from "@san/coding-agent/tts/vocalizer";
 import * as logger from "@san/utils/logger";
 
 type Spy = Mock<(...args: unknown[]) => unknown>;
@@ -667,27 +666,6 @@ describe("InputController escape behavior", () => {
 
 		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
 		expect(ctx.showUserMessageSelector).not.toHaveBeenCalled();
-	});
-
-	it("silences a still-audible vocalizer on Esc instead of opening the tree selector (#4521)", () => {
-		const clear = vi.spyOn(vocalizer, "clear").mockImplementation(() => {});
-		const isSpeaking = vi.spyOn(vocalizer, "isSpeaking").mockReturnValue(true);
-		const { ctx, editor, spies } = createContext();
-		const controller = new InputController(ctx);
-
-		controller.setupKeyHandlers();
-		editor.onEscape?.();
-
-		expect(clear).toHaveBeenCalledTimes(1);
-		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
-		expect(ctx.showUserMessageSelector).not.toHaveBeenCalled();
-		expect(spies.resetDisplay).not.toHaveBeenCalled();
-
-		// A second Esc after silence must NOT immediately fire the double-Esc
-		// gesture — the first press consumed the arm.
-		isSpeaking.mockReturnValue(false);
-		editor.onEscape?.();
-		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
 	});
 });
 
