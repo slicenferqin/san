@@ -19,8 +19,8 @@ import type {
 import memoryConsolidationPrompt from "../prompts/system/memory-consolidation-system.md" with { type: "text" };
 import memoryExtractionPrompt from "../prompts/system/memory-extraction-system.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
+import { tinyModelClient } from "../tiny/client";
 import { isTinyMemoryLocalModelKey, ONLINE_MEMORY_MODEL_KEY } from "../tiny/models";
-import { tinyModelClient } from "../tiny/title-client";
 import { shortenPath } from "../tools/render-utils";
 import {
 	loadMnemopiConfig,

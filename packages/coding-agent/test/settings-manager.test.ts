@@ -544,6 +544,52 @@ describe("Settings", () => {
 			expect(settings.getEditVariantForModel("gpt-5.2")).toBe("apply_patch");
 		});
 
+		it("drops the removed title-only tiny model setting", async () => {
+			await writeSettings({
+				providers: {
+					tinyModel: "lfm2-700m",
+					tinyModelDevice: "cpu",
+				},
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.get("providers.tinyModelDevice")).toBe("cpu");
+			expect(settings.isConfigured("providers.tinyModelDevice")).toBe(true);
+			settings.set("setupVersion", 1);
+			await settings.flush();
+			const saved = await readSettings();
+			expect(saved.providers).toEqual({ tinyModelDevice: "cpu" });
+		});
+
+		it("drops removed local speech settings from nested and flat forms", async () => {
+			await writeSettings({
+				stt: { enabled: true, language: "zh", modelName: "parakeet", submitTrigger: "release" },
+				speech: { enabled: true, mode: "all", enhanced: true, voice: "af_heart" },
+				tts: { localModel: "kokoro", localVoice: "af_heart" },
+				speechgen: { enabled: true },
+				providers: { tts: "xai", tinyModelDevice: "cpu" },
+				"stt.enabled": true,
+				"stt.language": "zh",
+				"stt.modelName": "parakeet",
+				"stt.submitTrigger": "release",
+				"speech.enabled": true,
+				"speech.mode": "all",
+				"speech.enhanced": true,
+				"speech.voice": "af_heart",
+				"tts.localModel": "kokoro",
+				"tts.localVoice": "af_heart",
+				"speechgen.enabled": true,
+				"providers.tts": "local",
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			settings.set("setupVersion", 1);
+			await settings.flush();
+
+			expect(await readSettings()).toEqual({ providers: { tinyModelDevice: "cpu" }, setupVersion: 1 });
+		});
+
 		it("maps legacy hindsight.dynamicBankId=true onto hindsight.scoping=per-project", async () => {
 			await writeSettings({
 				hindsight: { dynamicBankId: true },

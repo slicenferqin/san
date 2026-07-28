@@ -1328,6 +1328,35 @@ export class Settings {
 
 		migrateSanLoopSettings(raw);
 
+		// 本地标题模型与语音运行时已移除；同时清理嵌套配置和旧版点号键，
+		// 避免下一次保存继续写回已经失效的设置。
+		const providers = raw.providers;
+		if (isRecord(providers)) {
+			delete providers.tinyModel;
+			delete providers.tts;
+		}
+		delete raw["providers.tinyModel"];
+		delete raw["providers.tts"];
+
+		for (const group of ["stt", "speech", "tts", "speechgen"] as const) delete raw[group];
+		for (const settingPath of [
+			"stt.enabled",
+			"stt.language",
+			"stt.modelName",
+			"stt.submitTrigger",
+			"speech.enabled",
+			"speech.mode",
+			"speech.enhanced",
+			"speech.voice",
+			"tts.localModel",
+			"tts.localVoice",
+			"speechgen.enabled",
+		] as const) {
+			delete raw[settingPath];
+		}
+
+		if (isRecord(providers) && Object.keys(providers).length === 0) delete raw.providers;
+
 		// ask.timeout: ms -> seconds (if value > 1000, it's old ms format)
 		if (raw.ask && typeof (raw.ask as Record<string, unknown>).timeout === "number") {
 			const oldValue = (raw.ask as Record<string, unknown>).timeout as number;

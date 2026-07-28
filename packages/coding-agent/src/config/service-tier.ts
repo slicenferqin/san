@@ -89,9 +89,8 @@ export function buildServiceTierByFamily(openai: string, anthropic: string, goog
 /**
  * Broadcast a single chosen tier across families, clamped to what each family
  * realizes: OpenAI takes any tier, Anthropic only `priority`, Google only
- * `flex`/`priority`. Used by the subagent/advisor single-value settings and the
- * `san bench --service-tier` flag, which apply one tier to whatever family the
- * target model belongs to.
+ * `flex`/`priority`. Used by the subagent/advisor single-value settings, which
+ * apply one tier to whatever family the target model belongs to.
  */
 export function serviceTierForAllFamilies(tier: ServiceTier | undefined): ServiceTierByFamily {
 	if (!tier) return {};

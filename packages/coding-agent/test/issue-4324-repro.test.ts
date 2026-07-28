@@ -1,11 +1,9 @@
 /**
  * Regression for https://github.com/can1357/oh-my-pi/issues/4324
  *
- * The Kokoro TTS worker crash-loops with `exit code 7`, but every worker
- * subprocess was spawned with `stderr: "ignore"` — so the native crash message
- * (ONNX Runtime traceback, glibc assertion, segfault details) was discarded
- * and the parent only ever logged `tts subprocess exited with code 7`, with no
- * way to diagnose what actually blew up.
+ * A native inference worker exited with code 7, but every worker subprocess
+ * used `stderr: "ignore"`, so the ONNX Runtime crash message was discarded and
+ * the parent logged only an exit code with no diagnostic detail.
  *
  * The fix pipes stderr without starting a live read while the worker is idle;
  * after `onExit`, it drains the pipe, keeps the last 16 KiB in a bounded ring,
@@ -48,11 +46,11 @@ describe("issue #4324 — worker subprocess stderr survives to the exit error", 
 		const sub = createWorkerSubprocess<FakeWorkerOutbound>({
 			spawnCommand: stderrExitCommand(stderr, 7),
 			env: {},
-			exitLabel: "tts subprocess",
+			exitLabel: "inference subprocess",
 		});
 		const err = await firstWorkerError(sub);
 		// The exit-code prefix is preserved so existing log parsers keep working.
-		expect(err.message).toStartWith("tts subprocess exited with code 7");
+		expect(err.message).toStartWith("inference subprocess exited with code 7");
 		// The actual native crash reason must now be part of the error.
 		expect(err.message).toContain("onnxruntime[Native]");
 		expect(err.message).toContain("cudaMemcpy failed");
@@ -66,7 +64,7 @@ describe("issue #4324 — worker subprocess stderr survives to the exit error", 
 		const sub = createWorkerSubprocess<FakeWorkerOutbound>({
 			spawnCommand: stderrExitCommand(filler + trailer, 7),
 			env: {},
-			exitLabel: "tts subprocess",
+			exitLabel: "inference subprocess",
 		});
 		const err = await firstWorkerError(sub);
 		// Trailer wins.
@@ -86,7 +84,7 @@ describe("issue #4324 — worker subprocess stderr survives to the exit error", 
 		const workerScript =
 			"const p = process.ppid; const lock = new Int32Array(new SharedArrayBuffer(4)); while (process.ppid === p) Atomics.wait(lock, 0, 0, 100);";
 		const wrapperScript = `
-			const { createWorkerSubprocess } = await import("@oh-my-pi/pi-coding-agent/subprocess/worker-client");
+			const { createWorkerSubprocess } = await import("@san/coding-agent/subprocess/worker-client");
 			createWorkerSubprocess({
 				spawnCommand: { cmd: [process.execPath, "-e", ${JSON.stringify(workerScript)}] },
 				env: {},
@@ -119,7 +117,7 @@ describe("issue #4324 — worker subprocess stderr survives to the exit error", 
 				cmd: [process.execPath, "-e", "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000);"],
 			},
 			env: {},
-			exitLabel: "tts subprocess",
+			exitLabel: "inference subprocess",
 		});
 		let errored = false;
 		sub.errors.add(() => {

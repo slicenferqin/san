@@ -642,7 +642,6 @@ providers:
   image: auto
   fetch: auto
   webSearchGeminiModel: gemini-2.5-flash
-  tinyModel: online
   tinyModelDevice: default
   tinyModelDtype: default
   openaiWebsockets: auto
@@ -669,7 +668,6 @@ searxng:
 | `providers.webSearchGeminiModel` | string | _(unset)_ | Gemini model ID for Google Search grounding when `web_search` uses Gemini; defaults to `gemini-2.5-flash`, overridden by `GEMINI_SEARCH_MODEL`. |
 | `providers.image` | enum | `auto` | `auto`, `openai`, `antigravity`, `xai`, `gemini`, `openrouter`. |
 | `providers.fetch` | enum | `auto` | `auto`, `native`, `trafilatura`, `lynx`, `parallel`, `jina`. |
-| `providers.tinyModel` | enum | `online` | `online` or a local model (`lfm2-350m`, `qwen3-0.6b`, `gemma-270m`, `qwen2.5-0.5b`, `lfm2-700m`). |
 | `providers.tinyModelDevice` | enum | `default` | ONNX execution provider for local tiny models. Overridden by `SAN_TINY_DEVICE`; legacy `PI_TINY_DEVICE` still works. |
 | `providers.tinyModelDtype` | enum | `default` | ONNX precision for local tiny models. Overridden by `SAN_TINY_DTYPE`; legacy `PI_TINY_DTYPE` still works. |
 | `providers.openaiWebsockets` | enum | `auto` | `auto`, `off`, `on`. |
@@ -689,7 +687,7 @@ Provider credentials and custom model definitions are configured separately — 
 
 ### Other groups
 
-`san config list` exposes many more grouped settings, including: `task.*` (subagent concurrency, isolation, model overrides), `skills.*` and `commands.*` (discovery toggles), `mcp.*`, `github.*`, `async.*`, `goal.*`, `loop.*`, `todo.*`, `magicKeywords.*`, `ttsr.*` (time-traveling stream rules), `display.*`, `startup.*`, `share.*`, `collab.*`, `stt.*`/`tts.*`, `memories.*`/`hindsight.*`/`mnemopi.*` (memory backends), and `bashInterceptor.*`. Each follows the same type/default rules shown above.
+`san config list` exposes many more grouped settings, including: `task.*` (subagent concurrency, isolation, model overrides), `skills.*` and `commands.*` (discovery toggles), `mcp.*`, `github.*`, `async.*`, `goal.*`, `loop.*`, `todo.*`, `magicKeywords.*`, `ttsr.*` (time-traveling stream rules), `display.*`, `startup.*`, `share.*`, `collab.*`, `memories.*`/`hindsight.*`/`mnemopi.*` (memory backends), and `bashInterceptor.*`. Each follows the same type/default rules shown above.
 
 ## Legacy migration
 

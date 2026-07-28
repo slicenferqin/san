@@ -27,25 +27,6 @@ export function exportSessionToHtml() {
 `,
 	},
 	{
-		filter: /(?:^|[\\/])autoresearch(?:[\\/]index)?$/,
-		loader: "ts",
-		contents: `
-import type { ExtensionFactory } from "../extensibility/extensions/types";
-
-const CORE_AUTORESEARCH_ERROR =
-	"Autoresearch is not included in the San core binary; use the full binary.";
-
-export const createAutoresearchExtension: ExtensionFactory = api => {
-	api.registerCommand("autoresearch", {
-		description: "Unavailable in the San core binary; use the full binary.",
-		async handler(): Promise<void> {
-			throw new Error(CORE_AUTORESEARCH_ERROR);
-		},
-	});
-};
-`,
-	},
-	{
 		loader: "ts",
 		filter: /^\.\/converters\/pdf$/,
 		contents: `

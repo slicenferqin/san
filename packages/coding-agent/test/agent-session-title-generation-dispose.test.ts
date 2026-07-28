@@ -37,7 +37,6 @@ describe("AgentSession title generation disposal", () => {
 
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
-			"providers.tinyModel": "online",
 		});
 		settings.overrideModelRoles({ smol: `${model.provider}/${model.id}` });
 		const agent = new Agent({

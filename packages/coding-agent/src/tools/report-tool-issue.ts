@@ -274,16 +274,15 @@ export interface FlushResult {
 }
 
 /**
- * Optional per-flush controls. Used by `san grievances push` to surface
- * progress to a TTY and to skip the user-facing consent gate (manual
- * pushes are the user's explicit intent, not a side effect of a device write).
+ * Optional per-flush controls for explicit diagnostic clients and the
+ * device's automatic flush path.
  */
 export interface FlushOptions {
 	/**
 	 * Skip the `dev.autoqaConsent === "granted"` gate in
 	 * {@link resolvePushConfig}. Endpoint configuration is still required.
-	 * Reserved for explicit user-driven pushes (CLI `grievances push`,
-	 * future debug recipes); never set from the device's auto-flush path.
+	 * Reserved for explicit user-driven diagnostic flows; never set from the
+	 * device's auto-flush path.
 	 */
 	bypassConsent?: boolean;
 	/**
@@ -341,8 +340,7 @@ function resolvePushConfig(settings: Settings | undefined, bypassConsent: boolea
 	if (!isAutoQaEnabled(settings)) return null;
 
 	// Consent IS the push opt-in for the auto-flush path. `bypassConsent`
-	// covers explicit user-driven pushes (`san grievances push`) where the
-	// user clearly intends to ship regardless of dialog state. The
+	// covers explicit user-driven diagnostic flows. The
 	// `SAN_AUTO_QA_PUSH` env flag stays as a CI/headless override too; legacy
 	// `PI_AUTO_QA_PUSH` remains accepted.
 	if (!bypassConsent) {

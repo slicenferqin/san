@@ -2,8 +2,6 @@ import { THINKING_EFFORTS } from "@san/ai";
 import { SHAPE_VARIANT_NAMES } from "@san/snapcompact";
 import { DEFAULT_SHARE_URL } from "@san/wire";
 import { DEFAULT_RELAY_URL } from "../collab/protocol";
-import { DEFAULT_STT_MODEL_KEY, STT_MODEL_OPTIONS, STT_MODEL_VALUES } from "../stt/models";
-import { STT_SUBMIT_TRIGGER_OPTIONS, STT_SUBMIT_TRIGGER_VALUES } from "../stt/submit-trigger";
 import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMetadata } from "../thinking";
 import {
 	TINY_MODEL_DEVICE_DEFAULT,
@@ -20,20 +18,9 @@ import {
 	AUTO_THINKING_MODEL_VALUES,
 	ONLINE_AUTO_THINKING_MODEL_KEY,
 	ONLINE_MEMORY_MODEL_KEY,
-	ONLINE_TINY_TITLE_MODEL_KEY,
 	TINY_MEMORY_MODEL_OPTIONS,
 	TINY_MEMORY_MODEL_VALUES,
-	TINY_TITLE_MODEL_OPTIONS,
-	TINY_TITLE_MODEL_VALUES,
 } from "../tiny/models";
-import {
-	DEFAULT_TTS_LOCAL_MODEL_KEY,
-	DEFAULT_TTS_VOICE,
-	TTS_LOCAL_MODEL_OPTIONS,
-	TTS_LOCAL_MODEL_VALUES,
-	TTS_LOCAL_VOICE_OPTIONS,
-	TTS_LOCAL_VOICE_VALUES,
-} from "../tts/models";
 import { EDIT_MODES } from "../utils/edit-mode";
 import { SEARCH_PROVIDER_OPTIONS, SEARCH_PROVIDER_PREFERENCES, type SearchProviderId } from "../web/search/types";
 import {
@@ -1967,50 +1954,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	// Speech-to-text
-	"stt.enabled": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "interaction",
-			group: "Speech",
-			label: "Speech-to-Text",
-			description: "Enable speech-to-text input via microphone",
-		},
-	},
-
-	"stt.language": {
-		type: "string",
-		default: "en",
-	},
-
-	"stt.modelName": {
-		type: "enum",
-		values: STT_MODEL_VALUES,
-		default: DEFAULT_STT_MODEL_KEY,
-		ui: {
-			tab: "interaction",
-			group: "Speech",
-			label: "Speech Model",
-			description:
-				"Local on-device speech model. Parakeet TDT v3 (sherpa-onnx) is the SoTA default; Whisper base/small/large-v3-turbo tiers (transformers.js) trade size for multilingual coverage. Downloaded on first use.",
-			options: STT_MODEL_OPTIONS,
-		},
-	},
-	"stt.submitTrigger": {
-		type: "enum",
-		values: STT_SUBMIT_TRIGGER_VALUES,
-		default: "never",
-		ui: {
-			tab: "interaction",
-			group: "Speech",
-			label: "Speech-to-Text Submit Trigger",
-			description:
-				"Choose when speech dictation automatically submits: Never, Release (2+ words), Release with complete sentence, or When I Say Submit.",
-			options: STT_SUBMIT_TRIGGER_OPTIONS,
-		},
-	},
-
 	// ────────────────────────────────────────────────────────────────────────
 	// Context
 	// ────────────────────────────────────────────────────────────────────────
@@ -3860,16 +3803,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"speechgen.enabled": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "tools",
-			group: "Available Tools",
-			label: "Speech Generation",
-			description: "Enable the tts tool for on-device (Kokoro) or xAI Grok Voice speech-file synthesis",
-		},
-	},
 	"generate_image.enabled": {
 		type: "boolean",
 		default: false,
@@ -4796,117 +4729,6 @@ export const SETTINGS_SCHEMA = {
 			],
 		},
 	},
-	"providers.tts": {
-		type: "enum",
-		values: ["auto", "local", "xai"] as const,
-		default: "auto",
-		ui: {
-			tab: "providers",
-			group: "Services",
-			label: "Text-to-Speech Provider",
-			description: "Backend for the tts tool: local on-device neural TTS (Kokoro-82M) or xAI Grok Voice",
-			options: [
-				{
-					value: "auto",
-					label: "Auto",
-					description: "Prefer local on-device TTS; route .mp3 output to xAI when credentials exist",
-				},
-				{ value: "local", label: "Local", description: "On-device neural TTS (Kokoro-82M); output is WAV/PCM16" },
-				{
-					value: "xai",
-					label: "xAI Grok Voice",
-					description: "Requires xAI Grok OAuth or XAI_API_KEY; MP3 or WAV",
-				},
-			],
-		},
-	},
-	"tts.localModel": {
-		type: "enum",
-		values: TTS_LOCAL_MODEL_VALUES,
-		default: DEFAULT_TTS_LOCAL_MODEL_KEY,
-		ui: {
-			tab: "providers",
-			group: "Services",
-			label: "Local TTS Model",
-			description: "On-device neural TTS model (Kokoro-82M) used by the local TTS backend",
-			options: TTS_LOCAL_MODEL_OPTIONS,
-		},
-	},
-	"tts.localVoice": {
-		type: "enum",
-		values: TTS_LOCAL_VOICE_VALUES,
-		default: DEFAULT_TTS_VOICE,
-		ui: {
-			tab: "providers",
-			group: "Services",
-			label: "Local TTS Voice",
-			description: "Kokoro voice used by the local TTS backend (American/British, female/male)",
-			options: TTS_LOCAL_VOICE_OPTIONS,
-		},
-	},
-	"speech.enabled": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "providers",
-			group: "Services",
-			label: "Speech Vocalization",
-			description: "Speak the assistant's output aloud through the speakers as it streams",
-		},
-	},
-	"speech.mode": {
-		type: "enum",
-		values: ["all", "assistant", "yield"] as const,
-		default: "assistant",
-		ui: {
-			tab: "providers",
-			group: "Services",
-			label: "Speech Vocalization Mode",
-			description:
-				"What to speak: all = assistant messages + thinking; assistant = messages only; yield = only the final message at turn end",
-			options: [
-				{ value: "all", label: "All (messages + thinking)" },
-				{ value: "assistant", label: "Assistant messages" },
-				{ value: "yield", label: "Final message only" },
-			],
-		},
-	},
-	"speech.enhanced": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "providers",
-			group: "Services",
-			label: "Enhanced Speech Rewriting",
-			description:
-				"Rewrite assistant output into natural spoken prose with the tiny/smol model before synthesis (describes code, drops links and markdown). Falls back to mechanical cleanup on failure",
-		},
-	},
-	"speech.voice": {
-		type: "enum",
-		values: TTS_LOCAL_VOICE_VALUES,
-		default: DEFAULT_TTS_VOICE,
-		ui: {
-			tab: "providers",
-			group: "Services",
-			label: "Speech Vocalization Voice",
-			description: "Kokoro voice used when speaking the assistant's output aloud",
-			options: TTS_LOCAL_VOICE_OPTIONS,
-		},
-	},
-	"providers.tinyModel": {
-		type: "enum",
-		values: TINY_TITLE_MODEL_VALUES,
-		default: ONLINE_TINY_TITLE_MODEL_KEY,
-		ui: {
-			tab: "providers",
-			group: "Tiny Model",
-			label: "Tiny Model",
-			description:
-				"Session-title model: online (the TINY role from /models, else @smol) by default, or a local on-device model",
-			options: TINY_TITLE_MODEL_OPTIONS,
-		},
-	},
 	"providers.tinyModelDevice": {
 		type: "enum",
 		values: TINY_MODEL_DEVICE_SETTING_VALUES,
@@ -4916,7 +4738,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Tiny Model",
 			label: "Tiny Model Device",
 			description:
-				"ONNX execution provider for local tiny models (titles + memory). Default uses CPU-only inference. The SAN_TINY_DEVICE env var overrides this; legacy PI_TINY_DEVICE still works.",
+				"ONNX execution provider for local memory and classifier models. Default uses CPU-only inference. The SAN_TINY_DEVICE env var overrides this; legacy PI_TINY_DEVICE still works.",
 			options: TINY_MODEL_DEVICE_SETTING_OPTIONS,
 		},
 	},
@@ -4929,7 +4751,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Tiny Model",
 			label: "Tiny Model Precision",
 			description:
-				"ONNX quantization/precision for local tiny models. Default uses each model's shipped dtype (q4); lower precision is faster, higher is more faithful. The SAN_TINY_DTYPE env var overrides this; legacy PI_TINY_DTYPE still works.",
+				"ONNX quantization/precision for local memory and classifier models. Default uses each model's shipped dtype (q4); lower precision is faster, higher is more faithful. The SAN_TINY_DTYPE env var overrides this; legacy PI_TINY_DTYPE still works.",
 			options: TINY_MODEL_DTYPE_SETTING_OPTIONS,
 		},
 	},
@@ -5613,7 +5435,6 @@ export interface GroupTypeMap {
 	exa: ExaSettings;
 	statusLine: StatusLineSettings;
 	thinkingBudgets: ThinkingBudgetsSettings;
-	stt: SttSettings;
 	modelRoles: Record<string, string>;
 	modelTags: ModelTagsSettings;
 	cycleOrder: string[];

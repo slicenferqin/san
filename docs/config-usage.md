@@ -264,10 +264,10 @@ Create `TITLE_SYSTEM.md` in the same config locations as `SYSTEM.md` / `APPEND_S
 Generate a session name using lowercase `<type>:<primary-objective>`.
 ```
 
-- Missing `TITLE_SYSTEM.md` keeps the bundled title prompts.
+- Missing `TITLE_SYSTEM.md` keeps the bundled title prompt.
 - Discovery uses the same project-then-user config directory pattern as `SYSTEM.md`: project `.san/TITLE_SYSTEM.md` first, then user `~/.san/agent/TITLE_SYSTEM.md` and the other supported config bases.
 - The override replaces only the automatic session-title generation system prompt; normal `SYSTEM.md` / `APPEND_SYSTEM.md` prompt customization is unaffected.
-- The online path asks the title model to wrap the title in `<title>...</title>` and parses it leniently from text (a plain sentence, a truncated/unclosed tag, or a stray `{"title": "..."}` JSON echo all still work). A `TITLE_SYSTEM.md` override gets the wrap-in-`<title>` instruction appended after it. The local tiny-title path keeps the `<title>...</title>` prefill/stop wrapper and uses this file as its system turn.
+- The online title model is asked to wrap the title in `<title>...</title>` and its response is parsed leniently (a plain sentence, a truncated/unclosed tag, or a stray `{"title": "..."}` JSON echo still works). A `TITLE_SYSTEM.md` override gets the wrapper instruction appended after it.
 
 ## Skills subsystem
 

@@ -188,8 +188,7 @@ describe("flushGrievances", () => {
 			{ id: 2, model: "test-model", version: "test-version", tool: "read", report: "selector ignored" },
 		]);
 
-		// Rows are retained for inspection — `pushed=1` flips, but the data
-		// stays so users can browse what they've shipped via `san grievances`.
+		// Rows remain available to diagnostic clients after `pushed=1` flips.
 		expect(selectIds(db)).toEqual([1, 2]);
 		expect(selectPushedIds(db)).toEqual([1, 2]);
 		expect(selectUnpushedIds(db)).toEqual([]);

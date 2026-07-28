@@ -250,6 +250,8 @@ export function adaptSessionEvent(
 				skipped: event.skipped,
 				willRetry: event.willRetry,
 				errorMessage: sanitizeOptionalText(event.errorMessage),
+				failureStage: event.failureStage,
+				failureReason: sanitizeOptionalText(event.failureReason),
 			} satisfies ContextMaintenanceCompletedData;
 			return sequencer.emit("context.maintenance.completed", data, { durability: "durable", runId });
 		}

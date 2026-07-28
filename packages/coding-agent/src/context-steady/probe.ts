@@ -6,6 +6,7 @@ import type { ToolProgressGuardSnapshot } from "./tool-progress-guard";
 import type {
 	ActiveContinuationState,
 	ContextMaintenanceAction,
+	ContextMaintenanceFailureStage,
 	ContextMaintenanceTrigger,
 	ContextSummarySource,
 } from "./types";
@@ -21,6 +22,8 @@ export interface ContextProbeMaintenanceDecision {
 	action: ContextMaintenanceAction | "shake";
 	segmentDeltaTokens?: number;
 	segmentElapsedMs?: number;
+	failureStage?: ContextMaintenanceFailureStage;
+	failureReason?: string;
 }
 
 export interface ContextProbeCompactionObservation {
@@ -185,6 +188,12 @@ function buildContextProbeRecordBase(
 						...(options.maintenanceDecision.segmentElapsedMs === undefined
 							? {}
 							: { segmentElapsedMs: options.maintenanceDecision.segmentElapsedMs }),
+						...(options.maintenanceDecision.failureStage === undefined
+							? {}
+							: { failureStage: options.maintenanceDecision.failureStage }),
+						...(options.maintenanceDecision.failureReason === undefined
+							? {}
+							: { failureReason: options.maintenanceDecision.failureReason }),
 					}
 				: {}),
 		},

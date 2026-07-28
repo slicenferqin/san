@@ -501,7 +501,7 @@ function findValidCutPoints(entries: SessionEntry[], startIndex: number, endInde
 			case "custom_message":
 			case "label":
 		}
-		// branch_summary and custom_message are user-role messages, valid cut points
+		// 分支摘要和自定义消息也是合法切点。
 		if (entry.type === "branch_summary" || entry.type === "custom_message") {
 			cutPoints.push(i);
 		}
@@ -509,24 +509,23 @@ function findValidCutPoints(entries: SessionEntry[], startIndex: number, endInde
 	return cutPoints;
 }
 
+function isTurnStartEntry(entry: SessionEntry): boolean {
+	if (entry.type === "branch_summary") return true;
+	if (entry.type === "custom_message") return entry.attribution !== "agent";
+	if (entry.type !== "message") return false;
+	const role = entry.message.role as string;
+	return role === "user" || role === "bashExecution";
+}
+
 /**
- * Find the user message (or bashExecution) that starts the turn containing the given entry index.
- * Returns -1 if no turn start found before the index.
- * BashExecutionMessage is treated like a user message for turn boundaries.
+ * 查找包含指定 entry 的用户回合起点。
+ * 若之前不存在回合起点，返回 -1。
+ * agent-attributed custom message 是当前回合内的 steering，不是新回合边界。
  */
 export function findTurnStartIndex(entries: SessionEntry[], entryIndex: number, startIndex: number): number {
 	for (let i = entryIndex; i >= startIndex; i--) {
 		const entry = entries[i];
-		// branch_summary and custom_message are user-role messages, can start a turn
-		if (entry.type === "branch_summary" || entry.type === "custom_message") {
-			return i;
-		}
-		if (entry.type === "message") {
-			const role = entry.message.role as string;
-			if (role === "user" || role === "bashExecution") {
-				return i;
-			}
-		}
+		if (isTurnStartEntry(entry)) return i;
 	}
 	return -1;
 }
@@ -583,11 +582,25 @@ export function findCutPoint(
 		// Check if we've exceeded the budget
 		if (accumulatedTokens >= keepRecentTokens) {
 			// Find the closest valid cut point at or after this entry
+			let foundCutPoint = false;
 			for (let c = 0; c < cutPoints.length; c++) {
 				if (cutPoints[c] >= i) {
 					cutIndex = cutPoints[c];
+					foundCutPoint = true;
 					break;
 				}
+			}
+			// 若尾部只有工具结果，则其后没有合法切点；从对应的 assistant
+			// 工具调用开始保留，确保工具调用和结果不会分离。
+			if (!foundCutPoint) {
+				for (let c = cutPoints.length - 1; c >= 0; c--) {
+					const candidate = cutPoints[c];
+					if (candidate >= i || entries[candidate].type !== "message") continue;
+					cutIndex = candidate;
+					foundCutPoint = true;
+					break;
+				}
+				if (!foundCutPoint) cutIndex = cutPoints[cutPoints.length - 1];
 			}
 			break;
 		}
@@ -610,13 +623,13 @@ export function findCutPoint(
 
 	// Determine if this is a split turn
 	const cutEntry = entries[cutIndex];
-	const isUserMessage = cutEntry.type === "message" && cutEntry.message.role === "user";
-	const turnStartIndex = isUserMessage ? -1 : findTurnStartIndex(entries, cutIndex, startIndex);
+	const isTurnStart = isTurnStartEntry(cutEntry);
+	const turnStartIndex = isTurnStart ? -1 : findTurnStartIndex(entries, cutIndex, startIndex);
 
 	return {
 		firstKeptEntryIndex: cutIndex,
 		turnStartIndex,
-		isSplitTurn: !isUserMessage && turnStartIndex !== -1,
+		isSplitTurn: !isTurnStart && turnStartIndex !== -1,
 	};
 }
 

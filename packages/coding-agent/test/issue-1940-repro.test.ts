@@ -1,26 +1,24 @@
 import { describe, expect, it } from "bun:test";
-import { SttClient } from "@san/coding-agent/stt/asr-client";
-import type { SttWorkerInbound, SttWorkerOutbound } from "@san/coding-agent/stt/asr-protocol";
-import { TinyTitleClient } from "@san/coding-agent/tiny/title-client";
-import type { TinyTitleWorkerInbound, TinyTitleWorkerOutbound } from "@san/coding-agent/tiny/title-protocol";
+import { TinyModelClient } from "@san/coding-agent/tiny/client";
+import type { TinyModelWorkerInbound, TinyModelWorkerOutbound } from "@san/coding-agent/tiny/protocol";
 
 class FakeTinyWorker {
 	terminated = false;
 	refCalls = 0;
 	unrefCalls = 0;
-	#messageHandlers = new Set<(message: TinyTitleWorkerOutbound) => void>();
+	#messageHandlers = new Set<(message: TinyModelWorkerOutbound) => void>();
 	#errorHandlers = new Set<(error: Error) => void>();
-	#onSend: (message: TinyTitleWorkerInbound, worker: FakeTinyWorker) => void;
+	#onSend: (message: TinyModelWorkerInbound, worker: FakeTinyWorker) => void;
 
-	constructor(onSend: (message: TinyTitleWorkerInbound, worker: FakeTinyWorker) => void) {
+	constructor(onSend: (message: TinyModelWorkerInbound, worker: FakeTinyWorker) => void) {
 		this.#onSend = onSend;
 	}
 
-	send(message: TinyTitleWorkerInbound): void {
+	send(message: TinyModelWorkerInbound): void {
 		this.#onSend(message, this);
 	}
 
-	onMessage(handler: (message: TinyTitleWorkerOutbound) => void): () => void {
+	onMessage(handler: (message: TinyModelWorkerOutbound) => void): () => void {
 		this.#messageHandlers.add(handler);
 		return () => this.#messageHandlers.delete(handler);
 	}
@@ -42,7 +40,7 @@ class FakeTinyWorker {
 		this.unrefCalls += 1;
 	}
 
-	emit(message: TinyTitleWorkerOutbound): void {
+	emit(message: TinyModelWorkerOutbound): void {
 		for (const handler of this.#messageHandlers) handler(message);
 	}
 
@@ -51,87 +49,15 @@ class FakeTinyWorker {
 	}
 }
 
-class FakeSttWorker {
-	terminated = false;
-	refCalls = 0;
-	unrefCalls = 0;
-	#messageHandlers = new Set<(message: SttWorkerOutbound) => void>();
-	#errorHandlers = new Set<(error: Error) => void>();
-	#onSend: (message: SttWorkerInbound, worker: FakeSttWorker) => void;
-
-	constructor(onSend: (message: SttWorkerInbound, worker: FakeSttWorker) => void) {
-		this.#onSend = onSend;
-	}
-
-	send(message: SttWorkerInbound): void {
-		this.#onSend(message, this);
-	}
-
-	onMessage(handler: (message: SttWorkerOutbound) => void): () => void {
-		this.#messageHandlers.add(handler);
-		return () => this.#messageHandlers.delete(handler);
-	}
-
-	onError(handler: (error: Error) => void): () => void {
-		this.#errorHandlers.add(handler);
-		return () => this.#errorHandlers.delete(handler);
-	}
-
-	async terminate(): Promise<void> {
-		this.terminated = true;
-	}
-
-	ref(): void {
-		this.refCalls += 1;
-	}
-
-	unref(): void {
-		this.unrefCalls += 1;
-	}
-
-	emit(message: SttWorkerOutbound): void {
-		for (const handler of this.#messageHandlers) handler(message);
-	}
-}
-
-describe("tiny title client prompt options", () => {
-	it("forwards a custom system prompt on local title requests", async () => {
-		let sent: TinyTitleWorkerInbound | undefined;
-		const worker = new FakeTinyWorker((message, worker) => {
-			sent = message;
-			if (message.type === "generate") {
-				worker.emit({ type: "title", id: message.id, title: "custom title" });
-			}
-		});
-		const client = new TinyTitleClient(() => worker);
-
-		try {
-			const title = await client.generate("lfm2-350m", "Investigate routing", {
-				systemPrompt: "Custom title prompt",
-			});
-
-			expect(title).toBe("custom title");
-			expect(sent).toMatchObject({
-				type: "generate",
-				modelKey: "lfm2-350m",
-				message: "Investigate routing",
-				systemPrompt: "Custom title prompt",
-			});
-		} finally {
-			await client.terminate();
-		}
-	});
-});
-
 describe("issue #1940 — local model failures release the worker process", () => {
-	it("releases the failed worker and suppresses repeated local model attempts", async () => {
+	it("releases the failed worker and suppresses repeated attempts for that model", async () => {
 		const first = new FakeTinyWorker((message, worker) => {
 			if (message.type === "complete") {
 				worker.emit({ type: "error", id: message.id, error: "Error: Unknown failure" });
 			}
 		});
 		let spawnCount = 0;
-		const client = new TinyTitleClient(() => {
+		const client = new TinyModelClient(() => {
 			spawnCount += 1;
 			return first;
 		});
@@ -152,7 +78,7 @@ describe("issue #1940 — local model failures release the worker process", () =
 			if (message.type !== "complete") return;
 			firstRequestId ||= message.id;
 		});
-		const client = new TinyTitleClient(() => worker);
+		const client = new TinyModelClient(() => worker);
 
 		try {
 			const first = client.complete("qwen3-1.7b", "first prompt");
@@ -167,16 +93,16 @@ describe("issue #1940 — local model failures release the worker process", () =
 		}
 	});
 
-	it("does not suppress unrelated queued models after a worker crash", async () => {
+	it("allows an unrelated model after the worker crashes", async () => {
 		const first = new FakeTinyWorker(() => {});
 		const second = new FakeTinyWorker((message, worker) => {
-			if (message.type === "generate") {
-				worker.emit({ type: "title", id: message.id, title: "recovered title" });
+			if (message.type === "complete") {
+				worker.emit({ type: "completion", id: message.id, text: "recovered" });
 			}
 		});
 		const workers = [first, second];
 		let nextWorker = 0;
-		const client = new TinyTitleClient(() => {
+		const client = new TinyModelClient(() => {
 			const worker = workers[nextWorker];
 			if (!worker) throw new Error("unexpected worker spawn");
 			nextWorker += 1;
@@ -184,14 +110,12 @@ describe("issue #1940 — local model failures release the worker process", () =
 		});
 
 		try {
-			const crashedMemory = client.complete("qwen3-1.7b", "first prompt");
-			const queuedTitle = client.generate("lfm2-350m", "title prompt");
+			const crashed = client.complete("qwen3-1.7b", "first prompt");
 			first.emitError(new Error("tiny model subprocess exited with signal SIGKILL"));
 
-			expect(await crashedMemory).toBeNull();
-			expect(await queuedTitle).toBeNull();
+			expect(await crashed).toBeNull();
 			expect(first.terminated).toBe(true);
-			expect(await client.generate("lfm2-350m", "retry title")).toBe("recovered title");
+			expect(await client.complete("qwen2.5-1.5b", "retry prompt")).toBe("recovered");
 			expect(nextWorker).toBe(2);
 		} finally {
 			await client.terminate();
@@ -200,15 +124,15 @@ describe("issue #1940 — local model failures release the worker process", () =
 });
 
 describe("issue #3291 — tiny-model downloads keep the worker referenced", () => {
-	it("references the worker while a download request is pending", async () => {
+	it("references the worker while a memory-model download is pending", async () => {
 		let downloadRequestId = "";
 		const worker = new FakeTinyWorker(message => {
 			if (message.type === "download") downloadRequestId = message.id;
 		});
-		const client = new TinyTitleClient(() => worker);
+		const client = new TinyModelClient(() => worker);
 
 		try {
-			const download = client.downloadModel("lfm2-700m");
+			const download = client.downloadModel("lfm2-1.2b");
 
 			expect(downloadRequestId).not.toBe("");
 			expect(worker.refCalls).toBe(1);
@@ -228,61 +152,16 @@ describe("issue #3291 — tiny-model downloads keep the worker referenced", () =
 		const worker = new FakeTinyWorker(message => {
 			if (message.type === "download") downloadRequestId = message.id;
 		});
-		const client = new TinyTitleClient(() => worker);
+		const client = new TinyModelClient(() => worker);
 
 		try {
-			const download = client.downloadModel("lfm2-700m");
+			const download = client.downloadModel("lfm2-1.2b");
 
 			expect(downloadRequestId).not.toBe("");
 			worker.emit({ type: "error", id: downloadRequestId, error: "Error: runtime install failed" });
 
 			expect(await download).toEqual({ ok: false, error: "Error: runtime install failed" });
 			expect(worker.terminated).toBe(true);
-		} finally {
-			await client.terminate();
-		}
-	});
-});
-
-describe("issue #3939 — stt downloads keep the worker referenced", () => {
-	it("references the worker while a download request is pending", async () => {
-		let downloadRequestId = "";
-		const worker = new FakeSttWorker(message => {
-			if (message.type === "download") downloadRequestId = message.id;
-		});
-		const client = new SttClient(() => worker);
-
-		try {
-			const download = client.downloadModel("turbo");
-
-			expect(downloadRequestId).not.toBe("");
-			expect(worker.refCalls).toBe(1);
-			expect(worker.unrefCalls).toBe(0);
-
-			worker.emit({ type: "downloaded", id: downloadRequestId });
-
-			expect(await download).toEqual({ ok: true });
-			expect(worker.unrefCalls).toBe(1);
-		} finally {
-			await client.terminate();
-		}
-	});
-
-	it("surfaces worker download errors to setup callers", async () => {
-		let downloadRequestId = "";
-		const worker = new FakeSttWorker(message => {
-			if (message.type === "download") downloadRequestId = message.id;
-		});
-		const client = new SttClient(() => worker);
-
-		try {
-			const download = client.downloadModel("turbo");
-
-			expect(downloadRequestId).not.toBe("");
-			worker.emit({ type: "error", id: downloadRequestId, error: "Error: Hub returned 403" });
-
-			expect(await download).toEqual({ ok: false, error: "Error: Hub returned 403" });
-			expect(worker.unrefCalls).toBe(1);
 		} finally {
 			await client.terminate();
 		}

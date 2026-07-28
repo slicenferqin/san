@@ -133,8 +133,6 @@ export type SymbolKey =
 	| "icon.extensionPrompt"
 	| "icon.extensionContextFile"
 	| "icon.extensionInstruction"
-	// STT
-	| "icon.mic"
 	// Compaction divider
 	| "icon.camera"
 	// Thinking Levels
@@ -344,8 +342,6 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.extensionPrompt": "✎",
 	"icon.extensionContextFile": "📎",
 	"icon.extensionInstruction": "📘",
-	// STT
-	"icon.mic": "🎤",
 	// Compaction divider
 	"icon.camera": "📷",
 	// Thinking levels
@@ -644,8 +640,6 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.extensionContextFile": "\uf0f6",
 	// pick:  | alt:  
 	"icon.extensionInstruction": "\uf02d",
-	// STT - fa-microphone
-	"icon.mic": "\uf130",
 	// Compaction divider - fa-camera-retro
 	"icon.camera": "\uf083",
 	// Thinking Levels - emoji labels
@@ -873,8 +867,6 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.extensionPrompt": "PR",
 	"icon.extensionContextFile": "CF",
 	"icon.extensionInstruction": "IN",
-	// STT
-	"icon.mic": "MIC",
 	// Compaction divider
 	"icon.camera": "[o]",
 	// Thinking Levels
@@ -1874,7 +1866,6 @@ export class Theme {
 			extensionPrompt: this.#symbols["icon.extensionPrompt"],
 			extensionContextFile: this.#symbols["icon.extensionContextFile"],
 			extensionInstruction: this.#symbols["icon.extensionInstruction"],
-			mic: this.#symbols["icon.mic"],
 			camera: this.#symbols["icon.camera"],
 		};
 	}

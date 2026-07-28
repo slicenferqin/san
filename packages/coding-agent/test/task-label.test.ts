@@ -12,10 +12,6 @@ function getModelOrThrow(id: string): Model<Api> {
 
 function createSettings(model: Model<Api>) {
 	return {
-		get(path: string) {
-			if (path === "providers.tinyModel") return "online";
-			return undefined;
-		},
 		getModelRole(role: string) {
 			return role === "smol" ? `${model.provider}/${model.id}` : undefined;
 		},

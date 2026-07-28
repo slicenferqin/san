@@ -39,7 +39,7 @@ export interface XAIHttpTransport {
  *      happens for tool-only ids like `grok-imagine-image` that
  *      `applyXAIOAuthCuration` filters out via `XAI_NON_CHAT_PREFIXES`.
  *      Without this leg, a registry-configured proxy is silently bypassed for
- *      image/TTS traffic.
+ *      image-generation traffic.
  *   3. `XAI_BASE_URL` env var (legacy global override, preserved).
  *   4. `DEFAULT_BASE_URL = "https://api.x.ai/v1"`.
  *
@@ -111,8 +111,8 @@ export function resolveXAIHttpTransport(
  *      as a back-compat convenience: the borrow lets API-key-only setups
  *      satisfy the xai-oauth branch and then resolve baseUrl under
  *      xai-oauth instead of xai, silently bypassing `providers.xai.baseUrl`
- *      overrides for image/TTS traffic. The gate routes the borrow case to
- *      step 2 while preserving every dedicated xai-oauth path.
+ *      overrides for image-generation traffic. The gate routes the borrow case
+ *      to step 2 while preserving every dedicated xai-oauth path.
  *   2. xai (plain API key). Delegates to ModelRegistry.getApiKeyForProvider
  *      which runs AuthStorage.getApiKey's full cascade: runtime override →
  *      models.yml config override → stored api_key credential → OAuth

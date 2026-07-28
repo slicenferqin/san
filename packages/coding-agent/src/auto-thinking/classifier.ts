@@ -22,13 +22,13 @@ import type { Settings } from "../config/settings";
 import difficultySystemPrompt from "../prompts/system/auto-thinking-difficulty.md" with { type: "text" };
 import difficultyLocalPrompt from "../prompts/system/auto-thinking-difficulty-local.md" with { type: "text" };
 import { clampAutoThinkingEffort } from "../thinking";
+import { tinyModelClient } from "../tiny/client";
 import { preprocessTinyMessage } from "../tiny/message-preproc";
 import {
 	isTinyMemoryLocalModelKey,
 	isTinyMemoryReasoningModelKey,
 	ONLINE_AUTO_THINKING_MODEL_KEY,
 } from "../tiny/models";
-import { tinyModelClient } from "../tiny/title-client";
 
 const DIFFICULTY_SYSTEM_PROMPT = prompt.render(difficultySystemPrompt);
 

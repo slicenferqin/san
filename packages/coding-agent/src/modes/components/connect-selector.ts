@@ -2,7 +2,7 @@
  * `/connect` provider management surface.
  *
  * Lists model providers (OAuth, API key, keyless/local). Connected providers
- * sort first with origin + model count. Does not include web search / STT / TTS.
+ * sort first with origin + model count. Non-model services stay excluded.
  */
 
 import { PROVIDER_REGISTRY } from "@san/ai/registry/registry";

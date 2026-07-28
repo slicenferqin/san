@@ -5,6 +5,11 @@
 ### Breaking Changes
 
 - Renamed the published package from `@oh-my-pi/pi-utils` to `@san/utils`; consumers must update package dependencies and imports.
+- Removed the public `getAutoresearchDir`, `getAutoresearchProjectDir`, `getAutoresearchDbPath`, and `getAutoresearchRunDir` path helpers with the Autoresearch experiment.
+
+### Fixed
+
+- Fixed pinned side runtimes reusing stale dependencies after requested versions, overrides, or trusted dependencies changed.
 
 ## [17.0.2] - 2026-07-17
 
