@@ -1,3 +1,5 @@
+import { extractExplicitUserMemoryDirective } from "../context-steady/memory-authorization";
+import { isAuthoritativeUserMessage } from "../context-steady/session";
 import type { TurnDigest, TurnDigestMemoryCandidate } from "../context-steady/types";
 import type { SessionEntry } from "../session/session-entries";
 import { buildSanBrainEvidenceRef } from "./evidence";
@@ -52,6 +54,34 @@ function normalizedText(value: string): string {
 	return value.trim().replace(/\s+/g, " ");
 }
 
+function entryText(entry: SessionEntry): string {
+	if (entry.type === "message") {
+		if (!isAuthoritativeUserMessage(entry.message) || entry.message.role !== "user") return "";
+		if (typeof entry.message.content === "string") return entry.message.content;
+		return entry.message.content
+			.filter((content): content is { type: "text"; text: string } => content.type === "text")
+			.map(content => content.text)
+			.join(" ");
+	}
+	if (entry.type !== "custom_message" || entry.attribution !== "user") return "";
+	if (typeof entry.content === "string") return entry.content;
+	return entry.content
+		.filter((content): content is { type: "text"; text: string } => content.type === "text")
+		.map(content => content.text)
+		.join(" ");
+}
+
+function explicitUserPreference(options: SanBrainExtractOptions): string | undefined {
+	const fromIndex = options.entries.findIndex(entry => entry.id === options.digest.source.fromEntryId);
+	const toIndex = options.entries.findIndex(entry => entry.id === options.digest.source.toEntryId);
+	if (fromIndex < 0 || toIndex < fromIndex) return undefined;
+	for (const entry of options.entries.slice(fromIndex, toIndex + 1)) {
+		const directive = extractExplicitUserMemoryDirective(entryText(entry));
+		if (directive) return normalizedText(directive);
+	}
+	return undefined;
+}
+
 function stableHash(value: string): string {
 	return Bun.hash(value).toString(36);
 }
@@ -96,8 +126,11 @@ function topic(value: string): string {
 function createProfileCandidate(
 	memory: TurnDigestMemoryCandidate,
 	options: SanBrainExtractOptions,
+	explicitPreference?: string,
 ): SanBrainProfileCandidate | undefined {
-	const value = normalizedText(memory.content);
+	const summarizedValue = normalizedText(memory.content);
+	const authorizedValue = memory.type === "preference" ? explicitPreference : undefined;
+	const value = authorizedValue ?? summarizedValue;
 	const sensitivity = classifySanBrainSensitivity(value);
 	const confidence = clampProbability(memory.importance);
 	if (!value || sensitivity === "secret" || confidence < options.minConfidence) return undefined;
@@ -114,6 +147,7 @@ function createProfileCandidate(
 		candidateId: `brain_profile_${stableHash(`${options.digest.source.fromEntryId}\0${dedupeKey}`)}`,
 		scope,
 		type,
+		authorization: authorizedValue ? "explicit_user" : "inferred",
 		subject,
 		predicate,
 		value,
@@ -152,6 +186,7 @@ function createWorkflowCandidate(
 		candidateId: `brain_experience_${stableHash(`${options.digest.source.fromEntryId}\0${dedupeKey}`)}`,
 		scope,
 		type: "workflow_pattern",
+		authorization: "inferred",
 		selector: {},
 		action: { kind: "workflow_suggestion", workflowId },
 		taskTags: [],
@@ -189,6 +224,7 @@ function createWorkflowSkillCandidate(
 		candidateId: `brain_experience_${stableHash(`${options.digest.source.fromEntryId}\0${dedupeKey}`)}`,
 		scope,
 		type: "skill_candidate",
+		authorization: "inferred",
 		selector: {},
 		action: {
 			kind: "skill_reference",
@@ -231,6 +267,7 @@ function createToolFailureCandidates(options: SanBrainExtractOptions): SanBrainE
 			candidateId: `brain_experience_${stableHash(`${options.digest.source.fromEntryId}\0${dedupeKey}`)}`,
 			scope,
 			type: "failure_posture",
+			authorization: "inferred",
 			selector: { commands: [tool.tool] },
 			action: { kind: "risk_rule", riskClass, requiredCheck },
 			taskTags: [tool.tool],
@@ -253,6 +290,7 @@ function createToolFailureCandidates(options: SanBrainExtractOptions): SanBrainE
 			scope,
 			type: "check_candidate",
 			selector: { commands: [tool.tool] },
+			authorization: "inferred",
 			action: {
 				kind: "check_suggestion",
 				checkId,
@@ -278,6 +316,7 @@ function createToolFailureCandidates(options: SanBrainExtractOptions): SanBrainE
 			scope,
 			type: "recall",
 			selector: { commands: [tool.tool] },
+			authorization: "inferred",
 			action: { kind: "recall_policy", queryTemplateId: "risk-history-v1" },
 			taskTags: [tool.tool],
 			claimKey: recallClaimKey,
@@ -297,6 +336,7 @@ function createToolFailureCandidates(options: SanBrainExtractOptions): SanBrainE
 export function extractSanBrainCandidates(options: SanBrainExtractOptions): SanBrainExtractResult {
 	const limit = Math.max(0, Math.trunc(options.maxCandidates));
 	if (limit === 0) return { profileCandidates: [], experienceCandidates: [] };
+	const explicitPreference = explicitUserPreference(options);
 	const candidates: SanBrainCandidate[] = [];
 	const dedupeKeys = new Set<string>();
 	const add = (candidate: SanBrainCandidate | undefined) => {
@@ -304,8 +344,18 @@ export function extractSanBrainCandidates(options: SanBrainExtractOptions): SanB
 		dedupeKeys.add(candidate.dedupeKey);
 		candidates.push(candidate);
 	};
+	if (explicitPreference) {
+		add(
+			createProfileCandidate(
+				{ content: explicitPreference, type: "preference", importance: 1, authorization: "explicit_user" },
+				options,
+				explicitPreference,
+			),
+		);
+	}
 
 	for (const memory of options.digest.memoryCandidates) {
+		if (memory.type === "preference" && explicitPreference) continue;
 		if (memory.type === "workflow") {
 			add(createWorkflowCandidate(memory, options));
 			add(createWorkflowSkillCandidate(memory, options));

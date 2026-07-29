@@ -487,6 +487,7 @@ interface ModelPatch {
 	contextWindow?: number;
 	maxTokens?: number;
 	omitMaxOutputTokens?: boolean;
+	useResponsesLite?: boolean;
 	headers?: Record<string, string>;
 	compat?: ModelSpec<Api>["compat"];
 	contextPromotionTarget?: string;
@@ -514,6 +515,7 @@ function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: ModelTr
 	if (patch.contextWindow !== undefined) result.contextWindow = patch.contextWindow;
 	if (patch.maxTokens !== undefined) result.maxTokens = patch.maxTokens;
 	if (patch.omitMaxOutputTokens !== undefined) result.omitMaxOutputTokens = patch.omitMaxOutputTokens;
+	if (patch.useResponsesLite !== undefined) result.useResponsesLite = patch.useResponsesLite;
 	if (patch.contextPromotionTarget !== undefined) result.contextPromotionTarget = patch.contextPromotionTarget;
 	if (patch.compactionModel !== undefined) result.compactionModel = patch.compactionModel;
 	if (patch.remoteCompaction !== undefined) {
@@ -624,6 +626,7 @@ function buildCustomModelOverlay(
 		contextWindow: modelDef.contextWindow,
 		maxTokens: modelDef.maxTokens,
 		omitMaxOutputTokens: modelDef.omitMaxOutputTokens,
+		useResponsesLite: modelDef.useResponsesLite,
 		headers: mergeCustomModelHeaders(providerHeaders, modelDef.headers, authHeader, providerApiKey),
 		compat: mergeCompat(providerCompat, modelDef.compat),
 		contextPromotionTarget: modelDef.contextPromotionTarget,
@@ -667,6 +670,7 @@ function finalizeCustomModel(model: CustomModelOverlay, options: CustomModelBuil
 		maxTokens: resolvedModel.maxTokens ?? reference?.maxTokens ?? (options.useDefaults ? 16384 : null),
 		headers: resolvedModel.headers,
 		omitMaxOutputTokens: resolvedModel.omitMaxOutputTokens ?? reference?.omitMaxOutputTokens,
+		useResponsesLite: resolvedModel.useResponsesLite ?? reference?.useResponsesLite,
 		compat: mergeCompat(reference?.compatConfig, resolvedModel.compat),
 		contextPromotionTarget: resolvedModel.contextPromotionTarget,
 		compactionModel: resolvedModel.compactionModel,
@@ -1119,6 +1123,7 @@ export class ModelRegistry {
 				contextWindow: replacementModel.contextWindow ?? existing.contextWindow,
 				maxTokens: replacementModel.maxTokens ?? existing.maxTokens,
 				omitMaxOutputTokens: replacementModel.omitMaxOutputTokens ?? existing.omitMaxOutputTokens,
+				useResponsesLite: replacementModel.useResponsesLite ?? existing.useResponsesLite,
 				...(supportsTools !== undefined ? { supportsTools } : {}),
 			};
 		});

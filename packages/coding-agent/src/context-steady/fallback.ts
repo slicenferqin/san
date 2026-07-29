@@ -11,6 +11,7 @@
  * which transitively loads native modules via tokenizer → pi-natives.
  */
 
+import { extractExplicitUserMemoryDirective } from "./memory-authorization";
 import { isAuthoritativeUserMessage } from "./session";
 import type { TurnDigest, TurnDigestFile, TurnDigestSource, TurnDigestToolEvidence } from "./types";
 import { TURN_DIGEST_SCHEMA_VERSION } from "./types";
@@ -268,15 +269,24 @@ export function generateFallbackDigest(
 		/\b(evidence|found|observed|confirmed|verified|result|shows|means)\b/i,
 		/(证据|发现|观察到|确认|验证|结果|说明|表明)/u,
 	]);
+	const preferenceIntent = /\b(?:prefer|always|never|must|should)\b|(?:偏好|统一|始终|永远|不要|禁止|必须)/iu.test(
+		intent,
+	);
+	const explicitPreference = extractExplicitUserMemoryDirective(intent);
 	const memoryCandidates: TurnDigest["memoryCandidates"] = [];
-	if (/\b(?:prefer|always|never|must|should)\b|(?:偏好|统一|始终|永远|不要|禁止|必须)/iu.test(intent)) {
-		memoryCandidates.push({ content: intent, type: "preference", importance: 0.8 });
+	if (preferenceIntent || explicitPreference) {
+		memoryCandidates.push({
+			content: explicitPreference ?? intent,
+			type: "preference",
+			importance: 0.8,
+			authorization: explicitPreference ? "explicit_user" : "inferred",
+		});
 	}
 	for (const decision of decisions.slice(0, 6)) {
-		memoryCandidates.push({ content: decision, type: "decision", importance: 0.75 });
+		memoryCandidates.push({ content: decision, type: "decision", importance: 0.75, authorization: "inferred" });
 	}
 	for (const fact of factsLearned.slice(0, 6)) {
-		memoryCandidates.push({ content: fact, type: "project_fact", importance: 0.7 });
+		memoryCandidates.push({ content: fact, type: "project_fact", importance: 0.7, authorization: "inferred" });
 	}
 
 	return {

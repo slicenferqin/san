@@ -324,6 +324,8 @@ describe("openai-codex streaming", () => {
 			"https://chatgpt.com/backend-api",
 			"https://chatgpt.com/backend-api/codex",
 			"https://chatgpt.com/backend-api/codex/responses",
+			"https://api.example.com/v1",
+			"https://api.example.com/v1/responses",
 		]) {
 			const model = { ...createCodexTestModel(baseUrl), preferWebsockets: false };
 			const result = await streamOpenAICodexResponses(model, context, {
@@ -338,6 +340,8 @@ describe("openai-codex streaming", () => {
 			"https://chatgpt.com/backend-api/codex/responses",
 			"https://chatgpt.com/backend-api/codex/responses",
 			"https://chatgpt.com/backend-api/codex/responses",
+			"https://api.example.com/v1/responses",
+			"https://api.example.com/v1/responses",
 		]);
 	});
 

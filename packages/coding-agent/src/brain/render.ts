@@ -15,11 +15,11 @@ function formatScope(scope: { kind: string; key: string }): string {
 
 export function buildSanBrainInboxReportText(store: SanBrainStore, limit = 20): string {
 	const candidates = store.listPendingCandidates(limit);
-	if (candidates.length === 0) return "San Brain inbox is empty.";
-	const lines = [`San Brain inbox (${candidates.length})`];
+	if (candidates.length === 0) return "San Brain review queue is empty.";
+	const lines = [`San Brain review queue (${candidates.length})`];
 	for (const record of candidates) {
 		lines.push(
-			`- ${record.candidate.candidateId} [${record.kind}] scope=${formatScope(record.candidate.scope)} confidence=${record.candidate.confidence.toFixed(2)}`,
+			`- ${record.candidate.candidateId} [${record.kind}] status=${record.status} scope=${formatScope(record.candidate.scope)} confidence=${record.candidate.confidence.toFixed(2)}`,
 			`  ${summarizeSanBrainCandidate(record.kind, record.candidate)}`,
 		);
 	}
@@ -40,6 +40,18 @@ export function buildSanBrainProfileReportText(store: SanBrainStore, limit = 20)
 	return lines.join("\n");
 }
 
+export function buildSanBrainAutomationReportText(store: SanBrainStore): string {
+	const metrics = store.getAutomationMetrics();
+	const rate = metrics.evaluated === 0 ? "n/a" : `${(metrics.automationRate * 100).toFixed(1)}%`;
+	const revocationRate =
+		metrics.automaticallyApproved === 0 ? "n/a" : `${(metrics.automaticRevocationRate * 100).toFixed(1)}%`;
+	return [
+		`San Brain automation: rate=${rate} evaluated=${metrics.evaluated} auto=${metrics.automaticallyHandled} escalations=${metrics.escalated}`,
+		`- approve=${metrics.automaticallyApproved} discard=${metrics.automaticallyDiscarded} observe=${metrics.automaticallyObserved} supersede=${metrics.automaticallySuperseded}`,
+		`- candidates=${metrics.totalCandidates} pending=${metrics.pending} reviewQueue=${metrics.reviewQueue} revoked=${metrics.automaticallyRevoked} revocationRate=${revocationRate}`,
+	].join("\n");
+}
+
 export function buildSanBrainExplanationText(store: SanBrainStore, id: string): string {
 	const explanation = store.explain(id);
 	if (!explanation) return `No San Brain candidate or decision found for ${id}.`;
@@ -56,7 +68,8 @@ export function buildSanBrainExplanationText(store: SanBrainStore, id: string): 
 	];
 	for (const decision of explanation.decisions) {
 		lines.push(
-			`- ${decision.decision.decisionId}: ${decision.decision.action}; state=${decision.applicationState}; revision=${decision.decision.nextRevision}`,
+			`- ${decision.decision.decisionId}: ${decision.decision.action}; by=${decision.decision.requestedBy}; state=${decision.applicationState}; revision=${decision.decision.nextRevision}`,
+			`  reason=${sanitizeBrainDebugText(decision.decision.reason)}`,
 		);
 		if (decision.applicationError) lines.push(`  error=${decision.applicationError}`);
 	}

@@ -4,6 +4,7 @@ import { Agent, type AgentTool } from "@san/agent";
 import * as ai from "@san/ai";
 import { type AssistantMessage, z } from "@san/ai";
 import { createMockModel, type MockResponse } from "@san/ai/providers/mock";
+import { SanBrainStore } from "@san/coding-agent/brain/store";
 import {
 	BRAIN_EXPERIENCE_CANDIDATE_CUSTOM_TYPE,
 	BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE,
@@ -95,7 +96,11 @@ function customEntries(entries: readonly SessionEntry[]): CustomEntry[] {
 	return entries.filter((entry): entry is CustomEntry => entry.type === "custom");
 }
 
-async function createHarness(contextSteadyEnabled: boolean, llmDigestEnabled = false): Promise<Harness> {
+async function createHarness(
+	contextSteadyEnabled: boolean,
+	llmDigestEnabled = false,
+	autoDecisionEnabled = false,
+): Promise<Harness> {
 	const tempDir = TempDir.createSync("@san-brain-capture-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 	const mock = createMockModel({
@@ -122,6 +127,7 @@ async function createHarness(contextSteadyEnabled: boolean, llmDigestEnabled = f
 			"san.brain.capture.enabled": true,
 			"san.brain.capture.maxCandidatesPerTurn": 5,
 			"san.brain.capture.minConfidence": 0.72,
+			"san.brain.autoDecision.enabled": autoDecisionEnabled,
 		},
 	});
 	settings.setModelRole("default", `${mock.provider}/${mock.id}`);
@@ -229,5 +235,50 @@ describe("San Brain M2 AgentSession capture lifecycle", () => {
 			type: "user_preference",
 			value: expect.stringContaining("简洁中文"),
 		});
+	});
+
+	it("automatically activates an explicit user preference before prompt completion", async () => {
+		const { session, tempDir } = await createHarness(false, false, true);
+
+		await session.prompt("Please remember: always use concise replies.");
+
+		const store = SanBrainStore.open(tempDir.path());
+		try {
+			const active = store.listActiveStates();
+			expect(active).toHaveLength(1);
+			expect(active[0]).toMatchObject({
+				kind: "profile",
+				candidate: {
+					authorization: "explicit_user",
+					value: "Please remember: always use concise replies.",
+				},
+			});
+			const metrics = store.getAutomationMetrics();
+			expect(metrics).toMatchObject({
+				automaticallyApproved: 1,
+				escalated: 0,
+				automationRate: 1,
+			});
+			expect(metrics.automaticallyHandled).toBe(metrics.totalCandidates);
+		} finally {
+			store.close();
+		}
+	});
+
+	it("does not automatically activate a memory question", async () => {
+		const { session, tempDir } = await createHarness(false, false, true);
+
+		await session.prompt("Do you remember why the build failed?");
+
+		const store = SanBrainStore.open(tempDir.path());
+		try {
+			expect(store.listActiveStates()).toEqual([]);
+			expect(store.getAutomationMetrics()).toMatchObject({
+				automaticallyApproved: 0,
+				automaticallyRevoked: 0,
+			});
+		} finally {
+			store.close();
+		}
 	});
 });

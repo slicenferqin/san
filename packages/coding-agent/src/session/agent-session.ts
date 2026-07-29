@@ -178,6 +178,7 @@ import {
 	recordSanBrainActivationError,
 	type SanBrainInjectionCandidate,
 } from "../brain/activation";
+import { runSanBrainAutoDecisions } from "../brain/auto-decision";
 import { captureSanBrainTurn, recordSanBrainCaptureError } from "../brain/capture";
 import {
 	appendSanBrainActivation,
@@ -5336,7 +5337,8 @@ export class AgentSession {
 				const contextSteadyEnabled = this.#contextSteadyIsActive();
 				const digestEnabled = settings.get("san.contextSteady.digest.enabled") as boolean;
 				const persistFallback = settings.get("san.contextSteady.digest.persistFallback") as boolean;
-				const brainCaptureEnabled = resolveSanBrainRuntimePolicy(settings).captureEnabled;
+				const brainPolicy = resolveSanBrainRuntimePolicy(settings);
+				const brainCaptureEnabled = brainPolicy.captureEnabled;
 				if (!contextSteadyEnabled && !brainCaptureEnabled) return;
 				if (!digestEnabled && !brainCaptureEnabled) return;
 
@@ -5470,6 +5472,31 @@ export class AgentSession {
 							userScope: scopes.userScope,
 							fallbackScope: scopes.fallbackScope,
 						});
+						if (brainPolicy.autoDecisionEnabled) {
+							const store = SanBrainStore.open(settings.getAgentDir());
+							try {
+								const autoDecision = runSanBrainAutoDecisions({
+									store,
+									sessionManager,
+									candidateIds: capture.candidateIds,
+									explicitMinConfidence: settings.get("san.brain.autoDecision.explicitMinConfidence"),
+									inferredMinConfidence: settings.get("san.brain.autoDecision.inferredMinConfidence"),
+									minIndependentEvidence: settings.get("san.brain.autoDecision.minIndependentEvidence"),
+									maxPerTurn: settings.get("san.brain.autoDecision.maxPerTurn"),
+									createdAt: digest.createdAt,
+								});
+								logger.debug("San Brain automatic decisions persisted", {
+									sessionId: this.sessionId,
+									turnId: digest.turnId,
+									evaluated: autoDecision.evaluated,
+									automaticallyHandled: autoDecision.automaticallyHandled,
+									escalated: autoDecision.escalated,
+									failures: autoDecision.failures.length,
+								});
+							} finally {
+								store.close();
+							}
+						}
 						logger.debug("San Brain capture persisted", {
 							sessionId: this.sessionId,
 							turnId: digest.turnId,

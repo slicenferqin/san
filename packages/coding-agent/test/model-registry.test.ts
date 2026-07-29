@@ -1199,6 +1199,7 @@ describe("ModelRegistry", () => {
 		let addHeaders: ModelRegistry;
 		let omitOnBuiltin: ModelRegistry;
 		let omitOnCustom: ModelRegistry;
+		let responsesLiteOnCustom: ModelRegistry;
 		beforeAll(() => {
 			single = readonlyRegistry({
 				providers: {
@@ -1289,6 +1290,16 @@ describe("ModelRegistry", () => {
 								omitMaxOutputTokens: true,
 							},
 						],
+					},
+				},
+			});
+			responsesLiteOnCustom = readonlyRegistry({
+				providers: {
+					zzz: {
+						baseUrl: "https://api.zzzcoding.org/v1",
+						api: "openai-codex-responses",
+						auth: "none",
+						models: [{ id: "gpt-5.6-sol", useResponsesLite: true }],
 					},
 				},
 			});
@@ -1469,6 +1480,12 @@ describe("ModelRegistry", () => {
 			const model = omitOnCustom.find("ollama", "glm-5.1:cloud");
 			expect(model?.omitMaxOutputTokens).toBe(true);
 			expect(model?.maxTokens).toBe(202752);
+		});
+
+		test("custom model definitions preserve Responses Lite transport metadata", () => {
+			const model = responsesLiteOnCustom.find("zzz", "gpt-5.6-sol");
+			expect(model?.api).toBe("openai-codex-responses");
+			expect(model?.useResponsesLite).toBe(true);
 		});
 	});
 

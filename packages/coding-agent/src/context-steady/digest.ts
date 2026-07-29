@@ -472,6 +472,22 @@ function simplifyDetails(details: unknown): unknown {
 	return result;
 }
 
+function authoritativeMemoryCandidates(digest: TurnDigest, fallbackDigest: TurnDigest): TurnDigestMemoryCandidate[] {
+	const inferred: TurnDigestMemoryCandidate[] = digest.memoryCandidates.map(candidate => ({
+		...candidate,
+		authorization: "inferred",
+	}));
+	const seen = new Set(inferred.map(candidate => candidate.content.trim().toLowerCase()));
+	for (const candidate of fallbackDigest.memoryCandidates) {
+		if (candidate.authorization !== "explicit_user") continue;
+		const key = candidate.content.trim().toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		inferred.unshift({ ...candidate, authorization: "explicit_user" });
+	}
+	return inferred;
+}
+
 function mergeAuthoritativeDigestFields(digest: TurnDigest, fallbackDigest: TurnDigest): TurnDigest {
 	return {
 		...digest,
@@ -479,6 +495,7 @@ function mergeAuthoritativeDigestFields(digest: TurnDigest, fallbackDigest: Turn
 		sessionId: fallbackDigest.sessionId,
 		createdAt: fallbackDigest.createdAt,
 		source: fallbackDigest.source,
+		memoryCandidates: authoritativeMemoryCandidates(digest, fallbackDigest),
 		filesTouched: mergeFiles(digest.filesTouched, fallbackDigest.filesTouched),
 		toolEvidence: mergeToolEvidence(digest.toolEvidence, fallbackDigest.toolEvidence),
 		tokenStats: fallbackDigest.tokenStats,

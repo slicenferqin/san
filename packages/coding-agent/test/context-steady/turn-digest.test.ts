@@ -234,6 +234,45 @@ describe("fallback digest", () => {
 		);
 
 		expect(d.memoryCandidates.map(candidate => candidate.type)).toEqual(["preference", "decision", "project_fact"]);
+		expect(d.memoryCandidates[0]?.authorization).toBe("inferred");
+		const explicit = generateFallbackDigest(
+			asM([umsg("Please remember: always publish research notes as HTML."), amsg("Acknowledged.")]),
+			{ sessionId: "s1", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 },
+			"turn-explicit-memory",
+			"s1",
+		);
+		expect(explicit.memoryCandidates[0]?.authorization).toBe("explicit_user");
+	});
+
+	test("rejects questions, negations, and quoted text as explicit memory authorization", () => {
+		const prompts = [
+			"Do you remember why the build failed?",
+			"Please do not remember this output format.",
+			'The documentation says "Please remember: use HTML."',
+		];
+		for (const [index, prompt] of prompts.entries()) {
+			const digest = generateFallbackDigest(
+				asM([umsg(prompt), amsg("Acknowledged.")]),
+				{ sessionId: "s1", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 },
+				`turn-non-directive-${index}`,
+				"s1",
+			);
+			expect(digest.memoryCandidates.some(candidate => candidate.authorization === "explicit_user")).toBe(false);
+		}
+	});
+
+	test("retains only the explicit directive clause from a mixed user message", () => {
+		const digest = generateFallbackDigest(
+			asM([umsg("Fix the current build. From now on, publish research notes as HTML."), amsg("Acknowledged.")]),
+			{ sessionId: "s1", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 },
+			"turn-mixed-explicit-memory",
+			"s1",
+		);
+
+		expect(digest.memoryCandidates[0]).toMatchObject({
+			content: "From now on, publish research notes as HTML.",
+			authorization: "explicit_user",
+		});
 	});
 
 	test("generates unique turn IDs", () => {
@@ -458,6 +497,7 @@ describe("normalize", () => {
 		);
 
 		expect(d.memoryCandidates.map(candidate => candidate.importance)).toEqual([0.9, 1, 0, 0.5, 0.5]);
+		expect(d.memoryCandidates.every(candidate => candidate.authorization === "inferred")).toBe(true);
 	});
 
 	test("preserves tool evidence entry ids", () => {
@@ -592,6 +632,7 @@ describe("LLM digest orchestration", () => {
 						content: "San context steady should solve continuity generically, not with benchmark-specific rules.",
 						type: "decision",
 						importance: 0.9,
+						authorization: "explicit_user",
 					},
 				],
 			}),
@@ -628,6 +669,42 @@ describe("LLM digest orchestration", () => {
 			tool: "read",
 			entryIds: ["tool-entry"],
 		});
+		expect(stored.memoryCandidates[0]?.authorization).toBe("inferred");
+	});
+
+	test("retains a local explicit preference when the LLM digest omits it", async () => {
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(
+			assistantWithDigest({
+				userIntent: "Remember the user's durable output preference.",
+				actionsTaken: [],
+				decisions: [],
+				filesTouched: [],
+				factsLearned: [],
+				openQuestions: [],
+				risks: [],
+				nextSteps: [],
+				memoryCandidates: [],
+			}),
+		);
+		const sessionManager = createSessionManager();
+
+		await generateDigest(
+			asM([umsg("Please remember: always publish research notes as HTML."), amsg("Acknowledged.")]),
+			{ sessionId: "s", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 },
+			sessionManager as never,
+			{} as never,
+			steadySettings(true),
+			{ model: getDigestModel(), apiKey: async () => "test-key" },
+		);
+
+		const stored = sessionManager.getEntries()[0]?.data as TurnDigest;
+		expect(stored.memoryCandidates).toMatchObject([
+			{
+				content: "Please remember: always publish research notes as HTML.",
+				type: "preference",
+				authorization: "explicit_user",
+			},
+		]);
 	});
 
 	test("obfuscates digest side-request transcript and restores returned placeholders before persistence", async () => {
@@ -717,6 +794,7 @@ describe("LLM digest orchestration", () => {
 				content: "Digest 应压缩为通用状态摘要，而不是逐轮聊天复刻。",
 				type: "workflow",
 				importance: 0.9,
+				authorization: "inferred",
 			},
 		]);
 	});

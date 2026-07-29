@@ -18,13 +18,15 @@ import {
 
 const BRAIN_M3_POLICY_VERSION = "brain-m3";
 
-export type SanBrainMutationAction = "approve" | "discard" | "undo";
+export type SanBrainMutationAction = "approve" | "discard" | "observe" | "escalate" | "undo";
 
 export interface SanBrainMutationRequest {
 	action: SanBrainMutationAction;
 	id: string;
 	reason?: string;
 	createdAt?: string;
+	requestedBy?: "user" | "policy";
+	policyVersion?: string;
 }
 
 export interface SanBrainMutationResult {
@@ -43,15 +45,21 @@ function ownerType(candidate: SanBrainCandidateRecord): SanBrainDecision["ownerT
 	return candidate.kind === "profile" ? "profile_candidate" : "experience_candidate";
 }
 
+interface SanBrainDecisionContext {
+	requestedBy: "user" | "policy";
+	policyVersion: string;
+	createdAt: string;
+}
+
 function createDecision(
 	candidate: SanBrainCandidateRecord,
 	action: SanBrainDecisionAction,
 	reason: string,
-	context: string,
-	createdAt: string,
+	idempotencyContext: string,
+	context: SanBrainDecisionContext,
 ): SanBrainDecision {
 	const nextRevision = candidate.revision + 1;
-	const idempotencyKey = `${BRAIN_M3_POLICY_VERSION}:${action}:${candidate.candidate.candidateId}:${nextRevision}:${context}`;
+	const idempotencyKey = `${context.policyVersion}:${context.requestedBy}:${action}:${candidate.candidate.candidateId}:${nextRevision}:${idempotencyContext}`;
 	const nextDecisionId = decisionId(idempotencyKey);
 	const projectionIds = buildSanBrainProjectionPlans(candidate.candidate, {
 		decisionId: nextDecisionId,
@@ -65,12 +73,12 @@ function createDecision(
 		action,
 		previousRevision: candidate.revision,
 		nextRevision,
-		requestedBy: "user",
+		requestedBy: context.requestedBy,
 		reason,
-		policyVersion: BRAIN_M3_POLICY_VERSION,
+		policyVersion: context.policyVersion,
 		idempotencyKey,
 		projectionIds,
-		createdAt,
+		createdAt: context.createdAt,
 	};
 }
 
@@ -98,7 +106,7 @@ function planApprove(
 	store: SanBrainStore,
 	target: SanBrainCandidateRecord,
 	reason: string,
-	createdAt: string,
+	context: SanBrainDecisionContext,
 ): SanBrainDecision[] {
 	if (target.status === "active") return [];
 	if (
@@ -114,7 +122,10 @@ function planApprove(
 		candidate =>
 			candidate.candidate.candidateId !== target.candidate.candidateId &&
 			isEquivalentSanBrainCandidate(target, candidate) &&
-			(candidate.status === "pending" || candidate.status === "active"),
+			(candidate.status === "pending" ||
+				candidate.status === "observed" ||
+				candidate.status === "review" ||
+				candidate.status === "active"),
 	);
 	const activeEquivalent = equivalents.find(candidate => activeIds.has(candidate.candidate.candidateId));
 	if (activeEquivalent) {
@@ -124,12 +135,12 @@ function planApprove(
 				"supersede",
 				`Equivalent state is already active as ${activeEquivalent.candidate.candidateId}.`,
 				`equivalent:${activeEquivalent.candidate.candidateId}`,
-				createdAt,
+				context,
 			),
 		];
 	}
 
-	const decisions = [createDecision(target, "approve", reason, `approve:${target.candidate.candidateId}`, createdAt)];
+	const decisions = [createDecision(target, "approve", reason, `approve:${target.candidate.candidateId}`, context)];
 	const superseded = new Map<string, SanBrainCandidateRecord>();
 	for (const candidate of equivalents) superseded.set(candidate.candidate.candidateId, candidate);
 	for (const candidate of candidates) {
@@ -149,19 +160,30 @@ function planApprove(
 				"supersede",
 				`Superseded by approved candidate ${target.candidate.candidateId}.`,
 				`approved-by:${target.candidate.candidateId}`,
-				offsetTimestamp(createdAt, offset++),
+				{ ...context, createdAt: offsetTimestamp(context.createdAt, offset++) },
 			),
 		);
 	}
 	return decisions;
 }
 
-function planDiscard(target: SanBrainCandidateRecord, reason: string, createdAt: string): SanBrainDecision[] {
-	if (target.status === "discarded") return [];
-	return [createDecision(target, "discard", reason, `discard:${target.candidate.candidateId}`, createdAt)];
+function planStateChange(
+	target: SanBrainCandidateRecord,
+	action: "discard" | "observe" | "escalate",
+	reason: string,
+	context: SanBrainDecisionContext,
+): SanBrainDecision[] {
+	const settledStatus = action === "discard" ? "discarded" : action === "observe" ? "observed" : "review";
+	if (target.status === settledStatus) return [];
+	return [createDecision(target, action, reason, `${action}:${target.candidate.candidateId}`, context)];
 }
 
-function planUndo(store: SanBrainStore, id: string, reason: string, createdAt: string): SanBrainDecision[] {
+function planUndo(
+	store: SanBrainStore,
+	id: string,
+	reason: string,
+	context: SanBrainDecisionContext,
+): SanBrainDecision[] {
 	const target = requireCandidate(store, id);
 	const explanation = store.explain(target.candidate.candidateId);
 	if (!explanation) throw new Error(`No San Brain decision history found for ${target.candidate.candidateId}.`);
@@ -177,9 +199,9 @@ function planUndo(store: SanBrainStore, id: string, reason: string, createdAt: s
 		);
 	}
 	if (decision.decision.action !== "approve" || target.status !== "active") {
-		throw new Error(`Only the current applied approve decision can be undone in Brain M3.`);
+		throw new Error("Only the current applied approve decision can be undone in Brain M3.");
 	}
-	return [createDecision(target, "undo", reason, `undo:${decision.decision.decisionId}`, createdAt)];
+	return [createDecision(target, "undo", reason, `undo:${decision.decision.decisionId}`, context)];
 }
 
 export function buildSanBrainConsolidation(store: SanBrainStore): SanBrainConsolidationReport {
@@ -195,14 +217,28 @@ export function applySanBrainMutation(
 	if (!targetId) throw new Error(`San Brain ${request.action} requires an id.`);
 	store.syncSessionEntries(sessionManager.getSessionId(), sessionManager.getEntries());
 	const createdAt = request.createdAt ?? new Date().toISOString();
-	const reason = request.reason?.trim() || `${request.action} requested by user.`;
+	const requestedBy = request.requestedBy ?? "user";
+	const context: SanBrainDecisionContext = {
+		requestedBy,
+		policyVersion: request.policyVersion?.trim() || BRAIN_M3_POLICY_VERSION,
+		createdAt,
+	};
+	const reason = request.reason?.trim() || `${request.action} requested by ${requestedBy}.`;
 	const target = requireCandidate(store, targetId);
-	const decisions =
-		request.action === "approve"
-			? planApprove(store, target, reason, createdAt)
-			: request.action === "discard"
-				? planDiscard(target, reason, createdAt)
-				: planUndo(store, targetId, reason, createdAt);
+	let decisions: SanBrainDecision[];
+	switch (request.action) {
+		case "approve":
+			decisions = planApprove(store, target, reason, context);
+			break;
+		case "discard":
+		case "observe":
+		case "escalate":
+			decisions = planStateChange(target, request.action, reason, context);
+			break;
+		case "undo":
+			decisions = planUndo(store, targetId, reason, context);
+			break;
+	}
 	if (decisions.length === 0) {
 		return {
 			action: request.action,

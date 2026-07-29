@@ -148,6 +148,35 @@ describe("SYSTEM.md prompt assembly", () => {
 		expect(promptText).not.toContain("Discovered project SYSTEM prompt");
 	});
 
+	it("renders active San paths and a read-only legacy migration directory", async () => {
+		const projectDir = path.join(tempDir, "project");
+		const agentDir = path.join(tempHomeDir, ".san", "profiles", "work", "agent");
+
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: projectDir,
+			agentDir,
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames: [],
+			workspaceTree: {
+				rootPath: projectDir,
+				rendered: "",
+				truncated: false,
+				totalLines: 0,
+				agentsMdFiles: [],
+			},
+		});
+
+		const promptText = systemPrompt.join("\n\n");
+		const normalizedAgentDir = agentDir.replace(/\\/g, "/");
+		expect(promptText).toContain(`San's active global configuration directory is \`${normalizedAgentDir}\``);
+		expect(promptText).toContain(`global settings are in \`${normalizedAgentDir}/config.yml\``);
+		expect(promptText).toContain("Project settings belong in `<project>/.san/config.yml`");
+		expect(promptText).toContain("Legacy `.omp` is a read-only migration compatibility directory");
+		expect(promptText).toContain("NEVER create or modify files there");
+	});
+
 	it("renders active child repo context in the main system prompt", async () => {
 		const parentDir = path.join(tempDir, "parent-cwd");
 		fs.mkdirSync(path.join(parentDir, "active-project", ".git"), { recursive: true });

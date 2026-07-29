@@ -42,6 +42,7 @@ Working directory layout (sorted by mtime, recent first; depth ≤ 3):
 {{/if}}
 
 Today is {{date}}, and the current working directory is '{{cwd}}'.
+San's active global configuration directory is `{{agentDir}}`; global settings are in `{{agentDir}}/config.yml`. Project settings belong in `<project>/.san/config.yml`. Legacy `.omp` is a read-only migration compatibility directory; NEVER create or modify files there.
 
 <critical>
 - Each response MUST advance the task. There is no stopping condition other than completion.

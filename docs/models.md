@@ -75,6 +75,7 @@ providers:
           cacheWrite: 0
         contextWindow: 128000
         maxTokens: 16384
+        useResponsesLite: true # openai-codex-responses only
         headers:
           X-Model: value
         compat:
@@ -139,6 +140,7 @@ Must define at least one of:
 
 - `id` required
 - `contextWindow` and `maxTokens` must be positive if provided
+- `useResponsesLite` enables Codex Responses Lite request shaping for `openai-codex-responses` models
 
 ### Command-resolved secrets
 

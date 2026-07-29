@@ -7,6 +7,7 @@ export interface SanBrainCaptureResult {
 	profileCandidates: number;
 	experienceCandidates: number;
 	entryIds: string[];
+	candidateIds: string[];
 }
 
 export function captureSanBrainTurn(
@@ -21,12 +22,14 @@ export function captureSanBrainTurn(
 		...existing.experienceCandidates.map(entry => entry.data.candidateId),
 	]);
 	const entryIds: string[] = [];
+	const candidateIds: string[] = [];
 	let profileCandidates = 0;
 	let experienceCandidates = 0;
 
 	for (const candidate of extracted.profileCandidates) {
 		if (existingIds.has(candidate.candidateId)) continue;
 		existingIds.add(candidate.candidateId);
+		candidateIds.push(candidate.candidateId);
 		entryIds.push(appendSanBrainProfileCandidate(sessionManager, candidate));
 		profileCandidates++;
 	}
@@ -34,10 +37,11 @@ export function captureSanBrainTurn(
 		if (existingIds.has(candidate.candidateId)) continue;
 		existingIds.add(candidate.candidateId);
 		entryIds.push(appendSanBrainExperienceCandidate(sessionManager, candidate));
+		candidateIds.push(candidate.candidateId);
 		experienceCandidates++;
 	}
 
-	return { profileCandidates, experienceCandidates, entryIds };
+	return { profileCandidates, experienceCandidates, entryIds, candidateIds };
 }
 
 export function recordSanBrainCaptureError(

@@ -51,7 +51,7 @@ san:
       everyTurns: 6
       maxTokens: 12000
     recall:
-      enabled: false
+      enabled: true
       maxItems: 3
       maxTokens: 1000
       maxQueryChars: 2000

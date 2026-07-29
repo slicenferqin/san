@@ -41,6 +41,13 @@ describe("system prompt personality block", () => {
 		return systemPrompt.join("\n\n");
 	}
 
+	it("identifies the runtime as San rather than a legacy product", async () => {
+		const rendered = await render();
+		expect(rendered).toContain("operating in the San coding harness");
+		expect(rendered).not.toMatch(/you are (?:actually )?(?:not Claude, )?Pi\b/i);
+		expect(rendered).not.toMatch(/(?:OMP|Oh-My-Pi) coding (?:agent|harness)/i);
+	});
+
 	it("injects the default personality when the option is unset", async () => {
 		const rendered = await render();
 		expect(rendered).toContain("<personality>");

@@ -6,7 +6,7 @@ import * as os from "node:os";
 import type { AgentTool } from "@san/agent";
 import type { ToolExample, TSchema } from "@san/ai";
 import { renderToolInventory } from "@san/ai/dialect";
-import { $env, getGpuCachePath, getProjectDir, hasFsCode, isEnoent, logger, prompt } from "@san/utils";
+import { $env, getAgentDir, getGpuCachePath, getProjectDir, hasFsCode, isEnoent, logger, prompt } from "@san/utils";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
 import { findConfigFile } from "./config";
@@ -492,6 +492,8 @@ export interface BuildSystemPromptOptions {
 	skillsSettings?: SkillsSettings;
 	/** Working directory. Default: getProjectDir() */
 	cwd?: string;
+	/** Active global config directory. Default: getAgentDir() */
+	agentDir?: string;
 	/** Pre-loaded context files (skips discovery if provided). */
 	contextFiles?: Array<{ path: string; content: string; depth?: number }>;
 	/** Skills provided directly to system prompt construction. */
@@ -561,6 +563,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		skillsSettings,
 		toolNames: providedToolNames,
 		cwd,
+		agentDir,
 		contextFiles: providedContextFiles,
 		skills: providedSkills,
 		rules,
@@ -736,6 +739,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const date = formatLocalCalendarDate();
 	const dateTime = date;
 	const promptCwd = shortenPath(normalizePromptPath(resolvedCwd));
+	const promptAgentDir = shortenPath(normalizePromptPath(agentDir ?? getAgentDir()));
 	const activeRepoContextPrompt = renderActiveRepoContextPrompt(activeRepoContext);
 
 	// Build tool metadata for system prompt rendering.
@@ -815,6 +819,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		date,
 		dateTime,
 		cwd: promptCwd,
+		agentDir: promptAgentDir,
 		model: includeModelInPrompt ? (model ?? "") : "",
 		useCodexTaskPrompt: usesCodexTaskPrompt(model),
 		personality: personality === "none" ? "" : PERSONALITY_SPECS[personality].trim(),

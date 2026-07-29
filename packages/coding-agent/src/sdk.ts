@@ -799,6 +799,7 @@ export interface BuildSystemPromptOptions {
 	skills?: Skill[];
 	contextFiles?: Array<{ path: string; content: string }>;
 	cwd?: string;
+	agentDir?: string;
 	customPrompt?: string;
 	appendPrompt?: string;
 	inlineToolDescriptors?: boolean;
@@ -815,6 +816,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const toolMap = options.tools ? new Map(options.tools.map(tool => [tool.name, tool])) : undefined;
 	return await buildSystemPromptInternal({
 		cwd: options.cwd,
+		agentDir: options.agentDir,
 		customPrompt: options.customPrompt,
 		skills: options.skills,
 		contextFiles: options.contextFiles,
@@ -2446,6 +2448,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			const defaultPrompt = await buildSystemPromptInternal({
 				cwd,
+				agentDir,
 				xdevTools: toolSession.xdevRegistry?.entries() ?? [],
 				xdevDocs: toolSession.xdevRegistry?.docsAll(settings.get("tools.xdevDocs")) ?? "",
 				autoQaEnabled: isAutoQaEnabled(settings),
