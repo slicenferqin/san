@@ -121,10 +121,14 @@ export function mergeSanBrainCandidateRecords(
 	const taskTags = [...new Set(candidates.flatMap(candidate => candidate.taskTags))].sort();
 	const evidence = uniqueEvidence(candidates);
 	const createdAt = candidates.map(candidate => candidate.createdAt).sort()[0] ?? canonical.candidate.createdAt;
+	const authorization = candidates.some(candidate => candidate.authorization === "explicit_user")
+		? "explicit_user"
+		: "inferred";
 	if (canonical.kind === "profile" && isSanBrainProfileCandidate(canonical.candidate)) {
 		const profiles = candidates.filter(isSanBrainProfileCandidate);
 		return {
 			...canonical.candidate,
+			authorization,
 			taskTags,
 			evidence,
 			confidence: Math.max(...profiles.map(candidate => candidate.confidence)),
@@ -137,6 +141,7 @@ export function mergeSanBrainCandidateRecords(
 		const experiences = candidates.filter(isSanBrainExperienceCandidate);
 		return {
 			...canonical.candidate,
+			authorization,
 			taskTags,
 			evidence,
 			confidence: Math.max(...experiences.map(candidate => candidate.confidence)),

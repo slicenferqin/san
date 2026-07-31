@@ -109,9 +109,21 @@ describe("/brain slash command", () => {
 		const harness = createRuntime([entry("profile-entry", BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE, profile)]);
 
 		expect(await executeBuiltinSlashCommand("/brain inbox", harness.runtime)).toBe(true);
-		expect(harness.showStatus).toHaveBeenCalledWith(expect.stringContaining("San Brain inbox (1)"));
+		expect(harness.showStatus).toHaveBeenCalledWith(expect.stringContaining("San Brain review queue (1)"));
 		expect(harness.showStatus).toHaveBeenCalledWith(expect.stringContaining("profile-1 [profile]"));
 		expect(harness.setText).toHaveBeenCalledWith("");
+	});
+
+	it("reports automatic decision coverage without requiring inbox review", async () => {
+		const harness = createRuntime([entry("profile-entry", BRAIN_PROFILE_CANDIDATE_CUSTOM_TYPE, profile)]);
+
+		expect(await executeBuiltinSlashCommand("/brain status", harness.runtime)).toBe(true);
+		expect(harness.showStatus).toHaveBeenCalledWith(
+			expect.stringContaining("San Brain automation: rate=n/a evaluated=0 auto=0 escalations=0"),
+		);
+		expect(harness.showStatus).toHaveBeenCalledWith(
+			expect.stringContaining("reviewQueue=0 revoked=0 revocationRate=n/a"),
+		);
 	});
 
 	it("shows active profile and explains its decision", async () => {

@@ -10,6 +10,7 @@
 
 ### Added
 
+- Added source-backed San Brain automatic decisions for durable candidates: explicit user directives auto-activate, repeated high-confidence evidence auto-resolves, sensitive or invalid candidates are discarded, high-impact conflicts enter review, and `/brain status` reports automation and user-revocation rates.
 - Added persistence-backed San RPC v2 settings for global, workspace, and session scopes, including source attribution, optimistic revision conflicts, and immediate runtime application.
 - Added RPC v2 provider catalog management (`provider.config.create`, `provider.model.add`) and `usage.stats` analytics with capability/schema exposure, secret-free provider listings, active-session aggregation, and persisted-session breakdowns.
 - Added a cost-tiered public Context Steady benchmark runner with randomized Native/Steady pairs, isolated runtime credentials, Agent/Digest/Compaction usage aggregation, external quality verifiers, reproducible artifacts, a 180-step controlled-stress task, and explicit guards for 30-run Release and 50-run Extended campaigns.
@@ -32,10 +33,12 @@
 
 ### Changed
 
+- Changed enabled San Brain sessions to default to `activation`; `review-only` remains a capture-only mode and never runs automatic decisions.
 - Changed San Context Steady to remain native-equivalent below a configurable activation threshold (240K input tokens by default), then latch activation for the session and restore it after resume.
 - Reduced core binary size with full safe Bun minification, a gzip-compressed lazy model-catalog embed, compile-time PDF converter exclusion, and a type-only Workflow AST guard that removes the `@babel/types` runtime barrel.
 - Changed the core binary to retain the bundled host-module namespaces required by compiled legacy Pi extensions, keeping the plugin ecosystem functional in both binary profiles.
 - Changed custom provider validation so `models.yml` may declare `auth: apiKey` without embedding the secret (keys live in AuthStorage).
+- Changed generated agent prompts to identify the San coding harness, reference only active `.san` configuration paths, and stop advertising legacy OMP names or URIs.
 - Restored no-argument `/logout` to the dedicated credential-removal selector (provider connect remains `/connect` / `/login`).
 - Custom provider setup now rolls back the newly written `models.yml` entry and any login credential when key storage or first registry load fails, avoiding half-configured providers.
 - Changed San execution loop from fixed Commander→Worker→Supervisor pipeline to mode-driven `pipeline` roles: `solo` runs a single Worker, `team` runs Commander→Worker→Supervisor, and `council` adds Oracle before Supervisor.
@@ -85,9 +88,11 @@
 
 ### Fixed
 
+- Fixed custom Codex providers to preserve `useResponsesLite` metadata and route standard `/v1` base URLs to `/v1/responses`.
 - Fixed Context Steady recovery stalling when agent-authored continuation messages were treated as user turn boundaries or an oversized tail of tool results left no valid cut point; maintenance audits, probes, extension events, and RPC v2 now also expose the failed recovery stage and reason.
 - Fixed queued no-op auto-compaction reporting no continuation after scheduling a queue drain, preventing session-stop and digest work from racing the pending turn.
 - Fixed settings migration to drop removed local speech and tiny-title keys instead of preserving dead configuration on later saves.
+- Fixed the system prompt to expose San's active global and project configuration paths and forbid writes to legacy `.omp` migration fallbacks.
 - Fixed `--no-extensions` to disable ambient extension discovery without dropping explicit `--extension`/`-e` paths in root sessions or `san models`.
 - Fixed Linux NVIDIA GPU discovery so descendants inheriting the probe's stdout pipe have time to drain without turning a successful probe into a timeout.
 - Fixed San execution loop terminal budget races so post-review overspend writes a single blocked envelope instead of persisting `passed` then failing on a conflicting `blocked` transition.

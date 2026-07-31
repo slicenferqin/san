@@ -1,5 +1,6 @@
 export * from "./activation";
 export * from "./audit";
+export * from "./auto-decision";
 export * from "./capture";
 export * from "./commands";
 export * from "./compatibility";

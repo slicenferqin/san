@@ -3917,8 +3917,9 @@ function redactHeaders(headers: Headers): Record<string, string> {
 function resolveCodexResponsesUrl(baseUrl: string | undefined): string {
 	const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : CODEX_BASE_URL;
 	const normalized = raw.replace(/\/+$/, "");
-	if (normalized.endsWith("/codex/responses")) return normalized;
+	if (normalized.endsWith("/responses")) return normalized;
 	if (normalized.endsWith("/codex")) return `${normalized}/responses`;
+	if (normalized.endsWith("/v1")) return `${normalized}/responses`;
 	return `${normalized}/codex/responses`;
 }
 

@@ -6,6 +6,7 @@ export interface SanBrainRuntimePolicy {
 	enabled: boolean;
 	mode: SanBrainMode;
 	captureEnabled: boolean;
+	autoDecisionEnabled: boolean;
 	activationEnabled: boolean;
 	projectionEnabled: boolean;
 	legacyAutoRetainAllowed: boolean;
@@ -19,6 +20,7 @@ export function resolveSanBrainRuntimePolicy(settings: Settings): SanBrainRuntim
 		enabled,
 		mode,
 		captureEnabled: enabled && settings.get("san.brain.capture.enabled") === true,
+		autoDecisionEnabled: enabled && mode !== "review-only" && settings.get("san.brain.autoDecision.enabled") === true,
 		activationEnabled: enabled && (mode === "activation" || mode === "projection"),
 		projectionEnabled: enabled && mode === "projection" && settings.get("san.brain.projections.enabled") === true,
 		legacyAutoRetainAllowed: !enabled || (mode !== "projection" && compatibility !== "block"),

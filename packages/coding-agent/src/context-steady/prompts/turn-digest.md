@@ -14,6 +14,7 @@ Rules:
 - Do not copy large tool outputs or raw transcript text.
 - Use empty arrays when a field has no support in the turn span.
 - Add memoryCandidates only for durable future-use preferences, project facts, decisions, or workflows. Do not add temporary conclusions, current-run status, per-turn observations, or risk-only items as memory candidates.
+- NEVER assign authorization. The host derives explicit user authorization from authoritative journal messages.
 - Prefer at most two memoryCandidates.
 
 Return the digest by calling `record_turn_digest`.

@@ -744,7 +744,7 @@ function splitPdfImageMemberReadPath(readPath: string): { pdfPath: string; membe
 
 const readSchema = type({
 	path: type("string").describe(
-		'Local path, internal URI (e.g. "san://"; legacy alias "omp://"; also "history://", "issue://123", "pr://123"), or URL. Inline :<sel> remains accepted for compatibility.',
+		'Local path, internal URI (e.g. "san://", "history://", "issue://123", "pr://123"), or URL. Inline :<sel> remains accepted for compatibility.',
 	),
 	"selector?": type("string").describe(
 		'selector without a leading colon (e.g. "50-100", "raw", "raw:50-100", "conflicts"); keeps `path` literal when filenames contain colons',

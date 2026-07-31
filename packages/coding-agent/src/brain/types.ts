@@ -23,6 +23,7 @@ export const BRAIN_CUSTOM_TYPES = [
 export type SanBrainCandidateKind = "profile" | "experience";
 export type SanBrainScopeKind = "user" | "repo" | "project" | "session";
 export type SanBrainSensitivity = "normal" | "sensitive" | "secret";
+export type SanBrainAuthorization = "explicit_user" | "inferred";
 
 export interface SanBrainScope {
 	kind: SanBrainScopeKind;
@@ -64,6 +65,7 @@ export interface SanBrainProfileCandidate {
 	candidateId: string;
 	scope: SanBrainScope;
 	type: SanBrainProfileCandidateType;
+	authorization?: SanBrainAuthorization;
 	subject: string;
 	predicate: string;
 	value: string;
@@ -125,6 +127,7 @@ export interface SanBrainExperienceCandidate {
 	candidateId: string;
 	scope: SanBrainScope;
 	type: SanBrainExperienceCandidateType;
+	authorization?: SanBrainAuthorization;
 	selector: SanBrainTriggerSelector;
 	action: SanBrainAction;
 	taskTags: string[];
@@ -145,6 +148,8 @@ export type SanBrainCandidate = SanBrainProfileCandidate | SanBrainExperienceCan
 export type SanBrainDecisionAction =
 	| "approve"
 	| "discard"
+	| "observe"
+	| "escalate"
 	| "supersede"
 	| "undo"
 	| "reduce_scope"
@@ -317,6 +322,10 @@ function isSensitivity(value: unknown): value is SanBrainSensitivity {
 	return value === "normal" || value === "sensitive" || value === "secret";
 }
 
+function isAuthorization(value: unknown): value is SanBrainAuthorization {
+	return value === "explicit_user" || value === "inferred";
+}
+
 export function isSanBrainScope(value: unknown): value is SanBrainScope {
 	if (!isRecord(value)) return false;
 	return isBrainScopeKind(value.kind) && isNonEmptyString(value.key) && value.resolverVersion === BRAIN_SCHEMA_VERSION;
@@ -375,6 +384,7 @@ export function isSanBrainProfileCandidate(value: unknown): value is SanBrainPro
 		isNonEmptyString(value.candidateId) &&
 		isSanBrainScope(value.scope) &&
 		isProfileCandidateType(value.type) &&
+		(value.authorization === undefined || isAuthorization(value.authorization)) &&
 		isNonEmptyString(value.subject) &&
 		isNonEmptyString(value.predicate) &&
 		isNonEmptyString(value.value) &&
@@ -462,6 +472,7 @@ export function isSanBrainExperienceCandidate(value: unknown): value is SanBrain
 		isNonEmptyString(value.candidateId) &&
 		isSanBrainScope(value.scope) &&
 		isExperienceCandidateType(value.type) &&
+		(value.authorization === undefined || isAuthorization(value.authorization)) &&
 		isSanBrainTriggerSelector(value.selector) &&
 		isSanBrainAction(value.action) &&
 		isStringArray(value.taskTags) &&
@@ -483,6 +494,8 @@ function isDecisionAction(value: unknown): value is SanBrainDecisionAction {
 	return (
 		value === "approve" ||
 		value === "discard" ||
+		value === "observe" ||
+		value === "escalate" ||
 		value === "supersede" ||
 		value === "undo" ||
 		value === "reduce_scope" ||

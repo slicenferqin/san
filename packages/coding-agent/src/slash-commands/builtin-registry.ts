@@ -5,10 +5,12 @@ import { ThinkingLevel } from "@san/agent";
 import { getOAuthProviders } from "@san/ai/oauth";
 import { type AutocompleteItem, Spacer } from "@san/tui";
 import { APP_NAME, getProjectDir, setProjectDir } from "@san/utils";
+import { runSanBrainAutoDecisions } from "../brain/auto-decision";
 import { applySanBrainMutation, buildSanBrainConsolidation } from "../brain/commands";
 import { buildSanBrainProjectionReportText, runSanBrainProjections } from "../brain/projection";
 import { rebuildSanBrainStore } from "../brain/rebuild";
 import {
+	buildSanBrainAutomationReportText,
 	buildSanBrainConsolidationReportText,
 	buildSanBrainDebugReportText,
 	buildSanBrainExplanationText,
@@ -1689,11 +1691,12 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "brain",
-		description: "Inspect and review San Brain candidates and active state",
-		acpDescription: "Inspect or review San Brain state",
-		acpInputHint: "[inbox|profile|explain|debug|approve|discard|undo|consolidate|project|rebuild]",
+		description: "Inspect San Brain automation, review queue, and active state",
+		acpDescription: "Inspect San Brain automation and state",
+		acpInputHint: "[status|inbox|profile|explain|debug|approve|discard|undo|consolidate|decide|project|rebuild]",
 		allowArgs: true,
 		subcommands: [
+			{ name: "status", description: "Show automatic decision rate and counts" },
 			{ name: "inbox", description: "List pending Brain candidates" },
 			{ name: "profile", description: "List active profile state" },
 			{ name: "explain", description: "Explain one candidate or decision", usage: "<id>" },
@@ -1702,13 +1705,15 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "discard", description: "Discard one Brain candidate", usage: "<id>" },
 			{ name: "undo", description: "Undo the current approve decision", usage: "<id>" },
 			{ name: "consolidate", description: "Inspect duplicate and conflicting candidates" },
+			{ name: "decide", description: "Run automatic decisions for pending candidates" },
 			{ name: "project", description: "Run or retry pending Brain projections" },
 			{ name: "rebuild", description: "Rebuild Brain state from every session ledger" },
 		],
 		handle: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
-			const action = verb || "inbox";
+			const action = verb || "status";
 			const supported = [
+				"status",
 				"inbox",
 				"profile",
 				"explain",
@@ -1717,12 +1722,13 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				"discard",
 				"undo",
 				"consolidate",
+				"decide",
 				"project",
 				"rebuild",
 			];
 			if (!supported.includes(action)) {
 				return usage(
-					"Usage: /brain [inbox|profile|explain <id>|debug [pending|failed|blocked|all]|approve <id>|discard <id>|undo <id>|consolidate|project|rebuild]",
+					"Usage: /brain [status|inbox|profile|explain <id>|debug [pending|failed|blocked|all]|approve <id>|discard <id>|undo <id>|consolidate|decide|project|rebuild]",
 					runtime,
 				);
 			}
@@ -1730,7 +1736,10 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			if (idAction && (!rest.trim() || /\s/.test(rest.trim()))) {
 				return usage(`Usage: /brain ${action} <id>`, runtime);
 			}
-			if ((action === "consolidate" || action === "project" || action === "rebuild") && rest.trim()) {
+			if (
+				(action === "consolidate" || action === "decide" || action === "project" || action === "rebuild") &&
+				rest.trim()
+			) {
 				return usage(`Usage: /brain ${action}`, runtime);
 			}
 			if (action === "debug" && rest.trim() && !["pending", "failed", "blocked", "all"].includes(rest.trim())) {
@@ -1750,6 +1759,22 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 					await runtime.output(
 						`San Brain rebuilt from ${rebuilt.sessionsScanned} sessions (${rebuilt.sessionsWithBrainState} with Brain state): ${rebuilt.candidatesAdded} candidates, ${rebuilt.decisionsAdded} decisions.`,
 					);
+				} else if (action === "decide") {
+					if (!brainPolicy.autoDecisionEnabled) {
+						await runtime.output("San Brain automatic decisions are disabled by the effective runtime policy.");
+					} else {
+						const result = runSanBrainAutoDecisions({
+							store,
+							sessionManager: runtime.sessionManager,
+							explicitMinConfidence: runtime.settings.get("san.brain.autoDecision.explicitMinConfidence"),
+							inferredMinConfidence: runtime.settings.get("san.brain.autoDecision.inferredMinConfidence"),
+							minIndependentEvidence: runtime.settings.get("san.brain.autoDecision.minIndependentEvidence"),
+							maxPerTurn: runtime.settings.get("san.brain.autoDecision.maxPerTurn"),
+						});
+						await runtime.output(
+							`San Brain automatic decisions: evaluated=${result.evaluated} auto=${result.automaticallyHandled} review=${result.escalated} failures=${result.failures.length}.\n${buildSanBrainAutomationReportText(store)}`,
+						);
+					}
 				} else if (action === "project") {
 					const projectionResult = await runSanBrainProjections({
 						store,
@@ -1782,18 +1807,20 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 					await runtime.output(output.join("\n"));
 				} else {
 					const report =
-						action === "profile"
-							? buildSanBrainProfileReportText(store)
-							: action === "explain"
-								? buildSanBrainExplanationText(store, rest.trim())
-								: action === "debug"
-									? buildSanBrainDebugReportText(
-											store,
-											(rest.trim() || "pending") as "pending" | "failed" | "blocked" | "all",
-										)
-									: action === "consolidate"
-										? buildSanBrainConsolidationReportText(buildSanBrainConsolidation(store))
-										: buildSanBrainInboxReportText(store);
+						action === "status"
+							? buildSanBrainAutomationReportText(store)
+							: action === "profile"
+								? buildSanBrainProfileReportText(store)
+								: action === "explain"
+									? buildSanBrainExplanationText(store, rest.trim())
+									: action === "debug"
+										? buildSanBrainDebugReportText(
+												store,
+												(rest.trim() || "pending") as "pending" | "failed" | "blocked" | "all",
+											)
+										: action === "consolidate"
+											? buildSanBrainConsolidationReportText(buildSanBrainConsolidation(store))
+											: buildSanBrainInboxReportText(store);
 					await runtime.output(report);
 				}
 			} catch (error) {

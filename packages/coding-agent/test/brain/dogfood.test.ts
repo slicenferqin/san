@@ -64,6 +64,7 @@ describe("San Brain M6 dogfood", () => {
 		expect(settings.get("san.contextSteady.recall.maxTokens")).toBe(1000);
 		expect(settings.get("san.contextSteady.recall.maxQueryChars")).toBe(2000);
 		expect(settings.get("san.brain.enabled")).toBe(true);
+		expect(settings.get("san.brain.autoDecision.enabled")).toBe(true);
 		expect(settings.get("san.brain.mode")).toBe("projection");
 		expect(settings.get("san.brain.capture.enabled")).toBe(true);
 		expect(settings.get("san.brain.capture.maxCandidatesPerTurn")).toBe(5);

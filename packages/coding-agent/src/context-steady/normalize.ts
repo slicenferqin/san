@@ -87,7 +87,8 @@ function clampMemoryCandidateArray(value: unknown): TurnDigestMemoryCandidate[] 
 			typeof obj.importance === "number" && Number.isFinite(obj.importance)
 				? Math.max(0, Math.min(1, obj.importance))
 				: 0.5;
-		result.push({ content, type, importance });
+		const authorization = "inferred" as const;
+		result.push({ content, type, importance, authorization });
 	}
 	return result;
 }

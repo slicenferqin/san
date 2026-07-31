@@ -54,7 +54,7 @@ function customEntry(id: string, customType: string, data: unknown, parentId: st
 	};
 }
 
-function messageEntry(id: string, parentId: string | null): SessionEntry {
+function messageEntry(id: string, parentId: string | null, text = id, attribution?: "agent"): SessionEntry {
 	return {
 		type: "message",
 		id,
@@ -62,7 +62,8 @@ function messageEntry(id: string, parentId: string | null): SessionEntry {
 		timestamp: "2026-07-10T10:00:00.000Z",
 		message: {
 			role: id === "user-entry" ? "user" : "assistant",
-			content: [{ type: "text", text: id }],
+			content: [{ type: "text", text }],
+			...(attribution ? { attribution } : {}),
 			timestamp: 0,
 		},
 	} as SessionEntry;
@@ -164,6 +165,124 @@ describe("San Brain deterministic capture", () => {
 		});
 	});
 
+	it("derives explicit authorization only from authoritative user messages", () => {
+		const claimedExplicitDigest: TurnDigest = {
+			...digest,
+			memoryCandidates: [
+				{
+					type: "preference",
+					content: "delivery format: HTML",
+					importance: 0.9,
+					authorization: "explicit_user",
+				},
+			],
+		};
+		const inferred = extractSanBrainCandidates({
+			digest: claimedExplicitDigest,
+			entries: sourceEntries(),
+			sourceMode: "turn_digest",
+			maxCandidates: 10,
+			minConfidence: 0.8,
+		});
+		const explicitEntries = sourceEntries();
+		explicitEntries[0] = messageEntry("user-entry", null, "Please remember: always publish research as HTML.");
+		const explicit = extractSanBrainCandidates({
+			digest: claimedExplicitDigest,
+			entries: explicitEntries,
+			sourceMode: "turn_digest",
+			maxCandidates: 10,
+			minConfidence: 0.8,
+		});
+		const syntheticEntries = sourceEntries();
+		syntheticEntries[0] = messageEntry(
+			"user-entry",
+			null,
+			"Please remember: always publish research as HTML.",
+			"agent",
+		);
+		const synthetic = extractSanBrainCandidates({
+			digest: claimedExplicitDigest,
+			entries: syntheticEntries,
+			sourceMode: "turn_digest",
+			maxCandidates: 10,
+			minConfidence: 0.8,
+		});
+
+		expect(inferred.profileCandidates[0]?.authorization).toBe("inferred");
+		expect(explicit.profileCandidates[0]).toMatchObject({
+			authorization: "explicit_user",
+			value: "Please remember: always publish research as HTML.",
+		});
+		expect(synthetic.profileCandidates[0]?.authorization).toBe("inferred");
+	});
+
+	it("authorizes only one source-backed preference per turn", () => {
+		const entries = sourceEntries();
+		entries[0] = messageEntry(
+			"user-entry",
+			null,
+			"Fix the current build. From now on, always publish research as HTML.",
+		);
+		const result = extractSanBrainCandidates({
+			digest: {
+				...digest,
+				memoryCandidates: [
+					{ type: "preference", content: "publish research as HTML", importance: 0.9 },
+					{ type: "preference", content: "use dark mode", importance: 0.9 },
+				],
+			},
+			entries,
+			sourceMode: "turn_digest",
+			maxCandidates: 10,
+			minConfidence: 0.8,
+		});
+
+		expect(result.profileCandidates).toHaveLength(1);
+		expect(result.profileCandidates[0]).toMatchObject({
+			authorization: "explicit_user",
+			value: "From now on, always publish research as HTML.",
+		});
+	});
+
+	it("prioritizes the explicit user preference within the candidate limit", () => {
+		const entries = sourceEntries();
+		entries[0] = messageEntry("user-entry", null, "Please remember: always publish research as HTML.");
+		const result = extractSanBrainCandidates({
+			digest: {
+				...digest,
+				memoryCandidates: [
+					{ type: "project_fact", content: "project fact", importance: 0.9 },
+					{ type: "preference", content: "publish research as HTML", importance: 0.9 },
+				],
+			},
+			entries,
+			sourceMode: "turn_digest",
+			maxCandidates: 1,
+			minConfidence: 0.8,
+		});
+
+		expect(result.profileCandidates).toMatchObject([
+			{ authorization: "explicit_user", value: "Please remember: always publish research as HTML." },
+		]);
+	});
+
+	it("classifies the original explicit preference before retaining it", () => {
+		const entries = sourceEntries();
+		entries[0] = messageEntry("user-entry", null, "Please remember my password=secret-value-123456789.");
+		const result = extractSanBrainCandidates({
+			digest: {
+				...digest,
+				memoryCandidates: [{ type: "preference", content: "Remember my credential.", importance: 0.99 }],
+			},
+			entries,
+			sourceMode: "turn_digest",
+			maxCandidates: 10,
+			minConfidence: 0.8,
+		});
+
+		expect(result.profileCandidates).toEqual([]);
+	});
+
 	it("extracts bounded review-only candidates with accepted San Loop provenance", () => {
 		const result = extractSanBrainCandidates({
 			digest,
@@ -216,7 +335,7 @@ describe("San Brain deterministic capture", () => {
 		const second = captureSanBrainTurn(sessionManager, options);
 
 		expect(first).toMatchObject({ profileCandidates: 2, experienceCandidates: 5 });
-		expect(second).toEqual({ profileCandidates: 0, experienceCandidates: 0, entryIds: [] });
+		expect(second).toEqual({ profileCandidates: 0, experienceCandidates: 0, entryIds: [], candidateIds: [] });
 		expect(
 			entries.flatMap(entry =>
 				entry.type === "custom" && entry.customType === BRAIN_EXPERIENCE_CANDIDATE_CUSTOM_TYPE

@@ -1,0 +1,1108 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta
+			name="description"
+			content="从长上下文的注意力衰减、成本膨胀和压缩失真出发，解释 San Context Steady 的理念、控制逻辑、工程落地、真实故障修复与受控基准结果。"
+		/>
+		<title>上下文不是越长越好：我们为什么要给 Coding Agent 建立稳态</title>
+		<style>
+			:root {
+				--ink: #202124;
+				--muted: #66645f;
+				--line: #deddd8;
+				--paper: #ffffff;
+				--wash: #f6f7f4;
+				--green: #13745c;
+				--green-soft: #e7f1ed;
+				--red: #a8443b;
+				--red-soft: #f7eae8;
+				--gold: #9a6a13;
+				--gold-soft: #f7f0df;
+				--blue: #315f84;
+				--blue-soft: #eaf0f5;
+			}
+
+			* {
+				box-sizing: border-box;
+			}
+
+			html {
+				background: var(--paper);
+				scroll-behavior: smooth;
+			}
+
+			body {
+				margin: 0;
+				color: var(--ink);
+				background: var(--paper);
+				font-family:
+					-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+					sans-serif;
+				font-size: 17px;
+				line-height: 1.86;
+				letter-spacing: 0;
+				-webkit-font-smoothing: antialiased;
+			}
+
+			a {
+				color: var(--blue);
+				text-underline-offset: 3px;
+				text-decoration-thickness: 1px;
+			}
+
+			img,
+				figure {
+				max-width: 100%;
+			}
+
+			.hero {
+				border-top: 8px solid var(--green);
+				border-bottom: 1px solid var(--line);
+				background: var(--wash);
+			}
+
+			.hero-inner,
+				.article {
+				width: min(100% - 36px, 760px);
+				margin: 0 auto;
+			}
+
+			.hero-inner {
+				padding: 54px 0 42px;
+			}
+
+			.kicker {
+				margin: 0 0 18px;
+				color: var(--green);
+				font-size: 13px;
+				font-weight: 750;
+				line-height: 1.4;
+			}
+
+			h1 {
+				max-width: 710px;
+				margin: 0;
+				font-family: Georgia, "Songti SC", "STSong", serif;
+				font-size: 45px;
+				font-weight: 700;
+				line-height: 1.22;
+				letter-spacing: 0;
+			}
+
+			.deck {
+				max-width: 680px;
+				margin: 22px 0 0;
+				color: #4f504d;
+				font-size: 20px;
+				line-height: 1.65;
+			}
+
+			.meta {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 8px 18px;
+				margin-top: 24px;
+				color: var(--muted);
+				font-size: 13px;
+			}
+
+			.signal-chart {
+				margin-top: 36px;
+				padding: 22px 20px 16px;
+				border: 1px solid #d5d7d2;
+				border-radius: 6px;
+				background: var(--paper);
+			}
+
+			.signal-title {
+				display: flex;
+				justify-content: space-between;
+				gap: 16px;
+				margin-bottom: 16px;
+				font-size: 12px;
+				font-weight: 700;
+				line-height: 1.5;
+			}
+
+			.signal-plot {
+				position: relative;
+				display: grid;
+				grid-template-columns: repeat(12, minmax(0, 1fr));
+				align-items: end;
+				gap: 5px;
+				height: 150px;
+				padding: 0 4px;
+				border-bottom: 1px solid #bdbfba;
+			}
+
+			.signal-plot::before,
+			.signal-plot::after {
+				position: absolute;
+				left: 0;
+				right: 0;
+				content: "";
+				border-top: 1px dashed #99aaa3;
+			}
+
+			.signal-plot::before {
+				top: 44px;
+			}
+
+			.signal-plot::after {
+				top: 92px;
+			}
+
+			.signal-column {
+				position: relative;
+				height: 100%;
+			}
+
+			.raw-bar,
+			.steady-bar {
+				position: absolute;
+				left: 12%;
+				right: 12%;
+				bottom: 0;
+				border-radius: 2px 2px 0 0;
+			}
+
+			.raw-bar {
+				background: #d9ddd8;
+			}
+
+			.steady-bar {
+				left: 28%;
+				right: 28%;
+				background: var(--green);
+			}
+
+			.signal-legend {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 8px 18px;
+				margin-top: 12px;
+				color: var(--muted);
+				font-size: 12px;
+			}
+
+			.legend-key::before {
+				display: inline-block;
+				width: 10px;
+				height: 10px;
+				margin-right: 7px;
+				content: "";
+				background: #d9ddd8;
+			}
+
+			.legend-key.steady::before {
+				background: var(--green);
+			}
+
+			.article {
+				padding: 42px 0 88px;
+			}
+
+			.article > p:first-child::first-letter {
+				float: left;
+				margin: 9px 8px 0 0;
+				color: var(--green);
+				font-family: Georgia, "Songti SC", serif;
+				font-size: 58px;
+				font-weight: 700;
+				line-height: 0.72;
+			}
+
+			p {
+				margin: 0 0 20px;
+			}
+
+			h2 {
+				margin: 68px 0 24px;
+				padding-top: 18px;
+				border-top: 3px solid var(--ink);
+				font-family: Georgia, "Songti SC", "STSong", serif;
+				font-size: 30px;
+				line-height: 1.35;
+				letter-spacing: 0;
+			}
+
+			h3 {
+				margin: 38px 0 14px;
+				font-size: 21px;
+				line-height: 1.5;
+				letter-spacing: 0;
+			}
+
+			.lead-verdict {
+				margin: 30px 0 36px;
+				padding: 20px 22px;
+				border-left: 5px solid var(--green);
+				background: var(--green-soft);
+				font-size: 18px;
+				font-weight: 650;
+				line-height: 1.72;
+			}
+
+			.quote {
+				margin: 26px 0;
+				padding: 18px 20px 16px;
+				border: 1px solid var(--line);
+				border-left: 5px solid var(--gold);
+				border-radius: 4px;
+				background: #fffdf8;
+			}
+
+			.quote p {
+				margin-bottom: 10px;
+			}
+
+			.quote cite {
+				display: block;
+				color: var(--muted);
+				font-size: 13px;
+				font-style: normal;
+			}
+
+			.note {
+				margin: 24px 0;
+				padding: 17px 20px;
+				border-left: 4px solid var(--blue);
+				background: var(--blue-soft);
+				font-size: 15px;
+			}
+
+			.warning {
+				border-left-color: var(--red);
+				background: var(--red-soft);
+			}
+
+			.verdict-grid {
+				display: grid;
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+				gap: 10px;
+				margin: 28px 0 30px;
+			}
+
+			.verdict-item {
+				min-height: 152px;
+				padding: 18px 17px;
+				border: 1px solid var(--line);
+				border-radius: 6px;
+				background: var(--paper);
+			}
+
+			.verdict-item strong {
+				display: block;
+				margin-bottom: 8px;
+				color: var(--green);
+				font-size: 18px;
+			}
+
+			.verdict-item span {
+				display: block;
+				color: var(--muted);
+				font-size: 14px;
+				line-height: 1.65;
+			}
+
+			.definition {
+				margin: 30px 0;
+				padding: 26px 24px;
+				border-top: 1px solid var(--green);
+				border-bottom: 1px solid var(--green);
+				color: #173f35;
+				background: var(--green-soft);
+				font-family: Georgia, "Songti SC", "STSong", serif;
+				font-size: 23px;
+				font-weight: 650;
+				line-height: 1.65;
+				text-align: center;
+			}
+
+			.invariants {
+				margin: 28px 0;
+				padding: 0;
+				list-style: none;
+				counter-reset: steady-rule;
+			}
+
+			.invariants li {
+				position: relative;
+				margin: 0;
+				padding: 17px 0 17px 54px;
+				border-bottom: 1px solid var(--line);
+				counter-increment: steady-rule;
+			}
+
+			.invariants li::before {
+				position: absolute;
+				top: 18px;
+				left: 0;
+				display: grid;
+				width: 34px;
+				height: 34px;
+				place-items: center;
+				border-radius: 50%;
+				color: #fff;
+				background: var(--green);
+				content: counter(steady-rule);
+				font-size: 14px;
+				font-weight: 800;
+			}
+
+			.architecture {
+				margin: 32px 0;
+				border: 1px solid var(--line);
+				border-radius: 6px;
+				overflow: hidden;
+			}
+
+			.arch-row {
+				display: grid;
+				grid-template-columns: 160px 1fr;
+				border-bottom: 1px solid var(--line);
+			}
+
+			.arch-row:last-child {
+				border-bottom: 0;
+			}
+
+			.arch-label,
+				.arch-content {
+				padding: 18px 20px;
+			}
+
+			.arch-label {
+				font-weight: 800;
+			}
+
+			.arch-content {
+				color: #4d4e4b;
+				background: var(--paper);
+			}
+
+			.arch-journal .arch-label {
+				color: #654806;
+				background: var(--gold-soft);
+			}
+
+			.arch-plan .arch-label {
+				color: #244c6b;
+				background: var(--blue-soft);
+			}
+
+			.arch-working .arch-label {
+				color: #13523f;
+				background: var(--green-soft);
+			}
+
+			.arch-probe .arch-label {
+				color: #762f29;
+				background: var(--red-soft);
+			}
+
+			.flow {
+				display: grid;
+				grid-template-columns: repeat(4, minmax(0, 1fr));
+				gap: 8px;
+				margin: 30px 0;
+			}
+
+			.flow-step {
+				position: relative;
+				min-height: 128px;
+				padding: 16px 15px;
+				border: 1px solid var(--line);
+				border-radius: 5px;
+				background: var(--paper);
+			}
+
+			.flow-step strong,
+				.flow-step span {
+				display: block;
+			}
+
+			.flow-step strong {
+				margin-bottom: 7px;
+				font-size: 16px;
+			}
+
+			.flow-step span {
+				color: var(--muted);
+				font-size: 13px;
+				line-height: 1.55;
+			}
+
+			.mechanism {
+				display: grid;
+				grid-template-columns: 48px 1fr;
+				gap: 14px;
+				padding: 22px 0;
+				border-bottom: 1px solid var(--line);
+			}
+
+			.mechanism-no {
+				color: var(--green);
+				font-family: Georgia, serif;
+				font-size: 29px;
+				font-weight: 700;
+				line-height: 1.2;
+			}
+
+			.mechanism h3 {
+				margin: 0 0 8px;
+			}
+
+			.mechanism p {
+				margin-bottom: 10px;
+			}
+
+			code {
+				padding: 2px 5px;
+				border-radius: 3px;
+				color: #244c6b;
+				background: #edf2f5;
+				font-family: "SFMono-Regular", Consolas, monospace;
+				font-size: 0.88em;
+				overflow-wrap: anywhere;
+			}
+
+			.metrics {
+				display: grid;
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+				gap: 10px;
+				margin: 28px 0;
+			}
+
+			.metric {
+				padding: 20px 16px;
+				border: 1px solid var(--line);
+				border-radius: 6px;
+				text-align: center;
+			}
+
+			.metric strong,
+				.metric span {
+				display: block;
+			}
+
+			.metric strong {
+				color: var(--green);
+				font-family: Georgia, serif;
+				font-size: 34px;
+				line-height: 1.2;
+			}
+
+			.metric span {
+				margin-top: 8px;
+				color: var(--muted);
+				font-size: 13px;
+				line-height: 1.5;
+			}
+
+			.comparison {
+				margin: 30px 0;
+			}
+
+			.bar-row {
+				display: grid;
+				grid-template-columns: 104px 1fr 86px;
+				align-items: center;
+				gap: 10px;
+				margin: 13px 0;
+				font-size: 14px;
+			}
+
+			.bar-track {
+				height: 16px;
+				background: #ecece8;
+				overflow: hidden;
+			}
+
+			.bar-fill {
+				height: 100%;
+				background: #a9aca6;
+			}
+
+			.bar-fill.steady {
+				background: var(--green);
+			}
+
+			.bar-value {
+				font-variant-numeric: tabular-nums;
+				text-align: right;
+			}
+
+			table {
+				width: 100%;
+				margin: 26px 0;
+				border-collapse: collapse;
+				font-size: 14px;
+				line-height: 1.55;
+			}
+
+			th,
+				td {
+				padding: 12px 10px;
+				border-bottom: 1px solid var(--line);
+				text-align: left;
+				vertical-align: top;
+			}
+
+			th {
+				color: var(--muted);
+				background: var(--wash);
+				font-size: 12px;
+			}
+
+			.boundaries {
+				margin: 28px 0;
+				padding-left: 22px;
+			}
+
+			.boundaries li {
+				margin-bottom: 12px;
+				padding-left: 4px;
+			}
+
+			.closing {
+				margin: 56px 0 24px;
+				padding: 26px 24px;
+				border-top: 4px solid var(--green);
+				border-bottom: 1px solid var(--line);
+				background: var(--wash);
+				font-family: Georgia, "Songti SC", "STSong", serif;
+				font-size: 22px;
+				font-weight: 650;
+				line-height: 1.7;
+			}
+
+			.sources {
+				margin-top: 64px;
+				padding-top: 22px;
+				border-top: 1px solid var(--line);
+				color: var(--muted);
+				font-size: 13px;
+				line-height: 1.7;
+			}
+
+			.sources h2 {
+				margin-top: 0;
+				font-family: inherit;
+				font-size: 20px;
+			}
+
+			.sources ol {
+				padding-left: 22px;
+			}
+
+			.sources li {
+				margin-bottom: 10px;
+				padding-left: 4px;
+				overflow-wrap: anywhere;
+			}
+
+			@media (max-width: 720px) {
+				body {
+					font-size: 16px;
+					line-height: 1.82;
+				}
+
+				.hero-inner {
+					padding: 38px 0 30px;
+				}
+
+				h1 {
+					font-size: 35px;
+				}
+
+				.deck {
+					font-size: 18px;
+				}
+
+				h2 {
+					margin-top: 54px;
+					font-size: 27px;
+				}
+
+				.verdict-grid,
+				.metrics {
+					grid-template-columns: 1fr;
+				}
+
+				.verdict-item {
+					min-height: 0;
+				}
+
+				.flow {
+					grid-template-columns: repeat(2, minmax(0, 1fr));
+				}
+
+				.arch-row {
+					grid-template-columns: 1fr;
+				}
+
+				.arch-label,
+				.arch-content {
+					padding: 14px 16px;
+				}
+
+				.bar-row {
+					grid-template-columns: 82px 1fr 72px;
+					gap: 7px;
+					font-size: 12px;
+				}
+
+				table,
+				tbody,
+				tr,
+				td {
+					display: block;
+					width: 100%;
+				}
+
+				thead {
+					position: absolute;
+					width: 1px;
+					height: 1px;
+					overflow: hidden;
+					clip: rect(0 0 0 0);
+					white-space: nowrap;
+				}
+
+				tbody tr {
+					padding: 14px 0;
+					border-bottom: 1px solid var(--line);
+				}
+
+				tbody td {
+					padding: 4px 0;
+					border: 0;
+				}
+
+				tbody td:first-child {
+					margin-bottom: 5px;
+					font-weight: 800;
+				}
+
+				tbody td:nth-child(2)::before,
+				tbody td:nth-child(3)::before {
+					display: block;
+					color: var(--muted);
+					font-size: 11px;
+					font-weight: 800;
+				}
+
+				tbody td:nth-child(2)::before {
+					content: "旧行为";
+				}
+
+				tbody td:nth-child(3)::before {
+					content: "修复后的契约";
+				}
+			}
+
+			@media (max-width: 420px) {
+				.hero-inner,
+				.article {
+					width: min(100% - 26px, 760px);
+				}
+
+				h1 {
+					font-size: 31px;
+				}
+
+				.signal-chart {
+					padding: 18px 12px 14px;
+				}
+
+				.signal-title {
+					flex-direction: column;
+					gap: 3px;
+				}
+
+				.flow {
+					grid-template-columns: 1fr;
+				}
+
+				.definition {
+					padding: 22px 16px;
+					font-size: 20px;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<header class="hero">
+			<div class="hero-inner">
+				<p class="kicker">SAN · CONTEXT STEADY · 长任务上下文工程</p>
+				<h1>上下文不是越长越好：我们为什么要给 Coding Agent 建立“稳态”</h1>
+				<p class="deck">从 1M 额度爆炸、256K 反复压缩，到一套可持续运行、可审计、不会忘记当前任务的工作记忆系统。</p>
+				<div class="meta">
+					<span>调研与工程复盘</span>
+					<span>2026-07-29</span>
+					<span>基于公开资料、社区原帖与 San 实际代码/基准</span>
+				</div>
+
+				<figure class="signal-chart" aria-label="原始日志持续增长，活跃上下文周期性回到质量窗口的示意图">
+					<div class="signal-title">
+						<span>RAW JOURNAL 持续增长</span>
+						<span>ACTIVE CONTEXT 回到质量带</span>
+					</div>
+					<div class="signal-plot">
+						<div class="signal-column"><span class="raw-bar" style="height: 22%"></span><span class="steady-bar" style="height: 22%"></span></div>
+						<div class="signal-column"><span class="raw-bar" style="height: 30%"></span><span class="steady-bar" style="height: 30%"></span></div>
+						<div class="signal-column"><span class="raw-bar" style="height: 38%"></span><span class="steady-bar" style="height: 38%"></span></div>
+						<div class="signal-column"><span class="raw-bar" style="height: 47%"></span><span class="steady-bar" style="height: 26%"></span></div>
+						<div class="signal-column"><span class="raw-bar" style="height: 55%"></span><span class="steady-bar" style="height: 34%"></span></div>
+						<div class="signal-column"><span class="raw-bar" style="height: 63%"></span><span class="steady-bar" style="height: 42%"></span></div>
+						<div class="signal-column"><span class="raw-bar" style="height: 71%"></span><span class="steady-bar" style="height: 28%"></span></div>
+						<div class="signal-column"><span class="raw-bar" style="height: 79%"></span><span class="steady-bar" style="height: 36%"></span></div>
+						<div class="signal-column"><span class="raw-bar" style="height: 86%"></span><span class="steady-bar" style="height: 44%"></span></div>
+						<div class="signal-column"><span class="raw-bar" style="height: 91%"></span><span class="steady-bar" style="height: 29%"></span></div>
+						<div class="signal-column"><span class="raw-bar" style="height: 96%"></span><span class="steady-bar" style="height: 37%"></span></div>
+						<div class="signal-column"><span class="raw-bar" style="height: 100%"></span><span class="steady-bar" style="height: 43%"></span></div>
+					</div>
+					<figcaption class="signal-legend">
+						<span class="legend-key">完整事实与审计记录</span>
+						<span class="legend-key steady">当前模型真正看到的工作集</span>
+					</figcaption>
+				</figure>
+			</div>
+		</header>
+
+		<main class="article">
+			<p>
+				我们最初讨论“上下文稳态”时，出发点不是做一个更漂亮的自动摘要，也不是把模型窗口从 256K 改成 1M。真正的问题是：当 Coding Agent 连续工作数小时、经历数百次工具调用、数次压缩和多轮用户纠正后，它还能不能准确知道自己在做什么，为什么这么做，下一步应该做什么？
+			</p>
+
+			<div class="lead-verdict">
+				先给结论：痛点是主流痛点，基础解法也已经进入主流；但“上下文稳态”不是一个已经标准化的行业术语。San 的价值不在于发明了 compaction、memory 或 prompt cache，而在于把这些分散能力组织成一条可验证的系统不变量：历史可以无限增长，模型的工作上下文不能无限膨胀；摘要可以帮助续跑，但不能篡改当前任务；维护可以反复发生，但不能终止任务或制造新的循环。
+			</div>
+
+			<h2>一、三个帖子，正好拼出问题的全貌</h2>
+
+			<p>
+				这次我们通过 Exa 搜索，并使用已登录的浏览器会话读取了三篇 Linux.do 原帖。它们不是正式实验，但非常准确地呈现了真实用户已经在承受的三类代价。
+			</p>
+
+			<h3>1. 1M 窗口的悖论：能装下，不等于适合一直装</h3>
+
+			<div class="quote">
+				<p>“感觉 400K 是个分水岭。上去了 token 额度飞快，而且慢。致命问题是感觉注意力分散，更喜欢走捷径，体感降智。”</p>
+				<cite>Linux.do：《1m长上下文问题探讨。【额度爆炸】【降智推诿】》</cite>
+			</div>
+
+			<p>
+				这篇帖子的讨论很有意思。用户并没有停在“模型窗口够不够大”，而是自发收敛出了几种工程办法：把任务拆成小 Phase、把进度和决策落盘、到一定比例主动压缩、开新会话读取交接文档、让主 Agent 保持短上下文，把支线交给 Subagent。
+			</p>
+
+			<p>
+				换句话说，社区已经在手工搭建一种上下文稳态：保留外部状态，限制主工作区，按阶段重建，而不是把整个历史一直背在模型身上。
+			</p>
+
+			<h3>2. 256K 窗口的悖论：压缩能续命，也会逐次失真</h3>
+
+			<div class="quote">
+				<p>“256K 实在是不停地在压缩，压缩几次就该开始丢三落四了。”</p>
+				<p>“搞科研就头大了，经常压缩三四次之后 Codex 就开始忘记很多重要的事。”</p>
+				<cite>Linux.do：《Codex 的 256k 上下文是真的有点难受》</cite>
+			</div>
+
+			<p>
+				这揭示了另一个事实：compaction 是有损变换。第一次摘要丢掉一个“现在看起来不重要”的约束，第二次又把第一次摘要当成完整事实继续压，误差就会复利。窗口小，压缩太频繁；窗口大，每次重放成本又高。单纯调阈值，只是在两种代价之间移动。
+			</p>
+
+			<h3>3. 长 Agent Turn 的悖论：压缩时机本身就是 Agent Loop 的一部分</h3>
+
+			<div class="quote">
+				<p>“一个 agent turn 过长，上下文就可能一路涨到 100% 以上，有时甚至超过 130%，但 auto compact 迟迟没有触发。”</p>
+				<p>后续又出现原生压缩与插件同时触发，报出 “Already compacted” 和 continuation handoff failed。</p>
+				<cite>Linux.do：《推荐 pi-continue：解决 Pi 长任务中途不压缩的问题》</cite>
+			</div>
+
+			<p>
+				这里的问题已经不再是“摘要写得好不好”，而是并发控制：在哪个工具边界可以压缩？谁拥有本次维护？压缩后应该续跑 provider request，还是重新消费用户消息？已经成功的工具能不能被重复执行？两个压缩器同时触发时，如何保证幂等？
+			</p>
+
+			<p>
+				这正是为什么我们把 Context Steady 放在 harness，而不是只写一条更聪明的摘要 Prompt。上下文维护已经进入 Agent Loop 的控制面。
+			</p>
+
+			<h2>二、这是不是主流？准确答案是“两层都是”</h2>
+
+			<div class="verdict-grid">
+				<div class="verdict-item">
+					<strong>痛点：主流</strong>
+					<span>长上下文中的注意力衰减、成本膨胀、工具结果污染、压缩遗忘和跨会话断裂，都有论文、官方文档和社区案例支撑。</span>
+				</div>
+				<div class="verdict-item">
+					<strong>原语：主流</strong>
+					<span>Compaction、tool-result clearing、memory、外部 artifact、Subagent、prompt caching，已经成为 OpenAI、Anthropic、Google 的正式能力或推荐模式。</span>
+				</div>
+				<div class="verdict-item">
+					<strong>系统化：仍未收敛</strong>
+					<span>行业尚无统一的“Context Steady State”标准。任务权威、覆盖账本、维护幂等、用户抢占和循环收敛，仍主要由各 harness 自己解决。</span>
+				</div>
+			</div>
+
+			<h3>研究已经证明：标称窗口不等于有效窗口</h3>
+
+			<p>
+				《Lost in the Middle》发现，相关信息位于长上下文中部时，模型表现常显著下降；RULER 进一步表明，模型在简单“大海捞针”测试上接近满分，并不代表它能在同样长度下稳定完成多跳追踪、聚合和复杂问答。2025 年的一项后续研究甚至报告：在保证相关信息可被完美检索的条件下，仅仅增加输入长度，5 个受测模型在数学、问答和编码任务上的表现仍下降了 13.9% 到 85%。
+			</p>
+
+			<p>
+				因此，1M 更像一个物理容量和缓冲能力，不应自动等同于 1M 的高质量工作区。
+			</p>
+
+			<h3>官方路线已经高度趋同</h3>
+
+			<p>
+				Anthropic 把 context engineering 定义为：从不断变化的信息宇宙中，持续策划下一次推理真正需要的 token。它把长任务解法拆成 compaction、tool-result clearing、structured memory、just-in-time retrieval 和 multi-agent。
+			</p>
+
+			<p>
+				OpenAI 的官方 Cookbook 同样明确区分了 compaction 与 memory：前者帮助当前长任务继续，后者让未来任务复用稳定经验；重要事实应该留在可审阅的 artifact，而不是把未经审阅的 memory 当作事实库。Google 的 Antigravity Agent 也已经提供自动上下文压缩，并把执行环境与对话上下文分离，让文件和工具状态独立持久化。
+			</p>
+
+			<div class="note">
+				所以，我们不应该把 Context Steady 包装成“别人都没想到的新概念”。更准确的说法是：行业已经进入上下文工程阶段，San 选择用“稳态控制”把这些共识落到长任务 harness 的完整生命周期里。
+			</div>
+
+			<h2>三、上下文稳态到底是什么</h2>
+
+			<div class="definition">
+				当完整历史持续增长时，让模型每次推理所见的活跃上下文反复收敛到一个有界、高信号、保留当前任务权威、并且可以追溯来源的工作状态。
+			</div>
+
+			<p>
+				这里最重要的词不是“短”，而是“稳”。稳态不要求每次请求 token 数完全相同，也不追求上下文越少越好。它要求系统始终知道哪些内容必须精确保留，哪些可以被结构化替代，哪些可以随时重读，哪些只是历史噪声，以及每次替代发生后是否仍足以继续当前任务。
+			</p>
+
+			<ul class="invariants">
+				<li><strong>完整历史不丢。</strong> 用户消息、工具调用、工具结果、压缩边界和决策都进入 append-only Journal，作为事实与审计层。</li>
+				<li><strong>活跃工作集有界。</strong> Provider 每次只看到当前任务所需的精确消息、最新 checkpoint、有限 live tail 和相关证据。</li>
+				<li><strong>替代关系可证明。</strong> 从活跃上下文移出的每段历史，必须有 digest、checkpoint、artifact 或其他 replacement ref 覆盖。</li>
+				<li><strong>用户原始请求优先。</strong> 当前任务只能来自真实 Journal 中的用户消息；摘要、召回记忆和外部日志都不能升级为当前 Goal。</li>
+				<li><strong>维护不等于执行配额。</strong> Segment、摘要次数和压缩次数不能消耗“任务还能不能继续”的资格。</li>
+				<li><strong>失败必须可观察。</strong> 维护触发原因、前后 token、摘要成本、恢复阶段、权威冲突和循环状态都要能被还原。</li>
+			</ul>
+
+			<h2>四、不是一份摘要，而是四层数据架构</h2>
+
+			<div class="architecture" aria-label="San Context Steady 四层数据架构">
+				<div class="arch-row arch-journal">
+					<div class="arch-label">Raw Journal</div>
+					<div class="arch-content">不可变事实层。保存真实用户消息、assistant 消息、工具对、Segment、compaction entry 和执行证据。它可以持续增长，但不等于每轮都要重放给模型。</div>
+				</div>
+				<div class="arch-row arch-plan">
+					<div class="arch-label">ContextPlan</div>
+					<div class="arch-content">选择与覆盖层。建立 source index，选择 exact、TurnDigest、checkpoint、recall 等材料，并校验哪些原始 entry 已被什么材料覆盖。</div>
+				</div>
+				<div class="arch-row arch-working">
+					<div class="arch-label">Working Set</div>
+					<div class="arch-content">Provider 真正看到的执行上下文：稳定前缀、当前用户权威、最新 checkpoint、有限 live tail、未闭合工具对和按需证据。</div>
+				</div>
+				<div class="arch-row arch-probe">
+					<div class="arch-label">Probe Sidecar</div>
+					<div class="arch-content">独立观测层。记录每次请求的真实 usage、缓存率、active/raw token、维护原因、摘要成本、权威状态和循环收敛指标，但不进入模型上下文。</div>
+				</div>
+			</div>
+
+			<p>
+				这种分层解决了一个长期被混淆的问题：<strong>“系统记得”与“模型此刻看见”不是一回事。</strong> Journal 负责不遗忘，ContextPlan 负责选择，Working Set 负责推理，Probe 负责证明系统确实按预期工作。
+			</p>
+
+			<h2>五、一次长任务如何在稳态里运行</h2>
+
+			<div class="flow" aria-label="上下文稳态控制循环">
+				<div class="flow-step"><strong>1. 用户输入</strong><span>写入真实 Journal，成为当前任务权威；steering 可以更新当前逻辑 turn。</span></div>
+				<div class="flow-step"><strong>2. Context Gate</strong><span>估算完整 provider input，判断 pass、burst_required 或 hard_pressure。</span></div>
+				<div class="flow-step"><strong>3. ContextPlan</strong><span>保护当前请求和 live tool pair，选择 digest/checkpoint/recall，验证 coverage。</span></div>
+				<div class="flow-step"><strong>4. Provider 请求</strong><span>稳定前缀在前，动态材料靠后，当前用户请求保持最高近因权重。</span></div>
+				<div class="flow-step"><strong>5. 工具执行</strong><span>调用和结果按 call id 配对；新 diff、新测试状态和新证据被识别为进展。</span></div>
+				<div class="flow-step"><strong>6. 安全边界</strong><span>工具对闭合后检查压力；Segment 到点只写 checkpoint，不默认物理压缩。</span></div>
+				<div class="flow-step"><strong>7. 有界恢复</strong><span>真实硬压力最多执行一次 compact/replan/replay；失败显式暂停，不无限重试。</span></div>
+				<div class="flow-step"><strong>8. TurnDigest</strong><span>逻辑 turn 结束后沉淀意图、决策、文件、证据、风险和下一步，供后续选择。</span></div>
+			</div>
+
+			<h2>六、San 真正落地的七个机制</h2>
+
+			<div class="mechanism">
+				<div class="mechanism-no">01</div>
+				<div>
+					<h3>黄金工作窗口，而不是追逐物理上限</h3>
+					<p>San 当前以 240K 作为默认 activation/quality 基准，给输出、工具结果和估算偏差保留 20% 的默认 reserve；推荐配置使用 25%。真实预算会被模型物理窗口向下约束，burst ceiling 也不能越过硬上限。</p>
+					<p>更关键的是，启用 Context Steady 后，短中会话在达到 240K 前仍保持 native-equivalent 路径；一旦跨过阈值，本会话再锁存进入稳态。这是基准发现“中短任务不一定划算”之后的直接产品化修正。</p>
+				</div>
+			</div>
+
+			<div class="mechanism">
+				<div class="mechanism-no">02</div>
+				<div>
+					<h3>TurnDigest 与 Checkpoint：结构化状态，不是散文总结</h3>
+					<p>每个 settled turn 生成结构化 TurnDigest：用户意图、执行动作、决策、文件、工具证据、已知风险和下一步。旧 digest 采用 append-only 账本，checkpoint 低频合并，减少稳定前缀被频繁改写。</p>
+					<p>大文件和长日志不复制进摘要，只保留路径、短摘、证据引用和重读策略。需要原文时再按需读取新鲜数据。</p>
+				</div>
+			</div>
+
+			<div class="mechanism">
+				<div class="mechanism-no">03</div>
+				<div>
+					<h3>Continuation Authority：摘要只能讲历史，不能定义当前 Goal</h3>
+					<p>San 从真实 Journal 用户 entry 派生 <code>ActiveContinuationState</code>，保存当前请求、逻辑 turn、已发生的 mutation/verification 证据和未完成状态。压缩、handoff、resume 之后都从这个权威态继续。</p>
+					<p>Compaction summary 被明确降权为历史材料。若摘要出现 <code>Goal</code> 字段，或在没有 edit/test 证据时声称“已经完成”，系统会检查、修复或使用有界的确定性 fallback，而不是让错误摘要接管会话。</p>
+				</div>
+			</div>
+
+			<div class="mechanism">
+				<div class="mechanism-no">04</div>
+				<div>
+					<h3>Segment 是维护边界，不是压缩按钮，更不是执行额度</h3>
+					<p>长逻辑 turn 可以跨越任意多个 Segment。默认 15 分钟或模型相关的 token 增量只提示系统写一个递归 checkpoint；它不调用摘要模型、不生成 compaction entry，也不改写 provider working set。</p>
+					<p>只有真实容量压力才触发物理压缩。这样既能持续保存长任务进度，又不会出现“每增长 40K 就压一次”或“Segment 用完所以 Agent 停止”的维护饥饿。</p>
+				</div>
+			</div>
+
+			<div class="mechanism">
+				<div class="mechanism-no">05</div>
+				<div>
+					<h3>Mid-run 有界恢复：能续跑，但不允许压缩抖动</h3>
+					<p>每次 provider call，包括工具循环中段，都会重新经过硬上限 gate。遇到 hard pressure 时，系统只允许一次 compact → coverage rebuild → replan → replay。<code>maintenanceId</code> 和 recovery attempt 防止同一压力事件反复压缩。</p>
+					<p>模型热切换导致窗口缩小时，旧 ContextPlan 会立即失效并按新预算重建。若最小 continuation state 仍无法适配，系统显式暴露暂停原因，而不是静默停止或吞掉用户输入。</p>
+				</div>
+			</div>
+
+			<div class="mechanism">
+				<div class="mechanism-no">06</div>
+				<div>
+					<h3>Tool Progress Guard：按证据增量判断是否在前进</h3>
+					<p>长任务最危险的不是工具调用多，而是看似忙碌却没有新证据。San 对 action、resource 和 evidence 计算稳定指纹：新文件、新结果、新 diff、新测试状态或成功 mutation 才算进展。</p>
+					<p>同一动作与结果重复，或有限资源之间反复侦察而没有证据增量时，先 soft redirect；仍不收敛时，下一次请求强制输出已有结论或明确阻塞。用户的新纠正始终优先抢占维护与 advisor 等待。</p>
+				</div>
+			</div>
+
+			<div class="mechanism">
+				<div class="mechanism-no">07</div>
+				<div>
+					<h3>Probe：没有观测，就没有“稳态”</h3>
+					<p>独立的 v3 sidecar probe 记录 active/raw/archive token、缓存读写、prefix fingerprint、Segment/compaction 次数、真实 trigger、摘要输入输出成本、当前用户权威和循环收敛状态。</p>
+					<p>它与主 Journal 分离，既不污染模型上下文，也让我们能回答：到底是模型失误、provider 失败，还是 harness 自己进入了错误控制循环。</p>
+				</div>
+			</div>
+
+			<h2>七、我们得到过收益，也踩中过自己的坑</h2>
+
+			<h3>受控 Release 基准：超长任务收益明确</h3>
+
+			<p>
+				2026 年 7 月，我们用同一主模型、随机 Native/Steady 配对、外部质量验证器和冻结价格表跑了 30 次 Release profile：15/15 配对可比较，30/30 通过质量门禁。最重的 L5 是 180 步顺序证据链，6 次运行共 1,080 次直接模型工具调用，证据链全部有效。
+			</p>
+
+			<div class="metrics">
+				<div class="metric"><strong>30 / 30</strong><span>所有运行通过质量门禁</span></div>
+				<div class="metric"><strong>-80.9%</strong><span>L5 最大活跃上下文<br />355,606 → 67,972</span></div>
+				<div class="metric"><strong>1.2%</strong><span>Steady 维护估算成本占比</span></div>
+			</div>
+
+			<div class="comparison" aria-label="Native 与 Context Steady 基准对比">
+				<div class="bar-row"><span>Prompt · Native</span><div class="bar-track"><div class="bar-fill" style="width: 100%"></div></div><span class="bar-value">215.7M</span></div>
+				<div class="bar-row"><span>Prompt · Steady</span><div class="bar-track"><div class="bar-fill steady" style="width: 31.7%"></div></div><span class="bar-value">68.5M</span></div>
+				<div class="bar-row"><span>成本 · Native</span><div class="bar-track"><div class="bar-fill" style="width: 100%"></div></div><span class="bar-value">$132.76</span></div>
+				<div class="bar-row"><span>成本 · Steady</span><div class="bar-track"><div class="bar-fill steady" style="width: 52.5%"></div></div><span class="bar-value">$69.70</span></div>
+			</div>
+
+			<p>
+				总量上，Steady 将 Runner 可观测 Prompt Tokens 降低 68.3%，冻结价格表下的估算成本降低 47.5%。服务商管理台的未审计口径也观察到 token 下降 52.2%、金额下降 39.7%，但它可能包含中断、重试和其他计费项，因此我们没有把两个口径混在一起。
+			</p>
+
+			<div class="note warning">
+				这组收益主要由 L5 超长任务贡献。L1-L4 中短任务里，Steady 的 Runner 估算成本反而高 16% 到 27%；15 组配对的中位数与 bootstrap 95% 区间跨越零。证据支持“超长任务明显受益”，不支持“所有任务都更便宜”。这也是后来增加 240K 延迟激活门槛的原因。
+			</div>
+
+			<h3>真实事故：稳态系统也可能成为新的故障源</h3>
+
+			<p>
+				随后一次真实会话暴露了更严重的问题：原本用于保存长任务进度的 40K/15 分钟 Segment，被错误地绑定成了完整物理压缩；压缩摘要又从被调查的外部日志中吸收了另一个任务，把它升级成当前 Goal。用户已经纠正“应该开始实现代码”，Agent 仍进行了约 981 次工具执行，没有一次 edit/write。
+			</p>
+
+			<p>
+				目标会话累计 3,856 条 Journal 记录、454 条 probe、33 次 Segment 压缩，原始估算超过 1.83M token。Provider 的 504 和限流确实存在，但根因不是“模型突然变笨”，而是 harness 的 Research → Implement 状态转换失败，又被压缩权威错位和无证据工具循环放大。
+			</p>
+
+			<table>
+				<thead>
+					<tr><th>故障</th><th>旧行为</th><th>修复后的契约</th></tr>
+				</thead>
+				<tbody>
+					<tr><td>Segment 触发压缩</td><td>每增长约 40K 就可能重写 working set</td><td>Segment 只写 checkpoint；容量压力才物理压缩</td></tr>
+					<tr><td>摘要越权</td><td>摘要里的 Goal/完成声明可能覆盖用户</td><td>真实 Journal 用户 entry 是唯一当前权威</td></tr>
+					<tr><td>工具循环</td><td>只识别完全相同参数的连续重复</td><td>按动作与证据指纹识别 A/B 循环和等价结果</td></tr>
+					<tr><td>用户纠正</td><td>可能排在 advisor/maintenance 之后</td><td>新用户输入抢占非必要维护与等待</td></tr>
+					<tr><td>时序判断</td><td>同毫秒与时钟漂移可能误判先后</td><td>优先按 Journal branch order，时间戳仅作 fallback</td></tr>
+				</tbody>
+			</table>
+
+			<p>
+				修复最终形成 continuation authority、summary authority inspection、checkpoint-only Segment、Tool Progress Guard、用户抢占和 probe v3，并通过 18 个相关测试文件共 285 项回归、类型检查、仓库检查和 benchmark estimate-only 验证。
+			</p>
+
+			<p>
+				这段经历反而让“稳态”定义更完整：它不仅是控制 token 数，还要控制任务权威、维护所有权、状态转换和执行收敛。只做上下文压缩，可能把一个容量问题变成更隐蔽的控制问题。
+			</p>
+
+			<h2>八、上下文稳态不是什么</h2>
+
+			<ul class="boundaries">
+				<li><strong>不是“上下文越短越好”。</strong> 当前请求、未闭合工具对和关键证据必须完整保留；需要质量 burst 时可以临时扩张。</li>
+				<li><strong>不是“每轮都做摘要”。</strong> 短中任务保持原生路径；Segment checkpoint 与物理 compaction 也已经解耦。</li>
+				<li><strong>不是长期记忆的同义词。</strong> Compaction 解决当前长任务，memory 解决跨任务复用，artifact 承载可审阅事实，三者权威不同。</li>
+				<li><strong>不是 Subagent 的替代品。</strong> Subagent 适合隔离支线和缩小问题空间；主 Agent 仍需要稳定的任务权威与进度账本。</li>
+				<li><strong>不是模型能力保证。</strong> Harness 能减少自造噪声、错误摘要和控制循环，但无法消除模型本身的推理上限或 provider 故障。</li>
+				<li><strong>不是已经完成的终局。</strong> 当前能力仍是 opt-in；中小物理窗口的预算分区、不同模型的质量目标和更大规模真实任务统计仍需持续校准。</li>
+			</ul>
+
+			<h2>九、我们真正想改变的，是 Agent 的“长任务观”</h2>
+
+			<p>
+				传统聊天产品把上下文看成一段不断追加的对话；窗口够大，就继续追加，快满了，就总结一下。对 Coding Agent 来说，这个模型不够用。它面对的不是纯对话，而是一条长时间运行的执行轨迹：文件会变化、测试会失败、用户会纠正、工具会返回海量噪声、任务会跨过多个维护边界。
+			</p>
+
+			<p>
+				因此，Agent 的核心资产不应该是一段越来越长的聊天记录，而应该是一个持续更新的工作状态：当前目标来自哪里，哪些决定仍有效，哪些文件已经改过，哪些验证真正执行过，哪些证据可以按需重读，哪些历史已经被可靠替代。
+			</p>
+
+			<div class="closing">
+				更大的上下文窗口当然有价值，但它最好的用途是提供弹性，而不是鼓励堆积。真正决定长任务上限的，不是模型一次能塞进多少 token，而是系统能否在每一次增长、压缩、纠正和恢复之后，重新回到一个可信的工作状态。
+			</div>
+
+			<p>
+				这就是我们所说的上下文稳态：不是让 Agent 永远记住一切，而是让它始终记得此刻最重要的事情，并且知道去哪里找回其余事实。
+			</p>
+
+			<section class="sources">
+				<h2>资料与口径说明</h2>
+				<ol>
+					<li><a href="https://linux.do/t/topic/2404321">Linux.do：《1m长上下文问题探讨。【额度爆炸】【降智推诿】》</a>，浏览器登录态读取，访问于 2026-07-29。</li>
+					<li><a href="https://linux.do/t/topic/2481299">Linux.do：《Codex 的 256k 上下文是真的有点难受》</a>，访问于 2026-07-29。</li>
+					<li><a href="https://linux.do/t/topic/2571151">Linux.do：《推荐 pi-continue：解决 Pi 长任务中途不压缩的问题》</a>，访问于 2026-07-29。</li>
+					<li><a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">Anthropic: Effective context engineering for AI agents</a>，2025-09-29。</li>
+					<li><a href="https://platform.claude.com/cookbook/tool-use-context-engineering-context-engineering-tools">Anthropic Cookbook: Context engineering: memory, compaction, and tool clearing</a>，2026-03-20。</li>
+					<li><a href="https://developers.openai.com/cookbook/examples/agents_sdk/building_reliable_agents_memory_compaction">OpenAI Cookbook: Building Reliable Agents with Memory and Compaction</a>，2026-05-01。</li>
+					<li><a href="https://developers.openai.com/blog/skills-shell-tips">OpenAI: Shell + Skills + Compaction: Tips for long-running agents that do real work</a>。</li>
+					<li><a href="https://developers.openai.com/blog/run-long-horizon-tasks-with-codex">OpenAI: Run long horizon tasks with Codex</a>，2026-02-23。</li>
+					<li><a href="https://ai.google.dev/gemini-api/docs/antigravity-agent">Google AI for Developers: Antigravity Agent</a>，访问于 2026-07-29。</li>
+					<li><a href="https://aclanthology.org/2024.tacl-1.9/">Liu et al.: Lost in the Middle: How Language Models Use Long Contexts</a>，TACL 2024。</li>
+					<li><a href="https://arxiv.org/abs/2404.06654">Hsieh et al.: RULER: What’s the Real Context Size of Your Long-Context Language Models?</a>，2024。</li>
+					<li><a href="https://aclanthology.org/2025.findings-emnlp.1264/">Context Length Alone Hurts LLM Performance Despite Perfect Retrieval</a>，Findings of EMNLP 2025。</li>
+					<li><a href="san-context-steady-release-benchmark-report-20260718.html">San Context Steady Release Benchmark Report</a> 与 <a href="san-context-steady-release-benchmark-summary-20260718.json">机器可读结论快照</a>。Runner 估算和服务商管理台数据是两个不同口径，正文未混用。</li>
+					<li><a href="san-context-steady-loop-failure-repair-plan-20260723.html">San 会话循环故障修复方案</a>，包含事故证据、修复不变量、测试与发布门禁。</li>
+				</ol>
+			</section>
+		</main>
+	</body>
+</html>

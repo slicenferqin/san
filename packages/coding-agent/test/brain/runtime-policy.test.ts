@@ -16,6 +16,7 @@ describe("San Brain runtime policy", () => {
 			enabled: false,
 			mode: "projection",
 			captureEnabled: false,
+			autoDecisionEnabled: false,
 			activationEnabled: false,
 			projectionEnabled: false,
 			legacyAutoRetainAllowed: true,
@@ -35,6 +36,7 @@ describe("San Brain runtime policy", () => {
 			enabled: true,
 			mode: "review-only",
 			captureEnabled: true,
+			autoDecisionEnabled: false,
 			activationEnabled: false,
 			projectionEnabled: false,
 			legacyAutoRetainAllowed: false,
@@ -54,9 +56,21 @@ describe("San Brain runtime policy", () => {
 			enabled: true,
 			mode: "activation",
 			captureEnabled: false,
+			autoDecisionEnabled: true,
 			activationEnabled: true,
 			projectionEnabled: false,
 			legacyAutoRetainAllowed: true,
+		});
+	});
+
+	it("defaults enabled Brain sessions to low-authority activation", () => {
+		const settings = Settings.isolated({ "san.brain.enabled": true });
+
+		expect(resolveSanBrainRuntimePolicy(settings)).toMatchObject({
+			mode: "activation",
+			autoDecisionEnabled: true,
+			activationEnabled: true,
+			projectionEnabled: false,
 		});
 	});
 

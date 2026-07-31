@@ -51,11 +51,13 @@ export interface TurnDigestToolEvidence {
 	entryIds?: string[];
 }
 
-/** Candidate memory item — produced by digest, consumed by M4+. */
+/** 摘要生成的候选记忆。 */
 export interface TurnDigestMemoryCandidate {
 	content: string;
 	type: "preference" | "project_fact" | "decision" | "workflow" | "other";
 	importance: number;
+	/** 仅由本地权威用户消息分类器设置。 */
+	authorization?: "explicit_user" | "inferred";
 }
 
 /** Optional token usage snapshot for the turn. */

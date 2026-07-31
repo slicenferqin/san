@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS projections (
 CREATE INDEX IF NOT EXISTS projections_decision_idx ON projections(decision_id, state);
 `;
 
-type CandidateStatus = "pending" | "active" | "discarded" | "superseded" | "undone";
+type CandidateStatus = "pending" | "observed" | "review" | "active" | "discarded" | "superseded" | "undone";
 type DecisionApplicationState = "pending" | "applied" | "blocked";
 
 interface SchemaVersionDbRow {
@@ -174,6 +174,20 @@ interface ProjectionStateCountDbRow {
 	count: number;
 }
 
+interface AutomationDecisionDbRow {
+	requested_by: SanBrainDecision["requestedBy"];
+	action: SanBrainDecision["action"];
+}
+
+interface CandidateStatusCountDbRow {
+	status: CandidateStatus;
+	count: number;
+}
+
+interface AutomationRevocationCountDbRow {
+	count: number;
+}
+
 export interface SanBrainCandidateRecord {
 	kind: SanBrainCandidateKind;
 	candidate: SanBrainCandidate;
@@ -243,6 +257,22 @@ export interface SanBrainSyncResult {
 	decisionsAdded: number;
 	decisionsApplied: number;
 	decisionsBlocked: number;
+}
+
+export interface SanBrainAutomationMetrics {
+	totalCandidates: number;
+	pending: number;
+	automaticallyApproved: number;
+	automaticallyDiscarded: number;
+	automaticallyObserved: number;
+	automaticallySuperseded: number;
+	escalated: number;
+	automaticallyHandled: number;
+	reviewQueue: number;
+	evaluated: number;
+	automationRate: number;
+	automaticallyRevoked: number;
+	automaticRevocationRate: number;
 }
 
 function parseCandidate(kind: SanBrainCandidateKind, payload: string): SanBrainCandidate {
@@ -519,7 +549,7 @@ export class SanBrainStore {
 				`SELECT candidate_id, kind, source_session_id, source_entry_id, status, revision, updated_at, payload_json
 				 FROM candidates
 				 WHERE kind = ? AND scope_kind = ? AND scope_key = ? AND dedupe_key = ?
-				   AND status IN ('pending', 'active')
+				   AND status IN ('pending', 'observed', 'review', 'active')
 				 ORDER BY created_at, candidate_id`,
 			)
 			.all(candidateRow.kind, candidate.scope.kind, candidate.scope.key, candidate.dedupeKey) as CandidateDbRow[];
@@ -612,8 +642,22 @@ export class SanBrainStore {
 					JSON.stringify(consolidatedCandidate),
 				);
 		} else {
-			status =
-				decision.action === "discard" ? "discarded" : decision.action === "supersede" ? "superseded" : "undone";
+			switch (decision.action) {
+				case "discard":
+					status = "discarded";
+					break;
+				case "observe":
+					status = "observed";
+					break;
+				case "escalate":
+					status = "review";
+					break;
+				case "supersede":
+					status = "superseded";
+					break;
+				default:
+					status = "undone";
+			}
 			this.#db.prepare("DELETE FROM active_states WHERE owner_id = ?").run(candidateRow.candidate_id);
 		}
 
@@ -693,7 +737,8 @@ export class SanBrainStore {
 		const rows = this.#db
 			.query(
 				`SELECT candidate_id, kind, source_session_id, source_entry_id, status, revision, updated_at, payload_json
-				 FROM candidates WHERE status = 'pending' ORDER BY created_at DESC, candidate_id LIMIT ?`,
+				 FROM candidates WHERE status IN ('review', 'pending')
+				 ORDER BY CASE status WHEN 'review' THEN 0 ELSE 1 END, created_at DESC, candidate_id LIMIT ?`,
 			)
 			.all(Math.max(1, Math.trunc(limit))) as CandidateDbRow[];
 		return rows.map(candidateRecord);
@@ -773,6 +818,82 @@ export class SanBrainStore {
 		return row ? projectionRecord(row) : undefined;
 	}
 
+	getAutomationMetrics(): SanBrainAutomationMetrics {
+		const statusRows = this.#db
+			.query("SELECT status, COUNT(*) AS count FROM candidates GROUP BY status")
+			.all() as CandidateStatusCountDbRow[];
+		const statusCounts = new Map(statusRows.map(row => [row.status, row.count]));
+		const decisionRows = this.#db
+			.query(
+				`SELECT
+					json_extract(payload_json, '$.requestedBy') AS requested_by,
+					json_extract(payload_json, '$.action') AS action
+				 FROM decisions
+				 WHERE application_state = 'applied'
+					AND json_extract(payload_json, '$.requestedBy') = 'policy'`,
+			)
+			.all() as AutomationDecisionDbRow[];
+		const revocationRow = this.#db
+			.query(
+				`SELECT COUNT(*) AS count
+				 FROM decisions revocation_decision
+				 WHERE revocation_decision.application_state = 'applied'
+					AND json_extract(revocation_decision.payload_json, '$.requestedBy') = 'user'
+					AND json_extract(revocation_decision.payload_json, '$.action') IN ('undo', 'discard', 'supersede')
+					AND EXISTS (
+						SELECT 1 FROM decisions approved_decision
+						WHERE approved_decision.owner_id = revocation_decision.owner_id
+							AND approved_decision.application_state = 'applied'
+							AND json_extract(approved_decision.payload_json, '$.action') = 'approve'
+							AND json_extract(approved_decision.payload_json, '$.requestedBy') = 'policy'
+							AND CAST(json_extract(approved_decision.payload_json, '$.nextRevision') AS INTEGER) =
+								CAST(json_extract(revocation_decision.payload_json, '$.previousRevision') AS INTEGER)
+					)`,
+			)
+			.get() as AutomationRevocationCountDbRow | null;
+		const automaticallyRevoked = revocationRow?.count ?? 0;
+		let automaticallyApproved = 0;
+		let automaticallyDiscarded = 0;
+		let automaticallyObserved = 0;
+		let automaticallySuperseded = 0;
+		let escalated = 0;
+		for (const row of decisionRows) {
+			switch (row.action) {
+				case "approve":
+					automaticallyApproved++;
+					break;
+				case "discard":
+					automaticallyDiscarded++;
+					break;
+				case "observe":
+					automaticallyObserved++;
+					break;
+				case "supersede":
+					automaticallySuperseded++;
+					break;
+				case "escalate":
+					escalated++;
+			}
+		}
+		const automaticallyHandled =
+			automaticallyApproved + automaticallyDiscarded + automaticallyObserved + automaticallySuperseded;
+		const evaluated = automaticallyHandled + escalated;
+		return {
+			totalCandidates: [...statusCounts.values()].reduce((total, count) => total + count, 0),
+			pending: statusCounts.get("pending") ?? 0,
+			reviewQueue: statusCounts.get("review") ?? 0,
+			automaticallyApproved,
+			automaticallyDiscarded,
+			automaticallyObserved,
+			automaticallySuperseded,
+			escalated,
+			automaticallyHandled,
+			evaluated,
+			automationRate: evaluated === 0 ? 0 : automaticallyHandled / evaluated,
+			automaticallyRevoked,
+			automaticRevocationRate: automaticallyApproved === 0 ? 0 : automaticallyRevoked / automaticallyApproved,
+		};
+	}
 	explain(id: string): SanBrainExplanation | undefined {
 		const directCandidate = this.getCandidate(id);
 		const decisionById = directCandidate
