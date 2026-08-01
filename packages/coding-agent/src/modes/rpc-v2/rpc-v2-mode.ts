@@ -1122,6 +1122,15 @@ async function dispatchKnownMethod(
 				types: p.types,
 			});
 		}
+		case "session.messages.list": {
+			const p = params as { sessionId?: string; cursor?: string; limit?: number } | undefined;
+			if (!p?.sessionId) return invalidParamsError("session.messages.list requires sessionId", "sessionId");
+			return await sessionManager.listMessages({
+				sessionId: p.sessionId,
+				cursor: p.cursor,
+				limit: p.limit,
+			});
+		}
 		case "session.delete": {
 			const p = params as
 				| { sessionId?: string; mode?: "trash" | "permanent"; expectedRevision?: number }

@@ -38,8 +38,8 @@ import type { SessionRuntimeSettings, SubagentSnapshot } from "./dto/integration
 import type { InteractionRequest } from "./dto/interaction";
 import type { InputResourceRef } from "./dto/resources";
 import type { ContentPart, QueueItem, RunSnapshot } from "./dto/run";
-import type { RecoveryDescriptor, SessionSnapshot, SessionSummary, StreamPolicy } from "./dto/session";
-import { AdapterContext, adaptSessionEvent } from "./event-adapter";
+import type { RecoveryDescriptor, SessionMessage, SessionSnapshot, SessionSummary, StreamPolicy } from "./dto/session";
+import { AdapterContext, adaptSessionEvent, visibleMessageText } from "./event-adapter";
 import { EventSequencer } from "./event-sequencer";
 import { EvidenceLedger, generateToolEvidence } from "./evidence-generator";
 import { IdempotencyStore } from "./idempotency";
@@ -841,6 +841,45 @@ export class RpcV2SessionManager {
 			nextCursor: offset + limit < events.length ? encodeCursor(offset + limit) : null,
 			firstSequence: active.events[0]?.sequence ?? 0,
 			lastSequence: active.sequencer.currentSequence,
+		};
+	}
+
+	/**
+	 * 读取已持久化的会话正文。事件日志只记录当前 Runtime 产生的事件，
+	 * CLI 创建或跨进程恢复的会话在 `session.sync` 后 events 为空，客户端
+	 * 只能通过这里补齐历史对话。
+	 */
+	async listMessages(params: { sessionId: string; cursor?: string; limit?: number }): Promise<{
+		messages: SessionMessage[];
+		nextCursor: string | null;
+		total: number;
+	}> {
+		const active = this.assertSession(params.sessionId);
+		const limit = Math.min(Math.max(params.limit ?? 100, 1), 100);
+		const projected: SessionMessage[] = [];
+		for (const message of active.session.messages) {
+			if (!("role" in message)) continue;
+			const role = message.role;
+			if (role !== "user" && role !== "assistant") continue;
+			// 合成注入与 steering 包装不是用户可见的对话轮次，投影里必须剔除，
+			// 否则客户端会把 auto-continue 之类的内部消息渲染成用户发言。
+			if (role === "user" && ("synthetic" in message ? message.synthetic : false)) continue;
+			if (role === "user" && ("steering" in message ? message.steering : false)) continue;
+			const visible = visibleMessageText(message);
+			if (!visible.value) continue;
+			const timestamp = "timestamp" in message && typeof message.timestamp === "number" ? message.timestamp : 0;
+			projected.push({
+				role,
+				timestamp: new Date(timestamp).toISOString(),
+				content: sanitizeRpcText(visible.value),
+				...(visible.truncated ? { truncated: true } : {}),
+			});
+		}
+		const offset = decodeCursor(params.cursor);
+		return {
+			messages: projected.slice(offset, offset + limit),
+			nextCursor: offset + limit < projected.length ? encodeCursor(offset + limit) : null,
+			total: projected.length,
 		};
 	}
 

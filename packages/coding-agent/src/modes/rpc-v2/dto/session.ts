@@ -116,6 +116,21 @@ export interface EvidenceSummary {
 }
 
 // ============================================================================
+// Transcript messages (persisted history, independent of the event journal)
+// ============================================================================
+
+/**
+ * 一条持久化的会话消息投影。事件日志只覆盖当前 Runtime，CLI 创建的会话
+ * 没有 journal，客户端只能从这里拿到历史正文。
+ */
+export interface SessionMessage {
+	role: "user" | "assistant";
+	timestamp: Timestamp;
+	content: string;
+	truncated?: boolean;
+}
+
+// ============================================================================
 // Recovery
 // ============================================================================
 
