@@ -181,7 +181,7 @@ export function adaptSessionEvent(
 			const messageId = ctx.currentMessageId;
 			if (!messageId) return undefined;
 			const role = "role" in event.message ? event.message.role : "assistant";
-			const visibleText = truncateUtf8(extractVisibleText(event.message), MAX_ACTIVE_TEXT_BYTES);
+			const visibleText = visibleMessageText(event.message);
 			const data = {
 				messageId,
 				role,
@@ -401,6 +401,15 @@ function extractToolResultDetail(result: unknown): { path?: string; preview?: st
 
 function sanitizeOptionalText(value: string | undefined): string | undefined {
 	return typeof value === "string" ? sanitizeRpcText(value) : undefined;
+}
+
+/**
+ * v2 对外的可见正文投影：只取 text 部分，并套用与 `message.completed`
+ * 相同的字节预算。历史消息读取必须复用它，否则同一条消息在事件流和
+ * transcript 两条路径上的正文会不一致，客户端无法去重。
+ */
+export function visibleMessageText(message: unknown): { value: string; truncated: boolean } {
+	return truncateUtf8(extractVisibleText(message), MAX_ACTIVE_TEXT_BYTES);
 }
 
 function extractVisibleText(message: unknown): string {

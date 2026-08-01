@@ -75,6 +75,7 @@ export const RPC_V2_METHOD_DEFINITIONS: readonly RpcV2MethodDefinition[] = [
 	method("session.sync", { capability: "session.sync", requiresSession: true }),
 	method("session.unsync", { capability: "session.sync" }),
 	method("session.events.list", sessionRead),
+	method("session.messages.list", sessionRead),
 	method("session.rename", sessionWrite),
 	method("session.branch", sessionWrite),
 	method("session.handoff", sessionWrite),

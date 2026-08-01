@@ -431,6 +431,26 @@
           ],
           "additionalProperties": false
         },
+        "session.messages.list": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "cursor": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          "required": [
+            "sessionId"
+          ],
+          "additionalProperties": false
+        },
         "session.rename": {
           "type": "object",
           "properties": {
@@ -2212,6 +2232,7 @@
       "session.sync",
       "session.unsync",
       "session.events.list",
+      "session.messages.list",
       "session.rename",
       "session.branch",
       "session.handoff",

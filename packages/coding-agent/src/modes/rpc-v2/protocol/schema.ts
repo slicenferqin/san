@@ -228,6 +228,16 @@ const paramsByMethod: Record<string, JsonSchema> = {
 		required: ["sessionId"],
 		additionalProperties: false,
 	},
+	"session.messages.list": {
+		type: "object",
+		properties: {
+			sessionId: stringSchema,
+			cursor: stringSchema,
+			limit: { type: "integer", minimum: 1, maximum: 100 },
+		},
+		required: ["sessionId"],
+		additionalProperties: false,
+	},
 	"session.rename": {
 		type: "object",
 		properties: { sessionId: stringSchema, leaseId: stringSchema, name: stringSchema, meta: objectSchema },
