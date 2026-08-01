@@ -1192,6 +1192,68 @@ describe("OpenAI responses history payload", () => {
 		expect(replayHistoryItems[4]?.id).toBe(opaqueMessageId);
 	});
 
+	it("omits empty encrypted reasoning content from replay payloads", async () => {
+		const summary = [{ type: "summary_text", text: "Planning report" }];
+		const context: Context = {
+			messages: [
+				makeAssistantMessage([
+					{ type: "reasoning", id: "rs_empty", summary, encrypted_content: "" },
+					{
+						type: "message",
+						role: "assistant",
+						status: "completed",
+						content: [{ type: "output_text", text: "Visible answer", annotations: [] }],
+					},
+				]),
+				{ role: "user", content: "follow-up user", timestamp: Date.now() },
+			],
+		};
+
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
+		const payload = (await captureResponsesPayload(model, context)) as { input?: unknown[] };
+
+		expect(findResponsesInputItem(payload.input, "reasoning")).toEqual({ type: "reasoning", summary });
+		expect(containsAssistantOutputText(payload.input, "Visible answer")).toBe(true);
+	});
+
+	it("omits empty encrypted reasoning content from thinking-signature replay", async () => {
+		const summary = [{ type: "summary_text", text: "Planning report" }];
+		const assistant = makeAssistantMessage([]);
+		delete (assistant as { providerPayload?: unknown }).providerPayload;
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "first user", timestamp: Date.now() },
+				{
+					...assistant,
+					content: [
+						{
+							type: "thinking",
+							thinking: "Planning report",
+							thinkingSignature: JSON.stringify({
+								type: "reasoning",
+								id: "rs_empty_signature",
+								summary,
+								encrypted_content: "",
+							}),
+						},
+						{ type: "text", text: "Visible answer" },
+					],
+				},
+				{ role: "user", content: "follow-up user", timestamp: Date.now() },
+			],
+		};
+
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
+		const payload = (await captureResponsesPayload(model, context)) as { input?: unknown[] };
+
+		expect(findResponsesInputItem(payload.input, "reasoning")).toEqual({
+			type: "reasoning",
+			id: "rs_empty_signature",
+			summary,
+		});
+		expect(containsAssistantOutputText(payload.input, "Visible answer")).toBe(true);
+	});
+
 	it("backward compat: old full-snapshot payloads still replace history for legacy same-provider assistant turns", async () => {
 		const fullSnapshotItems = [
 			{ type: "message", role: "user", content: [{ type: "input_text", text: "Canonical user" }] },
