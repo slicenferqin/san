@@ -219,7 +219,10 @@ function sanitizeOpenAIResponsesReasoningItemForReplay(item: Record<string, unkn
 	const sanitizedItem: Record<string, unknown> = { type: "reasoning" };
 	if (Array.isArray(item.summary)) sanitizedItem.summary = item.summary;
 	if (Array.isArray(item.content)) sanitizedItem.content = item.content;
-	if (typeof item.encrypted_content === "string" || item.encrypted_content === null) {
+	if (
+		item.encrypted_content === null ||
+		(typeof item.encrypted_content === "string" && item.encrypted_content.length > 0)
+	) {
 		sanitizedItem.encrypted_content = item.encrypted_content;
 	}
 	if (item.status === "in_progress" || item.status === "completed" || item.status === "incomplete") {

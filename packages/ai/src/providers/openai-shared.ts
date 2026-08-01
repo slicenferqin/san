@@ -1619,7 +1619,9 @@ function parseResponseReasoningReplayItem(signature: string | undefined): Respon
 		if (!parsed || typeof parsed !== "object") return undefined;
 		if (!("type" in parsed) || parsed.type !== "reasoning") return undefined;
 		if (!("id" in parsed) || typeof parsed.id !== "string") return undefined;
-		return parsed as ResponseReasoningItem;
+		const reasoningItem = parsed as ResponseReasoningItem;
+		if (reasoningItem.encrypted_content === "") delete reasoningItem.encrypted_content;
+		return reasoningItem;
 	} catch {
 		return undefined;
 	}
