@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>San TUI 直接 Rust 重写评估 — 2026-07-29</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #f4f6f3;
+        --surface: #ffffff;
+        --ink: #17211d;
+        --muted: #596861;
+        --line: #d7dfda;
+        --accent: #126954;
+        --accent-soft: #e4f2ec;
+        --blue: #255b99;
+        --blue-soft: #e8f0fa;
+        --amber: #865808;
+        --amber-soft: #fff3d6;
+        --red: #a43a32;
+        --red-soft: #fae9e6;
+        --shadow: 0 10px 28px rgba(24, 43, 35, 0.07);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font: 15px/1.65 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main {
+        width: min(1180px, calc(100% - 36px));
+        margin: 28px auto 72px;
+      }
+      header {
+        padding: 38px 44px;
+        border: 1px solid #cbd9d2;
+        border-radius: 20px;
+        background: linear-gradient(135deg, #fcfdfc, #eaf4ef);
+        box-shadow: var(--shadow);
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-size: clamp(29px, 4vw, 46px);
+        line-height: 1.12;
+        letter-spacing: -0.035em;
+      }
+      h2 {
+        margin: 46px 0 17px;
+        padding-bottom: 8px;
+        border-bottom: 2px solid var(--line);
+        font-size: 25px;
+        letter-spacing: -0.02em;
+      }
+      h3 { margin: 0 0 9px; font-size: 18px; }
+      p { margin: 8px 0; }
+      ul, ol { margin: 8px 0; padding-left: 22px; }
+      li + li { margin-top: 5px; }
+      code {
+        padding: 0.1em 0.35em;
+        border-radius: 5px;
+        background: #edf1ee;
+        font: 0.92em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      pre {
+        margin: 13px 0;
+        padding: 15px 18px;
+        overflow-x: auto;
+        border: 1px solid #293c35;
+        border-radius: 11px;
+        background: #14211c;
+        color: #d9e8df;
+        font: 13px/1.62 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      a { color: var(--blue); text-underline-offset: 3px; }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--surface);
+      }
+      th, td {
+        padding: 11px 13px;
+        border: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+      th { background: #edf2ee; font-weight: 700; }
+      .table-wrap {
+        overflow-x: auto;
+        border-radius: 12px;
+        box-shadow: 0 2px 8px rgba(23, 40, 33, 0.035);
+      }
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 18px;
+      }
+      .chip, .badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 9px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 750;
+      }
+      .chip { border: 1px solid #c5d4cc; background: rgba(255, 255, 255, 0.75); color: #355249; }
+      .badge.fact { background: var(--blue-soft); color: var(--blue); }
+      .badge.estimate { background: var(--amber-soft); color: var(--amber); }
+      .badge.decision { background: var(--red-soft); color: var(--red); }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+      .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .card, .callout {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--surface);
+        box-shadow: 0 3px 13px rgba(23, 40, 33, 0.04);
+      }
+      .card { padding: 18px 20px; }
+      .metric {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--accent);
+        font-size: 24px;
+        font-weight: 800;
+      }
+      .small { color: var(--muted); font-size: 13px; }
+      .muted { color: var(--muted); }
+      .callout {
+        margin: 16px 0;
+        padding: 17px 20px;
+        border-left: 5px solid var(--accent);
+      }
+      .callout.info { background: var(--accent-soft); }
+      .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+      .callout.danger { border-left-color: var(--red); background: var(--red-soft); }
+      .decision-line { font-size: 17px; }
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 9px;
+        margin: 16px 0;
+      }
+      .flow > div {
+        position: relative;
+        padding: 13px 10px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--surface);
+        text-align: center;
+        font-weight: 700;
+      }
+      .flow > div:not(:last-child)::after {
+        content: "→";
+        position: absolute;
+        right: -14px;
+        top: 9px;
+        z-index: 2;
+        color: var(--accent);
+        font-size: 21px;
+      }
+      .score { white-space: nowrap; font-weight: 750; }
+      .low { color: var(--red); }
+      .mid { color: var(--amber); }
+      .high { color: var(--accent); }
+      footer {
+        margin-top: 44px;
+        padding-top: 17px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 13px;
+      }
+      @media (max-width: 820px) {
+        .grid, .grid.three, .flow { grid-template-columns: 1fr; }
+        .flow > div::after { display: none; }
+        header { padding: 28px 24px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>San TUI 直接 Rust 重写评估</h1>
+        <p class="decision-line">
+          <strong>结论：技术上可行，当前不值得直接重写。</strong>
+          若保持现有能力与扩展兼容，真实工作不是“替换 renderer”，而是重写完整交互前端；预计
+          <strong>24–38 engineer-months</strong>，由 3–4 名熟悉 Rust、终端协议和现有 San 语义的工程师投入
+          <strong>8–12 个月</strong>。
+        </p>
+        <p class="muted">
+          仅为性能而改写不成立：本机现有热路径微基准大多处于亚毫秒级，文本宽度、ANSI 切片、按键解析、模糊匹配、SIXEL
+          等关键原语已经由 Rust N-API 承担。Rust 的主要潜在收益是长期状态建模、单一原生 UI 所有权和 Ratatui 生态，而不是当下可证明的用户延迟下降。
+        </p>
+        <div class="meta">
+          <span class="chip">评估日期 2026-07-29</span>
+          <span class="chip">范围 packages/tui + interactive frontend</span>
+          <span class="chip">本机 Apple M5 / Darwin</span>
+          <span class="chip">不含 agent/provider/tool runtime 全量改写</span>
+        </div>
+      </header>
+
+      <h2>1. 判断摘要</h2>
+      <div class="grid three">
+        <div class="card">
+          <span class="badge fact">观测</span>
+          <span class="metric">84,624 行</span>
+          <p>当前 TUI 库与核心 interactive UI 生产代码规模；尚未计入散落在 tools、edit、task、extensions 中的专用 renderer。</p>
+        </div>
+        <div class="card">
+          <span class="badge fact">观测</span>
+          <span class="metric">199 个测试文件</span>
+          <p>位于 TUI 测试目录或直接导入 <code>@san/tui</code> 的测试；合计 66,869 行，反映兼容面而非可机械换算的工作量。</p>
+        </div>
+        <div class="card">
+          <span class="badge estimate">推算</span>
+          <span class="metric">24–38 人月</span>
+          <p>保持 inline scrollback、图片、IME、工具流式渲染、扩展 UI、跨平台和测试合同的完整前端切换。</p>
+        </div>
+      </div>
+
+      <div class="callout danger">
+        <strong>最关键的边界：</strong>San 的 agent/session/tool lifecycle 仍在 TypeScript/Bun；而 UI 不只是画字符串。
+        <code>EventController</code> 把流式消息、工具调用、重试、压缩、队列、子会话和 terminal 状态直接投影为可变 Component 树。
+        因此“Rust renderer + TypeScript UI”只会制造高频 FFI；要获得 Rust 的主要收益，Rust 必须拥有组件状态、布局、输入和终端写入。
+      </div>
+
+      <h2>2. 现有规模与耦合面</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>区域</th><th>生产文件</th><th>行数</th><th>迁移含义</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>packages/tui/src</code></td><td>37</td><td>24,401</td>
+              <td>终端生命周期、差分输出、native scrollback、editor、Markdown、图片、输入、能力探测。</td>
+            </tr>
+            <tr>
+              <td><code>modes/components</code></td><td>90</td><td>31,640</td>
+              <td>transcript、assistant/tool blocks、overlay、selector、dashboard、status、wizard。</td>
+            </tr>
+            <tr>
+              <td><code>modes/controllers</code></td><td>16</td><td>14,690</td>
+              <td>输入、事件、命令、selector、扩展 UI、MCP 等产品状态机。</td>
+            </tr>
+            <tr>
+              <td><code>modes</code> 根 + theme + utils</td><td>40</td><td>16,275</td>
+              <td><code>InteractiveMode</code> composition root、主题函数、展示辅助逻辑。</td>
+            </tr>
+            <tr>
+              <td><strong>核心合计</strong></td><td><strong>183</strong></td><td><strong>84,624</strong></td>
+              <td>保守下界；未包括 tools/task/edit/LSP/MCP 等目录中的 renderer 实现。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small">
+        统计包含空行和注释，只用于量级与 blast radius，不把 TypeScript 行数等同于 Rust 行数或人月。
+        另有 174 个生产 TypeScript 文件直接导入 <code>@san/tui</code>，这些文件合计 102,984 行。
+      </p>
+
+      <h3>耦合最深的合同</h3>
+      <div class="grid">
+        <div class="card">
+          <h3>事件与组件是同一状态机</h3>
+          <ul>
+            <li><code>EventController</code> 订阅 <code>AgentSessionEvent</code>，直接创建、更新、排序和销毁 transcript children。</li>
+            <li>流式 turn 可产生数百个 <code>message_update</code>；工具还有 start/update/end 与 partial JSON reveal。</li>
+            <li>scrollback committed rows、stable prefix、live region seam 由组件逐层上报，不能只替换最终 ANSI emitter。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>扩展 API 返回可执行 TypeScript 对象</h3>
+          <ul>
+            <li>自定义工具的 <code>renderCall</code>/<code>renderResult</code> 返回 <code>Component</code>。</li>
+            <li><code>setEditorComponent</code> 可注入自定义 editor factory。</li>
+            <li>主题包含字符串 style callback，而不是纯数据 token。</li>
+            <li>这些对象不能跨进程或 N-API 直接序列化；必须改 API、引入 declarative view AST，或降级为通用文本。</li>
+          </ul>
+        </div>
+      </div>
+
+      <h2>3. 性能基线：现有 renderer 不是已证实瓶颈</h2>
+      <p>
+        2026-07-29 在当前 Apple M5 工作区各运行一次现有基准。数据是方向性 micro-benchmark，不是 p95、不含真实 PTY/terminal flush，也不代表其他平台。
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>场景</th><th>观测结果</th><th>解释</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Editor 无变更 render</td><td>0.0205 ms/render</td>
+              <td>远低于 30fps 的约 33 ms 帧预算。</td>
+            </tr>
+            <tr>
+              <td>Editor edit + render</td><td>0.0566 ms/op</td>
+              <td>即使 Rust 快数倍，单次输入可节省的绝对时间仍很小。</td>
+            </tr>
+            <tr>
+              <td>流式 Markdown，2k–6k 字符</td><td>0.2335–0.4050 ms/step</td>
+              <td>首个 1k 样本为 3.2289 ms/step 的冷启动异常值；本次单跑不足以归因。</td>
+            </tr>
+            <tr>
+              <td>50/100/200 block transcript frame</td><td>0.0154–0.0795 ms/frame</td>
+              <td>缓存命中后非单调；只证明该 synthetic hot path 很小，不证明长会话整体无问题。</td>
+            </tr>
+            <tr>
+              <td>ANSI wrap</td><td>0.002326 ms/op</td>
+              <td>已经调用 Rust native implementation。</td>
+            </tr>
+            <tr>
+              <td>ANSI truncate/slice</td><td>约 0.00033 ms/op</td>
+              <td>已经调用 Rust native implementation。</td>
+            </tr>
+            <tr>
+              <td>按键 match</td><td>0.000560 ms/组</td>
+              <td>核心解析与匹配已经在 Rust native 中。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <pre>结论边界：
+已观测：synthetic render CPU 很低；若只移植这些路径，绝对收益有限。
+未观测：真实终端写入、GC pause、低端机器、ConPTY、tmux、超长会话的端到端 p95。
+因此不能声称 Rust “没有性能收益”，但当前也没有证据支持用完整重写购买该收益。</pre>
+
+      <h3>为什么理论加速不等于用户加速</h3>
+      <ul>
+        <li>现有 TUI 已有 30fps 节流、backpressure、component-scoped repaint、stable prefix 与缓存。</li>
+        <li>Unicode width、ANSI wrap/slice/truncate、key parsing/matching、fuzzy matching、SIXEL 已经进入 <code>@san/natives</code>。</li>
+        <li>Bun、agent session、provider streaming、tool execution 和大部分消息对象仍会存在；重写 UI 不会移除主运行时。</li>
+        <li>若采用 Rust sidecar，还会复制会话投影并增加 IPC/进程常驻内存；总 RSS 不保证下降。</li>
+      </ul>
+
+      <h2>4. 四种“Rust 重写”不是同一个项目</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>方案</th><th>边界</th><th>成本推算</th><th>收益</th><th>判断</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>A. Rust terminal kernel</strong></td>
+              <td>TS 仍生成完整 frame；一次批量 N-API 调用交给 Rust 做 diff、cursor、terminal write。</td>
+              <td>2–4 人月</td>
+              <td>可能减少 emitter CPU/主线程写入；不减少 TS component/render allocation。</td>
+              <td><span class="score mid">只适合有数据后的定点优化</span></td>
+            </tr>
+            <tr>
+              <td><strong>B. Rust widgets + TS controllers</strong></td>
+              <td>TS 发送 declarative view tree，Rust 做组件、布局、render；业务状态仍在 TS。</td>
+              <td>10–18 人月</td>
+              <td>布局和绘制原生化；但形成双状态、view AST 与复杂回调桥。</td>
+              <td><span class="score low">最差长期边界</span></td>
+            </tr>
+            <tr>
+              <td><strong>C. Rust 完整 interactive frontend</strong></td>
+              <td>Rust 拥有输入、UI 状态、组件、layout、terminal；TS 只发送 session events、接收 user intents。</td>
+              <td>24–38 人月；3–4 人，8–12 个月</td>
+              <td>真正获得单一所有权、低 GC 敏感度、Rust 状态机与 Ratatui 生态。</td>
+              <td><span class="score mid">唯一合理的完整目标，但当前 ROI 不足</span></td>
+            </tr>
+            <tr>
+              <td><strong>D. 全 CLI/agent Rust</strong></td>
+              <td>连 agent、provider、tools、extensions、RPC/ACP、配置与会话一起迁移。</td>
+              <td>本报告不估算；远大于 C</td>
+              <td>可真正移除 Bun，但会变成多包产品重建。</td>
+              <td><span class="score low">另立战略项目，不应伪装成 TUI 重写</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout warn">
+        <strong>不要采用每个 Component/每行跨 N-API 的混合模式。</strong>
+        它同时保留 JS allocation、Rust allocation、字符串复制和跨边界调度，复杂度上升而收益最小。
+        A 至少必须是“一帧一次调用”；C 则必须是“一批事件一次调用，Rust 独立完成绘制”。
+      </div>
+
+      <h2>5. 完整前端改写的成本构成</h2>
+      <p><span class="badge estimate">推算</span> 假设功能对等、无长期双栈、由熟悉现有系统的工程师执行，范围已含合理联调与回归缓冲。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>工作流</th><th>人月</th><th>必须交付</th><th>主要风险</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Rust TUI core</td><td>6–9</td>
+              <td>inline viewport、diff、cursor、scheduler、capability、native scrollback、resize、panic/exit restore、图片协议。</td>
+              <td>Ratatui inline 能力不是 San exact-final scrollback 合同的现成等价物。</td>
+            </tr>
+            <tr>
+              <td>产品 UI 与输入</td><td>8–13</td>
+              <td>editor、Markdown、transcript、tool blocks、status、所有 overlay/selector/wizard、mouse/IME/keymap。</td>
+              <td>大量行为藏在组件 mutation、focus、timer 与流式中间态。</td>
+            </tr>
+            <tr>
+              <td>TS↔Rust 协议与扩展</td><td>4–7</td>
+              <td>版本化事件协议、backpressure、command response、approval/dialog、extension renderer 新合同。</td>
+              <td>序列化顺序、取消、重连和扩展 API 兼容；双状态最容易分叉。</td>
+            </tr>
+            <tr>
+              <td>平台与切换</td><td>5–8</td>
+              <td>PTY oracle、macOS/Linux/Windows、tmux/screen、Ghostty/Kitty/iTerm/WezTerm/VS Code、打包、崩溃恢复、旧实现删除。</td>
+              <td>终端 bug 多为 host/protocol 组合问题，语言迁移不会自动消失。</td>
+            </tr>
+            <tr>
+              <td><strong>整体预测</strong></td><td><strong>24–38</strong></td>
+              <td colspan="2">工作流有并行与重叠，整体预测不是机械相加；日历期还受关键路径与 parity burn-down 限制。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>机会成本</h3>
+      <p>
+        <span class="badge estimate">推算</span>
+        3–4 名核心工程师投入 8–12 个月，意味着 Action Palette、Queue Center、Conversation Navigator、Terminal Doctor
+        等直接用户结果至少延后两个到三个季度。重写期间还要维护旧 TUI，直到新实现通过 parity gate；这段时间开发速度通常下降而不是上升。
+      </p>
+
+      <h2>6. 收益矩阵</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>维度</th><th>潜在收益</th><th>当前证据</th><th>净判断</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>render CPU</td><td>Rust buffer/layout 可更快、更少临时字符串。</td>
+              <td>现有 synthetic hot frames 多为 0.02–0.4 ms；关键文本原语已 native。</td>
+              <td><span class="score low">低</span></td>
+            </tr>
+            <tr>
+              <td>input-to-paint / GC</td><td>Rust-owned event loop 不受 Bun GC pause 直接影响。</td>
+              <td>尚无 live PTY p95 或 GC attribution，问题未被证实。</td>
+              <td><span class="score mid">未知，需测量</span></td>
+            </tr>
+            <tr>
+              <td>内存</td><td>紧凑 enum/buffer、减少 JS 对象可降低 UI heap。</td>
+              <td>Bun 与 agent state 仍常驻；sidecar 还会复制 projection。</td>
+              <td><span class="score low">低或中性</span></td>
+            </tr>
+            <tr>
+              <td>正确性</td><td>所有权、enum、RAII、穷尽 match 更适合复杂状态机。</td>
+              <td>长期成立；切换初期会重新引入已有终端兼容 bug。</td>
+              <td><span class="score mid">中，长期</span></td>
+            </tr>
+            <tr>
+              <td>生态</td><td>Ratatui/Crossterm、TestBackend、现成 widgets 与 Rust profiling。</td>
+              <td>官方 0.30.2 已支持 Inline、<code>insert_before</code>、test scrollback。</td>
+              <td><span class="score high">中高</span></td>
+            </tr>
+            <tr>
+              <td>扩展能力</td><td>可建立更稳定的 declarative UI ABI。</td>
+              <td>现有扩展直接返回 TS <code>Component</code>；必须破坏或迁移 API。</td>
+              <td><span class="score low">短中期为负</span></td>
+            </tr>
+            <tr>
+              <td>用户体验</td><td>Rust 可支撑复杂 pane、搜索与大数据量。</td>
+              <td>当前主要缺口是动作可发现性、队列语义和会话导航，不是绘制能力。</td>
+              <td><span class="score low">语言本身无收益</span></td>
+            </tr>
+            <tr>
+              <td>战略独立性</td><td>若未来原生 CLI，可复用 Rust 前端。</td>
+              <td>当前 agent/backend 明确仍是 TypeScript/Bun。</td>
+              <td><span class="score mid">仅在战略前提成立时高</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>7. Ratatui 能解决什么，不能解决什么</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>现成能力</h3>
+          <ul>
+            <li>双 buffer 与 cell-level diff。</li>
+            <li>Crossterm backend、跨平台输入、raw mode、alternate screen。</li>
+            <li><code>Viewport::Inline</code> 与 <code>Terminal::insert_before</code>。</li>
+            <li><code>TestBackend</code> 的 screen/cursor/scrollback 检查。</li>
+            <li>成熟 layout/widget 生态。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>仍需 San 自己实现</h3>
+          <ul>
+            <li>已提交 transcript 与 live tail 的 exact-final seam。</li>
+            <li>native scrollback commit/replay、ED3 destructive replay。</li>
+            <li>DEC 2026、terminal capability/reachability 与 host quirks。</li>
+            <li>Kitty/SIXEL 图片生命周期与 scrollback 降级。</li>
+            <li>流式工具中间态、partial JSON reveal、组件级稳定前缀。</li>
+            <li>扩展 renderer/editor 的可序列化替代合同。</li>
+          </ul>
+        </div>
+      </div>
+      <p>
+        xAI 的 Grok Build 证明完整 Rust coding-agent TUI 可行，但其官方 manifests 同时显示真实成本：除 Ratatui/Crossterm 外，还有专用
+        textarea/inline crates、Markdown、syntect、VTE、图片、PTY harness、设置 E2E 与多组 PTY 测试。它的 agent/tool ecosystem 也在 Rust
+        内，避免了 San 必须处理的 TS↔Rust 产品状态边界。因此 Grok 是可行性证据，不是“换两个 crate 即完成”的成本证据。
+      </p>
+
+      <h2>8. 如果仍决定做：正确架构</h2>
+      <div class="callout info">
+        <strong>推荐目标只能是 C：Rust-owned interactive frontend。</strong>
+        继续让 TypeScript 负责模型、agent session、tools、配置持久化与扩展执行；Rust 负责 terminal、input、local UI state、layout 和 rendering。
+        边界必须是粗粒度、版本化、可录制重放的事件协议。
+      </div>
+      <div class="flow">
+        <div>AgentSession / tools<br /><span class="small">TypeScript</span></div>
+        <div>batched UI events<br /><span class="small">versioned DTO</span></div>
+        <div>Rust UI state<br /><span class="small">single owner</span></div>
+        <div>Ratatui + backend<br /><span class="small">terminal owner</span></div>
+        <div>user intents<br /><span class="small">commands to TS</span></div>
+      </div>
+
+      <h3>入站事件</h3>
+      <p>
+        session snapshot；agent/turn start/end；message start/delta/end；tool start/update/end；compaction/retry；queue projection；settings/theme/keymap；
+        focused session/subagent；notice/error；approval/dialog request。流式 delta 必须批处理、合并并带顺序号，不能每 token 同步 FFI。
+      </p>
+      <h3>出站意图</h3>
+      <p>
+        submit/steer/follow-up/abort；command/action invoke；queue mutation；approval/dialog response；session focus；setting mutation；copy/open external editor；
+        shutdown。Rust 不直接修改 agent 业务状态，只提交意图并等待权威 projection。
+      </p>
+      <h3>扩展合同</h3>
+      <p>
+        必须以 versioned declarative view AST 替代任意 TS <code>Component</code> callback；首版只允许有限 primitives（text、stack、box、markdown、table、image、status、input）。
+        若保留 TS renderer 输出字符串作为永久逃生口，Rust 就无法拥有布局、focus、mouse hit testing 与稳定缓存，最终会回到方案 B。
+      </p>
+
+      <h2>9. 决策门槛与低风险试验</h2>
+      <p>不建议直接立项完整改写。若团队需要消除不确定性，先做可丢弃的 R0，不接入正式发布路径。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>R0</th><th>内容</th><th>预算</th><th>通过门槛</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>录制真实 event tape</td>
+              <td>idle、streaming、200-block transcript、tool partial、overlay、resize、IME。</td>
+              <td rowspan="3">2 人 × 3 周，约 1.5 人月</td>
+              <td>TS 与 Rust 可消费同一确定性事件序列。</td>
+            </tr>
+            <tr>
+              <td>Rust vertical slice</td>
+              <td>inline transcript + editor + 一个流式 tool block；粗粒度协议；TestBackend + PTY。</td>
+              <td>native scrollback 顺序、resize、cursor、取消均与 oracle 一致。</td>
+            </tr>
+            <tr>
+              <td>A/B 性能测量</td>
+              <td>相同 terminal/PTY 下测 input-to-paint、render CPU、event-loop stall、RSS、terminal bytes。</td>
+              <td>至少一项已归因核心指标改善 ≥30%，且无 RSS/启动/功能显著退化；否则停止。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small">30% 是立项门槛建议，不是当前性能事实；完整重写需要足够大的确定性收益，不能以微小 benchmark 优势覆盖迁移风险。</p>
+
+      <h2>10. 最终建议</h2>
+      <div class="callout danger">
+        <p><strong>现在：不直接 Rust 重写。</strong></p>
+        <ol>
+          <li>继续现有交互路线：Action Palette、Queue Center、Conversation Navigator、Terminal Doctor；这些直接解决已识别的用户问题。</li>
+          <li>补齐 live PTY 性能观测，按 idle/streaming/large transcript/overlay/resize 分解 render、schedule、terminal write 与 GC。</li>
+          <li>发现明确热点后，优先继续扩展现有 <code>@san/natives</code> 的批量原语，而不是迁移整个 UI。</li>
+          <li>只有在“未来要建设 Rust-native frontend”成为独立战略目标，或 live 数据证明 JS UI 是主要瓶颈时，才执行 R0。</li>
+        </ol>
+      </div>
+      <p>
+        <strong>ROI 判断：</strong>以“让当前 San TUI 更好用、更流畅”为目标，Rust 全改写的收益不足以覆盖 24–38 人月和两到三个季度的机会成本；
+        以“建立可脱离 Bun 的长期原生前端”为目标，它才可能成立，但应被当作新前端产品线，而不是 renderer refactor。
+      </p>
+
+      <h2>11. 证据与来源</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>结论</th><th>来源</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>现有渲染、scrollback、组件与事件耦合</td>
+              <td><code>packages/tui/src/tui.ts</code>、<code>terminal.ts</code>、<code>components/editor.ts</code>、<code>components/markdown.ts</code>、<code>modes/interactive-mode.ts</code>、<code>modes/controllers/event-controller.ts</code>、<code>modes/components/tool-execution.ts</code>。</td>
+            </tr>
+            <tr>
+              <td>扩展 API 直接返回 Component/editor factory</td>
+              <td><code>extensibility/custom-tools/types.ts</code>、<code>extensibility/extensions/types.ts</code>、<code>sdk.ts</code>。</td>
+            </tr>
+            <tr>
+              <td>本机性能数据</td>
+              <td><code>bun packages/coding-agent/bench/rendering.ts</code>；<code>bun packages/tui/bench/text-layout.ts</code>，2026-07-29 单次运行。</td>
+            </tr>
+            <tr>
+              <td>Ratatui Inline、insert_before、diff、TestBackend scrollback</td>
+              <td><a href="https://docs.rs/ratatui/0.30.2/ratatui/struct.Terminal.html">Ratatui 0.30.2 Terminal 官方文档</a>、<a href="https://docs.rs/ratatui/0.30.2/ratatui/enum.Viewport.html">Viewport 官方文档</a>、<a href="https://docs.rs/ratatui/0.30.2/ratatui/backend/struct.TestBackend.html">TestBackend 官方文档</a>。</td>
+            </tr>
+            <tr>
+              <td>Crossterm 跨平台终端与 event-stream 能力</td>
+              <td><a href="https://docs.rs/crossterm/latest/crossterm/">Crossterm 官方 rustdoc</a>。</td>
+            </tr>
+            <tr>
+              <td>Grok Build Rust TUI 的实际依赖与测试广度</td>
+              <td><a href="https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/Cargo.toml">xai-grok-pager Cargo.toml</a>、<a href="https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager-render/Cargo.toml">xai-grok-pager-render Cargo.toml</a>。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <footer>
+        观测事实与成本推算已分开标注。成本区间假设保持当前功能与平台合同；主动删除扩展 renderer、图片、inline native scrollback、IME 或 Windows 支持可以降低成本，但那是缩减产品能力，不是等价重写。
+      </footer>
+    </main>
+  </body>
+</html>
