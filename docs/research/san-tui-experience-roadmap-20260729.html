@@ -1,0 +1,1182 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>San TUI 体验推进方案 — 2026-07-29</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #f5f6f2;
+        --surface: #ffffff;
+        --ink: #18201d;
+        --muted: #5b6963;
+        --line: #d7ded8;
+        --accent: #116b58;
+        --accent-soft: #e2f1eb;
+        --blue: #245ca6;
+        --blue-soft: #e7effa;
+        --amber: #8a5a05;
+        --amber-soft: #fff3d4;
+        --red: #a53a32;
+        --red-soft: #fae8e5;
+        --shadow: 0 12px 30px rgba(23, 40, 33, 0.07);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font:
+          15px/1.66 ui-sans-serif,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+      main {
+        width: min(1180px, calc(100% - 36px));
+        margin: 28px auto 72px;
+      }
+      header {
+        position: relative;
+        overflow: hidden;
+        padding: 42px 46px;
+        border: 1px solid #cbd9d2;
+        border-radius: 22px;
+        background: linear-gradient(
+          135deg,
+          #fbfdfb 0%,
+          #edf5f0 58%,
+          #e7efe9 100%
+        );
+        box-shadow: var(--shadow);
+      }
+      header::after {
+        content: "";
+        position: absolute;
+        width: 270px;
+        height: 270px;
+        right: -95px;
+        top: -110px;
+        border-radius: 50%;
+        background: radial-gradient(
+          circle,
+          rgba(17, 107, 88, 0.17),
+          rgba(17, 107, 88, 0) 68%
+        );
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-size: clamp(29px, 4vw, 48px);
+        line-height: 1.1;
+        letter-spacing: -0.035em;
+      }
+      h2 {
+        margin: 50px 0 18px;
+        padding-bottom: 9px;
+        border-bottom: 2px solid var(--line);
+        font-size: 26px;
+        letter-spacing: -0.02em;
+      }
+      h3 {
+        margin: 0 0 9px;
+        font-size: 19px;
+      }
+      h4 {
+        margin: 0 0 6px;
+        font-size: 16px;
+      }
+      p {
+        margin: 8px 0;
+      }
+      ul,
+      ol {
+        margin: 8px 0;
+        padding-left: 22px;
+      }
+      li + li {
+        margin-top: 5px;
+      }
+      code {
+        padding: 0.1em 0.35em;
+        border-radius: 5px;
+        background: #edf1ee;
+        font:
+          0.92em ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+      }
+      pre {
+        margin: 13px 0;
+        padding: 15px 18px;
+        overflow-x: auto;
+        border: 1px solid #263b34;
+        border-radius: 12px;
+        background: #14201c;
+        color: #d8e8df;
+        font:
+          13px/1.65 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+      }
+      a {
+        color: var(--blue);
+        text-decoration-thickness: 1px;
+        text-underline-offset: 3px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--surface);
+      }
+      th,
+      td {
+        padding: 11px 13px;
+        border: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: #edf2ee;
+        font-weight: 700;
+      }
+      .table-wrap {
+        overflow-x: auto;
+        border-radius: 12px;
+        box-shadow: 0 2px 8px rgba(23, 40, 33, 0.035);
+      }
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 19px;
+      }
+      .chip,
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 4px 9px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+      .chip {
+        border: 1px solid #c4d3cb;
+        background: rgba(255, 255, 255, 0.72);
+        color: #355249;
+      }
+      .tag.p0 {
+        background: var(--red-soft);
+        color: var(--red);
+      }
+      .tag.p1 {
+        background: var(--amber-soft);
+        color: var(--amber);
+      }
+      .tag.p2 {
+        background: var(--blue-soft);
+        color: var(--blue);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+      .grid.three {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .card,
+      .phase,
+      .callout {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--surface);
+        box-shadow: 0 3px 13px rgba(23, 40, 33, 0.04);
+      }
+      .card {
+        padding: 19px 21px;
+      }
+      .card strong.big {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--accent);
+        font-size: 23px;
+      }
+      .callout {
+        margin: 16px 0;
+        padding: 17px 20px;
+        border-left: 5px solid var(--accent);
+      }
+      .callout.info {
+        background: var(--accent-soft);
+      }
+      .callout.warn {
+        border-left-color: var(--amber);
+        background: var(--amber-soft);
+      }
+      .callout.danger {
+        border-left-color: var(--red);
+        background: var(--red-soft);
+      }
+      .decision {
+        font-size: 17px;
+      }
+      .phase {
+        margin: 17px 0;
+        overflow: hidden;
+      }
+      .phase-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 17px 20px;
+        background: #edf2ee;
+        border-bottom: 1px solid var(--line);
+      }
+      .phase-body {
+        padding: 18px 20px;
+      }
+      .phase-grid {
+        display: grid;
+        grid-template-columns: 1.05fr 1.35fr 1fr;
+        gap: 18px;
+      }
+      .small {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .metric {
+        border-left: 3px solid var(--accent);
+        padding-left: 12px;
+      }
+      .now,
+      .next,
+      .later {
+        font-weight: 800;
+      }
+      .now {
+        color: var(--red);
+      }
+      .next {
+        color: var(--amber);
+      }
+      .later {
+        color: var(--blue);
+      }
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+        margin: 17px 0;
+      }
+      .flow > div {
+        position: relative;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        background: var(--surface);
+        text-align: center;
+        font-weight: 700;
+      }
+      .flow > div:not(:last-child)::after {
+        content: "→";
+        position: absolute;
+        right: -16px;
+        top: 11px;
+        z-index: 2;
+        color: var(--accent);
+        font-size: 22px;
+      }
+      .checklist {
+        list-style: none;
+        padding-left: 0;
+      }
+      .checklist li {
+        position: relative;
+        padding-left: 23px;
+      }
+      .checklist li::before {
+        content: "□";
+        position: absolute;
+        left: 0;
+        color: var(--accent);
+        font-weight: 800;
+      }
+      footer {
+        margin-top: 48px;
+        padding: 18px 0 0;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 13px;
+      }
+      @media (max-width: 820px) {
+        .grid,
+        .grid.three,
+        .phase-grid,
+        .flow {
+          grid-template-columns: 1fr;
+        }
+        .flow > div:not(:last-child)::after {
+          content: "↓";
+          right: auto;
+          left: 50%;
+          top: auto;
+          bottom: -22px;
+        }
+        header {
+          padding: 30px 25px;
+        }
+        main {
+          width: min(100% - 22px, 1180px);
+        }
+      }
+      @media print {
+        body {
+          background: white;
+        }
+        main {
+          width: 100%;
+          margin: 0;
+        }
+        header,
+        .card,
+        .phase,
+        .callout {
+          box-shadow: none;
+          break-inside: avoid;
+        }
+        h2 {
+          break-after: avoid;
+        }
+        a {
+          color: inherit;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>San TUI 体验推进方案</h1>
+        <p class="decision">
+          <strong>结论：</strong>不重写渲染器，不照搬 Grok Build。下一波优先把
+          San 已经强大的底层能力变成用户能感知、能理解、能掌控的交互：<strong
+            >统一动作入口、显式队列语义、结构化会话导航、终端自诊断、场景级 PTY
+            验收</strong
+          >。
+        </p>
+        <p class="muted">
+          当前主要问题不是“画得不够快”，而是能力分散在快捷键、斜杠命令、隐藏手势和多个
+          overlay
+          中。用户需要记住系统，而不是系统根据上下文告诉用户下一步能做什么。
+        </p>
+        <div class="meta">
+          <span class="chip">方案日期 2026-07-29</span>
+          <span class="chip">范围 packages/coding-agent + packages/tui</span>
+          <span class="chip">基线 Grok Build main 文档 + San 当前源码</span>
+          <span class="chip">目标 体验跃迁，不做技术栈迁移</span>
+        </div>
+      </header>
+
+      <h2>1. 目标与非目标</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>这轮要交付的用户结果</h3>
+          <ul>
+            <li>用户不查文档，也能发现主要动作、当前按键和不可用原因。</li>
+            <li>
+              运行中输入的“立即打断 / 下一步执行 / 稍后执行”含义清晰可见。
+            </li>
+            <li>
+              长会话能按 turn / response / tool block 导航、折叠、复制和搜索。
+            </li>
+            <li>快捷键在当前终端失效时，San 能解释并给出真正可达的替代键。</li>
+            <li>流畅度从主观感受变成有 PTY 场景、有指标阈值的发布合同。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>明确不做</h3>
+          <ul>
+            <li>
+              不从 TypeScript/Bun 重写成 Rust；现有 differential render、native
+              scrollback、DEC 2026 已是强底座。
+            </li>
+            <li>
+              不复制 Grok 的内置、不可重映射按键；San 已有 namespaced keybinding
+              manager。
+            </li>
+            <li>
+              不先做“更多动画”和视觉皮肤；动画不能替代动作可发现性和状态可解释性。
+            </li>
+            <li>
+              不新增第二套消息队列；UI 必须投影 <code>AgentSession</code> 现有
+              steering/followUp 队列。
+            </li>
+            <li>
+              不把所有交互强行塞进全屏 alternate-screen；普通会话继续保留原生
+              terminal scrollback。
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <h2>2. 现状判断：底层领先，交互层碎片化</h2>
+      <div class="grid three">
+        <div class="card">
+          <strong class="big">渲染底座：保留</strong>
+          <p>
+            <code>packages/tui/src/tui.ts</code> 已有 30fps 节流、自适应
+            backpressure、component-scoped repaint、stable prefix、native
+            scrollback commit/replay、resize 快路径和 loop watchdog。
+          </p>
+        </div>
+        <div class="card">
+          <strong class="big">输入语义：已有但难懂</strong>
+          <p>
+            <code>InputController</code> 已区分 Enter 的 <code>steer</code> 与
+            Ctrl+Q/Ctrl+Enter 的 <code>followUp</code>，队列也能 Alt+Up
+            恢复；但帮助页未完整说明，队列只是 transcript 下方的文本列表。
+          </p>
+        </div>
+        <div class="card">
+          <strong class="big">能力入口：割裂</strong>
+          <p>
+            热键在 <code>/hotkeys</code>，命令在 slash autocomplete，skills
+            在另一命名空间，终端状态在 debug
+            菜单；缺一个统一、可搜索、上下文感知的动作层。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout warn">
+        <strong>核心产品债：</strong>San
+        的能力密度已经很高，但“入口密度”也很高。当前默认按键包括模型切换、thinking、plan、tools、external
+        editor、history、hub、copy、retry、dequeue 等；多数只有静态帮助或
+        tips，没有按当前状态排序的操作提示。继续增加快捷键会恶化问题。
+      </div>
+
+      <h2>3. 从 Grok Build 借什么，不借什么</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Grok Build 机制（官方文档）</th>
+              <th>对 San 的价值</th>
+              <th>San 原生实现方向</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                搜索式 Command Palette：动作、slash commands、skills 同一入口
+              </td>
+              <td><span class="tag p0">P0</span> 最大幅度降低记忆成本</td>
+              <td>
+                建立 <code>ActionRegistry</code>；现有 keybindings、builtin
+                slash registry、extension commands、skills 只做
+                adapter，不复制定义。
+              </td>
+            </tr>
+            <tr>
+              <td>上下文 shortcuts bar：随焦点、运行状态、选中 block 变化</td>
+              <td><span class="tag p0">P0</span> 让隐藏能力就地可见</td>
+              <td>
+                从同一 ActionRegistry 选择 3–5
+                个当前高价值动作；窄屏按优先级收缩。
+              </td>
+            </tr>
+            <tr>
+              <td>Prompt queue pane：可选择、编辑、send now</td>
+              <td><span class="tag p0">P0</span> 明确运行中输入的时间语义</td>
+              <td>
+                基于现有 steering/followUp 队列做结构化
+                overlay；先查看/恢复/全部恢复，再评估 reorder。
+              </td>
+            </tr>
+            <tr>
+              <td>
+                Scrollback 焦点、turn/response 导航、折叠、复制、fullscreen
+              </td>
+              <td>
+                <span class="tag p1">P1</span> 长会话从“滚动文本”变成可操作记录
+              </td>
+              <td>
+                为 <code>TranscriptContainer</code> 增加 selection/navigation
+                model，不破坏 native scrollback tape。
+              </td>
+            </tr>
+            <tr>
+              <td>按 terminal host 提供可靠备用键，并提供 doctor</td>
+              <td><span class="tag p1">P1</span> 减少“按了没反应”</td>
+              <td>
+                扩展现有 terminal state/protocol probe，加入键盘事件 probe、按键
+                reachability 与冲突诊断。
+              </td>
+            </tr>
+            <tr>
+              <td>Simple/Vim 两套 scrollback 模式</td>
+              <td><span class="tag p2">P2</span> power user 增益</td>
+              <td>
+                先完成 action/navigation contract；Vim 只作为可选
+                keymap，不进入核心状态机。
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small">
+        外部事实来源：xAI Grok Build 官方
+        <a
+          href="https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/03-keyboard-shortcuts.md"
+          >Keyboard Shortcuts</a
+        >。其文档确认 command palette、contextual shortcuts bar、queue
+        pane、scrollback focus/navigation、terminal-specific fallback 和
+        keyboard help；具体实现细节未作为本方案前提。
+      </p>
+
+      <h2>4. 目标交互模型：一个状态，多个一致入口</h2>
+      <div class="flow">
+        <div>Session / TUI state</div>
+        <div>Action availability</div>
+        <div>Palette / hints / keys</div>
+        <div>同一 command handler</div>
+      </div>
+      <div class="callout info">
+        <strong>关键约束：</strong>快捷键、palette、slash command、context hint
+        不得各自实现业务逻辑。它们只解析成同一个 <code>ActionId</code>，由同一个
+        handler 执行。否则显示的“可用动作”和真正执行的动作必然漂移。
+      </div>
+      <pre>
+interface UiAction {
+  id: ActionId
+  title: string
+  category: "session" | "input" | "view" | "agent" | "tool"
+  keywords: readonly string[]
+  when: (state: UiActionState) =&gt; boolean
+  disabledReason?: (state: UiActionState) =&gt; string | undefined
+  priority: (state: UiActionState) =&gt; number
+  run: (ctx: InteractiveModeContext) =&gt; void | Promise&lt;void&gt;
+}</pre>
+      <p>
+        这不是要制造通用 command
+        framework。只抽出用户可触发动作的最小共同合同；已有 slash command
+        参数解析、extension 注册、skill 执行保持原样。
+      </p>
+
+      <h2>5. 分阶段落地</h2>
+
+      <section class="phase">
+        <div class="phase-head">
+          <h3>
+            <span class="tag p0">P0</span> A. Action Palette + 上下文操作条
+          </h3>
+          <span class="now">先做</span>
+        </div>
+        <div class="phase-body">
+          <div class="phase-grid">
+            <div>
+              <h4>用户合同</h4>
+              <ul>
+                <li>
+                  一个固定、跨终端可靠的入口打开动作搜索；同时保留
+                  <code>?</code> 作为易发现入口。
+                </li>
+                <li>
+                  搜索范围：app actions、builtin slash commands、extension
+                  commands、skills。
+                </li>
+                <li>每项展示当前绑定、来源、是否可用；不可用项解释原因。</li>
+                <li>
+                  编辑器下方只显示当前状态最重要的 3–5 个
+                  hints，而非全量快捷键。
+                </li>
+              </ul>
+            </div>
+            <div>
+              <h4>代码落点</h4>
+              <ul>
+                <li>
+                  新增 action registry：靠近
+                  <code>modes/controllers</code>，消费
+                  <code>KEYBINDINGS</code> 和现有 command registries。
+                </li>
+                <li>
+                  复用 <code>SelectList</code>/<code>SettingsList</code>
+                  构建可搜索 overlay。
+                </li>
+                <li>
+                  <code>keybinding-hints.ts</code> 升级为 action hint
+                  renderer；所有 surface 从 registry 取 display key。
+                </li>
+                <li>
+                  <code>/hotkeys</code> 改为 registry
+                  的完整只读视图，消除当前手写表格漂移。
+                </li>
+              </ul>
+            </div>
+            <div>
+              <h4>验收</h4>
+              <ul class="checklist">
+                <li>
+                  每个 registered action 可被搜索、可执行或显示明确 disabled
+                  reason。
+                </li>
+                <li>用户 remap 后 palette/hint/help 同帧显示新按键。</li>
+                <li>80 / 120 / 200 列下不溢出；窄屏按优先级丢弃。</li>
+                <li>overlay 打开/关闭不清空 draft、不改变 scrollback。</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="phase">
+        <div class="phase-head">
+          <h3>
+            <span class="tag p0">P0</span> B. Queue
+            Center：把运行中输入变成可管理对象
+          </h3>
+          <span class="now">与 A 同批</span>
+        </div>
+        <div class="phase-body">
+          <div class="phase-grid">
+            <div>
+              <h4>用户合同</h4>
+              <ul>
+                <li>
+                  队列非空时显示单行摘要：<code>Now 1 · After yield 2</code
+                  >，而不是永久展开所有文本。
+                </li>
+                <li>
+                  打开 Queue Center 后可查看完整消息、类型、图片数和执行时机。
+                </li>
+                <li>
+                  支持：恢复选中项到
+                  editor、恢复全部、清空用户队列、立即发送选中项。
+                </li>
+                <li>
+                  输入框顶边/提示条明确：Enter 当前是 steer 还是 normal
+                  send；follow-up 键当前做什么。
+                </li>
+              </ul>
+            </div>
+            <div>
+              <h4>源头修正</h4>
+              <ul>
+                <li>
+                  给 <code>AgentSession</code> 暴露稳定的只读 queue item
+                  DTO（id、kind、preview、images、attribution），不再只返回字符串。
+                </li>
+                <li>
+                  所有 mutation 仍由 session 队列 API 完成；overlay 不碰 agent
+                  core arrays。
+                </li>
+                <li>
+                  保留 Alt+Up 的 LIFO 快捷路径；Queue Center 提供精确选择。
+                </li>
+                <li>
+                  advisor/hidden companion 不伪装成可恢复用户消息；UI 显示范围与
+                  mutation 权限一致。
+                </li>
+              </ul>
+            </div>
+            <div>
+              <h4>验收</h4>
+              <ul class="checklist">
+                <li>
+                  steer/followUp/compaction queue 在一个投影视图中顺序稳定。
+                </li>
+                <li>带图片消息恢复后 marker 与图片索引仍一致。</li>
+                <li>
+                  队列 mutation 与 stream unwind 竞争时无丢失、重复或误发。
+                </li>
+                <li>focused subagent 与 main session 只显示各自队列。</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="phase">
+        <div class="phase-head">
+          <h3>
+            <span class="tag p1">P1</span> C. Conversation
+            Navigator：长会话可定位、可操作
+          </h3>
+          <span class="next">第二批</span>
+        </div>
+        <div class="phase-body">
+          <div class="phase-grid">
+            <div>
+              <h4>用户合同</h4>
+              <ul>
+                <li>
+                  Tab 或 palette 动作进入 conversation focus；draft 原样保留。
+                </li>
+                <li>按 user turn、assistant response、tool block 跳转。</li>
+                <li>
+                  选中 block 可折叠/展开、复制正文/元数据、打开 fullscreen
+                  viewer。
+                </li>
+                <li>
+                  会话内搜索跨用户、assistant、tool label/result，结果可跳转。
+                </li>
+              </ul>
+            </div>
+            <div>
+              <h4>实现边界</h4>
+              <ul>
+                <li>
+                  在 <code>TranscriptContainer</code> 上建立 block index：稳定
+                  block id、kind、row range、collapsed state。
+                </li>
+                <li>
+                  selection 是 viewport overlay，不重排或重写已提交 native
+                  scrollback。
+                </li>
+                <li>
+                  手动 fold 必须在 streaming finalization
+                  后保持，除非用户显式清除。
+                </li>
+                <li>
+                  先提供 Simple keymap；Vim keymap 只映射 action，不分叉逻辑。
+                </li>
+              </ul>
+            </div>
+            <div>
+              <h4>验收</h4>
+              <ul class="checklist">
+                <li>
+                  10k+ 行 transcript 中 turn jump 不触发 O(history) 全重绘。
+                </li>
+                <li>进入/退出 focus 不改变 terminal history bytes。</li>
+                <li>streaming 中展开/折叠不会产生重复 scrollback 行。</li>
+                <li>selection、search、copy 对宽字符和 ANSI 内容正确。</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="phase">
+        <div class="phase-head">
+          <h3>
+            <span class="tag p1">P1</span> D. Terminal Doctor + 场景级 PTY 验收
+          </h3>
+          <span class="next">贯穿第二批</span>
+        </div>
+        <div class="phase-body">
+          <div class="phase-grid">
+            <div>
+              <h4>用户合同</h4>
+              <ul>
+                <li>Debug → Terminal State 升级成 Terminal Doctor。</li>
+                <li>
+                  展示 detected host/mux、keyboard protocol、关键 chord
+                  是否可区分、fallback 建议。
+                </li>
+                <li>
+                  交互 probe 让用户按指定键，San 显示收到的 canonical key
+                  event。
+                </li>
+                <li>冲突或不可达 binding 在 palette/help 中直接标记。</li>
+              </ul>
+            </div>
+            <div>
+              <h4>验证矩阵</h4>
+              <ul>
+                <li>
+                  至少覆盖 Ghostty/Kitty、iTerm2、WezTerm、VS Code
+                  family、Windows Terminal、tmux、SSH+tmux。
+                </li>
+                <li>
+                  场景：长
+                  streaming、队列编辑、overlay、resize、IME、图片、selection/copy、cancel/exit。
+                </li>
+                <li>
+                  复用现有 <code>VirtualTerminal</code>、process-terminal
+                  harness、render-stress reducer；补真实 PTY scripted scenario。
+                </li>
+              </ul>
+            </div>
+            <div>
+              <h4>发布门槛</h4>
+              <ul class="checklist">
+                <li>
+                  输入到可见反馈 p95 ≤ 50ms（不含 terminal host 自身调度）。
+                </li>
+                <li>
+                  稳定 streaming frame p95 ≤ 16ms；极长 transcript p95 ≤ 33ms。
+                </li>
+                <li>
+                  连续 resize 后最终 frame、cursor、scrollback oracle 全部一致。
+                </li>
+                <li>
+                  关键 action 每个目标终端至少有一个经 probe 验证的可达入口。
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="phase">
+        <div class="phase-head">
+          <h3>
+            <span class="tag p2">P2</span> E. 精修：Vim
+            keymap、鼠标命中、视觉节奏
+          </h3>
+          <span class="later">后置</span>
+        </div>
+        <div class="phase-body">
+          <p>
+            只有 A–D 的行为合同稳定后再做：可选 Vim scrollback keymap、点击
+            block 选择、hover、queue row mouse action、focus
+            transitions、动画降噪。所有功能必须走 ActionRegistry 和同一
+            selection model；不得新增旁路。
+          </p>
+        </div>
+      </section>
+
+      <h2>6. 首批建议拆分（可直接开工）</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>切片</th>
+              <th>产物</th>
+              <th>主要文件/模块</th>
+              <th>依赖</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>A1 动作合同</td>
+              <td>
+                <code>UiAction</code>、state projection、builtin action
+                adapters、单元合同测试
+              </td>
+              <td><code>modes/actions/*</code>（建议新目录）、controllers</td>
+              <td>无</td>
+            </tr>
+            <tr>
+              <td>A2 Palette UI</td>
+              <td>搜索、category、binding/source/disabled reason、执行</td>
+              <td>components + <code>SelectList</code></td>
+              <td>A1</td>
+            </tr>
+            <tr>
+              <td>A3 Context hints</td>
+              <td>
+                editor 下方/顶边按状态投影 3–5 个动作；<code>/hotkeys</code>
+                改为生成
+              </td>
+              <td>
+                <code>keybinding-hints.ts</code>、interactive layout、hotkeys
+                markdown
+              </td>
+              <td>A1</td>
+            </tr>
+            <tr>
+              <td>B1 Queue DTO/API</td>
+              <td>
+                稳定 item id、read model、selected restore/send/clear mutation
+              </td>
+              <td><code>session/agent-session.ts</code></td>
+              <td>无；与 A1 并行</td>
+            </tr>
+            <tr>
+              <td>B2 Queue Center</td>
+              <td>摘要条 + overlay + keyboard/mouse routing</td>
+              <td>
+                <code>ui-helpers.ts</code>、新 queue overlay、input controller
+              </td>
+              <td>B1、A1 action adapter</td>
+            </tr>
+            <tr>
+              <td>D0 指标基线</td>
+              <td>
+                frame cost/input-to-paint 采样、可导出诊断快照、固定 stress
+                fixtures
+              </td>
+              <td>
+                <code>packages/tui/src/tui.ts</code>、debug report、test harness
+              </td>
+              <td>无；首日并行</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout info">
+        <strong>推荐集成顺序：</strong>D0 先建立基线；A1 与 B1 并行；A2/A3 接
+        A1；B2 接
+        B1+A1。首批完成时，用户已经能发现所有主要动作、理解运行中输入，并精确管理队列——这是最小可感知跃迁。
+      </div>
+
+      <h2>7. 体验指标：避免“感觉更顺”无法验收</h2>
+      <div class="grid">
+        <div class="card metric">
+          <h3>可发现性</h3>
+          <ul>
+            <li>
+              主要动作（send/interrupt/queue/model/plan/tools/hub/history）100%
+              可从 palette 找到。
+            </li>
+            <li>
+              关键状态（idle/streaming/compacting/focused subagent/queue
+              non-empty）均有上下文 hint。
+            </li>
+            <li>
+              帮助、palette、hints 的 binding 来源为同一 registry，零手写漂移。
+            </li>
+          </ul>
+        </div>
+        <div class="card metric">
+          <h3>掌控感</h3>
+          <ul>
+            <li>队列 mutation 每次有即时、可逆的可见结果。</li>
+            <li>draft、attachments、queue、focused session 切换无隐式丢失。</li>
+            <li>
+              destructive action 均有二次动作或明确确认，普通 navigation
+              不弹确认。
+            </li>
+          </ul>
+        </div>
+        <div class="card metric">
+          <h3>响应性</h3>
+          <ul>
+            <li>
+              采集 render cost、schedule delay、input-to-paint，不只采
+              event-loop stall。
+            </li>
+            <li>
+              测量 idle、streaming、large transcript、overlay、resize 五类
+              workload。
+            </li>
+            <li>
+              性能报告附 terminal/mux/capability 与 frame
+              percentile，能复现而非仅给 flamegraph。
+            </li>
+          </ul>
+        </div>
+        <div class="card metric">
+          <h3>兼容性</h3>
+          <ul>
+            <li>
+              任何宣传的 modified key 必须有 terminal reachability
+              证据或稳定字符键替代。
+            </li>
+            <li>
+              tmux/screen/ConPTY/IME/Kitty graphics 不因新 overlay/navigation
+              回归。
+            </li>
+            <li>headless/RPC/ACP 不加载交互 UI 状态机，也不改变消息语义。</li>
+          </ul>
+        </div>
+      </div>
+
+      <h2>8. 风险与控制</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>风险</th>
+              <th>为什么危险</th>
+              <th>控制</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>ActionRegistry 变成“大一统框架”</td>
+              <td>扩展点过多，迁移成本吞掉体验收益</td>
+              <td>
+                只收用户可触发动作；参数化业务、command
+                parsing、权限继续留在原模块。
+              </td>
+            </tr>
+            <tr>
+              <td>Queue UI 与 agent queue 状态分叉</td>
+              <td>并发 stream unwind 下会误显示、误删、重复发送</td>
+              <td>
+                session 提供稳定 DTO 和原子 mutation；UI 不持久化副本，只持
+                selected id。
+              </td>
+            </tr>
+            <tr>
+              <td>Conversation focus 破坏 native scrollback</td>
+              <td>San 当前最强的渲染资产可能被全屏选择模型绕开</td>
+              <td>
+                selection overlay 与 block index 分离；已提交 tape 不重写；PTY
+                oracle 先于视觉精修。
+              </td>
+            </tr>
+            <tr>
+              <td>终端特判扩散</td>
+              <td>每个 component 自己判断 host 会形成不可维护矩阵</td>
+              <td>
+                terminal capability/reachability 统一在 TUI 层；action 只消费
+                capability verdict。
+              </td>
+            </tr>
+            <tr>
+              <td>动画抢占帧预算</td>
+              <td>
+                现有 loader、thinking dots、stream reveal、magic shimmer 已并发
+              </td>
+              <td>
+                新增视觉反馈默认静态；统一 motion
+                budget，重负载时主动降帧/停动画。
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>9. Definition of Done</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>首批（A+B+D0）完成条件</h3>
+          <ul class="checklist">
+            <li>
+              Palette、context hints、<code>/hotkeys</code>
+              共享动作和按键事实源。
+            </li>
+            <li>
+              队列可查看、选择、恢复、清空、立即发送，图片与并发路径有合同测试。
+            </li>
+            <li>
+              终端宽度 80/120/200、idle/streaming/compacting/focused-agent
+              场景均验证。
+            </li>
+            <li>记录首批前后 input-to-paint/frame-cost 基线，无显著回退。</li>
+            <li>
+              coding-agent UI suite、tui suite、<code>bun check</code>、真实 CLI
+              smoke 通过。
+            </li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>整轮（A–D）完成条件</h3>
+          <ul class="checklist">
+            <li>
+              长会话具备 turn/response/block
+              导航、fold、copy、fullscreen、search。
+            </li>
+            <li>Terminal Doctor 能检测关键按键并给出当前终端的有效入口。</li>
+            <li>
+              目标 terminal/mux 矩阵有脚本化 PTY
+              evidence；scrollback/cursor/frame oracle 无回归。
+            </li>
+            <li>
+              新增用户合同进入
+              <code>packages/coding-agent/CHANGELOG.md</code> 和
+              <code>packages/tui/CHANGELOG.md</code> 对应 Unreleased。
+            </li>
+            <li>dogfood 以真实长任务运行，不以组件快照代替端到端体验验证。</li>
+          </ul>
+        </div>
+      </div>
+
+      <h2>10. 决策结论</h2>
+      <div class="callout info">
+        <p>
+          <strong
+            >San 下一波 TUI 不应从 renderer 开始，而应从 interaction model
+            开始。</strong
+          >
+        </p>
+        <p>
+          现有 renderer 已经解决了大量难题：差分输出、同步输出、native
+          scrollback、稳定前缀、长流式内容、resize 和 terminal
+          capability。当前高 ROI
+          是把这些能力托住的复杂产品语义收束成一套用户能看见的动作系统。
+        </p>
+        <p>
+          <strong>推荐立即启动 A+B+D0。</strong
+          >它们能在不动会话核心语义、不重写渲染技术栈的前提下，最快产生可感知提升；Conversation
+          Navigator 和 Terminal Doctor 在此基础上完成第二次跃迁。
+        </p>
+      </div>
+
+      <h2>11. 证据索引</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>结论</th>
+              <th>San 源码证据</th>
+              <th>外部基线</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>渲染层无需重写</td>
+              <td>
+                <code>packages/tui/src/tui.ts</code
+                >、<code>terminal-capabilities.ts</code>、<code>loop-watchdog.ts</code>、render
+                stress/process terminal tests
+              </td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td>已有双队列但 UI 偏文本化</td>
+              <td>
+                <code>modes/controllers/input-controller.ts</code
+                >、<code>modes/utils/ui-helpers.ts</code>、<code
+                  >session/agent-session.ts</code
+                >
+              </td>
+              <td>Grok “During an active turn” 与 queue pane 文档</td>
+            </tr>
+            <tr>
+              <td>动作入口分散</td>
+              <td>
+                <code>config/keybindings.ts</code
+                >、<code>modes/utils/hotkeys-markdown.ts</code>、builtin slash
+                registry、debug menu
+              </td>
+              <td>Grok Command Palette / Shortcuts Bar</td>
+            </tr>
+            <tr>
+              <td>终端诊断已有基础</td>
+              <td>
+                <code>debug/terminal-info.ts</code>、<code
+                  >debug/protocol-probe.ts</code
+                >
+              </td>
+              <td>
+                Grok terminal-specific key fallback 和 <code>/doctor</code> 提示
+              </td>
+            </tr>
+            <tr>
+              <td>结构化会话导航是缺口</td>
+              <td>
+                <code>modes/components/transcript-container.ts</code> 侧重
+                scrollback exactness；现有 history search 仅为 prompt history
+              </td>
+              <td>Grok Navigation / View / Block Content</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <footer>
+        方案文件：<code>docs/research/san-tui-experience-roadmap-20260729.html</code>。事实基线为
+        2026-07-29 当前工作树与 xAI Grok Build
+        官方快捷键文档；性能阈值是本方案的验收目标，不是已测得的当前结果。
+      </footer>
+    </main>
+  </body>
+</html>
