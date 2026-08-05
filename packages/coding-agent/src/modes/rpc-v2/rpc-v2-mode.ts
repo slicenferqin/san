@@ -12,7 +12,7 @@
  */
 import * as path from "node:path";
 import type { Api, ImageContent } from "@san/ai";
-import { logger, prompt, readLines, VERSION } from "@san/utils";
+import { getAgentDir, logger, prompt, readLines, VERSION } from "@san/utils";
 import { collectContextCheckpoints } from "../../context-steady/checkpoint";
 import { listTurnDigests } from "../../context-steady/session";
 import type { ContextCheckpoint, TurnDigest } from "../../context-steady/types";
@@ -42,6 +42,18 @@ import type { ApprovalScope, PermissionRule } from "./dto/approval";
 import type { EvidenceKind, EvidenceVerdict } from "./dto/evidence";
 import type { ContentPart } from "./dto/run";
 import type { StreamPolicy } from "./dto/session";
+import type {
+	CreateManagedWorktreeParams,
+	WorktreeEventEnvelope as WireWorktreeEventEnvelope,
+	WorktreeApplyParams,
+	WorktreeApplyPrepareParams,
+	WorktreeArchiveParams,
+	WorktreeLifecycleCapabilityDetails,
+	WorktreeListFilter,
+	WorktreeSetupCancelParams,
+	WorktreeSetupStartParams,
+} from "./dto/worktree";
+import { WORKTREE_EVENT_METHODS } from "./dto/worktree";
 import { type HostToolDefinition, type HostUriSchemeDefinition, RpcV2HostToolBridge } from "./host-tool-bridge";
 import {
 	IdempotencyConflictError,
@@ -53,7 +65,7 @@ import {
 } from "./idempotency";
 import { IntegrationRevisionError, RpcV2IntegrationCatalog } from "./integration-catalog";
 import { validateInteractionResponse } from "./interaction-validation";
-import type { ClientCapabilities } from "./protocol/capabilities";
+import type { CapabilityDescriptor, ClientCapabilities } from "./protocol/capabilities";
 import {
 	buildServerCapabilities,
 	DEFAULT_LIMITS,
@@ -94,20 +106,42 @@ import {
 	RpcV2SessionManager,
 	type SessionMutationReceipt,
 } from "./session-manager";
+import { DesktopActionSetupHost } from "./setup-host-bridge";
 import { RpcV2SubagentController } from "./subagent-controller";
 import { RpcV2UIContext } from "./ui-context";
 import { buildUsageAnalytics } from "./usage-analytics";
+import { WorktreeError, WorktreeLifecycleService } from "./worktree-lifecycle";
 
 // ============================================================================
 // Protocol constants
 // ============================================================================
-
-const PROTOCOL_VERSION = "2.0";
-const SERVER_NAME = "san";
-
 const IDEMPOTENCY_EXEMPT_METHODS = new Set(["server.shutdown", "stream.configure", "host.capabilities.update"]);
 const ATOMIC_SESSION_RECEIPT_METHODS = new Set(["run.start", "approval.decide", "queue.cancel"]);
 const RUNTIME_ONLY_IDEMPOTENCY_METHODS = new Set(["provider.config.create", "provider.model.add"]);
+/** Durable receipts owned by WorktreeLifecycleService — skip outer IdempotencyStore. */
+const WORKTREE_SERVICE_IDEMPOTENCY_METHODS = new Set([
+	"worktree.create",
+	"worktree.setup.start",
+	"worktree.setup.cancel",
+	"worktree.apply",
+	"worktree.archive",
+]);
+/**
+ * 嵌套控制面 mutation：可在另一 mutation 等待 UI/审批时并行执行。
+ * 不得进入 mutationTail，否则 worktree.setup.start → approval.decide 死锁。
+ * 普通业务 mutation 仍串行，防竞态。
+ */
+const NESTED_CONTROL_MUTATION_METHODS = new Set(["approval.decide", "interaction.respond", "interaction.cancel"]);
+
+/** 是否应挂到外层 mutation 串行队列（嵌套控制面除外）。 */
+export function shouldSerializeRpcMutation(method: string): boolean {
+	const definition = RPC_V2_METHOD_BY_NAME.get(method);
+	if (!definition?.mutation) return false;
+	return !NESTED_CONTROL_MUTATION_METHODS.has(method);
+}
+const WORKTREE_EVENT_METHOD_SET = new Set<string>(WORKTREE_EVENT_METHODS);
+const PROTOCOL_VERSION = "2.0";
+const SERVER_NAME = "san";
 
 // ============================================================================
 // Initialize types
@@ -181,6 +215,8 @@ function sendNotification(output: OutputFn, method: string, params: unknown): Pr
 function handleInitialize(
 	state: ServerState,
 	hostToolBridge: RpcV2HostToolBridge,
+	worktrees: WorktreeLifecycleService,
+	setupHost: DesktopActionSetupHost,
 	params: unknown,
 ): InitializeResult | RpcErrorBody {
 	if (state.initialized)
@@ -220,6 +256,7 @@ function handleInitialize(
 			uriSchemes.length > 0
 				? { version: 1, status: "available", details: { schemes: uriSchemes } }
 				: unavailableCapability("CLIENT_HOST_URI_MISSING", "Client did not declare any host URI scheme"),
+		"worktree.lifecycle": resolveWorktreeCapability(worktrees, setupHost),
 	});
 
 	return {
@@ -474,6 +511,9 @@ interface DispatchContext {
 	auth: AuthLoginManager;
 	subagents: RpcV2SubagentController;
 	integrations: RpcV2IntegrationCatalog;
+	worktrees: WorktreeLifecycleService;
+	/** 真实 setup host-action 桥；缺工具/未 recovery 时 ready=false。 */
+	setupHost: DesktopActionSetupHost;
 }
 
 async function resolveRunContent(
@@ -837,7 +877,9 @@ async function dispatchMethod(ctx: DispatchContext, method: string, params: unkn
 		}
 		try {
 			idempotencyInput = { method, params };
-			if (method === "session.create") {
+			if (WORKTREE_SERVICE_IDEMPOTENCY_METHODS.has(method)) {
+				// Durable receipts + conflict detection live in WorktreeLifecycleService.
+			} else if (method === "session.create") {
 				const createReceipt = await ctx.sessionCreateReceipts.begin(idempotencyKey, idempotencyInput);
 				if (createReceipt.cached) return await ctx.sessionManager.replayCreatedSession(createReceipt.sessionId);
 				createReservation = createReceipt.reservation;
@@ -899,7 +941,7 @@ async function dispatchMethod(ctx: DispatchContext, method: string, params: unkn
 			if (createReservation) await ctx.sessionCreateReceipts.cancel(createReservation);
 			return result;
 		}
-		if (idempotencyKey && !isRpcError(result)) {
+		if (idempotencyKey && !isRpcError(result) && !WORKTREE_SERVICE_IDEMPOTENCY_METHODS.has(method)) {
 			const completedInput = idempotencyInput ?? { method, params };
 			if (method === "session.create" && createReservation) {
 				if (!isRecord(result) || typeof result.sessionId !== "string") {
@@ -996,6 +1038,14 @@ async function dispatchKnownMethod(
 		"interaction.respond",
 		"interaction.cancel",
 		"host.capabilities.update",
+		"worktree.create",
+		"worktree.get",
+		"worktree.list",
+		"worktree.setup.start",
+		"worktree.setup.cancel",
+		"worktree.apply.prepare",
+		"worktree.apply",
+		"worktree.archive",
 	]);
 	if (!session && !methodsWithoutSession.has(method)) {
 		return createRpcError({
@@ -1009,7 +1059,7 @@ async function dispatchKnownMethod(
 	switch (method) {
 		// Server methods
 		case "initialize":
-			return handleInitialize(state, ctx.hostToolBridge, params);
+			return handleInitialize(state, ctx.hostToolBridge, ctx.worktrees, ctx.setupHost, params);
 		case "server.getHealth":
 			return handleGetHealth(state, sessionManager);
 		case "server.getCapabilities":
@@ -1557,10 +1607,12 @@ async function dispatchKnownMethod(
 					ctx.hostToolBridge.registeredSchemes.length > 0
 						? { version: 1, status: "available", details: { schemes: ctx.hostToolBridge.registeredSchemes } }
 						: unavailableCapability("HOST_URI_EMPTY", "No Host URI schemes are registered"),
+				// setup/apply/recovery 随真实端口与 ensureLoaded 状态，禁止 true override
+				"worktree.lifecycle": resolveWorktreeCapability(ctx.worktrees, ctx.setupHost),
 			});
 			await sendNotification(ctx.output, "server.capabilities.changed", {
 				revision: state.capabilitiesRevision,
-				changed: ["host.tools", "host.uri"],
+				changed: ["host.tools", "host.uri", "worktree.lifecycle"],
 				capabilities: state.capabilities,
 			});
 			return {
@@ -2226,6 +2278,80 @@ async function dispatchKnownMethod(
 			return knownRevision === revision ? { unchanged: true, revision } : { unchanged: false, commands, revision };
 		}
 
+		// Worktree lifecycle — params 已由 validateRpcV2Params 按冻结 schema 校验；
+		// mutation 幂等仅由 WorktreeLifecycleService canonical receipt 裁决。
+		case "worktree.create": {
+			const p = params as CreateManagedWorktreeParams;
+			try {
+				return await ctx.worktrees.create(p);
+			} catch (error: unknown) {
+				return mapWorktreeError(error);
+			}
+		}
+		case "worktree.get": {
+			const p = params as { worktreeId: string };
+			try {
+				return { worktree: await ctx.worktrees.get(p.worktreeId) };
+			} catch (error: unknown) {
+				return mapWorktreeError(error);
+			}
+		}
+		case "worktree.list": {
+			const p = (params ?? {}) as WorktreeListFilter;
+			try {
+				const filter: WorktreeListFilter = {};
+				if (p.state !== undefined) filter.state = p.state;
+				if (p.states !== undefined) filter.states = p.states;
+				if (p.repoId !== undefined) filter.repoId = p.repoId;
+				if (p.environmentId !== undefined) filter.environmentId = p.environmentId;
+				const worktrees = await callWorktreeList(ctx.worktrees, filter);
+				return { worktrees };
+			} catch (error: unknown) {
+				return mapWorktreeError(error);
+			}
+		}
+		case "worktree.setup.start": {
+			const p = params as WorktreeSetupStartParams;
+			try {
+				return await ctx.worktrees.setupStart(p);
+			} catch (error: unknown) {
+				return mapWorktreeError(error);
+			}
+		}
+		case "worktree.setup.cancel": {
+			const p = params as WorktreeSetupCancelParams;
+			try {
+				return await ctx.worktrees.setupCancel(p);
+			} catch (error: unknown) {
+				return mapWorktreeError(error);
+			}
+		}
+		case "worktree.apply.prepare": {
+			const p = params as WorktreeApplyPrepareParams;
+			try {
+				const plan = await ctx.worktrees.prepare(p);
+				return { plan };
+			} catch (error: unknown) {
+				return mapWorktreeError(error);
+			}
+		}
+		case "worktree.apply": {
+			const p = params as WorktreeApplyParams;
+			try {
+				return await ctx.worktrees.apply(p);
+			} catch (error: unknown) {
+				return mapWorktreeError(error);
+			}
+		}
+		case "worktree.archive": {
+			const p = params as WorktreeArchiveParams;
+			try {
+				return await ctx.worktrees.archive(p);
+			} catch (error: unknown) {
+				return mapWorktreeError(error);
+			}
+		}
+
 		default:
 			return createRpcError({
 				reason: "CAPABILITY_UNAVAILABLE",
@@ -2243,6 +2369,141 @@ function idempotencyConflict(key: string): RpcErrorBody {
 		message: `Idempotency key ${key} was already used with different parameters`,
 		details: { idempotencyKey: key },
 	});
+}
+
+/**
+ * 将 service capabilityDescriptor 映射为 ServerCapabilities 条目。
+ * recoveryReady 只来自 service ensureLoaded/recovery，禁止 true override 提前宣称；
+ * applyAvailable 来自真实 applyPort.ready；setupAvailable 仅当 setupHost.ready（工具+recovery）。
+ */
+export function resolveWorktreeCapability(
+	worktrees: WorktreeLifecycleService,
+	setupHost?: Pick<DesktopActionSetupHost, "ready" | "hasRequiredTools">,
+): CapabilityDescriptor {
+	const raw = worktrees.capabilityDescriptor();
+	const recoveryReady = raw.recoveryReady === true;
+	const recoveryStatus = !recoveryReady ? "unavailable" : raw.status === "degraded" ? "degraded" : "available";
+	// setupHost 优先：ready 已要求 recovery+tools；无 host 时回退 service setupPort.ready
+	const setupAvailable = recoveryReady && (setupHost ? setupHost.ready === true : raw.setupAvailable === true);
+	const applyAvailable = recoveryReady && raw.applyAvailable === true;
+	const details: WorktreeLifecycleCapabilityDetails = {
+		name: "worktree.lifecycle",
+		version: 1,
+		methods: [...raw.methods],
+		setupAvailable,
+		applyAvailable,
+		recoveryReady,
+		limits: raw.limits,
+		status: recoveryStatus,
+		...(raw.unresolvedUnknownOperations?.length
+			? {
+					unresolvedUnknownOperations: raw.unresolvedUnknownOperations.map(operation => ({
+						...operation,
+					})),
+				}
+			: {}),
+	};
+	if (!recoveryReady) {
+		return {
+			version: 1,
+			status: "unavailable",
+			reasonCode: "WORKTREE_SERVICE_NOT_READY",
+			message: "Managed worktree lifecycle service is not ready (durable recovery pending)",
+			details: details as unknown as Record<string, unknown>,
+		};
+	}
+	if (recoveryStatus === "degraded") {
+		return {
+			version: 1,
+			status: "degraded",
+			reasonCode: "WORKTREE_RECOVERY_DEGRADED",
+			message: "Managed worktree recovery has unresolved operation outcomes",
+			details: details as unknown as Record<string, unknown>,
+		};
+	}
+	return {
+		version: 1,
+		status: "available",
+		details: details as unknown as Record<string, unknown>,
+	};
+}
+
+async function callWorktreeList(service: WorktreeLifecycleService, filter: WorktreeListFilter): Promise<unknown> {
+	const list = service.list.bind(service) as (filter?: WorktreeListFilter) => Promise<unknown>;
+	if (
+		filter.state === undefined &&
+		filter.states === undefined &&
+		filter.repoId === undefined &&
+		filter.environmentId === undefined
+	) {
+		return list();
+	}
+	return list(filter);
+}
+
+function mapWorktreeError(error: unknown): RpcErrorBody {
+	if (!(error instanceof WorktreeError)) {
+		return createRpcError({
+			reason: "INTERNAL_ERROR",
+			category: "internal",
+			message: sanitizeRpcError(error, { maxChars: 500 }),
+		});
+	}
+	const details = error.details ? { ...error.details } : undefined;
+	switch (error.code) {
+		case "INVALID_PARAMS":
+			return createRpcError({
+				reason: "INVALID_PARAMS",
+				category: "validation",
+				message: error.message,
+				...(details ? { details } : {}),
+			});
+		case "NOT_FOUND":
+			return createRpcError({
+				reason: "RESOURCE_NOT_FOUND",
+				category: "not_found",
+				message: error.message,
+				...(details ? { details } : {}),
+			});
+		case "CONFLICT":
+		case "PRECONDITION_FAILED":
+			return createRpcError({
+				reason: "SESSION_STATE_CONFLICT",
+				category: "conflict",
+				message: error.message,
+				...(details ? { details } : {}),
+			});
+		case "IDEMPOTENCY_CONFLICT":
+			return createRpcError({
+				reason: "IDEMPOTENCY_CONFLICT",
+				category: "conflict",
+				message: error.message,
+				...(details ? { details } : {}),
+			});
+		case "OUTCOME_UNKNOWN":
+			return createRpcError({
+				reason: "SESSION_STATE_CONFLICT",
+				category: "conflict",
+				message: error.message,
+				retryable: false,
+				details: { ...(details ?? {}), idempotencyState: "outcome_unknown" },
+				suggestedActions: ["Call worktree.get or worktree.list to reconcile before retrying with a new key"],
+			});
+		case "CAPABILITY_UNAVAILABLE":
+			return createRpcError({
+				reason: "CAPABILITY_UNAVAILABLE",
+				category: "conflict",
+				message: error.message,
+				...(details ? { details } : {}),
+			});
+		default:
+			return createRpcError({
+				reason: "INTERNAL_ERROR",
+				category: "internal",
+				message: error.message,
+				...(details ? { details } : {}),
+			});
+	}
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -2288,10 +2549,18 @@ export async function runRpcV2Mode(factory: RpcV2SessionFactory, _eventBus?: Eve
 
 	const sessionManager = new RpcV2SessionManager({ runtimeId: state.runtimeId, factory });
 	sessionManager.setOutput((frame, options) => output(frame, options));
-	const hostToolBridge = new RpcV2HostToolBridge(enqueueOutput, () => ({
-		...(sessionManager.currentSessionId ? { sessionId: sessionManager.currentSessionId } : {}),
-		...(sessionManager.currentAdapter?.currentRunId ? { runId: sessionManager.currentAdapter.currentRunId } : {}),
-	}));
+	const hostToolBridge = new RpcV2HostToolBridge(
+		enqueueOutput,
+		() => ({
+			...(sessionManager.currentSessionId ? { sessionId: sessionManager.currentSessionId } : {}),
+			...(sessionManager.currentAdapter?.currentRunId ? { runId: sessionManager.currentAdapter.currentRunId } : {}),
+		}),
+		{
+			maxPayloadBytes: state.limits.maxInlineTextBytes,
+			// 普通 Host tool/URI 默认绑定 dispatch 时 current revision；更新后新请求读新值。
+			getCapabilityRevision: () => state.capabilitiesRevision,
+		},
+	);
 	const resources = new ResourceUploadManager();
 	sessionManager.setResourceReleaseHandler(async (resourceIds, sessionId) => {
 		if (sessionManager.currentSessionId !== sessionId) {
@@ -2303,13 +2572,68 @@ export async function runRpcV2Mode(factory: RpcV2SessionFactory, _eventBus?: Eve
 	const artifacts = new RpcArtifactStore();
 	const subagents = new RpcV2SubagentController();
 	const integrations = new RpcV2IntegrationCatalog();
+	const worktreeEmit = (event: WireWorktreeEventEnvelope | Record<string, unknown>): void => {
+		// §6.7：notification method 为 worktree.created 等；禁止单一 worktree.lifecycle
+		const method =
+			event && typeof event === "object" && "method" in event && typeof event.method === "string"
+				? event.method
+				: null;
+		const params = event && typeof event === "object" && "params" in event ? event.params : event;
+		if (!method || !WORKTREE_EVENT_METHOD_SET.has(method)) {
+			// core 过渡期若仍发旧 envelope，降级为 state.changed 而非假 lifecycle method
+			enqueueOutput({
+				jsonrpc: "2.0",
+				method: "worktree.state.changed",
+				params: params ?? event,
+			});
+			return;
+		}
+		enqueueOutput({
+			jsonrpc: "2.0",
+			method,
+			params,
+		});
+	};
+	// setupHost 先于 service：闭包捕获 uiContext/recoveryReady；service 以 setupPort 注入为唯一 mutation 出口
+	// recoveryReady 初始 false，仅 ensureLoaded 成功后从 service.capabilityDescriptor 读取
+	let worktreeRecoveryReady = false;
+	let uiContext: RpcV2UIContext | undefined;
+	const setupHost = new DesktopActionSetupHost({
+		hostToolBridge,
+		getUIContext: () => uiContext,
+		resolveIdentity: () => {
+			const sessionId = sessionManager.currentSessionId;
+			const runId = sessionManager.currentAdapter?.currentRunId ?? sessionId;
+			return {
+				...(sessionId ? { sessionId } : {}),
+				...(runId ? { runId } : {}),
+			};
+		},
+		getCapabilityRevision: () => state.capabilitiesRevision,
+		isRecoveryReady: () => worktreeRecoveryReady,
+	});
+	const worktrees = new WorktreeLifecycleService({
+		stateDir: path.join(getAgentDir(), "rpc-v2", "worktrees"),
+		// 不传 environmentId：与 ephemeral runtimeId 解耦。
+		// 未 pin → 有 environment.json 则 adopt（兼容历史 rt_*）；空盘生成稳定 env_* 并落盘。
+		emit: worktreeEmit,
+		emitEvent: worktreeEmit,
+		setupPort: setupHost,
+	});
+	await worktrees.ensureLoaded();
+	worktreeRecoveryReady = worktrees.capabilityDescriptor().recoveryReady === true;
+	// 不可 silent available：仅 recoveryReady 时发布 available；setup/apply 仅真实端口 ready
+	state.capabilities = buildServerCapabilities({
+		"worktree.lifecycle": resolveWorktreeCapability(worktrees, setupHost),
+	});
+
 	const approvalRules = new ApprovalRuleStore();
 	await approvalRules.load();
 	const runtimeCatalog = sessionManager.runtimeCatalog;
 	if (!runtimeCatalog) throw new Error("RPC v2 requires a runtime model and provider catalog");
 	const auth = new AuthLoginManager({ runtimeId: state.runtimeId, catalog: runtimeCatalog, output: enqueueOutput });
 
-	let uiContext: RpcV2UIContext | undefined;
+	// uiContext 已在上方声明，供 setupHost 审批绑定
 	await sessionManager.setSessionBinder(async active => {
 		uiContext?.rejectAll("RPC Session changed");
 		await resources.bind({
@@ -2371,6 +2695,8 @@ export async function runRpcV2Mode(factory: RpcV2SessionFactory, _eventBus?: Eve
 		auth,
 		subagents,
 		integrations,
+		worktrees,
+		setupHost,
 	};
 	sessionManager.setContentResolver(async ({ session, sessionId, content }) => {
 		const resolved = await resolveRunContent(dispatchCtx, session, sessionId, content);
@@ -2390,9 +2716,12 @@ export async function runRpcV2Mode(factory: RpcV2SessionFactory, _eventBus?: Eve
 		let mutationTail = Promise.resolve();
 		const scheduleRequest = (request: ClientRequest): Promise<void> => {
 			const execute = () => processClientRequest(dispatchCtx, output, request);
-			const definition = RPC_V2_METHOD_BY_NAME.get(request.method);
-			const task = definition?.mutation ? mutationTail.then(execute) : execute();
-			if (definition?.mutation) mutationTail = task;
+			// approval.decide / interaction.* 必须可在 setup.start 等 mutation 等待期间执行。
+			const serializeMutation = shouldSerializeRpcMutation(request.method);
+			const task = serializeMutation ? mutationTail.then(execute) : execute();
+			// pendingRequests 观察原 task 的失败；mutationTail 只是排序 gate，失败后必须恢复，
+			// 否则一个已回包的 mutation 会永久毒化后续所有 mutation。
+			if (serializeMutation) mutationTail = task.catch(() => undefined);
 			pendingRequests.add(task);
 			void task.then(
 				() => pendingRequests.delete(task),

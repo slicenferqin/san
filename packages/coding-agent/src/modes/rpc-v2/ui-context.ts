@@ -23,6 +23,35 @@ import type { ApprovalId, InteractionId, RunId, SessionId, ToolCallId } from "./
 import { newApprovalId, newInteractionId, newRunId } from "./protocol/ids";
 import { sanitizeRpcText } from "./redaction";
 
+/** worktree setup 等独立 host-action 的审批请求（非 tool_execute）。 */
+export interface HostActionApprovalRequest {
+	/** 绑定审批的 toolCall / host-action 身份。 */
+	toolCallId: string;
+	/** Host tool 名，如 desktop.action.start.v1。 */
+	toolName: string;
+	/** 展示用标签。 */
+	label?: string;
+	/** 人类可读摘要。 */
+	prompt: string;
+	/** 拒绝原因/风险说明。 */
+	reason?: string;
+	/** 未脱敏原始参数；审批事件中会脱敏。 */
+	arguments: Record<string, unknown>;
+	/** 指纹绑定的稳定目标（worktreeId/environmentId/actionId/revision）。 */
+	fingerprintTarget: Record<string, unknown>;
+	/** 可选工作目录展示。 */
+	cwd?: string;
+	/** 可选 run 身份；缺省时使用 session 当前 run 或新建。 */
+	runId?: string;
+}
+
+export interface HostActionApprovalDecision {
+	allowed: boolean;
+	scope: ApprovalScope;
+	approvalId: ApprovalId;
+	fingerprint: string;
+}
+
 // ============================================================================
 // Pending request tracking
 // ============================================================================
@@ -177,6 +206,36 @@ export class RpcV2UIContext implements ExtensionUIContext {
 		if (this.#closedError) return Promise.reject(this.#closedError);
 		if (dialogOptions?.signal?.aborted) return Promise.resolve({ allowed: false, scope: "once" });
 		return this.#handleApproval(request, dialogOptions);
+	}
+
+	/**
+	 * 独立 host-action 审批入口（worktree setup 等）。
+	 * requestAction 固定为 host_action；exec 风险；once-only；canPersistRule=false。
+	 * 不削弱 tool_execute 路径。
+	 */
+	requestHostActionApproval(
+		request: HostActionApprovalRequest,
+		dialogOptions?: ExtensionUIDialogOptions,
+	): Promise<HostActionApprovalDecision> {
+		if (this.#closedError) return Promise.reject(this.#closedError);
+		if (dialogOptions?.signal?.aborted) {
+			return Promise.resolve({
+				allowed: false,
+				scope: "once",
+				approvalId: newApprovalId(),
+				fingerprint: generateFingerprint({
+					requestAction: "host_action",
+					toolName: request.toolName,
+					operationKind: "exec",
+					targetCanonical: stableSerializeJson(
+						redactJsonValue(request.fingerprintTarget as Record<string, unknown>).value,
+					),
+					riskTier: "exec",
+					workspaceRoot: request.cwd,
+				}),
+			});
+		}
+		return this.#handleHostActionApproval(request, dialogOptions);
 	}
 
 	confirm(title: string, message: string, dialogOptions?: ExtensionUIDialogOptions): Promise<boolean> {
@@ -403,6 +462,137 @@ export class RpcV2UIContext implements ExtensionUIContext {
 					},
 				});
 			return decision;
+		});
+	}
+
+	async #handleHostActionApproval(
+		request: HostActionApprovalRequest,
+		dialogOptions?: ExtensionUIDialogOptions,
+	): Promise<HostActionApprovalDecision> {
+		const approvalId = newApprovalId();
+		const redactedArguments = redactJsonValue(request.arguments);
+		const redactedFingerprintTarget = redactJsonValue(request.fingerprintTarget);
+		// host_action 永远 once-only，禁止持久规则。
+		const canPersistRule = false;
+		const allowedScopes: ApprovalScope[] = ["once"];
+		const fingerprint = generateFingerprint({
+			requestAction: "host_action",
+			toolName: request.toolName,
+			operationKind: "exec",
+			targetCanonical: stableSerializeJson(redactedFingerprintTarget.value),
+			riskTier: "exec",
+			workspaceRoot: request.cwd,
+		});
+		const policyResolution = await this.#resolveApprovalPolicy?.({
+			fingerprint,
+			tier: "exec",
+			requestOverride: true,
+			canPersistRule,
+		});
+		const policySnapshot: ApprovalPolicySnapshot = policyResolution?.snapshot ?? {
+			source: "request_override",
+			effectiveDecision: "ask",
+			canPersistRule: false,
+			rationale: "Host actions require a one-time decision and cannot persist rules",
+		};
+		// 即便策略层返回可持久，host_action 仍强制 once / 不可持久。
+		policySnapshot.canPersistRule = false;
+		const approval: ApprovalRequest = {
+			schemaVersion: 1,
+			approvalId,
+			sessionId: this.#sessionId as SessionId,
+			runId: (request.runId as RunId | undefined) ?? this.#runId() ?? newRunId(),
+			toolCallId: request.toolCallId as ToolCallId,
+			requestAction: "host_action",
+			createdAt: new Date().toISOString(),
+			status: "pending",
+			title: `Approve host action ${request.label ?? request.toolName}`,
+			summary: sanitizeApprovalText(request.prompt),
+			risk: {
+				tier: "exec",
+				level: "high",
+				irreversible: true,
+				reasons: request.reason
+					? [sanitizeApprovalText(request.reason)]
+					: ["Host action executes a configured Desktop process"],
+			},
+			tool: {
+				name: request.toolName,
+				label: request.label ?? request.toolName,
+				operationKind: "exec",
+				arguments: redactedArguments,
+				argumentsSummary: `${request.toolName} (host_action/exec)`,
+				cwd: request.cwd,
+			},
+			targets: extractApprovalTargets(redactedFingerprintTarget.value, request.cwd),
+			policySnapshot,
+			allowedDecisions: ["allow", "deny"],
+			allowedScopes,
+			fingerprint,
+			invalidation: [],
+		};
+
+		if (policySnapshot.effectiveDecision !== "ask") {
+			const decision = policySnapshot.effectiveDecision;
+			const scope: ApprovalScope = "once";
+			await this.#emitApprovalRequested(approval);
+			await this.#emitApprovalResolved(approval, decision, scope);
+			return {
+				allowed: decision === "allow",
+				scope,
+				approvalId,
+				fingerprint,
+			};
+		}
+
+		const { promise, resolve, reject } = Promise.withResolvers<{ allowed: boolean; scope: ApprovalScope }>();
+		this.#pendingApprovals.set(approvalId, { approvalId, resolve, reject });
+
+		const onAbort = () => {
+			const pending = this.#pendingApprovals.get(approvalId);
+			if (pending) {
+				this.#pendingApprovals.delete(approvalId);
+				pending.resolve({ allowed: false, scope: "once" });
+			}
+		};
+		dialogOptions?.signal?.addEventListener("abort", onAbort, { once: true });
+
+		try {
+			await this.#emitApprovalRequested(approval);
+		} catch (error: unknown) {
+			this.#pendingApprovals.delete(approvalId);
+			reject(error instanceof Error ? error : new Error(String(error)));
+			throw error;
+		}
+
+		return promise.then(decision => {
+			dialogOptions?.signal?.removeEventListener("abort", onAbort);
+			if (!this.#registerApproval)
+				this.#output({
+					jsonrpc: "2.0",
+					method: "session.event",
+					params: {
+						schemaVersion: 1,
+						eventId: `evt_${approvalId}_resolved`,
+						sessionId: this.#sessionId,
+						sequence: ++this.#sequence,
+						timestamp: new Date().toISOString(),
+						type: "approval.resolved",
+						durability: "durable",
+						data: {
+							approvalId,
+							decision: decision.allowed ? "allow" : "deny",
+							scope: "once",
+							persistedRule: false,
+						},
+					},
+				});
+			return {
+				allowed: decision.allowed,
+				scope: "once" as ApprovalScope,
+				approvalId,
+				fingerprint,
+			};
 		});
 	}
 

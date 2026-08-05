@@ -7,3 +7,4 @@ export * from "./interaction";
 export * from "./resources";
 export * from "./run";
 export * from "./session";
+export * from "./worktree";

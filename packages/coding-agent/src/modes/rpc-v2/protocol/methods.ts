@@ -24,7 +24,8 @@ export type RpcV2CapabilityKey =
 	| "diagnostics.safe"
 	| "host.tools"
 	| "host.uri"
-	| "artifact.read";
+	| "artifact.read"
+	| "worktree.lifecycle";
 
 export interface RpcV2MethodDefinition {
 	method: string;
@@ -209,6 +210,16 @@ export const RPC_V2_METHOD_DEFINITIONS: readonly RpcV2MethodDefinition[] = [
 		requiresSession: true,
 		requiresWriteLease: true,
 	}),
+
+	method("worktree.create", { capability: "worktree.lifecycle", mutation: true }),
+	method("worktree.get", { capability: "worktree.lifecycle" }),
+	method("worktree.list", { capability: "worktree.lifecycle" }),
+	method("worktree.setup.start", { capability: "worktree.lifecycle", mutation: true }),
+	method("worktree.setup.cancel", { capability: "worktree.lifecycle", mutation: true }),
+	// prepare 只读计划（Desktop 仍可带 meta；不进入 mutation 幂等集合）
+	method("worktree.apply.prepare", { capability: "worktree.lifecycle" }),
+	method("worktree.apply", { capability: "worktree.lifecycle", mutation: true }),
+	method("worktree.archive", { capability: "worktree.lifecycle", mutation: true }),
 	method("host.capabilities.update", { mutation: true }),
 ] as const;
 

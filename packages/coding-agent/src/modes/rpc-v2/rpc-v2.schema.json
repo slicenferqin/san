@@ -2045,6 +2045,306 @@
           ],
           "additionalProperties": false
         },
+        "worktree.create": {
+          "type": "object",
+          "properties": {
+            "projectCwd": {
+              "type": "string"
+            },
+            "repoId": {
+              "type": "string"
+            },
+            "base": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "branch",
+                    "commit"
+                  ]
+                },
+                "value": {
+                  "type": "string"
+                },
+                "resolvedOid": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "value",
+                "resolvedOid"
+              ],
+              "additionalProperties": false
+            },
+            "branchName": {
+              "type": "string"
+            },
+            "purpose": {
+              "const": "session"
+            },
+            "setupActionId": {
+              "type": "string"
+            },
+            "meta": {
+              "type": "object",
+              "properties": {
+                "idempotencyKey": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "idempotencyKey"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "projectCwd",
+            "repoId",
+            "base",
+            "purpose",
+            "meta"
+          ],
+          "additionalProperties": false
+        },
+        "worktree.get": {
+          "type": "object",
+          "properties": {
+            "worktreeId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "worktreeId"
+          ],
+          "additionalProperties": false
+        },
+        "worktree.list": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "creating",
+                    "setup_pending",
+                    "ready",
+                    "in_use",
+                    "dirty",
+                    "applying",
+                    "conflicted",
+                    "archiving",
+                    "archived",
+                    "failed"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "creating",
+                      "setup_pending",
+                      "ready",
+                      "in_use",
+                      "dirty",
+                      "applying",
+                      "conflicted",
+                      "archiving",
+                      "archived",
+                      "failed"
+                    ]
+                  }
+                }
+              ]
+            },
+            "states": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "creating",
+                  "setup_pending",
+                  "ready",
+                  "in_use",
+                  "dirty",
+                  "applying",
+                  "conflicted",
+                  "archiving",
+                  "archived",
+                  "failed"
+                ]
+              }
+            },
+            "repoId": {
+              "type": "string"
+            },
+            "environmentId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "worktree.setup.start": {
+          "type": "object",
+          "properties": {
+            "worktreeId": {
+              "type": "string"
+            },
+            "setupActionId": {
+              "type": "string"
+            },
+            "meta": {
+              "type": "object",
+              "properties": {
+                "idempotencyKey": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "idempotencyKey"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "worktreeId",
+            "meta"
+          ],
+          "additionalProperties": false
+        },
+        "worktree.setup.cancel": {
+          "type": "object",
+          "properties": {
+            "worktreeId": {
+              "type": "string"
+            },
+            "meta": {
+              "type": "object",
+              "properties": {
+                "idempotencyKey": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "idempotencyKey"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "worktreeId",
+            "meta"
+          ],
+          "additionalProperties": false
+        },
+        "worktree.apply.prepare": {
+          "type": "object",
+          "properties": {
+            "worktreeId": {
+              "type": "string"
+            },
+            "expectedWorktreeRevision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "expectedTargetSnapshotId": {
+              "type": "string"
+            },
+            "strategy": {
+              "enum": [
+                "patch",
+                "merge_commit"
+              ]
+            },
+            "meta": {
+              "type": "object",
+              "properties": {
+                "idempotencyKey": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "idempotencyKey"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "worktreeId",
+            "expectedWorktreeRevision",
+            "expectedTargetSnapshotId",
+            "strategy",
+            "meta"
+          ],
+          "additionalProperties": false
+        },
+        "worktree.apply": {
+          "type": "object",
+          "properties": {
+            "planId": {
+              "type": "string"
+            },
+            "expectedWorktreeRevision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "expectedTargetSnapshotId": {
+              "type": "string"
+            },
+            "meta": {
+              "type": "object",
+              "properties": {
+                "idempotencyKey": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "idempotencyKey"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "planId",
+            "expectedWorktreeRevision",
+            "expectedTargetSnapshotId",
+            "meta"
+          ],
+          "additionalProperties": false
+        },
+        "worktree.archive": {
+          "type": "object",
+          "properties": {
+            "worktreeId": {
+              "type": "string"
+            },
+            "expectedRevision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "retainChanges": {
+              "type": "boolean"
+            },
+            "meta": {
+              "type": "object",
+              "properties": {
+                "idempotencyKey": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "idempotencyKey"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "worktreeId",
+            "expectedRevision",
+            "meta"
+          ],
+          "additionalProperties": false
+        },
         "host.capabilities.update": {
           "type": "object",
           "properties": {
@@ -2162,7 +2462,15 @@
             "integration.health.changed",
             "auth.login.state.changed",
             "evidence.recorded",
-            "session.notice"
+            "session.notice",
+            "worktree.created",
+            "worktree.state.changed",
+            "worktree.setup.started",
+            "worktree.setup.completed",
+            "worktree.apply.started",
+            "worktree.apply.completed",
+            "worktree.apply.conflicted",
+            "worktree.archived"
           ]
         },
         "durability": {
@@ -2293,6 +2601,14 @@
       "resource.upload.commit",
       "resource.registerHostUri",
       "resource.release",
+      "worktree.create",
+      "worktree.get",
+      "worktree.list",
+      "worktree.setup.start",
+      "worktree.setup.cancel",
+      "worktree.apply.prepare",
+      "worktree.apply",
+      "worktree.archive",
       "host.capabilities.update"
     ],
     "eventTypes": [
@@ -2358,7 +2674,15 @@
       "integration.health.changed",
       "auth.login.state.changed",
       "evidence.recorded",
-      "session.notice"
+      "session.notice",
+      "worktree.created",
+      "worktree.state.changed",
+      "worktree.setup.started",
+      "worktree.setup.completed",
+      "worktree.apply.started",
+      "worktree.apply.completed",
+      "worktree.apply.conflicted",
+      "worktree.archived"
     ]
   }
 }

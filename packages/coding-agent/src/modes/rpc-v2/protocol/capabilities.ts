@@ -47,6 +47,7 @@ export interface ServerCapabilities {
 	"host.tools": CapabilityDescriptor;
 	"host.uri": CapabilityDescriptor;
 	"artifact.read": CapabilityDescriptor;
+	"worktree.lifecycle": CapabilityDescriptor;
 }
 
 /** Capability keys that Desktop 0.2 requires for startup. */
@@ -75,6 +76,7 @@ export const REQUIRED_CAPABILITIES: ReadonlyArray<keyof ServerCapabilities> = [
 	"host.tools",
 	"host.uri",
 	"artifact.read",
+	// worktree.lifecycle is optional — published only when service is ready
 ];
 
 /** Limits negotiated during initialize. */
@@ -140,6 +142,15 @@ export function buildServerCapabilities(overrides?: Partial<ServerCapabilities>)
 		"host.tools": available(),
 		"host.uri": available(),
 		"artifact.read": available(),
+		// 默认 unavailable；仅当 mode 确认 core recovery ready 且 create/get/list/archive
+		// 为真实实现后覆盖为 available。details.setupAvailable/applyAvailable 必须为 false
+		// 直到真实 ProcessHost / Git mutation bridge 接入（不可 silent available）。
+		"worktree.lifecycle": {
+			version: 1,
+			status: "unavailable",
+			reasonCode: "WORKTREE_SERVICE_NOT_READY",
+			message: "Managed worktree lifecycle service is not ready",
+		},
 		...overrides,
 	};
 }

@@ -78,6 +78,14 @@ const sessionEventTypes = [
 	"auth.login.state.changed",
 	"evidence.recorded",
 	"session.notice",
+	"worktree.created",
+	"worktree.state.changed",
+	"worktree.setup.started",
+	"worktree.setup.completed",
+	"worktree.apply.started",
+	"worktree.apply.completed",
+	"worktree.apply.conflicted",
+	"worktree.archived",
 ] as const;
 
 const errorReasons = [
@@ -875,6 +883,178 @@ const paramsByMethod: Record<string, JsonSchema> = {
 			tools: { type: "array", items: objectSchema },
 			uriSchemes: { type: "array", items: objectSchema },
 		},
+		additionalProperties: false,
+	},
+	"worktree.create": {
+		type: "object",
+		properties: {
+			projectCwd: stringSchema,
+			repoId: stringSchema,
+			base: {
+				type: "object",
+				properties: {
+					kind: { enum: ["branch", "commit"] },
+					value: stringSchema,
+					resolvedOid: stringSchema,
+				},
+				required: ["kind", "value", "resolvedOid"],
+				additionalProperties: false,
+			},
+			branchName: stringSchema,
+			purpose: { const: "session" },
+			setupActionId: stringSchema,
+			meta: {
+				type: "object",
+				properties: { idempotencyKey: stringSchema },
+				required: ["idempotencyKey"],
+				additionalProperties: false,
+			},
+		},
+		required: ["projectCwd", "repoId", "base", "purpose", "meta"],
+		additionalProperties: false,
+	},
+	"worktree.get": {
+		type: "object",
+		properties: { worktreeId: stringSchema },
+		required: ["worktreeId"],
+		additionalProperties: false,
+	},
+	"worktree.list": {
+		type: "object",
+		properties: {
+			state: {
+				anyOf: [
+					{
+						enum: [
+							"creating",
+							"setup_pending",
+							"ready",
+							"in_use",
+							"dirty",
+							"applying",
+							"conflicted",
+							"archiving",
+							"archived",
+							"failed",
+						],
+					},
+					{
+						type: "array",
+						items: {
+							enum: [
+								"creating",
+								"setup_pending",
+								"ready",
+								"in_use",
+								"dirty",
+								"applying",
+								"conflicted",
+								"archiving",
+								"archived",
+								"failed",
+							],
+						},
+					},
+				],
+			},
+			states: {
+				type: "array",
+				items: {
+					enum: [
+						"creating",
+						"setup_pending",
+						"ready",
+						"in_use",
+						"dirty",
+						"applying",
+						"conflicted",
+						"archiving",
+						"archived",
+						"failed",
+					],
+				},
+			},
+			repoId: stringSchema,
+			environmentId: stringSchema,
+		},
+		additionalProperties: false,
+	},
+	"worktree.setup.start": {
+		type: "object",
+		properties: {
+			worktreeId: stringSchema,
+			setupActionId: stringSchema,
+			meta: {
+				type: "object",
+				properties: { idempotencyKey: stringSchema },
+				required: ["idempotencyKey"],
+				additionalProperties: false,
+			},
+		},
+		required: ["worktreeId", "meta"],
+		additionalProperties: false,
+	},
+	"worktree.setup.cancel": {
+		type: "object",
+		properties: {
+			worktreeId: stringSchema,
+			meta: {
+				type: "object",
+				properties: { idempotencyKey: stringSchema },
+				required: ["idempotencyKey"],
+				additionalProperties: false,
+			},
+		},
+		required: ["worktreeId", "meta"],
+		additionalProperties: false,
+	},
+	"worktree.apply.prepare": {
+		type: "object",
+		properties: {
+			worktreeId: stringSchema,
+			expectedWorktreeRevision: { type: "integer", minimum: 0 },
+			expectedTargetSnapshotId: stringSchema,
+			strategy: { enum: ["patch", "merge_commit"] },
+			meta: {
+				type: "object",
+				properties: { idempotencyKey: stringSchema },
+				required: ["idempotencyKey"],
+				additionalProperties: false,
+			},
+		},
+		required: ["worktreeId", "expectedWorktreeRevision", "expectedTargetSnapshotId", "strategy", "meta"],
+		additionalProperties: false,
+	},
+	"worktree.apply": {
+		type: "object",
+		properties: {
+			planId: stringSchema,
+			expectedWorktreeRevision: { type: "integer", minimum: 0 },
+			expectedTargetSnapshotId: stringSchema,
+			meta: {
+				type: "object",
+				properties: { idempotencyKey: stringSchema },
+				required: ["idempotencyKey"],
+				additionalProperties: false,
+			},
+		},
+		required: ["planId", "expectedWorktreeRevision", "expectedTargetSnapshotId", "meta"],
+		additionalProperties: false,
+	},
+	"worktree.archive": {
+		type: "object",
+		properties: {
+			worktreeId: stringSchema,
+			expectedRevision: { type: "integer", minimum: 0 },
+			retainChanges: { type: "boolean" },
+			meta: {
+				type: "object",
+				properties: { idempotencyKey: stringSchema },
+				required: ["idempotencyKey"],
+				additionalProperties: false,
+			},
+		},
+		required: ["worktreeId", "expectedRevision", "meta"],
 		additionalProperties: false,
 	},
 };
