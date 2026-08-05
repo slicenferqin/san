@@ -208,6 +208,8 @@ import {
 	resolveModelRoleValue,
 } from "../config/model-resolver";
 import { getKnownRoleIds, MODEL_ROLE_IDS, MODEL_ROLES } from "../config/model-roles";
+import type { ModelRouteResolutionRequest } from "../config/model-route-resolver";
+import type { RouteFailureCategory } from "../config/model-routes-schema";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily, serviceTierForAllFamilies, serviceTierSettingToTier } from "../config/service-tier";
 import type { Settings, SkillsSettings } from "../config/settings";
@@ -483,6 +485,12 @@ import {
 	stripImagesFromMessage,
 	USER_INTERRUPT_LABEL,
 } from "./messages";
+import {
+	type ActiveModelRoute,
+	formatModelRouteResolutionFailure,
+	ModelRouteLeaseController,
+	type ModelRouteSelection,
+} from "./model-route-lease";
 import type { BuildSessionContextOptions, SessionContext } from "./session-context";
 import { getLatestCompactionEntry, getRestorableSessionModels } from "./session-context";
 import { formatSessionDumpText } from "./session-dump-format";
@@ -792,6 +800,21 @@ export type AgentSessionEvent =
 	  }
 	| { type: "retry_fallback_applied"; from: string; to: string; role: string }
 	| { type: "retry_fallback_succeeded"; model: string; role: string }
+	| {
+			type: "model_route_resolved";
+			logicalModel: string;
+			routeId: string;
+			model: string;
+			reason: "primary" | "affinity" | "recovery" | "manual";
+	  }
+	| {
+			type: "model_route_changed";
+			logicalModel: string;
+			fromRoute: string;
+			toRoute: string;
+			trigger: RouteFailureCategory;
+			cooldownUntil?: number;
+	  }
 	| { type: "ttsr_triggered"; rules: Rule[] }
 	| { type: "todo_reminder"; todos: TodoItem[]; attempt: number; maxAttempts: number }
 	| { type: "todo_auto_clear" }
@@ -1018,6 +1041,8 @@ export interface AgentSessionConfig {
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 	/** Initial session thinking selector. */
 	thinkingLevel?: ConfiguredThinkingLevel;
+	/** 启动或恢复时已经解析出的 Logical Model route lease。 */
+	initialModelRoute?: ActiveModelRoute;
 	/** Prewalk from the starting model to a fast/cheap target at the first edit/write once the todo list exists. */
 	prewalk?: Prewalk;
 	/** Force read-only plan mode at start, auto-approve on the model's first
@@ -2090,6 +2115,7 @@ export class AgentSession {
 	#retryPromise: Promise<void> | undefined = undefined;
 	#retryResolve: (() => void) | undefined = undefined;
 	#activeRetryFallback: ActiveRetryFallbackState | undefined = undefined;
+	#modelRouteLease: ModelRouteLeaseController;
 	#pendingRecoveredRetryErrors: PendingRecoveredRetryError[] = [];
 	// Todo completion reminder state
 	#todoReminderCount = 0;
@@ -2841,6 +2867,10 @@ export class AgentSession {
 		this.#skillsReloadable = config.skillsReloadable ?? true;
 		this.#skillsSettings = config.skillsSettings;
 		this.#modelRegistry = config.modelRegistry;
+		this.#modelRouteLease = new ModelRouteLeaseController(
+			() => this.#modelRegistry.getModelRouteRegistry(),
+			config.initialModelRoute,
+		);
 		this.#recoverPersistedSanLoopRun();
 		// Resolve the wire service-tier per request so the Fireworks Priority
 		// toggle scopes priority to Fireworks alone, without mutating the shared
@@ -5188,6 +5218,15 @@ export class AgentSession {
 			}
 			if (this.#isRetryableError(msg)) {
 				const didRetry = await this.#handleRetryableError(msg);
+				if (didRetry) {
+					await emitAgentEndNotification({ willContinue: true });
+					return;
+				}
+			} else if (this.#isHardErrorModelRouteFallbackEligible(msg)) {
+				// Logical routes own provider/model-unavailable hard errors before
+				// cross-model fallback. A successful route switch retries immediately;
+				// otherwise the original non-retryable error remains terminal.
+				const didRetry = await this.#handleRetryableError(msg, { hardErrorRouteFallback: true });
 				if (didRetry) {
 					await emitAgentEndNotification({ willContinue: true });
 					return;
@@ -10593,6 +10632,7 @@ export class AgentSession {
 			this.#acceptTerminalEmptyStopForPrompt = options?.acceptTerminalEmptyStop === true;
 
 			await this.#maybeRestoreRetryFallbackPrimary();
+			await this.#maybeRecoverModelRoute();
 
 			// Validate model
 			if (!this.model) {
@@ -11880,6 +11920,112 @@ export class AgentSession {
 	// Model Management
 	// =========================================================================
 
+	get activeModelRoute(): ActiveModelRoute | undefined {
+		return this.#modelRouteLease.active;
+	}
+
+	#modelRouteResolutionRequest(
+		logicalModelId: string,
+		overrides: ModelRouteResolutionRequest = {},
+	): ModelRouteResolutionRequest {
+		const group = this.#modelRegistry.getModelRouteRegistry().get(logicalModelId);
+		const suppressedRouteIds = new Set(overrides.suppressedRouteIds ?? []);
+		for (const route of group?.routes ?? []) {
+			if (this.#modelRegistry.isSelectorSuppressed(route.modelSelector)) {
+				suppressedRouteIds.add(route.id);
+			}
+		}
+		const contextTokens = this.getContextUsage()?.tokens;
+		const requiresImages = this.messages.some(
+			message =>
+				"content" in message &&
+				Array.isArray(message.content) &&
+				message.content.some(content => content.type === "image"),
+		);
+		return {
+			requiredContextTokens: contextTokens && contextTokens > 0 ? contextTokens : undefined,
+			requiresImages,
+			requiresTools: this.agent.state.tools.length > 0,
+			thinkingLevel: this.configuredThinkingLevel(),
+			isAvailable: route => this.#modelRegistry.isProviderEnabled(route.model.provider),
+			hasAuth: route => this.#modelRegistry.hasConfiguredAuth(route.model),
+			...overrides,
+			suppressedRouteIds: suppressedRouteIds.size > 0 ? suppressedRouteIds : undefined,
+		};
+	}
+
+	async #emitModelRouteResolved(selection: ModelRouteSelection): Promise<void> {
+		const reason = selection.reason === "failover" ? "recovery" : selection.reason;
+		await this.#emitSessionEvent({
+			type: "model_route_resolved",
+			logicalModel: selection.route.logicalModelId,
+			routeId: selection.route.routeId,
+			model: selection.route.modelSelector,
+			reason,
+		});
+	}
+
+	async selectLogicalModel(
+		logicalModelId: string,
+		role: string = "default",
+		options?: {
+			thinkingLevel?: ConfiguredThinkingLevel;
+			persist?: boolean;
+			routeId?: string;
+		},
+	): Promise<{ switched: boolean; route: ActiveModelRoute }> {
+		if (!this.settings.get("routing.enabled")) {
+			throw new Error(`Logical model routing is disabled; cannot select "${logicalModelId}"`);
+		}
+		const registry = this.#modelRegistry.getModelRouteRegistry();
+		if (!registry.has(logicalModelId)) {
+			throw new Error(`Unknown logical model "${logicalModelId}"`);
+		}
+
+		const previousRoute = this.#modelRouteLease.snapshot();
+		const affinityRouteId =
+			options?.routeId === undefined && previousRoute?.logicalModelId === logicalModelId
+				? previousRoute.routeId
+				: undefined;
+		const request = this.#modelRouteResolutionRequest(logicalModelId, {
+			...(options?.routeId !== undefined && { manualRouteId: options.routeId }),
+			...(affinityRouteId !== undefined && { affinityRouteId }),
+			thinkingLevel: options?.thinkingLevel ?? this.configuredThinkingLevel(),
+		});
+		const selection = this.#modelRouteLease.select(logicalModelId, role, request);
+		if (!selection) {
+			const failedResolution = registry.resolve(logicalModelId, request);
+			throw new Error(formatModelRouteResolutionFailure(logicalModelId, failedResolution?.trace ?? []));
+		}
+
+		const previousEditMode = this.#resolveActiveEditMode();
+		try {
+			const targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(selection.model);
+			this.#clearActiveRetryFallback();
+			this.#setModelWithProviderSessionReset(targetModel);
+			this.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, role, {
+				logicalModel: logicalModelId,
+				routeId: selection.route.routeId,
+			});
+			if (options?.persist) {
+				this.settings.setModelRole(role, formatModelSelectorValue(logicalModelId, options.thinkingLevel));
+			}
+			this.settings.getStorage()?.recordModelUsage(`${targetModel.provider}/${targetModel.id}`);
+
+			if (options?.thinkingLevel !== undefined) {
+				this.setThinkingLevel(options.thinkingLevel);
+			} else {
+				this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
+			}
+			await this.#syncAfterModelChange(previousEditMode);
+			await this.#emitModelRouteResolved(selection);
+			return { switched: true, route: selection.route };
+		} catch (error) {
+			this.#modelRouteLease.restore(previousRoute);
+			throw error;
+		}
+	}
+
 	/**
 	 * Set model directly.
 	 * Validates that a credential source is configured (synchronously, without
@@ -11908,6 +12054,7 @@ export class AgentSession {
 
 		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#clearActiveRetryFallback();
+		this.#modelRouteLease.clear();
 		this.#setModelWithProviderSessionReset(targetModel);
 		this.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, role);
 		if (options?.persist) {
@@ -12106,6 +12253,7 @@ export class AgentSession {
 		// Apply model
 		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(next.model));
 		this.#clearActiveRetryFallback();
+		this.#modelRouteLease.clear();
 		this.#setModelWithProviderSessionReset(next.model);
 		this.sessionManager.appendModelChange(`${next.model.provider}/${next.model.id}`);
 		this.settings.getStorage()?.recordModelUsage(`${next.model.provider}/${next.model.id}`);
@@ -12137,6 +12285,7 @@ export class AgentSession {
 
 		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(nextModel));
 		this.#clearActiveRetryFallback();
+		this.#modelRouteLease.clear();
 		this.#setModelWithProviderSessionReset(nextModel);
 		this.sessionManager.appendModelChange(`${nextModel.provider}/${nextModel.id}`);
 		this.settings.getStorage()?.recordModelUsage(`${nextModel.provider}/${nextModel.id}`);
@@ -17352,6 +17501,38 @@ export class AgentSession {
 		return stopType === "refusal" || stopType === "sensitive";
 	}
 
+	#classifyModelRouteFailure(
+		message: AssistantMessage,
+		id: number = this.#classifyRetryMessage(message),
+	): RouteFailureCategory | undefined {
+		if (message.stopReason !== "error") return undefined;
+		if (this.#isClassifierRefusal(message) || AIError.is(id, AIError.Flag.ContentBlocked)) return "refusal";
+		if (AIError.is(id, AIError.Flag.Abort) || AIError.is(id, AIError.Flag.UserInterrupt)) return "user_abort";
+		if (AIError.isContextOverflow(message, this.model?.contextWindow ?? 0)) return "context_overflow";
+		if (AIError.is(id, AIError.Flag.AuthFailed)) return "auth_failed";
+
+		const status = message.errorStatus ?? extractHttpStatusFromError({ message: message.errorMessage });
+		if (status === 429) return "rate_limit";
+		if (AIError.is(id, AIError.Flag.UsageLimit)) return "quota";
+		if (AIError.is(id, AIError.Flag.Timeout)) return "timeout";
+		if (status === 404 || AIError.is(id, AIError.Flag.FastModeUnsupported)) {
+			return "model_unavailable";
+		}
+		if (status !== undefined && status >= 500) return "server_error";
+		if (
+			AIError.is(id, AIError.Flag.ThinkingLoop) ||
+			AIError.is(id, AIError.Flag.StaleResponsesItem) ||
+			AIError.is(id, AIError.Flag.MalformedFunctionCall) ||
+			AIError.is(id, AIError.Flag.ProviderFinishError) ||
+			AIError.is(id, AIError.Flag.Grammar)
+		) {
+			return undefined;
+		}
+		if (status === 400 || status === 409 || status === 413 || status === 422) return "invalid_request";
+		if (AIError.is(id, AIError.Flag.Transient)) return "network";
+		return undefined;
+	}
+
 	/** True when any registered model belongs to `provider`. */
 	#hasProviderModels(provider: string): boolean {
 		return this.#modelRegistry.getAll().some(model => model.provider === provider);
@@ -17464,13 +17645,15 @@ export class AgentSession {
 		return this.#modelRegistry.isSelectorSuppressed(selector.raw);
 	}
 
-	#noteRetryFallbackCooldown(currentSelector: string, retryAfterMs: number | undefined, errorMessage: string): void {
+	#noteRetryFallbackCooldown(currentSelector: string, retryAfterMs: number | undefined, errorMessage: string): number {
 		let cooldownMs = retryAfterMs;
 		if (!cooldownMs || cooldownMs <= 0) {
 			const reason = parseRateLimitReason(errorMessage);
 			cooldownMs = reason === "UNKNOWN" ? 5 * 60 * 1000 : calculateRateLimitBackoffMs(reason);
 		}
-		this.#modelRegistry.suppressSelector(currentSelector, Date.now() + cooldownMs);
+		const cooldownUntil = Date.now() + cooldownMs;
+		this.#modelRegistry.suppressSelector(currentSelector, cooldownUntil);
+		return cooldownUntil;
 	}
 
 	/**
@@ -17704,6 +17887,69 @@ export class AgentSession {
 		});
 	}
 
+	async #tryModelRouteFallback(
+		message: AssistantMessage,
+		id: number,
+		retryAfterMs: number | undefined,
+		errorMessage: string,
+		skipSameRouteRetry: boolean,
+	): Promise<{ switched: boolean; deferCrossModelFallback: boolean }> {
+		const routing = this.settings.getGroup("routing");
+		const previousRoute = this.#modelRouteLease.snapshot();
+		if (
+			!routing.enabled ||
+			!routing.routeFallback ||
+			!previousRoute ||
+			!this.#modelRouteLease.matchesModel(this.model) ||
+			this.#hasReplayUnsafeToolOutput(message)
+		) {
+			return { switched: false, deferCrossModelFallback: false };
+		}
+
+		const category = this.#classifyModelRouteFailure(message, id);
+		if (!category) return { switched: false, deferCrossModelFallback: false };
+		const decision = this.#modelRouteLease.resolveFallbackDecision(category, { skipSameRouteRetry });
+		if (decision === "not_allowed") return { switched: false, deferCrossModelFallback: false };
+		if (decision === "retry_same_route") return { switched: false, deferCrossModelFallback: true };
+
+		const cooldownUntil = this.#noteRetryFallbackCooldown(previousRoute.modelSelector, retryAfterMs, errorMessage);
+		const request = this.#modelRouteResolutionRequest(previousRoute.logicalModelId, {
+			selectionReason: "failover",
+		});
+		for (;;) {
+			const selection = this.#modelRouteLease.failover(request);
+			if (!selection) {
+				this.#modelRouteLease.restore(previousRoute);
+				return { switched: false, deferCrossModelFallback: false };
+			}
+			const apiKey = await this.#modelRegistry.getApiKey(selection.model, this.sessionId);
+			if (!apiKey) continue;
+
+			this.#clearActiveRetryFallback();
+			this.#setModelWithProviderSessionReset(selection.model);
+			if (this.#sessionWritesEnabled) {
+				this.sessionManager.appendModelRouteChange({
+					logicalModel: previousRoute.logicalModelId,
+					fromRoute: previousRoute.routeId,
+					toRoute: selection.route.routeId,
+					reason: category,
+					cooldownUntil,
+				});
+			}
+			this.settings.getStorage()?.recordModelUsage(selection.route.modelSelector);
+			this.#reapplyThinkingLevel();
+			await this.#emitSessionEvent({
+				type: "model_route_changed",
+				logicalModel: previousRoute.logicalModelId,
+				fromRoute: previousRoute.routeId,
+				toRoute: selection.route.routeId,
+				trigger: category,
+				cooldownUntil,
+			});
+			return { switched: true, deferCrossModelFallback: false };
+		}
+	}
+
 	async #tryRetryModelFallback(currentSelector: string, options?: { pinFallback?: boolean }): Promise<boolean> {
 		const role = this.#activeRetryFallback?.role ?? this.#resolveRetryFallbackRole(currentSelector);
 		if (!role) return false;
@@ -17751,6 +17997,15 @@ export class AgentSession {
 		if (AIError.is(id, AIError.Flag.UsageLimit)) return false;
 		if (AIError.is(id, AIError.Flag.AuthFailed)) return false;
 		return this.#modelRegistry.find("fireworks", toFireworksBaseModelId(model.id)) !== undefined;
+	}
+
+	#isHardErrorModelRouteFallbackEligible(message: AssistantMessage): boolean {
+		if (message.stopReason !== "error") return false;
+		const routing = this.settings.getGroup("routing");
+		if (!routing.enabled || !routing.routeFallback) return false;
+		if (!this.#modelRouteLease.active || !this.#modelRouteLease.matchesModel(this.model)) return false;
+		if (this.#hasReplayUnsafeToolOutput(message)) return false;
+		return this.#classifyModelRouteFailure(message) !== undefined;
 	}
 
 	/**
@@ -17852,6 +18107,43 @@ export class AgentSession {
 		this.#clearActiveRetryFallback();
 	}
 
+	async #maybeRecoverModelRoute(): Promise<void> {
+		if (!this.settings.get("routing.enabled")) return;
+		const previousRoute = this.#modelRouteLease.snapshot();
+		if (!previousRoute || !this.#modelRouteLease.matchesModel(this.model)) return;
+		const selection = this.#modelRouteLease.recover(
+			this.#modelRouteResolutionRequest(previousRoute.logicalModelId, { selectionReason: "recovery" }),
+		);
+		if (!selection) return;
+
+		const apiKey = await this.#modelRegistry.getApiKey(selection.model, this.sessionId);
+		if (!apiKey) {
+			this.#modelRouteLease.restore(previousRoute);
+			return;
+		}
+
+		const previousEditMode = this.#resolveActiveEditMode();
+		try {
+			const targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(selection.model);
+			this.#setModelWithProviderSessionReset(targetModel);
+			if (this.#sessionWritesEnabled) {
+				this.sessionManager.appendModelRouteChange({
+					logicalModel: selection.route.logicalModelId,
+					fromRoute: previousRoute.routeId,
+					toRoute: selection.route.routeId,
+					reason: "recovery",
+				});
+			}
+			this.settings.getStorage()?.recordModelUsage(selection.route.modelSelector);
+			this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
+			await this.#syncAfterModelChange(previousEditMode);
+			await this.#emitModelRouteResolved(selection);
+		} catch (error) {
+			this.#modelRouteLease.restore(previousRoute);
+			throw error;
+		}
+	}
+
 	#parseRetryAfterMsFromError(errorMessage: string): number | undefined {
 		const now = Date.now();
 		const retryAfterMsMatch = /retry-after-ms\s*[:=]\s*(\d+)/i.exec(errorMessage);
@@ -17913,7 +18205,12 @@ export class AgentSession {
 	 */
 	async #handleRetryableError(
 		message: AssistantMessage,
-		options?: { allowModelFallback?: boolean; fireworksFastFallback?: boolean; hardErrorFallback?: boolean },
+		options?: {
+			allowModelFallback?: boolean;
+			fireworksFastFallback?: boolean;
+			hardErrorFallback?: boolean;
+			hardErrorRouteFallback?: boolean;
+		},
 	): Promise<boolean> {
 		const retrySettings = this.settings.getGroup("retry");
 		// The Fireworks Fast→base degrade is an intrinsic model-selection safety net,
@@ -17950,6 +18247,8 @@ export class AgentSession {
 			: calculateRetryBackoffDelayMs(retrySettings.baseDelayMs, this.#retryAttempt);
 		let switchedCredential = false;
 		let switchedModel = false;
+		let switchedRoute = false;
+		let deferCrossModelFallback = false;
 		// Set when a usage-limit error pinned the wait to credential
 		// availability — suppresses the generic retry-after bump below.
 		let usageLimitWaitMs: number | undefined;
@@ -18009,9 +18308,26 @@ export class AgentSession {
 		const allowModelFallback = options?.allowModelFallback !== false;
 		const currentSelector = this.model ? formatRetryFallbackSelector(this.model, this.thinkingLevel) : undefined;
 		if (!staleOpenAIResponsesReplayError && !switchedCredential && currentSelector) {
+			if (allowModelFallback) {
+				const routeFallback = await this.#tryModelRouteFallback(
+					message,
+					id,
+					parsedRetryAfterMs,
+					errorMessage,
+					retryBudgetExhausted,
+				);
+				switchedRoute = routeFallback.switched;
+				deferCrossModelFallback = routeFallback.deferCrossModelFallback;
+			}
 			// A refusal chain stops at the retry budget: the exhausted-attempt
 			// last resort is for provider failures, not classifier decisions.
-			if (allowModelFallback && retrySettings.modelFallback && !(retryBudgetExhausted && classifierRefusal)) {
+			if (
+				!switchedRoute &&
+				!deferCrossModelFallback &&
+				allowModelFallback &&
+				retrySettings.modelFallback &&
+				!(retryBudgetExhausted && classifierRefusal)
+			) {
 				if (!classifierRefusal) {
 					this.#noteRetryFallbackCooldown(currentSelector, parsedRetryAfterMs, errorMessage);
 				}
@@ -18021,17 +18337,23 @@ export class AgentSession {
 			// of the role-fallback setting: it's intrinsic to the Fast contract (speed
 			// best-effort, degrade to Standard on failure) and triggers on hard router
 			// errors the generic retry classifier would otherwise reject.
-			if (!switchedModel && allowModelFallback && options?.fireworksFastFallback) {
+			if (
+				!switchedRoute &&
+				!switchedModel &&
+				!deferCrossModelFallback &&
+				allowModelFallback &&
+				options?.fireworksFastFallback
+			) {
 				switchedModel = await this.#tryFireworksFastFallback(currentSelector);
 			}
-			if (switchedModel) {
+			if (switchedRoute || switchedModel) {
 				delayMs = 0;
 			} else if (usageLimitWaitMs === undefined && parsedRetryAfterMs && parsedRetryAfterMs > delayMs) {
 				delayMs = parsedRetryAfterMs;
 			}
 		}
 		if (retryBudgetExhausted) {
-			if (!switchedModel) {
+			if (!switchedRoute && !switchedModel) {
 				await this.#persistRetryLifecycleErrorMessage(message);
 				// Max retries exceeded and no fallback model to switch to: emit
 				// final failure and reset.
@@ -18050,6 +18372,9 @@ export class AgentSession {
 			// counter in place would exhaust it again on its first error.
 			this.#retryAttempt = 1;
 		}
+		if (switchedRoute) {
+			this.#retryAttempt = 1;
+		}
 		if (classifierRefusal && !switchedModel) {
 			this.#retryAttempt = 0;
 			this.#resolveRetry();
@@ -18061,7 +18386,8 @@ export class AgentSession {
 		// failing model for an error the generic classifier wouldn't retry —
 		// surface it instead.
 		if (
-			(options?.fireworksFastFallback || options?.hardErrorFallback) &&
+			(options?.fireworksFastFallback || options?.hardErrorFallback || options?.hardErrorRouteFallback) &&
+			!switchedRoute &&
 			!switchedModel &&
 			!this.#isRetryableError(message)
 		) {
@@ -18078,7 +18404,7 @@ export class AgentSession {
 		// assistant error message is preserved in agent state so the caller
 		// can act on it.
 		const maxDelayMs = retrySettings.maxDelayMs;
-		if (maxDelayMs > 0 && delayMs > maxDelayMs && !switchedCredential && !switchedModel) {
+		if (maxDelayMs > 0 && delayMs > maxDelayMs && !switchedCredential && !switchedRoute && !switchedModel) {
 			await this.#persistRetryLifecycleErrorMessage(message);
 			const attempt = this.#retryAttempt;
 			this.#retryAttempt = 0;
@@ -18093,7 +18419,11 @@ export class AgentSession {
 			return false;
 		}
 
-		await this.#recordPendingRecoveredRetryError(message, id, { switchedCredential, switchedModel, delayMs });
+		await this.#recordPendingRecoveredRetryError(message, id, {
+			switchedCredential,
+			switchedModel: switchedRoute || switchedModel,
+			delayMs,
+		});
 
 		await this.#emitSessionEvent({
 			type: "auto_retry_start",

@@ -330,9 +330,9 @@ _[Watch the capture ↗](https://omp.sh/clips/conflict.mp4)_
 
 _[Watch the capture ↗](https://omp.sh/clips/codemod.mp4)_
 
-### 20 · Drives a _real browser_. _Or your Slack?_
+### 20 · Drives a _real browser_. _Or your desktop apps._
 
-Stealth's on by default, so pages see a normal user instead of a headless bot. The same API drives any Electron app in place — point it at Slack and the agent reads your DMs the way it reads the web.
+Pages see a normal browser profile instead of a headless bot, so anti-bot walls stay out of the way on a routine fetch. The same API attaches to any Electron app over CDP — point it at your local Slack and the agent drives that UI the way it drives the web. Real desktop apps are attached as-is, with no profile patching.
 
 ![San TUI driving the browser tool against DuckDuckGo](https://omp.sh/captures/browser.webp)
 

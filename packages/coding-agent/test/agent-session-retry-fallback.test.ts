@@ -9,6 +9,7 @@ import { writeModelCache } from "@san/catalog/model-cache";
 import { getBundledModel } from "@san/catalog/models";
 import { ModelRegistry } from "@san/coding-agent/config/model-registry";
 import { parseModelPattern, parseModelString } from "@san/coding-agent/config/model-resolver";
+import { compileModelRouteRegistry } from "@san/coding-agent/config/model-route-registry";
 import { Settings } from "@san/coding-agent/config/settings";
 import type { ExtensionRunner } from "@san/coding-agent/extensibility/extensions";
 import { AgentSession, type AgentSessionEvent } from "@san/coding-agent/session/agent-session";
@@ -633,6 +634,93 @@ describe("AgentSession retry fallback", () => {
 				role: "anthropic/*",
 			},
 		]);
+		expect(session.model?.provider).toBe(fallbackModel.provider);
+		expect(getLastAssistantMessage(session).stopReason).toBe("stop");
+	});
+
+	it("switches a logical route immediately on a non-retryable model-unavailable error", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		if (!primaryModel || !fallbackModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		const routeRegistry = compileModelRouteRegistry(
+			{
+				logical: {
+					routes: [
+						{
+							id: "primary",
+							model: `${primaryModel.provider}/${primaryModel.id}`,
+							priority: 0,
+							equivalence: "exact",
+						},
+						{
+							id: "fallback",
+							model: `${fallbackModel.provider}/${fallbackModel.id}`,
+							priority: 1,
+							equivalence: "exact",
+						},
+					],
+				},
+			},
+			[primaryModel, fallbackModel],
+		);
+		vi.spyOn(modelRegistry, "getModelRouteRegistry").mockReturnValue(routeRegistry);
+
+		const mock = createMockModel();
+		const requestedModels: string[] = [];
+		const routeChangedEvents: Array<Extract<AgentSessionEvent, { type: "model_route_changed" }>> = [];
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: {
+				model: primaryModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (model, context, options) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				if (model.provider === primaryModel.provider && model.id === primaryModel.id) {
+					mock.push({ throw: "HTTP 404: model unavailable on this route" });
+				} else {
+					mock.push({ content: ["Recovered on logical fallback route"] });
+				}
+				return mock.stream(model, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"routing.enabled": true,
+			"routing.routeFallback": true,
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		session.subscribe(event => {
+			if (event.type === "model_route_changed") routeChangedEvents.push(event);
+		});
+		await session.selectLogicalModel("logical");
+
+		await session.prompt("Recover from a missing provider route");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${fallbackModel.provider}/${fallbackModel.id}`,
+		]);
+		expect(routeChangedEvents).toHaveLength(1);
+		expect(routeChangedEvents[0]).toMatchObject({
+			logicalModel: "logical",
+			fromRoute: "primary",
+			toRoute: "fallback",
+			trigger: "model_unavailable",
+		});
 		expect(session.model?.provider).toBe(fallbackModel.provider);
 		expect(getLastAssistantMessage(session).stopReason).toBe("stop");
 	});

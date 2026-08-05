@@ -45,6 +45,8 @@ import {
 	MODEL_ROLE_IDS,
 	type ModelRole,
 } from "./model-roles";
+import type { ModelRouteRegistry } from "./model-route-registry";
+import type { ModelRouteResolution, ModelRouteResolutionReason } from "./model-route-resolver";
 import type { Settings } from "./settings";
 
 function isKnownProvider(provider: string): provider is KnownProvider {
@@ -464,8 +466,11 @@ export interface ModelMatchPreferences {
 	deprioritizeProviders?: string[];
 }
 
-export type ModelLookupRegistry = Pick<ModelRegistry, "getAvailable">;
-type CliModelRegistry = Pick<ModelRegistry, "getAll">;
+type ModelRouteLookupRegistry = Partial<
+	Pick<ModelRegistry, "getModelRouteRegistry" | "hasConfiguredAuth" | "isProviderEnabled" | "isSelectorSuppressed">
+>;
+export type ModelLookupRegistry = Pick<ModelRegistry, "getAvailable"> & ModelRouteLookupRegistry;
+type CliModelRegistry = Pick<ModelRegistry, "getAll"> & ModelRouteLookupRegistry;
 type InitialModelRegistry = Pick<ModelRegistry, "getAvailable" | "find">;
 type RestorableModelRegistry = Pick<ModelRegistry, "getAvailable" | "find" | "getApiKey">;
 
@@ -1139,12 +1144,108 @@ export interface ResolvedModelRoleValue {
 	thinkingLevel?: ConfiguredThinkingLevel;
 	explicitThinkingLevel: boolean;
 	warning: string | undefined;
+	logicalModelId?: string;
+	routeId?: string;
+	routeReason?: ModelRouteResolutionReason;
+	routeResolution?: ModelRouteResolution;
+}
+
+interface LogicalModelPatternResolution {
+	logicalModelId: string;
+	thinkingLevel?: ConfiguredThinkingLevel;
+	explicitThinkingLevel: boolean;
+	resolution: ModelRouteResolution;
+}
+
+function logicalRoutingEnabled(settings: Settings | undefined): boolean {
+	return settings?.get("routing.enabled") === true;
+}
+
+function resolveLogicalModelPattern(
+	pattern: string,
+	registry: ModelRouteLookupRegistry | undefined,
+	settings: Settings | undefined,
+): LogicalModelPatternResolution | undefined {
+	if (!registry || !logicalRoutingEnabled(settings)) return undefined;
+	const routeRegistry = registry.getModelRouteRegistry?.();
+	if (!routeRegistry) return undefined;
+
+	const normalized = pattern.trim();
+	let logicalModelId = normalized;
+	let thinkingLevel: ConfiguredThinkingLevel | undefined;
+	let explicitThinkingLevel = false;
+	if (!routeRegistry.has(logicalModelId)) {
+		const split = splitThinkingSuffix(normalized, -1, MAX_THINKING_SUFFIX_OPTIONS);
+		if (split.level === undefined || !routeRegistry.has(split.base)) return undefined;
+		logicalModelId = split.base;
+		thinkingLevel = split.level;
+		explicitThinkingLevel = true;
+	}
+
+	const group = routeRegistry.get(logicalModelId);
+	const suppressedRouteIds = group
+		? new Set(
+				group.routes
+					.filter(route => registry.isSelectorSuppressed?.(route.modelSelector) === true)
+					.map(route => route.id),
+			)
+		: undefined;
+	const resolution = routeRegistry.resolve(logicalModelId, {
+		thinkingLevel,
+		...(suppressedRouteIds && suppressedRouteIds.size > 0 && { suppressedRouteIds }),
+		hasAuth: route => registry.hasConfiguredAuth?.(route.model) ?? true,
+		isAvailable: route => registry.isProviderEnabled?.(route.model.provider) ?? true,
+	});
+	if (!resolution) return undefined;
+	return { logicalModelId, thinkingLevel, explicitThinkingLevel, resolution };
+}
+
+function formatLogicalRouteFailure(resolution: ModelRouteResolution): string {
+	const reasons = resolution.trace.map(route => {
+		const detail = route.rejections.map(rejection => rejection.code).join(", ") || "not selected";
+		return `${route.routeId} (${detail})`;
+	});
+	return `Logical model "${resolution.logicalModelId}" has no eligible route: ${reasons.join("; ")}`;
+}
+
+function resolvedLogicalRoleValue(logical: LogicalModelPatternResolution): ResolvedModelRoleValue {
+	const route = logical.resolution.route;
+	if (!route) {
+		return {
+			model: undefined,
+			thinkingLevel: logical.thinkingLevel,
+			explicitThinkingLevel: logical.explicitThinkingLevel,
+			warning: formatLogicalRouteFailure(logical.resolution),
+			logicalModelId: logical.logicalModelId,
+			routeResolution: logical.resolution,
+		};
+	}
+	return {
+		model: route.model,
+		thinkingLevel: logical.explicitThinkingLevel
+			? logical.thinkingLevel === AUTO_THINKING
+				? AUTO_THINKING
+				: (resolveThinkingLevelForModel(route.model, logical.thinkingLevel) ?? logical.thinkingLevel)
+			: logical.thinkingLevel,
+		explicitThinkingLevel: logical.explicitThinkingLevel,
+		warning: undefined,
+		logicalModelId: logical.logicalModelId,
+		routeId: route.id,
+		routeReason: logical.resolution.reason,
+		routeResolution: logical.resolution,
+	};
 }
 
 export function resolveModelRoleValue(
 	roleValue: string | undefined,
 	availableModels: Model<Api>[],
-	options?: { settings?: Settings; roleLookup?: ModelRoleLookup; matchPreferences?: ModelMatchPreferences },
+	options?: {
+		settings?: Settings;
+		roleLookup?: ModelRoleLookup;
+		matchPreferences?: ModelMatchPreferences;
+		modelRouteRegistry?: ModelRouteRegistry;
+		modelRegistry?: ModelRouteLookupRegistry;
+	},
 ): ResolvedModelRoleValue {
 	if (!roleValue) {
 		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
@@ -1166,7 +1267,14 @@ export function resolveModelRoleValue(
 	// models) once and reuse it across every fallback pattern instead of
 	// rebuilding it per pattern inside parseModelPattern.
 	const preferenceContext = buildPreferenceContext(availableModels, matchPreferences);
+	const configuredRouteRegistry = options?.modelRouteRegistry;
+	const logicalRegistry =
+		options?.modelRegistry ??
+		(configuredRouteRegistry ? { getModelRouteRegistry: () => configuredRouteRegistry } : undefined);
 	for (const effectivePattern of effectivePatterns) {
+		const logical = resolveLogicalModelPattern(effectivePattern, logicalRegistry, options?.settings);
+		if (logical) return resolvedLogicalRoleValue(logical);
+
 		const resolved = matchPatternWithContext(effectivePattern, availableModels, preferenceContext);
 		if (resolved.model) {
 			return {
@@ -1281,29 +1389,45 @@ export function resolveModelFromSettings(options: {
 /**
  * Resolve a list of override patterns to the first matching model.
  */
+export interface ResolvedModelOverride {
+	model?: Model<Api>;
+	thinkingLevel?: ConfiguredThinkingLevel;
+	explicitThinkingLevel: boolean;
+	warning?: string;
+	logicalModelId?: string;
+	routeId?: string;
+	routeReason?: ModelRouteResolutionReason;
+	routeResolution?: ModelRouteResolution;
+}
+
 export function resolveModelOverride(
 	modelPatterns: string[],
 	modelRegistry: ModelLookupRegistry,
 	settings?: Settings,
-): { model?: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel; explicitThinkingLevel: boolean; warning?: string } {
+): ResolvedModelOverride {
 	if (modelPatterns.length === 0) return { explicitThinkingLevel: false };
 	const availableModels = modelRegistry.getAvailable();
 	const matchPreferences = getModelMatchPreferences(settings);
 	let warning: string | undefined;
 	for (const pattern of modelPatterns) {
-		const {
-			model,
-			thinkingLevel,
-			explicitThinkingLevel,
-			warning: patternWarning,
-		} = resolveModelRoleValue(pattern, availableModels, {
+		const resolved = resolveModelRoleValue(pattern, availableModels, {
 			settings,
 			matchPreferences,
+			modelRegistry,
 		});
-		if (model) {
-			return { model, thinkingLevel, explicitThinkingLevel, warning: patternWarning };
+		if (resolved.model || resolved.logicalModelId) {
+			return {
+				...(resolved.model !== undefined && { model: resolved.model }),
+				...(resolved.thinkingLevel !== undefined && { thinkingLevel: resolved.thinkingLevel }),
+				explicitThinkingLevel: resolved.explicitThinkingLevel,
+				...(resolved.warning !== undefined && { warning: resolved.warning }),
+				...(resolved.logicalModelId !== undefined && { logicalModelId: resolved.logicalModelId }),
+				...(resolved.routeId !== undefined && { routeId: resolved.routeId }),
+				...(resolved.routeReason !== undefined && { routeReason: resolved.routeReason }),
+				...(resolved.routeResolution !== undefined && { routeResolution: resolved.routeResolution }),
+			};
 		}
-		if (!warning && patternWarning) warning = patternWarning;
+		if (!warning && resolved.warning) warning = resolved.warning;
 	}
 	return { explicitThinkingLevel: false, warning };
 }
@@ -1600,6 +1724,10 @@ export interface ResolveCliModelResult {
 	model: Model<Api> | undefined;
 	selector?: string;
 	thinkingLevel?: ConfiguredThinkingLevel;
+	logicalModelId?: string;
+	routeId?: string;
+	routeReason?: ModelRouteResolutionReason;
+	routeResolution?: ModelRouteResolution;
 	warning: string | undefined;
 	error: string | undefined;
 }
@@ -1631,14 +1759,33 @@ export function resolveCliModel(options: {
 	}
 
 	if (!cliProvider && modelRoleAliasPrefixLength(cliModel) !== undefined) {
-		const resolved = resolveModelRoleValue(cliModel, availableModels, { settings, matchPreferences: preferences });
+		const resolved = resolveModelRoleValue(cliModel, availableModels, {
+			settings,
+			matchPreferences: preferences,
+			modelRegistry,
+		});
 		if (resolved.model) {
 			return {
 				model: resolved.model,
-				selector: formatModelString(resolved.model),
+				selector: resolved.logicalModelId ?? formatModelString(resolved.model),
 				thinkingLevel: resolved.thinkingLevel,
+				...(resolved.logicalModelId !== undefined && { logicalModelId: resolved.logicalModelId }),
+				...(resolved.routeId !== undefined && { routeId: resolved.routeId }),
+				...(resolved.routeReason !== undefined && { routeReason: resolved.routeReason }),
+				...(resolved.routeResolution !== undefined && { routeResolution: resolved.routeResolution }),
 				warning: resolved.warning,
 				error: undefined,
+			};
+		}
+		if (resolved.logicalModelId) {
+			return {
+				model: undefined,
+				selector: resolved.logicalModelId,
+				thinkingLevel: resolved.thinkingLevel,
+				logicalModelId: resolved.logicalModelId,
+				...(resolved.routeResolution !== undefined && { routeResolution: resolved.routeResolution }),
+				warning: resolved.warning,
+				error: resolved.warning ?? `Logical model "${resolved.logicalModelId}" has no eligible route`,
 			};
 		}
 	}
@@ -1665,7 +1812,45 @@ export function resolveCliModel(options: {
 		// provider+id match over flat id match. Without this, a model with id
 		// "zai/glm-5" on provider "vercel-ai-gateway" wins over provider "zai"
 		// with id "glm-5", because Array.find returns the first catalog hit.
-		let exact = findExactModelReferenceMatch(trimmedModel, availableModels);
+		const exactConcrete = findExactModelReferenceMatch(trimmedModel, availableModels);
+		if (exactConcrete) {
+			return {
+				model: exactConcrete,
+				selector: formatModelString(exactConcrete),
+				warning: undefined,
+				thinkingLevel: undefined,
+				error: undefined,
+			};
+		}
+
+		const logical = resolveLogicalModelPattern(trimmedModel, modelRegistry, settings);
+		if (logical) {
+			const resolved = resolvedLogicalRoleValue(logical);
+			if (!resolved.model) {
+				return {
+					model: undefined,
+					selector: logical.logicalModelId,
+					thinkingLevel: resolved.thinkingLevel,
+					logicalModelId: logical.logicalModelId,
+					routeResolution: logical.resolution,
+					warning: resolved.warning,
+					error: resolved.warning ?? `Logical model "${logical.logicalModelId}" has no eligible route`,
+				};
+			}
+			return {
+				model: resolved.model,
+				selector: logical.logicalModelId,
+				thinkingLevel: resolved.thinkingLevel,
+				logicalModelId: logical.logicalModelId,
+				...(resolved.routeId !== undefined && { routeId: resolved.routeId }),
+				...(resolved.routeReason !== undefined && { routeReason: resolved.routeReason }),
+				routeResolution: logical.resolution,
+				warning: undefined,
+				error: undefined,
+			};
+		}
+
+		let exact: Model<Api> | undefined;
 		if (!exact) {
 			// Flat exact id (or full selector) by catalog order: CLI resolution
 			// stays deterministic across runs regardless of usage-based ranking.

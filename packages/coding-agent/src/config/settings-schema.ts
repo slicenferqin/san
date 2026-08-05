@@ -529,6 +529,23 @@ export const SETTINGS_SCHEMA = {
 
 	modelProviderOrder: { type: "array", default: EMPTY_STRING_ARRAY },
 
+	// V1 的逻辑模型路由需要显式启用；亲和性和诊断枚举只开放当前已实现的策略。
+	"routing.enabled": { type: "boolean", default: false },
+
+	"routing.routeFallback": { type: "boolean", default: true },
+
+	"routing.defaultAffinity": {
+		type: "enum",
+		values: ["session"] as const,
+		default: "session",
+	},
+
+	"routing.diagnostics": {
+		type: "enum",
+		values: ["summary"] as const,
+		default: "summary",
+	},
+
 	cycleOrder: { type: "array", default: DEFAULT_CYCLE_ORDER },
 
 	// ────────────────────────────────────────────────────────────────────────
@@ -5416,6 +5433,13 @@ export interface CodexResetsSettings {
 	keepCredits: number;
 }
 
+export interface RoutingSettings {
+	enabled: boolean;
+	routeFallback: boolean;
+	defaultAffinity: "session";
+	diagnostics: "summary";
+}
+
 export interface GcSettings {
 	blobs: boolean;
 	archive: boolean;
@@ -5432,6 +5456,7 @@ export interface GroupTypeMap {
 	title: TitleSettings;
 	contextPromotion: ContextPromotionSettings;
 	retry: RetrySettings;
+	routing: RoutingSettings;
 	memories: MemoriesSettings;
 	branchSummary: BranchSummarySettings;
 	skills: SkillsSettings;

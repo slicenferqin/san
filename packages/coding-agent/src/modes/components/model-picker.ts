@@ -11,7 +11,9 @@ import type { Settings } from "../../config/settings";
 import type { ResolvedRoleModel } from "../../session/agent-session";
 import { theme } from "../theme/theme";
 import {
+	type ActiveLogicalRouteSummary,
 	buildBrowserItems,
+	buildLogicalBrowserItems,
 	ModelBrowser,
 	type ModelBrowserItem,
 	resolveRoleAssignments,
@@ -35,6 +37,8 @@ export interface ModelPickerOptions {
 	currentContextTokens?: number;
 	/** `provider/id` of the session's active model; highlighted and preselected. */
 	currentSelector?: string;
+	/** 当前 Logical Model 的实际 route，用于展示真实 concrete route。 */
+	activeLogicalRoute?: ActiveLogicalRouteSummary;
 	/** Resolved role models in the same order used by the ctrl+p quick-role cycle. */
 	quickRoles?: ReadonlyArray<ResolvedRoleModel>;
 	/** Complete ctrl+p order, including unavailable roles, to preserve segment colors. */
@@ -71,6 +75,7 @@ export class ModelPickerComponent implements Component {
 	#configError: string | undefined;
 	#currentSelector: string | undefined;
 	#currentQuickRoleSelector: string | undefined;
+	#activeLogicalRoute: ActiveLogicalRouteSummary | undefined;
 	#modelItems: ModelBrowserItem[] = [];
 	#quickRoleItems: ModelBrowserItem[] = [];
 	#quickRoles = new Map<string, ResolvedRoleModel>();
@@ -89,6 +94,7 @@ export class ModelPickerComponent implements Component {
 		this.#registry = registry;
 		this.#scopedModels = scopedModels;
 		this.#currentSelector = options.currentSelector;
+		this.#activeLogicalRoute = options.activeLogicalRoute;
 		this.#currentQuickRoleSelector = options.currentQuickRole ? `@${options.currentQuickRole}` : undefined;
 		this.#quickRoleItems = this.#buildQuickRoleItems(
 			options.quickRoles ?? [],
@@ -153,11 +159,17 @@ export class ModelPickerComponent implements Component {
 		}
 
 		const allModels = this.#scopedModels.length > 0 ? models : this.#registry.getAll();
-		const roles = resolveRoleAssignments(this.#settings, allModels, models);
+		const roles = resolveRoleAssignments(this.#settings, allModels, models, this.#registry);
 		const storage = this.#settings.getStorage();
 		const mruOrder = storage?.getModelUsageOrder() ?? [];
-		this.#modelItems = buildBrowserItems(models);
-		sortModelItems(this.#modelItems, { roles, mruOrder });
+		const concreteItems = buildBrowserItems(models);
+		sortModelItems(concreteItems, { roles, mruOrder });
+		const logicalItems =
+			this.#scopedModels.length > 0
+				? []
+				: buildLogicalBrowserItems(this.#settings, this.#registry, this.#activeLogicalRoute);
+		sortModelItems(logicalItems, { roles, mruOrder });
+		this.#modelItems = [...logicalItems, ...concreteItems];
 		this.#browser.setRoles(roles);
 		this.#browser.setMruOrder(mruOrder);
 		this.#browser.setPerfStats(storage?.getModelPerf() ?? new Map());

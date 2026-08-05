@@ -708,6 +708,7 @@ export class SelectorController {
 	#showModelPicker(): void {
 		const currentContextTokens = this.ctx.session.getContextUsage()?.tokens ?? 0;
 		const current = this.ctx.session.model;
+		const activeLogicalRoute = this.ctx.session.activeModelRoute;
 		const quickRoleOrder = this.ctx.settings.get("cycleOrder");
 		const quickRoleCycle = this.ctx.session.getRoleModelCycle(quickRoleOrder);
 		let overlayHandle: OverlayHandle | undefined;
@@ -731,10 +732,22 @@ export class SelectorController {
 						const previousConfigured = this.ctx.session.configuredThinkingLevel();
 						const previousConcrete = this.ctx.session.thinkingLevel;
 						const roleThinkingLevel = this.ctx.session.resolveTemporaryModelThinkingLevel(model);
-						await this.ctx.session.setModelTemporary(model, roleThinkingLevel);
+						const logicalSelection =
+							this.ctx.settings.get("routing.enabled") &&
+							this.ctx.session.modelRegistry.getModelRouteRegistry().has(selector);
+						if (logicalSelection) {
+							await this.ctx.session.selectLogicalModel(selector, undefined, {
+								thinkingLevel: roleThinkingLevel,
+								persist: false,
+							});
+						} else {
+							await this.ctx.session.setModelTemporary(model, roleThinkingLevel);
+						}
+						const selectedModel = this.ctx.session.model;
+						if (!selectedModel) throw new Error("Model selection completed without an active concrete model");
 						const effortNote =
 							roleThinkingLevel === undefined
-								? this.#applySessionEffortAfterModelChange(model, previousConfigured, previousConcrete)
+								? this.#applySessionEffortAfterModelChange(selectedModel, previousConfigured, previousConcrete)
 								: undefined;
 						const configured = this.ctx.session.configuredThinkingLevel();
 						const effortLabel = configured ? getConfiguredThinkingLevelMetadata(configured).label : undefined;
@@ -770,7 +783,9 @@ export class SelectorController {
 			},
 			{
 				currentContextTokens,
-				currentSelector: current ? `${current.provider}/${current.id}` : undefined,
+				currentSelector:
+					activeLogicalRoute?.logicalModelId ?? (current ? `${current.provider}/${current.id}` : undefined),
+				activeLogicalRoute,
 				quickRoles: quickRoleCycle?.models,
 				quickRoleOrder,
 				currentQuickRole: quickRoleCycle?.models[quickRoleCycle.currentIndex]?.role,
@@ -799,6 +814,8 @@ export class SelectorController {
 		onCancel?: () => void;
 	}): void {
 		const currentContextTokens = this.ctx.session.getContextUsage()?.tokens ?? 0;
+		const currentModel = this.ctx.session.model;
+		const activeLogicalRoute = this.ctx.session.activeModelRoute;
 		let overlayHandle: OverlayHandle | undefined;
 		let hub: ModelHubComponent | undefined;
 		let closed = false;
@@ -945,6 +962,7 @@ export class SelectorController {
 									scopedModels.length > 0 ? scopedModels : this.ctx.session.getAvailableModels();
 								const resolved = resolveModelRoleValue(fallbackRoleValue, availableModels, {
 									settings: this.ctx.settings,
+									modelRegistry: this.ctx.session.modelRegistry,
 								});
 								if (resolved.model) {
 									const fallbackModel = resolved.model;
@@ -963,6 +981,7 @@ export class SelectorController {
 									}
 									const effectiveIsAuto = isAuto || isAutoFromDefault;
 									const { switched } = await this.ctx.session.setModel(fallbackModel, "default", {
+										...(resolved.logicalModelId !== undefined && { selector: resolved.logicalModelId }),
 										persist: false,
 										thinkingLevel: effectiveIsAuto
 											? ThinkingLevel.Inherit
@@ -991,10 +1010,22 @@ export class SelectorController {
 					try {
 						const previousConfigured = this.ctx.session.configuredThinkingLevel();
 						const previousConcrete = this.ctx.session.thinkingLevel;
-						await this.ctx.session.setModelTemporary(model, thinkingLevel);
+						const logicalSelection =
+							this.ctx.settings.get("routing.enabled") &&
+							this.ctx.session.modelRegistry.getModelRouteRegistry().has(selector);
+						if (logicalSelection) {
+							await this.ctx.session.selectLogicalModel(selector, undefined, {
+								thinkingLevel,
+								persist: false,
+							});
+						} else {
+							await this.ctx.session.setModelTemporary(model, thinkingLevel);
+						}
+						const selectedModel = this.ctx.session.model;
+						if (!selectedModel) throw new Error("Model selection completed without an active concrete model");
 						const effortNote =
 							thinkingLevel === undefined
-								? this.#applySessionEffortAfterModelChange(model, previousConfigured, previousConcrete)
+								? this.#applySessionEffortAfterModelChange(selectedModel, previousConfigured, previousConcrete)
 								: undefined;
 						const configured = this.ctx.session.configuredThinkingLevel();
 						const effortLabel = configured ? getConfiguredThinkingLevelMetadata(configured).label : undefined;
@@ -1053,6 +1084,10 @@ export class SelectorController {
 				initialProviderId: hubOptions.initialProviderId,
 				pickerHint: hubOptions.pickerHint,
 				initialThinkingLevel: this.ctx.session.configuredThinkingLevel(),
+				currentSelector:
+					activeLogicalRoute?.logicalModelId ??
+					(currentModel ? `${currentModel.provider}/${currentModel.id}` : undefined),
+				activeLogicalRoute,
 			},
 		);
 		overlayHandle = this.ctx.ui.showOverlay(hub, {

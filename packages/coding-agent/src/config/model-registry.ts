@@ -61,7 +61,7 @@ import { isBunTestRuntime, isRecord, logger, wrapFetchForExtraCa } from "@san/ut
 import { parseModelString, resolveProviderModelReference } from "../config/model-resolver";
 import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
-import type { ConfigError, ConfigFile } from "./config-file";
+import { ConfigError, type ConfigFile } from "./config-file";
 import {
 	applyLlamaCppQwenThinking,
 	DISCOVERY_DEFAULT_MAX_TOKENS,
@@ -73,6 +73,8 @@ import {
 	getOllamaContextLengthOverride,
 	normalizeLiteLLMDiscoveryBaseUrl,
 } from "./model-discovery";
+import { compileModelRouteRegistry, ModelRouteRegistry } from "./model-route-registry";
+import type { LogicalModelsConfig } from "./model-routes-schema";
 import { ModelsConfigFile, type ProviderValidationModel, validateProviderConfiguration } from "./models-config";
 import type { ModelOverride, ModelsConfig, ProviderAuthMode } from "./models-config-schema";
 import { settings } from "./settings";
@@ -259,6 +261,7 @@ interface CustomModelsResult {
 	keylessProviders?: Set<string>;
 	discoverableProviders?: DiscoveryProviderConfig[];
 	configuredProviders?: Set<string>;
+	logicalModels?: LogicalModelsConfig;
 	error?: ConfigError;
 	found: boolean;
 }
@@ -746,7 +749,11 @@ export class ModelRegistry {
 	#providerOverrides: Map<string, ProviderOverride> = new Map();
 	#modelOverrides: Map<string, Map<string, ModelOverride>> = new Map();
 	#configError: ConfigError | undefined = undefined;
+	#modelsConfigLoadError: ConfigError | undefined = undefined;
 	#modelsConfigFile: ConfigFile<ModelsConfig>;
+	#logicalModelsConfig: LogicalModelsConfig | undefined;
+	#modelRouteRegistry = ModelRouteRegistry.empty();
+	#modelRoutePolicyVersion = 0;
 	#lastStaticLoadMtime: number | null = null;
 	#registeredProviderSources: Set<string> = new Set();
 	#providerDiscoveryStates: Map<string, ProviderDiscoveryState> = new Map();
@@ -987,6 +994,7 @@ export class ModelRegistry {
 		this.#models = this.#models.map(candidate =>
 			candidate.provider === current.provider && candidate.id === current.id ? patched : candidate,
 		);
+		this.#refreshModelRoutes();
 		return patched;
 	}
 
@@ -1028,6 +1036,7 @@ export class ModelRegistry {
 		this.#providerOverrides.clear();
 		this.#modelOverrides.clear();
 		this.#configError = undefined;
+		this.#modelsConfigLoadError = undefined;
 		this.#providerDiscoveryStates.clear();
 		this.#loadModels();
 	}
@@ -1039,6 +1048,44 @@ export class ModelRegistry {
 		return this.#configError;
 	}
 
+	/** 返回当前原子编译完成的 Logical Model 路由快照。 */
+	getModelRouteRegistry(): ModelRouteRegistry {
+		return this.#modelRouteRegistry;
+	}
+
+	/** 仅检查 provider 是否被配置禁用，不把鉴权状态混入可用性判断。 */
+	isProviderEnabled(provider: string): boolean {
+		return !getDisabledProviderIdsFromSettings().has(provider);
+	}
+
+	#compileModelRoutes(logicalModels: LogicalModelsConfig | undefined): void {
+		const hadLogicalModels = this.#logicalModelsConfig !== undefined;
+		this.#logicalModelsConfig = logicalModels;
+		if (logicalModels === undefined && !hadLogicalModels) {
+			this.#configError = this.#modelsConfigLoadError;
+			return;
+		}
+		const nextPolicyVersion = this.#modelRoutePolicyVersion + 1;
+		try {
+			const nextRegistry = compileModelRouteRegistry(logicalModels, this.#models, {
+				policyVersion: nextPolicyVersion,
+			});
+			this.#modelRouteRegistry = nextRegistry;
+			this.#modelRoutePolicyVersion = nextPolicyVersion;
+			this.#configError = this.#modelsConfigLoadError;
+		} catch (error) {
+			this.#configError = new ConfigError("models", undefined, {
+				err: error,
+				stage: "Validate(model-routes)",
+			});
+		}
+	}
+
+	#refreshModelRoutes(): void {
+		if (this.#modelsConfigLoadError || this.#logicalModelsConfig === undefined) return;
+		this.#compileModelRoutes(this.#logicalModelsConfig);
+	}
+
 	#loadModels() {
 		// Load custom config first (to know which providers to override).
 		const {
@@ -1048,8 +1095,10 @@ export class ModelRegistry {
 			keylessProviders = new Set(),
 			discoverableProviders = [],
 			configuredProviders = new Set(),
+			logicalModels,
 			error: configError,
 		} = this.#loadCustomModels();
+		this.#modelsConfigLoadError = configError;
 		this.#configError = configError;
 		this.#keylessProviders = keylessProviders;
 		this.#discoverableProviders = discoverableProviders;
@@ -1093,6 +1142,9 @@ export class ModelRegistry {
 		// collapse effort-tier variants here so X/X-thinking twins fold.
 		const withModelOverrides = this.#applyModelOverrides(collapseBuiltModelVariants(combined), this.#modelOverrides);
 		this.#models = this.#applyLlamaCppQwenThinkingToModels(this.#applyRuntimeProviderOverrides(withModelOverrides));
+		if (!configError) {
+			this.#compileModelRoutes(logicalModels);
+		}
 		this.#lastStaticLoadMtime = this.#modelsConfigFile.getMtimeMs();
 	}
 
@@ -1444,6 +1496,7 @@ export class ModelRegistry {
 			keylessProviders,
 			discoverableProviders,
 			configuredProviders,
+			logicalModels: value.logicalModels,
 			found: true,
 		};
 	}
@@ -1493,6 +1546,7 @@ export class ModelRegistry {
 		const combined = this.#mergeCustomModels(withConfigModels, this.#runtimeModelOverlays);
 		const withModelOverrides = this.#applyModelOverrides(collapseBuiltModelVariants(combined), this.#modelOverrides);
 		this.#models = this.#applyLlamaCppQwenThinkingToModels(this.#applyRuntimeProviderOverrides(withModelOverrides));
+		this.#refreshModelRoutes();
 	}
 
 	#configuredDiscoveryCacheProviderId(providerConfig: DiscoveryProviderConfig): string {
@@ -2333,11 +2387,13 @@ export class ModelRegistry {
 				const credential = this.authStorage.getOAuthCredential(providerName);
 				if (credential) {
 					this.#models = config.oauth.modifyModels(withRuntimeTransportOverride, credential);
+					this.#refreshModelRoutes();
 					return;
 				}
 			}
 
 			this.#models = withRuntimeTransportOverride;
+			this.#refreshModelRoutes();
 			return;
 		}
 
@@ -2416,6 +2472,7 @@ export class ModelRegistry {
 					return this.#applyProviderTransportOverride(m, transportOverride);
 				}),
 			);
+			this.#refreshModelRoutes();
 		}
 	}
 
