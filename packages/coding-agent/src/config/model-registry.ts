@@ -59,6 +59,7 @@ import type { OAuthCredentials, OAuthLoginCallbacks } from "@san/ai/oauth/types"
 import { getBundledModelReferenceIndex, resolveModelReference } from "@san/catalog/identity";
 import { isBunTestRuntime, isRecord, logger, wrapFetchForExtraCa } from "@san/utils";
 import { parseModelString, resolveProviderModelReference } from "../config/model-resolver";
+import { type ProviderHealthKey, providerHealthKeyFromModel } from "../execution-control/provider-health";
 import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
 import type { ConfigError, ConfigFile } from "./config-file";
@@ -824,6 +825,11 @@ export class ModelRegistry {
 		});
 		// Load models synchronously in constructor.
 		this.#loadModels();
+	}
+
+	/** Canonical credential-free route identity used by provider-health admission. */
+	providerHealthKey(model: Pick<Model, "provider" | "baseUrl" | "id">): ProviderHealthKey {
+		return providerHealthKeyFromModel(model);
 	}
 
 	/**

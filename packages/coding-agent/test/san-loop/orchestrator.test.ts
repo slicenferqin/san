@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import type { AcceptanceGate, ImmutableObjectiveContract } from "../../src/execution-control";
+import { createCommandEvidenceReceipt } from "../../src/execution-control";
 import type { SanLoopDefect, SanLoopRole, SanLoopTaskNode } from "../../src/san-loop";
 import {
 	applySanLoopPlan,
@@ -316,6 +318,93 @@ describe("San loop orchestrator", () => {
 		expect(reviewed.run.reviewReports.at(-1)?.defects.some(d => d.defectId === "host-evidence-gate-blocked")).toBe(
 			true,
 		);
+	});
+
+	test("requires current host receipts for typed acceptance gates", () => {
+		const contract: ImmutableObjectiveContract = {
+			ref: {
+				contractId: "contract-san",
+				revision: 1,
+				contractHash: "sha256:contract-san",
+				clauseRefs: ["clause:tests"],
+			},
+			authoritativeUserTurnId: "turn-san",
+			source: "authoritative_user",
+		};
+		const gate: AcceptanceGate = {
+			gateId: "gate-command",
+			contractRef: contract.ref,
+			contractRevision: 1,
+			objectiveClauseRefs: ["clause:tests"],
+			verifier: { kind: "command", checkId: "check:focused", expectedExitCode: 0 },
+			status: "unknown",
+			evidenceRefs: [
+				{
+					evidenceId: "receipt-command",
+					kind: "command",
+					receiptRef: "receipt-command",
+					receiptId: "receipt-command",
+					gateId: "gate-command",
+					contractRevision: 1,
+					assignmentId: "assignment-current",
+					freshnessRevision: 0,
+				},
+			],
+			assignmentId: "assignment-current",
+			freshnessRevision: 0,
+		};
+		const run = createSanLoopRunSnapshot({
+			sessionId: "session-typed",
+			objective: "Require host evidence",
+			mode: "solo",
+			runId: "loop-typed-gate",
+			createdAt: CREATED_AT,
+			objectiveContract: contract.ref,
+			contractRevision: 1,
+			contractHash: contract.ref.contractHash,
+			objectiveClauseRefs: ["clause:tests"],
+			acceptanceGates: [gate],
+		});
+		const withWorker = recordSanLoopWorkerResult(run, {
+			resultId: "result-typed",
+			assignmentId: "assignment-current",
+			status: "completed",
+			summary: "Host command passed.",
+			commandsRun: [],
+			evidenceReceipts: [
+				createCommandEvidenceReceipt({
+					receiptId: "receipt-command",
+					scopeId: run.runId,
+					gateId: "gate-command",
+					contractRevision: 1,
+					contractHash: contract.ref.contractHash,
+					assignmentId: "assignment-current",
+					freshnessRevision: 0,
+					outcome: "pass",
+					timestamp: "2026-07-01T00:07:00.000Z",
+					checkId: "check:focused",
+					exitCode: 0,
+				}),
+			],
+			verification: ["host receipt recorded"],
+			risks: [],
+		}).run;
+		const reviewed = applySanLoopReview(
+			withWorker,
+			{
+				reviewer: "supervisor",
+				verdict: "pass",
+				assignmentId: "assignment-current",
+				evidenceRefs: ["receipt-command"],
+				testsRun: ["check:focused"],
+				evidence: ["host receipt recorded"],
+				confidence: "high",
+			},
+			{ createdAt: "2026-07-01T00:08:00.000Z", currentBatchAssignmentIds: ["assignment-current"] },
+		);
+
+		expect(reviewed.run.status).toBe("passed");
+		expect(reviewed.run.finalVerdict).toBe("pass");
 	});
 
 	test("does not share mutable pipeline arrays across policy lookups", () => {

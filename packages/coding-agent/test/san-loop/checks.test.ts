@@ -2,7 +2,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { discoverSanLoopChecks, renderSanLoopChecks, selectSanLoopChecks } from "../../src/san-loop";
+import {
+	bindSanLoopChecks,
+	discoverSanLoopChecks,
+	renderSanLoopChecks,
+	type SanLoopCheck,
+	selectSanLoopChecks,
+} from "../../src/san-loop";
 
 let tmpDirs: string[] = [];
 
@@ -61,7 +67,7 @@ appliesTo: ["supervisor"]
 			`---
 name: coding-agent-only
 scope:
-  paths: ["packages/coding-agent/**"]
+  paths: ["**/checks.ts"]
 severity: error
 appliesTo: ["worker", "supervisor"]
 ---
@@ -126,5 +132,38 @@ severity: blocker
 		await expect(discoverSanLoopChecks({ cwd, includeBuiltins: false })).rejects.toThrow(
 			/Failed to load San check.*Failed to parse YAML frontmatter/,
 		);
+	});
+	test("binds only checks whose declared clauses are in the immutable contract", () => {
+		const checks: SanLoopCheck[] = [
+			{
+				name: "allowed",
+				description: "allowed check",
+				path: "allowed.md",
+				content: "assert clause one",
+				scope: undefined,
+				severity: "error" as const,
+				appliesTo: ["worker"],
+				source: "project" as const,
+				objectiveClauseRefs: ["clause:one"],
+			},
+			{
+				name: "foreign",
+				description: "foreign check",
+				path: "foreign.md",
+				content: "assert clause foreign",
+				scope: undefined,
+				severity: "error" as const,
+				appliesTo: ["worker"],
+				source: "project" as const,
+				objectiveClauseRefs: ["clause:foreign"],
+			},
+		];
+		const bound = bindSanLoopChecks(checks, {
+			objectiveClauseRefs: ["clause:one"],
+			contractRevision: 3,
+			contractHash: "sha256:contract",
+		});
+		expect(bound).toHaveLength(1);
+		expect(bound[0]).toMatchObject({ name: "allowed", objectiveClauseRefs: ["clause:one"], contractRevision: 3 });
 	});
 });

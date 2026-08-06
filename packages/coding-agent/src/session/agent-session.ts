@@ -298,6 +298,8 @@ import {
 import { disposeRubyKernelSessionsByOwner } from "../eval/rb/executor";
 import { defaultEvalSessionId } from "../eval/session-id";
 import { type BashResult, executeBash as executeBashCommand } from "../exec/bash-executor";
+import { type ProviderHealthRegistry, providerHealthKeyFromModel } from "../execution-control/provider-health";
+import type { TaskContractRegistry } from "../execution-control/task-contract";
 import type { TtsrManager, TtsrMatchContext } from "../export/ttsr";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
@@ -1044,6 +1046,10 @@ export interface AgentSessionConfig {
 	skillsSettings?: SkillsSettings;
 	/** Model registry for API key resolution and model discovery */
 	modelRegistry: ModelRegistry;
+	/** Optional provider-health registry closed by successful assistant terminals. */
+	providerHealthRegistry?: ProviderHealthRegistry;
+	/** Root-scoped task admission registry shared with nested sessions. */
+	taskContractRegistry?: TaskContractRegistry;
 	/** Tool registry for LSP and settings */
 	toolRegistry?: Map<string, AgentTool>;
 	/** Creates the tools registered only while `/vibe` mode is active. */
@@ -2191,6 +2197,8 @@ export class AgentSession {
 
 	// Model registry for API key resolution
 	#modelRegistry: ModelRegistry;
+	#providerHealthRegistry: ProviderHealthRegistry | undefined;
+	#taskContractRegistry: TaskContractRegistry | undefined;
 
 	// Tool registry and prompt builder for extensions
 	#toolRegistry: Map<string, AgentTool>;
@@ -2842,6 +2850,8 @@ export class AgentSession {
 		this.#skillsReloadable = config.skillsReloadable ?? true;
 		this.#skillsSettings = config.skillsSettings;
 		this.#modelRegistry = config.modelRegistry;
+		this.#providerHealthRegistry = config.providerHealthRegistry;
+		this.#taskContractRegistry = config.taskContractRegistry;
 		this.#recoverPersistedSanLoopRun();
 		// Resolve the wire service-tier per request so the Fireworks Priority
 		// toggle scopes priority to Fireworks alone, without mutating the shared
@@ -4683,6 +4693,20 @@ export class AgentSession {
 			}
 		}
 
+		if (event.type === "message_end" && event.message.role === "assistant") {
+			const message = event.message as AssistantMessage;
+			const activeModel = this.model;
+			if (
+				this.#providerHealthRegistry &&
+				activeModel &&
+				activeModel.provider === message.provider &&
+				activeModel.id === message.model &&
+				message.stopReason !== "aborted" &&
+				message.stopReason !== "error"
+			) {
+				this.#providerHealthRegistry.recordSuccess(providerHealthKeyFromModel(activeModel));
+			}
+		}
 		const interruptedThinkingMessage =
 			event.type === "message_end" && event.message.role === "assistant"
 				? this.#demoteInterruptedThinkingOnUserInterrupt(event.message as AssistantMessage)
@@ -8581,6 +8605,10 @@ export class AgentSession {
 	/** Current session ID */
 	get sessionId(): string {
 		return this.#activeProviderSessionId();
+	}
+	/** Root-scoped task admission registry, if this session can spawn work. */
+	getTaskContractRegistry(): TaskContractRegistry | undefined {
+		return this.#taskContractRegistry;
 	}
 	getEvalSessionId(): string | null {
 		if (this.#parentEvalSessionId !== undefined) return this.#parentEvalSessionId;
@@ -17335,6 +17363,10 @@ export class AgentSession {
 		if (message.stopReason !== "error") return false;
 
 		const id = this.#classifyRetryMessage(message);
+		// Auth failures are terminal for the current model even when a provider
+		// also stamped a transient or classifier-refusal bit. Credential rotation
+		// remains provider-internal; this path must not replay the same model.
+		if (AIError.is(id, AIError.Flag.AuthFailed) || AIError.is(id, AIError.Flag.OAuthExpiry)) return false;
 		// Context overflow is handled by compaction, not retry
 		const contextWindow = this.model?.contextWindow ?? 0;
 		if (AIError.isContextOverflow(message, contextWindow)) return false;
@@ -17710,15 +17742,26 @@ export class AgentSession {
 		});
 	}
 
-	async #tryRetryModelFallback(currentSelector: string, options?: { pinFallback?: boolean }): Promise<boolean> {
+	async #tryRetryModelFallback(
+		currentSelector: string,
+		options?: { pinFallback?: boolean; requireConcreteModelChange?: boolean },
+	): Promise<boolean> {
 		const role = this.#activeRetryFallback?.role ?? this.#resolveRetryFallbackRole(currentSelector);
 		if (!role) return false;
+		const requireConcreteModelChange = options?.requireConcreteModelChange === true;
+		const currentModel = this.model;
+		if (requireConcreteModelChange && !currentModel) return false;
+		const currentConcreteSelector =
+			requireConcreteModelChange && currentModel ? formatModelStringWithRouting(currentModel) : undefined;
 
 		for (const selector of this.#findRetryFallbackCandidates(role, currentSelector)) {
 			if (this.#isRetryFallbackSelectorSuppressed(selector)) continue;
 			const resolved = resolveModelOverride([selector.raw], this.#modelRegistry, this.settings);
 			const candidate = resolved.model ?? this.#modelRegistry.find(selector.provider, selector.id);
 			if (!candidate) continue;
+			// Final auth recovery must switch the concrete model or its pinned route;
+			// ordinary retry/fallback paths intentionally permit thinking-only changes.
+			if (currentConcreteSelector && formatModelStringWithRouting(candidate) === currentConcreteSelector) continue;
 			const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
 			if (!apiKey) continue;
 			await this.#applyRetryFallbackCandidate(role, selector, currentSelector, options);
@@ -17755,7 +17798,7 @@ export class AgentSession {
 		const id = this.#classifyRetryMessage(message);
 		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;
 		if (AIError.is(id, AIError.Flag.UsageLimit)) return false;
-		if (AIError.is(id, AIError.Flag.AuthFailed)) return false;
+		if (AIError.is(id, AIError.Flag.AuthFailed) || AIError.is(id, AIError.Flag.OAuthExpiry)) return false;
 		return this.#modelRegistry.find("fireworks", toFireworksBaseModelId(model.id)) !== undefined;
 	}
 
@@ -18021,7 +18064,12 @@ export class AgentSession {
 				if (!classifierRefusal) {
 					this.#noteRetryFallbackCooldown(currentSelector, parsedRetryAfterMs, errorMessage);
 				}
-				switchedModel = await this.#tryRetryModelFallback(currentSelector, { pinFallback: classifierRefusal });
+				switchedModel = await this.#tryRetryModelFallback(currentSelector, {
+					pinFallback: classifierRefusal,
+					requireConcreteModelChange:
+						options?.hardErrorFallback === true &&
+						(AIError.is(id, AIError.Flag.AuthFailed) || AIError.is(id, AIError.Flag.OAuthExpiry)),
+				});
 			}
 			// Auto fallback from a Fireworks Fast variant to its base model. Independent
 			// of the role-fallback setting: it's intrinsic to the Fast contract (speed

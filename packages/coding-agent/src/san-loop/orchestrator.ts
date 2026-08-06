@@ -1,4 +1,11 @@
 import {
+	type EvidenceGateVerificationResult,
+	isConcreteLegacyCommand,
+	legacyCommandCheckId,
+	verifyAcceptanceGates,
+} from "../execution-control/evidence-gates";
+import type { EvidenceReceipt, EvidenceRef } from "../execution-control/types";
+import {
 	type LegacySanLoopMode,
 	normalizeSanLoopMode,
 	SAN_LOOP_SCHEMA_VERSION,
@@ -57,6 +64,7 @@ export interface SanLoopWorkerResultInput {
 	verification?: readonly string[];
 	risks?: readonly string[];
 	createdAt?: string;
+	evidenceReceipts?: readonly EvidenceReceipt[];
 }
 
 export interface SanLoopReviewInput {
@@ -71,6 +79,7 @@ export interface SanLoopReviewInput {
 	confidence?: SanLoopReviewReport["confidence"];
 	assignmentId?: string;
 	createdAt?: string;
+	evidenceRefs?: readonly string[];
 }
 
 export interface SanLoopTransition {
@@ -291,6 +300,7 @@ export function createSanLoopWorkerResult(
 		summary: input.summary.trim(),
 		changedFiles: unique(input.changedFiles),
 		commandsRun: input.commandsRun ? input.commandsRun.map(command => ({ ...command })) : [],
+		evidenceReceipts: input.evidenceReceipts ? input.evidenceReceipts.map(receipt => ({ ...receipt })) : [],
 		verification: unique(input.verification),
 		risks: unique(input.risks),
 	};
@@ -316,6 +326,7 @@ export function recordSanLoopWorkerResult(
 			status: nextStatus,
 			plan: updateTaskStatuses(run.plan, assignment?.taskNodeIds ?? [], taskStatus),
 			assignments: updateAssignmentStatus(run.assignments, result.assignmentId, assignmentStatus),
+			evidenceReceipts: [...(run.evidenceReceipts ?? []), ...(result.evidenceReceipts ?? [])],
 			workerResults: [...run.workerResults, result],
 			budget: appendBudget(run, nextStatus, createdAt),
 		},
@@ -336,6 +347,7 @@ export function createSanLoopReviewReport(run: SanLoopRunSnapshot, input: SanLoo
 		verdict: input.verdict,
 		defects: input.defects ? input.defects.map(defect => ({ ...defect, evidence: unique(defect.evidence) })) : [],
 		testsRun: unique(input.testsRun),
+		evidenceRefs: unique(input.evidenceRefs),
 		evidence: unique(input.evidence),
 		retryable,
 		requiredNextActions: unique(input.requiredNextActions),
@@ -343,51 +355,143 @@ export function createSanLoopReviewReport(run: SanLoopRunSnapshot, input: SanLoo
 		assignmentId: input.assignmentId,
 	};
 }
+export interface SanLoopEvidenceValidationOptions {
+	readonly currentBatchAssignmentIds?: readonly string[];
+	readonly hostReceipts?: readonly EvidenceReceipt[];
+	readonly freshnessRevision?: number;
+}
+
+function mergeHostReceipts(run: SanLoopRunSnapshot, options: SanLoopEvidenceValidationOptions): EvidenceReceipt[] {
+	const canonical = run.evidenceReceipts?.length
+		? run.evidenceReceipts
+		: run.workerResults.flatMap(result => result.evidenceReceipts ?? []);
+	const receipts: EvidenceReceipt[] = [];
+	const byId = new Map<string, EvidenceReceipt>();
+	for (const receipt of [...canonical, ...(options.hostReceipts ?? [])]) {
+		const existing = byId.get(receipt.receiptId);
+		if (!existing) {
+			byId.set(receipt.receiptId, receipt);
+			receipts.push(receipt);
+			continue;
+		}
+		if (JSON.stringify(existing) !== JSON.stringify(receipt)) receipts.push(receipt);
+	}
+	return receipts;
+}
+
+function passEvidenceResult(evidenceRefs: readonly string[], reason: string): EvidenceGateVerificationResult {
+	return {
+		passed: true,
+		allRequiredGatesPassing: true,
+		verdicts: [],
+		evidenceRefs: [...evidenceRefs],
+		reasons: [reason],
+	};
+}
+
+function failEvidenceResult(reason: string): EvidenceGateVerificationResult {
+	return {
+		passed: false,
+		allRequiredGatesPassing: false,
+		verdicts: [],
+		evidenceRefs: [],
+		reasons: [reason],
+	};
+}
+
+function evidenceRefForReceipt(receipt: EvidenceReceipt): EvidenceRef {
+	return {
+		evidenceId: receipt.receiptId,
+		kind: receipt.kind,
+		receiptRef: receipt.receiptId,
+		receiptId: receipt.receiptId,
+		gateId: receipt.gateId,
+		contractRevision: receipt.contractRevision,
+		assignmentId: receipt.assignmentId,
+		freshnessRevision: receipt.freshnessRevision,
+	};
+}
+
+function legacyBatchIds(run: SanLoopRunSnapshot, requested?: readonly string[]): string[] {
+	if (requested && requested.length > 0) return [...requested];
+	const assignment = run.assignments.at(-1);
+	if (assignment) return [assignment.assignmentId];
+	const result = run.workerResults.at(-1);
+	return result ? [result.assignmentId] : [];
+}
 
 /**
- * Host-side evidence gate. Pass requires at least one completed worker result
- * from the CURRENT assignment batch with a command that reported exitCode 0.
- * Historical worker results from previous retries are excluded — stale
- * evidence must never unlock a new retry's pass verdict.
+ * Validate a pass using only typed host receipts. Legacy sessions without a
+ * typed contract retain readability through a concrete, test-like host command
+ * derived from the current assignment; arbitrary successful bash is rejected.
  */
-function validatePassEvidence(
+export function validatePassEvidence(
 	report: SanLoopReviewReport,
 	run: SanLoopRunSnapshot,
-	currentBatchAssignmentIds?: readonly string[],
-): boolean {
-	if (report.verdict !== "pass") return true;
-	// Only trust completed results from the CURRENT batch. Historical retries
-	// must never unlock a new pass. When batch IDs are omitted, prefer the
-	// latest assignment, then the latest worker result's assignment — never
-	// the full historical set.
-	const batchIds =
-		currentBatchAssignmentIds && currentBatchAssignmentIds.length > 0
-			? [...currentBatchAssignmentIds]
-			: run.assignments.at(-1)
-				? [run.assignments.at(-1)!.assignmentId]
-				: run.workerResults.at(-1)
-					? [run.workerResults.at(-1)!.assignmentId]
-					: [];
-	if (batchIds.length === 0) return false;
+	options: SanLoopEvidenceValidationOptions = {},
+): EvidenceGateVerificationResult {
+	if (report.verdict !== "pass") return passEvidenceResult([], "non-pass review does not finalize");
+	const batchIds = legacyBatchIds(run, options.currentBatchAssignmentIds);
+	const receipts = mergeHostReceipts(run, options);
+	const contractRevision = run.contractRevision ?? run.objectiveContract?.revision;
+	const contractHash = run.contractHash ?? run.objectiveContract?.contractHash;
+	const gates = run.acceptanceGates ?? [];
+	if (gates.length > 0 || contractRevision !== undefined || contractHash !== undefined) {
+		if (contractRevision === undefined || !contractHash) {
+			return failEvidenceResult("typed acceptance gates require an immutable contract revision and hash");
+		}
+		const currentReceipts = receipts.filter(receipt => {
+			if (!receipt.assignmentId || batchIds.length === 0) return true;
+			return batchIds.includes(receipt.assignmentId);
+		});
+		const freshnessRevision = options.freshnessRevision ?? run.revision;
+		const boundGates = gates.map(gate => {
+			if (gate.evidenceRefs.length > 0 || !report.evidenceRefs || report.evidenceRefs.length === 0) return gate;
+			const reported = currentReceipts.filter(
+				receipt => report.evidenceRefs!.includes(receipt.receiptId) && receipt.gateId === gate.gateId,
+			);
+			return { ...gate, evidenceRefs: reported.map(evidenceRefForReceipt) };
+		});
+		return verifyAcceptanceGates({
+			scopeId: run.runId,
+			contractRevision,
+			contractHash,
+			freshnessRevision,
+			gates: boundGates,
+			receipts: currentReceipts,
+			evidenceRefs: report.evidenceRefs,
+			assignmentIds: batchIds,
+		});
+	}
+
+	if (batchIds.length === 0) return failEvidenceResult("no current assignment batch exists");
 	const batchSet = new Set(batchIds);
 	const relevantResults = run.workerResults.filter(
 		result => batchSet.has(result.assignmentId) && result.status === "completed",
 	);
-	// P0-03: only host-owned tool receipts unlock pass. Model-claimed
-	// commandsRun entries are untrusted and ignored by the gate.
-	return relevantResults.some(result =>
-		result.commandsRun.some(command => command.source === "host" && command.exitCode === 0),
+	const matchingCommands = relevantResults.flatMap(result =>
+		result.commandsRun.filter(
+			command => command.source === "host" && command.exitCode === 0 && isConcreteLegacyCommand(command.command),
+		),
+	);
+	if (matchingCommands.length === 0) {
+		return failEvidenceResult("no concrete host command check passed in the current assignment batch");
+	}
+	return passEvidenceResult(
+		matchingCommands.map(command => legacyCommandCheckId(command.command)),
+		"legacy host command matched a concrete derived check",
 	);
 }
 
 export function applySanLoopReview(
 	run: SanLoopRunSnapshot,
 	input: SanLoopReviewInput,
-	options: { createdAt?: string; currentBatchAssignmentIds?: readonly string[] } = {},
+	options: { createdAt?: string } & SanLoopEvidenceValidationOptions = {},
 ): SanLoopTransition {
 	const createdAt = options.createdAt ?? nowIso();
 	const rawReport = createSanLoopReviewReport(run, { ...input, createdAt: input.createdAt ?? createdAt });
-	const evidenceValid = validatePassEvidence(rawReport, run, options.currentBatchAssignmentIds);
+	const evidenceVerdict = validatePassEvidence(rawReport, run, options);
+	const evidenceValid = rawReport.verdict !== "pass" || evidenceVerdict.passed;
 	const report: SanLoopReviewReport = evidenceValid
 		? rawReport
 		: {
@@ -399,17 +503,14 @@ export function applySanLoopReview(
 					{
 						defectId: "host-evidence-gate-blocked",
 						severity: "blocker",
-						title: "Supervisor pass rejected by host evidence gate: no host-owned bash receipt with exitCode 0.",
-						evidence: [
-							`Review testsRun: ${rawReport.testsRun.length}, evidence: ${rawReport.evidence.length}`,
-							`Worker results with host exitCode 0 receipts: ${run.workerResults.filter(r => r.commandsRun.some(c => c.source === "host" && c.exitCode === 0)).length}`,
-						],
+						title: "Supervisor pass rejected by host typed evidence gate.",
+						evidence: [...evidenceVerdict.reasons],
 						retryable: false,
 					},
 				],
 				requiredNextActions: [
 					...rawReport.requiredNextActions,
-					"Worker must produce at least one host-owned bash receipt with exitCode 0 before a pass can finalize.",
+					"Worker must produce matching host-owned typed evidence for every required gate before a pass can finalize.",
 				],
 			};
 	if (report.reviewer === "oracle") {

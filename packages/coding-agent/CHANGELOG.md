@@ -32,9 +32,11 @@
 - Changed the core binary to reject HTML session export with an explicit full-binary guidance while retaining the export path in full builds.
 - Added optional Bun metafile output to binary and npm bundle build scripts for reproducible bundle-size analysis.
 
+- Added host-owned runaway recovery for San execution with append-only scope state, typed acceptance evidence, provider circuit health, deterministic watchdog scheduling, semantic task contracts, and CAS-bound supervisor decisions.
 
 ### Changed
 
+- Changed task orchestration to deduplicate repeated work strategies, expose status and heartbeat cursors through Task and Hub, isolate root registries while sharing them with child sessions, preserve in-flight work during scheduler grace windows, and require explicit acknowledgement for mutating Todo operations.
 - Changed enabled San Brain sessions to default to `activation`; `review-only` remains a capture-only mode and never runs automatic decisions.
 - Changed San Context Steady to remain native-equivalent below a configurable activation threshold (240K input tokens by default), then latch activation for the session and restore it after resume.
 - Reduced core binary size with full safe Bun minification, a gzip-compressed lazy model-catalog embed, compile-time PDF converter exclusion, and a type-only Workflow AST guard that removes the `@babel/types` runtime barrel.

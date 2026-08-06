@@ -10,6 +10,8 @@ import { EditTool } from "../edit";
 import { checkJuliaKernelAvailability } from "../eval/jl/kernel";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
 import { checkRubyKernelAvailability } from "../eval/rb/kernel";
+import type { ProviderHealthRegistry } from "../execution-control/provider-health";
+import type { TaskContractRegistry } from "../execution-control/task-contract";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { Skill } from "../extensibility/skills";
 import type { GoalModeState, GoalRuntime } from "../goals";
@@ -197,6 +199,10 @@ export interface ToolSession {
 	prewalkArmed?: boolean;
 	/** Task recursion depth (0 = top-level, 1 = first child, etc.) */
 	taskDepth?: number;
+	/** Root session identity shared by nested task contracts. */
+	getRootSessionId?: () => string | null;
+	/** Root-scoped task admission registry shared with child sessions. */
+	taskContractRegistry?: TaskContractRegistry;
 	/** Get shared eval executor session ID. Subagents inherit this to share JS/Python/Ruby/Julia state. */
 	getEvalSessionId?: () => string | null;
 	/** Get session file */
@@ -264,6 +270,8 @@ export interface ToolSession {
 	 * session never borrows the owning session's manager by accident.
 	 */
 	asyncJobManager?: AsyncJobManager;
+	/** Provider-health circuit registry shared by this root and child requests. */
+	providerHealthRegistry?: ProviderHealthRegistry;
 	/** MCP manager visible to subagents without relying on the process-global singleton. */
 	mcpManager?: MCPManager;
 	/** Local protocol root to propagate to nested subagents and eval-created agents. */

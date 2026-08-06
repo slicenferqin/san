@@ -1,3 +1,4 @@
+import type { DurableScheduler } from "../execution-control/durable-scheduler";
 import type { SessionEntry } from "../session/session-entries";
 import { type SanLoopCheck, selectSanLoopChecks } from "./checks";
 import {
@@ -123,6 +124,8 @@ export interface RunSanLoopOptions {
 	runId?: string;
 	signal?: AbortSignal;
 	checks?: readonly SanLoopCheck[];
+	/** Optional host policy gate for assignment dispatch and recovery windows. */
+	scheduler?: DurableScheduler;
 }
 
 export interface RunSanLoopResult {
@@ -672,26 +675,40 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 					break executionLoop;
 				}
 				const waveAssignments = readyAssignments.slice(0, waveSize);
-				if (!spendTurns(waveAssignments.length)) {
+				if (options.scheduler) {
+					options.scheduler.setRunnableNodes(pendingAssignments.flatMap(assignment => assignment.taskNodeIds));
+				}
+				const dispatchAssignments = options.scheduler
+					? waveAssignments.filter(
+							assignment => options.scheduler?.admitDispatch(assignment.assignmentId).admitted,
+						)
+					: waveAssignments;
+				if (dispatchAssignments.length === 0) break executionLoop;
+				if (!spendTurns(dispatchAssignments.length)) {
 					blockForBudget();
 					break executionLoop;
 				}
 				if (tryEnforceUsageBudget()) break executionLoop;
 				const workerResultInputs = await mapWithLimit(
-					waveAssignments,
+					dispatchAssignments,
 					maxWorkers,
 					signal,
-					(assignment, index, workerSignal) =>
-						options.executor.worker({
-							run,
-							assignment,
-							mode,
-							signal: workerSignal,
-							checks: selectSanLoopChecks(options.checks ?? [], { role: "worker" }),
-							budget: exclusiveBudget
-								? splitRoleBudget(exclusiveBudget, index, waveAssignments.length)
-								: undefined,
-						}),
+					(assignment, index, workerSignal) => {
+						const runWorker = () =>
+							options.executor.worker({
+								run,
+								assignment,
+								mode,
+								signal: workerSignal,
+								checks: selectSanLoopChecks(options.checks ?? [], { role: "worker" }),
+								budget: exclusiveBudget
+									? splitRoleBudget(exclusiveBudget, index, dispatchAssignments.length)
+									: undefined,
+							});
+						return options.scheduler
+							? options.scheduler.executeAssignment(assignment.assignmentId, runWorker)
+							: runWorker();
+					},
 				);
 				signal.throwIfAborted();
 				const batchWorkerResults: SanLoopWorkerResult[] = [];
@@ -707,7 +724,7 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 					if (workerResult) batchWorkerResults.push(workerResult);
 				}
 				if (tryEnforceUsageBudget()) break executionLoop;
-				for (const assignment of waveAssignments) {
+				for (const assignment of dispatchAssignments) {
 					const index = pendingAssignments.findIndex(
 						candidate => candidate.assignmentId === assignment.assignmentId,
 					);
@@ -723,7 +740,7 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 					run = failedRecord.run;
 					break executionLoop;
 				}
-				for (const assignment of waveAssignments) {
+				for (const assignment of dispatchAssignments) {
 					for (const taskId of assignment.taskNodeIds) completedTaskIds.add(taskId);
 				}
 			}

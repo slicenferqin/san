@@ -389,6 +389,26 @@ export class HubTool implements AgentTool<typeof hubSchema, HubDetails> {
 		const usedSmartWindow = window.smart && params.timeoutMs === undefined;
 
 		const racePromises: Promise<unknown>[] = runningJobs.map(j => j.promise);
+		const contractAbort = this.session.taskContractRegistry ? new AbortController() : undefined;
+		const contractSnapshots = snapshotJobs(this.session, jobsToWatch);
+		if (this.session.taskContractRegistry && contractAbort) {
+			for (const job of contractSnapshots) {
+				if (!job.taskContract) continue;
+				racePromises.push(
+					this.session.taskContractRegistry
+						.waitForChange(
+							job.taskContract,
+							{
+								cursor: job.taskContract.cursor,
+								revision: job.taskContract.revision,
+								heartbeatAt: job.taskContract.heartbeatAt,
+							},
+							contractAbort.signal,
+						)
+						.catch(() => undefined),
+				);
+			}
+		}
 
 		// Message leg: park a bus waiter with no timeout of its own — the race
 		// window governs. Cancelled via sentinel so late losers do not reject.
@@ -453,6 +473,7 @@ export class HubTool implements AgentTool<typeof hubSchema, HubDetails> {
 				await Promise.race(racePromises);
 			}
 		} finally {
+			contractAbort?.abort(new Error("hub wait settled"));
 			manager.unwatchJobs(watchedJobIds);
 			if (timeoutHandle) clearTimeout(timeoutHandle);
 			if (progressTimer) clearInterval(progressTimer);

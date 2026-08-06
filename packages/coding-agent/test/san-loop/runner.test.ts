@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { DurableScheduler } from "../../src/execution-control/durable-scheduler";
+import { ExecutionLedger } from "../../src/execution-control/execution-ledger";
 import {
 	cancelRunningSanLoop,
 	findLatestSanLoopRun,
@@ -88,6 +90,47 @@ describe("San loop runner", () => {
 		});
 		expect(ledger.events.map(event => event.data.type)).toContain("finalized");
 		expect(ledger.reviews[0]?.data.verdict).toBe("pass");
+	});
+
+	test("host scheduler grace gate leaves new worker dispatch pending", async () => {
+		const session = SessionManager.inMemory();
+		const hostLedger = new ExecutionLedger({
+			scopeId: "scope:runner-gate",
+			rootSessionId: "session:runner-gate",
+			logicalTurnId: "turn:runner-gate",
+		});
+		const scheduler = new DurableScheduler({ ledger: hostLedger, now: () => 100, graceMs: 1_000 });
+		scheduler.openGraceWindow();
+		let workerCalls = 0;
+		const executor: SanLoopAgentExecutor = {
+			async commander() {
+				return { plan: { taskGraph: [taskNode("gated")] } };
+			},
+			async worker() {
+				workerCalls += 1;
+				return { assignmentId: "loop_runner_gate_gated", status: "completed", summary: "unexpected dispatch" };
+			},
+			async supervisor() {
+				return { reviewer: "supervisor", verdict: "pass" };
+			},
+		};
+
+		const result = await runSanLoop({
+			sessionManager: session,
+			objective: "Wait for the diagnostic grace window",
+			mode: "team",
+			runId: "loop_runner_gate",
+			executor,
+			scheduler,
+			maxTurns: 4,
+		});
+
+		expect(workerCalls).toBe(0);
+		expect(result.run.status).toBe("working");
+		expect(result.transitions.map(transition => transition.event.type)).toEqual([
+			"plan_created",
+			"assignment_created",
+		]);
 	});
 
 	test("retries when supervisor returns needs_fix and stops after pass", async () => {

@@ -59,6 +59,7 @@ describe("TodoTool auto-start behavior", () => {
 		const tool = new TodoTool(createSession());
 		const result = await tool.execute("call-1", {
 			op: "init",
+			operationRequired: true,
 			list: [{ phase: "Execution", items: ["status", "diagnostics"] }],
 		});
 
@@ -75,10 +76,11 @@ describe("TodoTool auto-start behavior", () => {
 		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", {
 			op: "init",
+			operationRequired: true,
 			list: [{ phase: "Execution", items: ["status", "diagnostics"] }],
 		});
 
-		const result = await tool.execute("call-2", { op: "done", task: "status" });
+		const result = await tool.execute("call-2", { operationRequired: true, op: "done", task: "status" });
 
 		const tasks = result.details?.phases[0]?.tasks ?? [];
 		expect(tasks.map(task => task.status)).toEqual(["completed", "in_progress"]);
@@ -87,7 +89,11 @@ describe("TodoTool auto-start behavior", () => {
 		if (summary?.type !== "text") throw new Error("Expected text summary from todo");
 		expect(summary.text).toContain("Remaining items (1):");
 		expect(summary.text).toContain("diagnostics [in_progress] (Execution)");
-		const completedResult = await tool.execute("call-3", { op: "done", task: "diagnostics" });
+		const completedResult = await tool.execute("call-3", {
+			operationRequired: true,
+			op: "done",
+			task: "diagnostics",
+		});
 		const completedSummary = completedResult.content.find(part => part.type === "text");
 		if (completedSummary?.type !== "text") {
 			throw new Error("Expected text summary from todo");
@@ -130,8 +136,12 @@ describe("nextActionableTask", () => {
 
 it("renders completed tasks as checked before revealing strikethrough", async () => {
 	const tool = new TodoTool(createSession());
-	await tool.execute("call-1", { op: "init", list: [{ phase: "Execution", items: ["finish"] }] });
-	const result = await tool.execute("call-2", { op: "done", task: "finish" });
+	await tool.execute("call-1", {
+		operationRequired: true,
+		op: "init",
+		list: [{ phase: "Execution", items: ["finish"] }],
+	});
+	const result = await tool.execute("call-2", { operationRequired: true, op: "done", task: "finish" });
 	const options = { expanded: true, isPartial: false, spinnerFrame: 0 };
 	const component = todoToolRenderer.renderResult(result, options, theme);
 
@@ -150,10 +160,11 @@ describe("TodoTool operations", () => {
 		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", {
 			op: "init",
+			operationRequired: true,
 			list: [{ phase: "Phase A", items: ["first", "second", "third"] }],
 		});
 
-		const result = await tool.execute("call-2", { op: "start", task: "third" });
+		const result = await tool.execute("call-2", { operationRequired: true, op: "start", task: "third" });
 
 		const tasks = result.details?.phases[0]?.tasks ?? [];
 		expect(tasks.map(task => task.status)).toEqual(["pending", "pending", "in_progress"]);
@@ -164,13 +175,14 @@ describe("TodoTool operations", () => {
 		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", {
 			op: "init",
+			operationRequired: true,
 			list: [
 				{ phase: "A", items: ["a1", "a2"] },
 				{ phase: "B", items: ["b1"] },
 			],
 		});
 
-		const result = await tool.execute("call-2", { op: "start", task: "b1" });
+		const result = await tool.execute("call-2", { operationRequired: true, op: "start", task: "b1" });
 
 		const allTasks = result.details?.phases.flatMap(phase => phase.tasks) ?? [];
 		expect(allTasks.map(task => task.status)).toEqual(["pending", "pending", "in_progress"]);
@@ -178,10 +190,15 @@ describe("TodoTool operations", () => {
 
 	it("appends items to an existing phase", async () => {
 		const tool = new TodoTool(createSession());
-		await tool.execute("call-1", { op: "init", list: [{ phase: "Work", items: ["First"] }] });
+		await tool.execute("call-1", {
+			operationRequired: true,
+			op: "init",
+			list: [{ phase: "Work", items: ["First"] }],
+		});
 
 		const result = await tool.execute("call-2", {
 			op: "append",
+			operationRequired: true,
 			phase: "Work",
 			items: ["Second"],
 		});
@@ -195,10 +212,15 @@ describe("TodoTool operations", () => {
 
 	it("creates a phase when append targets a missing phase", async () => {
 		const tool = new TodoTool(createSession());
-		await tool.execute("call-1", { op: "init", list: [{ phase: "Work", items: ["First"] }] });
+		await tool.execute("call-1", {
+			operationRequired: true,
+			op: "init",
+			list: [{ phase: "Work", items: ["First"] }],
+		});
 
 		const result = await tool.execute("call-2", {
 			op: "append",
+			operationRequired: true,
 			phase: "Cleanup",
 			items: ["Remove dead code"],
 		});
@@ -211,13 +233,14 @@ describe("TodoTool operations", () => {
 		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", {
 			op: "init",
+			operationRequired: true,
 			list: [
 				{ phase: "Work", items: ["First", "Second"] },
 				{ phase: "Later", items: ["Third"] },
 			],
 		});
 
-		const result = await tool.execute("call-2", { op: "done", phase: "Work" });
+		const result = await tool.execute("call-2", { operationRequired: true, op: "done", phase: "Work" });
 		const allTasks = result.details?.phases.flatMap(phase => phase.tasks) ?? [];
 		expect(allTasks.map(task => task.status)).toEqual(["completed", "completed", "in_progress"]);
 	});
@@ -226,10 +249,11 @@ describe("TodoTool operations", () => {
 		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", {
 			op: "init",
+			operationRequired: true,
 			list: [{ phase: "Work", items: ["First", "Second"] }],
 		});
 
-		const result = await tool.execute("call-2", { op: "rm" });
+		const result = await tool.execute("call-2", { operationRequired: true, op: "rm" });
 		expect(result.details?.phases[0]?.tasks).toEqual([]);
 		const summary = result.content.find(part => part.type === "text");
 		if (summary?.type !== "text") throw new Error("Expected text summary");
@@ -240,10 +264,11 @@ describe("TodoTool operations", () => {
 		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", {
 			op: "init",
+			operationRequired: true,
 			list: [{ phase: "Work", items: ["First", "Second"] }],
 		});
 
-		const result = await tool.execute("call-2", { op: "drop", phase: "Work" });
+		const result = await tool.execute("call-2", { operationRequired: true, op: "drop", phase: "Work" });
 		const tasks = result.details?.phases[0]?.tasks ?? [];
 		expect(tasks.map(task => task.status)).toEqual(["abandoned", "abandoned"]);
 	});
@@ -280,12 +305,81 @@ describe("TodoTool operations", () => {
 		expect(summary.text).toContain("Todo list is empty.");
 		expect(result.isError).toBeUndefined();
 	});
+	it("rejects init while unfinished work exists without changing state", async () => {
+		const session = createSession();
+		const tool = new TodoTool(session);
+		await tool.execute("call-1", {
+			operationRequired: true,
+			op: "init",
+			list: [{ phase: "Work", items: ["First", "Second"] }],
+		});
+
+		const result = await tool.execute("call-2", {
+			op: "init",
+			operationRequired: true,
+			list: [{ phase: "Replacement", items: ["Third"] }],
+		});
+
+		expect(result.isError).toBe(true);
+		expect(result.details?.phases.map(phase => phase.name)).toEqual(["Work"]);
+		expect(result.details?.phases[0]?.tasks.map(task => task.content)).toEqual(["First", "Second"]);
+		expect(session.getTodoPhases?.()?.[0]?.tasks.map(task => task.content)).toEqual(["First", "Second"]);
+	});
+
+	it("allows init after every existing task is terminal", async () => {
+		const tool = new TodoTool(createSession());
+		await tool.execute("call-1", {
+			operationRequired: true,
+			op: "init",
+			list: [{ phase: "Old", items: ["Finished"] }],
+		});
+		await tool.execute("call-2", { operationRequired: true, op: "done", task: "Finished" });
+
+		const result = await tool.execute("call-3", {
+			op: "init",
+			operationRequired: true,
+			list: [{ phase: "New", items: ["Next"] }],
+		});
+
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.phases.map(phase => phase.name)).toEqual(["New"]);
+		expect(result.details?.phases[0]?.tasks).toEqual([{ content: "Next", status: "in_progress" }]);
+	});
+
+	it("reconciles active work without losing status or omitted tasks", async () => {
+		const tool = new TodoTool(createSession());
+		await tool.execute("call-1", {
+			op: "init",
+			operationRequired: true,
+			list: [{ phase: "Work", items: ["Completed", "Active", "Omitted"] }],
+		});
+		await tool.execute("call-2", { operationRequired: true, op: "done", task: "Completed" });
+
+		const result = await tool.execute("call-3", {
+			op: "reconcile",
+			operationRequired: true,
+			list: [{ phase: "Revised", items: ["Completed", "Active", "Added"] }],
+		});
+
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.phases).toEqual([
+			{
+				name: "Revised",
+				tasks: [
+					{ content: "Completed", status: "completed" },
+					{ content: "Active", status: "in_progress" },
+					{ content: "Added", status: "pending" },
+				],
+			},
+			{ name: "Work", tasks: [{ content: "Omitted", status: "pending" }] },
+		]);
+	});
 });
 
 describe("TodoTool lenient init shapes", () => {
 	it("accepts a flattened init with bare items and no phase", async () => {
 		const tool = new TodoTool(createSession());
-		const result = await tool.execute("call-1", { op: "init", items: ["First", "Second"] });
+		const result = await tool.execute("call-1", { operationRequired: true, op: "init", items: ["First", "Second"] });
 
 		expect(result.isError).toBeUndefined();
 		expect(result.details?.phases.map(phase => phase.name)).toEqual(["Tasks"]);
@@ -298,7 +392,12 @@ describe("TodoTool lenient init shapes", () => {
 
 	it("honors a bare phase on a flattened init", async () => {
 		const tool = new TodoTool(createSession());
-		const result = await tool.execute("call-1", { op: "init", phase: "Cleanup", items: ["Remove dead code"] });
+		const result = await tool.execute("call-1", {
+			operationRequired: true,
+			op: "init",
+			phase: "Cleanup",
+			items: ["Remove dead code"],
+		});
 
 		expect(result.isError).toBeUndefined();
 		expect(result.details?.phases.map(phase => phase.name)).toEqual(["Cleanup"]);
@@ -307,7 +406,7 @@ describe("TodoTool lenient init shapes", () => {
 
 	it("still errors when init has neither list nor items", async () => {
 		const tool = new TodoTool(createSession());
-		const result = await tool.execute("call-1", { op: "init" });
+		const result = await tool.execute("call-1", { operationRequired: true, op: "init" });
 
 		expect(result.isError).toBe(true);
 		const summary = result.content.find(part => part.type === "text");
@@ -328,14 +427,51 @@ describe("TodoTool empty items tolerance", () => {
 
 	it("defers empty append items to an op-specific runtime error", async () => {
 		const tool = new TodoTool(createSession());
-		await tool.execute("call-1", { op: "init", list: [{ phase: "Work", items: ["First"] }] });
+		await tool.execute("call-1", {
+			operationRequired: true,
+			op: "init",
+			list: [{ phase: "Work", items: ["First"] }],
+		});
 
-		const result = await tool.execute("call-2", { op: "append", phase: "Work", items: [] });
+		const result = await tool.execute("call-2", { operationRequired: true, op: "append", phase: "Work", items: [] });
 
 		expect(result.isError).toBe(true);
 		const summary = result.content.find(part => part.type === "text");
 		if (summary?.type !== "text") throw new Error("Expected text summary");
 		expect(summary.text).toContain("Missing items for append operation");
+	});
+});
+
+describe("TodoTool mutation confirmation contract", () => {
+	const mutatingOps = ["init", "reconcile", "start", "done", "rm", "drop", "append"] as const;
+
+	it("requires operationRequired true for every mutating op at the schema boundary", () => {
+		const schema = new TodoTool(createSession()).parameters;
+		for (const op of mutatingOps) {
+			expect(schema({ op }) instanceof type.errors).toBe(true);
+			expect(schema({ op, operationRequired: false }) instanceof type.errors).toBe(true);
+			expect(schema({ op, operationRequired: true }) instanceof type.errors).toBe(false);
+		}
+		expect(schema({ op: "view" }) instanceof type.errors).toBe(false);
+		expect(schema({ op: "view", operationRequired: false }) instanceof type.errors).toBe(false);
+	});
+
+	it("rejects missing or false confirmation without mutating, then executes true", async () => {
+		const session = createSession([{ name: "Work", tasks: [{ content: "First", status: "pending" }] }]);
+		const tool = new TodoTool(session);
+
+		for (const operationRequired of [undefined, false] as const) {
+			const result = await tool.execute("call-1", { op: "done", task: "First", operationRequired });
+			expect(result.isError).toBe(true);
+			expect(result.details?.phases[0]?.tasks[0]?.status).toBe("pending");
+			const summary = result.content.find(part => part.type === "text");
+			if (summary?.type !== "text") throw new Error("Expected text summary");
+			expect(summary.text).toContain("operationRequired: true");
+		}
+
+		const result = await tool.execute("call-2", { op: "done", task: "First", operationRequired: true });
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.phases[0]?.tasks[0]?.status).toBe("completed");
 	});
 });
 
@@ -399,6 +535,7 @@ describe("todoToolRenderer.renderResult phase collapsing", () => {
 		const tool = new TodoTool(createSession());
 		await tool.execute("init", {
 			op: "init",
+			operationRequired: true,
 			list: [
 				{ phase: "Alpha", items: ["a1", "a2"] },
 				{ phase: "Beta", items: ["b1", "b2"] },
@@ -407,7 +544,7 @@ describe("todoToolRenderer.renderResult phase collapsing", () => {
 		});
 		// `done a1` keeps the active task inside Alpha (auto-promotes a2), leaving
 		// Beta and Gamma untouched by this update.
-		return tool.execute("done", { op: "done", task: "a1" });
+		return tool.execute("done", { operationRequired: true, op: "done", task: "a1" });
 	}
 	function innerLines(component: Component): string[] {
 		const lines = Bun.stripANSI(component.render(100).join("\n")).split("\n");

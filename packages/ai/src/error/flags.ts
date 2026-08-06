@@ -180,6 +180,7 @@ const ERROR_KIND_LABELS: readonly [Flag, string][] = [
 	[Flag.ContentBlocked, "content-blocked"],
 	[Flag.ContextOverflow, "context-overflow"],
 	[Flag.AuthFailed, "auth-failed"],
+	[Flag.OAuthExpiry, "oauth-expiry"],
 	[Flag.SilentAbort, "silent-abort"],
 	[Flag.UserInterrupt, "user-interrupt"],
 	[Flag.Abort, "abort"],
@@ -205,6 +206,7 @@ export function is(id: number | undefined, flag: Flag): boolean {
 
 export function retriable(id: number | undefined, opts?: { replayUnsafe?: boolean }): boolean {
 	if (is(id, Flag.ContentBlocked)) return false;
+	if (is(id, Flag.AuthFailed) || is(id, Flag.OAuthExpiry)) return false;
 	if (is(id, Flag.MalformedFunctionCall)) return true;
 	if (opts?.replayUnsafe) return false;
 	return ((id ?? 0) & RETRIABLE_KINDS) !== 0;
@@ -313,6 +315,7 @@ function classifyText(errorMessage: string | undefined, errorStatus: number | un
 		if (isProviderFinishErrorText(errorMessage)) kinds |= Flag.ProviderFinishError;
 		if (isContentBlockedText(errorMessage)) kinds |= Flag.ContentBlocked;
 		if (isAuthFailureText(errorMessage)) kinds |= Flag.AuthFailed;
+		if (isOAuthExpiry(errorMessage)) kinds |= Flag.OAuthExpiry;
 
 		const statusClean = errorStatus ? errorStatus : (status({ message: errorMessage }) ?? undefined);
 		const cleanMessage = errorMessage;

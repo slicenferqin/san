@@ -1,6 +1,7 @@
 import type { Usage } from "@san/ai";
 import { $env } from "@san/utils";
 import { type BaseType, type } from "arktype";
+import type { TaskContractInput, TaskContractSnapshot } from "../execution-control/task-contract";
 import type { AgentSessionEvent } from "../session/agent-session";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import type { NestedRepoPatch } from "./worktree";
@@ -77,16 +78,27 @@ export interface SubagentLifecyclePayload {
 /** Display cap for a normalized one-line label (roster line, registry `displayName`, prompt field). */
 export const LABEL_MAX = 80;
 
+const taskContractSchema = type({
+	"contractId?": "string",
+	"scopeId?": "string",
+	"workKey?": "string",
+	"strategyKey?": "string",
+	"taskId?": "string",
+	"+": "delete",
+});
+
 export const taskItemSchema = type({
 	"name?": "string",
 	agent: "string = 'task'",
 	task: "string",
+	"contract?": taskContractSchema,
 	"+": "delete",
 });
 const taskItemSchemaIsolated = type({
 	"name?": "string",
 	agent: "string = 'task'",
 	task: "string",
+	"contract?": taskContractSchema,
 	"isolated?": "boolean",
 	"+": "delete",
 });
@@ -99,6 +111,8 @@ export interface TaskItem {
 	agent?: string;
 	/** The work; required by the schema. */
 	task?: string;
+	/** Optional host-owned admission identity. Missing fields are derived deterministically. */
+	contract?: TaskContractInput;
 	/** Run this spawn in an isolated worktree (batch form; flat form carries it top-level). */
 	isolated?: boolean;
 }
@@ -107,6 +121,7 @@ export const taskSchema = type({
 	"name?": "string",
 	agent: "string = 'task'",
 	task: "string",
+	"contract?": taskContractSchema,
 	"isolated?": "boolean",
 	"+": "delete",
 });
@@ -114,6 +129,7 @@ const taskSchemaNoIsolation = type({
 	"name?": "string",
 	agent: "string = 'task'",
 	task: "string",
+	"contract?": taskContractSchema,
 	"+": "delete",
 });
 const taskSchemaBatch = type({
@@ -150,25 +166,21 @@ function createTaskSchema(options: {
 	defaultAgent: string;
 }): BaseType {
 	const agent = taskAgentSchemaRule(options.defaultAgent);
+	const contract = type.raw({
+		"contractId?": "string",
+		"scopeId?": "string",
+		"workKey?": "string",
+		"strategyKey?": "string",
+		"taskId?": "string",
+		"+": "delete",
+	});
 	if (options.batchEnabled) {
-		if (options.isolationEnabled) {
-			const item = type.raw({
-				"name?": "string",
-				agent,
-				task: "string",
-				"isolated?": "boolean",
-				"+": "delete",
-			});
-			return type.raw({
-				context: "string",
-				tasks: item.array(),
-				"+": "delete",
-			});
-		}
 		const item = type.raw({
 			"name?": "string",
 			agent,
 			task: "string",
+			"contract?": contract,
+			...(options.isolationEnabled ? { "isolated?": "boolean" } : {}),
 			"+": "delete",
 		});
 		return type.raw({
@@ -177,19 +189,12 @@ function createTaskSchema(options: {
 			"+": "delete",
 		});
 	}
-	if (options.isolationEnabled) {
-		return type.raw({
-			"name?": "string",
-			agent,
-			task: "string",
-			"isolated?": "boolean",
-			"+": "delete",
-		});
-	}
 	return type.raw({
 		"name?": "string",
 		agent,
 		task: "string",
+		"contract?": contract,
+		...(options.isolationEnabled ? { "isolated?": "boolean" } : {}),
 		"+": "delete",
 	});
 }
@@ -231,6 +236,8 @@ export interface TaskParams {
 	agent?: string;
 	/** The work (flat form). */
 	task?: string;
+	/** Optional host-owned admission identity (flat form). */
+	contract?: TaskContractInput;
 	/** Batch form (`task.batch`): one subagent per item. */
 	tasks?: TaskItem[];
 	/** Batch form: shared background prepended to every assignment; required by the batch schema. */
@@ -467,8 +474,10 @@ export interface TaskToolDetails {
 	totalDurationMs: number;
 	/** Aggregated usage across all subagents. */
 	usage?: Usage;
-	outputPaths?: string[];
 	progress?: AgentProgress[];
+	outputPaths?: string[];
+	/** Admission and heartbeat snapshots for the spawned work. */
+	taskContracts?: TaskContractSnapshot[];
 	async?: {
 		state: "running" | "completed" | "failed";
 		jobId: string;

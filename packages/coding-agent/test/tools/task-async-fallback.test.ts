@@ -4,6 +4,7 @@ import { TaskTool } from "@san/coding-agent/task";
 import * as discoveryModule from "@san/coding-agent/task/discovery";
 import type { TaskParams } from "@san/coding-agent/task/types";
 import type { ToolSession } from "@san/coding-agent/tools";
+import { TaskContractRegistry } from "../../src/execution-control";
 
 function createSession(overrides: Partial<Record<string, unknown>> = {}): ToolSession {
 	return {
@@ -48,7 +49,11 @@ describe("task.async-fallback", () => {
 		discoverSpy.mockResolvedValue({ agents: [], projectAgentsDir: null });
 
 		// Enable async so the missing `asyncJobManager` is the fallback trigger.
-		const tool = await TaskTool.create(createSession({ "async.enabled": true }));
+		const registry = new TaskContractRegistry({ rootSessionId: "root-sync" });
+		const session = createSession({ "async.enabled": true });
+		session.taskContractRegistry = registry;
+		session.getRootSessionId = () => registry.rootSessionId ?? null;
+		const tool = await TaskTool.create(session);
 
 		const result = await tool.execute("tool-1", {
 			agent: "task",
@@ -60,6 +65,16 @@ describe("task.async-fallback", () => {
 		expect(text).toContain('Unknown agent "task"');
 		expect(text).toContain("Available: none");
 		// create + sync-path re-discovery; the async path would have stopped at one.
+		expect(discoverSpy).toHaveBeenCalledTimes(2);
+		expect(registry.list()).toHaveLength(1);
+		expect(registry.list()[0]?.status).toBe("failed");
+
+		const duplicate = await tool.execute("tool-2", {
+			agent: "task",
+			name: "Two",
+			task: "Do the thing.",
+		} as TaskParams);
+		expect(getFirstText(duplicate)).toContain("Reused task contract");
 		expect(discoverSpy).toHaveBeenCalledTimes(2);
 	});
 });

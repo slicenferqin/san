@@ -143,6 +143,7 @@ export function snapshotJobs(session: ToolSession, jobs: TrackedJobLike[]): JobS
 	return jobs.map(j => {
 		const current = session.asyncJobManager?.getJob(j.id);
 		const latest = current ?? j;
+		const taskContract = session.taskContractRegistry?.snapshotForJob(latest.id);
 		return {
 			id: latest.id,
 			type: latest.type,
@@ -151,6 +152,7 @@ export function snapshotJobs(session: ToolSession, jobs: TrackedJobLike[]): JobS
 			durationMs: Math.max(0, now - latest.startTime),
 			...(latest.resultText ? { resultText: latest.resultText } : {}),
 			...(latest.errorText ? { errorText: latest.errorText } : {}),
+			...(taskContract ? { taskContract } : {}),
 		};
 	});
 }
@@ -171,6 +173,7 @@ export function buildJobResult(
 		return true;
 	});
 	const jobResults = snapshotJobs(session, uniqueJobs);
+	const taskContracts = jobResults.flatMap(job => (job.taskContract ? [job.taskContract] : []));
 
 	manager.acknowledgeDeliveries(jobResults.filter(j => j.status !== "running").map(j => j.id));
 
@@ -220,6 +223,7 @@ export function buildJobResult(
 
 	const details: CoordinationDetails = {
 		op,
+		...(taskContracts.length ? { taskContracts } : {}),
 		jobs: jobResults,
 		...(cancelOutcomes.length ? { cancelled: cancelOutcomes.map(({ id, status }) => ({ id, status })) } : {}),
 		...(agents.length ? { agents } : {}),
@@ -303,6 +307,7 @@ export function executeCancel(
 			continue;
 		}
 		const cancelled = manager.cancel(id, ownerFilter);
+		if (cancelled && existing.type === "task") session.taskContractRegistry?.setStatusByJobId?.(id, "cancelled");
 		cancelOutcomes.push(
 			cancelled
 				? { id, status: "cancelled", message: `Cancelled background job ${id}.` }

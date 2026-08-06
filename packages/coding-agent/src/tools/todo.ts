@@ -20,7 +20,7 @@ import { formatErrorDetail, PREVIEW_LIMITS } from "./render-utils";
 
 export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned";
 /** Operation names accepted by the todo tool and echoed in successful result details. */
-export type TodoOperation = "init" | "start" | "done" | "rm" | "drop" | "append" | "view";
+export type TodoOperation = "init" | "reconcile" | "start" | "done" | "rm" | "drop" | "append" | "view";
 
 export interface TodoItem {
 	content: string;
@@ -49,7 +49,11 @@ export interface TodoToolDetails {
 // Schema
 // =============================================================================
 
-const TodoOp = type('"init" | "start" | "done" | "rm" | "drop" | "append" | "view"').describe("operation to apply");
+const TODO_MUTATION_CONFIRMATION_ERROR = "Mutating todo operations require operationRequired: true.";
+
+const TodoOp = type('"init" | "reconcile" | "start" | "done" | "rm" | "drop" | "append" | "view"').describe(
+	"operation to apply",
+);
 
 const InitListEntry = type({
 	phase: type("string").describe("phase name"),
@@ -58,14 +62,20 @@ const InitListEntry = type({
 
 const todoSchema = type({
 	op: TodoOp,
-	"list?": InitListEntry.array().describe("phased task list (init)"),
+	"operationRequired?": type("boolean").describe("set to true for mutating operations; omit for view"),
+	"list?": InitListEntry.array().describe("phased task list (init/reconcile)"),
 	"task?": type("string").describe("task content"),
 	"phase?": type("string").describe("phase name"),
 	// No `atLeastLength(1)` here: `items` is only meaningful for `init`/`append`,
 	// and both enforce non-empty with op-specific errors. A stray `items: []` on
 	// an op that ignores it (e.g. `view`) must not be a hard schema rejection.
 	"items?": type("string").describe("task content").array().describe("tasks to append"),
-}).describe("apply a single todo operation");
+})
+	.describe("apply a single todo operation")
+	.narrow(
+		(params, ctx) =>
+			params.op === "view" || params.operationRequired === true || ctx.mustBe(TODO_MUTATION_CONFIRMATION_ERROR),
+	);
 
 type TodoParams = TodoSchema;
 type TodoSchema = typeof todoSchema.infer;
@@ -299,6 +309,37 @@ function initPhases(entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
 	}));
 }
 
+function reconcilePhases(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
+	const requested = initPhases(entry, errors);
+	if (errors.length > 0) return phases;
+
+	const existingByContent = new Map<string, TodoItem>();
+	for (const phase of phases) {
+		for (const task of phase.tasks) existingByContent.set(task.content, task);
+	}
+
+	const reconciled: TodoPhase[] = requested.map(phase => ({
+		name: phase.name,
+		tasks: phase.tasks.map(task => {
+			const existing = existingByContent.get(task.content);
+			return existing ? cloneTask(existing) : task;
+		}),
+	}));
+	const requestedContents = new Set(requested.flatMap(phase => phase.tasks.map(task => task.content)));
+	for (const existingPhase of phases) {
+		for (const task of existingPhase.tasks) {
+			if (requestedContents.has(task.content) || task.status === "abandoned") continue;
+			let target = findPhaseByName(reconciled, existingPhase.name);
+			if (!target) {
+				target = { name: existingPhase.name, tasks: [] };
+				reconciled.push(target);
+			}
+			target.tasks.push(cloneTask(task));
+		}
+	}
+	return reconciled;
+}
+
 function appendItems(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
 	if (!entry.phase) {
 		errors.push("Missing phase name for append operation");
@@ -356,7 +397,15 @@ function removeTasks(phases: TodoPhase[], entry: TodoOpEntryValue, errors: strin
 function applyEntry(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
 	switch (entry.op) {
 		case "init":
+			if (
+				phases.some(phase => phase.tasks.some(task => task.status === "pending" || task.status === "in_progress"))
+			) {
+				errors.push("Cannot initialize todo list while unfinished tasks remain; use reconcile to update it safely");
+				return phases;
+			}
 			return initPhases(entry, errors);
+		case "reconcile":
+			return reconcilePhases(phases, entry, errors);
 		case "start": {
 			const hit = resolveTaskOrError(phases, entry.task, errors);
 			if (!hit) return phases;
@@ -577,6 +626,7 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 			caption: "Initial setup (multi-phase)",
 			call: {
 				op: "init",
+				operationRequired: true,
 				list: [
 					{ phase: "Foundation", items: ["Scaffold crate", "Wire workspace"] },
 					{ phase: "Auth", items: ["Port credential store", "Wire OAuth providers"] },
@@ -592,28 +642,37 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 			caption: "Initial setup (single phase)",
 			call: {
 				op: "init",
+				operationRequired: true,
 				list: [{ phase: "Implementation", items: ["Apply fix", "Run tests"] }],
 			},
 		},
 		{
+			caption: "Reconcile an active plan",
+			call: {
+				op: "reconcile",
+				operationRequired: true,
+				list: [{ phase: "Implementation", items: ["Apply fix", "Run focused tests"] }],
+			},
+		},
+		{
 			caption: "Complete one task",
-			call: { op: "done", task: "Wire workspace" },
+			call: { operationRequired: true, op: "done", task: "Wire workspace" },
 		},
 		{
 			caption: "Complete a whole phase",
-			call: { op: "done", phase: "Auth" },
+			call: { operationRequired: true, op: "done", phase: "Auth" },
 		},
 		{
 			caption: "Remove all tasks",
-			call: { op: "rm" },
+			call: { operationRequired: true, op: "rm" },
 		},
 		{
 			caption: "Drop one task",
-			call: { op: "drop", task: "Run cargo test" },
+			call: { operationRequired: true, op: "drop", task: "Run cargo test" },
 		},
 		{
 			caption: "Append tasks to a phase",
-			call: { op: "append", phase: "Auth", items: ["Handle retries", "Run tests"] },
+			call: { operationRequired: true, op: "append", phase: "Auth", items: ["Handle retries", "Run tests"] },
 		},
 	];
 	readonly loadMode = "discoverable";
@@ -631,6 +690,14 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 		const previousPhases = clonePhases(this.session.getTodoPhases?.() ?? []);
 		// Pure-view calls are reads: no normalization, no state write.
 		const readOnly = params.op === "view";
+		const storage = this.session.getSessionFile() ? "session" : "memory";
+		if (!readOnly && params.operationRequired !== true) {
+			return {
+				content: [{ type: "text", text: TODO_MUTATION_CONFIRMATION_ERROR }],
+				details: { op: params.op, phases: previousPhases, storage },
+				isError: true,
+			};
+		}
 		const { phases: updated, errors } = readOnly
 			? { phases: previousPhases, errors: [] as string[] }
 			: applyParams(clonePhases(previousPhases), params);
@@ -641,7 +708,7 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 		const effective = failed ? previousPhases : updated;
 		const completedTasks = readOnly || failed ? [] : getCompletionTransitions(previousPhases, updated);
 		if (!readOnly && !failed) this.session.setTodoPhases?.(updated);
-		const storage = this.session.getSessionFile() ? "session" : "memory";
+
 		const details: TodoToolDetails = { op: params.op, phases: effective, storage };
 		if (completedTasks.length > 0) details.completedTasks = completedTasks;
 

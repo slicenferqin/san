@@ -27,6 +27,7 @@ import * as discoveryModule from "@san/coding-agent/task/discovery";
 import * as executorModule from "@san/coding-agent/task/executor";
 import type { AgentDefinition, SingleResult, TaskParams, TaskToolDetails } from "@san/coding-agent/task/types";
 import type { ToolSession } from "@san/coding-agent/tools";
+import { TaskContractRegistry } from "../../src/execution-control";
 
 const taskAgent: AgentDefinition = {
 	name: "task",
@@ -230,7 +231,11 @@ describe("task per-item blocking split", () => {
 		});
 
 		const manager = createManager();
-		const tool = await TaskTool.create(createSession({ manager }));
+		const registry = new TaskContractRegistry({ rootSessionId: "root-blocking" });
+		const session = createSession({ manager });
+		session.taskContractRegistry = registry;
+		session.getRootSessionId = () => registry.rootSessionId ?? null;
+		const tool = await TaskTool.create(session);
 
 		const result = await tool.execute("tc-all-blocking", {
 			context: "ctx",
@@ -244,6 +249,7 @@ describe("task per-item blocking split", () => {
 		expect(result.details?.async).toBeUndefined();
 		expect(result.details?.results.map(r => r.id).sort()).toEqual(["ScoutA", "ScoutB"]);
 		expect(manager.getAllJobs()).toHaveLength(0);
+		expect(registry.list().map(contract => contract.status)).toEqual(["completed", "completed"]);
 	});
 
 	it("returns inline results and reports the failure when async scheduling fails", async () => {

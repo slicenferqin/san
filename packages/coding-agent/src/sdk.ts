@@ -7,6 +7,7 @@ import {
 	type AgentTool,
 	AppendOnlyContextManager,
 	filterProviderReplayMessages,
+	type StreamFn,
 	type ThinkingLevel,
 } from "@san/agent";
 import type {
@@ -53,6 +54,8 @@ import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate
 import { buildServiceTierByFamily } from "./config/service-tier";
 import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
+import { ProviderHealthRegistry, providerHealthKeyFromModel } from "./execution-control/provider-health";
+import { TaskContractRegistry } from "./execution-control/task-contract";
 import "./discovery";
 import { initializeWithSettings } from "./discovery";
 import { disposeAllJuliaKernelSessions, disposeJuliaKernelSessionsByOwner } from "./eval/jl/executor";
@@ -376,6 +379,12 @@ export interface CreateAgentSessionOptions {
 	authStorage?: AuthStorage;
 	/** Model registry. Default: discoverModels(authStorage, agentDir) */
 	modelRegistry?: ModelRegistry;
+	/** Optional per-root provider health circuit registry shared by provider dispatches. */
+	providerHealthRegistry?: ProviderHealthRegistry;
+	/** Root-scoped task admission registry shared by nested sessions. */
+	taskContractRegistry?: TaskContractRegistry;
+	/** Root session identity used when creating a registry for this session. */
+	rootSessionId?: string;
 	/** 仅保存在内存中的额外敏感值；传入后即使全局开关关闭也会启用出站脱敏。 */
 	additionalSecretEntries?: readonly SecretEntry[];
 
@@ -1296,6 +1305,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		logger.time("sessionManager", () =>
 			SessionManager.create(cwd, SessionManager.getDefaultSessionDir(cwd, agentDir)),
 		);
+	const providerHealthRegistry = options.providerHealthRegistry ?? new ProviderHealthRegistry();
+	const taskContractRegistry =
+		options.taskContractRegistry ??
+		new TaskContractRegistry({
+			rootSessionId: options.rootSessionId ?? sessionManager.getSessionId(),
+		});
 	const providerSessionId = options.providerSessionId ?? sessionManager.getSessionId();
 	const forkCacheShapeChanged =
 		options.model !== undefined ||
@@ -1641,6 +1656,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			get cwd() {
 				return sessionManager.getCwd();
 			},
+			getRootSessionId: () => taskContractRegistry.rootSessionId ?? sessionManager.getSessionId(),
+			taskContractRegistry,
+			providerHealthRegistry,
 			isToolActive: name => activeToolNames.has(name),
 			setActiveToolNames,
 			hasUI: options.hasUI ?? false,
@@ -2703,6 +2721,31 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			settings,
 			createSettingsAwareStreamFn(settings),
 		);
+		const dispatchStreamFn: StreamFn = (...args) => {
+			if (notifyFirstChatDispatch) {
+				const cb = notifyFirstChatDispatch;
+				notifyFirstChatDispatch = undefined;
+				try {
+					cb();
+				} catch (err) {
+					logger.warn("onFirstChatDispatch hook threw", {
+						error: err instanceof Error ? err.message : String(err),
+					});
+				}
+			}
+			return settingsAwareStreamFn(...args);
+		};
+		const providerHealthStreamFn: StreamFn = (...args) => {
+			const [streamModel, _context, streamOptions] = args;
+			return providerHealthRegistry.dispatchStream(
+				{
+					key: providerHealthKeyFromModel(streamModel),
+					sessionId: providerSessionId,
+					signal: streamOptions?.signal,
+				},
+				() => dispatchStreamFn(...args),
+			);
+		};
 		const transformToolCallArguments = (args: Record<string, unknown>, toolName: string): Record<string, unknown> => {
 			let result = args;
 			const maxTimeout = settings.get("tools.maxTimeout");
@@ -2806,20 +2849,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			preferWebsockets: preferOpenAICodexWebsockets,
 			getToolContext: tc => toolContextStore.getContext(tc),
 			getApiKey: requestModel => modelRegistry.resolver(requestModel, agent.sessionId),
-			streamFn: (streamModel, context, streamOptions) => {
-				if (notifyFirstChatDispatch) {
-					const cb = notifyFirstChatDispatch;
-					notifyFirstChatDispatch = undefined;
-					try {
-						cb();
-					} catch (err) {
-						logger.warn("onFirstChatDispatch hook threw", {
-							error: err instanceof Error ? err.message : String(err),
-						});
-					}
-				}
-				return settingsAwareStreamFn(streamModel, context, streamOptions);
-			},
+			streamFn: providerHealthStreamFn,
 			cursorExecHandlers,
 			getCursorTools: () => [...(toolSession.xdevRegistry?.list() ?? [])],
 			transformToolCallArguments,
@@ -2938,6 +2968,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			skillsReloadable: options.skills === undefined,
 			skillsSettings: settings.getGroup("skills"),
 			modelRegistry,
+			providerHealthRegistry,
+			taskContractRegistry,
 			toolRegistry,
 			createVibeTools:
 				(options.taskDepth ?? 0) === 0 && !options.parentTaskPrefix
@@ -2948,8 +2980,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			transformProviderContext,
 			onPayload,
 			onResponse,
-			sideStreamFn: settingsAwareStreamFn,
-			advisorStreamFn: settingsAwareStreamFn,
+			sideStreamFn: providerHealthStreamFn,
+			advisorStreamFn: providerHealthStreamFn,
 			preferWebsockets: preferOpenAICodexWebsockets,
 			convertToLlm: convertToLlmFinal,
 			rebuildSystemPrompt,
@@ -3151,7 +3183,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					kimiApiFormat: settings.get("providers.kimiApiFormat") ?? "anthropic",
 					preferWebsockets: preferOpenAICodexWebsockets,
 					getToolContext: toolCall => toolContextStore.getContext(toolCall),
-					streamFn: settingsAwareStreamFn,
+					streamFn: providerHealthStreamFn,
 					transformToolCallArguments,
 					intentTracing: !!intentField,
 					pruneToolDescriptions: inlineToolDescriptors,

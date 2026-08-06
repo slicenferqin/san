@@ -15,6 +15,7 @@ export type * from "./config/prompt-templates";
 export * from "./config/prompt-templates";
 export type { RetrySettings, SkillsSettings } from "./config/settings";
 export { Settings, settings } from "./config/settings";
+export * from "./execution-control";
 // Custom commands
 export type * from "./extensibility/custom-commands/types";
 export type * from "./extensibility/custom-tools";

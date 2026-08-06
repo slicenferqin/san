@@ -43,6 +43,22 @@ describe("error-id classification", () => {
 		expect(AIError.retriable(id)).toBe(true);
 	});
 
+	it("vetoes auth and OAuth expiry when transient wording overlaps", () => {
+		const authId = AIError.classifyMessage(
+			message({ errorMessage: "503 auth_unavailable: no auth available (providers=codex, model=gpt-5.4-mini)" }),
+		);
+		expect(AIError.is(authId, AIError.Flag.AuthFailed)).toBe(true);
+		expect(AIError.is(authId, AIError.Flag.Transient)).toBe(true);
+		expect(AIError.retriable(authId)).toBe(false);
+
+		const oauthId = AIError.classifyMessage(
+			message({ errorMessage: "invalid_grant: refresh token expired; 503 service unavailable" }),
+		);
+		expect(AIError.is(oauthId, AIError.Flag.OAuthExpiry)).toBe(true);
+		expect(AIError.is(oauthId, AIError.Flag.Transient)).toBe(true);
+		expect(AIError.retriable(oauthId)).toBe(false);
+	});
+
 	it("keeps provider content filters non-retryable", () => {
 		const error = new AIError.ProviderResponseError("Provider returned error finish_reason: content_filter", {
 			provider: "openrouter",

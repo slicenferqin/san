@@ -22,6 +22,7 @@ import { $env, logger, prompt, Snowflake } from "@san/utils";
 import type { ToolSession } from "..";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
 import { formatModelRoleAlias, LEGACY_MODEL_ROLE_ALIAS_PREFIX } from "../config/model-roles";
+import type { TaskContractIdentity, TaskContractSnapshot } from "../execution-control/task-contract";
 import { MCPManager } from "../mcp/manager";
 import type { Theme } from "../modes/theme/theme";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
@@ -122,6 +123,21 @@ function addUsageTotals(target: Usage, usage: Partial<Usage>): void {
 	target.cost.total += cost.total;
 }
 
+export type {
+	TaskContractAdmission,
+	TaskContractDerivationInput,
+	TaskContractIdentity,
+	TaskContractInput,
+	TaskContractSnapshot,
+	TaskContractStatus,
+} from "../execution-control/task-contract";
+export {
+	createTaskContractRegistry,
+	deriveTaskContract,
+	deriveTaskContractIdentity,
+	TaskContractRegistry,
+	taskContractIdentityKey,
+} from "../execution-control/task-contract";
 // Re-export types and utilities
 export { loadBundledAgents as BUNDLED_AGENTS } from "./agents";
 export { discoverCommands, expandCommand, getCommand } from "./commands";
@@ -308,7 +324,12 @@ function resolveSpawnItems(params: TaskParams): TaskItem[] {
 	if (Array.isArray(params.tasks) && params.tasks.length > 0) {
 		return params.tasks;
 	}
-	const item: TaskItem = { name: params.name, agent: params.agent, task: params.task };
+	const item: TaskItem = {
+		name: params.name,
+		agent: params.agent,
+		task: params.task,
+		contract: params.contract,
+	};
 	if ("isolated" in params) item.isolated = params.isolated;
 	return [item];
 }
@@ -323,7 +344,10 @@ function resolveSpawnItems(params: TaskParams): TaskItem[] {
  * `isolated` (batch form) wins over the top-level flag (flat form).
  */
 function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string): TaskParams {
-	const spawn: TaskParams = { agent: item.agent?.trim() || defaultAgent };
+	const spawn: TaskParams = {
+		agent: item.agent?.trim() || defaultAgent,
+		contract: item.contract ?? params.contract,
+	};
 	if (item.name !== undefined) spawn.name = item.name;
 	if (item.task !== undefined) spawn.task = item.task;
 	if (params.context !== undefined) spawn.context = params.context;
@@ -636,7 +660,23 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			return createTaskModeError(validationError);
 		}
 
-		const spawnItems = resolveSpawnItems(params);
+		const requestedSpawnItems = resolveSpawnItems(params);
+		const contractRegistry = this.session.taskContractRegistry;
+		const contractAdmissions = requestedSpawnItems.map(item =>
+			contractRegistry?.admit({
+				...item.contract,
+				rootSessionId: this.session.getRootSessionId?.() ?? undefined,
+				task: item.task,
+				agent: item.agent?.trim() || defaultAgent,
+			}),
+		);
+		const duplicateContracts = contractAdmissions.flatMap(admission =>
+			admission && admission.kind !== "admitted" ? [admission.contract] : [],
+		);
+		const spawnItems = requestedSpawnItems.filter((_, index) => {
+			const admission = contractAdmissions[index];
+			return admission === undefined || admission.kind === "admitted";
+		});
 		const resolvedAgents = spawnItems.map(item => item.agent?.trim() || defaultAgent);
 		// Execution mode is per item: an item whose agent type declares
 		// `blocking: true` runs inline on this turn (the parent waits on its
@@ -666,22 +706,54 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					ircEnabled,
 					willRunAsync,
 				});
+		const duplicateSummary =
+			duplicateContracts.length > 0
+				? duplicateContracts
+						.map(contract => `Reused task contract \`${contract.contractId}\`; no duplicate spawn was started.`)
+						.join(" ")
+				: undefined;
+		const currentContractSnapshots = (): TaskContractSnapshot[] =>
+			contractAdmissions.flatMap(admission => {
+				if (!admission) return [];
+				const current = contractRegistry?.get(admission.contract) ?? admission.contract;
+				return [current];
+			});
 		// Returns a fresh result (copied content array, copied text part) rather
 		// than mutating the caller's — task results are short-lived here, but an
 		// in-place edit on a shared/cached AgentToolResult would be a hidden trap.
 		const withAdvisory = (result: AgentToolResult<TaskToolDetails>): AgentToolResult<TaskToolDetails> => {
-			if (!advisory) return result;
+			const notices = [duplicateSummary, advisory].filter((notice): notice is string => Boolean(notice));
+			const details = result.details
+				? {
+						...result.details,
+						...(contractRegistry && contractAdmissions.length > 0
+							? { taskContracts: currentContractSnapshots() }
+							: {}),
+					}
+				: result.details;
+			if (notices.length === 0) return details === result.details ? result : { ...result, details };
 			let appended = false;
 			const content = result.content.map(part => {
 				if (!appended && part.type === "text" && typeof part.text === "string") {
 					appended = true;
-					return { ...part, text: `${part.text}\n\n${advisory}` };
+					return { ...part, text: `${part.text}\n\n${notices.join("\n\n")}` };
 				}
 				return part;
 			});
-			if (!appended) content.push({ type: "text", text: advisory });
-			return { ...result, content };
+			if (!appended) content.push({ type: "text", text: notices.join("\n\n") });
+			return { ...result, content, details };
 		};
+		if (spawnItems.length === 0) {
+			return withAdvisory({
+				content: [{ type: "text", text: duplicateSummary ?? "No task work was admitted." }],
+				details: {
+					projectAgentsDir: null,
+					results: [],
+					totalDurationMs: 0,
+					taskContracts: currentContractSnapshots(),
+				},
+			});
+		}
 		if (!manager || asyncItems.length === 0) {
 			// Sync fallback: async execution disabled, orphaned host that never
 			// wired a job manager, or every item's agent type declares
@@ -705,6 +777,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			index: number;
 			blocking: boolean;
 			progress: AgentProgress;
+			contract?: TaskContractIdentity;
 		}> = [];
 		for (let index = 0; index < spawnItems.length; index++) {
 			const item = spawnItems[index];
@@ -712,11 +785,18 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			const agentSource = this.#discoveredAgents.find(agent => agent.name === agentType)?.source ?? "bundled";
 			const agentId = await outputManager.allocate(item.name?.trim() || generateTaskName());
 			const assignment = (item.task ?? "").trim();
+			const contract = contractRegistry?.derive({
+				...item.contract,
+				rootSessionId: this.session.getRootSessionId?.() ?? undefined,
+				task: item.task,
+				agent: agentType,
+			});
 			spawns.push({
 				agentId,
 				item,
 				index,
 				blocking: itemBlocking[index],
+				contract,
 				progress: {
 					index,
 					id: agentId,
@@ -758,6 +838,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			usage: syncUsage,
 			outputPaths: syncOutputPaths,
 			progress: spawns.map(spawn => ({ ...spawn.progress })),
+			taskContracts: currentContractSnapshots(),
 			async: {
 				state: settledCount < asyncSpawns.length ? "running" : failedCount > 0 ? "failed" : "completed",
 				jobId: primaryJobId,
@@ -774,6 +855,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					toolCallId,
 					spawnParams: spawnParamsFor(params, spawn.item, defaultAgent),
 					agentId: spawn.agentId,
+					contract: spawn.contract,
 					progress: spawn.progress,
 					ircEnabled,
 					buildDetails: buildAsyncDetails,
@@ -783,11 +865,13 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						if (failed) failedCount += 1;
 					},
 				});
+				if (spawn.contract && contractRegistry) contractRegistry.bindJob(spawn.contract, jobId);
 				if (started.length === 0) primaryJobId = jobId;
 				started.push({ agentId: spawn.agentId, jobId });
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				failedSchedules.push(`${spawn.agentId}: ${message}`);
+				if (spawn.contract && contractRegistry) contractRegistry.setStatus(spawn.contract, "failed");
 				spawn.progress.status = "failed";
 				settledCount += 1;
 				failedCount += 1;
@@ -795,15 +879,20 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		}
 
 		if (started.length === 0 && syncSpawns.length === 0) {
-			return {
+			return withAdvisory({
 				content: [
 					{
 						type: "text",
 						text: `Failed to start background task job${failedSchedules.length === 1 ? "" : "s"}: ${failedSchedules.join("; ")}`,
 					},
 				],
-				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
-			};
+				details: {
+					projectAgentsDir: null,
+					results: [],
+					totalDurationMs: 0,
+					taskContracts: currentContractSnapshots(),
+				},
+			});
 		}
 
 		const scheduleFailureSummary =
@@ -931,14 +1020,25 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		toolCallId: string;
 		spawnParams: TaskParams;
 		agentId: string;
+		contract?: TaskContractIdentity;
 		progress: AgentProgress;
 		ircEnabled: boolean;
 		buildDetails: () => TaskToolDetails;
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>;
 		onSettled?: (failed: boolean) => void;
 	}): string {
-		const { manager, toolCallId, spawnParams, agentId, progress, ircEnabled, buildDetails, onUpdate, onSettled } =
-			options;
+		const {
+			manager,
+			toolCallId,
+			spawnParams,
+			agentId,
+			contract,
+			progress,
+			ircEnabled,
+			buildDetails,
+			onUpdate,
+			onSettled,
+		} = options;
 		const buildFollowUpHint = (aborted: boolean): string => {
 			if (aborted) {
 				const status = AgentRegistry.global().get(agentId)?.status;
@@ -982,6 +1082,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				if (!semaphoreHeld || runSignal.aborted) {
 					releasePermit();
 					progress.status = "aborted";
+					if (contract && this.session.taskContractRegistry) {
+						this.session.taskContractRegistry.setStatus(contract, runSignal.aborted ? "cancelled" : "failed");
+					}
 					onSettled?.(true);
 					throw new Error("Aborted before execution");
 				}
@@ -1029,13 +1132,14 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					if (error instanceof TaskJobError) {
 						throw error;
 					}
-					progress.status = "failed";
+					const cancelled = runSignal.aborted;
+					progress.status = cancelled ? "aborted" : "failed";
 					progress.durationMs = Math.max(0, Date.now() - startedAt);
 					onSettled?.(true);
 					const statusText = `Background task ${agentId} failed.`;
 					await reportProgress(statusText);
 					const message = error instanceof Error ? error.message : String(error);
-					const hint = AgentRegistry.global().get(agentId) ? buildFollowUpHint(false) : "";
+					const hint = AgentRegistry.global().get(agentId) ? buildFollowUpHint(cancelled) : "";
 					throw new TaskJobError(`${message}${hint}`);
 				} finally {
 					releasePermit();
@@ -1201,7 +1305,36 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		detached = false,
 		launchTiming?: { invokedAt: number; acquiredAt: number },
 	): Promise<AgentToolResult<TaskToolDetails>> {
-		return this.#runSpawn(toolCallId, params, signal, onUpdate, preAllocatedId, spawnIndex, detached, launchTiming);
+		const contractRegistry = this.session.taskContractRegistry;
+		const contract = contractRegistry?.derive({
+			...params.contract,
+			rootSessionId: this.session.getRootSessionId?.() ?? undefined,
+			task: params.task,
+			agent: params.agent,
+		});
+		if (contract && contractRegistry) contractRegistry.setStatus(contract, "running");
+		try {
+			const result = await this.#runSpawn(
+				toolCallId,
+				params,
+				signal,
+				onUpdate,
+				preAllocatedId,
+				spawnIndex,
+				detached,
+				launchTiming,
+			);
+			const singleResult = result.details?.results[0];
+			const failed = !singleResult || (singleResult.aborted ?? false) || singleResult.exitCode !== 0;
+			if (contract && contractRegistry) {
+				contractRegistry.setStatus(contract, singleResult?.aborted ? "cancelled" : failed ? "failed" : "completed");
+			}
+			return result;
+		} catch (error) {
+			if (contract && contractRegistry)
+				contractRegistry.setStatus(contract, signal?.aborted ? "cancelled" : "failed");
+			throw error;
+		}
 	}
 
 	/** Spawn a fresh subagent and run it to completion. */
@@ -1220,6 +1353,13 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const agentName = params.agent ?? "";
 		const sharedContext = this.#isBatchEnabled() ? params.context?.trim() || undefined : undefined;
 		const assignment = (params.task ?? "").trim();
+		const contractRegistry = this.session.taskContractRegistry;
+		const contract = contractRegistry?.derive({
+			...params.contract,
+			rootSessionId: this.session.getRootSessionId?.() ?? undefined,
+			task: assignment,
+			agent: agentName,
+		});
 		const isolationMode = this.session.settings.get("task.isolation.mode");
 		const isolationRequested = "isolated" in params ? params.isolated === true : false;
 		const isIsolated = isolationMode !== "none" && isolationRequested;
@@ -1381,6 +1521,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					this.session.agentOutputManager ?? new AgentOutputManager(this.session.getArtifactsDir ?? (() => null));
 				agentId = await outputManager.allocate(params.name?.trim() || generateTaskName());
 			}
+			if (contract && contractRegistry) contractRegistry.setStatus(contract, "running");
 
 			const availableSkills = [...(this.session.skills ?? [])];
 			// Resolve autoload skills from agent definition against available skills
@@ -1459,10 +1600,14 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					// executor, the rest is reassigned or immutable. A deep clone
 					// here cost O(extractedToolData) per progress event.
 					latestProgress = { ...progress, recentTools: progress.recentTools.slice() };
+					if (contract && contractRegistry) contractRegistry.heartbeat(contract);
 					emitProgress();
 				},
 				authStorage: this.session.authStorage,
 				modelRegistry: this.session.modelRegistry,
+				providerHealthRegistry: this.session.providerHealthRegistry,
+				taskContractRegistry: contractRegistry,
+				rootSessionId: this.session.getRootSessionId?.() ?? undefined,
 				settings: this.session.settings,
 				mcpManager,
 				contextFiles,
@@ -1558,12 +1703,28 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			if (shouldCleanupTempArtifacts) {
 				await fs.rm(tempArtifactsDir, { recursive: true, force: true });
 			}
+			if (contract && contractRegistry) {
+				contractRegistry.setStatus(
+					contract,
+					result.aborted ? "cancelled" : result.exitCode === 0 && !result.error ? "completed" : "failed",
+				);
+			}
 
-			return this.#buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);
+			return this.#buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary, contract);
 		} catch (err) {
+			if (contract && contractRegistry)
+				contractRegistry.setStatus(contract, signal?.aborted ? "cancelled" : "failed");
 			return {
 				content: [{ type: "text", text: `Task execution failed: ${err}` }],
-				details: { projectAgentsDir, results: [], totalDurationMs: Date.now() - startTime },
+				details: {
+					projectAgentsDir,
+					results: [],
+					totalDurationMs: Date.now() - startTime,
+					taskContracts:
+						contract && contractRegistry
+							? ([contractRegistry.get(contract)].filter(Boolean) as TaskContractSnapshot[])
+							: undefined,
+				},
 			};
 		}
 	}
@@ -1574,6 +1735,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		projectAgentsDir: string | null,
 		totalDurationMs: number,
 		mergeSummary: string,
+		contract?: TaskContractIdentity,
 	): AgentToolResult<TaskToolDetails> {
 		const status = result.aborted
 			? "cancelled"
@@ -1623,6 +1785,10 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				totalDurationMs,
 				usage: result.usage,
 				outputPaths: result.outputPath ? [result.outputPath] : undefined,
+				taskContracts:
+					contract && this.session.taskContractRegistry
+						? ([this.session.taskContractRegistry.get(contract)].filter(Boolean) as TaskContractSnapshot[])
+						: undefined,
 			},
 		};
 	}

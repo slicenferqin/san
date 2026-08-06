@@ -22,6 +22,8 @@ import type { PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily, resolveSubagentServiceTier } from "../config/service-tier";
 import { Settings } from "../config/settings";
 import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
+import type { ProviderHealthRegistry } from "../execution-control/provider-health";
+import type { TaskContractRegistry } from "../execution-control/task-contract";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
@@ -300,6 +302,12 @@ export interface ExecutorOptions {
 	outputSchemaOverridesAgent?: boolean;
 	/** Parent task recursion depth (0 = top-level, 1 = first child, etc.) */
 	taskDepth?: number;
+	/** Parent provider-health circuit registry shared by child requests. */
+	providerHealthRegistry?: ProviderHealthRegistry;
+	/** Root-scoped task admission registry shared by nested children. */
+	taskContractRegistry?: TaskContractRegistry;
+	/** Root session identity used to derive child task contracts. */
+	rootSessionId?: string;
 	/**
 	 * Override the `task.maxRuntimeMs` wall-clock cap for this run. When provided
 	 * it wins over the settings value; `0` disables the per-subagent wall-clock
@@ -2460,6 +2468,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				cwd: worktree ?? cwd,
 				authStorage,
 				modelRegistry,
+				providerHealthRegistry: options.providerHealthRegistry,
+				taskContractRegistry: options.taskContractRegistry,
+				rootSessionId: options.rootSessionId,
 				settings: subagentSettings,
 				model,
 				modelPattern: model || modelOverride === undefined ? undefined : modelPatterns,
