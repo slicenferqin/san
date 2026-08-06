@@ -9,6 +9,7 @@ import type { RouteFailureCategory } from "../config/model-routes-schema";
 
 export interface ActiveModelRoute {
 	logicalModelId: string;
+	harnessProfile: string;
 	routeId: string;
 	modelSelector: string;
 	policyVersion: number;
@@ -24,6 +25,12 @@ export interface ModelRouteSelection {
 	trace: ModelRouteResolution["trace"];
 }
 
+export interface ModelRouteLeaseState {
+	active?: ActiveModelRoute;
+	failedRouteIds: readonly string[];
+	consecutiveRouteFailures: number;
+}
+
 function mergedRouteIds(
 	left: ReadonlySet<string> | undefined,
 	right: ReadonlySet<string>,
@@ -32,14 +39,28 @@ function mergedRouteIds(
 	return new Set([...(left ?? []), ...right]);
 }
 
-function activeRoute(route: CompiledModelRoute, policyVersion: number, role: string): ActiveModelRoute {
+function activeRoute(
+	resolution: ModelRouteResolution,
+	role: string,
+	harnessProfile = resolution.harnessProfile,
+): ActiveModelRoute | undefined {
+	const route = resolution.route;
+	if (!route) return undefined;
 	return Object.freeze({
 		logicalModelId: route.logicalModelId,
+		harnessProfile,
 		routeId: route.id,
 		modelSelector: route.modelSelector,
-		policyVersion,
+		policyVersion: resolution.policyVersion,
 		role,
 	});
+}
+
+export function activeModelRouteFromResolution(
+	resolution: ModelRouteResolution | undefined,
+	role: string,
+): ActiveModelRoute | undefined {
+	return resolution ? activeRoute(resolution, role) : undefined;
 }
 
 /**
@@ -67,6 +88,20 @@ export class ModelRouteLeaseController {
 		return this.#active ? { ...this.#active } : undefined;
 	}
 
+	captureState(): ModelRouteLeaseState {
+		return {
+			...(this.#active && { active: { ...this.#active } }),
+			failedRouteIds: [...this.#failedRouteIds],
+			consecutiveRouteFailures: this.#consecutiveRouteFailures,
+		};
+	}
+
+	restoreState(state: ModelRouteLeaseState): void {
+		this.#active = state.active ? Object.freeze({ ...state.active }) : undefined;
+		this.#failedRouteIds = new Set(state.failedRouteIds);
+		this.#consecutiveRouteFailures = state.consecutiveRouteFailures;
+	}
+
 	restore(snapshot: ActiveModelRoute | undefined): void {
 		this.#active = snapshot ? Object.freeze({ ...snapshot }) : undefined;
 		this.#failedRouteIds.clear();
@@ -89,7 +124,8 @@ export class ModelRouteLeaseController {
 	select(logicalModelId: string, role: string, request: ModelRouteResolutionRequest): ModelRouteSelection | undefined {
 		const resolution = this.#getRegistry().resolve(logicalModelId, request);
 		if (!resolution?.route || !resolution.reason) return undefined;
-		this.#active = activeRoute(resolution.route, resolution.policyVersion, role);
+		this.#active = activeModelRouteFromResolution(resolution, role);
+		if (!this.#active) return undefined;
 		this.#failedRouteIds.clear();
 		this.#consecutiveRouteFailures = 0;
 		return {
@@ -135,7 +171,8 @@ export class ModelRouteLeaseController {
 			excludedRouteIds: mergedRouteIds(request.excludedRouteIds, this.#failedRouteIds),
 		});
 		if (!resolution?.route || !resolution.reason) return undefined;
-		this.#active = activeRoute(resolution.route, resolution.policyVersion, active.role);
+		this.#active = activeRoute(resolution, active.role, active.harnessProfile);
+		if (!this.#active) return undefined;
 		this.#consecutiveRouteFailures = 0;
 		return {
 			route: this.#active,
@@ -169,7 +206,8 @@ export class ModelRouteLeaseController {
 			return undefined;
 		}
 
-		this.#active = activeRoute(resolution.route, resolution.policyVersion, active.role);
+		this.#active = activeRoute(resolution, active.role, active.harnessProfile);
+		if (!this.#active) return undefined;
 		this.#failedRouteIds.clear();
 		this.#consecutiveRouteFailures = 0;
 		return {
@@ -184,16 +222,4 @@ export class ModelRouteLeaseController {
 		this.#failedRouteIds.clear();
 		this.#consecutiveRouteFailures = 0;
 	}
-}
-
-export function formatModelRouteResolutionFailure(
-	logicalModelId: string,
-	trace: ModelRouteResolution["trace"],
-): string {
-	if (trace.length === 0) return `Logical model "${logicalModelId}" has no configured routes`;
-	const reasons = trace.map(route => {
-		const details = route.rejections.map(rejection => `${rejection.code}: ${rejection.message}`).join("; ");
-		return `${route.routeId} (${route.modelSelector}): ${details || "not selected"}`;
-	});
-	return `No eligible route for logical model "${logicalModelId}": ${reasons.join(" | ")}`;
 }

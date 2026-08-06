@@ -309,10 +309,7 @@ export class SelectorController {
 			};
 			// Label the seeded implicit-default row with the actual advisor-role model
 			// (NOT the first live advisor, which may be a named advisor from another scope).
-			const advisorRoleSel = resolveAdvisorRoleSelection(
-				this.ctx.settings,
-				this.ctx.session.modelRegistry.getAvailable(),
-			);
+			const advisorRoleSel = resolveAdvisorRoleSelection(this.ctx.settings, this.ctx.session.modelRegistry);
 			const defaultAdvisorModel = advisorRoleSel?.model;
 			const deps: AdvisorConfigDeps = {
 				modelRegistry: this.ctx.session.modelRegistry,
@@ -879,12 +876,28 @@ export class SelectorController {
 									this.ctx.settings.set("defaultThinkingLevel", AUTO_THINKING);
 								}
 							} else {
-								const { switched } = await this.ctx.session.setModel(model, role, {
-									selector,
-									thinkingLevel: isAuto ? ThinkingLevel.Inherit : concreteThinking,
-									persist: targetScope === "global",
-									currentContextTokens,
-								});
+								const logicalSelection =
+									selector !== undefined &&
+									this.ctx.settings.get("routing.enabled") &&
+									this.ctx.session.modelRegistry.getModelRouteRegistry().has(selector);
+								let switched: boolean;
+								if (logicalSelection) {
+									switched = (
+										await this.ctx.session.selectLogicalModel(selector, role, {
+											thinkingLevel: isAuto ? ThinkingLevel.Inherit : concreteThinking,
+											persist: targetScope === "global",
+										})
+									).switched;
+								} else {
+									switched = (
+										await this.ctx.session.setModel(model, role, {
+											selector,
+											thinkingLevel: isAuto ? ThinkingLevel.Inherit : concreteThinking,
+											persist: targetScope === "global",
+											currentContextTokens,
+										})
+									).switched;
+								}
 								if (!switched) return;
 								if (targetScope === "project") {
 									this.ctx.settings.setProjectModelRole(
@@ -980,14 +993,26 @@ export class SelectorController {
 										}
 									}
 									const effectiveIsAuto = isAuto || isAutoFromDefault;
-									const { switched } = await this.ctx.session.setModel(fallbackModel, "default", {
-										...(resolved.logicalModelId !== undefined && { selector: resolved.logicalModelId }),
-										persist: false,
-										thinkingLevel: effectiveIsAuto
-											? ThinkingLevel.Inherit
-											: (concreteThinking ?? ThinkingLevel.Inherit),
-										currentContextTokens,
-									});
+									const thinkingLevel = effectiveIsAuto
+										? ThinkingLevel.Inherit
+										: (concreteThinking ?? ThinkingLevel.Inherit);
+									let switched: boolean;
+									if (resolved.logicalModelId) {
+										switched = (
+											await this.ctx.session.selectLogicalModel(resolved.logicalModelId, "default", {
+												thinkingLevel,
+												persist: false,
+											})
+										).switched;
+									} else {
+										switched = (
+											await this.ctx.session.setModel(fallbackModel, "default", {
+												persist: false,
+												thinkingLevel,
+												currentContextTokens,
+											})
+										).switched;
+									}
 									if (!switched) return;
 									if (effectiveIsAuto) {
 										this.ctx.session.setThinkingLevel(AUTO_THINKING, true);

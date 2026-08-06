@@ -45,7 +45,7 @@ import {
 	MODEL_ROLE_IDS,
 	type ModelRole,
 } from "./model-roles";
-import type { ModelRouteRegistry } from "./model-route-registry";
+import type { CompiledModelRoute, ModelRouteRegistry } from "./model-route-registry";
 import type { ModelRouteResolution, ModelRouteResolutionReason } from "./model-route-resolver";
 import type { Settings } from "./settings";
 
@@ -470,6 +470,10 @@ type ModelRouteLookupRegistry = Partial<
 	Pick<ModelRegistry, "getModelRouteRegistry" | "hasConfiguredAuth" | "isProviderEnabled" | "isSelectorSuppressed">
 >;
 export type ModelLookupRegistry = Pick<ModelRegistry, "getAvailable"> & ModelRouteLookupRegistry;
+export type ModelRoleSelectionRegistry = Pick<
+	ModelRegistry,
+	"getAvailable" | "getModelRouteRegistry" | "hasConfiguredAuth" | "isProviderEnabled" | "isSelectorSuppressed"
+>;
 type CliModelRegistry = Pick<ModelRegistry, "getAll"> & ModelRouteLookupRegistry;
 type InitialModelRegistry = Pick<ModelRegistry, "getAvailable" | "find">;
 type RestorableModelRegistry = Pick<ModelRegistry, "getAvailable" | "find" | "getApiKey">;
@@ -1200,12 +1204,29 @@ function resolveLogicalModelPattern(
 	return { logicalModelId, thinkingLevel, explicitThinkingLevel, resolution };
 }
 
-function formatLogicalRouteFailure(resolution: ModelRouteResolution): string {
+export interface ModelRouteRuntimeRejection {
+	readonly routeId: string;
+	readonly code: "api_key_unavailable" | "api_key_error" | "provider_failure";
+	readonly message: string;
+}
+
+export function formatLogicalRouteFailure(
+	resolution: ModelRouteResolution,
+	runtimeRejections: readonly ModelRouteRuntimeRejection[] = [],
+): string {
+	if (resolution.trace.length === 0) {
+		return `Logical model "${resolution.logicalModelId}" has no configured routes`;
+	}
 	const reasons = resolution.trace.map(route => {
-		const detail = route.rejections.map(rejection => rejection.code).join(", ") || "not selected";
-		return `${route.routeId} (${detail})`;
+		const details = [
+			...route.rejections,
+			...runtimeRejections.filter(rejection => rejection.routeId === route.routeId),
+		]
+			.map(rejection => `${rejection.code}: ${rejection.message}`)
+			.join("; ");
+		return `${route.routeId} (${route.modelSelector}): ${details || "not selected"}`;
 	});
-	return `Logical model "${resolution.logicalModelId}" has no eligible route: ${reasons.join("; ")}`;
+	return `No eligible route for logical model "${resolution.logicalModelId}": ${reasons.join(" | ")}`;
 }
 
 function resolvedLogicalRoleValue(logical: LogicalModelPatternResolution): ResolvedModelRoleValue {
@@ -1262,6 +1283,7 @@ export function resolveModelRoleValue(
 	}
 
 	let warning: string | undefined;
+	let firstLogicalFailure: ResolvedModelRoleValue | undefined;
 	const matchPreferences = mergeModelMatchPreferences(options?.settings, options?.matchPreferences);
 	// Build the O(n) preference context (model-order map over all available
 	// models) once and reuse it across every fallback pattern instead of
@@ -1273,7 +1295,17 @@ export function resolveModelRoleValue(
 		(configuredRouteRegistry ? { getModelRouteRegistry: () => configuredRouteRegistry } : undefined);
 	for (const effectivePattern of effectivePatterns) {
 		const logical = resolveLogicalModelPattern(effectivePattern, logicalRegistry, options?.settings);
-		if (logical) return resolvedLogicalRoleValue(logical);
+		if (logical) {
+			const resolvedLogical = resolvedLogicalRoleValue(logical);
+			if (resolvedLogical.model) {
+				return {
+					...resolvedLogical,
+					warning: firstLogicalFailure?.warning ?? resolvedLogical.warning,
+				};
+			}
+			firstLogicalFailure ??= resolvedLogical;
+			continue;
+		}
 
 		const resolved = matchPatternWithContext(effectivePattern, availableModels, preferenceContext);
 		if (resolved.model) {
@@ -1285,7 +1317,7 @@ export function resolveModelRoleValue(
 						: (resolveThinkingLevelForModel(resolved.model, resolved.thinkingLevel) ?? resolved.thinkingLevel)
 					: resolved.thinkingLevel,
 				explicitThinkingLevel: resolved.explicitThinkingLevel,
-				warning: resolved.warning,
+				warning: firstLogicalFailure?.warning ?? resolved.warning,
 			};
 		}
 		if (!warning && resolved.warning) {
@@ -1293,7 +1325,14 @@ export function resolveModelRoleValue(
 		}
 	}
 
-	return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning };
+	return (
+		firstLogicalFailure ?? {
+			model: undefined,
+			thinkingLevel: undefined,
+			explicitThinkingLevel: false,
+			warning,
+		}
+	);
 }
 
 interface ExplicitThinkingSelectorOptions {
@@ -1398,6 +1437,19 @@ export interface ResolvedModelOverride {
 	routeId?: string;
 	routeReason?: ModelRouteResolutionReason;
 	routeResolution?: ModelRouteResolution;
+	runtimeRejections?: readonly ModelRouteRuntimeRejection[];
+}
+
+function withSelectedLogicalRoute(resolution: ModelRouteResolution, route: CompiledModelRoute): ModelRouteResolution {
+	const reason = resolution.route?.id === route.id ? resolution.reason : "failover";
+	return Object.freeze({
+		...resolution,
+		route,
+		...(reason !== undefined && { reason }),
+		trace: Object.freeze(
+			resolution.trace.map(trace => Object.freeze({ ...trace, selected: trace.routeId === route.id })),
+		),
+	});
 }
 
 export function resolveModelOverride(
@@ -1409,27 +1461,36 @@ export function resolveModelOverride(
 	const availableModels = modelRegistry.getAvailable();
 	const matchPreferences = getModelMatchPreferences(settings);
 	let warning: string | undefined;
+	let firstLogicalFailure: ResolvedModelOverride | undefined;
 	for (const pattern of modelPatterns) {
 		const resolved = resolveModelRoleValue(pattern, availableModels, {
 			settings,
 			matchPreferences,
 			modelRegistry,
 		});
-		if (resolved.model || resolved.logicalModelId) {
+		const override: ResolvedModelOverride = {
+			...(resolved.model !== undefined && { model: resolved.model }),
+			...(resolved.thinkingLevel !== undefined && { thinkingLevel: resolved.thinkingLevel }),
+			explicitThinkingLevel: resolved.explicitThinkingLevel,
+			...(resolved.warning !== undefined && { warning: resolved.warning }),
+			...(resolved.logicalModelId !== undefined && { logicalModelId: resolved.logicalModelId }),
+			...(resolved.routeId !== undefined && { routeId: resolved.routeId }),
+			...(resolved.routeReason !== undefined && { routeReason: resolved.routeReason }),
+			...(resolved.routeResolution !== undefined && { routeResolution: resolved.routeResolution }),
+		};
+		if (resolved.model) {
 			return {
-				...(resolved.model !== undefined && { model: resolved.model }),
-				...(resolved.thinkingLevel !== undefined && { thinkingLevel: resolved.thinkingLevel }),
-				explicitThinkingLevel: resolved.explicitThinkingLevel,
-				...(resolved.warning !== undefined && { warning: resolved.warning }),
-				...(resolved.logicalModelId !== undefined && { logicalModelId: resolved.logicalModelId }),
-				...(resolved.routeId !== undefined && { routeId: resolved.routeId }),
-				...(resolved.routeReason !== undefined && { routeReason: resolved.routeReason }),
-				...(resolved.routeResolution !== undefined && { routeResolution: resolved.routeResolution }),
+				...override,
+				...(firstLogicalFailure?.warning !== undefined && { warning: firstLogicalFailure.warning }),
 			};
+		}
+		if (resolved.logicalModelId) {
+			firstLogicalFailure ??= override;
+			continue;
 		}
 		if (!warning && resolved.warning) warning = resolved.warning;
 	}
-	return { explicitThinkingLevel: false, warning };
+	return firstLogicalFailure ?? { explicitThinkingLevel: false, warning };
 }
 
 /**
@@ -1464,36 +1525,122 @@ export async function resolveModelOverrideWithAuthFallback(
 	modelRegistry: ModelLookupRegistry & Pick<ModelRegistry, "getApiKey">,
 	settings?: Settings,
 	sessionId?: string,
-): Promise<{
-	model?: Model<Api>;
-	thinkingLevel?: ConfiguredThinkingLevel;
-	explicitThinkingLevel: boolean;
-	authFallbackUsed: boolean;
-	warning?: string;
-}> {
+): Promise<ResolvedModelOverride & { authFallbackUsed: boolean }> {
 	const primary = resolveModelOverride(modelPatterns, modelRegistry, settings);
-	if (!primary.model || !parentActiveModelPattern) {
+	if (!parentActiveModelPattern) {
 		return { ...primary, authFallbackUsed: false };
 	}
 
-	const primaryKey = await modelRegistry.getApiKey(primary.model, sessionId);
-	if (primaryKey === kNoAuth || isAuthenticated(primaryKey)) {
+	const runtimeRejections: ModelRouteRuntimeRejection[] = [];
+	if (primary.model) {
+		const logicalGroup = primary.logicalModelId
+			? modelRegistry.getModelRouteRegistry?.().get(primary.logicalModelId)
+			: undefined;
+		const logicalCandidates =
+			logicalGroup && primary.routeResolution
+				? primary.routeResolution.trace
+						.filter(trace => trace.eligible)
+						.flatMap(trace => {
+							const route = logicalGroup.routes.find(candidate => candidate.id === trace.routeId);
+							return route ? [route] : [];
+						})
+				: undefined;
+
+		if (logicalCandidates?.length) {
+			for (const route of logicalCandidates) {
+				try {
+					const key = await modelRegistry.getApiKey(route.model, sessionId);
+					if (key === kNoAuth || isAuthenticated(key)) {
+						const routeResolution = withSelectedLogicalRoute(primary.routeResolution!, route);
+						return {
+							...primary,
+							model: route.model,
+							routeId: route.id,
+							...(routeResolution.reason !== undefined && { routeReason: routeResolution.reason }),
+							routeResolution,
+							...(runtimeRejections.length > 0 && { runtimeRejections: Object.freeze([...runtimeRejections]) }),
+							authFallbackUsed: false,
+						};
+					}
+					runtimeRejections.push({
+						routeId: route.id,
+						code: "api_key_unavailable",
+						message: `No usable API key for ${route.modelSelector}`,
+					});
+				} catch (error) {
+					runtimeRejections.push({
+						routeId: route.id,
+						code: "api_key_error",
+						message: `API key lookup for ${route.modelSelector} failed: ${String(error)}`,
+					});
+				}
+			}
+		} else {
+			const primaryKey = await modelRegistry.getApiKey(primary.model, sessionId);
+			if (primaryKey === kNoAuth || isAuthenticated(primaryKey)) {
+				return { ...primary, authFallbackUsed: false };
+			}
+		}
+	} else if (
+		!primary.logicalModelId ||
+		primary.routeResolution?.route ||
+		!primary.routeResolution?.trace.length ||
+		!primary.routeResolution.trace.every(
+			trace =>
+				trace.rejections.length > 0 && trace.rejections.every(rejection => rejection.code === "unauthenticated"),
+		)
+	) {
 		return { ...primary, authFallbackUsed: false };
 	}
 
 	const fallback = resolveModelOverride([parentActiveModelPattern], modelRegistry, settings);
 	if (!fallback.model) {
-		return { ...primary, authFallbackUsed: false };
+		return {
+			...primary,
+			...(runtimeRejections.length > 0 && {
+				runtimeRejections: Object.freeze([...runtimeRejections]),
+				warning: primary.routeResolution
+					? formatLogicalRouteFailure(primary.routeResolution, runtimeRejections)
+					: primary.warning,
+			}),
+			authFallbackUsed: false,
+		};
 	}
-	if (modelsAreEqual(fallback.model, primary.model)) {
-		return { ...primary, authFallbackUsed: false };
+	if (primary.model && modelsAreEqual(fallback.model, primary.model)) {
+		return {
+			...primary,
+			...(runtimeRejections.length > 0 && {
+				runtimeRejections: Object.freeze([...runtimeRejections]),
+				warning: primary.routeResolution
+					? formatLogicalRouteFailure(primary.routeResolution, runtimeRejections)
+					: primary.warning,
+			}),
+			authFallbackUsed: false,
+		};
 	}
 	const fallbackKey = await modelRegistry.getApiKey(fallback.model, sessionId);
-	if (!isAuthenticated(fallbackKey)) {
-		return { ...primary, authFallbackUsed: false };
+	if (fallbackKey !== kNoAuth && !isAuthenticated(fallbackKey)) {
+		return {
+			...primary,
+			...(runtimeRejections.length > 0 && {
+				runtimeRejections: Object.freeze([...runtimeRejections]),
+				warning: primary.routeResolution
+					? formatLogicalRouteFailure(primary.routeResolution, runtimeRejections)
+					: primary.warning,
+			}),
+			authFallbackUsed: false,
+		};
 	}
 
-	return { ...fallback, authFallbackUsed: true, warning: primary.warning ?? fallback.warning };
+	return {
+		...fallback,
+		...(runtimeRejections.length > 0 && { runtimeRejections: Object.freeze([...runtimeRejections]) }),
+		authFallbackUsed: true,
+		warning:
+			primary.routeResolution && runtimeRejections.length > 0
+				? formatLogicalRouteFailure(primary.routeResolution, runtimeRejections)
+				: (primary.warning ?? fallback.warning),
+	};
 }
 
 /**
@@ -1502,13 +1649,15 @@ export async function resolveModelOverrideWithAuthFallback(
 export function resolveRoleSelection(
 	roles: readonly string[],
 	settings: Settings,
-	availableModels: Model<Api>[],
+	modelRegistry: ModelRoleSelectionRegistry,
 ): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
+	const availableModels = modelRegistry.getAvailable();
 	const matchPreferences = getModelMatchPreferences(settings);
 	for (const role of roles) {
 		const resolved = resolveModelRoleValue(settings.getModelRole(role), availableModels, {
 			settings,
 			matchPreferences,
+			modelRegistry,
 		});
 		if (resolved.model) {
 			return { model: resolved.model, thinkingLevel: resolved.thinkingLevel };
@@ -1527,11 +1676,13 @@ export function resolveRoleSelection(
  */
 export function resolveAdvisorRoleSelection(
 	settings: Settings,
-	availableModels: Model<Api>[],
+	modelRegistry: ModelRoleSelectionRegistry,
 ): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
+	const availableModels = modelRegistry.getAvailable();
 	const resolved = resolveModelRoleValue(formatModelRoleAlias("advisor"), availableModels, {
 		settings,
 		matchPreferences: getModelMatchPreferences(settings),
+		modelRegistry,
 	});
 	return resolved.model ? { model: resolved.model, thinkingLevel: resolved.thinkingLevel } : undefined;
 }
@@ -1549,7 +1700,7 @@ export function resolveAdvisorRoleSelection(
  */
 export async function resolveModelScope(
 	patterns: string[],
-	modelRegistry: Pick<ModelRegistry, "getAvailable">,
+	modelRegistry: ModelLookupRegistry,
 	preferences?: ModelMatchPreferences,
 	settings?: Settings,
 ): Promise<ScopedModel[]> {
@@ -1594,7 +1745,11 @@ export async function resolveModelScope(
 		// entry exactly like `--model` would pick. (Bare `*` stays a match-all
 		// glob above; scope semantics, not the default-role alias.)
 		if (settings && modelRoleAliasPrefixLength(pattern) !== undefined) {
-			const resolved = resolveModelRoleValue(pattern, availableModels, { settings, matchPreferences: preferences });
+			const resolved = resolveModelRoleValue(pattern, availableModels, {
+				settings,
+				matchPreferences: preferences,
+				modelRegistry,
+			});
 			if (resolved.warning) logger.warn(resolved.warning);
 			if (!resolved.model) {
 				logger.warn(`No models match pattern "${pattern}"`);
@@ -1648,7 +1803,7 @@ export async function resolveModelScope(
  * falling back to the global default (see issue #1022).
  */
 export async function resolveAllowedModels(
-	modelRegistry: Pick<ModelRegistry, "getAvailable">,
+	modelRegistry: ModelLookupRegistry,
 	settings: Settings | undefined,
 	preferences?: ModelMatchPreferences,
 ): Promise<Model<Api>[]> {
@@ -1687,6 +1842,7 @@ export function filterAvailableModelsByEnabledPatterns(
 	available: Model<Api>[],
 	patterns: readonly string[],
 	settings?: Settings,
+	modelRegistry?: ModelRouteLookupRegistry,
 ): Model<Api>[] {
 	if (patterns.length === 0) return available;
 
@@ -1706,7 +1862,7 @@ export function filterAvailableModelsByEnabledPatterns(
 
 		// Mirror resolveModelScope: role aliases resolve to the role's model.
 		if (settings && modelRoleAliasPrefixLength(pattern) !== undefined) {
-			const { model } = resolveModelRoleValue(pattern, available, { settings });
+			const { model } = resolveModelRoleValue(pattern, available, { settings, modelRegistry });
 			if (model) addAllowed(model);
 			continue;
 		}

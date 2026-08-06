@@ -54,6 +54,7 @@ export interface ModelRouteResolutionRequest {
 
 export interface ModelRouteResolution {
 	readonly logicalModelId: string;
+	readonly harnessProfile: string;
 	readonly policyVersion: number;
 	readonly route?: CompiledModelRoute;
 	readonly reason?: ModelRouteResolutionReason;
@@ -220,6 +221,7 @@ export function resolveModelRoute(
 
 	return Object.freeze({
 		logicalModelId: group.id,
+		harnessProfile: group.harnessProfile,
 		policyVersion: group.policyVersion,
 		...(selectedRoute !== undefined && { route: selectedRoute, reason: selectedReason }),
 		trace: Object.freeze(trace),

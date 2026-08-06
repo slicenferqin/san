@@ -3,7 +3,7 @@ import type { Api, ApiKey, Model } from "@san/ai";
 import type { ApiKeyResolverRegistry } from "../config/api-key-resolver";
 import {
 	getModelMatchPreferences,
-	type ModelLookupRegistry,
+	type ModelRoleSelectionRegistry,
 	parseModelPattern,
 	resolveModelRoleValue,
 	resolveRoleSelection,
@@ -29,7 +29,7 @@ export interface ResolvedCommitModel {
 	thinkingLevel?: ThinkingLevel;
 }
 
-type CommitModelRegistry = ModelLookupRegistry &
+type CommitModelRegistry = ModelRoleSelectionRegistry &
 	ApiKeyResolverRegistry & {
 		getApiKey: (model: Model<Api>) => Promise<string | undefined>;
 	};
@@ -42,8 +42,8 @@ export async function resolvePrimaryModel(
 	const available = modelRegistry.getAvailable();
 	const matchPreferences = getModelMatchPreferences(settings);
 	const resolved = override
-		? resolveModelRoleValue(override, available, { settings, matchPreferences })
-		: resolveRoleSelection(["commit", "smol", ...MODEL_ROLE_IDS], settings, available);
+		? resolveModelRoleValue(override, available, { settings, matchPreferences, modelRegistry })
+		: resolveRoleSelection(["commit", "smol", ...MODEL_ROLE_IDS], settings, modelRegistry);
 	const model = resolved?.model;
 	if (!model) {
 		throw new Error("No model available for commit generation");
@@ -66,7 +66,7 @@ export async function resolveSmolModel(
 	fallbackApiKey: ApiKey,
 ): Promise<ResolvedCommitModel> {
 	const available = modelRegistry.getAvailable();
-	const resolvedSmol = resolveRoleSelection(["smol"], settings, available);
+	const resolvedSmol = resolveRoleSelection(["smol"], settings, modelRegistry);
 	if (resolvedSmol?.model) {
 		const apiKey = await modelRegistry.getApiKey(resolvedSmol.model);
 		if (apiKey) {

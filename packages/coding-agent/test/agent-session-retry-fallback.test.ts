@@ -648,6 +648,7 @@ describe("AgentSession retry fallback", () => {
 		const routeRegistry = compileModelRouteRegistry(
 			{
 				logical: {
+					harnessProfile: "gpt-5.6-sol",
 					routes: [
 						{
 							id: "primary",
@@ -696,16 +697,24 @@ describe("AgentSession retry fallback", () => {
 			"routing.enabled": true,
 			"routing.routeFallback": true,
 		});
+		let promptRebuilds = 0;
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
 			settings,
 			modelRegistry,
+			toolRegistry: new Map(),
+			rebuildSystemPrompt: async () => {
+				promptRebuilds++;
+				return { systemPrompt: ["logical-profile:gpt-5.6-sol"] };
+			},
 		});
 		session.subscribe(event => {
 			if (event.type === "model_route_changed") routeChangedEvents.push(event);
 		});
 		await session.selectLogicalModel("logical");
+		expect(promptRebuilds).toBe(1);
+		const logicalPrompt = [...session.agent.state.systemPrompt];
 
 		await session.prompt("Recover from a missing provider route");
 		await session.waitForIdle();
@@ -722,7 +731,88 @@ describe("AgentSession retry fallback", () => {
 			trigger: "model_unavailable",
 		});
 		expect(session.model?.provider).toBe(fallbackModel.provider);
+		expect(promptRebuilds).toBe(1);
+		expect(session.agent.state.systemPrompt).toEqual(logicalPrompt);
 		expect(getLastAssistantMessage(session).stopReason).toBe("stop");
+	});
+
+	it("resets the logical route retry budget after a successful same-route retry", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		if (!primaryModel || !fallbackModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		const routeRegistry = compileModelRouteRegistry(
+			{
+				logical: {
+					routes: [
+						{
+							id: "primary",
+							model: `${primaryModel.provider}/${primaryModel.id}`,
+							priority: 0,
+							equivalence: "exact",
+						},
+						{
+							id: "fallback",
+							model: `${fallbackModel.provider}/${fallbackModel.id}`,
+							priority: 1,
+							equivalence: "exact",
+						},
+					],
+				},
+			},
+			[primaryModel, fallbackModel],
+		);
+		vi.spyOn(modelRegistry, "getModelRouteRegistry").mockReturnValue(routeRegistry);
+
+		const mock = createMockModel();
+		const requestedModels: string[] = [];
+		let primaryAttempts = 0;
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: {
+				model: primaryModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (model, context, options) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				if (model.provider === primaryModel.provider && primaryAttempts++ % 2 === 0) {
+					mock.push({ throw: "fetch failed: ECONNRESET" });
+				} else {
+					mock.push({ content: ["Recovered on the same route"] });
+				}
+				return mock.stream(model, context, options);
+			},
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"routing.enabled": true,
+			"routing.routeFallback": true,
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		await session.selectLogicalModel("logical");
+
+		await session.prompt("First transient failure");
+		await session.waitForIdle();
+		await session.prompt("Second transient failure");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${primaryModel.provider}/${primaryModel.id}`,
+		]);
+		expect(session.activeModelRoute?.routeId).toBe("primary");
 	});
 
 	it("surfaces a non-retryable error without same-model retries when no fallback candidate has a credential", async () => {

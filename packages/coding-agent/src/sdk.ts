@@ -17,9 +17,7 @@ import type {
 	ProviderSessionState,
 	SimpleStreamOptions,
 } from "@san/ai";
-import type { Dialect } from "@san/ai/dialect";
 import { getOpenAICodexTransportDetails, prewarmOpenAICodexResponses } from "@san/ai/providers/openai-codex-responses";
-import { FALLBACK_DIALECT, preferredDialect } from "@san/catalog/identity";
 import type { Component } from "@san/tui";
 import { $env, $flag, getAgentDir, getProjectDir, logger, postmortem, prompt, Snowflake } from "@san/utils";
 import { INTENT_FIELD } from "@san/wire";
@@ -38,20 +36,22 @@ import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
 import { isAuthenticated, kNoAuth, ModelRegistry } from "./config/model-registry";
 import {
+	formatLogicalRouteFailure,
 	formatModelSelectorValue,
 	formatModelString,
 	formatModelStringWithRouting,
 	getModelMatchPreferences,
-	parseModelPattern,
 	parseModelString,
 	pickDefaultAvailableModel,
 	resolveAllowedModels,
 	resolveConfiguredModelPatterns,
+	resolveModelOverride,
 	resolveModelRoleValue,
 } from "./config/model-resolver";
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "./config/prompt-templates";
 import { buildServiceTierByFamily } from "./config/service-tier";
 import { Settings, type SkillsSettings } from "./config/settings";
+import { resolveDialect } from "./config/tool-dialect";
 import { CursorExecHandlers } from "./cursor";
 import "./discovery";
 import { initializeWithSettings } from "./discovery";
@@ -127,8 +127,9 @@ import {
 	USER_INTERRUPT_LABEL,
 	wrapSteeringForModel,
 } from "./session/messages";
+import { type ActiveModelRoute, activeModelRouteFromResolution } from "./session/model-route-lease";
 import { clampProviderContextImages } from "./session/provider-image-budget";
-import { getRestorableSessionModels } from "./session/session-context";
+import { getRestorableSessionLogicalModels, getRestorableSessionModels } from "./session/session-context";
 import { SessionManager } from "./session/session-manager";
 import { createSettingsAwareStreamFn } from "./session/settings-stream-fn";
 import { SnapcompactInlineTransformer } from "./session/snapcompact-inline";
@@ -381,6 +382,8 @@ export interface CreateAgentSessionOptions {
 
 	/** Model to use. Default: from settings, else first available */
 	model?: Model;
+	/** Logical Model route lease corresponding to `model`, when the caller already resolved one. */
+	initialModelRoute?: ActiveModelRoute;
 	/** Raw model pattern(s) (e.g. from --model CLI flag) to resolve after extensions load.
 	 * Used when model lookup is deferred because extension-provided models aren't registered yet. */
 	modelPattern?: string | string[];
@@ -604,26 +607,11 @@ export interface CreateAgentSessionResult {
 	eventBus: EventBus;
 }
 
-export type DialectFormat = "auto" | "native" | Dialect;
-
-export function resolveDialect(
-	format: DialectFormat,
-	model: (Pick<Model, "supportsTools"> & Partial<Pick<Model, "id">>) | undefined,
-): Dialect | undefined {
-	if (format === "native") return undefined;
-	if (format === "auto") {
-		if (model?.supportsTools !== false) return undefined;
-		if (!model.id) return "glm";
-		const preferred = preferredDialect(model.id);
-		return preferred === FALLBACK_DIALECT ? "glm" : preferred;
-	}
-	return format;
-}
-
 // Re-exports
 
 export type { PromptTemplate } from "./config/prompt-templates";
 export { Settings, type SkillsSettings } from "./config/settings";
+export { type DialectFormat, resolveDialect } from "./config/tool-dialect";
 export type { CustomCommand, CustomCommandFactory } from "./extensibility/custom-commands/types";
 export type { CustomTool, CustomToolFactory } from "./extensibility/custom-tools/types";
 export type * from "./extensibility/extensions";
@@ -1148,6 +1136,22 @@ export function createAutoLearnCaptureRunner(
 		}
 	};
 }
+
+function assertInitialModelRouteMatchesModel(model: Model | undefined, route: ActiveModelRoute | undefined): void {
+	if (!route) return;
+	if (!model) {
+		throw new Error(
+			`initialModelRoute "${route.logicalModelId}/${route.routeId}" requires model, but model was not provided`,
+		);
+	}
+	const modelSelector = `${model.provider}/${model.id}`;
+	if (route.modelSelector !== modelSelector) {
+		throw new Error(
+			`initialModelRoute "${route.logicalModelId}/${route.routeId}" selects "${route.modelSelector}", but model is "${modelSelector}"`,
+		);
+	}
+}
+
 /**
  * Create an AgentSession with the specified options.
  *
@@ -1180,6 +1184,7 @@ export function createAutoLearnCaptureRunner(
  * ```
  */
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
+	assertInitialModelRouteMatchesModel(options.model, options.initialModelRoute);
 	const cwd = options.cwd ?? getProjectDir();
 	const agentDir = options.agentDir ?? getAgentDir();
 	const eventBus = options.eventBus ?? new EventBus();
@@ -1372,21 +1377,103 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		resolveModelRoleValue(settings.getModelRole("default"), allowedModels, {
 			settings,
 			matchPreferences: modelMatchPreferences,
+			modelRegistry,
 		}),
 	);
 	let model = options.model;
+	let initialModelRoute = options.initialModelRoute;
 	let modelFallbackMessage: string | undefined;
+	let logicalModelFailureMessage: string | undefined;
+	const lastModelChangeRole = sessionManager.getLastModelChangeRole();
+	const startupRouteThinkingLevel =
+		options.thinkingLevel ??
+		(hasExistingSession && hasThinkingEntry
+			? (parseConfiguredThinkingLevel(existingSession.configuredThinkingLevel) ??
+				parseThinkingLevel(existingSession.thinkingLevel))
+			: undefined);
+	const resolveStartupLogicalRoute = (
+		logicalModelId: string,
+		role: string,
+		affinityRouteId?: string,
+		routeThinkingLevel: ConfiguredThinkingLevel | undefined = startupRouteThinkingLevel,
+	) => {
+		const registry = modelRegistry.getModelRouteRegistry();
+		const group = registry.get(logicalModelId);
+		if (!group) return { kind: "unknown" as const };
+		const suppressedRouteIds = new Set<string>();
+		for (const route of group.routes) {
+			if (modelRegistry.isSelectorSuppressed(route.modelSelector)) {
+				suppressedRouteIds.add(route.id);
+			}
+		}
+		const resolution = registry.resolve(logicalModelId, {
+			...(affinityRouteId !== undefined && { affinityRouteId, selectionReason: "recovery" as const }),
+			thinkingLevel: routeThinkingLevel,
+			isAvailable: route =>
+				modelRegistry.isProviderEnabled(route.model.provider) &&
+				modelRegistry.find(route.model.provider, route.model.id) !== undefined,
+			hasAuth: route => modelRegistry.hasConfiguredAuth(route.model),
+			...(suppressedRouteIds.size > 0 && { suppressedRouteIds }),
+		});
+		const route = activeModelRouteFromResolution(resolution, role);
+		const currentModel = resolution?.route
+			? modelRegistry.find(resolution.route.model.provider, resolution.route.model.id)
+			: undefined;
+		return route && resolution?.route && currentModel
+			? { kind: "selected" as const, model: currentModel, route, resolution }
+			: { kind: "unavailable" as const, resolution };
+	};
 	// Identify session model strings to restore in fallback order. We do an
 	// initial pass here so model-dependent setup (thinking-level resolution,
 	// host preconnect) can use the restored model; extension-registered
 	// providers aren't visible yet, so we retry the preferred candidates once
 	// extensions register below.
+	const sessionLogicalModelIds =
+		!hasExplicitModel && hasExistingSession && settings.get("routing.enabled")
+			? getRestorableSessionLogicalModels(existingSession.logicalModels, lastModelChangeRole)
+			: [];
 	const sessionModelStrings =
 		!hasExplicitModel && hasExistingSession
-			? getRestorableSessionModels(existingSession.models, sessionManager.getLastModelChangeRole())
+			? getRestorableSessionModels(existingSession.models, lastModelChangeRole)
 			: [];
 	let restoredSessionModelIndex = -1;
 	let restoredSessionThinkingLevel: ConfiguredThinkingLevel | undefined;
+	let pendingRestoredModelRouteChange: { logicalModel: string; fromRoute: string; toRoute: string } | undefined;
+	if (!hasExplicitModel && !model && sessionLogicalModelIds.length > 0) {
+		logger.time("restoreSessionLogicalModel", () => {
+			let failedLogicalModelMessage: string | undefined;
+			for (let i = 0; i < sessionLogicalModelIds.length; i++) {
+				const logicalModelId = sessionLogicalModelIds[i];
+				const role =
+					lastModelChangeRole && existingSession.logicalModels[lastModelChangeRole] === logicalModelId
+						? lastModelChangeRole
+						: "default";
+				const savedRouteId = existingSession.modelRoutes[logicalModelId];
+				const restored = resolveStartupLogicalRoute(logicalModelId, role, savedRouteId);
+				if (restored.kind !== "selected") {
+					if (restored.kind === "unavailable") {
+						failedLogicalModelMessage ??= restored.resolution
+							? formatLogicalRouteFailure(restored.resolution)
+							: `Logical model "${logicalModelId}" has no eligible route`;
+					}
+					continue;
+				}
+				model = restored.model;
+				initialModelRoute = restored.route;
+				if (savedRouteId && savedRouteId !== restored.route.routeId) {
+					pendingRestoredModelRouteChange = {
+						logicalModel: logicalModelId,
+						fromRoute: savedRouteId,
+						toRoute: restored.route.routeId,
+					};
+				}
+				break;
+			}
+			if (failedLogicalModelMessage) {
+				modelFallbackMessage = failedLogicalModelMessage;
+			}
+		});
+	}
 	if (!hasExplicitModel && !model && sessionModelStrings.length > 0) {
 		logger.time("restoreSessionModel", () => {
 			let failedSessionModel: string | undefined;
@@ -1405,6 +1492,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				const restoredModel = modelRegistry.find(parsedModel.provider, parsedModel.id);
 				if (restoredModel && hasModelAuth(restoredModel)) {
 					model = restoredModel;
+					initialModelRoute = undefined;
 					restoredSessionModelIndex = i;
 					restoredSessionThinkingLevel = parsedModel.thinkingLevel;
 					break;
@@ -1425,6 +1513,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// defaultRoleSpec.model already comes from modelRegistry.getAvailable(),
 			// so re-validating auth here just repeats the expensive lookup path.
 			model = settingsDefaultModel;
+			initialModelRoute = activeModelRouteFromResolution(defaultRoleSpec.routeResolution, "default");
 		});
 	}
 
@@ -1478,6 +1567,19 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// (interactive, print, rpc, acp).
 		preconnectModelHost(model.baseUrl);
 	}
+	const applyStartupRouteSelection = (selection: { model: Model; route: ActiveModelRoute }): void => {
+		model = selection.model;
+		initialModelRoute = selection.route;
+		thinkingLevel = pickInitialThinkingLevel(selection.model);
+		autoThinking = thinkingLevel === AUTO_THINKING;
+		effectiveThinkingLevel = concreteThinkingLevel(thinkingLevel);
+		effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
+			autoThinking
+				? resolveProvisionalAutoLevel(selection.model)
+				: resolveThinkingLevelForModel(selection.model, effectiveThinkingLevel),
+		);
+		preconnectModelHost(selection.model.baseUrl);
+	};
 
 	let skills: Skill[];
 	let skillWarnings: SkillWarning[];
@@ -1625,6 +1727,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (activeModel) return formatModelString(activeModel);
 			if (model) return formatModelString(model);
 			return undefined;
+		};
+		const getActiveHarnessProfile = (): string | undefined => {
+			const activeModel = agent?.state.model ?? model;
+			if (!activeModel) return undefined;
+			const activeRoute = session ? session.activeModelRoute : initialModelRoute;
+			if (activeRoute?.modelSelector === `${activeModel.provider}/${activeModel.id}`) {
+				return activeRoute.harnessProfile;
+			}
+			return formatModelString(activeModel);
 		};
 		// Per-path mutation counter shared across edit/write tools. Late-diagnostics
 		// entries capture it at fetch time and are dropped at injection if a newer
@@ -1999,6 +2110,84 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			});
 		});
 
+		if (initialModelRoute && sessionLogicalModelIds.length === 0) {
+			const previousRoute = initialModelRoute;
+			const routeThinkingLevel = options.initialModelRoute
+				? options.thinkingLevel
+				: defaultRoleSpec.explicitThinkingLevel
+					? defaultRoleSpec.thinkingLevel
+					: undefined;
+			const refreshedRoute = resolveStartupLogicalRoute(
+				previousRoute.logicalModelId,
+				previousRoute.role,
+				previousRoute.routeId,
+				routeThinkingLevel,
+			);
+			if (refreshedRoute.kind === "selected") {
+				applyStartupRouteSelection(refreshedRoute);
+			} else {
+				model = undefined;
+				initialModelRoute = undefined;
+				logicalModelFailureMessage =
+					refreshedRoute.kind === "unavailable" && refreshedRoute.resolution
+						? formatLogicalRouteFailure(refreshedRoute.resolution)
+						: `Logical model "${previousRoute.logicalModelId}" is no longer configured`;
+				modelFallbackMessage = logicalModelFailureMessage;
+			}
+		}
+
+		// Retry persisted Logical Model intent first now that extension providers
+		// are registered. The saved route id is affinity, not a hard pin: if that
+		// route is no longer eligible, the resolver selects the next valid route
+		// while preserving the logical model and records the recovery below.
+		if (!hasExplicitModel && sessionLogicalModelIds.length > 0) {
+			let restoredLogicalModel = false;
+			let persistedLogicalFailureMessage: string | undefined;
+			for (let i = 0; i < sessionLogicalModelIds.length; i++) {
+				const logicalModelId = sessionLogicalModelIds[i];
+				const role =
+					lastModelChangeRole && existingSession.logicalModels[lastModelChangeRole] === logicalModelId
+						? lastModelChangeRole
+						: "default";
+				const savedRouteId = existingSession.modelRoutes[logicalModelId];
+				const restored = resolveStartupLogicalRoute(logicalModelId, role, savedRouteId);
+				if (restored.kind !== "selected") {
+					if (restored.kind === "unavailable") {
+						persistedLogicalFailureMessage ??= restored.resolution
+							? formatLogicalRouteFailure(restored.resolution)
+							: `Logical model "${logicalModelId}" has no eligible route`;
+					}
+					continue;
+				}
+
+				applyStartupRouteSelection(restored);
+				logicalModelFailureMessage = undefined;
+				modelFallbackMessage = undefined;
+				restoredSessionModelIndex = -1;
+				pendingRestoredModelRouteChange =
+					savedRouteId && savedRouteId !== restored.route.routeId
+						? {
+								logicalModel: logicalModelId,
+								fromRoute: savedRouteId,
+								toRoute: restored.route.routeId,
+							}
+						: undefined;
+				restoredLogicalModel = true;
+				break;
+			}
+			if (!restoredLogicalModel && persistedLogicalFailureMessage) {
+				logicalModelFailureMessage = persistedLogicalFailureMessage;
+				modelFallbackMessage = persistedLogicalFailureMessage;
+				initialModelRoute = undefined;
+				model = undefined;
+				restoredSessionModelIndex = -1;
+			} else if (!restoredLogicalModel) {
+				// Logical Model 已删除或改名时，保留具体模型作为旧 session 的恢复路径，
+				// 但不能继续投影已经失效的 route。
+				initialModelRoute = undefined;
+			}
+		}
+
 		// Retry session-model candidates now that extension providers are
 		// registered. The initial restore runs before extensions load, so a role
 		// model supplied by an extension would have either fallen back to the
@@ -2007,7 +2196,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// downstream fallback filling `model`). Reclaim it here so resume
 		// honors the last active role in either case.
 		const sessionRetryLimit = restoredSessionModelIndex >= 0 ? restoredSessionModelIndex : sessionModelStrings.length;
-		if (!hasExplicitModel && sessionRetryLimit > 0) {
+		if (!hasExplicitModel && !logicalModelFailureMessage && !initialModelRoute && sessionRetryLimit > 0) {
 			for (let i = 0; i < sessionRetryLimit; i++) {
 				const sessionModelStr = sessionModelStrings[i];
 				const parsedModel = parseModelString(sessionModelStr, {
@@ -2019,6 +2208,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				const restoredModel = modelRegistry.find(parsedModel.provider, parsedModel.id);
 				if (restoredModel && hasModelAuth(restoredModel)) {
 					model = restoredModel;
+					initialModelRoute = undefined;
 					modelFallbackMessage = undefined;
 					restoredSessionModelIndex = i;
 					restoredSessionThinkingLevel = parsedModel.thinkingLevel;
@@ -2044,30 +2234,30 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// path (resolveModelOverride → resolveModelRoleValue) accepts.
 		if (!model && deferredModelPatterns.length > 0) {
 			const expandedModelPatterns = resolveConfiguredModelPatterns(deferredModelPatterns, settings);
-			const availableModels = modelRegistry.getAll();
-			const matchPreferences = getModelMatchPreferences(settings);
+			let resolutionWarning: string | undefined;
 			for (let patternIndex = 0; patternIndex < expandedModelPatterns.length; patternIndex += 1) {
 				const pattern = expandedModelPatterns[patternIndex];
-				const primary = parseModelPattern(pattern, availableModels, matchPreferences);
-				if (!primary.model) continue;
+				const primary = resolveModelOverride([pattern], modelRegistry, settings);
+				if (!primary.model) {
+					resolutionWarning ??= primary.warning;
+					continue;
+				}
 				let selectedModel = primary.model;
 				let selectedThinkingLevel = primary.thinkingLevel;
 				let selectedExplicitThinkingLevel = primary.explicitThinkingLevel;
+				let selectedModelRoute = activeModelRouteFromResolution(primary.routeResolution, "default");
 				let authFallbackUsed = false;
 				if (options.modelPatternAuthFallback) {
 					const primaryKey = await modelRegistry.getApiKey(primary.model);
 					if (primaryKey !== kNoAuth && !isAuthenticated(primaryKey)) {
-						const fallback = parseModelPattern(
-							options.modelPatternAuthFallback,
-							availableModels,
-							matchPreferences,
-						);
+						const fallback = resolveModelOverride([options.modelPatternAuthFallback], modelRegistry, settings);
 						if (fallback.model) {
 							const fallbackKey = await modelRegistry.getApiKey(fallback.model);
-							if (isAuthenticated(fallbackKey)) {
+							if (fallbackKey === kNoAuth || isAuthenticated(fallbackKey)) {
 								selectedModel = fallback.model;
 								selectedThinkingLevel = fallback.thinkingLevel;
 								selectedExplicitThinkingLevel = fallback.explicitThinkingLevel;
+								selectedModelRoute = activeModelRouteFromResolution(fallback.routeResolution, "default");
 								authFallbackUsed = true;
 							}
 						}
@@ -2075,16 +2265,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				}
 				if (!authFallbackUsed && options.modelPatternFallbackRole) {
 					const primarySelector = formatModelSelectorValue(
-						formatModelStringWithRouting(primary.model),
+						primary.logicalModelId ?? formatModelStringWithRouting(primary.model),
 						primary.thinkingLevel,
 					);
 					const seenSelectors = new Set<string>([primarySelector]);
 					const fallbackSelectors: string[] = [];
 					for (const fallbackPattern of expandedModelPatterns.slice(patternIndex + 1)) {
-						const fallback = parseModelPattern(fallbackPattern, availableModels, matchPreferences);
+						const fallback = resolveModelOverride([fallbackPattern], modelRegistry, settings);
 						if (!fallback.model) continue;
 						const fallbackSelector = formatModelSelectorValue(
-							formatModelStringWithRouting(fallback.model),
+							fallback.logicalModelId ?? formatModelStringWithRouting(fallback.model),
 							fallback.thinkingLevel,
 						);
 						if (seenSelectors.has(fallbackSelector)) continue;
@@ -2115,6 +2305,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					}
 				}
 				model = selectedModel;
+				initialModelRoute = selectedModelRoute;
 				modelFallbackMessage = undefined;
 				if (selectedExplicitThinkingLevel) {
 					restoredSessionThinkingLevel = selectedThinkingLevel;
@@ -2135,14 +2326,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					deferredModelPatterns.length === 1
 						? `"${deferredModelPatterns[0]}"`
 						: `one of ${deferredModelPatterns.map(pattern => `"${pattern}"`).join(", ")}`;
-				modelFallbackMessage = `Model ${requested} not found`;
+				modelFallbackMessage = resolutionWarning ?? `Model ${requested} not found`;
 			}
 		}
 
 		// Fall back to first available model with a valid API key, honoring the
 		// path-scoped `enabledModels` allow-list when configured. Skip when the
 		// user explicitly requested a model via --model that wasn't found.
-		if (!model && deferredModelPatterns.length === 0) {
+		if (!model && !hasExplicitModel && deferredModelPatterns.length === 0) {
 			// Re-resolve the allowed set: extension factories above may have
 			// registered providers/models that weren't visible at startup.
 			const fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
@@ -2156,15 +2347,49 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// default with a bundled provider's default whenever a stray
 			// `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` is in the environment.
 			// (issue #3569)
-			if (!hasExplicitModel && !defaultRoleSpec.model) {
+			const canRefreshSelectedDefaultRole =
+				sessionLogicalModelIds.length === 0 &&
+				sessionModelStrings.length === 0 &&
+				defaultRoleSpec.logicalModelId !== undefined;
+			if (
+				!logicalModelFailureMessage &&
+				!hasExplicitModel &&
+				(!defaultRoleSpec.model || canRefreshSelectedDefaultRole)
+			) {
 				const reResolvedRoleSpec = resolveModelRoleValue(settings.getModelRole("default"), fallbackCandidates, {
 					settings,
 					matchPreferences: modelMatchPreferences,
+					modelRegistry,
 				});
-				if (reResolvedRoleSpec.model) {
+				if (reResolvedRoleSpec.logicalModelId) {
+					const refreshedDefaultRoute = resolveStartupLogicalRoute(
+						reResolvedRoleSpec.logicalModelId,
+						"default",
+						reResolvedRoleSpec.routeId,
+						reResolvedRoleSpec.explicitThinkingLevel ? reResolvedRoleSpec.thinkingLevel : undefined,
+					);
+					if (refreshedDefaultRoute.kind === "selected") {
+						defaultRoleSpec = {
+							...reResolvedRoleSpec,
+							model: refreshedDefaultRoute.model,
+							routeId: refreshedDefaultRoute.route.routeId,
+							routeReason: refreshedDefaultRoute.resolution.reason,
+							routeResolution: refreshedDefaultRoute.resolution,
+						};
+						applyStartupRouteSelection(refreshedDefaultRoute);
+						logicalModelFailureMessage = undefined;
+						modelFallbackMessage = undefined;
+					} else if (refreshedDefaultRoute.kind === "unavailable") {
+						logicalModelFailureMessage = refreshedDefaultRoute.resolution
+							? formatLogicalRouteFailure(refreshedDefaultRoute.resolution)
+							: `Logical model "${reResolvedRoleSpec.logicalModelId}" has no eligible route`;
+						modelFallbackMessage = logicalModelFailureMessage;
+					}
+				} else if (reResolvedRoleSpec.model) {
 					defaultRoleSpec = reResolvedRoleSpec;
 					const resolvedDefaultModel = reResolvedRoleSpec.model;
 					model = resolvedDefaultModel;
+					initialModelRoute = undefined;
 					modelFallbackMessage = undefined;
 					// Recompute the thinking level against the now-real model.
 					// `pickInitialThinkingLevel` closes over `defaultRoleSpec`,
@@ -2181,10 +2406,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				}
 			}
 
-			if (!model) {
+			if (!model && !logicalModelFailureMessage) {
 				const defaultModel = pickDefaultAvailableModel(fallbackCandidates.filter(hasModelAuth));
 				if (defaultModel) {
 					model = defaultModel;
+					initialModelRoute = undefined;
 				}
 			}
 			if (model) {
@@ -2194,9 +2420,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			} else {
 				const patterns = settings.get("enabledModels");
 				modelFallbackMessage =
-					patterns && patterns.length > 0
+					logicalModelFailureMessage ??
+					(patterns && patterns.length > 0
 						? `No model available matching enabledModels (${patterns.join(", ")}) with usable credentials. Configure auth for an allowed provider or adjust enabledModels.`
-						: "No models available. Use /login or set an API key environment variable. Then use /model to select a model.";
+						: "No models available. Use /login or set an API key environment variable. Then use /model to select a model.");
 			}
 		}
 
@@ -2217,6 +2444,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				);
 			}
 		}
+		assertInitialModelRouteMatchesModel(model, initialModelRoute);
 
 		// A first-turn user tail has no assistant metadata to copy. Once startup
 		// has selected its final model, use that model to terminate the
@@ -2473,7 +2701,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				workspaceTree: workspaceTreePromise,
 				includeWorkspaceTree,
 				memoryRootEnabled: memoryBackend.id === "local",
-				model: getActiveModelString(),
+				model: getActiveHarnessProfile(),
 				includeModelInPrompt: settings.get("includeModelInPrompt"),
 				personality: agentKind === "sub" ? "none" : settings.get("personality"),
 				renderMermaid: settings.get("tui.renderMermaid"),
@@ -2851,10 +3079,25 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// Restore messages if session has existing data
 		if (hasExistingSession) {
 			agent.replaceMessages(existingSession.messages);
+			if (pendingRestoredModelRouteChange && options.sessionAccess !== "read_only") {
+				sessionManager.appendModelRouteChange({
+					...pendingRestoredModelRouteChange,
+					reason: "recovery",
+				});
+			}
 		} else if (options.sessionAccess !== "read_only") {
 			// Save initial model, thinking level, and service tier for new sessions so they can be restored on resume.
 			if (model) {
-				sessionManager.appendModelChange(`${model.provider}/${model.id}`);
+				sessionManager.appendModelChange(
+					`${model.provider}/${model.id}`,
+					initialModelRoute?.role,
+					initialModelRoute
+						? {
+								logicalModel: initialModelRoute.logicalModelId,
+								routeId: initialModelRoute.routeId,
+							}
+						: undefined,
+				);
 			}
 			if (!autoThinking) {
 				// Do not write the `auto` selector before the first turn resolves; auto
@@ -2913,6 +3156,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			agent,
 			pruneToolDescriptions: inlineToolDescriptors,
 			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,
+			initialModelRoute,
 			prewalk: options.prewalk,
 			planYolo: options.planYolo,
 			serviceTierByFamily: initialServiceTierByFamily,

@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { Api, Model } from "@san/ai";
 import { buildModel } from "@san/catalog/build";
 import type { ModelRegistry } from "@san/coding-agent/config/model-registry";
-import type { Settings } from "@san/coding-agent/config/settings";
+import { compileModelRouteRegistry, ModelRouteRegistry } from "@san/coding-agent/config/model-route-registry";
+import { Settings } from "@san/coding-agent/config/settings";
 import { createExtensionModelQuery } from "../../src/extensibility/extensions/model-api";
 
 function model(id: string, name: string, provider: string): Model<"anthropic-messages"> {
@@ -27,9 +28,13 @@ const gpt = model("gpt-5.4", "GPT-5.4", "openai");
 const available = [claude, gpt] as Model<Api>[];
 
 /** Minimal registry stub: only the methods the facade and core resolver touch. */
-function registry(): ModelRegistry {
+function registry(modelRoutes = ModelRouteRegistry.empty()): ModelRegistry {
 	return {
 		getAvailable: () => available,
+		getModelRouteRegistry: () => modelRoutes,
+		hasConfiguredAuth: () => true,
+		isProviderEnabled: () => true,
+		isSelectorSuppressed: () => false,
 	} as unknown as ModelRegistry;
 }
 
@@ -58,8 +63,27 @@ describe("createExtensionModelQuery", () => {
 	test("resolve() honors configured role aliases via the same settings-backed path as core", () => {
 		const settings = {
 			getModelRole: (role: string) => (role === "slow" ? "anthropic/claude-opus-4-8" : undefined),
+			get: () => undefined,
 		} as unknown as Settings;
 		const q = createExtensionModelQuery(registry(), settings, () => undefined);
+		expect(q.resolve("@slow")).toBe(claude);
+	});
+
+	test("resolve() routes a configured role alias through its logical model group", () => {
+		const modelRoutes = compileModelRouteRegistry(
+			{
+				"logical-slow": {
+					routes: [{ id: "primary", model: "anthropic/claude-opus-4-8", equivalence: "exact" }],
+				},
+			},
+			available,
+		);
+		const settings = Settings.isolated({
+			"routing.enabled": true,
+			modelRoles: { slow: "logical-slow" },
+		});
+		const q = createExtensionModelQuery(registry(modelRoutes), settings, () => undefined);
+
 		expect(q.resolve("@slow")).toBe(claude);
 	});
 

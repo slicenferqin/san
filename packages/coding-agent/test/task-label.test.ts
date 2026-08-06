@@ -15,6 +15,9 @@ function createSettings(model: Model<Api>) {
 		getModelRole(role: string) {
 			return role === "smol" ? `${model.provider}/${model.id}` : undefined;
 		},
+		get() {
+			return undefined;
+		},
 	} as never;
 }
 

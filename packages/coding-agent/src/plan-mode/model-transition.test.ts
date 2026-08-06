@@ -15,11 +15,14 @@ const model = (provider: string, id: string): Model => ({ provider, id }) as unk
 const resolved = (
 	m: Model | undefined,
 	thinking?: ResolvedModelRoleValue["thinkingLevel"],
+	route?: Pick<ResolvedModelRoleValue, "logicalModelId" | "routeId">,
 ): ResolvedModelRoleValue => ({
 	model: m,
 	thinkingLevel: thinking,
 	explicitThinkingLevel: thinking !== undefined,
 	warning: undefined,
+	...(route?.logicalModelId !== undefined && { logicalModelId: route.logicalModelId }),
+	...(route?.routeId !== undefined && { routeId: route.routeId }),
 });
 
 describe("resolvePlanModelTransition", () => {
@@ -39,6 +42,26 @@ describe("resolvePlanModelTransition", () => {
 		const plan = model("anthropic", "opus");
 		const transition = resolvePlanModelTransition(model("openai", "gpt"), resolved(plan, ThinkingLevel.High), false);
 		expect(transition).toEqual({ kind: "apply", model: plan, thinkingLevel: ThinkingLevel.High, deferred: false });
+	});
+
+	it("applies a logical plan lease even when its concrete model is unchanged", () => {
+		const plan = model("anthropic", "opus");
+		const transition = resolvePlanModelTransition(
+			plan,
+			resolved(plan, undefined, {
+				logicalModelId: "planner",
+				routeId: "planner-primary",
+			}),
+			true,
+		);
+		expect(transition).toEqual({
+			kind: "apply",
+			model: plan,
+			thinkingLevel: undefined,
+			deferred: true,
+			logicalModelId: "planner",
+			routeId: "planner-primary",
+		});
 	});
 
 	it("only adjusts thinking when the model is unchanged but the level is explicit", () => {

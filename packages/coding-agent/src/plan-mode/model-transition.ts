@@ -28,7 +28,14 @@ export type PlanModelTransition =
 	 * switch must wait for the current turn to end (a live `setModelTemporary`
 	 * resets the provider session), so the caller queues it instead.
 	 */
-	| { kind: "apply"; model: Model; thinkingLevel: ConfiguredThinkingLevel | undefined; deferred: boolean };
+	| {
+			kind: "apply";
+			model: Model;
+			thinkingLevel: ConfiguredThinkingLevel | undefined;
+			deferred: boolean;
+			logicalModelId?: string;
+			routeId?: string;
+	  };
 
 /**
  * Decide how to reconcile the active model with the resolved `plan` role.
@@ -44,6 +51,16 @@ export function resolvePlanModelTransition(
 ): PlanModelTransition {
 	if (!resolved.model) return { kind: "none" };
 	const planThinkingLevel = resolved.explicitThinkingLevel ? resolved.thinkingLevel : undefined;
+	if (resolved.logicalModelId) {
+		return {
+			kind: "apply",
+			model: resolved.model,
+			thinkingLevel: planThinkingLevel,
+			deferred: isStreaming,
+			logicalModelId: resolved.logicalModelId,
+			...(resolved.routeId !== undefined && { routeId: resolved.routeId }),
+		};
+	}
 	if (modelsAreEqual(currentModel, resolved.model)) {
 		return planThinkingLevel ? { kind: "thinking", thinkingLevel: planThinkingLevel } : { kind: "none" };
 	}

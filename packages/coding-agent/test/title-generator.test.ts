@@ -25,6 +25,9 @@ function createSettings(model: Model<Api>) {
 		getStorage() {
 			return undefined;
 		},
+		get() {
+			return undefined;
+		},
 	} as never;
 }
 
@@ -505,6 +508,9 @@ describe("title generator", () => {
 			getStorage() {
 				return undefined;
 			},
+			get() {
+				return undefined;
+			},
 		} as never;
 
 		const registry = {
@@ -531,6 +537,9 @@ describe("title generator", () => {
 			getStorage() {
 				return undefined;
 			},
+			get() {
+				return undefined;
+			},
 		} as never;
 
 		await generateSessionTitle("Some message", registry, currentSettings);
@@ -546,6 +555,9 @@ describe("title generator", () => {
 				return undefined;
 			},
 			getStorage() {
+				return undefined;
+			},
+			get() {
 				return undefined;
 			},
 		} as never;

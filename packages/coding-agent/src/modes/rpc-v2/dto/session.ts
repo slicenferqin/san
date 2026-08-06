@@ -106,6 +106,8 @@ export interface ModelSnapshot {
 	modelId: string;
 	displayName?: string;
 	contextWindow?: number;
+	logicalModel?: string;
+	routeId?: string;
 }
 
 export interface EvidenceSummary {

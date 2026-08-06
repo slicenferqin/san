@@ -171,6 +171,53 @@ describe("event-adapter tool_execution_end", () => {
 });
 
 describe("event-adapter diagnostic metadata", () => {
+	it("projects logical model route lifecycle events", () => {
+		const { ctx, sequencer } = makeContext();
+		const resolved = adaptSessionEvent(
+			{
+				type: "model_route_resolved",
+				logicalModel: "coding",
+				routeId: "primary",
+				model: "provider/chat",
+				reason: "affinity",
+			},
+			sequencer,
+			ctx,
+		);
+		const changed = adaptSessionEvent(
+			{
+				type: "model_route_changed",
+				logicalModel: "coding",
+				fromRoute: "primary",
+				toRoute: "backup",
+				trigger: "rate_limit",
+				cooldownUntil: 1_785_830_400_000,
+			},
+			sequencer,
+			ctx,
+		);
+
+		expect(resolved).toMatchObject({
+			type: "model.route.resolved",
+			data: {
+				logicalModel: "coding",
+				routeId: "primary",
+				model: "provider/chat",
+				reason: "affinity",
+			},
+		});
+		expect(changed).toMatchObject({
+			type: "model.route.changed",
+			data: {
+				logicalModel: "coding",
+				fromRoute: "primary",
+				toRoute: "backup",
+				trigger: "rate_limit",
+				cooldownUntil: 1_785_830_400_000,
+			},
+		});
+	});
+
 	it("redacts retry errors, tool intents, and notices before emission", () => {
 		const home = process.env.HOME ?? "/Users/tester";
 		const secret = "sk-abcdefghijklmnopqrstuvwx";

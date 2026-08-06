@@ -832,6 +832,10 @@ export class Agent {
 		this.#state.model = m;
 	}
 
+	setDialect(dialect: Dialect | undefined): void {
+		this.#dialect = dialect;
+	}
+
 	setThinkingLevel(l: Effort | undefined) {
 		this.#state.thinkingLevel = l;
 	}

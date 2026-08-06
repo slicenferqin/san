@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AssistantMessage, Model } from "@san/ai";
 import * as ai from "@san/ai";
+import { compileModelRouteRegistry } from "@san/coding-agent/config/model-route-registry";
 import { Settings } from "@san/coding-agent/config/settings";
 import { startMemoryStartupTask } from "@san/coding-agent/memories";
 import {
@@ -30,11 +31,11 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 	return { promise, resolve };
 }
 
-function createMemoryTestModel(): Model {
+function createMemoryTestModel(id = "test-model"): Model {
 	return {
 		provider: "openai",
-		id: "test-model",
-		name: "test-model",
+		id,
+		name: id,
 		contextWindow: 32_000,
 	} as Model;
 }
@@ -207,12 +208,23 @@ describe("memories/storage", () => {
 		);
 
 		const model = createMemoryTestModel();
+		const routedModel = createMemoryTestModel("memory-route-model");
+		const routeRegistry = compileModelRouteRegistry(
+			{
+				"logical-memory": {
+					routes: [{ id: "primary", model: "openai/memory-route-model", equivalence: "exact" }],
+				},
+			},
+			[model, routedModel],
+		);
 		const settings = Settings.isolated({
 			"memories.enabled": true,
 			"memories.minRolloutIdleHours": 0,
 			"memories.maxRolloutsPerStartup": 16,
 			"memories.threadScanLimit": 64,
 			"memories.phase2HeartbeatSeconds": 1,
+			"routing.enabled": true,
+			modelRoles: { default: "logical-memory", smol: "logical-memory" },
 		});
 		const settled = deferred();
 		const session = {
@@ -228,7 +240,11 @@ describe("memories/storage", () => {
 		} as unknown as Parameters<typeof startMemoryStartupTask>[0]["session"];
 		const modelRegistry = {
 			find: () => model,
-			getAll: () => [model],
+			getAll: () => [model, routedModel],
+			getModelRouteRegistry: () => routeRegistry,
+			hasConfiguredAuth: () => true,
+			isProviderEnabled: () => true,
+			isSelectorSuppressed: () => false,
 			getApiKey: async () => "test-api-key",
 			resolver: () => async () => "test-api-key",
 		} as unknown as Parameters<typeof startMemoryStartupTask>[0]["modelRegistry"];
@@ -250,6 +266,7 @@ describe("memories/storage", () => {
 
 		await settled.promise;
 		expect(completeSpy).toHaveBeenCalledTimes(2);
+		expect(completeSpy.mock.calls.map(call => call[0])).toEqual([routedModel, routedModel]);
 		const db = openMemoryDb(getAgentDbPath(agentDir));
 		const rows = db.prepare("SELECT id, cwd FROM threads ORDER BY id").all() as Array<{ id: string; cwd: string }>;
 		closeMemoryDb(db);

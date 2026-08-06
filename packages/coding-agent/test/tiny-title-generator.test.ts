@@ -29,6 +29,9 @@ function createSettings(model: Model<Api>) {
 		getStorage() {
 			return undefined;
 		},
+		get() {
+			return undefined;
+		},
 	} as never;
 }
 

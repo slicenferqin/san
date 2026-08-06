@@ -2208,6 +2208,7 @@ export class RpcV2SessionManager {
 		const session = active.session;
 		const goalState = session.getGoalModeState();
 		const planState = session.getPlanModeState();
+		const activeModelRoute = session.activeModelRoute;
 		const summary = this.#summaryFromActive(active);
 		const commandCatalogRevision = (await this.#commandCatalogRevisionProvider?.(session)) ?? 0;
 		return {
@@ -2250,6 +2251,12 @@ export class RpcV2SessionManager {
 							displayName: session.model.name,
 							...(typeof session.model.contextWindow === "number"
 								? { contextWindow: session.model.contextWindow }
+								: {}),
+							...(activeModelRoute
+								? {
+										logicalModel: activeModelRoute.logicalModelId,
+										routeId: activeModelRoute.routeId,
+									}
 								: {}),
 						},
 					}
