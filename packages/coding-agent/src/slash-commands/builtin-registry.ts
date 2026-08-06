@@ -67,6 +67,11 @@ import type { SessionEntry } from "../session/session-entries";
 import { resolveResumableSession } from "../session/session-listing";
 import type { SessionManager } from "../session/session-manager";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
+import {
+	appendSessionSubagentModelOverride,
+	getSessionSubagentModelOverride,
+	resolveSessionSubagentModelSelector,
+} from "../session/subagent-model-override";
 import { CLI_THINKING_LEVELS, getConfiguredThinkingLevelMetadata, parseConfiguredThinkingLevel } from "../thinking";
 import { expandTilde, resolveToCwd } from "../tools/path-utils";
 import { urlHyperlinkAlways } from "../tui";
@@ -117,6 +122,39 @@ export interface TuiBuiltinSlashCommand extends BuiltinSlashCommand {
 function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
 	ctx.ui.requestRender();
+}
+
+interface SubagentModelCommandRuntime {
+	session: AgentSession;
+	sessionManager: SessionManager;
+	settings: Settings;
+	output: (text: string) => Promise<void> | void;
+}
+
+async function handleSubagentModelCommand(args: string, runtime: SubagentModelCommandRuntime): Promise<void> {
+	const input = args.trim();
+	if (!input || input.toLowerCase() === "status") {
+		const selector = getSessionSubagentModelOverride(runtime.sessionManager.getBranch());
+		await runtime.output(
+			selector
+				? `Task-role subagent model: ${selector}`
+				: "Task-role subagent model: configured routing (no session override).",
+		);
+		return;
+	}
+	if (input.toLowerCase() === "clear") {
+		appendSessionSubagentModelOverride(runtime.sessionManager, null);
+		await runtime.output("Task-role subagent model override cleared.");
+		return;
+	}
+
+	const resolved = resolveSessionSubagentModelSelector(input, runtime.session.getAvailableModels(), runtime.settings);
+	if (!resolved.ok) {
+		await runtime.output(`Cannot set task-role subagent model: ${resolved.error}`);
+		return;
+	}
+	appendSessionSubagentModelOverride(runtime.sessionManager, resolved.selector);
+	await runtime.output(`Task-role subagent model: ${resolved.selector}`);
 }
 
 /** `/fast status` label for the active model: "on" when its family is priority, else "off". */
@@ -667,6 +705,36 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
 			await runtime.ctx.handleQueueCommand(command.args);
+		},
+	},
+	{
+		name: "subagent",
+		description: "Set the task-role subagent model for this session",
+		allowArgs: true,
+		subcommands: [
+			{ name: "status", description: "Show the current session override" },
+			{ name: "clear", description: "Restore configured task-role routing" },
+		],
+		getTuiAutocompleteDescription: runtime => {
+			const selector = runtime.ctx.session.getSubagentModelOverride();
+			return selector ? `Subagent: ${selector}` : "Subagent: configured @task routing";
+		},
+		handle: async (command, runtime) => {
+			await handleSubagentModelCommand(command.args, runtime);
+			return commandConsumed();
+		},
+		handleTui: async (command, runtime) => {
+			if (!command.args.trim()) {
+				runtime.ctx.showSubagentModelSelector();
+			} else {
+				await handleSubagentModelCommand(command.args, {
+					session: runtime.ctx.session,
+					sessionManager: runtime.ctx.sessionManager,
+					settings: runtime.ctx.settings,
+					output: text => runtime.ctx.showStatus(text),
+				});
+			}
+			runtime.ctx.editor.setText("");
 		},
 	},
 	{

@@ -372,6 +372,7 @@ export interface InteractiveModeContext {
 		onCancel?: () => void;
 	}): void;
 	showModelRoleSelector(): void;
+	showSubagentModelSelector(): void;
 	showConnectSelector(): Promise<void>;
 	showPluginSelector(mode?: "install" | "uninstall"): void;
 	showUserMessageSelector(): void;

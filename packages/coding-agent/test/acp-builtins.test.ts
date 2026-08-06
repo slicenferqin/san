@@ -2,7 +2,16 @@ import { describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome, ResetCreditTarget, UsageReport } from "@san/ai";
+import {
+	type Api,
+	Effort,
+	type Model,
+	type ResetCreditAccountStatus,
+	type ResetCreditRedeemOutcome,
+	type ResetCreditTarget,
+	type UsageReport,
+} from "@san/ai";
+import { buildModel } from "@san/catalog/build";
 import { Settings } from "@san/coding-agent/config/settings";
 import { CONTEXT_PLAN_CUSTOM_TYPE, CONTEXT_PLAN_SCHEMA_VERSION } from "@san/coding-agent/context-steady/plan-types";
 import {
@@ -54,7 +63,7 @@ interface FakeAcpBuiltinSession {
 	getToolByName(name: string): unknown;
 	compact(args?: string): Promise<void>;
 	getContextUsage(): { tokens?: number; contextWindow: number } | undefined;
-	getAvailableModels(): Array<{ provider: string; id: string; contextWindow?: number }>;
+	getAvailableModels(): Array<{ provider: string; id: string; contextWindow?: number | null }>;
 	setModel(model: unknown): Promise<void>;
 	listResetCredits: () => Promise<ResetCreditAccountStatus[]>;
 	redeemResetCredit: (target: ResetCreditTarget) => Promise<ResetCreditRedeemOutcome>;
@@ -81,6 +90,22 @@ interface FakeAcpBuiltinSessionManager {
 	dropSession(sessionPath: string): Promise<void>;
 	getCwd(): string;
 	setSessionName(name: string, source: string): Promise<boolean>;
+}
+
+function reasoningModel(provider: string, id: string, efforts: readonly Effort[]): Model<Api> {
+	return buildModel({
+		provider,
+		id,
+		name: id,
+		api: "openai-completions",
+		baseUrl: `https://${provider}.example.test`,
+		reasoning: true,
+		thinking: { mode: "effort", efforts: [...efforts] },
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128_000,
+		maxTokens: 8_192,
+	});
 }
 
 function createRuntime() {
@@ -280,6 +305,48 @@ describe("ACP builtin slash commands", () => {
 		const unavailable = await executeAcpBuiltinSlashCommand("/effort high", runtime);
 		expect(unavailable).toEqual({ consumed: true });
 		expect(output).toEqual(["Current model does not support controllable thinking effort."]);
+	});
+
+	it("sets, reports, and clears a session-only task-role subagent model", async () => {
+		const { fakeSessionManager, output, runtime, session } = createRuntime();
+		const target = reasoningModel("cpa", "kl/deepseek-v4-flash", [Effort.Low, Effort.High, Effort.Max]);
+		session.getAvailableModels = () => [target];
+
+		expect(await executeAcpBuiltinSlashCommand("/subagent cpa/kl/deepseek-v4-flash:max", runtime)).toEqual({
+			consumed: true,
+		});
+		expect(output).toEqual(["Task-role subagent model: cpa/kl/deepseek-v4-flash:max"]);
+		expect(fakeSessionManager._customEntries.at(-1)).toEqual({
+			customType: "subagent_model_override",
+			data: { role: "task", selector: "cpa/kl/deepseek-v4-flash:max" },
+		});
+
+		output.length = 0;
+		expect(await executeAcpBuiltinSlashCommand("/subagent status", runtime)).toEqual({ consumed: true });
+		expect(output).toEqual(["Task-role subagent model: cpa/kl/deepseek-v4-flash:max"]);
+
+		output.length = 0;
+		expect(await executeAcpBuiltinSlashCommand("/subagent clear", runtime)).toEqual({ consumed: true });
+		expect(output).toEqual(["Task-role subagent model override cleared."]);
+		expect(fakeSessionManager._customEntries.at(-1)).toEqual({
+			customType: "subagent_model_override",
+			data: { role: "task", selector: null },
+		});
+	});
+
+	it("rejects an unsupported explicit subagent effort without mutating session state", async () => {
+		const { fakeSessionManager, output, runtime, session } = createRuntime();
+		const limited = reasoningModel("test", "limited-reasoner", [Effort.Low, Effort.High]);
+		session.getAvailableModels = () => [limited];
+		const entriesBefore = fakeSessionManager._customEntries.length;
+
+		expect(await executeAcpBuiltinSlashCommand("/subagent test/limited-reasoner:max", runtime)).toEqual({
+			consumed: true,
+		});
+		expect(output).toEqual([
+			"Cannot set task-role subagent model: Model test/limited-reasoner does not support effort max. Supported: low, high.",
+		]);
+		expect(fakeSessionManager._customEntries).toHaveLength(entriesBefore);
 	});
 
 	it("runs the San execution loop instead of only creating a ledger entry", async () => {

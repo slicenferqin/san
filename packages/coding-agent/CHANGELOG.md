@@ -11,6 +11,7 @@
 ### Added
 
 - Added source-backed San Brain automatic decisions for durable candidates: explicit user directives auto-activate, repeated high-confidence evidence auto-resolves, sensitive or invalid candidates are discarded, high-impact conflicts enter review, and `/brain status` reports automation and user-revocation rates.
+- Added `/subagent [model|status|clear]` session-local model routing for task-role subagents, persisted across resume and honored by Task, SDK, and ACP launches without overriding explicitly bound expert agents.
 - Added persistence-backed San RPC v2 settings for global, workspace, and session scopes, including source attribution, optimistic revision conflicts, and immediate runtime application.
 - Added RPC v2 provider catalog management (`provider.config.create`, `provider.model.add`) and `usage.stats` analytics with capability/schema exposure, secret-free provider listings, active-session aggregation, and persisted-session breakdowns.
 - Added RPC v2 `session.messages.list` for paginated persisted user/assistant transcript history, excluding synthetic, steering, tool-result, and empty-text messages while matching live `message.completed` text projection limits.

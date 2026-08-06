@@ -21,6 +21,7 @@ import type { Usage } from "@san/ai";
 import { $env, logger, prompt, Snowflake } from "@san/utils";
 import type { ToolSession } from "..";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
+import { formatModelRoleAlias, LEGACY_MODEL_ROLE_ALIAS_PREFIX } from "../config/model-roles";
 import { MCPManager } from "../mcp/manager";
 import type { Theme } from "../modes/theme/theme";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
@@ -64,6 +65,17 @@ import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { renderResult, renderCall as renderTaskCall } from "./render";
 import { repairTaskParams } from "./repair-args";
 import { parseIsolationMode } from "./worktree";
+
+function isTaskRoleModelBinding(model: AgentDefinition["model"]): boolean {
+	const values = (Array.isArray(model) ? model : model ? [model] : [])
+		.flatMap(value => value.split(","))
+		.map(value => value.trim())
+		.filter(Boolean);
+	return (
+		values.length === 1 &&
+		(values[0] === formatModelRoleAlias("task") || values[0] === `${LEGACY_MODEL_ROLE_ALIAS_PREFIX}task`)
+	);
+}
 
 function renderSubagentUserPrompt(assignment: string): string {
 	return prompt.render(subagentUserPromptTemplate, {
@@ -1271,8 +1283,11 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const agentModelOverrides = this.session.settings.get("task.agentModelOverrides");
 		const settingsModelOverride = agentModelOverrides[agentName];
 		const parentActiveModelPattern = this.session.getActiveModelString?.();
+		const sessionModelOverride = isTaskRoleModelBinding(effectiveAgent.model)
+			? this.session.getSubagentModelOverride?.()
+			: undefined;
 		const modelOverride = resolveAgentModelPatterns({
-			settingsOverride: settingsModelOverride,
+			settingsOverride: sessionModelOverride ?? settingsModelOverride,
 			agentModel: effectiveAgent.model,
 			settings: this.session.settings,
 			activeModelPattern: parentActiveModelPattern,

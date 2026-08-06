@@ -491,6 +491,7 @@ import { EPHEMERAL_MODEL_CHANGE_ROLE } from "./session-entries";
 import { formatSessionHistoryMarkdown } from "./session-history-format";
 import { cleanupEmptyMoveSession, type SessionManager } from "./session-manager";
 import type { ShakeMode, ShakeResult } from "./shake-types";
+import { getSessionSubagentModelOverride } from "./subagent-model-override";
 import { ToolChoiceQueue } from "./tool-choice-queue";
 import { planTurnPersistence, sameMessageContent, sessionMessagePersistenceKey } from "./turn-persistence";
 import { classifyUnexpectedStop, isUnexpectedStopCandidate } from "./unexpected-stop-classifier";
@@ -7565,6 +7566,11 @@ export class AgentSession {
 	/** Current model (may be undefined if not yet selected) */
 	get model(): Model | undefined {
 		return this.agent.state.model;
+	}
+
+	/** Session-local model selector for subagents bound to the task role. */
+	getSubagentModelOverride(): string | undefined {
+		return getSessionSubagentModelOverride(this.sessionManager.getBranch());
 	}
 
 	/** Effective thinking level applied to the agent (the resolved level when `auto`). */

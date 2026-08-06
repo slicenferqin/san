@@ -59,6 +59,10 @@ import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome } from "../../s
 import type { SessionInfo } from "../../session/session-listing";
 import { SessionManager } from "../../session/session-manager";
 import { FileSessionStorage } from "../../session/session-storage";
+import {
+	appendSessionSubagentModelOverride,
+	resolveSessionSubagentModelSelector,
+} from "../../session/subagent-model-override";
 import { type LogoutAccount, toLogoutAccounts } from "../../slash-commands/helpers/logout";
 import {
 	describeRedeemOutcome,
@@ -797,6 +801,7 @@ export class SelectorController {
 		initialProviderId?: string;
 		pickerHint?: string;
 		onCancel?: () => void;
+		onPick?: (model: Model, selector: string, thinkingLevel: ConfiguredThinkingLevel | undefined) => Promise<void>;
 	}): void {
 		const currentContextTokens = this.ctx.session.getContextUsage()?.tokens ?? 0;
 		let overlayHandle: OverlayHandle | undefined;
@@ -989,6 +994,11 @@ export class SelectorController {
 				},
 				onPick: async (model, selector, thinkingLevel) => {
 					try {
+						if (hubOptions.onPick) {
+							await hubOptions.onPick(model, selector, thinkingLevel);
+							done();
+							return;
+						}
 						const previousConfigured = this.ctx.session.configuredThinkingLevel();
 						const previousConcrete = this.ctx.session.thinkingLevel;
 						await this.ctx.session.setModelTemporary(model, thinkingLevel);
@@ -1080,6 +1090,24 @@ export class SelectorController {
 	 */
 	showModelRoleSelector(): void {
 		this.showModelSelector({ roleMode: true });
+	}
+
+	showSubagentModelSelector(): void {
+		this.#showModelHub({
+			mode: "pick",
+			pickerHint: "Task-role subagent · session only",
+			onPick: async (_model, selector, thinkingLevel) => {
+				const input = formatModelSelectorValue(selector, thinkingLevel);
+				const resolved = resolveSessionSubagentModelSelector(
+					input,
+					this.ctx.session.getAvailableModels(),
+					this.ctx.settings,
+				);
+				if (!resolved.ok) throw new Error(resolved.error);
+				appendSessionSubagentModelOverride(this.ctx.sessionManager, resolved.selector);
+				this.ctx.showStatus(`Task-role subagent model: ${resolved.selector}`);
+			},
+		});
 	}
 
 	/**
