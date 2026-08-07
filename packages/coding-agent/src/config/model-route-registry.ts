@@ -4,11 +4,11 @@ import {
 	type LogicalModelsConfig,
 	type ModelRouteBillingConfig,
 	ModelRouteConfigurationError,
-	type RouteFailureCategory,
+	type RouteFallbackCategory,
 	validateLogicalModelsConfiguration,
 } from "./model-routes-schema";
 
-const DEFAULT_ROUTE_FALLBACK_ON: readonly RouteFailureCategory[] = Object.freeze([
+const DEFAULT_ROUTE_FALLBACK_ON: readonly RouteFallbackCategory[] = Object.freeze([
 	"rate_limit",
 	"quota",
 	"timeout",
@@ -21,7 +21,7 @@ export interface CompiledModelRoutePolicy {
 	readonly strategy: "priority";
 	readonly affinity: "session";
 	readonly revert: "next-turn-after-cooldown" | "never";
-	readonly fallbackOn: readonly RouteFailureCategory[];
+	readonly fallbackOn: readonly RouteFallbackCategory[];
 }
 
 export interface CompiledModelRoute {
@@ -34,6 +34,23 @@ export interface CompiledModelRoute {
 	readonly enabled: boolean;
 	readonly equivalence: "exact" | "compatible" | "unknown";
 	readonly billing?: Readonly<ModelRouteBillingConfig>;
+}
+
+/** Route-local effective cost snapshot (per-million-token, four fields). */
+export type ModelCostSnapshot = Readonly<{
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+}>;
+
+/**
+ * LMR-02：显式四字段 cost 相等比较。registry recompilation 会为同 selector 创建
+ * 新的 route-local model clone，因此禁止用对象身份比较判断 cost 是否变化。
+ */
+export function modelCostsEqual(a: ModelCostSnapshot | undefined, b: ModelCostSnapshot | undefined): boolean {
+	if (a === undefined || b === undefined) return a === b;
+	return a.input === b.input && a.output === b.output && a.cacheRead === b.cacheRead && a.cacheWrite === b.cacheWrite;
 }
 
 export interface CompiledLogicalModelRouteGroup {
@@ -63,7 +80,9 @@ function compileRoutePolicy(policy: LogicalModelsConfig[string]["policy"]): Comp
 		strategy: policy?.strategy ?? "priority",
 		affinity: policy?.affinity ?? "session",
 		revert: policy?.revert ?? "next-turn-after-cooldown",
-		fallbackOn: Object.freeze([...(policy?.fallbackOn ?? DEFAULT_ROUTE_FALLBACK_ON)]),
+		// validateLogicalModelsConfiguration 已拒绝 unsafe 类别，这里收窄为
+		// 编译后保证的 RouteFallbackCategory 集合。
+		fallbackOn: Object.freeze([...(policy?.fallbackOn ?? DEFAULT_ROUTE_FALLBACK_ON)] as RouteFallbackCategory[]),
 	});
 }
 
@@ -136,11 +155,25 @@ export function compileModelRouteRegistry(
 			if (model === null) {
 				throw new ModelRouteConfigurationError(modelPath, `ambiguous concrete model "${route.model}"`);
 			}
+			// LMR-02：billing override 构造 route-local effective model，只替换
+			// cost 四字段，复制其余 transport/capability/thinking 等字段；绝不
+			// 突变 catalog model 或共享 cost 对象。
+			const effectiveModel = route.billing
+				? Object.freeze({
+						...model,
+						cost: Object.freeze({
+							input: route.billing.input,
+							output: route.billing.output,
+							cacheRead: route.billing.cacheRead,
+							cacheWrite: route.billing.cacheWrite,
+						}),
+					})
+				: model;
 			return Object.freeze({
 				id: route.id ?? route.model,
 				logicalModelId,
 				modelSelector: route.model,
-				model,
+				model: effectiveModel,
 				priority: route.priority ?? configOrder,
 				configOrder,
 				enabled: route.enabled ?? true,

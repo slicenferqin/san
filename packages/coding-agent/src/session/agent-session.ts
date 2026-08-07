@@ -18404,12 +18404,55 @@ export class AgentSession {
 
 		const registry = this.#modelRegistry.getModelRouteRegistry();
 		const request = this.#modelRouteResolutionRequest(activeRoute.logicalModelId);
+
+		// LMR-01：配置热更新后，同 route ID 的 modelSelector/policyVersion 已变化时，
+		// 旧 active lease 视为 stale，在请求边界用当前 constraints 重绑（保留 role
+		// 与已选 harnessProfile）；在途 stream 不切 provider，只在下一请求前生效。
+		// LMR-02：同 selector 的 billing override 变化（costRefresh）只切换 effective
+		// cost，不关闭 provider session、不重建 transport 状态。
+		const rebindSelection = this.#modelRouteLease.reconcile(request);
+		let rebindKeyRejected = false;
+		if (rebindSelection) {
+			if (rebindSelection.costRefresh) {
+				const costRefreshTransition = this.#captureModelRouteTransition();
+				try {
+					const refreshedModel = await this.#modelRegistry.refreshSelectedModelMetadata(rebindSelection.model);
+					this.agent.setModel(refreshedModel);
+				} catch (error) {
+					this.#restoreModelRouteTransition(costRefreshTransition);
+					throw error;
+				}
+				return;
+			}
+			const rebindTransition = this.#captureModelRouteTransition();
+			const rebindKey = await this.#getRouteApiKeyRejection(rebindSelection);
+			if (rebindKey.available) {
+				const previousEditMode = this.#resolveActiveEditMode();
+				let targetModel: Model;
+				try {
+					targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(rebindSelection.model);
+					this.#setModelWithProviderSessionReset(targetModel);
+					this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
+					await this.#syncAfterModelChange(previousEditMode);
+				} catch (error) {
+					this.#restoreModelRouteTransition(rebindTransition);
+					throw error;
+				}
+				this.settings.getStorage()?.recordModelUsage(rebindSelection.route.modelSelector);
+				await this.#emitModelRouteResolved(rebindSelection);
+				return;
+			}
+			if (rebindKey.rejection) runtimeRejections.push(rebindKey.rejection);
+			this.#modelRouteLease.restoreState(rebindTransition.routeState);
+			rebindKeyRejected = true;
+		}
+
 		const resolution = registry.resolve(activeRoute.logicalModelId, request);
 		if (!resolution) {
 			throw new Error(`Unknown logical model "${activeRoute.logicalModelId}"`);
 		}
 		const activeTrace = resolution.trace.find(route => route.routeId === activeRoute.routeId);
-		const activeEligible = activeTrace?.eligible === true;
+		const activeEligible = activeTrace?.eligible === true && !rebindKeyRejected;
 		let originalError: Error | undefined;
 		if (activeEligible) {
 			const keyResult = await this.#getRouteApiKeyRejection({ route: activeRoute, model });

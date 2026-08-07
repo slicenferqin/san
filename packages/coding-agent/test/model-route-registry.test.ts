@@ -4,7 +4,12 @@ import * as path from "node:path";
 import { buildModel } from "@san/catalog/build";
 import { ModelRegistry, type ProviderConfigInput } from "@san/coding-agent/config/model-registry";
 import { compileModelRouteRegistry } from "@san/coding-agent/config/model-route-registry";
-import { validateLogicalModelsConfiguration } from "@san/coding-agent/config/model-routes-schema";
+import {
+	ModelRouteConfigurationError,
+	type RouteFailureCategory,
+	RUNTIME_ALLOWED_FALLBACK_CATEGORIES,
+	validateLogicalModelsConfiguration,
+} from "@san/coding-agent/config/model-routes-schema";
 import { AuthStorage } from "@san/coding-agent/session/auth-storage";
 import { TempDir } from "@san/utils";
 
@@ -204,4 +209,106 @@ describe("Logical Model route registry", () => {
 		expect(route?.model.baseUrl).toBe("https://runtime-new.example.invalid/v1");
 		expect(registry.getModelRouteRegistry().policyVersion).toBeGreaterThan(previousVersion);
 	});
+});
+test("fallbackOn 对三个 unsafe 类别逐项 fail fast 并定位精确 index", () => {
+	const routes = [{ id: "main", model: "first/shared", equivalence: "exact" as const }];
+	for (const [category, index] of [
+		["refusal", 0],
+		["user_abort", 1],
+		["context_overflow", 2],
+	] as const) {
+		const fallbackOn = ["rate_limit", "timeout", "network"] as RouteFailureCategory[];
+		fallbackOn[index] = category;
+		const config = { logical: { policy: { fallbackOn }, routes } };
+		expect(() => validateLogicalModelsConfiguration(config)).toThrow(
+			`logicalModels.logical.policy.fallbackOn[${index}]`,
+		);
+		expect(() => validateLogicalModelsConfiguration(config)).toThrow(
+			`fallbackOn category "${category}" is not replayable`,
+		);
+		expect(() => compileModelRouteRegistry(config, [concreteModel("first", "shared")])).toThrow(
+			ModelRouteConfigurationError,
+		);
+	}
+});
+
+test("allowed fallbackOn 类别全部接受，default 与 duplicate 精确路径不回归", () => {
+	const models = [concreteModel("first", "shared")];
+	const routes = [{ id: "main", model: "first/shared", equivalence: "exact" as const }];
+	for (const category of RUNTIME_ALLOWED_FALLBACK_CATEGORIES) {
+		const registry = compileModelRouteRegistry({ logical: { policy: { fallbackOn: [category] }, routes } }, models);
+		expect(registry.get("logical")?.policy.fallbackOn).toEqual([category]);
+	}
+	const defaultRegistry = compileModelRouteRegistry({ logical: { routes } }, models);
+	expect(defaultRegistry.get("logical")?.policy.fallbackOn).toEqual([
+		"rate_limit",
+		"quota",
+		"timeout",
+		"network",
+		"server_error",
+		"model_unavailable",
+	]);
+	expect(() =>
+		validateLogicalModelsConfiguration({
+			logical: { policy: { fallbackOn: ["rate_limit", "rate_limit"] }, routes },
+		}),
+	).toThrow("logicalModels.logical.policy.fallbackOn[1]");
+});
+
+test("billing override 构造 route-local effective model，catalog model 不被突变", () => {
+	const catalog = concreteModel("first", "shared");
+	const registry = compileModelRouteRegistry(
+		{
+			logical: {
+				routes: [
+					{
+						id: "paid",
+						model: "first/shared",
+						equivalence: "exact",
+						billing: { source: "override", input: 10, output: 20, cacheRead: 30, cacheWrite: 40 },
+					},
+				],
+			},
+		},
+		[catalog],
+	);
+	const route = registry.get("logical")?.routes[0];
+	expect(route?.model.cost).toEqual({ input: 10, output: 20, cacheRead: 30, cacheWrite: 40 });
+	expect(route?.model).not.toBe(catalog);
+	expect(route?.modelSelector).toBe("first/shared");
+	expect(route?.model.provider).toBe("first");
+	expect(route?.model.id).toBe("shared");
+	expect(route?.model.baseUrl).toBe(catalog.baseUrl);
+	expect(route?.model.input).toEqual(catalog.input);
+	expect(route?.billing).toEqual({ source: "override", input: 10, output: 20, cacheRead: 30, cacheWrite: 40 });
+	expect(catalog.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+});
+
+test("无 billing 的 route 复用 catalog model 对象，primary/backup 各自 effective price", () => {
+	const primary = concreteModel("first", "chat");
+	const backup = concreteModel("second", "chat");
+	const registry = compileModelRouteRegistry(
+		{
+			logical: {
+				routes: [
+					{
+						id: "primary",
+						model: "first/chat",
+						priority: 0,
+						equivalence: "exact",
+						billing: { source: "override", input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+					},
+					{ id: "backup", model: "second/chat", priority: 10, equivalence: "exact" },
+				],
+			},
+		},
+		[primary, backup],
+	);
+	const primaryRoute = registry.get("logical")?.routes[0];
+	const backupRoute = registry.get("logical")?.routes[1];
+	expect(primaryRoute?.model.cost).toEqual({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4 });
+	expect(backupRoute?.model).toBe(backup);
+	expect(backupRoute?.model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+	expect(primary.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+	expect(backup.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 });

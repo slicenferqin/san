@@ -73,7 +73,7 @@ import {
 	getOllamaContextLengthOverride,
 	normalizeLiteLLMDiscoveryBaseUrl,
 } from "./model-discovery";
-import { compileModelRouteRegistry, ModelRouteRegistry } from "./model-route-registry";
+import { compileModelRouteRegistry, ModelRouteRegistry, modelCostsEqual } from "./model-route-registry";
 import type { LogicalModelsConfig } from "./model-routes-schema";
 import { ModelsConfigFile, type ProviderValidationModel, validateProviderConfiguration } from "./models-config";
 import type { ModelOverride, ModelsConfig, ProviderAuthMode } from "./models-config-schema";
@@ -947,11 +947,16 @@ export class ModelRegistry {
 			return model;
 		}
 		const runtimeMetadata = await discoverLlamaCppModelRuntimeMetadata(model, this.#nonResolvingDiscoveryContext());
+		const current = this.find(model.provider, model.id) ?? model;
+		// LMR-02：传入 model 可能是 route-local effective model（携带 billing override）。
+		// 动态 metadata 刷新只更新能力字段（context/maxTokens/input）；cost 四字段以
+		// 显式相等比较判断，保留 route-local override 于返回值，catalog 条目仍保持
+		// catalog cost，绝不在 provider usage/hard-budget 下游二次套用。
+		const routeCostOverride = modelCostsEqual(model.cost, current.cost) ? undefined : model.cost;
 		if (runtimeMetadata === undefined) {
-			return this.find(model.provider, model.id) ?? model;
+			return routeCostOverride ? applyModelPatch(current, { cost: routeCostOverride }, "merge") : current;
 		}
 		const { contextWindow, maxTokens, input } = runtimeMetadata;
-		const current = this.find(model.provider, model.id) ?? model;
 		const override = this.#resolveLiveModelOverride(current);
 		const customModel = this.#resolveLiveCustomModelOverlay(current);
 		const patch: ModelPatch = {};
@@ -988,16 +993,15 @@ export class ModelRegistry {
 			patch.input = input;
 		}
 		if (patch.contextWindow === undefined && patch.maxTokens === undefined && patch.input === undefined) {
-			return current;
+			return routeCostOverride ? applyModelPatch(current, { cost: routeCostOverride }, "merge") : current;
 		}
 		const patched = applyModelPatch(current, patch, "merge");
 		this.#models = this.#models.map(candidate =>
 			candidate.provider === current.provider && candidate.id === current.id ? patched : candidate,
 		);
 		this.#refreshModelRoutes();
-		return patched;
+		return routeCostOverride ? applyModelPatch(patched, { cost: routeCostOverride }, "merge") : patched;
 	}
-
 	/**
 	 * Discover models for providers registered at runtime via `fetchDynamicModels`
 	 * (extension providers). Merges the discovered catalog into the existing model

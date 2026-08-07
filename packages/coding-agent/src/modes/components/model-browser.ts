@@ -69,6 +69,8 @@ export interface ModelBrowserItem {
 	model: Model;
 	selector: string;
 	logicalRoute?: LogicalModelRouteDisplay;
+	/** Set when the logical group has no route eligible under the current resolution constraints. */
+	noEligibleRoute?: boolean;
 	/** Optional foreground color for the row label. */
 	labelColor?: ThemeColor;
 }
@@ -161,13 +163,21 @@ export function buildBrowserItems(models: ReadonlyArray<Model>): ModelBrowserIte
 }
 
 /**
- * 将显式 Route Group 投影成可选择的 Logical Model 行。没有启用路由时
- * 返回空数组，保证旧的模型列表与交互顺序不变。
+ * Optional constraints forwarded to the logical route resolver when projecting
+ * a Route Group. Mirrors the picker-relevant subset of `ModelRouteResolutionRequest`;
+ * eligibility is decided solely by the existing resolver (auth, suppression,
+ * provider availability, equivalence, and context window all apply).
  */
+export interface LogicalBrowserResolutionConstraints {
+	/** Session token count; routes with a smaller context window are ineligible. */
+	requiredContextTokens?: number;
+}
+
 export function buildLogicalBrowserItems(
 	settings: Settings,
 	modelRegistry: ModelRegistry,
 	activeRoute?: ActiveLogicalRouteSummary,
+	constraints: LogicalBrowserResolutionConstraints = {},
 ): ModelBrowserItem[] {
 	if (!settings.get("routing.enabled")) return [];
 	const routeRegistry = modelRegistry.getModelRouteRegistry();
@@ -178,18 +188,28 @@ export function buildLogicalBrowserItems(
 		);
 		const resolution = routeRegistry.resolve(group.id, {
 			...(suppressedRouteIds.size > 0 && { suppressedRouteIds }),
+			...(constraints.requiredContextTokens !== undefined && {
+				requiredContextTokens: constraints.requiredContextTokens,
+			}),
 			hasAuth: route => modelRegistry.hasConfiguredAuth(route.model),
 			isAvailable: route => modelRegistry.isProviderEnabled(route.model.provider),
 		});
 		const activeForGroup = activeRoute?.logicalModelId === group.id ? activeRoute : undefined;
 		const activeCompiledRoute = activeForGroup ? routeRegistry.getRoute(group.id, activeForGroup.routeId) : undefined;
-		const representative = activeCompiledRoute ?? resolution?.route ?? group.routes[0];
+		// The active lease is only a valid representative while it stays eligible
+		// in the same resolution trace; otherwise the resolver's eligible backup
+		// (or none at all) decides the row's model/context and selectability.
+		const activeEligible =
+			activeCompiledRoute !== undefined &&
+			resolution?.trace.some(entry => entry.routeId === activeCompiledRoute.id && entry.eligible) === true;
+		const representative = activeEligible ? activeCompiledRoute : (resolution?.route ?? group.routes[0]);
 		if (!representative) continue;
 		items.push({
 			provider: "logical",
 			id: group.id,
 			model: representative.model,
 			selector: group.id,
+			...(resolution?.route === undefined && { noEligibleRoute: true }),
 			logicalRoute: {
 				logicalModelId: group.id,
 				name: group.name,
@@ -559,6 +579,10 @@ export class ModelBrowser implements Component {
 
 	#isDisabled(item: ModelBrowserItem): boolean {
 		if (item.id === "separator") return true;
+		// A logical group with no resolver-eligible route is unselectable in
+		// context-sensitive (session-switch) mode; other modes keep the row
+		// enabled exactly as before.
+		if (item.noEligibleRoute) return this.#disableOverContext;
 		if (!this.#disableOverContext || this.#currentContextTokens <= 0) return false;
 		const contextWindow = item.model.contextWindow ?? 0;
 		return contextWindow > 0 && this.#currentContextTokens > contextWindow;
@@ -823,7 +847,9 @@ export class ModelBrowser implements Component {
 		const currentMark =
 			item.selector === this.#currentSelector ? ` ${theme.fg("success", theme.status.enabled)}` : "";
 		const overLimit = disabled
-			? ` ${theme.status.disabled} context>${formatNumber(item.model.contextWindow ?? 0).toLowerCase()}`
+			? item.noEligibleRoute
+				? ` ${theme.status.disabled} no eligible route`
+				: ` ${theme.status.disabled} context>${formatNumber(item.model.contextWindow ?? 0).toLowerCase()}`
 			: "";
 		let left = `${prefix}${providerPrefix}${name}${currentMark}${overLimit}`;
 
@@ -873,6 +899,10 @@ export class ModelBrowser implements Component {
 					return `${mark}${sanitizeLogicalDisplay(route.id)}→${sanitizeLogicalDisplay(route.modelSelector)}${disabled}`;
 				})
 				.join(" · ");
+			if (this.#isDisabled(selected) && selected.noEligibleRoute) {
+				const warning = `  ${theme.status.disabled} no eligible route in this logical group for the current session`;
+				return [line1, truncateToWidth(theme.fg("warning", warning), width)];
+			}
 			return [line1, truncateToWidth(theme.fg("dim", `  routes: ${routeList}`), width)];
 		}
 

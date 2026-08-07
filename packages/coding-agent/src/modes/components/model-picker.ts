@@ -76,6 +76,8 @@ export class ModelPickerComponent implements Component {
 	#currentSelector: string | undefined;
 	#currentQuickRoleSelector: string | undefined;
 	#activeLogicalRoute: ActiveLogicalRouteSummary | undefined;
+	/** Normalized session token count forwarded to logical route resolution. */
+	#currentContextTokens = 0;
 	#modelItems: ModelBrowserItem[] = [];
 	#quickRoleItems: ModelBrowserItem[] = [];
 	#quickRoles = new Map<string, ResolvedRoleModel>();
@@ -95,6 +97,8 @@ export class ModelPickerComponent implements Component {
 		this.#scopedModels = scopedModels;
 		this.#currentSelector = options.currentSelector;
 		this.#activeLogicalRoute = options.activeLogicalRoute;
+		const tokens = options.currentContextTokens ?? 0;
+		this.#currentContextTokens = Number.isFinite(tokens) && tokens > 0 ? Math.floor(tokens) : 0;
 		this.#currentQuickRoleSelector = options.currentQuickRole ? `@${options.currentQuickRole}` : undefined;
 		this.#quickRoleItems = this.#buildQuickRoleItems(
 			options.quickRoles ?? [],
@@ -167,7 +171,9 @@ export class ModelPickerComponent implements Component {
 		const logicalItems =
 			this.#scopedModels.length > 0
 				? []
-				: buildLogicalBrowserItems(this.#settings, this.#registry, this.#activeLogicalRoute);
+				: buildLogicalBrowserItems(this.#settings, this.#registry, this.#activeLogicalRoute, {
+						requiredContextTokens: this.#currentContextTokens > 0 ? this.#currentContextTokens : undefined,
+					});
 		sortModelItems(logicalItems, { roles, mruOrder });
 		this.#modelItems = [...logicalItems, ...concreteItems];
 		this.#browser.setRoles(roles);

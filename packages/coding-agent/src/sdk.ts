@@ -1416,11 +1416,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			...(suppressedRouteIds.size > 0 && { suppressedRouteIds }),
 		});
 		const route = activeModelRouteFromResolution(resolution, role);
-		const currentModel = resolution?.route
-			? modelRegistry.find(resolution.route.model.provider, resolution.route.model.id)
-			: undefined;
-		return route && resolution?.route && currentModel
-			? { kind: "selected" as const, model: currentModel, route, resolution }
+		// LMR-02：startup/default/resume 必须使用 resolution 的 route-local effective
+		// model（携带 billing override），而不是 catalog 条目——后者会丢掉 route-local
+		// cost。availability 检查已由上方 `isAvailable`（catalog find 存在性）承担。
+		return route && resolution?.route
+			? { kind: "selected" as const, model: resolution.route.model, route, resolution }
 			: { kind: "unavailable" as const, resolution };
 	};
 	// Identify session model strings to restore in fallback order. We do an

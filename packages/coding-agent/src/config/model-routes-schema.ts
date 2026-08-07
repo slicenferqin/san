@@ -10,6 +10,47 @@ export const RouteFailureCategorySchema = type(
 
 export type RouteFailureCategory = typeof RouteFailureCategorySchema.infer;
 
+/**
+ * 运行时实际允许 replay 的可配置 fallback 类别（窄集合）。
+ *
+ * refusal / user_abort / context_overflow 永不会被 runtime 重放，只能用于错误
+ * 分类、session entry 与 RPC event（保持完整的 RouteFailureCategory）。配置
+ * fallbackOn 时只接受本集合，非法项由 validateLogicalModelsConfiguration 以
+ * 精确的 `logicalModels.<id>.policy.fallbackOn[index]` 路径拒绝。
+ */
+export const RouteFallbackCategorySchema = type(
+	'"rate_limit" | "quota" | "timeout" | "network" | "server_error" | "model_unavailable" | "auth_failed" | "invalid_request"',
+);
+
+export type RouteFallbackCategory = typeof RouteFallbackCategorySchema.infer;
+
+/** 配置侧允许的 fallback 类别清单，与 RouteFallbackCategorySchema 保持一致。 */
+export const RUNTIME_ALLOWED_FALLBACK_CATEGORIES: readonly RouteFallbackCategory[] = Object.freeze([
+	"rate_limit",
+	"quota",
+	"timeout",
+	"network",
+	"server_error",
+	"model_unavailable",
+	"auth_failed",
+	"invalid_request",
+]);
+
+/** 配置侧 fallback 类别运行时可重放性，与 RouteFailureCategory 保持穷尽。 */
+const REPLAYABLE_ROUTE_FAILURE_CATEGORY: Readonly<Record<RouteFailureCategory, boolean>> = Object.freeze({
+	rate_limit: true,
+	quota: true,
+	timeout: true,
+	network: true,
+	server_error: true,
+	model_unavailable: true,
+	auth_failed: true,
+	invalid_request: true,
+	context_overflow: false,
+	refusal: false,
+	user_abort: false,
+});
+
 export const ModelRouteBillingSchema = type({
 	source: '"override"',
 	input: "number >= 0",
@@ -97,6 +138,14 @@ export function validateLogicalModelsConfiguration(logicalModels: LogicalModelsC
 		const routeIndexById = new Map<string, number>();
 		const fallbackIndexByCategory = new Map<RouteFailureCategory, number>();
 		for (const [fallbackIndex, category] of (logicalModel.policy?.fallbackOn ?? []).entries()) {
+			// LMR-05：拒绝运行时永不执行 replay 的类别（refusal / user_abort /
+			// context_overflow），路径精确到 policy.fallbackOn[index]。
+			if (!REPLAYABLE_ROUTE_FAILURE_CATEGORY[category]) {
+				throw new ModelRouteConfigurationError(
+					`${logicalPath}.policy.fallbackOn[${fallbackIndex}]`,
+					`fallbackOn category "${category}" is not replayable by runtime routing (never replay: refusal, user_abort, context_overflow)`,
+				);
+			}
 			const previousIndex = fallbackIndexByCategory.get(category);
 			if (previousIndex !== undefined) {
 				throw new ModelRouteConfigurationError(

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { ProviderSessionState } from "@san/ai";
 import { createMockModel } from "@san/ai/providers/mock";
 import { ModelRegistry, type ProviderConfigInput } from "@san/coding-agent/config/model-registry";
 import { Settings } from "@san/coding-agent/config/settings";
@@ -729,6 +730,439 @@ describe("createAgentSession Logical Model startup", () => {
 				logicalModelId: "worker",
 				routeId: "worker-backup",
 			});
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("config refresh 后下一 prompt 把同 ID 的 stale lease 重绑到新 selector", async () => {
+		const modelsPath = path.join(tempDir, "models.json");
+		const write = async (selector: string): Promise<void> => {
+			await Bun.write(
+				modelsPath,
+				JSON.stringify({
+					providers: { pa: provider("chat"), pb: provider("chat") },
+					logicalModels: {
+						logical: { routes: [{ id: "main", model: selector, equivalence: "exact" }] },
+					},
+				}),
+			);
+			const future = new Date(Date.now() + 2_000);
+			await fs.promises.utimes(modelsPath, future, future);
+		};
+		await write("pa/chat");
+		modelRegistry = new ModelRegistry(authStorage, modelsPath);
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"routing.enabled": true,
+			modelRoles: { default: "logical" },
+		});
+		const sessionManager = SessionManager.create(tempDir, path.join(tempDir, "rebind-sessions"));
+		const { session } = await createAgentSession(options(settings, sessionManager));
+		const setModel = session.agent.setModel.bind(session.agent);
+		const setModelCalls: string[] = [];
+		vi.spyOn(session.agent, "setModel").mockImplementation(model => {
+			setModelCalls.push(`${model.provider}/${model.id}`);
+			return setModel(model);
+		});
+		const resolvedEvents: string[] = [];
+		const unsubscribe = session.subscribe(event => {
+			if (event.type === "model_route_resolved") {
+				resolvedEvents.push(event.model);
+			}
+		});
+		const mock = createMockModel();
+		const requestedModels: string[] = [];
+		session.agent.streamFn = (model, context, streamOptions) => {
+			requestedModels.push(`${model.provider}/${model.id}`);
+			mock.push({ content: [`ok:${model.provider}/${model.id}`] });
+			return mock.stream(model, context, streamOptions);
+		};
+
+		try {
+			expect(session.model?.provider).toBe("pa");
+			expect(session.activeModelRoute?.modelSelector).toBe("pa/chat");
+
+			await write("pb/chat");
+			await modelRegistry.refresh("offline");
+			expect(session.activeModelRoute?.modelSelector).toBe("pa/chat");
+
+			await session.prompt("rebind to the refreshed target");
+			await session.waitForIdle();
+
+			expect(requestedModels).toEqual(["pb/chat"]);
+			expect(session.model?.provider).toBe("pb");
+			expect(session.activeModelRoute).toMatchObject({
+				logicalModelId: "logical",
+				routeId: "main",
+				modelSelector: "pb/chat",
+				role: "default",
+			});
+			expect(session.activeModelRoute?.policyVersion).toBe(modelRegistry.getModelRouteRegistry().policyVersion);
+			expect(resolvedEvents).toEqual(["pb/chat"]);
+			expect(setModelCalls).toEqual(["pb/chat"]);
+			expect(sessionManager.getBranch().findLast(entry => entry.type === "model_route_change")).toBeUndefined();
+		} finally {
+			unsubscribe();
+			await session.dispose();
+		}
+	});
+
+	test("同 ID/同 selector 的无关 policy refresh 只刷新 lease version 不 reset", async () => {
+		const modelsPath = path.join(tempDir, "models.json");
+		const write = async (): Promise<void> => {
+			await Bun.write(
+				modelsPath,
+				JSON.stringify({
+					providers: { pa: provider("chat") },
+					logicalModels: {
+						logical: { routes: [{ id: "main", model: "pa/chat", equivalence: "exact" }] },
+					},
+				}),
+			);
+			const future = new Date(Date.now() + 2_000);
+			await fs.promises.utimes(modelsPath, future, future);
+		};
+		await write();
+		modelRegistry = new ModelRegistry(authStorage, modelsPath);
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"routing.enabled": true,
+			modelRoles: { default: "logical" },
+		});
+		const sessionManager = SessionManager.inMemory(tempDir);
+		const { session } = await createAgentSession(options(settings, sessionManager));
+		const setModel = session.agent.setModel.bind(session.agent);
+		const setModelSpy = vi.spyOn(session.agent, "setModel").mockImplementation(model => setModel(model));
+		const mock = createMockModel();
+		const requestedModels: string[] = [];
+		session.agent.streamFn = (model, context, streamOptions) => {
+			requestedModels.push(`${model.provider}/${model.id}`);
+			mock.push({ content: ["still the same target"] });
+			return mock.stream(model, context, streamOptions);
+		};
+
+		try {
+			await write();
+			await modelRegistry.refresh("offline");
+			await session.prompt("no-op refresh");
+			await session.waitForIdle();
+
+			expect(requestedModels).toEqual(["pa/chat"]);
+			expect(session.model?.provider).toBe("pa");
+			expect(session.activeModelRoute?.modelSelector).toBe("pa/chat");
+			expect(session.activeModelRoute?.policyVersion).toBe(modelRegistry.getModelRouteRegistry().policyVersion);
+			expect(setModelSpy).not.toHaveBeenCalled();
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("重绑目标不 eligible 时选择下一条 eligible route，不回旧 A", async () => {
+		const modelsPath = path.join(tempDir, "models.json");
+		const write = async (mainSelector: string): Promise<void> => {
+			await Bun.write(
+				modelsPath,
+				JSON.stringify({
+					providers: { pa: provider("chat"), pb: provider("chat"), pc: provider("chat") },
+					logicalModels: {
+						logical: {
+							routes: [
+								{ id: "main", model: mainSelector, priority: 0, equivalence: "exact" },
+								{ id: "backup", model: "pb/chat", priority: 10, equivalence: "exact" },
+							],
+						},
+					},
+				}),
+			);
+			const future = new Date(Date.now() + 2_000);
+			await fs.promises.utimes(modelsPath, future, future);
+		};
+		await write("pa/chat");
+		modelRegistry = new ModelRegistry(authStorage, modelsPath);
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"routing.enabled": true,
+			modelRoles: { default: "logical" },
+		});
+		const sessionManager = SessionManager.inMemory(tempDir);
+		const { session } = await createAgentSession(options(settings, sessionManager));
+		const mock = createMockModel();
+		const requestedModels: string[] = [];
+		session.agent.streamFn = (model, context, streamOptions) => {
+			requestedModels.push(`${model.provider}/${model.id}`);
+			mock.push({ content: [`ok:${model.provider}/${model.id}`] });
+			return mock.stream(model, context, streamOptions);
+		};
+
+		try {
+			await write("pc/chat");
+			await modelRegistry.refresh("offline");
+			modelRegistry.suppressSelector("pc/chat", Date.now() + 60_000);
+
+			await session.prompt("fall over the suppressed refreshed target");
+			await session.waitForIdle();
+
+			expect(requestedModels).toEqual(["pb/chat"]);
+			expect(session.model?.provider).toBe("pb");
+			expect(session.activeModelRoute).toMatchObject({
+				logicalModelId: "logical",
+				routeId: "backup",
+				modelSelector: "pb/chat",
+			});
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("billing override 的 effective model 贯穿 hard budget 与 usage 价格", async () => {
+		const modelsPath = path.join(tempDir, "models.json");
+		await Bun.write(
+			modelsPath,
+			JSON.stringify({
+				providers: { primary: provider("chat"), backup: provider("chat") },
+				logicalModels: {
+					logical: {
+						routes: [
+							{
+								id: "primary",
+								model: "primary/chat",
+								priority: 0,
+								equivalence: "exact",
+								billing: { source: "override", input: 0, output: 2_000_000, cacheRead: 0, cacheWrite: 0 },
+							},
+							{ id: "backup", model: "backup/chat", priority: 10, equivalence: "exact" },
+						],
+					},
+				},
+			}),
+		);
+		modelRegistry = new ModelRegistry(authStorage, modelsPath);
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"routing.enabled": true,
+			modelRoles: { default: "logical" },
+		});
+		const sessionManager = SessionManager.inMemory(tempDir);
+		const { session } = await createAgentSession({
+			...options(settings, sessionManager),
+			maxTotalCost: 10,
+			maxOutputTokens: 8,
+		});
+		const mock = createMockModel();
+		const requestedModels: string[] = [];
+		const streamModelCosts: number[] = [];
+		const maxTokens: number[] = [];
+		session.agent.streamFn = (model, context, streamOptions) => {
+			requestedModels.push(`${model.provider}/${model.id}`);
+			streamModelCosts.push(model.cost.output);
+			if (streamOptions?.maxTokens !== undefined) maxTokens.push(streamOptions.maxTokens);
+			mock.push({ content: ["charged turn"] });
+			return mock.stream(model, context, streamOptions);
+		};
+
+		try {
+			expect(session.activeModelRoute?.routeId).toBe("primary");
+			await session.selectLogicalModel("logical");
+			expect(session.model?.cost).toEqual({ input: 0, output: 2_000_000, cacheRead: 0, cacheWrite: 0 });
+			expect(session.activeModelRoute?.modelSelector).toBe("primary/chat");
+			expect(modelRegistry.find("primary", "chat")?.cost.output).toBe(0);
+			expect(modelRegistry.find("backup", "chat")?.cost.output).toBe(0);
+
+			await session.prompt("charge the effective price");
+			await session.waitForIdle();
+
+			expect(requestedModels).toEqual(["primary/chat"]);
+			expect(streamModelCosts).toEqual([2_000_000]);
+			expect(maxTokens).toEqual([5]);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("startup default logical model 的 billing override 直接生效，hard budget 读 override", async () => {
+		const modelsPath = path.join(tempDir, "models.json");
+		await Bun.write(
+			modelsPath,
+			JSON.stringify({
+				providers: { primary: provider("chat"), backup: provider("chat") },
+				logicalModels: {
+					logical: {
+						routes: [
+							{
+								id: "primary",
+								model: "primary/chat",
+								priority: 0,
+								equivalence: "exact",
+								billing: { source: "override", input: 0, output: 2_000_000, cacheRead: 0, cacheWrite: 0 },
+							},
+							{ id: "backup", model: "backup/chat", priority: 10, equivalence: "exact" },
+						],
+					},
+				},
+			}),
+		);
+		modelRegistry = new ModelRegistry(authStorage, modelsPath);
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"routing.enabled": true,
+			modelRoles: { default: "logical" },
+		});
+		const sessionManager = SessionManager.inMemory(tempDir);
+		const { session } = await createAgentSession({
+			...options(settings, sessionManager),
+			maxTotalCost: 10,
+			maxOutputTokens: 8,
+		});
+		const mock = createMockModel();
+		const streamModelCosts: number[] = [];
+		const maxTokens: number[] = [];
+		session.agent.streamFn = (model, context, streamOptions) => {
+			streamModelCosts.push(model.cost.output);
+			if (streamOptions?.maxTokens !== undefined) maxTokens.push(streamOptions.maxTokens);
+			mock.push({ content: ["charged turn"] });
+			return mock.stream(model, context, streamOptions);
+		};
+
+		try {
+			// startup 即携带 route-local effective cost，而非 catalog cost。
+			expect(session.activeModelRoute?.routeId).toBe("primary");
+			expect(session.model?.cost).toEqual({ input: 0, output: 2_000_000, cacheRead: 0, cacheWrite: 0 });
+			expect(modelRegistry.find("primary", "chat")?.cost.output).toBe(0);
+			expect(modelRegistry.find("backup", "chat")?.cost.output).toBe(0);
+
+			await session.prompt("charge the effective price");
+			await session.waitForIdle();
+
+			expect(streamModelCosts).toEqual([2_000_000]);
+			// hard budget 按 override 价格计算：10 / 2e6 * 1e6 = 5。
+			expect(maxTokens).toEqual([5]);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("persisted logical resume 的 billing override 在 startup 恢复路径保持", async () => {
+		const modelsPath = path.join(tempDir, "models.json");
+		await Bun.write(
+			modelsPath,
+			JSON.stringify({
+				providers: { primary: provider("chat"), backup: provider("chat") },
+				logicalModels: {
+					logical: {
+						routes: [
+							{ id: "primary", model: "primary/chat", priority: 0, equivalence: "exact" },
+							{
+								id: "backup",
+								model: "backup/chat",
+								priority: 10,
+								equivalence: "exact",
+								billing: { source: "override", input: 0, output: 2_000_000, cacheRead: 0, cacheWrite: 0 },
+							},
+						],
+					},
+				},
+			}),
+		);
+		modelRegistry = new ModelRegistry(authStorage, modelsPath);
+
+		const settings = Settings.isolated({ "routing.enabled": true });
+		const sessionManager = SessionManager.inMemory(tempDir);
+		sessionManager.appendModelChange("backup/chat", "default", {
+			logicalModel: "logical",
+			routeId: "backup",
+		});
+
+		const { session } = await createAgentSession(options(settings, sessionManager));
+		try {
+			expect(session.activeModelRoute?.routeId).toBe("backup");
+			expect(session.model?.cost).toEqual({ input: 0, output: 2_000_000, cacheRead: 0, cacheWrite: 0 });
+			expect(modelRegistry.find("backup", "chat")?.cost.output).toBe(0);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("同 selector 的 billing refresh 在下一请求边界切换 effective cost，不 reset provider session", async () => {
+		const modelsPath = path.join(tempDir, "models.json");
+		const write = async (outputPrice: number): Promise<void> => {
+			await Bun.write(
+				modelsPath,
+				JSON.stringify({
+					providers: { pa: provider("chat") },
+					logicalModels: {
+						logical: {
+							routes: [
+								{
+									id: "main",
+									model: "pa/chat",
+									equivalence: "exact",
+									billing: {
+										source: "override",
+										input: 0,
+										output: outputPrice,
+										cacheRead: 0,
+										cacheWrite: 0,
+									},
+								},
+							],
+						},
+					},
+				}),
+			);
+			const future = new Date(Date.now() + 2_000);
+			await fs.promises.utimes(modelsPath, future, future);
+		};
+		await write(1_000_000);
+		modelRegistry = new ModelRegistry(authStorage, modelsPath);
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"routing.enabled": true,
+			modelRoles: { default: "logical" },
+		});
+		const sessionManager = SessionManager.inMemory(tempDir);
+		const { session } = await createAgentSession(options(settings, sessionManager));
+		const setModel = session.agent.setModel.bind(session.agent);
+		const setModelSpy = vi.spyOn(session.agent, "setModel").mockImplementation(model => setModel(model));
+		const mock = createMockModel();
+		const streamModelCosts: number[] = [];
+		session.agent.streamFn = (model, context, streamOptions) => {
+			streamModelCosts.push(model.cost.output);
+			mock.push({ content: ["billing refresh turn"] });
+			return mock.stream(model, context, streamOptions);
+		};
+		const closeSpy = vi.fn();
+		session.providerSessionState.set("pa", { close: closeSpy } satisfies ProviderSessionState);
+
+		try {
+			expect(session.model?.cost.output).toBe(1_000_000);
+			await write(2_000_000);
+			await modelRegistry.refresh("offline");
+
+			await session.prompt("charge the refreshed price");
+			await session.waitForIdle();
+
+			expect(session.model?.cost.output).toBe(2_000_000);
+			expect(session.activeModelRoute?.policyVersion).toBe(modelRegistry.getModelRouteRegistry().policyVersion);
+			expect(streamModelCosts).toEqual([2_000_000]);
+			// cost-only refresh：setModel 只更新 state.model，不关闭 provider session。
+			expect(setModelSpy).toHaveBeenCalledTimes(1);
+			expect(closeSpy).not.toHaveBeenCalled();
+			expect(session.providerSessionState.get("pa")).toBeDefined();
+			expect(modelRegistry.find("pa", "chat")?.cost.output).toBe(0);
+
+			// 同 selector 同 billing 的无关 refresh：不再 setModel。
+			await write(2_000_000);
+			await modelRegistry.refresh("offline");
+			await session.prompt("no-op billing refresh");
+			await session.waitForIdle();
+			expect(setModelSpy).toHaveBeenCalledTimes(1);
 		} finally {
 			await session.dispose();
 		}

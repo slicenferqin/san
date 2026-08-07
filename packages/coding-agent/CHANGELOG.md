@@ -90,6 +90,7 @@
 
 ### Fixed
 
+- Fixed logical model routing to reject unsafe fallback policies, rebind stale leases after config refresh, apply route-specific billing, select context-eligible fallback routes in the model picker, and render persisted route-change audits in the TUI and HTML exports.
 - Fixed custom Codex providers to preserve `useResponsesLite` metadata and route standard `/v1` base URLs to `/v1/responses`.
 - Fixed Context Steady recovery stalling when agent-authored continuation messages were treated as user turn boundaries or an oversized tail of tool results left no valid cut point; maintenance audits, probes, extension events, and RPC v2 now also expose the failed recovery stage and reason.
 - Fixed queued no-op auto-compaction reporting no continuation after scheduling a queue drain, preventing session-stop and digest work from racing the pending turn.
