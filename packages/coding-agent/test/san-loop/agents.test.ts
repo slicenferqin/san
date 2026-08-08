@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { Settings } from "../../src/config/settings";
-import { createSanLoopTaskAgentExecutor } from "../../src/san-loop/task-executor";
+import type { ExecutionRuntime } from "../../src/execution-control/execution-runtime";
+import type { AcceptanceGate } from "../../src/execution-control/types";
+import {
+	createSanLoopTaskAgentExecutor,
+	SAN_LOOP_INSPECTION_ARTIFACT_KIND,
+	SAN_LOOP_INSPECTION_SCHEMA_ID,
+} from "../../src/san-loop/task-executor";
 import {
 	SAN_LOOP_SCHEMA_VERSION,
 	type SanLoopReviewReport,
@@ -12,6 +18,46 @@ import { SessionManager } from "../../src/session/session-manager";
 import { clearBundledAgentsCache, loadBundledAgents } from "../../src/task/agents";
 import * as executorModule from "../../src/task/executor";
 import type { SingleResult } from "../../src/task/types";
+
+const fakeExecutionRuntime = {
+	runtimeId: "runtime:agents-test",
+	rootSessionId: "session:agents-test",
+	getScope: () => undefined,
+} as unknown as ExecutionRuntime;
+const SAN_EXECUTION_SCOPE_ID = "scope:agents-test";
+
+function runtimeWithGates(gates: readonly AcceptanceGate[]): ExecutionRuntime {
+	return {
+		...fakeExecutionRuntime,
+		getScope: () => ({ snapshot: () => ({ gates }) }),
+	} as unknown as ExecutionRuntime;
+}
+
+function inspectionGate(): AcceptanceGate {
+	const contractRef = {
+		contractId: "contract:inspection-test",
+		revision: 1,
+		contractHash: "sha256:inspection-test",
+		clauseRefs: ["clause:inspection-test"],
+	};
+	return {
+		gateId: "gate:host-inspection:assign-role-models",
+		contractRef,
+		contractRevision: contractRef.revision,
+		contractHash: contractRef.contractHash,
+		objectiveClauseRefs: [...contractRef.clauseRefs],
+		verifier: {
+			kind: "artifact",
+			artifactKind: SAN_LOOP_INSPECTION_ARTIFACT_KIND,
+			schemaId: SAN_LOOP_INSPECTION_SCHEMA_ID,
+		},
+		status: "unknown",
+		evidenceRefs: [],
+		assignmentId: "assign-role-models",
+		freshnessRevision: 7,
+		required: true,
+	};
+}
 
 function makeResult(id: string, output: unknown): SingleResult {
 	return {
@@ -161,8 +207,12 @@ describe("San loop bundled agents", () => {
 			timestamp: Date.now() - 1,
 		} as Parameters<SessionManager["appendMessage"]>[0]);
 		let commanderTask = "";
+		const capturedRuntimes: unknown[] = [];
+		const capturedScopeIds: Array<string | undefined> = [];
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			commanderTask = options.task;
+			capturedRuntimes.push(options.executionRuntime);
+			capturedScopeIds.push(options.executionScopeId);
 			return makeResult(options.id, {
 				objective: "同意，进入M4",
 				mode: "team",
@@ -182,6 +232,8 @@ describe("San loop bundled agents", () => {
 
 		const executor = createSanLoopTaskAgentExecutor({
 			cwd: "/tmp",
+			executionRuntime: fakeExecutionRuntime,
+			executionScopeId: SAN_EXECUTION_SCOPE_ID,
 			session: {
 				sessionManager,
 				settings,
@@ -198,6 +250,8 @@ describe("San loop bundled agents", () => {
 		expect(commanderTask).toContain("Current objective:\n同意，进入M4");
 		expect(commanderTask).toContain("Infer missing scope, constraints, and acceptance criteria");
 		expect(result.assignments).toHaveLength(1);
+		expect(capturedRuntimes[0]).toBe(fakeExecutionRuntime);
+		expect(capturedScopeIds[0]).toBe(SAN_EXECUTION_SCOPE_ID);
 	});
 
 	test("routes configured execution-loop model roles into each San subagent", async () => {
@@ -259,6 +313,8 @@ describe("San loop bundled agents", () => {
 
 		const executor = createSanLoopTaskAgentExecutor({
 			cwd: "/tmp",
+			executionRuntime: fakeExecutionRuntime,
+			executionScopeId: SAN_EXECUTION_SCOPE_ID,
 			session: {
 				sessionManager: SessionManager.inMemory(),
 				settings,
@@ -322,6 +378,8 @@ describe("San loop bundled agents", () => {
 		});
 		const executor = createSanLoopTaskAgentExecutor({
 			cwd: "/tmp",
+			executionRuntime: fakeExecutionRuntime,
+			executionScopeId: SAN_EXECUTION_SCOPE_ID,
 			session: {
 				sessionManager: SessionManager.inMemory(),
 				settings,
@@ -375,6 +433,8 @@ describe("San loop bundled agents", () => {
 		);
 		const executor = createSanLoopTaskAgentExecutor({
 			cwd: "/tmp",
+			executionRuntime: fakeExecutionRuntime,
+			executionScopeId: SAN_EXECUTION_SCOPE_ID,
 			session: {
 				sessionManager: SessionManager.inMemory(),
 				settings,
@@ -436,6 +496,8 @@ describe("San loop bundled agents", () => {
 		);
 		const executor = createSanLoopTaskAgentExecutor({
 			cwd: "/tmp",
+			executionRuntime: fakeExecutionRuntime,
+			executionScopeId: SAN_EXECUTION_SCOPE_ID,
 			session: {
 				sessionManager: SessionManager.inMemory(),
 				settings,
@@ -489,6 +551,8 @@ describe("San loop bundled agents", () => {
 		);
 		const executor = createSanLoopTaskAgentExecutor({
 			cwd: "/tmp",
+			executionRuntime: fakeExecutionRuntime,
+			executionScopeId: SAN_EXECUTION_SCOPE_ID,
 			session: {
 				sessionManager: SessionManager.inMemory(),
 				settings,
@@ -555,6 +619,8 @@ describe("San loop bundled agents", () => {
 		);
 		const executor = createSanLoopTaskAgentExecutor({
 			cwd: "/tmp",
+			executionRuntime: fakeExecutionRuntime,
+			executionScopeId: SAN_EXECUTION_SCOPE_ID,
 			session: {
 				sessionManager: SessionManager.inMemory(),
 				settings,
@@ -607,6 +673,8 @@ describe("San loop bundled agents", () => {
 		);
 		const executor = createSanLoopTaskAgentExecutor({
 			cwd: "/tmp",
+			executionRuntime: fakeExecutionRuntime,
+			executionScopeId: SAN_EXECUTION_SCOPE_ID,
 			session: {
 				sessionManager: SessionManager.inMemory(),
 				settings,
@@ -657,6 +725,8 @@ describe("San loop bundled agents", () => {
 		);
 		const executor = createSanLoopTaskAgentExecutor({
 			cwd: "/tmp",
+			executionRuntime: fakeExecutionRuntime,
+			executionScopeId: SAN_EXECUTION_SCOPE_ID,
 			session: {
 				sessionManager: SessionManager.inMemory(),
 				settings,
@@ -703,6 +773,8 @@ describe("San loop bundled agents", () => {
 		);
 		const executor = createSanLoopTaskAgentExecutor({
 			cwd: "/tmp",
+			executionRuntime: fakeExecutionRuntime,
+			executionScopeId: SAN_EXECUTION_SCOPE_ID,
 			session: {
 				sessionManager: SessionManager.inMemory(),
 				settings,
@@ -759,6 +831,8 @@ describe("San loop bundled agents", () => {
 		);
 		const executor = createSanLoopTaskAgentExecutor({
 			cwd: "/tmp",
+			executionRuntime: fakeExecutionRuntime,
+			executionScopeId: SAN_EXECUTION_SCOPE_ID,
 			session: {
 				sessionManager: SessionManager.inMemory(),
 				settings,
@@ -782,6 +856,48 @@ describe("San loop bundled agents", () => {
 		]);
 	});
 
+	test("creates a bounded host receipt from successful inspection tools", async () => {
+		const settings = Settings.isolated({});
+		const subprocessResult = makeResult("worker", { status: "completed", summary: "Inspected workspace." });
+		subprocessResult.extractedToolData = {
+			...subprocessResult.extractedToolData,
+			read: [{ tool: "read", succeeded: true }],
+		};
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(subprocessResult);
+		const gate = inspectionGate();
+		const executor = createSanLoopTaskAgentExecutor({
+			cwd: "/tmp",
+			executionRuntime: runtimeWithGates([gate]),
+			executionScopeId: SAN_EXECUTION_SCOPE_ID,
+			session: {
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry: { authStorage: {} } as never,
+			},
+		});
+
+		const result = await executor.worker({ run: runSnapshot(), mode: "solo", assignment: assignment() });
+
+		expect(result.evidenceReceipts).toEqual([
+			expect.objectContaining({
+				receiptId: `receipt:assign-role-models:${gate.gateId}`,
+				kind: "artifact",
+				source: "host",
+				scopeId: SAN_EXECUTION_SCOPE_ID,
+				gateId: gate.gateId,
+				contractRevision: 1,
+				contractHash: "sha256:inspection-test",
+				freshnessRevision: 7,
+				assignmentId: "assign-role-models",
+				outcome: "pass",
+				artifactKind: SAN_LOOP_INSPECTION_ARTIFACT_KIND,
+				schemaId: SAN_LOOP_INSPECTION_SCHEMA_ID,
+			}),
+		]);
+		expect(result.evidenceReceipts?.[0]).not.toHaveProperty("path");
+		expect(result.evidenceReceipts?.[0]).not.toHaveProperty("content");
+	});
+
 	test("normalizes report-style worker yields from real providers", async () => {
 		const settings = Settings.isolated({});
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options =>
@@ -796,6 +912,8 @@ describe("San loop bundled agents", () => {
 		);
 		const executor = createSanLoopTaskAgentExecutor({
 			cwd: "/tmp",
+			executionRuntime: fakeExecutionRuntime,
+			executionScopeId: SAN_EXECUTION_SCOPE_ID,
 			session: {
 				sessionManager: SessionManager.inMemory(),
 				settings,
@@ -855,6 +973,8 @@ describe("San loop bundled agents", () => {
 		});
 		const executor = createSanLoopTaskAgentExecutor({
 			cwd: "/tmp",
+			executionRuntime: fakeExecutionRuntime,
+			executionScopeId: SAN_EXECUTION_SCOPE_ID,
 			session: {
 				sessionManager: SessionManager.inMemory(),
 				settings,
@@ -899,6 +1019,8 @@ describe("San loop bundled agents", () => {
 		);
 		const executor = createSanLoopTaskAgentExecutor({
 			cwd: "/tmp",
+			executionRuntime: fakeExecutionRuntime,
+			executionScopeId: SAN_EXECUTION_SCOPE_ID,
 			session: {
 				sessionManager: SessionManager.inMemory(),
 				settings,
@@ -945,6 +1067,8 @@ describe("San loop bundled agents", () => {
 		);
 		const executor = createSanLoopTaskAgentExecutor({
 			cwd: "/tmp",
+			executionRuntime: fakeExecutionRuntime,
+			executionScopeId: SAN_EXECUTION_SCOPE_ID,
 			session: {
 				sessionManager: SessionManager.inMemory(),
 				settings,
@@ -1003,6 +1127,8 @@ describe("San loop bundled agents", () => {
 		});
 		const executor = createSanLoopTaskAgentExecutor({
 			cwd: "/tmp",
+			executionRuntime: fakeExecutionRuntime,
+			executionScopeId: SAN_EXECUTION_SCOPE_ID,
 			hardBudget: { maxTokens: 1_000, maxCost: 10, maxProviderRequests: 10 },
 			session: {
 				sessionManager: SessionManager.inMemory(),

@@ -5,6 +5,7 @@
  */
 
 import type { AgentToolResult } from "@san/agent";
+import type { TaskContractSnapshot } from "../../execution-control/task-contract";
 import type { IrcDeliveryReceipt, IrcMessage } from "../../irc/bus";
 import type { LaunchParams, LaunchToolDetails } from "./launch";
 
@@ -48,6 +49,8 @@ export interface JobSnapshot {
 	durationMs: number;
 	resultText?: string;
 	errorText?: string;
+	/** Host-owned admission/heartbeat state for task jobs. */
+	taskContract?: TaskContractSnapshot;
 }
 
 export type CancelStatus = "cancelled" | "not_found" | "already_completed";
@@ -85,6 +88,8 @@ export interface CoordinationDetails {
 	inbox?: IrcMessage[];
 	peers?: HubPeerInfo[];
 	jobs?: JobSnapshot[];
+	/** Flat task-contract view for callers that need admission state without traversing jobs. */
+	taskContracts?: TaskContractSnapshot[];
 	cancelled?: { id: string; status: CancelStatus }[];
 	/** Running subagents not represented by a job row in this result. */
 	agents?: AgentActivitySnapshot[];

@@ -4331,6 +4331,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	showModelRoleSelector(): void {
 		this.#selectorController.showModelRoleSelector();
 	}
+	showSubagentModelSelector(): void {
+		this.#selectorController.showSubagentModelSelector();
+	}
 
 	showConnectSelector(): Promise<void> {
 		return this.#selectorController.showConnectSelector();

@@ -123,6 +123,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		const approvalMode: ApprovalMode = cliAutoApprove ? "yolo" : configuredMode;
 		const userPolicies = (settings?.get("tools.approval") ?? {}) as Record<string, unknown>;
 		const resolved = resolveApproval(this.tool, params, approvalMode, userPolicies);
+		context?.xdevTierResolved?.(resolved.tier);
 		if (resolved.policy === "deny") {
 			throw new Error(
 				`Tool "${this.tool.name}" is blocked by user policy.\n` +

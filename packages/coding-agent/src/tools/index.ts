@@ -10,6 +10,9 @@ import { EditTool } from "../edit";
 import { checkJuliaKernelAvailability } from "../eval/jl/kernel";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
 import { checkRubyKernelAvailability } from "../eval/rb/kernel";
+import type { ExecutionRuntime } from "../execution-control/execution-runtime";
+import type { ProviderHealthRegistry } from "../execution-control/provider-health";
+import type { TaskContractRegistry } from "../execution-control/task-contract";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { Skill } from "../extensibility/skills";
 import type { GoalModeState, GoalRuntime } from "../goals";
@@ -197,6 +200,14 @@ export interface ToolSession {
 	prewalkArmed?: boolean;
 	/** Task recursion depth (0 = top-level, 1 = first child, etc.) */
 	taskDepth?: number;
+	/** Root session identity shared by nested task contracts. */
+	getRootSessionId?: () => string | null;
+	/** Root-scoped task admission registry shared with child sessions. */
+	taskContractRegistry?: TaskContractRegistry;
+	/** 本根会话及其子会话共享的宿主执行 runtime。此处只读：子会话禁止 start/sync/dispose 作用域。 */
+	executionRuntime?: ExecutionRuntime;
+	/** 会话的固定/活动执行作用域 id（子会话继承父会话的精确 scope id；根会话跟随 runtime 的活动作用域）。 */
+	getExecutionScopeId?: () => string | undefined;
 	/** Get shared eval executor session ID. Subagents inherit this to share JS/Python/Ruby/Julia state. */
 	getEvalSessionId?: () => string | null;
 	/** Get session file */
@@ -237,6 +248,8 @@ export interface ToolSession {
 	getModelString?: () => string | undefined;
 	/** Get the current session model string, regardless of how it was chosen */
 	getActiveModelString?: () => string | undefined;
+	/** Get the session-local model selector for subagents bound to the task role. */
+	getSubagentModelOverride?: () => string | undefined;
 	/** Get the current session model object (provider/api capabilities), regardless of how it was chosen. */
 	getActiveModel?: () => Model | undefined;
 	/** Get the session's live per-family service tiers (undefined = none). Source of truth for subagent `tier.subagent: inherit`. */
@@ -262,6 +275,8 @@ export interface ToolSession {
 	 * session never borrows the owning session's manager by accident.
 	 */
 	asyncJobManager?: AsyncJobManager;
+	/** Provider-health circuit registry shared by this root and child requests. */
+	providerHealthRegistry?: ProviderHealthRegistry;
 	/** MCP manager visible to subagents without relying on the process-global singleton. */
 	mcpManager?: MCPManager;
 	/** Local protocol root to propagate to nested subagents and eval-created agents. */
@@ -582,7 +597,10 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	// Always create the xd:// registry when enabled so SDK assembly can mount
 	// discoverable custom/MCP tools later. Explicitly requested built-ins keep
 	// their top-level presentation; default tool sets mount discoverable built-ins.
-	const xdevEnabled = session.settings.get("tools.xdev");
+	const xdevEnabled =
+		session.strictToolNames !== true &&
+		session.settings.get("tools.xdev") &&
+		tools.some(tool => tool.name === "write");
 	const mountBuiltinTools = requestedTools === undefined;
 	if (xdevEnabled) {
 		const mounted: Tool[] = [];
@@ -600,12 +618,14 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			session.isToolActive = name => finalActiveNames.has(name);
 		}
 	}
-	// The xd:// transport rides read/write: `read xd://` lists+documents devices,
-	// `write xd://<tool>` executes them. Staged previews from deferrable tools
-	// (e.g. ast_edit) also resolve through a `write` to xd://resolve/reject. Retain
-	// both whenever any device is mounted or a deferrable tool can stage one.
+	// Staged previews from deferrable tools resolve through xd:// and need write.
+	// Mounting itself never grants write: sessions without it expose tools top-level.
 	const xdevMounted = (session.xdevRegistry?.size ?? 0) > 0;
-	if ((tools.some(tool => tool.deferrable === true) || xdevMounted) && !tools.some(tool => tool.name === "write")) {
+	if (
+		session.strictToolNames !== true &&
+		tools.some(tool => tool.deferrable === true) &&
+		!tools.some(tool => tool.name === "write")
+	) {
 		const writeTool = await logger.time("createTools:write", BUILTIN_TOOLS.write, session);
 		if (writeTool) {
 			tools.push(wrapToolWithMetaNotice(writeTool));

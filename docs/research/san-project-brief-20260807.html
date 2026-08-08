@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>San 项目简报｜执行恢复与子代理路由</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #15231c;
+      --muted: #607067;
+      --paper: #f2f0e8;
+      --panel: #fffdf8;
+      --line: #d6ddd7;
+      --green: #176647;
+      --green-soft: #e6f1ea;
+      --blue: #245e83;
+      --blue-soft: #e9f2f7;
+      --amber: #8b5a12;
+      --amber-soft: #fbf0d8;
+      --red: #973f39;
+      --red-soft: #f9e7e4;
+      --shadow: 0 14px 34px rgb(25 45 34 / 8%);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 12% 0%, rgb(36 94 131 / 9%), transparent 31rem),
+        radial-gradient(circle at 88% 7%, rgb(23 102 71 / 9%), transparent 34rem),
+        var(--paper);
+      font: 16px/1.65 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+    main { width: min(1160px, calc(100% - 36px)); margin: 34px auto 72px; }
+    header, section {
+      background: color-mix(in srgb, var(--panel) 96%, transparent);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+    }
+    header { padding: 38px 42px; border-top: 7px solid var(--green); }
+    section { margin-top: 20px; padding: 28px 32px; }
+    h1, h2, h3 { line-height: 1.22; margin-top: 0; }
+    h1 { font-size: clamp(2rem, 5vw, 3.55rem); letter-spacing: -0.04em; margin-bottom: 12px; }
+    h2 { font-size: 1.42rem; color: var(--green); border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+    h3 { font-size: 1.02rem; color: var(--blue); margin: 0 0 7px; }
+    p { max-width: 90ch; }
+    code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+    code { background: #edf2ee; border: 1px solid #dfe7e1; border-radius: 5px; padding: 0.08em 0.34em; }
+    a { color: var(--blue); text-underline-offset: 3px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 9px 24px; color: var(--muted); font-size: 0.92rem; }
+    .lede { color: #405349; font-size: 1.12rem; max-width: 84ch; }
+    .status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 22px; }
+    .pill { display: inline-flex; align-items: center; gap: 7px; border-radius: 999px; padding: 6px 11px; font-size: 0.88rem; font-weight: 700; border: 1px solid currentColor; }
+    .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+    .green { color: var(--green); background: var(--green-soft); }
+    .amber { color: var(--amber); background: var(--amber-soft); }
+    .red { color: var(--red); background: var(--red-soft); }
+    .blue { color: var(--blue); background: var(--blue-soft); }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; margin-top: 18px; }
+    .card { border: 1px solid var(--line); border-radius: 13px; padding: 16px; background: #fffefa; min-height: 116px; }
+    .card .value { font-size: 1.65rem; font-weight: 780; line-height: 1.2; letter-spacing: -0.03em; }
+    .card .label { color: var(--muted); font-size: 0.9rem; margin-top: 5px; }
+    .card .detail { color: #405349; font-size: 0.84rem; margin-top: 8px; }
+    .split { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 18px; }
+    .callout { border-left: 5px solid var(--blue); background: var(--blue-soft); border-radius: 9px; padding: 15px 18px; }
+    .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    .callout.danger { border-left-color: var(--red); background: var(--red-soft); }
+    .flow { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 9px; margin: 18px 0 8px; }
+    .flow > div { position: relative; border: 1px solid var(--line); border-radius: 10px; background: #f8faf8; padding: 12px 10px; text-align: center; font-size: 0.88rem; }
+    .flow > div:not(:last-child)::after { content: "→"; position: absolute; right: -10px; top: 50%; transform: translate(50%, -50%); color: var(--green); font-weight: 800; z-index: 2; }
+    .flow strong { display: block; color: var(--green); margin-bottom: 4px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+    th, td { border-bottom: 1px solid var(--line); padding: 12px 10px; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 0.85rem; letter-spacing: 0.04em; text-transform: uppercase; }
+    td:first-child { font-weight: 700; width: 21%; }
+    .state { white-space: nowrap; font-weight: 750; }
+    .state.done { color: var(--green); }
+    .state.partial { color: var(--amber); }
+    .state.blocked { color: var(--red); }
+    .timeline { list-style: none; padding: 0; margin: 12px 0 0; }
+    .timeline li { position: relative; padding: 0 0 20px 29px; border-left: 2px solid var(--line); margin-left: 7px; }
+    .timeline li:last-child { border-left-color: transparent; padding-bottom: 0; }
+    .timeline li::before { content: ""; position: absolute; left: -7px; top: 5px; width: 12px; height: 12px; border-radius: 50%; background: var(--green); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--green); }
+    .timeline li.current::before { background: var(--amber); box-shadow: 0 0 0 1px var(--amber); }
+    .timeline li.next::before { background: #fff; box-shadow: 0 0 0 1px var(--line); }
+    .timeline b { display: block; }
+    .small { color: var(--muted); font-size: 0.88rem; }
+    .priority { display: inline-block; min-width: 36px; text-align: center; border-radius: 5px; padding: 1px 6px; margin-right: 7px; font: 700 0.78rem/1.7 ui-monospace, monospace; }
+    .p0 { color: #fff; background: var(--red); }
+    .p1 { color: #fff; background: var(--amber); }
+    .p2 { color: #fff; background: var(--blue); }
+    ul, ol { padding-left: 1.3rem; }
+    li + li { margin-top: 6px; }
+    .sources { columns: 2; column-gap: 30px; font-size: 0.88rem; color: var(--muted); }
+    .sources li { break-inside: avoid; }
+    @media (max-width: 920px) {
+      .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .split { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .flow > div:nth-child(3)::after { display: none; }
+    }
+    @media (max-width: 620px) {
+      main { width: min(100% - 18px, 1160px); margin-top: 12px; }
+      header, section { padding: 22px 19px; border-radius: 13px; }
+      .cards, .flow { grid-template-columns: 1fr; }
+      .flow > div::after { display: none !important; }
+      .sources { columns: 1; }
+      table, thead, tbody, tr, th, td { display: block; width: 100%; }
+      thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+      tbody { display: grid; gap: 12px; }
+      tr { border: 1px solid var(--line); border-radius: 10px; background: #fffefa; padding: 5px 10px; }
+      td, td:first-child { position: relative; width: 100%; min-height: 2.6em; padding: 8px 0 8px 36%; border-bottom: 1px dashed var(--line); overflow-wrap: anywhere; }
+      td:last-child { border-bottom: 0; }
+      td::before { position: absolute; left: 0; top: 8px; width: 32%; color: var(--muted); font-size: 0.76rem; font-weight: 750; letter-spacing: 0.03em; }
+      .status-table td:nth-child(1)::before { content: "工作流"; }
+      .status-table td:nth-child(2)::before { content: "状态"; }
+      .status-table td:nth-child(3)::before { content: "已交付"; }
+      .status-table td:nth-child(4)::before { content: "未闭环"; }
+      .risk-table td:nth-child(1)::before { content: "优先级"; }
+      .risk-table td:nth-child(2)::before { content: "风险"; }
+      .risk-table td:nth-child(3)::before { content: "影响"; }
+      .risk-table td:nth-child(4)::before { content: "处置"; }
+      .state { white-space: normal; }
+      .priority { margin-right: 0; }
+      li { overflow-wrap: anywhere; }
+    }
+    @media print {
+      body { background: #fff; }
+      main { width: 100%; margin: 0; }
+      header, section { box-shadow: none; break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="meta">
+      <span>快照日期：2026-08-07</span>
+      <span>分支：<code>fix/san-loop-runaway-recovery</code></span>
+      <span>HEAD：<code>b348f59db</code></span>
+      <span>范围：<code>packages/coding-agent</code> + <code>packages/ai</code></span>
+    </div>
+    <h1>项目简报：执行恢复与子代理路由</h1>
+    <p class="lede">主目标是把“Agent 自称有进展”改造成宿主可验证、可持久化、可终止的执行状态机，避免多 Agent、上下文压缩和 Provider 故障叠加时形成语义活锁。当前已形成一套提交并推送的实现基线；但通用持久化调度栈尚未完整接入根会话生命周期，且工作区正在处理一个半开探针拒绝问题。</p>
+    <div class="status-line">
+      <span class="pill amber">总体：已提交，尚未合并</span>
+      <span class="pill green">提交基线验证通过</span>
+      <span class="pill red">本地跟进测试 0/3</span>
+      <span class="pill blue">Fork 暂无开放 PR</span>
+    </div>
+    <div class="cards">
+      <div class="card"><div class="value">2</div><div class="label">领先 <code>origin/main</code> 的提交</div><div class="detail">子代理路由 + 持久执行恢复</div></div>
+      <div class="card"><div class="value">57</div><div class="label">已提交改动文件</div><div class="detail"><code>+9626 / -167</code></div></div>
+      <div class="card"><div class="value">3175</div><div class="label">基线聚焦测试通过</div><div class="detail">337 skip，0 fail</div></div>
+      <div class="card"><div class="value">3</div><div class="label">未提交实现文件</div><div class="detail">1 modified + 2 untracked，不含本简报</div></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>1. 目标与边界</h2>
+    <div class="split">
+      <div>
+        <h3>主目标：宿主拥有执行真相</h3>
+        <ul>
+          <li>每个逻辑任务绑定稳定的 scope、objective contract、strategy 与 assignment 身份，名称变化不能绕过重复检测。</li>
+          <li>进展必须落到宿主可验证事实：状态 revision、typed evidence、provider terminal receipt、任务 heartbeat/cursor。</li>
+          <li>无进展、重复轮询、Provider 连续失败和重复派发触发确定性动作，而不是继续消耗模型回合。</li>
+          <li>完成、阻塞、需要用户、运行时故障必须由宿主状态机落盘，压缩摘要和子 Agent 文本不能改写目标。</li>
+        </ul>
+      </div>
+      <div>
+        <h3>配套目标：会话级子代理路由</h3>
+        <ul>
+          <li>通过 <code>/subagent</code> 为当前会话的 <code>@task</code> 子代理指定模型与 effort。</li>
+          <li>覆盖写入 branch-aware 会话日志；恢复、分叉、清除保持正确。</li>
+          <li>不污染主代理模型，不修改全局或项目配置，不强制改写专家 Agent。</li>
+        </ul>
+        <p class="small">该能力已独立提交，适合作为支撑执行实验的配套交付，不是 runaway recovery 的核心依赖。</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 目标架构</h2>
+    <div class="flow">
+      <div><strong>权威用户回合</strong>logical turn<br />objective contract</div>
+      <div><strong>执行 Scope</strong>稳定身份<br />不可变目标</div>
+      <div><strong>追加式 Ledger</strong>CAS revision<br />持久事实</div>
+      <div><strong>宿主判定器</strong>Watchdog<br />Provider health</div>
+      <div><strong>调度与监督</strong>lease / grace<br />supervisor decision</div>
+      <div><strong>证据门禁</strong>typed receipts<br />terminal state</div>
+    </div>
+    <div class="callout warn"><strong>当前关键差距：</strong><code>ProviderHealthRegistry</code> 与 <code>TaskContractRegistry</code> 已由 <code>createAgentSession()</code> 实例化并接入真实请求/Task 路径；但 <code>ExecutionScopeRegistry</code>、<code>ExecutionLedger</code>、<code>Watchdog</code>、<code>DurableScheduler</code> 和 <code>ExecutionScopePersistence</code> 目前只在 execution-control 模块、重放逻辑与测试中被构造，尚未在根会话或 San Loop 生产生命周期中形成统一闭环。</div>
+  </section>
+
+  <section>
+    <h2>3. 当前进度</h2>
+    <table class="status-table">
+      <thead><tr><th>工作流</th><th>状态</th><th>已交付</th><th>未闭环</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>会话级子代理路由</td>
+          <td><span class="state done">已提交</span></td>
+          <td><code>/subagent model|status|clear</code>、branch-aware 持久化、Task/SDK/ACP 路由、模型与 effort 校验。</td>
+          <td>尚未发 PR；与执行恢复应拆分评审。</td>
+        </tr>
+        <tr>
+          <td>San Loop 无进展恢复</td>
+          <td><span class="state done">已提交</span></td>
+          <td>增强检查、Host progress ledger、恢复分类、重试上限、typed acceptance evidence 与终态约束。</td>
+          <td>需要长时 dogfood 证明语义活锁能稳定收敛，而不只是单测通过。</td>
+        </tr>
+        <tr>
+          <td>Provider 健康回路</td>
+          <td><span class="state partial">运行时已接线</span></td>
+          <td>每模型/endpoint circuit、auth/retry-after/stall 分类、半开 probe、成功清债、凭据脱敏。</td>
+          <td>当前正在修复 probe promise 的拒绝观察；新增本地用例仍失败。</td>
+        </tr>
+        <tr>
+          <td>语义任务契约</td>
+          <td><span class="state done">运行时已接线</span></td>
+          <td>Task admission 去重、Job 绑定、状态/heartbeat/cursor、Hub wait/cancel 投影、父子会话共享。</td>
+          <td>仍需多 Agent + compaction + resume 的端到端追踪。</td>
+        </tr>
+        <tr>
+          <td>Todo 计划安全</td>
+          <td><span class="state done">已提交</span></td>
+          <td><code>reconcile</code>、活动计划保护、批量原子更新、显式 mutation acknowledgement、完成迁移。</td>
+          <td>属于行为变更；需要观察旧会话/旧提示缓存下的兼容性。</td>
+        </tr>
+        <tr>
+          <td>通用执行控制栈</td>
+          <td><span class="state partial">框架完成</span></td>
+          <td>Scope、Ledger、persistence、Watchdog、Scheduler、evidence gates、CAS supervisor decision 及 6 个测试文件。</td>
+          <td>没有统一的 root lifecycle ownership、恢复启动、dispose 与生产态持久化接线。</td>
+        </tr>
+        <tr>
+          <td>PR / 合并</td>
+          <td><span class="state blocked">未开始</span></td>
+          <td>两个逻辑提交均已推送到远端分支。</td>
+          <td><code>slicenferqin/san</code> 当前无开放 PR；工作区不干净。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>4. 交付记录与验证</h2>
+    <div class="split">
+      <div>
+        <ol class="timeline">
+          <li><b><code>7707bc287</code> — 会话级子代理模型路由</b><span class="small">14 files，+630 / -6；含方案文档、session helper、slash command、Task/ACP/TUI 测试。</span></li>
+          <li><b><code>b348f59db</code> — 持久执行恢复</b><span class="small">48 files，+8996 / -161；含 execution-control、San Loop、Provider health、Task/Hub/Todo 与测试。</span></li>
+          <li class="current"><b>本地 WIP — 半开 probe 拒绝观察</b><span class="small">修改 <code>provider-health.ts</code>，新增 2 个源码目录测试文件；尚未提交。</span></li>
+          <li class="next"><b>下一里程碑 — 稳定 WIP 并完成根生命周期闭环</b><span class="small">清洁工作区、端到端 dogfood、拆分 PR。</span></li>
+        </ol>
+      </div>
+      <div>
+        <div class="callout"><strong>已验证的提交基线</strong><ul><li><code>bun check</code>：通过</li><li>聚焦套件：3175 pass / 337 skip / 0 fail</li><li><code>bun run ci:test:smoke</code>：<code>smoke-test: ok</code></li><li>分支 HEAD 已推送到 <code>origin/fix/san-loop-runaway-recovery</code></li></ul></div>
+        <div class="callout danger" style="margin-top: 12px"><strong>当前工作区验证</strong><ul><li>本地 probe 测试：0 pass / 3 fail</li><li>观察 1：lone probe 失败后状态为 <code>half_open</code>，用例期望 <code>open</code></li><li>观察 2：排队请求的 <code>ProviderCircuitOpenError</code> 仍被 Bun 记为未处理拒绝</li><li>因此，前述绿色基线不能代表当前未提交 WIP 已通过</li></ul></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>5. 主要风险</h2>
+    <table class="risk-table">
+      <thead><tr><th>优先级</th><th>风险</th><th>影响</th><th>处置</th></tr></thead>
+      <tbody>
+        <tr><td><span class="priority p0">P0</span></td><td>通用 execution-control 未接入根会话生命周期</td><td>当前更接近“可复用框架 + 部分生产接线”，尚不能证明完整的 host-owned recovery 闭环。</td><td>完成 create/resume/persist/dispose ownership，或收窄 Changelog 与 PR 声明。</td></tr>
+        <tr><td><span class="priority p0">P0</span></td><td>半开 probe WIP 仍有 3 个失败</td><td>可能在故障恢复路径触发状态不收敛或未处理拒绝，正是长时会话稳定性的高风险区域。</td><td>先固定期望状态和 rejection ownership，再保留一个无调试输出的行为回归测试。</td></tr>
+        <tr><td><span class="priority p1">P1</span></td><td>缺少真实语义活锁复现与终止证据</td><td>单测能证明局部不变量，不能证明“多 Agent + compaction + provider flap”整夜场景不再旋转。</td><td>用已知失败会话形态做限额 dogfood，记录 token、回合、恢复动作与最终终态。</td></tr>
+        <tr><td><span class="priority p1">P1</span></td><td>一个分支包含两个独立产品主题</td><td>57 文件、近万行，审查面过大；子代理路由与执行恢复的回滚/发布风险不同。</td><td>利用现有两个独立提交拆成两条 PR 分支。</td></tr>
+        <tr><td><span class="priority p2">P2</span></td><td>Todo mutation acknowledgement 是行为变更</td><td>旧模型提示、缓存 schema 或嵌入方可能发送缺少确认字段的 mutation。</td><td>补一个真实恢复会话兼容 smoke，并在发布说明中明确。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>6. 建议的下一阶段计划</h2>
+    <ol>
+      <li><span class="priority p0">P0</span><strong>收敛当前 probe 修复：</strong>明确半开失败应该 reopen 还是按 stall 多证据继续 half-open；修正 rejection 观察时序；删除 <code>probe-debug.test.ts</code> 调试脚手架；将唯一行为回归放入标准 <code>test/execution-control</code>。</li>
+      <li><span class="priority p0">P0</span><strong>完成或收窄“持久恢复”承诺：</strong>将 Scope/Ledger/Persistence/Watchdog/Scheduler 绑定到 root AgentSession/San Loop 生命周期；若暂不接线，则将对外表述改为“execution-control foundation”。</li>
+      <li><span class="priority p1">P1</span><strong>执行端到端故障注入：</strong>至少覆盖 auth unavailable、stream stall、compaction 后重复派发、子 Agent 心跳停滞、外部依赖 needs_user，验证每条路径在硬预算内进入可解释终态。</li>
+      <li><span class="priority p1">P1</span><strong>拆分评审：</strong>从 <code>7707bc287</code> 建子代理路由 PR；从主线单独承载 <code>b348f59db</code> 及后续恢复修复，避免两个主题互相阻塞。</li>
+      <li><span class="priority p2">P2</span><strong>发布门禁：</strong>清洁工作区后重跑 <code>bun check</code>、相关全套测试、CLI smoke；再补完整 CI/install-method 证据并开 PR。</li>
+    </ol>
+    <div class="callout"><strong>建议的“可开 PR”判定：</strong>工作区无调试文件；当前 probe 回归全绿；运行时接线范围与 Changelog 一致；至少一条真实语义活锁 dogfood 在预算内稳定终止；两个产品主题完成拆分。</div>
+  </section>
+
+  <section>
+    <h2>7. 结论</h2>
+    <p><strong>已完成的是一套很厚的可验证基础和两条已推送能力线；尚未完成的是“根会话级、可恢复、可持久化的统一闭环”。</strong>因此当前最准确的项目状态不是“已完成待合并”，而是“提交基线可用，生产闭环与一个高风险 probe 路径仍在收敛”。优先解决 P0 后再拆 PR，能显著降低近万行改动被一次性审查和回滚的风险。</p>
+  </section>
+
+  <section>
+    <h2>8. 证据索引</h2>
+    <ul class="sources">
+      <li><code>git log origin/main..HEAD</code>：2 个提交</li>
+      <li><code>git diff --stat origin/main...HEAD</code>：57 files，+9626 / -167</li>
+      <li><code>packages/coding-agent/CHANGELOG.md</code>：runaway recovery、Task/Todo 变更</li>
+      <li><code>packages/ai/CHANGELOG.md</code>：认证失败重试修复</li>
+      <li><code>packages/coding-agent/src/execution-control/</code>：通用执行控制栈</li>
+      <li><code>packages/coding-agent/src/sdk.ts</code>：Provider health / Task contract 真实接线</li>
+      <li><code>packages/coding-agent/src/san-loop/</code>：生产 San Loop 状态与证据逻辑</li>
+      <li><code>docs/research/san-session-subagent-routing-proposal-20260805.html</code></li>
+      <li>本地 probe 测试命令：3 fail / 0 pass</li>
+      <li><code>pr://slicenferqin/san?state=open</code>：无开放 PR</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

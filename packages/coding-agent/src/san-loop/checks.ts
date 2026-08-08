@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CONFIG_DIR_NAME, isEnoent, parseFrontmatter } from "@san/utils";
 import { findAllNearestProjectConfigDirs, getConfigDirs } from "../config";
+import type { AcceptanceVerifier, EvidenceVerifierKind } from "../execution-control/types";
 import builtinProjectTypescriptContracts from "../prompts/san-loop/checks/project-typescript-contracts.md" with {
 	type: "text",
 };
@@ -25,6 +26,19 @@ export interface SanLoopCheck {
 	severity: SanLoopCheckSeverity;
 	appliesTo: SanLoopRole[];
 	source: SanLoopCheckSource;
+	/** Objective clauses this check is allowed to assert. */
+	objectiveClauseRefs?: string[];
+	/** Immutable objective contract binding supplied by the host. */
+	contractRevision?: number;
+	contractHash?: string;
+	/** Matching host verifier; model text never supplies this field. */
+	verifier?: AcceptanceVerifier;
+}
+
+export interface SanLoopCheckBinding {
+	readonly objectiveClauseRefs: readonly string[];
+	readonly contractRevision: number;
+	readonly contractHash: string;
 }
 
 export interface DiscoverSanLoopChecksOptions {
@@ -36,6 +50,9 @@ export interface DiscoverSanLoopChecksOptions {
 export interface SanLoopCheckPlanOptions {
 	role?: SanLoopRole;
 	paths?: readonly string[];
+	contractRevision?: number;
+	contractHash?: string;
+	objectiveClauseRefs?: readonly string[];
 }
 
 interface CheckFrontmatter {
@@ -44,6 +61,10 @@ interface CheckFrontmatter {
 	scope?: unknown;
 	severity?: unknown;
 	appliesTo?: unknown;
+	objectiveClauseRefs?: unknown;
+	contractRevision?: unknown;
+	contractHash?: unknown;
+	verifier?: unknown;
 }
 
 const CHECK_EXTENSIONS = new Set([".md", ".markdown"]);
@@ -92,6 +113,53 @@ function parseScope(value: unknown): SanLoopCheckScope | undefined {
 	return paths ? { paths } : undefined;
 }
 
+function parseVerifier(value: unknown): AcceptanceVerifier | undefined {
+	if (!isRecord(value) || typeof value.kind !== "string") return undefined;
+	switch (value.kind) {
+		case "command":
+			return typeof value.checkId === "string" && typeof value.expectedExitCode === "number"
+				? { kind: "command", checkId: value.checkId, expectedExitCode: value.expectedExitCode }
+				: undefined;
+		case "browser":
+			return typeof value.scenarioId === "string" &&
+				Array.isArray(value.assertionIds) &&
+				value.assertionIds.every(item => typeof item === "string")
+				? { kind: "browser", scenarioId: value.scenarioId, assertionIds: [...value.assertionIds] }
+				: undefined;
+		case "api":
+			return typeof value.requestId === "string" &&
+				Array.isArray(value.assertionIds) &&
+				value.assertionIds.every(item => typeof item === "string")
+				? { kind: "api", requestId: value.requestId, assertionIds: [...value.assertionIds] }
+				: undefined;
+		case "artifact":
+			return typeof value.artifactKind === "string" && typeof value.schemaId === "string"
+				? { kind: "artifact", artifactKind: value.artifactKind, schemaId: value.schemaId }
+				: undefined;
+		case "review": {
+			if (typeof value.rubricId !== "string" || !Array.isArray(value.requiredEvidenceKinds)) return undefined;
+			const kinds = value.requiredEvidenceKinds.filter(
+				(item): item is EvidenceVerifierKind =>
+					item === "command" ||
+					item === "browser" ||
+					item === "api" ||
+					item === "artifact" ||
+					item === "review" ||
+					item === "external",
+			);
+			return kinds.length === value.requiredEvidenceKinds.length
+				? { kind: "review", rubricId: value.rubricId, requiredEvidenceKinds: kinds }
+				: undefined;
+		}
+		case "external":
+			return typeof value.dependencyId === "string"
+				? { kind: "external", dependencyId: value.dependencyId }
+				: undefined;
+		default:
+			return undefined;
+	}
+}
+
 function parseCheck(content: string, filePath: string, source: SanLoopCheckSource): SanLoopCheck | null {
 	const { frontmatter, body } = parseFrontmatter(content, { source: filePath, level: "fatal" });
 	const fm = frontmatter as CheckFrontmatter;
@@ -101,6 +169,11 @@ function parseCheck(content: string, filePath: string, source: SanLoopCheckSourc
 	if (!name) return null;
 	const bodyText = body.trim();
 	if (!bodyText) return null;
+	const contractRevision =
+		typeof fm.contractRevision === "number" && Number.isInteger(fm.contractRevision)
+			? fm.contractRevision
+			: undefined;
+	const contractHash = typeof fm.contractHash === "string" ? fm.contractHash.trim() || undefined : undefined;
 	return {
 		name,
 		description: typeof fm.description === "string" ? fm.description.trim() : undefined,
@@ -110,6 +183,10 @@ function parseCheck(content: string, filePath: string, source: SanLoopCheckSourc
 		severity: parseSeverity(fm.severity),
 		appliesTo: parseAppliesTo(fm.appliesTo),
 		source,
+		objectiveClauseRefs: stringArray(fm.objectiveClauseRefs),
+		contractRevision,
+		contractHash,
+		verifier: parseVerifier(fm.verifier),
 	};
 }
 
@@ -178,17 +255,57 @@ function pathMatches(pattern: string, target: string): boolean {
 	const normalizedPattern = pattern.replaceAll("\\", "/");
 	const normalizedTarget = target.replaceAll("\\", "/");
 	if (normalizedPattern === normalizedTarget) return true;
-	if (normalizedPattern.endsWith("/**")) {
-		return normalizedTarget.startsWith(normalizedPattern.slice(0, -3));
+	if (!normalizedPattern.includes("*"))
+		return normalizedTarget === normalizedPattern || normalizedTarget.startsWith(`${normalizedPattern}/`);
+	if (normalizedPattern.endsWith("/**") && normalizedTarget === normalizedPattern.slice(0, -3)) return true;
+	let expression = "^";
+	for (let index = 0; index < normalizedPattern.length; index++) {
+		const character = normalizedPattern[index];
+		if (character === "*") {
+			if (normalizedPattern[index + 1] === "*") {
+				index++;
+				if (normalizedPattern[index + 1] === "/") {
+					expression += "(?:.*/)?";
+					index++;
+				} else {
+					expression += ".*";
+				}
+			} else {
+				expression += "[^/]*";
+			}
+			continue;
+		}
+		expression += /[.+?^${}()|[\]\\]/.test(character) ? `\\${character}` : character;
 	}
-	if (normalizedPattern.startsWith("**/")) {
-		return normalizedTarget.endsWith(normalizedPattern.slice(3));
-	}
-	if (normalizedPattern.includes("*")) {
-		const escaped = normalizedPattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*");
-		return new RegExp(`^${escaped}$`).test(normalizedTarget);
-	}
-	return normalizedTarget.startsWith(normalizedPattern);
+	return new RegExp(`${expression}$`).test(normalizedTarget);
+}
+
+export function bindSanLoopChecks(checks: readonly SanLoopCheck[], binding: SanLoopCheckBinding): SanLoopCheck[] {
+	return checks
+		.filter(check => {
+			const clauses = check.objectiveClauseRefs;
+			// 无显式 clauses 的 host check 绑定为 contract 全部 clauseRefs；
+			// 有显式 clauses 的校验 subset 必须全部落在 contract 内。
+			if (clauses === undefined || clauses.length === 0) return true;
+			return clauses.every(clause => binding.objectiveClauseRefs.includes(clause));
+		})
+		.map(check => ({
+			...check,
+			objectiveClauseRefs:
+				check.objectiveClauseRefs && check.objectiveClauseRefs.length > 0
+					? [...check.objectiveClauseRefs]
+					: [...binding.objectiveClauseRefs],
+			contractRevision: binding.contractRevision,
+			contractHash: binding.contractHash,
+		}));
+}
+
+export function isSanLoopCheckBound(check: SanLoopCheck, binding: SanLoopCheckBinding): boolean {
+	return (
+		check.contractRevision === binding.contractRevision &&
+		check.contractHash === binding.contractHash &&
+		binding.objectiveClauseRefs.every(clause => check.objectiveClauseRefs?.includes(clause))
+	);
 }
 
 export function selectSanLoopChecks(
@@ -197,6 +314,14 @@ export function selectSanLoopChecks(
 ): SanLoopCheck[] {
 	return checks.filter(check => {
 		if (options.role && !check.appliesTo.includes(options.role)) return false;
+		if (options.contractRevision !== undefined && check.contractRevision !== options.contractRevision) return false;
+		if (options.contractHash !== undefined && check.contractHash !== options.contractHash) return false;
+		if (
+			options.objectiveClauseRefs &&
+			!options.objectiveClauseRefs.every(clause => check.objectiveClauseRefs?.includes(clause))
+		) {
+			return false;
+		}
 		if (!options.paths || options.paths.length === 0 || !check.scope?.paths || check.scope.paths.length === 0) {
 			return true;
 		}

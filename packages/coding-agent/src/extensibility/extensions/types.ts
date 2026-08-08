@@ -1305,6 +1305,9 @@ export interface ExtensionAPI {
 	 */
 	registerProvider(name: string, config: ProviderConfig): void;
 
+	/** 注销此前由扩展注册的 provider。 */
+	unregisterProvider(name: string): void;
+
 	/** Shared event bus for extension communication. */
 	events: EventBus;
 }
@@ -1444,6 +1447,10 @@ export interface ExtensionRuntimeState {
 	flagValues: Map<string, boolean | string>;
 	/** Provider registrations queued during extension loading, processed during session initialization */
 	pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig; sourceId: string }>;
+	/** 在初始化前排队，初始化后立即应用 provider 注册。 */
+	registerProvider(name: string, config: ProviderConfig, sourceId: string): void;
+	/** 删除排队中或已初始化的 provider 注册。 */
+	unregisterProvider(name: string, sourceId: string): void;
 }
 
 /** Action implementations for ExtensionAPI methods. */

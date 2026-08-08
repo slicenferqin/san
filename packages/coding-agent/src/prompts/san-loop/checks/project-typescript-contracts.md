@@ -5,6 +5,10 @@ scope:
   paths: ["packages/coding-agent/**"]
 severity: error
 appliesTo: ["worker", "supervisor"]
+verifier:
+  kind: command
+  checkId: "command:bun check"
+  expectedExitCode: 0
 ---
 
 - Do not use `any` unless explicitly justified.

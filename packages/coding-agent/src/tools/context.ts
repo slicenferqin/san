@@ -13,6 +13,8 @@ declare module "@san/agent" {
 		 *  wrapper must not re-prompt for the same action (explicit per-tool
 		 *  policies and overrides still apply). */
 		xdevApproved?: boolean;
+		/** Reports the effective tier after an extension wrapper resolves approval. */
+		xdevTierResolved?(tier: "read" | "write" | "exec"): void;
 	}
 }
 

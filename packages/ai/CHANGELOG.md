@@ -10,9 +10,11 @@
 
 - Added OpenAI-compatible request support for explicit `max` and `ultra` reasoning efforts advertised by custom models, including provider-error fallback from unsupported `ultra` to `max`.
 - Added `AuthStorage.upsertLoginApiKey()` so interactive API-key entry can persist a distinct login-sourced key without replace-all wiping OAuth or sibling API-key accounts for the same provider, including through a remote auth broker.
+- Added OAuth provider unregistration so extension providers can replace or roll back login registrations without leaving stale global state.
 
 ### Fixed
 
+- Fixed authentication failures taking ordinary same-route retries before a verified route or model switch, while keeping abort and backpressure failures out of stall recovery.
 - Fixed resumed OpenAI Responses sessions failing with HTTP 400 when replaying a reasoning item whose encrypted content was an empty string.
 ## [17.0.2] - 2026-07-17
 

@@ -532,8 +532,8 @@ export interface BuildSystemPromptOptions {
 	renderMermaid?: boolean;
 	/** Pre-resolved nested active repo context. Undefined resolves from cwd. */
 	activeRepoContext?: ActiveRepoContext | null;
-	/** Tools mounted under `xd://`; renders the protocol section when non-empty. */
-	xdevTools?: Array<{ name: string; summary: string }>;
+	/** Tools mounted under `xd://`; `dynamic` marks untrusted external metadata. */
+	xdevTools?: Array<{ name: string; summary: string; dynamic?: boolean }>;
 	/** Rendered `xd://` guidance: either full docs/schema or a compact on-demand catalog. */
 	xdevDocs?: string;
 	/** Whether Auto-QA grievance reporting is enabled; renders the `xd://report_issue` note. */
@@ -544,6 +544,8 @@ export interface BuildSystemPromptOptions {
 export interface BuildSystemPromptResult {
 	/** Ordered system prompt blocks. Providers should preserve entries as distinct messages/blocks. */
 	systemPrompt: string[];
+	/** Device names rendered by the default prompt's xd:// catalog. */
+	xdevCatalogNames?: readonly string[];
 }
 
 /** Build the system prompt with tools, guidelines, and context */
@@ -836,6 +838,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		includeWorkspaceTree,
 		renderMermaid,
 		xdevTools,
+		hasDynamicXdevTools: xdevTools.some(mounted => mounted.dynamic === true),
 		xdevDocs,
 		autoQaEnabled,
 	};
@@ -853,5 +856,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		systemPrompt.push(activeRepoContextPrompt);
 	}
 
-	return { systemPrompt };
+	const xdevCatalogNames =
+		!resolvedCustomPrompt && xdevTools.length > 0 ? xdevTools.map(mounted => mounted.name) : undefined;
+	return { systemPrompt, xdevCatalogNames };
 }

@@ -21,7 +21,7 @@ interface PromptTokenMeasurement {
 	cwd: string;
 	xdev: {
 		enabled: boolean;
-		docsMode: "full" | "catalog";
+		docsMode: "inline" | "builtins" | "catalog";
 		deviceCount: number;
 		docs: {
 			tokens: number;
@@ -100,7 +100,7 @@ const topLevelTools = await createTools(initialSession);
 const xdevTools = initialSession.xdevRegistry?.list() ?? [];
 const xdevEntries = initialSession.xdevRegistry?.entries() ?? [];
 const xdevDocsMode = settings.get("tools.xdevDocs");
-const xdevDocs = initialSession.xdevRegistry?.docsAll(xdevDocsMode) ?? "";
+const xdevDocs = initialSession.xdevRegistry?.docsAll(xdevDocsMode, settings.get("tools.xdevInlineDevices")) ?? "";
 
 const allAvailableSession = createSession(cwd, settings);
 const allAvailableTools = await createTools(allAvailableSession, Object.keys(BUILTIN_TOOLS));

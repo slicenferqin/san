@@ -63,6 +63,15 @@ export class ExtensionRuntime implements IExtensionRuntime {
 	flagValues = new Map<string, boolean | string>();
 	pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig; sourceId: string }> = [];
 
+	registerProvider(name: string, config: ProviderConfig, sourceId: string): void {
+		this.pendingProviderRegistrations.push({ name, config, sourceId });
+	}
+
+	unregisterProvider(name: string): void {
+		const remaining = this.pendingProviderRegistrations.filter(registration => registration.name !== name);
+		this.pendingProviderRegistrations.splice(0, this.pendingProviderRegistrations.length, ...remaining);
+	}
+
 	sendMessage(): void {
 		throw new ExtensionRuntimeNotInitializedError();
 	}
@@ -261,7 +270,11 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 	}
 
 	registerProvider(name: string, config: ProviderConfig): void {
-		this.runtime.pendingProviderRegistrations.push({ name, config, sourceId: this.extension.path });
+		this.runtime.registerProvider(name, config, this.extension.path);
+	}
+
+	unregisterProvider(name: string): void {
+		this.runtime.unregisterProvider(name, this.extension.path);
 	}
 }
 
@@ -280,6 +293,21 @@ function createExtension(extensionPath: string, resolvedPath: string): Extension
 		flags: new Map(),
 		shortcuts: new Map(),
 	};
+}
+
+/** 扩展初始化失败时完整恢复 provider 注册队列。 */
+async function runExtensionFactory(
+	factory: ExtensionFactory,
+	api: ExtensionAPI,
+	runtime: IExtensionRuntime,
+): Promise<void> {
+	const checkpoint = [...runtime.pendingProviderRegistrations];
+	try {
+		await factory(api);
+	} catch (error) {
+		runtime.pendingProviderRegistrations.splice(0, runtime.pendingProviderRegistrations.length, ...checkpoint);
+		throw error;
+	}
 }
 
 async function loadExtension(
@@ -302,9 +330,7 @@ async function loadExtension(
 
 		const extension = createExtension(extensionPath, resolvedPath);
 		const api = new ConcreteExtensionAPI(PiCodingAgent, extension, runtime, cwd, eventBus);
-		await withHostGuard(async () => {
-			await factory(api);
-		});
+		await withHostGuard(() => runExtensionFactory(factory, api, runtime));
 
 		return { extension, error: null };
 	} catch (err) {
@@ -325,7 +351,7 @@ export async function loadExtensionFromFactory(
 ): Promise<Extension> {
 	const extension = createExtension(name, name);
 	const api = new ConcreteExtensionAPI(PiCodingAgent, extension, runtime, cwd, eventBus);
-	await factory(api);
+	await runExtensionFactory(factory, api, runtime);
 	return extension;
 }
 

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@san/agent";
 import { type Api, Effort, type Model, z } from "@san/ai";
@@ -10,6 +10,10 @@ import { AgentSession } from "@san/coding-agent/session/agent-session";
 import { AuthStorage } from "@san/coding-agent/session/auth-storage";
 import { convertToLlm } from "@san/coding-agent/session/messages";
 import { SessionManager } from "@san/coding-agent/session/session-manager";
+import {
+	type BuiltinSlashCommandRuntime,
+	executeBuiltinSlashCommand,
+} from "@san/coding-agent/slash-commands/builtin-registry";
 import { TempDir } from "@san/utils";
 
 /**
@@ -485,17 +489,18 @@ describe("AgentSession prewalk", () => {
 				return mock.stream(model, context, options);
 			},
 		});
+		const sessionManager = SessionManager.inMemory();
 		session = new AgentSession({
 			agent,
-			sessionManager: SessionManager.inMemory(),
+			sessionManager,
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry,
 			toolRegistry: new Map([[writeTool.name, writeTool as AgentTool]]),
 		});
 
 		// Arming twice back-to-back must stay a single, idempotent arm.
-		session.armPrewalk(target);
-		session.armPrewalk(target);
+		expect(session.armPrewalk(target)).toBe(true);
+		expect(session.armPrewalk(target)).toBe(true);
 
 		await session.prompt("do the task");
 
@@ -503,5 +508,151 @@ describe("AgentSession prewalk", () => {
 		// immediately — no second primary-model turn needed.
 		expect(requested).toEqual([`${primary.provider}/${primary.id}`, `${target.provider}/${target.id}`]);
 		expect(session.model?.id).toBe(target.id);
+		expect(
+			sessionManager
+				.buildSessionContext()
+				.messages.some(message => message.role === "custom" && message.customType === "prewalk-plan"),
+		).toBe(false);
+	});
+
+	it("rejects a same-model same-effort prewalk without injecting its plan nudge", async () => {
+		const model = modelOrThrow("claude-sonnet-4-5");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		const planMarker = "complete plan in your NEXT reply";
+		const calls: boolean[] = [];
+		const mock = createMockModel({ responses: [{ content: ["status only"] }] });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+				thinkingLevel: Effort.Medium,
+			},
+			convertToLlm,
+			streamFn: (streamModel, context, options) => {
+				calls.push(contextMessagesHaveMarker(context.messages, planMarker));
+				return mock.stream(streamModel, context, options);
+			},
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+			toolRegistry,
+			thinkingLevel: Effort.Medium,
+		});
+
+		expect(session.armPrewalk(model, Effort.Medium)).toBe(false);
+		await session.prompt("report status");
+		expect(calls).toEqual([false]);
+	});
+
+	it("requires a fresh todo before a later explicit prewalk can hand off", async () => {
+		const primary = modelOrThrow("claude-sonnet-4-5");
+		const target = modelOrThrow("claude-sonnet-4-6");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		const mock = createMockModel({
+			responses: [
+				toolCall("first-todo", "todo"),
+				toolCall("first-write", "write"),
+				{ content: ["first done"] },
+				toolCall("second-write-before-todo", "write"),
+				toolCall("second-todo", "todo"),
+				toolCall("second-write-after-todo", "write"),
+				{ content: ["second done"] },
+			],
+		});
+		const requested: string[] = [];
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: primary,
+				systemPrompt: ["Test"],
+				tools: [todoTool as AgentTool, writeTool as AgentTool],
+				messages: [],
+				thinkingLevel: Effort.Medium,
+			},
+			convertToLlm,
+			streamFn: (model, context, options) => {
+				requested.push(`${model.provider}/${model.id}`);
+				return mock.stream(model, context, options);
+			},
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+			toolRegistry,
+			prewalk: { target },
+		});
+
+		await session.prompt("first task");
+		const firstRunCallCount = requested.length;
+		expect(session.model?.id).toBe(target.id);
+
+		expect(session.armPrewalk(primary)).toBe(true);
+		await session.prompt("second task");
+		expect(requested.slice(firstRunCallCount)).toEqual([
+			`${target.provider}/${target.id}`,
+			`${target.provider}/${target.id}`,
+			`${target.provider}/${target.id}`,
+			`${primary.provider}/${primary.id}`,
+		]);
+		expect(session.model?.id).toBe(primary.id);
+	});
+
+	it("reports /prewalk success only when the requested arm remains active", async () => {
+		const primary = modelOrThrow("claude-sonnet-4-5");
+		const target = modelOrThrow("claude-sonnet-4-6");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		const settings = Settings.isolated({ "compaction.enabled": false });
+		const sessionManager = SessionManager.inMemory();
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: primary,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+				thinkingLevel: Effort.Medium,
+			},
+			convertToLlm,
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			toolRegistry,
+			thinkingLevel: Effort.Medium,
+		});
+		const showStatus = vi.fn();
+		const runtime = {
+			ctx: {
+				session,
+				sessionManager,
+				settings,
+				collabGuest: false,
+				showStatus,
+				editor: { setText: vi.fn() },
+				refreshSlashCommandState: vi.fn(),
+			},
+		} as unknown as BuiltinSlashCommandRuntime;
+
+		settings.setModelRole("smol", `${primary.provider}/${primary.id}:medium`);
+		expect(await executeBuiltinSlashCommand("/prewalk", runtime)).toBe(true);
+		expect(showStatus).not.toHaveBeenCalled();
+
+		settings.setModelRole("smol", `${target.provider}/${target.id}:medium`);
+		expect(await executeBuiltinSlashCommand("/prewalk", runtime)).toBe(true);
+		expect(showStatus).toHaveBeenCalledTimes(1);
+
+		settings.setModelRole("smol", `${primary.provider}/${primary.id}:medium`);
+		expect(await executeBuiltinSlashCommand("/prewalk", runtime)).toBe(true);
+		expect(showStatus).toHaveBeenCalledTimes(1);
 	});
 });

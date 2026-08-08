@@ -1,3 +1,5 @@
+import type { AcceptanceGate, EvidenceReceipt, ObjectiveContractRef } from "../execution-control/types";
+
 /**
  * San v0.2 execution loop ledger types.
  *
@@ -118,6 +120,8 @@ export interface SanLoopWorkerResult {
 	summary: string;
 	changedFiles: string[];
 	commandsRun: SanLoopCommandEvidence[];
+	/** Host-created bounded receipts; legacy sessions may omit this field. */
+	evidenceReceipts?: EvidenceReceipt[];
 	verification: string[];
 	risks: string[];
 }
@@ -141,6 +145,8 @@ export interface SanLoopReviewReport {
 	defects: SanLoopDefect[];
 	testsRun: string[];
 	evidence: string[];
+	/** Supervisor-reported receipt identities; host verification resolves them. */
+	evidenceRefs?: string[];
 	retryable: boolean;
 	requiredNextActions: string[];
 	confidence: "low" | "medium" | "high";
@@ -170,7 +176,6 @@ export interface SanLoopBudgetSnapshot {
 	providerRequests?: number;
 	remainingTurns?: number;
 }
-
 export interface SanLoopRunSnapshot {
 	schemaVersion: typeof SAN_LOOP_SCHEMA_VERSION;
 	revision: number;
@@ -184,6 +189,13 @@ export interface SanLoopRunSnapshot {
 	contextPlanRefs?: string[];
 	/** Legacy ContextPacket refs kept for old session readability. */
 	contextPacketRefs: string[];
+	/** Immutable objective binding used by typed acceptance evidence. */
+	objectiveContract?: ObjectiveContractRef;
+	contractRevision?: number;
+	contractHash?: string;
+	objectiveClauseRefs?: string[];
+	acceptanceGates?: AcceptanceGate[];
+	evidenceReceipts?: EvidenceReceipt[];
 	plan?: SanLoopPlan;
 	assignments: SanLoopWorkerAssignment[];
 	workerResults: SanLoopWorkerResult[];

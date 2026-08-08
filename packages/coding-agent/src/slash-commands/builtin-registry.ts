@@ -50,6 +50,7 @@ import type { InteractiveModeContext } from "../modes/types";
 import { extractLastCodeBlock, extractLastCommand } from "../modes/utils/copy-targets";
 import {
 	abortSanLoopRun,
+	bindSanLoopChecks,
 	cancelRunningSanLoop,
 	createSanLoopTaskAgentExecutor,
 	discoverSanLoopChecks,
@@ -67,6 +68,12 @@ import type { SessionEntry } from "../session/session-entries";
 import { resolveResumableSession } from "../session/session-listing";
 import type { SessionManager } from "../session/session-manager";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
+import {
+	appendSessionSubagentModelOverride,
+	getSessionSubagentModelOverride,
+	resolveSessionSubagentModelSelector,
+} from "../session/subagent-model-override";
+import { refreshAgentDiscovery } from "../task";
 import { CLI_THINKING_LEVELS, getConfiguredThinkingLevelMetadata, parseConfiguredThinkingLevel } from "../thinking";
 import { expandTilde, resolveToCwd } from "../tools/path-utils";
 import { urlHyperlinkAlways } from "../tui";
@@ -117,6 +124,39 @@ export interface TuiBuiltinSlashCommand extends BuiltinSlashCommand {
 function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
 	ctx.ui.requestRender();
+}
+
+interface SubagentModelCommandRuntime {
+	session: AgentSession;
+	sessionManager: SessionManager;
+	settings: Settings;
+	output: (text: string) => Promise<void> | void;
+}
+
+async function handleSubagentModelCommand(args: string, runtime: SubagentModelCommandRuntime): Promise<void> {
+	const input = args.trim();
+	if (!input || input.toLowerCase() === "status") {
+		const selector = getSessionSubagentModelOverride(runtime.sessionManager.getBranch());
+		await runtime.output(
+			selector
+				? `Task-role subagent model: ${selector}`
+				: "Task-role subagent model: configured routing (no session override).",
+		);
+		return;
+	}
+	if (input.toLowerCase() === "clear") {
+		appendSessionSubagentModelOverride(runtime.sessionManager, null);
+		await runtime.output("Task-role subagent model override cleared.");
+		return;
+	}
+
+	const resolved = resolveSessionSubagentModelSelector(input, runtime.session.getAvailableModels(), runtime.settings);
+	if (!resolved.ok) {
+		await runtime.output(`Cannot set task-role subagent model: ${resolved.error}`);
+		return;
+	}
+	appendSessionSubagentModelOverride(runtime.sessionManager, resolved.selector);
+	await runtime.output(`Task-role subagent model: ${resolved.selector}`);
 }
 
 /** `/fast status` label for the active model: "on" when its family is priority, else "off". */
@@ -195,6 +235,22 @@ async function runConfiguredSanLoop(options: {
 	cwd: string;
 }): Promise<RunSanLoopResult> {
 	if (!sanLoopEnabled(options.settings)) throw new Error(SAN_LOOP_DISABLED_MESSAGE);
+	const executionRuntime = options.session.getExecutionRuntime();
+	if (!executionRuntime) {
+		throw new Error("San execution loop requires a session execution runtime; none is bound.");
+	}
+	const executionScopeId = options.session.getActiveExecutionScopeId();
+	if (!executionScopeId) {
+		throw new Error("San execution loop requires an active execution scope; none is started.");
+	}
+	// 目标契约从 active scope snapshot 的不可变 objectiveContract 取；缺失或
+	// clauseRefs 为空一律 fail-fast，绝不静默降级到无 host gate 运行。
+	const contractRef = executionRuntime.getScope(executionScopeId)?.snapshot().objectiveContract?.ref;
+	if (!contractRef?.clauseRefs?.length) {
+		throw new Error(
+			"San execution loop requires an immutable objective contract with clause refs on the active execution scope.",
+		);
+	}
 	const checks = options.settings.get("san.executionLoop.checks.enabled")
 		? await discoverSanLoopChecks({
 				cwd: options.cwd,
@@ -202,8 +258,35 @@ async function runConfiguredSanLoop(options: {
 				projectDir: options.settings.get("san.executionLoop.checks.projectDir"),
 			})
 		: [];
+	const boundChecks = bindSanLoopChecks(checks, {
+		objectiveClauseRefs: contractRef.clauseRefs,
+		contractRevision: contractRef.revision,
+		contractHash: contractRef.contractHash,
+	});
+	// 带 host verifier 的 bound checks 物化为 acceptance gate templates；
+	// runner 在 assignment 产生后按 assignment 绑定 freshness/assignmentId。
+	const acceptanceGates = boundChecks
+		.filter(check => check.verifier !== undefined)
+		.map(check => ({
+			gateId: check.name,
+			contractRef: {
+				contractId: contractRef.contractId,
+				revision: contractRef.revision,
+				contractHash: contractRef.contractHash,
+				clauseRefs: [...contractRef.clauseRefs],
+			},
+			contractRevision: contractRef.revision,
+			contractHash: contractRef.contractHash,
+			objectiveClauseRefs: [...check.objectiveClauseRefs!],
+			verifier: check.verifier!,
+			status: "unknown" as const,
+			evidenceRefs: [],
+			required: true,
+		}));
 	return runSanLoop({
 		sessionManager: options.sessionManager,
+		executionRuntime,
+		executionScopeId,
 		objective: options.objective,
 		mode: options.mode,
 		maxRetries: options.settings.get("san.executionLoop.maxRetries"),
@@ -216,10 +299,15 @@ async function runConfiguredSanLoop(options: {
 		reserveRatio: options.settings.get("san.executionLoop.budget.reserveRatio"),
 		oracleEnabledInModes: options.settings.get("san.executionLoop.roles.oracle.enabledInModes"),
 		contextPlanRefs: latestContextPlanRefs(options.sessionManager.getBranch()),
-		checks,
+		checks: boundChecks,
+		contractRevision: contractRef.revision,
+		contractHash: contractRef.contractHash,
+		acceptanceGates,
 		executor: createSanLoopTaskAgentExecutor({
 			session: options.session,
 			cwd: options.cwd,
+			executionRuntime,
+			executionScopeId,
 			hardBudget: {
 				maxTokens: positiveBudgetLimit(options.settings.get("san.executionLoop.budget.maxTokens")),
 				maxCost: positiveBudgetLimit(options.settings.get("san.executionLoop.budget.maxCost")),
@@ -670,6 +758,36 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "subagent",
+		description: "Set the task-role subagent model for this session",
+		allowArgs: true,
+		subcommands: [
+			{ name: "status", description: "Show the current session override" },
+			{ name: "clear", description: "Restore configured task-role routing" },
+		],
+		getTuiAutocompleteDescription: runtime => {
+			const selector = runtime.ctx.session.getSubagentModelOverride();
+			return selector ? `Subagent: ${selector}` : "Subagent: configured @task routing";
+		},
+		handle: async (command, runtime) => {
+			await handleSubagentModelCommand(command.args, runtime);
+			return commandConsumed();
+		},
+		handleTui: async (command, runtime) => {
+			if (!command.args.trim()) {
+				runtime.ctx.showSubagentModelSelector();
+			} else {
+				await handleSubagentModelCommand(command.args, {
+					session: runtime.ctx.session,
+					sessionManager: runtime.ctx.sessionManager,
+					settings: runtime.ctx.settings,
+					output: text => runtime.ctx.showStatus(text),
+				});
+			}
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "model",
 		aliases: ["models"],
 		description: "Switch model for this session",
@@ -914,10 +1032,11 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			if (!runtime.session.modelRegistry.hasConfiguredAuth(resolved.model)) {
 				return usage(`No API key for ${resolved.model.provider}/${resolved.model.id}`, runtime);
 			}
-			runtime.session.armPrewalk(resolved.model, resolved.thinkingLevel);
-			await runtime.output(
-				`Prewalk on: switching to ${resolved.model.provider}/${resolved.model.id} at the next edit/write (todo-gated).`,
-			);
+			if (runtime.session.armPrewalk(resolved.model, resolved.thinkingLevel)) {
+				await runtime.output(
+					`Prewalk on: switching to ${resolved.model.provider}/${resolved.model.id} at the next edit/write (todo-gated).`,
+				);
+			}
 			return commandConsumed();
 		},
 	},
@@ -2984,6 +3103,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			// listClaudePluginRoots re-reads from disk on next access.
 			const projectPath = await resolveActiveProjectRegistryPath(runtime.ctx.sessionManager.getCwd());
 			clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
+			await refreshAgentDiscovery(runtime.ctx.sessionManager.getCwd());
 			await runtime.ctx.refreshSkillState();
 			await runtime.ctx.refreshSlashCommandState();
 			resetCapabilities();
@@ -3348,6 +3468,7 @@ export async function executeBuiltinSlashCommand(
 			reloadPlugins: async () => {
 				const projectPath = await resolveActiveProjectRegistryPath(ctx.sessionManager.getCwd());
 				clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
+				await refreshAgentDiscovery(ctx.sessionManager.getCwd());
 				await ctx.refreshSkillState();
 				await ctx.refreshSlashCommandState();
 				resetCapabilities();

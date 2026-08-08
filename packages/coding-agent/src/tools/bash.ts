@@ -43,6 +43,7 @@ import {
 	previewWindowRows,
 	replaceTabs,
 } from "./render-utils";
+import { extractLeadingCdTarget } from "./shell-tokenize";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout, TOOL_TIMEOUTS } from "./tool-timeouts";
@@ -742,17 +743,12 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 		let command = rawCommand;
 		const env = normalizeBashEnv(rawEnv);
 
-		// Extract leading `cd <path> && ...` into cwd when the model ignores the cwd parameter.
-		// Constrained to a single line so a `&&` that sits on a later line of a multiline
-		// script can't pull the entire script into the "cwd" capture.
+		// 仅提取一个裸路径 token；其余 shell 语法保留给 shell 自身解释。
 		if (!cwd) {
-			const cdMatch = command.match(/^cd[ \t]+((?:[^&\\\n\r]|\\.)+?)[ \t]*&&[ \t]*/);
-			// Skip extraction when the path needs shell expansion ($VAR, $(...),
-			// backticks) — resolveToCwd only expands `~`, so routing those through
-			// cwd would reject commands the shell itself handles fine.
-			if (cdMatch && !/[$`(]/.test(cdMatch[1])) {
-				cwd = cdMatch[1].trim().replace(/^["']|["']$/g, "");
-				command = command.slice(cdMatch[0].length);
+			const leadingCd = extractLeadingCdTarget(command);
+			if (leadingCd) {
+				cwd = leadingCd.path;
+				command = leadingCd.rest;
 			}
 		}
 		if (asyncRequested && !this.#asyncEnabled) {

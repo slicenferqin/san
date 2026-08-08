@@ -101,6 +101,7 @@ import type {
 	TextContent,
 	ToolCall,
 	ToolChoice,
+	ToolResultMessage,
 	Usage,
 	UsageReport,
 } from "@san/ai";
@@ -137,6 +138,7 @@ import {
 	getInstallId,
 	isBunTestRuntime,
 	isEnoent,
+	isRecord,
 	logger,
 	postmortem,
 	prompt,
@@ -303,6 +305,15 @@ import {
 import { disposeRubyKernelSessionsByOwner } from "../eval/rb/executor";
 import { defaultEvalSessionId } from "../eval/session-id";
 import { type BashResult, executeBash as executeBashCommand } from "../exec/bash-executor";
+import type {
+	ExecutionLedgerAppendResult,
+	ExecutionRuntime,
+	ExecutionScopeHandle,
+	ImmutableObjectiveContract,
+} from "../execution-control";
+import { ProviderCircuitOpenError, StaleExecutionRevisionError } from "../execution-control";
+import { stableValueFingerprint } from "../execution-control/progress-classifier";
+import type { TaskContractRegistry } from "../execution-control/task-contract";
 import type { TtsrManager, TtsrMatchContext } from "../export/ttsr";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
@@ -417,6 +428,7 @@ import {
 	concreteThinkingLevel,
 	parseConfiguredThinkingLevel,
 	parseThinkingLevel,
+	prewalkWouldBeNoop,
 	resolveProvisionalAutoLevel,
 	resolveThinkingLevelForModel,
 	shouldDisableReasoning,
@@ -509,6 +521,7 @@ import { EPHEMERAL_MODEL_CHANGE_ROLE } from "./session-entries";
 import { formatSessionHistoryMarkdown } from "./session-history-format";
 import { cleanupEmptyMoveSession, type SessionManager } from "./session-manager";
 import type { ShakeMode, ShakeResult } from "./shake-types";
+import { getSessionSubagentModelOverride } from "./subagent-model-override";
 import { ToolChoiceQueue } from "./tool-choice-queue";
 import { planTurnPersistence, sameMessageContent, sessionMessagePersistenceKey } from "./turn-persistence";
 import { classifyUnexpectedStop, isUnexpectedStopCandidate } from "./unexpected-stop-classifier";
@@ -627,6 +640,10 @@ const MID_RUN_TODO_NUDGE_MESSAGE_TYPE = "mid-run-todo-nudge";
 /** Hidden plan nudge injected by prewalk; scrubbed from the LLM context
  *  when the switch happens. */
 const PREWALK_PLAN_MESSAGE_TYPE = "prewalk-plan";
+
+function isPrewalkPlanNudge(message: AgentMessage): boolean {
+	return message.role === "custom" && message.customType === PREWALK_PLAN_MESSAGE_TYPE;
+}
 /** Hidden safety-net nudge forcing one more turn after a text-only reply to
  *  the plan nudge, which would otherwise end the run with no code written. */
 const PREWALK_CONTINUE_MESSAGE_TYPE = "prewalk-continue";
@@ -638,6 +655,11 @@ const PREWALK_CHECKLIST_MESSAGE_TYPE = "prewalk-checklist";
 /** Hidden steered notice announcing a mid-session `xd://` mount/unmount delta
  *  (see {@link AgentSession.#notifyXdevMountDelta}). */
 const XDEV_MOUNT_NOTICE_MESSAGE_TYPE = "xdev-mount-notice";
+
+interface XdevMountNoticeDetails {
+	added: string[];
+	removed: string[];
+}
 /** Tools whose first successful call triggers the switch — once the todo
  *  gate is open (see {@link AgentSession.#prewalkTodoSeen}). Bash is
  *  deliberately excluded: it doubles as exploration (ls/cat) and fired
@@ -648,6 +670,16 @@ const PREWALK_ACTION_TOOLS: Record<string, true> = {
 	edit: true,
 	write: true,
 };
+
+/** A device write only counts as implementation when its wrapped tier mutates state. */
+function isPrewalkImplementationAction(result: ToolResultMessage): boolean {
+	if (!PREWALK_ACTION_TOOLS[result.toolName]) return false;
+	const details = result.details;
+	if (!isRecord(details) || !("xdev" in details) || !details.xdev) return true;
+	const xdev = details.xdev;
+	if (!isRecord(xdev) || !("tier" in xdev)) return false;
+	return xdev.tier === "write" || xdev.tier === "exec";
+}
 /** `customType` for the hidden hand-off message steered to the target model
  *  once PlanYolo auto-approves the plan. Unlike prewalk's plan nudge this
  *  is never scrubbed — it IS the instruction the target model acts on. */
@@ -1078,6 +1110,20 @@ export interface AgentSessionConfig {
 	skillsSettings?: SkillsSettings;
 	/** Model registry for API key resolution and model discovery */
 	modelRegistry: ModelRegistry;
+	/**
+	 * 共享 execution runtime。根会话创建实例并向下传递；子会话采纳父 runtime，
+	 * 自身不得 start/sync/dispose。
+	 */
+	executionRuntime?: ExecutionRuntime;
+	/**
+	 * 本会话拥有的 execution runtime（创建它的根会话）。子/采纳会话保持
+	 * undefined，不得拆除；只有 owner 的 {@link AgentSession.dispose} 释放它。
+	 */
+	ownedExecutionRuntime?: ExecutionRuntime;
+	/** 从父会话继承的固定不可变 execution scope（子会话）。 */
+	executionScopeId?: string;
+	/** 与嵌套会话共享的 root 级 Task 准入注册表。 */
+	taskContractRegistry?: TaskContractRegistry;
 	/** Tool registry for LSP and settings */
 	toolRegistry?: Map<string, AgentTool>;
 	/** Creates the tools registered only while `/vibe` mode is active. */
@@ -1993,10 +2039,6 @@ type SetSessionNameWithTrigger = (
 	trigger?: SessionNameTrigger,
 ) => Promise<boolean>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function textFromContent(content: unknown): string {
 	if (typeof content === "string") return content.trim();
 	if (!Array.isArray(content)) return "";
@@ -2035,6 +2077,35 @@ function titleConversationTurnFromMessage(message: AgentMessage): TitleConversat
 	const thinking = message.role === "assistant" ? thinkingFromContent(message.content) : undefined;
 	if (!text && !thinking) return undefined;
 	return { role: message.role, ...(text ? { text } : {}), ...(thinking ? { thinking } : {}) };
+}
+
+/**
+ * 由真实 journal entry 派生 host-minted user-turn objective contract。
+ *
+ * 仅使用 entryId（真实持久化身份）与消息内容（稳定 fingerprint）推导，
+ * 绝不读取模型文本。同一 entry 重入必然得到完全相同的契约（scope registry
+ * 以此校验不可变绑定）。clauseRefs 必须非空且从 entryId 派生：typed
+ * acceptance gate 的 objectiveClauseRefs 必须属于契约，空 clauseRefs 会让
+ * 任何 gate 都无法通过验证，scope 将永远无法 completed。
+ */
+export function buildAuthoritativeUserObjectiveContract(
+	entryId: string,
+	message: AgentMessage,
+): ImmutableObjectiveContract {
+	if (message.role !== "user") {
+		throw new Error(`Authoritative objective contracts require a user message, received ${message.role}.`);
+	}
+	const fingerprintText = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+	return {
+		source: "authoritative_user",
+		authoritativeUserTurnId: entryId,
+		ref: {
+			contractId: `user-turn:${entryId}`,
+			revision: 1,
+			contractHash: stableValueFingerprint(fingerprintText),
+			clauseRefs: [`user-turn:${entryId}:objective`],
+		},
+	};
 }
 
 export class AgentSession {
@@ -2250,8 +2321,14 @@ export class AgentSession {
 
 	// Model registry for API key resolution
 	#modelRegistry: ModelRegistry;
-
-	// Tool registry and prompt builder for extensions
+	#taskContractRegistry: TaskContractRegistry | undefined;
+	#executionRuntime: ExecutionRuntime | undefined;
+	#ownedExecutionRuntime: ExecutionRuntime | undefined;
+	#executionScopeId: string | undefined;
+	/** 本会话的 active execution scope handle（仅 root 会话）。 */
+	#executionHandle: ExecutionScopeHandle | undefined;
+	/** 本会话已驱动到终态的 scope；永不重复 finish。 */
+	#finishedExecutionScopes = new Set<string>();
 	#toolRegistry: Map<string, AgentTool>;
 	#createVibeTools: (() => AgentTool[]) | undefined;
 	#installedVibeToolNames = new Set<string>();
@@ -2265,7 +2342,10 @@ export class AgentSession {
 	#preferWebsockets: boolean | undefined;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#rebuildSystemPrompt:
-		| ((toolNames: string[], tools: Map<string, AgentTool>) => Promise<{ systemPrompt: string[] }>)
+		| ((
+				toolNames: string[],
+				tools: Map<string, AgentTool>,
+		  ) => Promise<{ systemPrompt: string[]; xdevCatalogNames?: readonly string[] }>)
 		| undefined;
 	#getLocalCalendarDate: () => string;
 	#getMcpServerInstructions: (() => Map<string, string> | undefined) | undefined;
@@ -2276,6 +2356,8 @@ export class AgentSession {
 	#runtimeSelectedToolNames: ReadonlySet<string> | undefined;
 	#baseSystemPrompt: string[];
 	#baseSystemPromptBeforeMemoryPromotion: string[] | undefined;
+	/** Per-turn prompt replacement returned by `before_agent_start`. */
+	#turnSystemPromptOverride: string[] | undefined;
 	/**
 	 * Signature of the (toolNames, tool descriptions) tuple passed to the most
 	 * recent successful `rebuildSystemPrompt` call. Used to skip redundant rebuilds
@@ -2296,6 +2378,13 @@ export class AgentSession {
 	#xdevRegistry: XdevRegistry | undefined;
 	/** Names of discoverable tools currently mounted under `xd://` (dynamic mounts only, not built-in devices). */
 	#mountedXdevToolNames = new Set<string>();
+	/** Coalesced mount delta delivered with the next user-authored prompt. */
+	#pendingXdevMountDelta: { added: Set<string>; removed: Set<string> } | undefined;
+	/** Dynamic devices already visible through delivered notices or the outgoing base catalog. */
+	#announcedMounts = new Set<string>();
+	#announcedMountsSeeded = false;
+	/** Device names rendered by the current base system prompt. */
+	#basePromptXdevNames: ReadonlySet<string> = new Set();
 
 	// TTSR manager for time-traveling stream rules
 	#ttsrManager: TtsrManager | undefined = undefined;
@@ -2602,15 +2691,38 @@ export class AgentSession {
 		this.#emit(pending);
 	}
 
+	#isPrewalkNoop(prewalk: Prewalk): boolean {
+		return prewalkWouldBeNoop(this.model, this.configuredThinkingLevel(), prewalk.target, prewalk.thinkingLevel);
+	}
+
+	#clearPrewalkState(): void {
+		this.#prewalk = undefined;
+		this.#prewalkPlanInjected = false;
+		this.#prewalkContinuePending = false;
+		this.#prewalkTodoSeen = false;
+	}
+
+	#disarmNoopPrewalk(prewalk: Prewalk): void {
+		this.#clearPrewalkState();
+		this.emitNotice(
+			"info",
+			`Prewalk: target ${prewalk.target.provider}/${prewalk.target.id} already matches the active model and thinking level; nothing to switch.`,
+			"prewalk",
+		);
+	}
+
 	/** Advance the one-way prewalk switch at a completed assistant-turn boundary. */
 	async #advancePrewalk(liveMessages: AgentMessage[], context: AgentTurnEndContext | undefined): Promise<void> {
 		const prewalk = this.#prewalk;
 		if (!prewalk || context?.message.role !== "assistant") return;
-
-		const todoCalledThisTurn = context.toolResults.some(result => result.toolName === "todo");
-		if (todoCalledThisTurn) {
-			this.#prewalkTodoSeen = true;
+		if (this.#isPrewalkNoop(prewalk)) {
+			this.#scrubPrewalkPlanNudge(liveMessages);
+			this.#disarmNoopPrewalk(prewalk);
+			return;
 		}
+
+		const todoCalledThisTurn = context.toolResults.some(result => result.toolName === "todo" && !result.isError);
+		if (todoCalledThisTurn) this.#prewalkTodoSeen = true;
 
 		// The plan nudge asks for a prose plan before implementation begins,
 		// but the agent loop treats each text-only reply as terminal — observed
@@ -2645,7 +2757,7 @@ export class AgentSession {
 		// deadlock the switch.
 		const todoGateOpen = this.#prewalkTodoSeen || !this.getActiveToolNames().includes("todo");
 		const action = todoGateOpen
-			? context.toolResults.find(result => PREWALK_ACTION_TOOLS[result.toolName])
+			? context.toolResults.find(result => isPrewalkImplementationAction(result))
 			: undefined;
 		if (!action) {
 			if (!this.#prewalkPlanInjected) {
@@ -2671,13 +2783,13 @@ export class AgentSession {
 
 		this.#scrubPrewalkPlanNudge(liveMessages);
 		const target = prewalk.target;
-		if (this.model && modelsAreEqual(this.model, target)) {
-			this.#prewalk = undefined;
+		if (this.#isPrewalkNoop(prewalk)) {
+			this.#disarmNoopPrewalk(prewalk);
 			return;
 		}
 
 		await this.setModelTemporary(target, prewalk.thinkingLevel, { ephemeral: true });
-		this.#prewalk = undefined;
+		this.#clearPrewalkState();
 		this.emitNotice(
 			"info",
 			`Prewalk: switched to ${target.provider}/${target.id} after first ${action.toolName} call.`,
@@ -2700,18 +2812,29 @@ export class AgentSession {
 	 * invocation means "start this now." A no-op with a notice if a prewalk
 	 * is already armed and waiting.
 	 */
-	armPrewalk(target: Model, thinkingLevel?: ConfiguredThinkingLevel): void {
-		if (this.#prewalk) {
+	armPrewalk(target: Model, thinkingLevel?: ConfiguredThinkingLevel): boolean {
+		const active = this.#prewalk;
+		if (active) {
 			this.emitNotice(
 				"info",
-				`Prewalk: already armed for ${this.#prewalk.target.provider}/${this.#prewalk.target.id}, waiting for the first edit/write.`,
+				`Prewalk: already armed for ${active.target.provider}/${active.target.id}, waiting for the first edit/write.`,
 				"prewalk",
 			);
-			return;
+			return (
+				active.target.provider === target.provider &&
+				active.target.id === target.id &&
+				active.thinkingLevel === thinkingLevel
+			);
 		}
-		this.#prewalk = { target, thinkingLevel };
+		const candidate = { target, thinkingLevel };
+		if (this.#isPrewalkNoop(candidate)) {
+			this.#disarmNoopPrewalk(candidate);
+			return false;
+		}
+		this.#prewalk = candidate;
 		this.#prewalkPlanInjected = true;
 		this.#prewalkContinuePending = true;
+		this.#prewalkTodoSeen = false;
 		this.agent.steer({
 			role: "custom",
 			customType: PREWALK_PLAN_MESSAGE_TYPE,
@@ -2725,20 +2848,17 @@ export class AgentSession {
 			`Prewalk: armed for ${target.provider}/${target.id} — will switch at the first edit/write once the todo list exists.`,
 			"prewalk",
 		);
+		return true;
 	}
 
 	/**
-	 * Remove the plan nudge from the LLM context before the model switch: the
-	 * fast model inherits the plan the nudge produced, not the nudge itself.
-	 * Splices the loop's live context array in place (the run streams from
-	 * it) and mirrors the removal into agent state. The persisted transcript
-	 * keeps the message for audit; a session reload re-materializes it,
-	 * which is acceptable for prewalk's single-run lifecycle.
+	 * Remove the one-run plan nudge from the live model context before the
+	 * switch. The nudge is transient and is never persisted, so resume, fork,
+	 * and context rebuilds cannot resurrect it.
 	 */
 	#scrubPrewalkPlanNudge(liveMessages: AgentMessage[]): void {
 		if (!this.#prewalkPlanInjected) return;
-		const isPlanNudge = (m: AgentMessage): boolean =>
-			m.role === "custom" && m.customType === PREWALK_PLAN_MESSAGE_TYPE;
+		const isPlanNudge = isPrewalkPlanNudge;
 		for (let i = liveMessages.length - 1; i >= 0; i--) {
 			if (isPlanNudge(liveMessages[i])) liveMessages.splice(i, 1);
 		}
@@ -2900,7 +3020,11 @@ export class AgentSession {
 		this.#customCommands = config.customCommands ?? [];
 		this.#skillsReloadable = config.skillsReloadable ?? true;
 		this.#skillsSettings = config.skillsSettings;
+		this.#executionRuntime = config.executionRuntime;
+		this.#ownedExecutionRuntime = config.ownedExecutionRuntime;
+		this.#executionScopeId = config.executionScopeId;
 		this.#modelRegistry = config.modelRegistry;
+		this.#taskContractRegistry = config.taskContractRegistry;
 		this.#modelRouteLease = new ModelRouteLeaseController(
 			() => this.#modelRegistry.getModelRouteRegistry(),
 			config.initialModelRoute,
@@ -4900,14 +5024,15 @@ export class AgentSession {
 			const persistMessageEnd = () => {
 				// Check if this is a hook/custom message
 				if (event.message.role === "hookMessage" || event.message.role === "custom") {
-					// Persist as CustomMessageEntry
-					this.sessionManager.appendCustomMessageEntry(
-						event.message.customType,
-						event.message.content,
-						event.message.display,
-						event.message.details,
-						event.message.attribution ?? "agent",
-					);
+					if (!isPrewalkPlanNudge(event.message)) {
+						this.sessionManager.appendCustomMessageEntry(
+							event.message.customType,
+							event.message.content,
+							event.message.display,
+							event.message.details,
+							event.message.attribution ?? "agent",
+						);
+					}
 					if (event.message.role === "custom" && event.message.customType === "ttsr-injection") {
 						this.#markTtsrInjected(this.#extractTtsrRuleNames(event.message.details));
 					}
@@ -5755,10 +5880,17 @@ export class AgentSession {
 				}
 				this.#beginInFlight();
 				try {
-					await this.#maybeRestoreRetryFallbackPrimary();
+					const reverted = await this.#maybeRestoreRetryFallbackPrimary();
 					if (signal.aborted || this.#isDisposed) {
 						this.#skipAgentContinue("post-restore-unavailable", options);
 						return;
+					}
+					if (reverted) {
+						await this.#runPrePromptCompactionIfNeeded([]);
+						if (signal.aborted || this.#isDisposed) {
+							this.#skipAgentContinue("post-restore-unavailable", options);
+							return;
+						}
 					}
 					await this.agent.continue();
 				} catch (error) {
@@ -7350,7 +7482,7 @@ export class AgentSession {
 		const resetMnemopi = this.#resetMnemopiConversationTrackingIfMnemopi();
 		if (hadPromotedMemoryPrompt) {
 			this.#baseSystemPrompt = this.#baseSystemPromptBeforeMemoryPromotion!;
-			this.agent.setSystemPrompt(this.#baseSystemPrompt);
+			this.#applyAgentSystemPrompt(this.#baseSystemPrompt);
 			this.#baseSystemPromptBeforeMemoryPromotion = undefined;
 		}
 		if (resetHindsight || resetMnemopi || hadPromotedMemoryPrompt) {
@@ -7586,6 +7718,12 @@ export class AgentSession {
 				logger.warn("Failed to disconnect owned MCP manager during dispose", { error: String(error) });
 			}
 		}
+		// 释放本会话拥有的 execution runtime（创建它的根会话）。采纳会话共享父
+		// runtime，不得拆除。runtime dispose 按契约幂等；失败会上抛，绝不静默。
+		if (this.#ownedExecutionRuntime) {
+			this.#ownedExecutionRuntime.dispose();
+			this.#ownedExecutionRuntime = undefined;
+		}
 		// Flush the retain queue BEFORE clearing the session's pointer so
 		// `HindsightRetainQueue.#doFlush` still sees `session.getHindsightSessionState() === state`.
 		// Reversed, the spliced batch survives just long enough to fail the
@@ -7659,6 +7797,11 @@ export class AgentSession {
 	/** Current model (may be undefined if not yet selected) */
 	get model(): Model | undefined {
 		return this.agent.state.model;
+	}
+
+	/** Session-local model selector for subagents bound to the task role. */
+	getSubagentModelOverride(): string | undefined {
+		return getSessionSubagentModelOverride(this.sessionManager.getBranch());
 	}
 
 	/** Effective thinking level applied to the agent (the resolved level when `auto`). */
@@ -7995,27 +8138,28 @@ export class AgentSession {
 
 	async #applyActiveToolsByName(toolNames: string[]): Promise<void> {
 		toolNames = normalizeToolNames(toolNames);
+		let builtInWriteAvailable = this.#builtInToolNames.has("write");
+		if (toolNames.includes("write") && !builtInWriteAvailable) {
+			builtInWriteAvailable = (await this.#ensureWriteRegistered?.()) === true;
+			if (builtInWriteAvailable) this.#builtInToolNames.add("write");
+		}
 		const selectedTools = toolNames.flatMap(name => {
 			const tool = this.#toolRegistry.get(name);
 			return tool ? [{ name, tool }] : [];
 		});
 		const xdevReadAvailable = this.#builtInToolNames.has("read") && selectedTools.some(({ name }) => name === "read");
+		const xdevWriteAvailable = builtInWriteAvailable && selectedTools.some(({ name }) => name === "write");
 		const isPresentationPinned = (name: string): boolean =>
 			this.#presentationPinnedToolNames?.has(name) === true || this.#runtimeSelectedToolNames?.has(name) === true;
 		const mountCandidates = selectedTools.filter(
 			({ name, tool }) =>
 				this.#xdevRegistry !== undefined &&
 				xdevReadAvailable &&
+				xdevWriteAvailable &&
 				!isPresentationPinned(name) &&
 				isMountableUnderXdev(tool),
 		);
-
-		let builtInWriteAvailable = this.#builtInToolNames.has("write");
-		if (mountCandidates.length > 0 && !builtInWriteAvailable) {
-			builtInWriteAvailable = (await this.#ensureWriteRegistered?.()) === true;
-			if (builtInWriteAvailable) this.#builtInToolNames.add("write");
-		}
-		const mountNames = builtInWriteAvailable ? new Set(mountCandidates.map(({ name }) => name)) : new Set<string>();
+		const mountNames = new Set(mountCandidates.map(({ name }) => name));
 		const tools: AgentTool[] = [];
 		const validToolNames: string[] = [];
 		const mountedTools: AgentTool[] = [];
@@ -8063,6 +8207,7 @@ export class AgentSession {
 
 		let rebuiltSystemPrompt: string[] | undefined;
 		let rebuiltSignature: string | undefined;
+		let rebuiltXdevCatalogNames: readonly string[] | undefined;
 		try {
 			if (this.#rebuildSystemPrompt) {
 				const signature = this.#computeAppliedToolSignature(validToolNames, tools);
@@ -8070,6 +8215,7 @@ export class AgentSession {
 					const built = await this.#rebuildSystemPrompt(validToolNames, this.#toolRegistry);
 					rebuiltSystemPrompt = built.systemPrompt;
 					rebuiltSignature = signature;
+					rebuiltXdevCatalogNames = built.xdevCatalogNames;
 				}
 			}
 		} catch (error) {
@@ -8085,42 +8231,127 @@ export class AgentSession {
 			if (this.#lastAppliedToolSignature !== undefined) this.#clearInheritedProviderPromptCacheKey();
 			this.#baseSystemPrompt = rebuiltSystemPrompt;
 			this.#baseSystemPromptBeforeMemoryPromotion = undefined;
-			this.agent.setSystemPrompt(this.#baseSystemPrompt);
+			this.#applyAgentSystemPrompt(this.#baseSystemPrompt);
 			this.#lastAppliedToolSignature = rebuiltSignature;
 			this.#promptModelKey = this.#currentPromptModelKey();
+			this.#basePromptXdevNames = new Set(rebuiltXdevCatalogNames);
 		}
 	}
 
-	/**
-	 * Announce a mid-session `xd://` mount delta to the model as a steered
-	 * system notice instead of rewriting the system prompt: the prompt (and
-	 * its provider cache prefix) stays byte-stable across MCP connects and
-	 * disconnects, and the model learns about new devices from the notice
-	 * (docs + schema stay one `read xd://<tool>` away). The full docs join
-	 * the system prompt opportunistically on the next unrelated rebuild.
-	 */
+	/** Record mount churn without starting an unsolicited model turn. */
 	#notifyXdevMountDelta(previousMounted: ReadonlySet<string>): void {
-		const registry = this.#xdevRegistry;
-		if (!registry) return;
+		if (!this.#xdevRegistry) return;
 		const current = this.#mountedXdevToolNames;
 		const addedNames = [...current].filter(name => !previousMounted.has(name));
-		const removed = [...previousMounted].filter(name => !current.has(name)).map(name => ({ name }));
-		if (addedNames.length === 0 && removed.length === 0) return;
-		const summaries = new Map(registry.entries().map(entry => [entry.name, entry.summary]));
+		const removedNames = [...previousMounted].filter(name => !current.has(name));
+		if (addedNames.length === 0 && removedNames.length === 0) return;
+
+		const pending = this.#pendingXdevMountDelta ?? { added: new Set<string>(), removed: new Set<string>() };
+		for (const name of addedNames) {
+			if (!pending.removed.delete(name)) pending.added.add(name);
+		}
+		for (const name of removedNames) {
+			if (!pending.added.delete(name)) pending.removed.add(name);
+		}
+		this.#pendingXdevMountDelta = pending.added.size > 0 || pending.removed.size > 0 ? pending : undefined;
+
+		if (this.settings.get("startup.quiet")) return;
+		const parts: string[] = [];
+		if (addedNames.length > 0) parts.push(`mounted ${addedNames.join(", ")}`);
+		if (removedNames.length > 0) parts.push(`unmounted ${removedNames.join(", ")}`);
+		this.emitNotice("info", `xd://: ${parts.join("; ")}`, "xdev");
+	}
+
+	/** Re-seed delivered mount history after the active transcript changes. */
+	#resetAnnouncedMounts(): void {
+		this.#announcedMounts.clear();
+		this.#announcedMountsSeeded = false;
+	}
+
+	#ensureAnnouncedMountsSeeded(): void {
+		if (this.#announcedMountsSeeded) return;
+		this.#announcedMountsSeeded = true;
+		for (const message of this.agent.state.messages) {
+			if (message.role !== "custom" || message.customType !== XDEV_MOUNT_NOTICE_MESSAGE_TYPE) continue;
+			const details = message.details;
+			if (
+				isRecord(details) &&
+				Array.isArray(details.added) &&
+				details.added.every(name => typeof name === "string") &&
+				Array.isArray(details.removed) &&
+				details.removed.every(name => typeof name === "string")
+			) {
+				for (const name of details.added) this.#announcedMounts.add(name);
+				for (const name of details.removed) this.#announcedMounts.delete(name);
+				continue;
+			}
+
+			if (typeof message.content !== "string") continue;
+			let section: "added" | "removed" | undefined;
+			for (const line of message.content.split("\n")) {
+				if (line === "These tools became available:") {
+					section = "added";
+					continue;
+				}
+				if (line.startsWith("These tools became available.")) {
+					section = "added";
+					continue;
+				}
+				if (line.startsWith("No longer mounted")) {
+					section = "removed";
+					continue;
+				}
+				if (line === "Configured inline device docs:" || line === "</system-notice>") break;
+				if (line.startsWith("Read `xd://<tool>`")) {
+					section = undefined;
+					continue;
+				}
+				if (!section) continue;
+				const match = /^- xd:\/\/(\S+?)(?:\s+—|$)/.exec(line);
+				const name = match?.[1];
+				if (!name) continue;
+				if (section === "added") this.#announcedMounts.add(name);
+				else this.#announcedMounts.delete(name);
+			}
+		}
+	}
+
+	/** Consume a coalesced mount delta at a user prompt boundary. */
+	#takePendingXdevMountNotice(baseCatalogDelivered: boolean): CustomMessage<XdevMountNoticeDetails> | undefined {
+		const pending = this.#pendingXdevMountDelta;
+		if (!pending) return undefined;
+		this.#pendingXdevMountDelta = undefined;
+		this.#ensureAnnouncedMountsSeeded();
+
+		if (baseCatalogDelivered) {
+			for (const name of pending.added) {
+				if (this.#basePromptXdevNames.has(name)) this.#announcedMounts.add(name);
+			}
+		}
+		const addedNames = [...pending.added].filter(name => !this.#announcedMounts.has(name));
+		const removedNames = [...pending.removed].filter(name => this.#announcedMounts.has(name));
+		if (addedNames.length === 0 && removedNames.length === 0) return undefined;
+
+		const summaries = new Map(this.#xdevRegistry?.entries().map(entry => [entry.name, entry.summary]) ?? []);
 		const added = addedNames.map(name => ({ name, summary: summaries.get(name) ?? "" }));
-		this.agent.steer({
+		const removed = removedNames.map(name => ({ name }));
+		const docs =
+			this.#xdevRegistry?.docsFor(
+				addedNames,
+				this.settings.get("tools.xdevDocs"),
+				this.settings.get("tools.xdevInlineDevices"),
+			) ?? "";
+		for (const name of addedNames) this.#announcedMounts.add(name);
+		for (const name of removedNames) this.#announcedMounts.delete(name);
+		return {
 			role: "custom",
 			customType: XDEV_MOUNT_NOTICE_MESSAGE_TYPE,
-			content: prompt.render(xdevMountNoticePrompt, { added, removed }),
+			content: prompt.render(xdevMountNoticePrompt, { added, removed, docs }),
+			details: { added: addedNames, removed: removedNames },
 			attribution: "agent",
 			display: false,
 			timestamp: Date.now(),
-		});
-		if (this.settings.get("startup.quiet")) return;
-		const parts: string[] = [];
-		if (added.length > 0) parts.push(`mounted ${added.map(entry => entry.name).join(", ")}`);
-		if (removed.length > 0) parts.push(`unmounted ${removed.map(entry => entry.name).join(", ")}`);
-		this.emitNotice("info", `xd://: ${parts.join("; ")}`, "xdev");
+		};
 	}
 
 	/**
@@ -8178,6 +8409,20 @@ export class AgentSession {
 		}
 	}
 
+	/** Apply a rebuilt base prompt without clobbering the active turn override. */
+	#applyAgentSystemPrompt(base: string[]): void {
+		this.agent.setSystemPrompt(this.#turnSystemPromptOverride ?? base);
+	}
+
+	#setTurnSystemPromptOverride(prompt: string[]): void {
+		this.#turnSystemPromptOverride = prompt;
+		this.agent.setSystemPrompt(prompt);
+	}
+
+	#clearTurnSystemPromptOverride(): void {
+		this.#turnSystemPromptOverride = undefined;
+	}
+
 	/** Rebuild the base system prompt using the current active tool set. */
 	async refreshBaseSystemPrompt(): Promise<void> {
 		if (!this.#rebuildSystemPrompt) return;
@@ -8186,6 +8431,7 @@ export class AgentSession {
 		const previousBaseSystemPrompt = this.#baseSystemPrompt;
 		const built = await this.#rebuildSystemPrompt(activeToolNames, this.#toolRegistry);
 		this.#baseSystemPrompt = built.systemPrompt;
+		this.#basePromptXdevNames = new Set(built.xdevCatalogNames);
 		this.#baseSystemPromptBeforeMemoryPromotion = undefined;
 		if (
 			previousBaseSystemPrompt.length !== this.#baseSystemPrompt.length ||
@@ -8193,7 +8439,7 @@ export class AgentSession {
 		) {
 			this.#clearInheritedProviderPromptCacheKey();
 		}
-		this.agent.setSystemPrompt(this.#baseSystemPrompt);
+		this.#applyAgentSystemPrompt(this.#baseSystemPrompt);
 		this.#promptModelKey = this.#currentPromptModelKey();
 		// Refresh the cached signature so a subsequent `#applyActiveToolsByName` with
 		// the same tool set does not re-rebuild on top of the explicit refresh we
@@ -8209,7 +8455,7 @@ export class AgentSession {
 			if (this.#baseSystemPromptBeforeMemoryPromotion) {
 				this.#baseSystemPrompt = this.#baseSystemPromptBeforeMemoryPromotion;
 				this.#baseSystemPromptBeforeMemoryPromotion = undefined;
-				this.agent.setSystemPrompt(this.#baseSystemPrompt);
+				this.#applyAgentSystemPrompt(this.#baseSystemPrompt);
 			}
 			return this.#baseSystemPrompt;
 		}
@@ -8241,7 +8487,7 @@ export class AgentSession {
 			this.#baseSystemPromptBeforeMemoryPromotion ??= previousBaseSystemPrompt;
 			const stablePrompt = [...previousBaseSystemPrompt, injected];
 			this.#baseSystemPrompt = stablePrompt;
-			this.agent.setSystemPrompt(stablePrompt);
+			this.#applyAgentSystemPrompt(stablePrompt);
 			return stablePrompt;
 		} catch (err) {
 			logger.debug("Memory backend beforeAgentStartPrompt failed", {
@@ -8682,6 +8928,121 @@ export class AgentSession {
 	/** Current session ID */
 	get sessionId(): string {
 		return this.#activeProviderSessionId();
+	}
+	/** 共享 execution runtime（根创建或父采纳）；execution control 未接线时为 undefined。 */
+	getExecutionRuntime(): ExecutionRuntime | undefined {
+		return this.#executionRuntime;
+	}
+	/**
+	 * 真实分支/会话切换后重同步 execution runtime。sync 必须发生在任何新分支
+	 * replay（agent.replaceMessages 等）之前：runtime 依据传入的当前分支
+	 * entries 重建 ledger/scheduler/registries。错误绝不吞掉——runtime 自身的
+	 * CAS 规则拒绝过期/迟到状态，失败必须上抛以便调用方处理。固定 scope 的
+	 * 子会话共享父 runtime，不得 syncBranch。
+	 */
+	async #syncExecutionBranch(): Promise<void> {
+		if (!this.#executionRuntime || this.#executionScopeId !== undefined) return;
+		await this.#executionRuntime.syncBranch(this.sessionManager.getBranch());
+	}
+	/**
+	 * 真实宿主用户 turn 在首次 provider 派发前 mint 根 scope；同一 turn 内的
+	 * continuation/steering/compaction/handoff/recovery 只复用当前 active
+	 * scope，绝不新建。用户消息先持久化进 journal，其真实 entry id 同时作为
+	 * logicalTurnId 与 host evidence ref（objectiveContract.authoritativeUserTurnId），
+	 * 契约由 buildAuthoritativeUserObjectiveContract 从 entryId 稳定派生。
+	 * synthetic/model 文本永远不能 mint scope；read-only 会话与固定 scope 的
+	 * child 同样零 scope 写入。
+	 */
+	async #ensureExecutionScopeForTurn(message: AgentMessage): Promise<void> {
+		const runtime = this.#executionRuntime;
+		if (!runtime || this.#executionScopeId !== undefined || !this.#sessionWritesEnabled) return;
+		// 非真实用户消息：只复用当前 active scope（存在时），绝不新建。
+		if (message.role !== "user") {
+			const activeScopeId = runtime.activeScopeId();
+			if (activeScopeId !== undefined) {
+				this.#executionHandle = runtime.getScope(activeScopeId);
+			}
+			return;
+		}
+		// 每个新的顶层用户 prompt 都是独立 authoritative turn：即使上一 scope
+		// 仍 active（evidence gate 未满足而保持运行），也不能因“已有 active”
+		// 复用它——先持久化拿到真实 entryId，再 mint 新 scope。
+		let entryId: string | undefined;
+		if (this.#sessionMessageAlreadyPersisted(message)) {
+			const key = sessionMessagePersistenceKey(message);
+			const branch = this.sessionManager.getBranch();
+			for (let index = branch.length - 1; index >= 0; index--) {
+				const entry = branch[index];
+				if (entry.type !== "message") continue;
+				if (sessionMessagePersistenceKey(entry.message) !== key) continue;
+				if (sameMessageContent(entry.message, message)) {
+					entryId = entry.id;
+					break;
+				}
+			}
+		} else {
+			entryId = this.#appendSessionMessage(message);
+		}
+		if (entryId === undefined) return;
+		this.#executionHandle = runtime.startScope({
+			rootSessionId: runtime.rootSessionId,
+			logicalTurnId: entryId,
+			objectiveContract: buildAuthoritativeUserObjectiveContract(entryId, message),
+		});
+	}
+
+	/**
+	 * 以 revision CAS 把 active scope 驱动到终态。仅 root（固定 scope 的 child
+	 * 永不 finish）；每个 scope 恰好一次被接受的 finish——runtime 的终态守卫与
+	 * 本会话的 one-shot 集合共同拒绝任何迟到 re-finish（如 host abort 之后才
+	 * 到达的 provider 响应）。CAS 过期时以最新 revision 做单次权威重试；仍冲突
+	 * 则上抛，绝不静默。`completed` 仅在 required host evidence gate 全部 pass
+	 * 且带 host evidence 时才尝试；缺证据保持 scope 运行，永不转成用户可见失败。
+	 */
+	async #finishExecutionScope(
+		state: "completed" | "aborted_by_user" | "budget_exhausted" | "runtime_fault" | "no_provider_available",
+	): Promise<void> {
+		const runtime = this.#executionRuntime;
+		if (!runtime || this.#executionScopeId !== undefined) return;
+		const scopeId = runtime.activeScopeId();
+		if (scopeId === undefined || this.#finishedExecutionScopes.has(scopeId)) return;
+		const handle = runtime.getScope(scopeId);
+		if (!handle) return;
+		if (state === "completed") {
+			const snapshot = handle.snapshot();
+			const requiredGates = snapshot.gates.filter(gate => gate.required !== false);
+			const evidenceSatisfied =
+				requiredGates.length > 0 &&
+				requiredGates.every(gate => gate.status === "pass" && gate.evidenceRefs.length > 0);
+			if (!evidenceSatisfied) return;
+		}
+		const finishOnce = (expectedRevision: number): ExecutionLedgerAppendResult =>
+			runtime.finishScope(scopeId, { expectedRevision, state });
+		let result: ExecutionLedgerAppendResult;
+		try {
+			result = finishOnce(handle.snapshot().revision);
+		} catch (error) {
+			if (!(error instanceof StaleExecutionRevisionError)) throw error;
+			// 单次权威重试：以最新 revision 重新 CAS；仍过期则向上抛，绝不吞掉。
+			const fresh = runtime.getScope(scopeId);
+			if (!fresh) return;
+			result = finishOnce(fresh.snapshot().revision);
+		}
+		if (result.accepted) {
+			this.#finishedExecutionScopes.add(scopeId);
+			if (this.#executionHandle?.scopeId === scopeId) this.#executionHandle = undefined;
+		}
+	}
+	/** 从父会话继承的固定不可变 execution scope（子会话）。 */
+	getExecutionScopeId(): string | undefined {
+		return this.#executionScopeId;
+	}
+	getActiveExecutionScopeId(): string | undefined {
+		return this.#executionScopeId ?? this.#executionRuntime?.activeScopeId();
+	}
+	/** 当前会话可派生任务时使用的 root 级 Task 准入注册表。 */
+	getTaskContractRegistry(): TaskContractRegistry | undefined {
+		return this.#taskContractRegistry;
 	}
 	getEvalSessionId(): string | null {
 		if (this.#parentEvalSessionId !== undefined) return this.#parentEvalSessionId;
@@ -10760,6 +11121,7 @@ export class AgentSession {
 				messages.push(...options.prependMessages);
 			}
 
+			const xdevMountNoticeIndex = messages.length;
 			messages.push(message);
 
 			// Early bail-out: if a newer abort/prompt cycle started during setup,
@@ -10789,6 +11151,7 @@ export class AgentSession {
 
 			const beforeAgentStartSystemPrompt = await this.#buildSystemPromptForAgentStart(expandedText);
 
+			let baseXdevCatalogDelivered = true;
 			// Emit before_agent_start extension event
 			if (this.#extensionRunner) {
 				const result = await this.#extensionRunner.emitBeforeAgentStart(
@@ -10823,17 +11186,27 @@ export class AgentSession {
 				}
 
 				if (result?.systemPrompt !== undefined) {
-					this.agent.setSystemPrompt(result.systemPrompt);
+					baseXdevCatalogDelivered = false;
+					this.#setTurnSystemPromptOverride(result.systemPrompt);
 				} else {
+					this.#clearTurnSystemPromptOverride();
 					this.agent.setSystemPrompt(beforeAgentStartSystemPrompt);
 				}
 			} else {
+				this.#clearTurnSystemPromptOverride();
 				this.agent.setSystemPrompt(beforeAgentStartSystemPrompt);
 			}
 
 			// Bail out if a newer abort/prompt cycle has started since we began setup
 			if (this.#promptGeneration !== generation) {
 				return;
+			}
+
+			const xdevMountNotice = isUserQueuedMessage(message)
+				? this.#takePendingXdevMountNotice(baseXdevCatalogDelivered)
+				: undefined;
+			if (xdevMountNotice) {
+				messages.splice(xdevMountNoticeIndex, 0, xdevMountNotice);
 			}
 
 			// Auto thinking: classify this real user turn and set the effective level
@@ -10879,19 +11252,46 @@ export class AgentSession {
 			// Context steady: capture leaf entry ID before this prompt cycle's
 			// entries are appended, so the source range spans the full turn.
 			this.#contextSteadyPreTurnLeafId = this.sessionManager.getLeafId();
+			// Execution control：真实宿主用户 turn 在首次 provider 派发前 mint
+			// 根 scope；continuation/steering 复用 active scope。用户消息 entry
+			// id 即 host evidence ref（authoritativeUserTurnId）。synthetic/
+			// model 文本永远不能 mint scope。
+			await this.#ensureExecutionScopeForTurn(message);
+			if (this.#promptGeneration !== generation) {
+				return;
+			}
+			// Provider 派发 gate 位于 SDK provider wrapper：每次调用先以
+			// Snowflake requestId 向 runtime 登记（任何 provider/network 工作
+			// 之前），scheduler gate 拒绝即零网络。ProviderHealthRegistry 保持
+			// 为传输层电路 gate。
 			try {
 				await this.#promptAgentWithIdleRetry(messages, agentPromptOptions);
-			} finally {
-				// Remap pending_* refs after journal append. Persist the audit only after
-				// post-prompt recovery so TurnDigest settledLeafId is not the plan entry.
-				if (this.#contextSteadyRequestPlan) {
-					this.#contextSteadyRequestPlan = this.#remapContextSteadyPlanPendingRefs(this.#contextSteadyRequestPlan);
-					this.#contextSteadyLastPlan = this.#contextSteadyPlanInputsChanged(this.#contextSteadyRequestPlan)
-						? undefined
-						: this.#contextSteadyRequestPlan;
+			} catch (error) {
+				// `abort()` 自行决定当前 Scope 是否需要终态化；其等待 Agent idle
+				// 期间保持该标记，避免 prompt 的并发失败路径抢先写入 runtime_fault。
+				// 内部手动压缩会继续同一执行，因此不得终结 Scope。
+				if (!this.#abortInProgress) {
+					if (error instanceof ProviderCircuitOpenError) {
+						await this.#finishExecutionScope("no_provider_available");
+					} else {
+						await this.#finishExecutionScope("runtime_fault");
+					}
 				}
-				this.#setPendingContextSnapshot(undefined);
+				throw error;
 			}
+			// 正常完成：尝试终态迁移；仅当 required host evidence gate 全部
+			// pass 且带 host evidence 时 runtime 才接受 `completed`——assistant
+			// 文本永远不是 evidence，缺 evidence 不是用户错误，scope 保持运行。
+			await this.#finishExecutionScope("completed");
+			// 追加 journal 后重映射 pending_* 引用；仅在后提示恢复之后持久化
+			// 审计，以便 TurnDigest settledLeafId 指向非 plan entry。
+			if (this.#contextSteadyRequestPlan) {
+				this.#contextSteadyRequestPlan = this.#remapContextSteadyPlanPendingRefs(this.#contextSteadyRequestPlan);
+				this.#contextSteadyLastPlan = this.#contextSteadyPlanInputsChanged(this.#contextSteadyRequestPlan)
+					? undefined
+					: this.#contextSteadyRequestPlan;
+			}
+			this.#setPendingContextSnapshot(undefined);
 			if (!options?.skipPostPromptRecoveryWait) {
 				await this.#waitForPostPromptRecovery(generation);
 			}
@@ -10908,6 +11308,7 @@ export class AgentSession {
 				}
 			}
 		} finally {
+			this.#clearTurnSystemPromptOverride();
 			// Drop the in-flight request plan, but keep last plan for idle status parity.
 			this.#contextSteadyRequestPlan = undefined;
 			this.#promptModelRouteRequirements = previousRouteRequirements;
@@ -11776,6 +12177,11 @@ export class AgentSession {
 			this.abortEval();
 			const postPromptDrain = this.#cancelPostPromptTasks();
 			this.agent.abort(options?.reason);
+			// 手动压缩只暂停当前 provider turn，随后仍在同一执行 Scope 中恢复；
+			// 其余宿主中止则立即终态化，拒绝任何迟到 provider 响应复活 Scope。
+			if (!options?.preserveCompaction) {
+				await this.#finishExecutionScope("aborted_by_user");
+			}
 			await postPromptDrain;
 			await this.agent.waitForIdle();
 			await this.#drainAutolearnCapture();
@@ -11868,6 +12274,7 @@ export class AgentSession {
 		} finally {
 			this.#finishBashSessionTransition(bashTransition, sessionTransitioned);
 		}
+		this.#resetAnnouncedMounts();
 
 		this.#clearCheckpointRuntimeState();
 		this.setTodoPhases([]);
@@ -13657,6 +14064,7 @@ export class AgentSession {
 			const preservedSteering = this.agent.peekSteeringQueue().slice();
 			const preservedFollowUp = this.agent.peekFollowUpQueue().slice();
 			this.agent.reset();
+			this.#resetAnnouncedMounts();
 			this.agent.replaceQueues(preservedSteering, preservedFollowUp);
 			this.#freshProviderSessionId = undefined;
 			this.#syncAgentSessionId();
@@ -13717,7 +14125,7 @@ export class AgentSession {
 
 			return { document: handoffText, savedPath };
 		} catch (error) {
-			if (handoffSignal.aborted || (error instanceof Error && error.name === "AbortError")) {
+			if (handoffSignal.aborted) {
 				throw new Error("Handoff cancelled");
 			}
 			throw error;
@@ -15040,6 +15448,7 @@ export class AgentSession {
 				}
 			}
 		}
+		this.#resetAnnouncedMounts();
 		const sessionContext = this.buildDisplaySessionContext();
 		if (activeMessages) {
 			activeMessages.splice(0, activeMessages.length, ...sessionContext.messages);
@@ -17641,6 +18050,10 @@ export class AgentSession {
 		if (message.stopReason !== "error") return false;
 
 		const id = this.#classifyRetryMessage(message);
+		// Auth failures are terminal for the current model even when a provider
+		// also stamped a transient or classifier-refusal bit. Credential rotation
+		// remains provider-internal; this path must not replay the same model.
+		if (AIError.is(id, AIError.Flag.AuthFailed) || AIError.is(id, AIError.Flag.OAuthExpiry)) return false;
 		// Context overflow is handled by compaction, not retry
 		const contextWindow = this.model?.contextWindow ?? 0;
 		if (AIError.isContextOverflow(message, contextWindow)) return false;
@@ -18020,7 +18433,7 @@ export class AgentSession {
 		role: string,
 		selector: RetryFallbackSelector,
 		currentSelector: string,
-		options?: { pinFallback?: boolean },
+		options?: { pinFallback?: boolean; requireConcreteModelChange?: boolean },
 	): Promise<boolean> {
 		const resolved = resolveModelOverride([selector.raw], this.#modelRegistry, this.settings);
 		// Capture the configured selector (auto-aware) so a fallback chain preserves
@@ -18063,6 +18476,20 @@ export class AgentSession {
 				if (!apiKey) return false;
 				this.#modelRouteLease.clear();
 				targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(candidate);
+			}
+			if (options?.requireConcreteModelChange) {
+				const currentModel = this.model;
+				if (!currentModel) {
+					this.#modelRouteLease.restoreState(transitionSnapshot.routeState);
+					return false;
+				}
+				const sameConcreteModel =
+					formatModelStringWithRouting(targetModel) === formatModelStringWithRouting(currentModel);
+				const sameRoute = routeSelection ? originalModelRoute?.routeId === routeSelection.route.routeId : true;
+				if (sameConcreteModel && sameRoute) {
+					this.#modelRouteLease.restoreState(transitionSnapshot.routeState);
+					return false;
+				}
 			}
 			this.#setModelWithProviderSessionReset(targetModel);
 			this.setThinkingLevel(nextThinkingLevel);
@@ -18189,9 +18616,13 @@ export class AgentSession {
 		}
 	}
 
-	async #tryRetryModelFallback(currentSelector: string, options?: { pinFallback?: boolean }): Promise<boolean> {
+	async #tryRetryModelFallback(
+		currentSelector: string,
+		options?: { pinFallback?: boolean; requireConcreteModelChange?: boolean },
+	): Promise<boolean> {
 		const role = this.#activeRetryFallback?.role ?? this.#resolveRetryFallbackRole(currentSelector);
 		if (!role) return false;
+		if (options?.requireConcreteModelChange && !this.model) return false;
 
 		for (const selector of this.#findRetryFallbackCandidates(role, currentSelector)) {
 			if (this.#isRetryFallbackSelectorSuppressed(selector)) continue;
@@ -18228,7 +18659,7 @@ export class AgentSession {
 		const id = this.#classifyRetryMessage(message);
 		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;
 		if (AIError.is(id, AIError.Flag.UsageLimit)) return false;
-		if (AIError.is(id, AIError.Flag.AuthFailed)) return false;
+		if (AIError.is(id, AIError.Flag.AuthFailed) || AIError.is(id, AIError.Flag.OAuthExpiry)) return false;
 		return this.#modelRegistry.find("fireworks", toFireworksBaseModelId(model.id)) !== undefined;
 	}
 
@@ -18295,10 +18726,10 @@ export class AgentSession {
 		return true;
 	}
 
-	async #maybeRestoreRetryFallbackPrimary(): Promise<void> {
-		if (!this.#activeRetryFallback) return;
-		if (this.#activeRetryFallback.pinned) return;
-		if (this.#getRetryFallbackRevertPolicy() !== "cooldown-expiry") return;
+	async #maybeRestoreRetryFallbackPrimary(): Promise<boolean> {
+		if (!this.#activeRetryFallback) return false;
+		if (this.#activeRetryFallback.pinned) return false;
+		if (this.#getRetryFallbackRevertPolicy() !== "cooldown-expiry") return false;
 
 		const {
 			originalSelector: originalSelectorRaw,
@@ -18309,19 +18740,19 @@ export class AgentSession {
 		const originalSelector = parseRetryFallbackSelector(originalSelectorRaw, this.#modelRegistry);
 		if (!originalSelector) {
 			this.#clearActiveRetryFallback();
-			return;
+			return false;
 		}
 
 		const currentModel = this.model;
-		if (!currentModel) return;
+		if (!currentModel) return false;
 		const currentSelector = formatRetryFallbackSelector(currentModel, this.thinkingLevel);
 		if (currentSelector === originalSelector.raw) {
 			if (!this.#isRetryFallbackSelectorSuppressed(originalSelector)) {
 				this.#clearActiveRetryFallback();
 			}
-			return;
+			return false;
 		}
-		if (this.#isRetryFallbackSelectorSuppressed(originalSelector)) return;
+		if (this.#isRetryFallbackSelectorSuppressed(originalSelector)) return false;
 
 		const currentThinkingLevel = this.configuredThinkingLevel();
 		const thinkingToApply =
@@ -18353,16 +18784,16 @@ export class AgentSession {
 				}
 				if (!routeSelection) {
 					this.#modelRouteLease.restoreState(transitionSnapshot.routeState);
-					return;
+					return false;
 				}
 				primaryModel = await this.#modelRegistry.refreshSelectedModelMetadata(routeSelection.model);
 			} else {
 				const resolvedPrimary = resolveModelOverride([originalSelector.raw], this.#modelRegistry, this.settings);
 				const candidate =
 					resolvedPrimary.model ?? this.#modelRegistry.find(originalSelector.provider, originalSelector.id);
-				if (!candidate) return;
+				if (!candidate) return false;
 				const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
-				if (!apiKey) return;
+				if (!apiKey) return false;
 				this.#modelRouteLease.clear();
 				primaryModel = await this.#modelRegistry.refreshSelectedModelMetadata(candidate);
 			}
@@ -18385,6 +18816,7 @@ export class AgentSession {
 		this.settings.getStorage()?.recordModelUsage(primarySelector);
 		this.#clearActiveRetryFallback();
 		if (routeSelection) await this.#emitModelRouteResolved(routeSelection);
+		return true;
 	}
 
 	async #ensurePromptModelRoute(runtimeRejections: ModelRouteRuntimeRejection[]): Promise<void> {
@@ -18659,11 +19091,21 @@ export class AgentSession {
 
 		const errorMessage = message.errorMessage || "Unknown error";
 		const id = this.#classifyRetryMessage(message);
+		const rateLimitReason = parseRateLimitReason(errorMessage);
 		const staleOpenAIResponsesReplayError = AIError.is(id, AIError.Flag.StaleResponsesItem);
 		const parsedRetryAfterMs = this.#parseRetryAfterMsFromError(errorMessage);
 		let delayMs = staleOpenAIResponsesReplayError
 			? 0
 			: calculateRetryBackoffDelayMs(retrySettings.baseDelayMs, this.#retryAttempt);
+		if (
+			!staleOpenAIResponsesReplayError &&
+			!AIError.is(id, AIError.Flag.UsageLimit) &&
+			parsedRetryAfterMs === undefined &&
+			rateLimitReason === "RATE_LIMIT_EXCEEDED"
+		) {
+			const reasonBackoffMs = calculateRateLimitBackoffMs(rateLimitReason);
+			if (reasonBackoffMs > delayMs) delayMs = reasonBackoffMs;
+		}
 		let switchedCredential = false;
 		let switchedModel = false;
 		let switchedRoute = false;
@@ -18682,7 +19124,7 @@ export class AgentSession {
 			!staleOpenAIResponsesReplayError &&
 			AIError.is(id, AIError.Flag.UsageLimit)
 		) {
-			const retryAfterMs = parsedRetryAfterMs ?? calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage));
+			const retryAfterMs = parsedRetryAfterMs ?? calculateRateLimitBackoffMs(rateLimitReason);
 			const outcome = await this.#modelRegistry.authStorage.markUsageLimitReached(
 				this.model.provider,
 				this.sessionId,
@@ -18750,7 +19192,12 @@ export class AgentSession {
 				if (!classifierRefusal) {
 					this.#noteRetryFallbackCooldown(currentSelector, parsedRetryAfterMs, errorMessage);
 				}
-				switchedModel = await this.#tryRetryModelFallback(currentSelector, { pinFallback: classifierRefusal });
+				switchedModel = await this.#tryRetryModelFallback(currentSelector, {
+					pinFallback: classifierRefusal,
+					requireConcreteModelChange:
+						options?.hardErrorFallback === true &&
+						(AIError.is(id, AIError.Flag.AuthFailed) || AIError.is(id, AIError.Flag.OAuthExpiry)),
+				});
 			}
 			// Auto fallback from a Fireworks Fast variant to its base model. Independent
 			// of the role-fallback setting: it's intrinsic to the Fast contract (speed
@@ -18767,7 +19214,7 @@ export class AgentSession {
 			}
 			if (switchedRoute || switchedModel) {
 				delayMs = 0;
-			} else if (usageLimitWaitMs === undefined && parsedRetryAfterMs && parsedRetryAfterMs > delayMs) {
+			} else if (usageLimitWaitMs === undefined && parsedRetryAfterMs !== undefined) {
 				delayMs = parsedRetryAfterMs;
 			}
 		}
@@ -19997,6 +20444,11 @@ export class AgentSession {
 				});
 			}
 
+			// 会话切换与分支切换同序：SessionManager 已切到目标会话后，先重同步
+			// runtime（按目标分支 entries 重建 ledger/registries），再 replay
+			// 目标上下文（agent.replaceMessages）。
+			await this.#syncExecutionBranch();
+
 			this.agent.replaceMessages(sessionContext.messages);
 			this.#resetAdvisorSessionState();
 			this.#syncTodoPhasesFromBranch();
@@ -20165,6 +20617,9 @@ export class AgentSession {
 			if (switchingToDifferentSession) {
 				await this.#resetMemoryContextForNewTranscript();
 			}
+			if (switchingToDifferentSession || didReloadConversationChange) {
+				this.#resetAnnouncedMounts();
+			}
 			if (pendingRouteChange && this.#sessionWritesEnabled) {
 				this.sessionManager.appendModelRouteChange({
 					...pendingRouteChange,
@@ -20187,6 +20642,8 @@ export class AgentSession {
 			return true;
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
+			// 回滚同样要重同步 runtime：否则 runtime 仍持有目标会话的分支状态。
+			await this.#syncExecutionBranch();
 			this.#freshProviderSessionId = previousFreshProviderSessionId;
 			this.#syncAgentSessionId(previousSessionState.sessionId);
 			this.#rekeyHindsightMemoryForCurrentSessionId();
@@ -20285,6 +20742,7 @@ export class AgentSession {
 		} finally {
 			this.#finishBashSessionTransition(bashTransition, sessionTransitioned);
 		}
+		this.#resetAnnouncedMounts();
 		this.#rehydrateCheckpointRewindState();
 		this.#syncTodoPhasesFromBranch();
 		this.#freshProviderSessionId = undefined;
@@ -20304,6 +20762,12 @@ export class AgentSession {
 				previousSessionFile,
 			});
 		}
+
+		// SessionManager 已切到新分支：先重同步 execution runtime（ledger/
+		// scheduler/registries 依据当前分支 entries 重建），再 replay 新分支
+		// 上下文（agent.replaceMessages）。顺序不可颠倒；错误绝不吞掉，直接
+		// 上抛由调用方处理。
+		await this.#syncExecutionBranch();
 
 		if (!skipConversationRestore) {
 			this.agent.replaceMessages(sessionContext.messages);
@@ -20382,6 +20846,7 @@ export class AgentSession {
 		} finally {
 			this.#finishBashSessionTransition(bashTransition, sessionTransitioned);
 		}
+		this.#resetAnnouncedMounts();
 
 		this.#rehydrateCheckpointRewindState();
 		this.sessionManager.appendMessage({
@@ -20405,6 +20870,9 @@ export class AgentSession {
 				previousSessionFile,
 			});
 		}
+
+		// /btw 分支切换同样先重同步 runtime 再 replay 新分支上下文。
+		await this.#syncExecutionBranch();
 
 		this.agent.replaceMessages(sessionContext.messages);
 		this.#resetAdvisorSessionState();
@@ -20589,6 +21057,7 @@ export class AgentSession {
 			this.#finishBashSessionTransition(bashTransition, branchTransitioned);
 		}
 
+		this.#resetAnnouncedMounts();
 		// Update agent state — build display context to populate agent messages.
 		const stateContext = this.sessionManager.buildSessionContext();
 		const displayContext = deobfuscateSessionContext(stateContext, this.#obfuscator);

@@ -1,4 +1,5 @@
 **Tasks referenced by verbatim content string, NEVER an auto-generated ID — no "task-1"/"task-N" exists. Pass the content text in the `task` field.**
+**Mutating operations require `operationRequired: true`; omit it for `view`. Missing or false confirmation is rejected without changing the list.**
 
 On each completion the earliest still-open task (in phase order) auto-promotes to `in_progress`.
 Completing tasks out of phase order can move this pointer **back** to an earlier phase — expected; completed tasks are never reverted.
@@ -7,14 +8,15 @@ Completing tasks out of phase order can move this pointer **back** to an earlier
 
 |`op`|Required fields|Effect|
 |---|---|---|
-|`init`|`list: [{phase, items: string[]}]`|Initialize full list (replaces existing)|
-|`init`|`items: string[]`|Flattened single-phase init|
-|`start`|`task`|Mark in progress|
-|`done`|`task` or `phase`|Mark completed|
-|`drop`|`task` or `phase`|Mark abandoned|
-|`rm`|`task` or `phase` (optional)|Remove task or phase; omit both to clear|
-|`append`|`phase`, `items: string[]`|Append tasks to `phase`; lazily creates phase|
-|`view`|—|Read-only: echo list|
+|`init`|`operationRequired: true`, `list: [{phase, items: string[]}]`|Initialize full list; only when empty or all tasks terminal|
+|`init`|`operationRequired: true`, `items: string[]`|Flattened single-phase init; same guard|
+|`reconcile`|`operationRequired: true`, `list` or `items`|Update an active plan while preserving task status|
+|`start`|`operationRequired: true`, `task`|Mark in progress|
+|`done`|`operationRequired: true`, `task` or `phase`|Mark completed|
+|`drop`|`operationRequired: true`, `task` or `phase`|Mark abandoned|
+|`rm`|`operationRequired: true`, `task` or `phase` (optional)|Remove task or phase; omit both to clear|
+|`append`|`operationRequired: true`, `phase`, `items: string[]`|Append tasks to `phase`; lazily creates phase|
+|`view`|—|Read-only: echo list; omit `operationRequired`|
 
 ## Anatomy
 - **Task content**: 5–10 words; what, not how. Unique identifier.
@@ -26,6 +28,7 @@ Completing tasks out of phase order can move this pointer **back** to an earlier
 - Blocked? `append` a task to the active phase, or `drop`.
 - Keep `task`/`phase` strings stable once introduced.
 - Lost the exact task text? `view` echoes the list — NEVER guess from memory.
+- `init` never replaces unfinished work. Use `reconcile`: matching task content keeps its status, new tasks are pending, and omitted unfinished/completed tasks remain until explicit `rm`/`drop`.
 
 ## When to create a list
 - Task requires 3+ distinct steps

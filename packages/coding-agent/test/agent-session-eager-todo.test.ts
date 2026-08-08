@@ -256,6 +256,7 @@ describe("AgentSession eager todo enforcement", () => {
 		scriptedResponses = [
 			createToolCallAssistantMessage("todo", {
 				op: "init",
+				operationRequired: true,
 				list: [{ phase: "List worktrees", items: ["List all git worktrees in the current repository"] }],
 			}),
 			createAssistantMessage("real user turn handled"),
@@ -303,6 +304,7 @@ describe("AgentSession eager todo enforcement", () => {
 		scriptedResponses = [
 			createToolCallAssistantMessage("todo", {
 				op: "init",
+				operationRequired: true,
 				list: [{ phase: "Parser", items: ["Rework parser diagnostics around recovery"] }],
 			}),
 			createAssistantMessage("todo initialized"),
@@ -343,6 +345,7 @@ describe("AgentSession eager todo enforcement", () => {
 		scriptedResponses = [
 			createToolCallAssistantMessage("todo", {
 				op: "init",
+				operationRequired: true,
 				list: [{ phase: "Parser", items: ["Replan parser diagnostics"] }],
 			}),
 			createAssistantMessage("todo initialized"),
@@ -365,6 +368,7 @@ describe("AgentSession eager todo enforcement", () => {
 		scriptedResponses = [
 			createToolCallAssistantMessage("todo", {
 				op: "init",
+				operationRequired: true,
 				list: [{ phase: "Parser", items: ["Replan parser diagnostics"] }],
 			}),
 			createAssistantMessage("todo initialized"),
@@ -382,6 +386,7 @@ describe("AgentSession eager todo enforcement", () => {
 		scriptedResponses = [
 			createToolCallAssistantMessage("todo", {
 				op: "init",
+				operationRequired: true,
 				list: [{ phase: "Parser", items: ["Replan parser diagnostics"] }],
 			}),
 			createAssistantMessage("todo initialized"),

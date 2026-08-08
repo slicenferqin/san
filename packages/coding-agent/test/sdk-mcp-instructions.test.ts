@@ -137,21 +137,23 @@ describe("createAgentSession MCP server instructions (deferred UI)", () => {
 		try {
 			expect(session.getActiveToolNames()).toContain("read");
 
-			// Deferred discovery mounts MCP under xd:// and activates write as its transport.
+			// Without an explicit write grant, deferred MCP tools stay top-level. This is a genuine
+			// integration wait: discovery owns a real subprocess and exposes no completion signal.
 			const deadline = Date.now() + 12_000;
-			let deviceNames = session.getXdevToolEntries().map(entry => entry.name);
-			while (!deviceNames.includes(MCP_TOOL_NAME) && Date.now() < deadline) {
+
+			let activeNames = session.getActiveToolNames();
+			while (!activeNames.includes(MCP_TOOL_NAME) && Date.now() < deadline) {
 				await Bun.sleep(50);
-				deviceNames = session.getXdevToolEntries().map(entry => entry.name);
+				activeNames = session.getActiveToolNames();
 			}
 
-			expect(session.getActiveToolNames()).toContain("read");
-			expect(session.getActiveToolNames()).toContain("write");
-			expect(session.getActiveToolNames()).not.toContain(MCP_TOOL_NAME);
-			expect(deviceNames).toContain(MCP_TOOL_NAME);
-			const write = session.getToolByName("write");
-			expect(write).toBeDefined();
-			const result = await write!.execute("deferred-mcp-call", { path: `xd://${MCP_TOOL_NAME}`, content: "{}" });
+			expect(activeNames).toContain("read");
+			expect(activeNames).toContain(MCP_TOOL_NAME);
+			expect(activeNames).not.toContain("write");
+			expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain(MCP_TOOL_NAME);
+			const mcpTool = session.getToolByName(MCP_TOOL_NAME);
+			expect(mcpTool).toBeDefined();
+			const result = await mcpTool!.execute("deferred-mcp-call", {});
 			expect(result.content.find(part => part.type === "text")?.text).toBe(TOOL_RESULT);
 		} finally {
 			await session.dispose();

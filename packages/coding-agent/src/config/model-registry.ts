@@ -54,11 +54,12 @@ const BUILT_IN_DISCOVERY_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 const BUILT_IN_DISCOVERY_NON_AUTHORITATIVE_RETRY_MS = 5 * 60 * 1000;
 
 import type { ApiKeyResolver, FetchImpl } from "@san/ai";
-import { registerOAuthProvider, unregisterOAuthProviders } from "@san/ai/oauth";
+import { registerOAuthProvider, unregisterOAuthProvider, unregisterOAuthProviders } from "@san/ai/oauth";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@san/ai/oauth/types";
 import { getBundledModelReferenceIndex, resolveModelReference } from "@san/catalog/identity";
 import { isBunTestRuntime, isRecord, logger, wrapFetchForExtraCa } from "@san/utils";
 import { parseModelString, resolveProviderModelReference } from "../config/model-resolver";
+import { type ProviderHealthKey, providerHealthKeyFromModel } from "../execution-control/provider-health";
 import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
 import { ConfigError, type ConfigFile } from "./config-file";
@@ -831,6 +832,11 @@ export class ModelRegistry {
 		});
 		// Load models synchronously in constructor.
 		this.#loadModels();
+	}
+
+	/** Canonical credential-free route identity used by provider-health admission. */
+	providerHealthKey(model: Pick<Model, "provider" | "baseUrl" | "id">): ProviderHealthKey {
+		return providerHealthKeyFromModel(model);
 	}
 
 	/**
@@ -2260,6 +2266,21 @@ export class ModelRegistry {
 			this.#runtimeProviderSourceByName.delete(providerName);
 			this.#clearRuntimeProviderState(providerName);
 		}
+		this.#lastStaticLoadMtime = null;
+		this.#reloadStaticModels();
+	}
+
+	/** 删除一个扩展注册的 provider，并恢复其静态模型。 */
+	unregisterProvider(providerName: string): void {
+		const sourceId = this.#runtimeProviderSourceByName.get(providerName);
+		if (sourceId) {
+			const sourceProviders = this.#runtimeProvidersBySource.get(sourceId);
+			sourceProviders?.delete(providerName);
+			if (sourceProviders?.size === 0) this.#runtimeProvidersBySource.delete(sourceId);
+			this.#runtimeProviderSourceByName.delete(providerName);
+		}
+		unregisterOAuthProvider(providerName);
+		this.#clearRuntimeProviderState(providerName);
 		this.#lastStaticLoadMtime = null;
 		this.#reloadStaticModels();
 	}

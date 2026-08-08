@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import {
 	Agent,
 	type AgentEvent,
@@ -7,6 +8,7 @@ import {
 	type AgentTool,
 	AppendOnlyContextManager,
 	filterProviderReplayMessages,
+	type StreamFn,
 	type ThinkingLevel,
 } from "@san/agent";
 import type {
@@ -53,6 +55,9 @@ import { buildServiceTierByFamily } from "./config/service-tier";
 import { Settings, type SkillsSettings } from "./config/settings";
 import { resolveDialect } from "./config/tool-dialect";
 import { CursorExecHandlers } from "./cursor";
+import { createExecutionRuntime, type ExecutionRuntime } from "./execution-control";
+import { ProviderHealthRegistry, providerHealthKeyFromModel } from "./execution-control/provider-health";
+import { TaskContractRegistry } from "./execution-control/task-contract";
 import "./discovery";
 import { initializeWithSettings } from "./discovery";
 import { disposeAllJuliaKernelSessions, disposeJuliaKernelSessionsByOwner } from "./eval/jl/executor";
@@ -377,6 +382,16 @@ export interface CreateAgentSessionOptions {
 	authStorage?: AuthStorage;
 	/** Model registry. Default: discoverModels(authStorage, agentDir) */
 	modelRegistry?: ModelRegistry;
+	/** 可选的 root 级 Provider 健康熔断注册表，由所有 Provider 派发共享。 */
+	providerHealthRegistry?: ProviderHealthRegistry;
+	/** 可选的共享执行运行时。根会话未传入时自行创建，子会话继承父实例。 */
+	executionRuntime?: ExecutionRuntime;
+	/** 从父会话继承的固定且不可变的执行 Scope（供子会话使用）。 */
+	executionScopeId?: string;
+	/** 嵌套会话共享的 root 级 Task 准入注册表。 */
+	taskContractRegistry?: TaskContractRegistry;
+	/** 为当前会话创建注册表时使用的根会话身份。 */
+	rootSessionId?: string;
 	/** 仅保存在内存中的额外敏感值；传入后即使全局开关关闭也会启用出站脱敏。 */
 	additionalSecretEntries?: readonly SecretEntry[];
 
@@ -1197,7 +1212,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// / session would silently miss credential_disabled events.
 	const modelRegistry =
 		options.modelRegistry ??
-		new ModelRegistry(options.authStorage ?? (await logger.time("discoverModels", discoverAuthStorage, agentDir)));
+		new ModelRegistry(
+			options.authStorage ?? (await logger.time("discoverModels", discoverAuthStorage, agentDir)),
+			path.join(agentDir, "models.yml"),
+		);
 	// Track whether we internally created the authStorage so we can close it
 	// if construction fails before the session takes ownership.
 	const ownsAuthStorage = !options.authStorage && !options.modelRegistry;
@@ -1301,6 +1319,46 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		logger.time("sessionManager", () =>
 			SessionManager.create(cwd, SessionManager.getDefaultSessionDir(cwd, agentDir)),
 		);
+	// Registry 身份：被采纳的 execution runtime 是共享 task/provider
+	// registry 的唯一事实来源。一旦提供 runtime，其 registry 优先；调用方
+	// 若同时传入不同的 registry 实例则快速失败，绝不静默割裂控制面。
+	const adoptedRuntime = options.executionRuntime;
+	if (adoptedRuntime) {
+		if (options.providerHealthRegistry && options.providerHealthRegistry !== adoptedRuntime.providerRegistry) {
+			throw new Error(
+				"options.providerHealthRegistry must be the execution runtime's providerRegistry when both are provided",
+			);
+		}
+		if (options.taskContractRegistry && options.taskContractRegistry !== adoptedRuntime.taskRegistry) {
+			throw new Error(
+				"options.taskContractRegistry must be the execution runtime's taskRegistry when both are provided",
+			);
+		}
+	}
+	const providerHealthRegistry = adoptedRuntime
+		? adoptedRuntime.providerRegistry
+		: (options.providerHealthRegistry ?? new ProviderHealthRegistry());
+	const taskContractRegistry = adoptedRuntime
+		? adoptedRuntime.taskRegistry
+		: (options.taskContractRegistry ??
+			new TaskContractRegistry({
+				rootSessionId: options.rootSessionId ?? sessionManager.getSessionId(),
+			}));
+	// Execution runtime：根会话每个 root 恰好创建一个（并拥有）实例；
+	// 子会话采纳父的共享 runtime 与固定 scope，绝不 start/sync/dispose。
+	// runtime 经 session manager 持久化其 ledger，并共享上述解析出的
+	// task/provider registry。
+	const executionRuntime =
+		adoptedRuntime ??
+		createExecutionRuntime({
+			rootSessionId: options.rootSessionId ?? sessionManager.getSessionId(),
+			branchEntries: sessionManager.getBranch(),
+			sessionManager,
+			taskRegistry: taskContractRegistry,
+			providerRegistry: providerHealthRegistry,
+		});
+	const ownedExecutionRuntime = adoptedRuntime ? undefined : executionRuntime;
+	const executionScopeId = options.executionScopeId;
 	const providerSessionId = options.providerSessionId ?? sessionManager.getSessionId();
 	const forkCacheShapeChanged =
 		options.model !== undefined ||
@@ -1752,6 +1810,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			get cwd() {
 				return sessionManager.getCwd();
 			},
+			getRootSessionId: () => taskContractRegistry.rootSessionId ?? sessionManager.getSessionId(),
+			taskContractRegistry,
+			providerHealthRegistry,
+			executionRuntime: executionRuntime,
+			getExecutionScopeId: () => executionScopeId ?? session?.getActiveExecutionScopeId(),
 			isToolActive: name => activeToolNames.has(name),
 			setActiveToolNames,
 			hasUI: options.hasUI ?? false,
@@ -1790,6 +1853,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getSessionSpawns: () => options.spawns ?? "*",
 			getModelString: () => (hasExplicitModel && model ? formatModelString(model) : undefined),
 			getActiveModelString,
+			getSubagentModelOverride: () => session?.getSubagentModelOverride(),
 			getActiveModel: () => agent?.state.model ?? model,
 			getServiceTierByFamily: () => session?.serviceTierByFamily,
 			getImageAttachments: () => session?.getImageAttachments() ?? [],
@@ -2585,9 +2649,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// Existing staged/device paths need write registered before active-set assembly.
 		// Deferred MCP also registers it now, but refresh activates it only after a server connects.
 		const hasDeferrableTools = Array.from(toolRegistry.values()).some(tool => tool.deferrable === true);
-		const hasXdevTools = (toolSession.xdevRegistry?.size ?? 0) > 0;
 		const planModeAvailable = settings.get("plan.enabled");
-		if (hasDeferrableTools || hasXdevTools || planModeAvailable || deferMCPDiscoveryForUI) {
+		if (!options.strictToolNames && (hasDeferrableTools || planModeAvailable || deferMCPDiscoveryForUI)) {
 			await ensureWriteRegistered();
 		}
 
@@ -2678,7 +2741,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				cwd,
 				agentDir,
 				xdevTools: toolSession.xdevRegistry?.entries() ?? [],
-				xdevDocs: toolSession.xdevRegistry?.docsAll(settings.get("tools.xdevDocs")) ?? "",
+				xdevDocs:
+					toolSession.xdevRegistry?.docsAll(
+						settings.get("tools.xdevDocs"),
+						settings.get("tools.xdevInlineDevices"),
+					) ?? "",
 				autoQaEnabled: isAutoQaEnabled(settings),
 				resolvedCustomPrompt: options.customSystemPrompt,
 				skills: session?.skills ?? skills,
@@ -2760,6 +2827,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const xdevReadAvailable =
 			builtInRegistryToolNames.has("read") &&
 			(explicitlyRequestedToolNameSet === undefined || explicitlyRequestedToolNameSet.has("read"));
+		const xdevWriteAvailable =
+			builtInRegistryToolNames.has("write") &&
+			(explicitlyRequestedToolNameSet === undefined || explicitlyRequestedToolNameSet.has("write"));
 		const initialRequestedActiveToolNames = options.toolNames
 			? requestedActiveToolNames
 			: requestedActiveToolNames.filter(name => !defaultInactiveToolNames.has(name));
@@ -2805,20 +2875,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			for (const name of initialToolNames) {
 				const tool = toolRegistry.get(name);
 				const explicitlyRequested = explicitlyRequestedToolNameSet?.has(name) === true;
-				if (tool && xdevReadAvailable && !explicitlyRequested && isMountableUnderXdev(tool))
+				if (tool && xdevReadAvailable && xdevWriteAvailable && !explicitlyRequested && isMountableUnderXdev(tool))
 					mountedTools.push(tool);
 				else topLevelToolNames.push(name);
 			}
-			const writeTransportAvailable = mountedTools.length === 0 || (await ensureWriteRegistered());
-			if (writeTransportAvailable) {
-				toolSession.xdevRegistry.reconcile(mountedTools);
-				initialMountedXdevToolNames = mountedTools.map(tool => tool.name);
-				initialToolNames = topLevelToolNames;
-				if (initialMountedXdevToolNames.length > 0 && !initialToolNames.includes("write"))
-					initialToolNames.push("write");
-			} else {
-				toolSession.xdevRegistry.reconcile([]);
-			}
+			toolSession.xdevRegistry.reconcile(mountedTools);
+			initialMountedXdevToolNames = mountedTools.map(tool => tool.name);
+			initialToolNames = topLevelToolNames;
+			if (initialMountedXdevToolNames.length > 0 && !initialToolNames.includes("write"))
+				initialToolNames.push("write");
 		}
 
 		setActiveToolNames(initialToolNames);
@@ -2930,6 +2995,42 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			settings,
 			createSettingsAwareStreamFn(settings),
 		);
+		const dispatchStreamFn: StreamFn = (...args) => {
+			if (notifyFirstChatDispatch) {
+				const cb = notifyFirstChatDispatch;
+				notifyFirstChatDispatch = undefined;
+				try {
+					cb();
+				} catch (err) {
+					logger.warn("onFirstChatDispatch hook threw", {
+						error: err instanceof Error ? err.message : String(err),
+					});
+				}
+			}
+			return settingsAwareStreamFn(...args);
+		};
+		const providerHealthStreamFn: StreamFn = (...args) => {
+			const [streamModel, _context, streamOptions] = args;
+			// 每次 provider 派发都用 Snowflake 生成唯一 requestId：先解析当前
+			// 固定/active scope 并向 runtime 登记（任何 provider/network 工作
+			// 之前；登记失败——终态 scope、scheduler gate 拒绝——即零网络抛错），
+			// 再进入 ProviderHealthRegistry.dispatchStream 并同步传入 requestId。
+			// 未登记的请求结果绝不猜测进任何 scope。
+			const requestId = Snowflake.next();
+			const dispatchScopeId = executionScopeId ?? executionRuntime.activeScopeId();
+			if (executionRuntime && dispatchScopeId !== undefined) {
+				executionRuntime.registerProviderDispatch(dispatchScopeId, requestId);
+			}
+			return providerHealthRegistry.dispatchStream(
+				{
+					key: providerHealthKeyFromModel(streamModel),
+					sessionId: providerSessionId,
+					signal: streamOptions?.signal,
+					requestId,
+				},
+				() => dispatchStreamFn(...args),
+			);
+		};
 		const transformToolCallArguments = (args: Record<string, unknown>, toolName: string): Record<string, unknown> => {
 			let result = args;
 			const maxTimeout = settings.get("tools.maxTimeout");
@@ -3033,20 +3134,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			preferWebsockets: preferOpenAICodexWebsockets,
 			getToolContext: tc => toolContextStore.getContext(tc),
 			getApiKey: requestModel => modelRegistry.resolver(requestModel, agent.sessionId),
-			streamFn: (streamModel, context, streamOptions) => {
-				if (notifyFirstChatDispatch) {
-					const cb = notifyFirstChatDispatch;
-					notifyFirstChatDispatch = undefined;
-					try {
-						cb();
-					} catch (err) {
-						logger.warn("onFirstChatDispatch hook threw", {
-							error: err instanceof Error ? err.message : String(err),
-						});
-					}
-				}
-				return settingsAwareStreamFn(streamModel, context, streamOptions);
-			},
+			streamFn: providerHealthStreamFn,
 			cursorExecHandlers,
 			getCursorTools: () => [...(toolSession.xdevRegistry?.list() ?? [])],
 			transformToolCallArguments,
@@ -3181,6 +3269,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			skillsReloadable: options.skills === undefined,
 			skillsSettings: settings.getGroup("skills"),
 			modelRegistry,
+			executionRuntime,
+			ownedExecutionRuntime,
+			executionScopeId,
+			taskContractRegistry,
 			toolRegistry,
 			createVibeTools:
 				(options.taskDepth ?? 0) === 0 && !options.parentTaskPrefix
@@ -3191,8 +3283,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			transformProviderContext,
 			onPayload,
 			onResponse,
-			sideStreamFn: settingsAwareStreamFn,
-			advisorStreamFn: settingsAwareStreamFn,
+			sideStreamFn: providerHealthStreamFn,
+			advisorStreamFn: providerHealthStreamFn,
 			preferWebsockets: preferOpenAICodexWebsockets,
 			convertToLlm: convertToLlmFinal,
 			rebuildSystemPrompt,
@@ -3394,7 +3486,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					kimiApiFormat: settings.get("providers.kimiApiFormat") ?? "anthropic",
 					preferWebsockets: preferOpenAICodexWebsockets,
 					getToolContext: toolCall => toolContextStore.getContext(toolCall),
-					streamFn: settingsAwareStreamFn,
+					streamFn: providerHealthStreamFn,
 					transformToolCallArguments,
 					intentTracing: !!intentField,
 					pruneToolDescriptions: inlineToolDescriptors,

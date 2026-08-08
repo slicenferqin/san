@@ -1,3 +1,4 @@
+import type { AcceptanceGate, EvidenceReceipt, ObjectiveContractRef } from "../execution-control/types";
 import type { SessionEntry } from "../session/session-entries";
 import type { SanLoopTransition } from "./orchestrator";
 import {
@@ -35,6 +36,12 @@ export interface CreateSanLoopRunOptions {
 	contextPlanRefs?: string[];
 	contextPacketRefs?: string[];
 	initialRemainingTurns?: number;
+	objectiveContract?: ObjectiveContractRef;
+	contractRevision?: number;
+	contractHash?: string;
+	objectiveClauseRefs?: string[];
+	acceptanceGates?: AcceptanceGate[];
+	evidenceReceipts?: EvidenceReceipt[];
 }
 
 export interface UpdateSanLoopRunOptions {
@@ -248,6 +255,14 @@ export function createSanLoopRunSnapshot(options: CreateSanLoopRunOptions): SanL
 		runId: options.runId ?? newId("loop"),
 		sessionId: options.sessionId,
 		createdAt,
+		...(options.objectiveContract ? { objectiveContract: options.objectiveContract } : {}),
+		...(options.contractRevision !== undefined ? { contractRevision: options.contractRevision } : {}),
+		...(options.contractHash ? { contractHash: options.contractHash } : {}),
+		...(options.objectiveClauseRefs ? { objectiveClauseRefs: [...options.objectiveClauseRefs] } : {}),
+		...(options.acceptanceGates
+			? { acceptanceGates: options.acceptanceGates.map(gate => ({ ...gate, evidenceRefs: [...gate.evidenceRefs] })) }
+			: {}),
+		evidenceReceipts: options.evidenceReceipts ? options.evidenceReceipts.map(receipt => ({ ...receipt })) : [],
 		updatedAt: createdAt,
 		objective: options.objective,
 		mode: options.mode ?? "team",

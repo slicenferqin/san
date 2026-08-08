@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>San 会话级子代理模型路由方案</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17221c;
+      --muted: #5a6b61;
+      --paper: #f4f2e9;
+      --panel: #fffdf7;
+      --line: #cfd8d0;
+      --green: #1f6a4a;
+      --blue: #245f86;
+      --amber: #8a5b16;
+      --red: #8a3d35;
+      --code: #eef3ef;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font: 16px/1.7 ui-serif, "Iowan Old Style", "Songti SC", "STSong", serif;
+    }
+    main { width: min(1040px, calc(100% - 40px)); margin: 42px auto 80px; }
+    header, section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 8px 24px rgb(28 48 37 / 6%);
+    }
+    header { padding: 36px 40px; border-top: 6px solid var(--green); }
+    section { margin-top: 20px; padding: 26px 32px; }
+    h1, h2, h3 { line-height: 1.25; margin-top: 0; }
+    h1 { font-size: clamp(2rem, 5vw, 3.4rem); letter-spacing: -0.035em; margin-bottom: 12px; }
+    h2 { color: var(--green); font-size: 1.45rem; border-bottom: 1px solid var(--line); padding-bottom: 9px; }
+    h3 { color: var(--blue); font-size: 1.08rem; margin-top: 24px; }
+    p, li { max-width: 86ch; }
+    code, pre { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    code { background: var(--code); border-radius: 4px; padding: 0.1em 0.32em; }
+    pre { background: #17251d; color: #e9f1eb; padding: 18px 20px; border-radius: 10px; overflow: auto; line-height: 1.55; }
+    pre code { background: none; padding: 0; }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+    th, td { border: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }
+    th { background: #e8efe9; }
+    .lede { color: var(--muted); font-size: 1.12rem; max-width: 78ch; }
+    .meta { color: var(--muted); display: flex; flex-wrap: wrap; gap: 12px 26px; font-size: 0.92rem; }
+    .decision { border-left: 5px solid var(--blue); background: #edf5f9; padding: 14px 18px; border-radius: 8px; }
+    .risk { border-left: 5px solid var(--amber); background: #faf3e4; padding: 14px 18px; border-radius: 8px; }
+    .no { color: var(--red); font-weight: 650; }
+    .yes { color: var(--green); font-weight: 650; }
+    .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; align-items: stretch; }
+    .flow div { background: #edf2ee; border: 1px solid var(--line); border-radius: 8px; padding: 10px; text-align: center; }
+    .flow b { display: block; color: var(--green); }
+    @media (max-width: 760px) {
+      main { width: min(100% - 20px, 1040px); margin-top: 18px; }
+      header, section { padding: 22px 20px; }
+      .flow { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="meta"><span>方案编号：SAN-SUBAGENT-ROUTING-001</span><span>日期：2026-08-05</span><span>范围：packages/coding-agent</span></div>
+    <h1>会话级子代理模型路由</h1>
+    <p class="lede">新增 <code>/subagent</code>，在不修改全局或项目配置的前提下，为当前会话中绑定 <code>@task</code> 角色的子代理指定模型与思维强度。状态写入会话日志，随恢复和分支正确还原，不污染主代理模型。</p>
+  </header>
+
+  <section>
+    <h2>1. 问题与决策</h2>
+    <p>现有 <code>modelRoles.task</code> 与 <code>task.agentModelOverrides</code> 适合全局或项目默认值，但不适合临时会话实验。直接改 <code>Settings</code> 的运行时覆盖层会影响共享该实例的其他会话；外部编辑配置还可能因长会话未热重载而保持旧值。</p>
+    <div class="decision"><strong>决策：</strong>路由覆盖属于 <code>AgentSession</code>，不是 <code>Settings</code>。使用非上下文会话条目持久化，TaskTool 在每次派生子代理时从当前分支解析最新值。</div>
+    <h3>目标</h3>
+    <ul>
+      <li>当前会话即时切换 <code>@task</code> 子代理模型，支持 <code>provider/model:effort</code>。</li>
+      <li>恢复、分叉和树导航均遵循所在分支的最新覆盖。</li>
+      <li>会话覆盖高于全局/项目的 per-agent override，但不改动主代理模型。</li>
+      <li>模型选择和思维强度在写入前完成解析与校验。</li>
+    </ul>
+    <h3>非目标</h3>
+    <ul>
+      <li>不把所有专家代理强制切到同一模型；<code>@smol</code>、<code>@slow</code>、<code>@designer</code> 等角色保持原路由。</li>
+      <li>不实现运行时故障转移、配置热重载或每次 TaskTool 调用的显式 model 字段。</li>
+      <li>不写入 <code>~/.san/agent/config.yml</code> 或项目 <code>.san/config.yml</code>。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>2. 用户接口</h2>
+    <table>
+      <thead><tr><th>命令</th><th>TUI</th><th>ACP/文本模式</th></tr></thead>
+      <tbody>
+        <tr><td><code>/subagent</code></td><td>打开模型选择器；选择模型和 effort 后写入会话覆盖</td><td>显示当前覆盖状态</td></tr>
+        <tr><td><code>/subagent status</code></td><td colspan="2">显示当前 <code>@task</code> 会话覆盖；未设置时显示配置路由仍生效</td></tr>
+        <tr><td><code>/subagent clear</code></td><td colspan="2">写入显式清除事件，恢复项目/全局配置路由</td></tr>
+        <tr><td><code>/subagent cpa/kl/deepseek-v4-flash:max</code></td><td colspan="2">解析为具体模型，验证 <code>max</code>，再写入规范化 selector</td></tr>
+      </tbody>
+    </table>
+    <pre><code>/subagent cpa/kl/deepseek-v4-flash:max
+# Task-role subagent model: cpa/kl/deepseek-v4-flash:max
+
+/subagent clear
+# Task-role subagent model override cleared.</code></pre>
+    <p class="risk"><strong>校验边界：</strong>用户显式指定的 effort 若不在模型支持集合中，命令报错，不静默降级或钳制。未带 effort 时使用代理定义或模型解析得到的既有默认规则。</p>
+  </section>
+
+  <section>
+    <h2>3. 路由优先级</h2>
+    <div class="flow">
+      <div><b>1</b>单次 task.model<br />未来/上游能力</div>
+      <div><b>2</b>会话 <code>/subagent</code></div>
+      <div><b>3</b><code>task.agentModelOverrides</code></div>
+      <div><b>4</b>代理定义 <code>@task</code></div>
+      <div><b>5</b>主会话模型回退</div>
+    </div>
+    <p>本次本地实现覆盖第 2–5 层；当前分支尚无上游已合并的 per-call <code>task.model</code> wire 字段，因此第 1 层仅保留为兼容方向。</p>
+    <p>会话覆盖只在代理定义的 model 是单一 <code>@task</code>（兼容旧写法 <code>pi/task</code>）时生效。显式绑定其他角色或具体模型的专家代理不受影响。</p>
+  </section>
+
+  <section>
+    <h2>4. 会话状态模型</h2>
+    <pre><code>{
+  "type": "custom",
+  "customType": "subagent_model_override",
+  "data": {
+    "role": "task",
+    "selector": "cpa/kl/deepseek-v4-flash:max"
+  }
+}</code></pre>
+    <p>清除使用同一事件结构并令 <code>selector: null</code>。读取算法沿当前 branch 从后向前找到该 role 的第一条合法事件；因此：</p>
+    <ul>
+      <li><span class="yes">恢复：</span>日志天然携带状态，无额外设置文件。</li>
+      <li><span class="yes">分支：</span>子分支继承分叉点以前的覆盖；分叉点以后的兄弟分支修改互不干扰。</li>
+      <li><span class="yes">清除：</span>显式 null 阻断更早的覆盖，不能用“没有条目”表达。</li>
+      <li><span class="yes">上下文：</span><code>custom</code> 条目不进入 LLM 上下文，不消耗提示词。</li>
+    </ul>
+    <p class="no">禁止复用 <code>model_change</code>：它参与主模型恢复和 fallback role 推断，会把子代理覆盖误当成主会话模型切换。</p>
+  </section>
+
+  <section>
+    <h2>5. 实现切面</h2>
+    <table>
+      <thead><tr><th>区域</th><th>改动</th><th>不变量</th></tr></thead>
+      <tbody>
+        <tr><td>session</td><td>新增 branch-aware 的读取/追加 helper；AgentSession 暴露只读 getter</td><td>不进入 LLM context，不修改 Settings</td></tr>
+        <tr><td>tools</td><td>ToolSession 增加可选 getter</td><td>现有测试/嵌入方无需实现</td></tr>
+        <tr><td>task</td><td>在模型 pattern 解析前注入会话覆盖</td><td>只覆盖单一 <code>@task</code> 绑定；session &gt; config</td></tr>
+        <tr><td>slash command</td><td>注册 <code>/subagent</code>，支持 status/clear/selector</td><td>规范化具体 selector，拒绝未知模型和不支持 effort</td></tr>
+        <tr><td>TUI</td><td>复用 Model Hub 的模型与 effort 选择流程</td><td>选择结果写子代理状态，不触发主模型切换</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>6. 验收与回归</h2>
+    <ol>
+      <li>设置 <code>/subagent cpa/kl/deepseek-v4-flash:max</code> 后，下一次 <code>@task</code> spawn 的 <code>modelOverride</code> 使用该 selector，即使配置存在不同的 per-agent override。</li>
+      <li><code>@slow</code> 等专家代理不受覆盖。</li>
+      <li><code>/subagent status</code> 能读取刚写入状态；<code>clear</code> 后回到配置路由。</li>
+      <li>会话恢复、分支和清除遵循“当前 branch 最新合法事件”。</li>
+      <li>未知模型、非法 effort、模型不支持的显式 effort 均不写入条目。</li>
+      <li>运行 coding-agent 的聚焦测试、<code>bun check</code>，再通过 CLI smoke 场景确认命令和下一次子代理派生。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>7. 社区贡献边界</h2>
+    <p>截至 2026-08-06，上游已有开放议题 <a href="https://github.com/can1357/oh-my-pi/issues/7614">#7614</a>，请求为 <code>task</code> 等角色增加一次启动范围的模型覆盖；维护者回复明确指出接口仍待决定，并倾向可重复的 <code>--model-role role=selector</code>，而不是动态 flag。当前没有同标题/同接口的开放 PR。这里实现的会话内 <code>/subagent</code> 与其需求互补，但共享 role selector、优先级和解析语义，不能当作无关新功能直接另起提案。</p>
+    <p class="decision"><strong>贡献建议：</strong>适合反哺，但不应原样提交本地 HTML 或直接开 PR。先在 #7614（必要时按 <a href="https://github.com/can1357/oh-my-pi/blob/main/CONTRIBUTING.md">贡献指南</a>到 Discord）用精简、产品中立的设计对齐：一次启动的任意 role override 与会话内 task-role override 是否都需要、优先级如何、是否要求 branch-aware persistence。维护者确认接口后，再移植窄 PR；排除 San 品牌、自定义 <code>san-worker</code> 和执行循环，只保留解析、持久化、Task/SDK/ACP 一致性及行为测试。</p>
+  </section>
+</main>
+</body>
+</html>

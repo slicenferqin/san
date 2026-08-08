@@ -31,10 +31,16 @@ const taskAgent: AgentDefinition = {
 	description: "General-purpose task agent",
 	systemPrompt: "You are a task agent.",
 	source: "bundled",
+	model: ["@task"],
 };
 
 function createSession(
-	options: { manager?: AsyncJobManager; settings?: Record<string, unknown>; agentId?: string } = {},
+	options: {
+		manager?: AsyncJobManager;
+		settings?: Record<string, unknown>;
+		agentId?: string;
+		subagentModelOverride?: string;
+	} = {},
 ): ToolSession {
 	return {
 		cwd: "/tmp",
@@ -43,6 +49,7 @@ function createSession(
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 		getAgentId: () => options.agentId ?? null,
+		getSubagentModelOverride: () => options.subagentModelOverride,
 		asyncJobManager: options.manager,
 	} as unknown as ToolSession;
 }
@@ -76,9 +83,9 @@ function makeResult(id: string, overrides: Partial<SingleResult> = {}): SingleRe
 	};
 }
 
-function mockDiscovery(): void {
+function mockDiscovery(agents: AgentDefinition[] = [taskAgent]): void {
 	vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
-		agents: [taskAgent],
+		agents,
 		projectAgentsDir: null,
 	});
 }
@@ -219,6 +226,54 @@ describe("task.batch spawning", () => {
 		}
 		AgentLifecycleManager.resetGlobalForTests();
 		AgentRegistry.resetGlobalForTests();
+	});
+
+	it("prefers the session override over settings for task-role agents", async () => {
+		mockDiscovery();
+		let modelOverride: string | string[] | undefined;
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			modelOverride = options.modelOverride;
+			return makeResult(options.id ?? "?");
+		});
+		const tool = await TaskTool.create(
+			createSession({
+				subagentModelOverride: "cpa/kl/deepseek-v4-flash:max",
+				settings: {
+					"async.enabled": false,
+					"task.agentModelOverrides": { task: "configured/task-model:low" },
+				},
+			}),
+		);
+
+		await tool.execute("tc-session-model", { agent: "task", task: "Do the thing." } as TaskParams);
+
+		expect(modelOverride).toEqual(["cpa/kl/deepseek-v4-flash:max"]);
+	});
+
+	it("leaves explicitly bound expert agents outside the task-role override", async () => {
+		const reviewer: AgentDefinition = {
+			name: "reviewer",
+			description: "Review work",
+			systemPrompt: "Review the work.",
+			source: "bundled",
+			model: ["expert/reviewer-model:high"],
+		};
+		mockDiscovery([reviewer]);
+		let modelOverride: string | string[] | undefined;
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			modelOverride = options.modelOverride;
+			return makeResult(options.id ?? "?");
+		});
+		const tool = await TaskTool.create(
+			createSession({
+				subagentModelOverride: "cpa/kl/deepseek-v4-flash:max",
+				settings: { "async.enabled": false },
+			}),
+		);
+
+		await tool.execute("tc-expert-model", { agent: "reviewer", task: "Review it." } as TaskParams);
+
+		expect(modelOverride).toEqual(["expert/reviewer-model:high"]);
 	});
 
 	it("spawns one background job per task item and forwards the shared context", async () => {

@@ -12,6 +12,7 @@
 
 - Added opt-in logical model routing groups with deterministic provider-route selection, session affinity, typed failover policies, cooldown recovery, persisted route leases, and TUI/RPC route projections.
 - Added source-backed San Brain automatic decisions for durable candidates: explicit user directives auto-activate, repeated high-confidence evidence auto-resolves, sensitive or invalid candidates are discarded, high-impact conflicts enter review, and `/brain status` reports automation and user-revocation rates.
+- Added `/subagent [model|status|clear]` session-local model routing for task-role subagents, persisted across resume and honored by Task, SDK, and ACP launches without overriding explicitly bound expert agents.
 - Added persistence-backed San RPC v2 settings for global, workspace, and session scopes, including source attribution, optimistic revision conflicts, and immediate runtime application.
 - Added RPC v2 provider catalog management (`provider.config.create`, `provider.model.add`) and `usage.stats` analytics with capability/schema exposure, secret-free provider listings, active-session aggregation, and persisted-session breakdowns.
 - Added RPC v2 `session.messages.list` for paginated persisted user/assistant transcript history, excluding synthetic, steering, tool-result, and empty-text messages while matching live `message.completed` text projection limits.
@@ -32,9 +33,11 @@
 - Changed the core binary to reject HTML session export with an explicit full-binary guidance while retaining the export path in full builds.
 - Added optional Bun metafile output to binary and npm bundle build scripts for reproducible bundle-size analysis.
 
+- Added host-owned runaway recovery for San execution with append-only scope state, typed acceptance evidence, provider circuit health, deterministic watchdog scheduling, semantic task contracts, and CAS-bound supervisor decisions.
 
 ### Changed
 
+- Changed task orchestration to deduplicate repeated work strategies, expose status and heartbeat cursors through Task and Hub, isolate root registries while sharing them with child sessions, preserve in-flight work during scheduler grace windows, and require explicit acknowledgement for mutating Todo operations.
 - Changed enabled San Brain sessions to default to `activation`; `review-only` remains a capture-only mode and never runs automatic decisions.
 - Changed San Context Steady to remain native-equivalent below a configurable activation threshold (240K input tokens by default), then latch activation for the session and restore it after resume.
 - Reduced core binary size with full safe Bun minification, a gzip-compressed lazy model-catalog embed, compile-time PDF converter exclusion, and a type-only Workflow AST guard that removes the `@babel/types` runtime barrel.
@@ -90,6 +93,9 @@
 
 ### Fixed
 
+- Fixed `xd://` parity with upstream: enabled-tool activation and SDK all-tool mode now honor mounted devices without implicitly granting `write`; ambient tools remain top-level unless the read/write transport is explicitly active; dynamic summaries are byte-bounded, sanitized, and marked untrusted; mount notices survive resume and transcript transitions without replay; and device failures keep structured error envelopes.
+- Fixed prewalk's one-shot lifecycle: transient plan nudges no longer persist, same-model or conflicting arm requests no longer report false activation, and each re-arm requires a fresh todo gate before handoff.
+- Fixed post-fork runtime regressions: turn-scoped system-prompt overrides now survive concurrent base rebuilds, Bash safely extracts leading quoted `cd` targets, failed or replaced extension providers roll back registrations and credentials, refreshed task-agent discovery reaches live tools, cooldown fallback reverts re-check smaller context windows, and provider `AbortError`s no longer masquerade as cancelled handoffs.
 - Fixed logical model routing to reject unsafe fallback policies, rebind stale leases after config refresh, apply route-specific billing, select context-eligible fallback routes in the model picker, and render persisted route-change audits in the TUI and HTML exports.
 - Fixed custom Codex providers to preserve `useResponsesLite` metadata and route standard `/v1` base URLs to `/v1/responses`.
 - Fixed Context Steady recovery stalling when agent-authored continuation messages were treated as user turn boundaries or an oversized tail of tool results left no valid cut point; maintenance audits, probes, extension events, and RPC v2 now also expose the failed recovery stage and reason.
@@ -100,6 +106,7 @@
 - Fixed Linux NVIDIA GPU discovery so descendants inheriting the probe's stdout pipe have time to drain without turning a successful probe into a timeout.
 - Fixed San execution loop terminal budget races so post-review overspend writes a single blocked envelope instead of persisting `passed` then failing on a conflicting `blocked` transition.
 - Fixed San evidence gate to require successful commands from the current assignment batch only; prior-retry successes no longer unlock a new pass.
+- Fixed San v0.2 read-only acceptance runs becoming permanently blocked by typed evidence enforcement: the acceptance runner now binds a bounded inspection gate to the immutable objective contract, and San workers derive matching receipts from successful host `read`, `grep`, and `glob` completions.
 - Fixed council mode silently degrading without Oracle: `requireOracle=true` with no Oracle executor (or settings-disabled Oracle) now blocks immediately.
 - Fixed San role context projecting session-global latest ContextPlan materials; only `run.contextPlanRefs` are bound and projected.
 - Fixed `san.loop_transition` rebuild accepting envelopes whose event/review runId or sessionId disagreed with the embedded run snapshot.

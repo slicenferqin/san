@@ -120,6 +120,54 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		expect(modelFallbackMessage).toBeUndefined();
 	});
 
+	test("loads custom models from the explicit agentDir", async () => {
+		await Bun.write(
+			path.join(tempDir, "models.yml"),
+			[
+				"providers:",
+				"  sdk-agent-dir:",
+				"    baseUrl: https://sdk-agent-dir.example.test/v1",
+				"    apiKey: test-key",
+				"    api: openai-completions",
+				"    models:",
+				"      - id: sdk-agent-dir-model",
+				"        name: SDK Agent Dir Model",
+				"        contextWindow: 128000",
+				"        maxTokens: 8192",
+				"        supportsTools: true",
+				"        cost:",
+				"          input: 0",
+				"          output: 0",
+				"          cacheRead: 0",
+				"          cacheWrite: 0",
+			].join("\n"),
+		);
+		const { session, modelFallbackMessage } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			settings: Settings.isolated(),
+			sessionManager: SessionManager.inMemory(),
+			disableExtensionDiscovery: true,
+			extensions: [],
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+			modelPattern: "sdk-agent-dir/sdk-agent-dir-model",
+		});
+
+		try {
+			expect(session.model?.provider).toBe("sdk-agent-dir");
+			expect(session.model?.id).toBe("sdk-agent-dir-model");
+			expect(modelFallbackMessage).toBeUndefined();
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	test("resolves explicit dynamic-only modelPattern from fresh runtime cache", async () => {
 		const authStorage = await AuthStorage.create(path.join(tempDir, "dynamic-auth.db"));
 		authStoragesToClose.push(authStorage);

@@ -2,7 +2,16 @@ import { describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome, ResetCreditTarget, UsageReport } from "@san/ai";
+import {
+	type Api,
+	Effort,
+	type Model,
+	type ResetCreditAccountStatus,
+	type ResetCreditRedeemOutcome,
+	type ResetCreditTarget,
+	type UsageReport,
+} from "@san/ai";
+import { buildModel } from "@san/catalog/build";
 import { Settings } from "@san/coding-agent/config/settings";
 import { CONTEXT_PLAN_CUSTOM_TYPE, CONTEXT_PLAN_SCHEMA_VERSION } from "@san/coding-agent/context-steady/plan-types";
 import {
@@ -15,6 +24,7 @@ import type { UsageStatistics } from "@san/coding-agent/session/session-entries"
 import type { SessionManager } from "@san/coding-agent/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "@san/coding-agent/slash-commands/acp-builtins";
 import { removeWithRetries, setProjectDir } from "@san/utils";
+import type { ExecutionRuntime } from "../src/execution-control/execution-runtime";
 import * as sanLoopModule from "../src/san-loop";
 
 interface FakeAcpBuiltinSession {
@@ -54,10 +64,12 @@ interface FakeAcpBuiltinSession {
 	getToolByName(name: string): unknown;
 	compact(args?: string): Promise<void>;
 	getContextUsage(): { tokens?: number; contextWindow: number } | undefined;
-	getAvailableModels(): Array<{ provider: string; id: string; contextWindow?: number }>;
+	getAvailableModels(): Array<{ provider: string; id: string; contextWindow?: number | null }>;
 	setModel(model: unknown): Promise<void>;
 	listResetCredits: () => Promise<ResetCreditAccountStatus[]>;
 	redeemResetCredit: (target: ResetCreditTarget) => Promise<ResetCreditRedeemOutcome>;
+	getExecutionRuntime(): ExecutionRuntime | undefined;
+	getActiveExecutionScopeId(): string | undefined;
 }
 
 interface FakeAcpBuiltinSessionManager {
@@ -83,10 +95,44 @@ interface FakeAcpBuiltinSessionManager {
 	setSessionName(name: string, source: string): Promise<boolean>;
 }
 
+const ACP_EXECUTION_SCOPE_ID = "scope:fake-session";
+const ACP_OBJECTIVE_CONTRACT = {
+	ref: {
+		contractId: "contract:fake-session",
+		revision: 1,
+		contractHash: "sha256:fake-session",
+		clauseRefs: ["clause:fake-session"],
+	},
+	authoritativeUserTurnId: "turn:fake-session",
+	source: "authoritative_user" as const,
+};
+
+function reasoningModel(provider: string, id: string, efforts: readonly Effort[]): Model<Api> {
+	return buildModel({
+		provider,
+		id,
+		name: id,
+		api: "openai-completions",
+		baseUrl: `https://${provider}.example.test`,
+		reasoning: true,
+		thinking: { mode: "effort", efforts: [...efforts] },
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128_000,
+		maxTokens: 8_192,
+	});
+}
+
 function createRuntime() {
 	const settings = Settings.isolated();
 	const output: string[] = [];
 	let fakeSessionManager: FakeAcpBuiltinSessionManager | undefined;
+	const executionRuntime = {
+		getScope: (scopeId: string) =>
+			scopeId === ACP_EXECUTION_SCOPE_ID
+				? { snapshot: () => ({ objectiveContract: ACP_OBJECTIVE_CONTRACT }) }
+				: undefined,
+	} as unknown as ExecutionRuntime;
 	const session: FakeAcpBuiltinSession = {
 		fastMode: false,
 		forcedToolChoice: undefined as string | undefined,
@@ -166,6 +212,8 @@ function createRuntime() {
 		getContextUsage: () => undefined,
 		getAvailableModels: () => [] as Array<{ provider: string; id: string; contextWindow?: number }>,
 		async setModel(_model: unknown) {},
+		getExecutionRuntime: () => executionRuntime,
+		getActiveExecutionScopeId: () => ACP_EXECUTION_SCOPE_ID,
 	};
 	const typedSession = session as unknown as AgentSession & FakeAcpBuiltinSession;
 	fakeSessionManager = {
@@ -233,6 +281,7 @@ function createRuntime() {
 		output,
 		session,
 		fakeSessionManager,
+		executionRuntime,
 		runtime: {
 			session: typedSession,
 			sessionManager: fakeSessionManager as unknown as SessionManager,
@@ -282,8 +331,50 @@ describe("ACP builtin slash commands", () => {
 		expect(output).toEqual(["Current model does not support controllable thinking effort."]);
 	});
 
+	it("sets, reports, and clears a session-only task-role subagent model", async () => {
+		const { fakeSessionManager, output, runtime, session } = createRuntime();
+		const target = reasoningModel("cpa", "kl/deepseek-v4-flash", [Effort.Low, Effort.High, Effort.Max]);
+		session.getAvailableModels = () => [target];
+
+		expect(await executeAcpBuiltinSlashCommand("/subagent cpa/kl/deepseek-v4-flash:max", runtime)).toEqual({
+			consumed: true,
+		});
+		expect(output).toEqual(["Task-role subagent model: cpa/kl/deepseek-v4-flash:max"]);
+		expect(fakeSessionManager._customEntries.at(-1)).toEqual({
+			customType: "subagent_model_override",
+			data: { role: "task", selector: "cpa/kl/deepseek-v4-flash:max" },
+		});
+
+		output.length = 0;
+		expect(await executeAcpBuiltinSlashCommand("/subagent status", runtime)).toEqual({ consumed: true });
+		expect(output).toEqual(["Task-role subagent model: cpa/kl/deepseek-v4-flash:max"]);
+
+		output.length = 0;
+		expect(await executeAcpBuiltinSlashCommand("/subagent clear", runtime)).toEqual({ consumed: true });
+		expect(output).toEqual(["Task-role subagent model override cleared."]);
+		expect(fakeSessionManager._customEntries.at(-1)).toEqual({
+			customType: "subagent_model_override",
+			data: { role: "task", selector: null },
+		});
+	});
+
+	it("rejects an unsupported explicit subagent effort without mutating session state", async () => {
+		const { fakeSessionManager, output, runtime, session } = createRuntime();
+		const limited = reasoningModel("test", "limited-reasoner", [Effort.Low, Effort.High]);
+		session.getAvailableModels = () => [limited];
+		const entriesBefore = fakeSessionManager._customEntries.length;
+
+		expect(await executeAcpBuiltinSlashCommand("/subagent test/limited-reasoner:max", runtime)).toEqual({
+			consumed: true,
+		});
+		expect(output).toEqual([
+			"Cannot set task-role subagent model: Model test/limited-reasoner does not support effort max. Supported: low, high.",
+		]);
+		expect(fakeSessionManager._customEntries).toHaveLength(entriesBefore);
+	});
+
 	it("runs the San execution loop instead of only creating a ledger entry", async () => {
-		const { output, runtime } = createRuntime();
+		const { executionRuntime, output, runtime } = createRuntime();
 		runtime.settings.set("san.executionLoop.enabled", true);
 		runtime.sessionManager.appendCustomEntry(CONTEXT_PLAN_CUSTOM_TYPE, { planId: "plan-old" });
 		const latestPlanEntryId = runtime.sessionManager.appendCustomEntry(CONTEXT_PLAN_CUSTOM_TYPE, {
@@ -339,6 +430,10 @@ describe("ACP builtin slash commands", () => {
 				maxRetries: 2,
 				maxTurns: 3,
 				contextPlanRefs: ["fake-entry-1", latestPlanEntryId],
+				executionRuntime,
+				executionScopeId: ACP_EXECUTION_SCOPE_ID,
+				contractRevision: ACP_OBJECTIVE_CONTRACT.ref.revision,
+				contractHash: ACP_OBJECTIVE_CONTRACT.ref.contractHash,
 			});
 			expect(output[0]).toContain("San execution loop loop-acp finished with status passed.");
 			expect(output[0]).toContain("Final verdict: pass");

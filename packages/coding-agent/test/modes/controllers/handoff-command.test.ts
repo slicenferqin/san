@@ -90,6 +90,34 @@ describe("/handoff command", () => {
 		expect(ctx.session.handoff).toHaveBeenCalledWith("focus on tests");
 	});
 
+	it("surfaces a provider AbortError as a real handoff failure", async () => {
+		const providerError = new Error("Deepseek stream stalled");
+		providerError.name = "AbortError";
+		const showError = vi.fn();
+		const ctx = {
+			sessionManager: { getEntries: () => [{ type: "message" }, { type: "message" }] },
+			session: {
+				handoff: vi.fn(async () => {
+					throw providerError;
+				}),
+				abortHandoff: vi.fn(),
+			},
+			loadingAnimation: undefined,
+			statusContainer: createContainer(),
+			chatContainer: createContainer(),
+			ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() },
+			editor: { onEscape: vi.fn() },
+			showError,
+			showStatus: vi.fn(),
+			showWarning: vi.fn(),
+		} as unknown as InteractiveModeContext;
+
+		await new CommandController(ctx).handleHandoffCommand();
+
+		expect(showError).toHaveBeenCalledTimes(1);
+		expect(showError).toHaveBeenCalledWith("Handoff failed: Deepseek stream stalled");
+	});
+
 	it("refuses to hand off while a response is streaming", async () => {
 		// Bug: /handoff dispatches before the streaming-queue branch, so without a
 		// guard it resets the agent mid-turn and the live stream keeps emitting into

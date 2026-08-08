@@ -1,3 +1,9 @@
+import { type DurableSupervisorDecision, supervisorDecisionBasis } from "../execution-control/durable-scheduler";
+import { isTerminalExecutionState, StaleExecutionRevisionError } from "../execution-control/execution-ledger";
+import type { ExecutionRuntime } from "../execution-control/execution-runtime";
+import { stableFailureFingerprint } from "../execution-control/progress-classifier";
+import type { TaskContractIdentity, TaskContractStatus } from "../execution-control/task-contract";
+import type { AcceptanceGate, ObjectiveContractRef } from "../execution-control/types";
 import type { SessionEntry } from "../session/session-entries";
 import { type SanLoopCheck, selectSanLoopChecks } from "./checks";
 import {
@@ -27,6 +33,7 @@ import type {
 	SanLoopMode,
 	SanLoopReviewReport,
 	SanLoopReviewVerdict,
+	SanLoopRole,
 	SanLoopRunSnapshot,
 	SanLoopTaskNode,
 	SanLoopWorkerAssignment,
@@ -123,6 +130,16 @@ export interface RunSanLoopOptions {
 	runId?: string;
 	signal?: AbortSignal;
 	checks?: readonly SanLoopCheck[];
+	/** Shared host-owned execution runtime bound to this run's root scope. */
+	executionRuntime: ExecutionRuntime;
+	/** Fixed root execution scope id; children must not start/sync/dispose it. */
+	executionScopeId: string;
+	/** Immutable objective binding used by typed acceptance evidence. */
+	objectiveContract?: ObjectiveContractRef;
+	contractRevision?: number;
+	contractHash?: string;
+	objectiveClauseRefs?: readonly string[];
+	acceptanceGates?: readonly AcceptanceGate[];
 }
 
 export interface RunSanLoopResult {
@@ -462,6 +479,11 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 		initialRemainingTurns: remainingTurns,
 		contextPlanRefs: options.contextPlanRefs ? [...options.contextPlanRefs] : [],
 		contextPacketRefs: options.contextPacketRefs ? [...options.contextPacketRefs] : [],
+		objectiveContract: options.objectiveContract,
+		contractRevision: options.contractRevision,
+		contractHash: options.contractHash,
+		objectiveClauseRefs: options.objectiveClauseRefs ? [...options.objectiveClauseRefs] : undefined,
+		acceptanceGates: options.acceptanceGates ? [...options.acceptanceGates] : undefined,
 	});
 	let run = runCreated.run;
 	const transitions: RecordSanLoopTransitionResult[] = [];
@@ -477,7 +499,188 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 	};
 	activeSanLoopRuns.set(run.runId, activeRun);
 	let reviewReserve = 0;
-	const blockForBudget = () => {
+	const scopeHandle = () => options.executionRuntime.getScope(options.executionScopeId);
+	const finalizeScopeState = (
+		state: "completed" | "aborted_by_user" | "budget_exhausted" | "runtime_fault" | "no_provider_available",
+	) => {
+		const handle = scopeHandle();
+		if (!handle) return;
+		const snapshot = handle.snapshot();
+		// 显式终态处理：scope 已终态时不再追加 finish 事件。
+		if (isTerminalExecutionState(snapshot.state)) return;
+		try {
+			options.executionRuntime.finishScope(options.executionScopeId, {
+				expectedRevision: snapshot.revision,
+				state,
+			});
+		} catch (error) {
+			// CAS 过期时仅以权威快照重试一次；其余错误如实上抛，绝不吞掉。
+			if (error instanceof StaleExecutionRevisionError) {
+				const fresh = handle.snapshot();
+				if (isTerminalExecutionState(fresh.state)) return;
+				options.executionRuntime.finishScope(options.executionScopeId, {
+					expectedRevision: fresh.revision,
+					state,
+				});
+				return;
+			}
+			throw error;
+		}
+	};
+	const finalizeBudgetExhausted = () => {
+		finalizeScopeState("budget_exhausted");
+	};
+	const finalizeCompletedScope = (): boolean => {
+		const handle = scopeHandle();
+		if (!handle) return false;
+		const snapshot = handle.snapshot();
+		if (snapshot.state === "completed") return true;
+		if (isTerminalExecutionState(snapshot.state)) return false;
+		// completed 只凭 host evidence gates：required gate 未全部 pass 或缺少
+		// host evidence 时保持运行，San run 也不得向用户报告 passed。
+		const requiredGates = snapshot.gates.filter(gate => gate.required !== false);
+		const gatesPassed =
+			requiredGates.length > 0 &&
+			requiredGates.every(gate => gate.status === "pass" && gate.evidenceRefs.length > 0);
+		if (!gatesPassed) return false;
+		finalizeScopeState("completed");
+		return handle.snapshot().state === "completed";
+	};
+	const recordWorkerHostFacts = (workerResult: SanLoopWorkerResult, assignment: SanLoopWorkerAssignment) => {
+		const contract = options.executionRuntime.taskRegistry.derive({
+			scopeId: options.executionScopeId,
+			workKey: assignment.assignmentId,
+			strategyKey: `san-loop:${mode}:worker`,
+		});
+		if (workerResult.status !== "completed") {
+			// 失败以稳定指纹上报 watchdog；同一失败产生稳定 signature，绝不伪造进度。
+			options.executionRuntime.recordHostObservation({
+				scopeId: options.executionScopeId,
+				observation: {
+					type: "failure",
+					signature: stableFailureFingerprint(
+						`${contract.workKey}\u0000${contract.strategyKey}\u0000${workerResult.summary}`,
+					),
+					workKey: contract.workKey,
+					strategyKey: contract.strategyKey,
+					assignmentId: assignment.assignmentId,
+					retryable: false,
+				},
+			});
+			return;
+		}
+		for (const receipt of workerResult.evidenceReceipts ?? []) {
+			// typed host evidence receipt：runtime 写入 ledger evidence，并在
+			// verifier 校验通过后推进绑定的 acceptance gate。
+			options.executionRuntime.recordHostObservation({
+				scopeId: options.executionScopeId,
+				receipt,
+			});
+		}
+		for (const receipt of workerResult.evidenceReceipts ?? []) {
+			// 完成证据同步为 watchdog 观察（进度事实）；heartbeat 仅 activity。
+			// observationId 显式取 receipt id：workKey/strategyKey/cursor 相同的
+			// 多条证据指纹一致，缺 observationId 会与 worker 完成观察在 ledger 冲突。
+			options.executionRuntime.recordHostObservation({
+				scopeId: options.executionScopeId,
+				observation: {
+					type: "evidence",
+					observationId: receipt.receiptId,
+					evidenceId: receipt.receiptId,
+					evidenceKind: receipt.kind,
+					...(receipt.gateId === undefined ? {} : { gateId: receipt.gateId }),
+					receiptRef: receipt.receiptId,
+					workKey: contract.workKey,
+					strategyKey: contract.strategyKey,
+					assignmentId: receipt.assignmentId ?? assignment.assignmentId,
+					cursor: workerResult.resultId,
+				},
+			});
+		}
+	};
+	const recordBlockedTransition = (
+		transition: SanLoopTransition,
+		actor: SanLoopRole,
+		data?: Record<string, unknown>,
+	) => {
+		const blockedRecord = recordSanLoopTransition(options.sessionManager, transition, { actor, data });
+		transitions.push(blockedRecord);
+		run = blockedRecord.run;
+	};
+	const roleDispatchBlocked = (role: SanLoopRole, reason: string) => {
+		const createdAt = new Date().toISOString();
+		recordBlockedTransition(
+			{
+				run: updateSanLoopRunSnapshot(run, {
+					status: "blocked",
+					updatedAt: createdAt,
+					finalVerdict: "blocked",
+					budget: [...run.budget, { createdAt, state: "blocked", remainingTurns }],
+				}),
+				eventType: "blocked",
+				eventSummary: reason,
+				retryExhausted: false,
+			},
+			"commander",
+			{ blockedBy: "dispatch_gate", role },
+		);
+	};
+	const bindPassedTransitionToScope = (transition: SanLoopTransition): SanLoopTransition => {
+		if (transition.run.status !== "passed" || finalizeCompletedScope()) return transition;
+		const createdAt = new Date().toISOString();
+		return {
+			...transition,
+			run: updateSanLoopRunSnapshot(transition.run, {
+				status: "blocked",
+				updatedAt: createdAt,
+				finalVerdict: "blocked",
+				budget: [...transition.run.budget, { createdAt, state: "blocked", remainingTurns }],
+			}),
+			eventType: "blocked",
+			eventSummary: "Host evidence gates are not satisfied; pass finalization is blocked.",
+			retryExhausted: false,
+		};
+	};
+	const tryScopeGate = (): boolean => {
+		const snapshot = scopeHandle()?.snapshot();
+		if (!snapshot) return false;
+		let reason: string | undefined;
+		if (snapshot.state === "needs_user") {
+			reason = "Execution scope is waiting for user input; role dispatch is blocked.";
+		} else if (isTerminalExecutionState(snapshot.state)) {
+			reason = `Execution scope is terminal (${snapshot.state}); role dispatch is blocked.`;
+		} else {
+			const providers = options.executionRuntime.providerRegistry.all();
+			// 空 registry 表示尚无 provider 观测，不得提前判定 no_provider_available；
+			// 仅当存在已知 route 且全部不可 dispatch 时才终止。可用性由 registry 按
+			// 注入 clock 纯查询判定：open 未到期 / half_open 已有在途 probe 均不可。
+			const hasViableRoute = options.executionRuntime.providerRegistry.hasDispatchableRoute();
+			if (providers.length > 0 && !hasViableRoute) {
+				finalizeScopeState("no_provider_available");
+				reason = "No provider route is available; role dispatch is blocked until a route recovers.";
+			}
+		}
+		if (reason === undefined) return false;
+		const createdAt = new Date().toISOString();
+		recordBlockedTransition(
+			{
+				run: updateSanLoopRunSnapshot(run, {
+					status: "blocked",
+					updatedAt: createdAt,
+					finalVerdict: "blocked",
+					budget: [...run.budget, { createdAt, state: "blocked", remainingTurns }],
+				}),
+				eventType: "blocked",
+				eventSummary: reason,
+				retryExhausted: false,
+			},
+			"commander",
+			{ blockedBy: "scope_gate", scopeState: snapshot.state },
+		);
+		return true;
+	};
+	const blockForBudget = (finalizeScope = true) => {
+		if (finalizeScope) finalizeBudgetExhausted();
 		const blockedRecord = recordSanLoopTransition(options.sessionManager, budgetBlockedTransition(run), {
 			actor: "commander",
 			data: { remainingTurns, reserveRatio, reviewReserve },
@@ -493,6 +696,7 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 		return true;
 	};
 	const blockForUsageBudget = (reason: SanLoopTransition) => {
+		finalizeBudgetExhausted();
 		const blockedRecord = recordSanLoopTransition(options.sessionManager, reason, {
 			actor: "commander",
 			data: { usage: options.executor.usage?.() },
@@ -512,6 +716,50 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 		if (!blocked) return false;
 		blockForUsageBudget(blocked);
 		return true;
+	};
+	const workerContracts = new Map<string, TaskContractIdentity>();
+	const terminalTaskStatuses = new Set<TaskContractStatus>(["completed", "failed", "cancelled", "rejected"]);
+	const workerContractInput = (assignment: SanLoopWorkerAssignment) => ({
+		scopeId: options.executionScopeId,
+		workKey: assignment.assignmentId,
+		strategyKey: `san-loop:${mode}:worker`,
+		taskId: assignment.taskNodeIds[0],
+	});
+	const registerWorkerContract = (assignment: SanLoopWorkerAssignment): TaskContractIdentity => {
+		const input = workerContractInput(assignment);
+		const admission = options.executionRuntime.taskRegistry.admit({
+			...input,
+			semantic: assignment.objective,
+		});
+		workerContracts.set(assignment.assignmentId, admission.contract);
+		return admission.contract;
+	};
+	const setWorkerContractStatus = (assignmentId: string, status: TaskContractStatus): void => {
+		const contract = workerContracts.get(assignmentId);
+		if (!contract) return;
+		const current = options.executionRuntime.taskRegistry.get(contract);
+		if (!current || terminalTaskStatuses.has(current.status)) return;
+		options.executionRuntime.taskRegistry.setStatus(contract, status);
+	};
+	const cancelOpenWorkerContracts = (): void => {
+		for (const [assignmentId, contract] of workerContracts) {
+			const current = options.executionRuntime.taskRegistry.get(contract);
+			if (current?.status === "queued" || current?.status === "running") {
+				options.executionRuntime.taskRegistry.setStatus(contract, "cancelled");
+			}
+			workerContracts.delete(assignmentId);
+		}
+	};
+	const roleContractKey = (role: SanLoopRole) => ({
+		scopeId: options.executionScopeId,
+		workKey: `${run.runId}:${role}`,
+		strategyKey: `san-loop:${mode}:${role}`,
+		taskId: `${run.runId}:${role}`,
+	});
+	const admittedRoleContracts = new Set<SanLoopRole>();
+	const releaseRoleContract = (role: SanLoopRole): void => {
+		options.executionRuntime.taskRegistry.remove(roleContractKey(role));
+		admittedRoleContracts.delete(role);
 	};
 
 	try {
@@ -553,10 +801,70 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 			run = blocked.run;
 			return { run, runCreated, transitions, reviewEntryIds };
 		}
+		let scheduler = options.executionRuntime.schedulerFor(options.executionScopeId);
 		reviewReserve = hasSupervisor || hasOracle ? Math.max(0, Math.ceil(totalTurns * reserveRatio)) : 0;
-
+		let roleCallSequence = 0;
+		const recordRoleHostFact = (
+			role: SanLoopRole,
+			assignmentId: string,
+			cursor: string,
+			evidenceRefs: readonly string[] = [],
+		) => {
+			// 角色完成是模型 yield 事实，只计 activity；host-owned typed receipts
+			// 才记录 evidence 进度。失败/取消在 catch 分支以稳定 failure signature
+			// 上报，绝不静默吞掉。
+			options.executionRuntime.recordHostObservation({
+				scopeId: options.executionScopeId,
+				observation: {
+					type: "activity",
+					observationId: cursor,
+					...(evidenceRefs.length > 0 ? { expectedEvidenceRefs: evidenceRefs } : {}),
+					workKey: `${run.runId}:${role}`,
+					strategyKey: `san-loop:${mode}:${role}`,
+					assignmentId,
+					cursor,
+				},
+			});
+		};
+		const admitRoleAssignment = (role: SanLoopRole): string | undefined => {
+			const roleAssignmentId = `${run.runId}:${role}:${roleCallSequence++}`;
+			// 角色使用稳定 TaskContract identity 准入；同一契约已准入（reused）
+			// 表示重复派发，不得再次执行角色。
+			const admission = options.executionRuntime.taskRegistry.admit({
+				...roleContractKey(role),
+				semantic: `san-loop ${mode} ${role} 角色调用`,
+			});
+			if (admission.kind === "reused") return undefined;
+			admittedRoleContracts.add(role);
+			// 任何 agent/provider 网络调用之前完成调度准入；被拒时同步释放
+			// role contract，避免预算或 scheduler gate 留下幽灵准入。
+			if (!scheduler.admitDispatch(roleAssignmentId).admitted) {
+				releaseRoleContract(role);
+				return undefined;
+			}
+			return roleAssignmentId;
+		};
 		executionLoop: while (true) {
 			signal.throwIfAborted();
+			// 分支可能被外部 syncBranch 重建：每次迭代确认 scheduler 仍绑定当前
+			// ledger，确保后续所有决策（准入/派发/观察）使用新 ledger。
+			{
+				const current = options.executionRuntime.schedulerFor(options.executionScopeId);
+				if (current !== scheduler) scheduler = current;
+			}
+			if (tryScopeGate()) break;
+			// 角色派发准入必须在任何 turn/usage 预算预留与 provider 网络调用之前。
+			let commanderAssignmentId: string | undefined;
+			if (hasCommander) {
+				commanderAssignmentId = admitRoleAssignment("commander");
+				if (commanderAssignmentId === undefined) {
+					roleDispatchBlocked(
+						"commander",
+						"Commander dispatch was denied by the execution scheduler admission gate.",
+					);
+					break;
+				}
+			}
 			if (!spendTurns(1)) {
 				blockForBudget();
 				break;
@@ -567,16 +875,18 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 
 			if (hasCommander) {
 				if (tryEnforceUsageBudget()) break;
-				const commanderResult = await options.executor.commander({
-					run,
-					mode,
-					signal,
-					latestReview: latestReview(run),
-					checks: selectSanLoopChecks(options.checks ?? [], { role: "commander" }),
-					budget: hasExclusiveUsageBudget(usageLimits)
-						? remainingRoleBudget(options.executor, usageLimits)
-						: undefined,
-				});
+				const commanderResult = await scheduler.executeAssignment(commanderAssignmentId!, () =>
+					options.executor.commander({
+						run,
+						mode,
+						signal,
+						latestReview: latestReview(run),
+						checks: selectSanLoopChecks(options.checks ?? [], { role: "commander" }),
+						budget: hasExclusiveUsageBudget(usageLimits)
+							? remainingRoleBudget(options.executor, usageLimits)
+							: undefined,
+					}),
+				);
 				signal.throwIfAborted();
 				const planned = withExecutorUsage(
 					withBudgetRemaining(applySanLoopPlan(run, commanderResult.plan), remainingTurns),
@@ -585,6 +895,13 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 				const plannedRecord = recordSanLoopTransition(options.sessionManager, planned, { actor: "commander" });
 				transitions.push(plannedRecord);
 				run = plannedRecord.run;
+				recordRoleHostFact(
+					"commander",
+					commanderAssignmentId!,
+					`${run.runId}:commander:${run.retryCount}`,
+					plannedRecord.run.plan?.checkPlan ?? [],
+				);
+				releaseRoleContract("commander");
 				if (tryEnforceUsageBudget()) break;
 
 				const assignmentInputs = deriveAssignments(run, commanderResult);
@@ -640,6 +957,56 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 				batchAssignments = run.assignments.slice(-assignmentInputs.length);
 			}
 
+			// host gate templates 在 assignment 已知后物化：gateId 永远追加
+			// assignmentId。重入时复用原 gate/freshness，不得以同 recordId 改绑。
+			const materializeAcceptanceGates = (assignments: SanLoopWorkerAssignment[]): void => {
+				const templates = options.acceptanceGates ?? [];
+				if (templates.length === 0 || assignments.length === 0) return;
+				const handle = scopeHandle();
+				if (!handle) return;
+				const freshnessRevision = handle.snapshot().revision;
+				const materialized = new Map<string, AcceptanceGate>();
+				for (const gate of templates) {
+					for (const assignment of assignments) {
+						const gateId = `${gate.gateId}:${assignment.assignmentId}`;
+						const existing = handle.snapshot().gates.find(candidate => candidate.gateId === gateId);
+						if (existing) {
+							const existingHash = existing.contractHash ?? existing.contractRef.contractHash;
+							const templateHash = gate.contractHash ?? gate.contractRef.contractHash;
+							if (
+								existing.assignmentId !== assignment.assignmentId ||
+								existing.contractRevision !== gate.contractRevision ||
+								existing.contractRef.contractId !== gate.contractRef.contractId ||
+								existingHash !== templateHash ||
+								JSON.stringify(existing.contractRef.clauseRefs) !==
+									JSON.stringify(gate.contractRef.clauseRefs) ||
+								JSON.stringify(existing.objectiveClauseRefs) !== JSON.stringify(gate.objectiveClauseRefs) ||
+								(existing.required !== false) !== (gate.required !== false) ||
+								JSON.stringify(existing.verifier) !== JSON.stringify(gate.verifier)
+							) {
+								throw new Error(`Acceptance gate ${gateId} has a conflicting materialized binding.`);
+							}
+							materialized.set(gateId, existing);
+							continue;
+						}
+						const bound: AcceptanceGate = {
+							...gate,
+							gateId,
+							assignmentId: assignment.assignmentId,
+							freshnessRevision,
+						};
+						handle.ledger.append({
+							recordId: `gate:${options.executionScopeId}:${gateId}`,
+							type: "acceptance_gate_recorded",
+							gate: bound,
+						});
+						materialized.set(gateId, bound);
+					}
+				}
+				run = { ...run, acceptanceGates: [...materialized.values()] };
+			};
+			materializeAcceptanceGates(batchAssignments);
+			for (const assignment of batchAssignments) registerWorkerContract(assignment);
 			const pendingAssignments = [...batchAssignments];
 			const completedTaskIds = new Set(
 				run.plan?.taskGraph.filter(task => task.status === "completed").map(task => task.id),
@@ -672,29 +1039,242 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 					break executionLoop;
 				}
 				const waveAssignments = readyAssignments.slice(0, waveSize);
-				if (!spendTurns(waveAssignments.length)) {
+				scheduler.setRunnableNodes(pendingAssignments.flatMap(assignment => assignment.taskNodeIds));
+				const batchWorkerResults: SanLoopWorkerResult[] = [];
+				const reusedAssignments: SanLoopWorkerAssignment[] = [];
+				const dispatchAssignments: SanLoopWorkerAssignment[] = [];
+				let recoveryUsed = false;
+				let recoveryPassed = false;
+				let watchdogBlockedReason: string | undefined;
+				for (const assignment of waveAssignments) {
+					if (watchdogBlockedReason) break;
+					const contract = options.executionRuntime.taskRegistry.derive({
+						scopeId: options.executionScopeId,
+						workKey: assignment.assignmentId,
+						strategyKey: `san-loop:${mode}:worker`,
+					});
+					const decision = scheduler.enforce({
+						observation: {
+							type: "activity",
+							assignmentId: assignment.assignmentId,
+							workKey: contract.workKey,
+							strategyKey: contract.strategyKey,
+							requestKind: "assignment",
+						},
+						ledgerRevision: scheduler.ledger.revision,
+					});
+					if (decision.action === "reuse_duplicate") {
+						const prior = run.workerResults.find(result => result.assignmentId === assignment.assignmentId);
+						if (prior) {
+							reusedAssignments.push(assignment);
+							batchWorkerResults.push(prior);
+						} else {
+							watchdogBlockedReason = `Assignment ${assignment.assignmentId} is a duplicate without a reusable result.`;
+						}
+						continue;
+					}
+					if (decision.action === "reject_duplicate") {
+						watchdogBlockedReason = `Assignment ${assignment.assignmentId} was rejected as a duplicate; no respawn.`;
+						continue;
+					}
+					if (decision.action === "suppress_unchanged_poll") {
+						watchdogBlockedReason =
+							"No host progress signal changed; waiting for an external event before dispatching.";
+						continue;
+					}
+					if (decision.action === "none" || decision.action === "stale_diagnosis") {
+						// 同一契约已有先例结果时绝不再次执行（reused 语义）：复用既有
+						// 结果，保证 scheduler 重建后 duplicate 判定与 watchdog 一致。
+						const prior = run.workerResults.find(result => result.assignmentId === assignment.assignmentId);
+						if (prior) {
+							reusedAssignments.push(assignment);
+							batchWorkerResults.push(prior);
+						} else {
+							dispatchAssignments.push(assignment);
+						}
+						continue;
+					}
+					if (decision.action === "repair_state_drift") {
+						options.executionRuntime.syncBranch(options.sessionManager.getEntries());
+						// syncBranch 重建 ledger：旧 scheduler 已失效，必须重新取得
+						// scope scheduler，后续重试与决策全部基于新 ledger。
+						scheduler = options.executionRuntime.schedulerFor(options.executionScopeId);
+						const retried = scheduler.enforce({
+							observation: {
+								type: "activity",
+								assignmentId: assignment.assignmentId,
+								workKey: contract.workKey,
+								strategyKey: contract.strategyKey,
+								requestKind: "assignment",
+							},
+							ledgerRevision: scheduler.ledger.revision,
+						});
+						if (retried.action === "repair_state_drift") {
+							watchdogBlockedReason = `Assignment ${assignment.assignmentId} state drift did not resolve after runtime sync.`;
+						} else {
+							dispatchAssignments.push(assignment);
+						}
+						continue;
+					}
+					if (decision.action === "diagnose") {
+						if (recoveryUsed) {
+							watchdogBlockedReason = "Stalled strategy already received its one bounded supervisor recovery.";
+							continue;
+						}
+						recoveryUsed = true;
+						const recoveryAssignmentId = admitRoleAssignment("supervisor");
+						if (recoveryAssignmentId === undefined) {
+							watchdogBlockedReason =
+								"Supervisor recovery dispatch was denied by the execution scheduler admission gate.";
+							continue;
+						}
+						if (!spendTurns(1, "review")) {
+							blockForBudget();
+							break executionLoop;
+						}
+						const recoveryInput = await scheduler.executeAssignment(recoveryAssignmentId, () =>
+							options.executor.supervisor({
+								run,
+								assignments: [assignment],
+								workerResults: run.workerResults.filter(result =>
+									batchAssignments.some(candidate => candidate.assignmentId === result.assignmentId),
+								),
+								mode,
+								signal,
+								checks: selectSanLoopChecks(options.checks ?? [], { role: "supervisor" }),
+								budget: hasExclusiveUsageBudget(usageLimits)
+									? remainingRoleBudget(options.executor, usageLimits)
+									: undefined,
+							}),
+						);
+						signal.throwIfAborted();
+						if (recoveryInput.reviewer !== "supervisor") {
+							throw new Error(`San recovery returned reviewer ${recoveryInput.reviewer}; expected supervisor.`);
+						}
+						const recovered = bindPassedTransitionToScope(
+							withExecutorUsage(
+								withBudgetRemaining(
+									applySanLoopReview(run, recoveryInput, {
+										currentBatchAssignmentIds: batchAssignments.map(a => a.assignmentId),
+										scopeId: options.executionScopeId,
+									}),
+									remainingTurns,
+								),
+								options.executor,
+							),
+						);
+						const recoveredReview = recovered.run.reviewReports.at(-1);
+						const recoveredRecord = recordSanLoopTransition(options.sessionManager, recovered, {
+							actor: "supervisor",
+							review: recoveredReview,
+						});
+						if (recoveredRecord.reviewEntryId) reviewEntryIds.push(recoveredRecord.reviewEntryId);
+						transitions.push(recoveredRecord);
+						run = recoveredRecord.run;
+						if (recoveredReview) {
+							recordRoleHostFact(
+								"supervisor",
+								recoveryAssignmentId,
+								recoveredReview.reportId,
+								recoveredReview.evidenceRefs,
+							);
+						}
+						releaseRoleContract("supervisor");
+						if (run.status === "passed" || run.status === "blocked") {
+							recoveryPassed = true;
+						} else if (run.status !== "retrying") {
+							watchdogBlockedReason = "Supervisor recovery did not clear the stalled strategy.";
+						}
+					}
+				}
+				for (const assignment of reusedAssignments) {
+					const prior = batchWorkerResults.find(result => result.assignmentId === assignment.assignmentId);
+					setWorkerContractStatus(assignment.assignmentId, prior?.status === "completed" ? "completed" : "failed");
+				}
+				if (recoveryPassed) break executionLoop;
+				if (watchdogBlockedReason) {
+					const createdAt = new Date().toISOString();
+					recordBlockedTransition(
+						{
+							run: updateSanLoopRunSnapshot(run, {
+								status: "blocked",
+								updatedAt: createdAt,
+								finalVerdict: "blocked",
+								budget: [...run.budget, { createdAt, state: "blocked", remainingTurns }],
+							}),
+							eventType: "blocked",
+							eventSummary: watchdogBlockedReason,
+							retryExhausted: false,
+						},
+						"commander",
+						{ blockedBy: "watchdog" },
+					);
+					break executionLoop;
+				}
+				if (dispatchAssignments.length > 0) {
+					const admitted = dispatchAssignments.filter(
+						assignment => scheduler.admitDispatch(assignment.assignmentId).admitted,
+					);
+					dispatchAssignments.length = 0;
+					dispatchAssignments.push(...admitted);
+				}
+				if (dispatchAssignments.length === 0 && reusedAssignments.length === 0) {
+					// 全部派发被准入门拒绝：记录确定性 blocked，不静默中断。
+					const createdAt = new Date().toISOString();
+					recordBlockedTransition(
+						{
+							run: updateSanLoopRunSnapshot(run, {
+								status: "blocked",
+								updatedAt: createdAt,
+								finalVerdict: "blocked",
+								budget: [...run.budget, { createdAt, state: "blocked", remainingTurns }],
+							}),
+							eventType: "blocked",
+							eventSummary: "All worker dispatches were denied by the execution scheduler admission gate.",
+							retryExhausted: false,
+						},
+						"commander",
+						{ blockedBy: "dispatch_gate", role: "worker" },
+					);
+					break executionLoop;
+				}
+				if (tryScopeGate()) break executionLoop;
+				if (!spendTurns(dispatchAssignments.length)) {
 					blockForBudget();
 					break executionLoop;
 				}
 				if (tryEnforceUsageBudget()) break executionLoop;
 				const workerResultInputs = await mapWithLimit(
-					waveAssignments,
+					dispatchAssignments,
 					maxWorkers,
 					signal,
-					(assignment, index, workerSignal) =>
-						options.executor.worker({
-							run,
-							assignment,
-							mode,
-							signal: workerSignal,
-							checks: selectSanLoopChecks(options.checks ?? [], { role: "worker" }),
-							budget: exclusiveBudget
-								? splitRoleBudget(exclusiveBudget, index, waveAssignments.length)
-								: undefined,
-						}),
+					async (assignment, index, workerSignal) => {
+						setWorkerContractStatus(assignment.assignmentId, "running");
+						const runWorker = () =>
+							options.executor.worker({
+								run,
+								assignment,
+								mode,
+								signal: workerSignal,
+								checks: selectSanLoopChecks(options.checks ?? [], { role: "worker" }),
+								budget: exclusiveBudget
+									? splitRoleBudget(exclusiveBudget, index, dispatchAssignments.length)
+									: undefined,
+							});
+						try {
+							const result = await scheduler.executeAssignment(assignment.assignmentId, runWorker);
+							setWorkerContractStatus(
+								assignment.assignmentId,
+								result.status === "completed" ? "completed" : "failed",
+							);
+							return result;
+						} catch (error) {
+							setWorkerContractStatus(assignment.assignmentId, workerSignal.aborted ? "cancelled" : "failed");
+							throw error;
+						}
+					},
 				);
 				signal.throwIfAborted();
-				const batchWorkerResults: SanLoopWorkerResult[] = [];
 				for (const workerInput of workerResultInputs) {
 					const worked = withExecutorUsage(
 						withBudgetRemaining(recordSanLoopWorkerResult(run, workerInput), remainingTurns),
@@ -704,10 +1284,16 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 					transitions.push(workedRecord);
 					run = workedRecord.run;
 					const workerResult = run.workerResults.at(-1);
-					if (workerResult) batchWorkerResults.push(workerResult);
+					if (workerResult) {
+						batchWorkerResults.push(workerResult);
+						const workerAssignment = dispatchAssignments.find(
+							candidate => candidate.assignmentId === workerInput.assignmentId,
+						);
+						if (workerAssignment) recordWorkerHostFacts(workerResult, workerAssignment);
+					}
 				}
 				if (tryEnforceUsageBudget()) break executionLoop;
-				for (const assignment of waveAssignments) {
+				for (const assignment of [...dispatchAssignments, ...reusedAssignments]) {
 					const index = pendingAssignments.findIndex(
 						candidate => candidate.assignmentId === assignment.assignmentId,
 					);
@@ -723,15 +1309,22 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 					run = failedRecord.run;
 					break executionLoop;
 				}
-				for (const assignment of waveAssignments) {
+				for (const assignment of [...dispatchAssignments, ...reusedAssignments]) {
 					for (const taskId of assignment.taskNodeIds) completedTaskIds.add(taskId);
 				}
 			}
 
 			let oracleReview: SanLoopReviewReport | undefined;
 			if (hasOracle) {
-				if (!options.executor.oracle) {
+				const oracle = options.executor.oracle;
+				if (!oracle) {
 					blockForBudget();
+					break;
+				}
+				if (tryScopeGate()) break;
+				const oracleAssignmentId = admitRoleAssignment("oracle");
+				if (oracleAssignmentId === undefined) {
+					roleDispatchBlocked("oracle", "Oracle dispatch was denied by the execution scheduler admission gate.");
 					break;
 				}
 				if (!spendTurns(1, "review")) {
@@ -739,22 +1332,24 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 					break;
 				}
 				if (tryEnforceUsageBudget()) break;
-				const oracleInput = await options.executor.oracle({
-					run,
-					assignments: batchAssignments,
-					workerResults: run.workerResults.filter(result =>
-						batchAssignments.some(assignment => assignment.assignmentId === result.assignmentId),
-					),
-					mode,
-					signal,
-					checks: selectSanLoopChecks(options.checks ?? [], {
-						role: "oracle",
-						paths: run.workerResults.flatMap(result => result.changedFiles),
+				const oracleInput = await scheduler.executeAssignment(oracleAssignmentId!, () =>
+					oracle({
+						run,
+						assignments: batchAssignments,
+						workerResults: run.workerResults.filter(result =>
+							batchAssignments.some(assignment => assignment.assignmentId === result.assignmentId),
+						),
+						mode,
+						signal,
+						checks: selectSanLoopChecks(options.checks ?? [], {
+							role: "oracle",
+							paths: run.workerResults.flatMap(result => result.changedFiles),
+						}),
+						budget: hasExclusiveUsageBudget(usageLimits)
+							? remainingRoleBudget(options.executor, usageLimits)
+							: undefined,
 					}),
-					budget: hasExclusiveUsageBudget(usageLimits)
-						? remainingRoleBudget(options.executor, usageLimits)
-						: undefined,
-				});
+				);
 				signal.throwIfAborted();
 				if (oracleInput.reviewer !== "oracle") {
 					throw new Error(`San Oracle returned reviewer ${oracleInput.reviewer}; expected oracle.`);
@@ -763,6 +1358,7 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 					withBudgetRemaining(
 						applySanLoopReview(run, oracleInput, {
 							currentBatchAssignmentIds: batchAssignments.map(a => a.assignmentId),
+							scopeId: options.executionScopeId,
 						}),
 						remainingTurns,
 					),
@@ -776,32 +1372,47 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 				if (oracleRecord.reviewEntryId) reviewEntryIds.push(oracleRecord.reviewEntryId);
 				transitions.push(oracleRecord);
 				run = oracleRecord.run;
+				if (oracleReview) {
+					recordRoleHostFact("oracle", oracleAssignmentId, oracleReview.reportId, oracleReview.evidenceRefs);
+				}
+				releaseRoleContract("oracle");
 				if (tryEnforceUsageBudget()) break;
 			}
 
 			if (hasSupervisor) {
+				if (tryScopeGate()) break;
+				const supervisorAssignmentId = admitRoleAssignment("supervisor");
+				if (supervisorAssignmentId === undefined) {
+					roleDispatchBlocked(
+						"supervisor",
+						"Supervisor dispatch was denied by the execution scheduler admission gate.",
+					);
+					break;
+				}
 				if (!spendTurns(1, "review")) {
 					blockForBudget();
 					break;
 				}
 				if (tryEnforceUsageBudget()) break;
-				const reviewInput = await options.executor.supervisor({
-					run,
-					assignments: batchAssignments,
-					workerResults: run.workerResults.filter(result =>
-						batchAssignments.some(assignment => assignment.assignmentId === result.assignmentId),
-					),
-					mode,
-					signal,
-					oracleReview,
-					checks: selectSanLoopChecks(options.checks ?? [], {
-						role: "supervisor",
-						paths: run.workerResults.flatMap(result => result.changedFiles),
+				const reviewInput = await scheduler.executeAssignment(supervisorAssignmentId!, () =>
+					options.executor.supervisor({
+						run,
+						assignments: batchAssignments,
+						workerResults: run.workerResults.filter(result =>
+							batchAssignments.some(assignment => assignment.assignmentId === result.assignmentId),
+						),
+						mode,
+						signal,
+						oracleReview,
+						checks: selectSanLoopChecks(options.checks ?? [], {
+							role: "supervisor",
+							paths: run.workerResults.flatMap(result => result.changedFiles),
+						}),
+						budget: hasExclusiveUsageBudget(usageLimits)
+							? remainingRoleBudget(options.executor, usageLimits)
+							: undefined,
 					}),
-					budget: hasExclusiveUsageBudget(usageLimits)
-						? remainingRoleBudget(options.executor, usageLimits)
-						: undefined,
-				});
+				);
 				signal.throwIfAborted();
 				if (reviewInput.reviewer !== "supervisor") {
 					throw new Error(`San Supervisor returned reviewer ${reviewInput.reviewer}; expected supervisor.`);
@@ -810,15 +1421,39 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 					withBudgetRemaining(
 						applySanLoopReview(run, reviewInput, {
 							currentBatchAssignmentIds: batchAssignments.map(a => a.assignmentId),
+							scopeId: options.executionScopeId,
 						}),
 						remainingTurns,
 					),
 					options.executor,
 				);
 				const review = reviewed.run.reviewReports.at(-1);
-				// P0-01: Budget must be checked BEFORE any terminal pass is written.
-				// If over budget, persist a single blocked envelope (optionally
-				// carrying the review for audit) and never write status=passed.
+				if (review) {
+					recordRoleHostFact("supervisor", supervisorAssignmentId, review.reportId, review.evidenceRefs);
+				}
+				releaseRoleContract("supervisor");
+				if (reviewInput.externalBlocker && review?.verdict === "blocked") {
+					// needs_user 只凭 typed external blocker 经 scheduler 进入；内部
+					// 依赖阻塞保持 diagnose/blocked，绝不视为外部等待。
+					scheduler.setRunnableNodes([]);
+					const blocker = reviewInput.externalBlocker;
+					const basis = supervisorDecisionBasis(scheduler.ledger);
+					const decision: DurableSupervisorDecision = {
+						decisionId: `review:${review.reportId}`,
+						scopeId: options.executionScopeId,
+						basisRevision: basis.revision,
+						basisHash: basis.hash,
+						action: "needs_user",
+						evidenceRefs: [blocker.evidenceRef],
+						invalidatedHypothesisRefs: [],
+						confidence: review.confidence,
+						createdAt: review.createdAt,
+						externalBlocker: blocker,
+					};
+					scheduler.applySupervisorDecision(decision);
+				}
+				// P0-01：预算检查必须先于任何终态 pass 写入；超预算时只持久化
+				// 单个 blocked envelope（可携带 review 供审计），绝不写入 status=passed。
 				const postReviewBudget = checkUsageBudget(options.executor, run, usageLimits);
 				if (postReviewBudget) {
 					const blockedRecord = recordSanLoopTransition(
@@ -842,9 +1477,11 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 					if (blockedRecord.reviewEntryId) reviewEntryIds.push(blockedRecord.reviewEntryId);
 					transitions.push(blockedRecord);
 					run = blockedRecord.run;
+					finalizeBudgetExhausted();
 					break;
 				}
-				const reviewedRecord = recordSanLoopTransition(options.sessionManager, reviewed, {
+				const scopeBoundReview = bindPassedTransitionToScope(reviewed);
+				const reviewedRecord = recordSanLoopTransition(options.sessionManager, scopeBoundReview, {
 					actor: review?.reviewer ?? "supervisor",
 					review,
 				});
@@ -853,7 +1490,7 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 				run = reviewedRecord.run;
 				if (run.status !== "retrying") break;
 			} else {
-				// No Supervisor in pipeline: auto-finalize from worker results.
+				// 无 Supervisor 的流水线：由 worker 结果自动收尾。
 				if (tryEnforceUsageBudget()) break;
 				const workerResults = run.workerResults.filter(result =>
 					batchAssignments.some(assignment => assignment.assignmentId === result.assignmentId),
@@ -876,6 +1513,9 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 						: [],
 					testsRun: workerResults.flatMap(result => result.commandsRun.map(c => c.command)),
 					evidence: workerResults.flatMap(result => result.verification),
+					evidenceRefs: workerResults.flatMap(result =>
+						(result.evidenceReceipts ?? []).map(receipt => receipt.receiptId),
+					),
 					retryable: false,
 					requiredNextActions: [],
 					confidence: hasFailures ? "low" : "high",
@@ -884,6 +1524,7 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 					withBudgetRemaining(
 						applySanLoopReview(run, reviewInput, {
 							currentBatchAssignmentIds: batchAssignments.map(a => a.assignmentId),
+							scopeId: options.executionScopeId,
 						}),
 						remainingTurns,
 					),
@@ -913,9 +1554,11 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 					if (blockedRecord.reviewEntryId) reviewEntryIds.push(blockedRecord.reviewEntryId);
 					transitions.push(blockedRecord);
 					run = blockedRecord.run;
+					finalizeBudgetExhausted();
 					break;
 				}
-				const reviewedRecord = recordSanLoopTransition(options.sessionManager, reviewed, {
+				const scopeBoundReview = bindPassedTransitionToScope(reviewed);
+				const reviewedRecord = recordSanLoopTransition(options.sessionManager, scopeBoundReview, {
 					actor: review?.reviewer ?? "supervisor",
 					review,
 				});
@@ -929,6 +1572,24 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 		return { run, runCreated, transitions, reviewEntryIds };
 	} catch (error) {
 		const latest = findLatestSanLoopRun(options.sessionManager.getEntries(), run.runId)?.data ?? run;
+		// 未捕获的角色/worker 失败或取消以稳定指纹上报 watchdog（进度事实）；
+		// 观测写入失败时保持原始错误为最终错误，不覆盖也不静默吞掉。
+		try {
+			options.executionRuntime.recordHostObservation({
+				scopeId: options.executionScopeId,
+				observation: {
+					type: "failure",
+					signature: stableFailureFingerprint(
+						signal.aborted ? "cancelled" : error instanceof Error ? error.message : String(error),
+					),
+					workKey: `${run.runId}:runtime`,
+					strategyKey: `san-loop:${mode}:runtime`,
+					retryable: false,
+				},
+			});
+		} catch {
+			// 观测写入失败不得掩盖原始错误。
+		}
 		if (signal.aborted) {
 			if (latest.status === "aborting") {
 				const acknowledged = acknowledgeSanLoopAbort(options.sessionManager, latest);
@@ -943,6 +1604,7 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 			} else {
 				run = latest;
 			}
+			finalizeScopeState("aborted_by_user");
 			return { run, runCreated, transitions, reviewEntryIds };
 		}
 		if (!isSanLoopTerminalStatus(latest.status)) {
@@ -954,9 +1616,12 @@ export async function runSanLoop(options: RunSanLoopOptions): Promise<RunSanLoop
 				},
 			);
 			run = failed.run;
+			finalizeScopeState("runtime_fault");
 		}
 		throw error;
 	} finally {
+		cancelOpenWorkerContracts();
+		for (const role of [...admittedRoleContracts]) releaseRoleContract(role);
 		if (activeSanLoopRuns.get(runCreated.run.runId) === activeRun) activeSanLoopRuns.delete(runCreated.run.runId);
 		completion.resolve();
 	}

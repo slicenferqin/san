@@ -131,7 +131,7 @@ describe("generate_image tool gating", () => {
 
 	it("keeps carried mounted devices under xd after runtime tool selection", async () => {
 		const ambientTool = customTool("ambient_search");
-		const session = await sessionWithCustomTools(["read"], [ambientTool]);
+		const session = await sessionWithCustomTools(["read", "write"], [ambientTool]);
 		expect(session.getXdevToolEntries().map(entry => entry.name)).toContain(ambientTool.name);
 
 		await session.setActiveToolsByName(session.getEnabledToolNames());
@@ -162,7 +162,7 @@ describe("generate_image tool gating", () => {
 			settings: Settings.isolated({ "generate_image.enabled": true }),
 			model: getBundledModel("openai", "gpt-4o-mini"),
 			disableExtensionDiscovery: true,
-			toolNames: ["read", "generate_image"],
+			toolNames: ["read", "write", "generate_image"],
 			customTools: [mcpTool],
 		});
 		sessions.push(session);
@@ -183,20 +183,24 @@ describe("generate_image tool gating", () => {
 		expect(mcpCalls).toBe(1);
 	});
 
-	it("drops transport-only write after the last MCP device disconnects", async () => {
-		const session = await sessionWithCustomTools(["read"], [customTool("mcp__test__search", true)]);
-		expect(session.getActiveToolNames()).toContain("write");
+	it("keeps ambient MCP tools top-level when write was not granted", async () => {
+		const mcpTool = customTool("mcp__test__search", true);
+		const session = await sessionWithCustomTools(["read"], [mcpTool]);
+		expect(session.getActiveToolNames()).toContain(mcpTool.name);
+		expect(session.getActiveToolNames()).not.toContain("write");
+		expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain(mcpTool.name);
 
 		await session.refreshMCPTools([]);
 
+		expect(session.getActiveToolNames()).not.toContain(mcpTool.name);
 		expect(session.getActiveToolNames()).not.toContain("write");
 	});
 
-	it("does not pin transport-only write during enabled-set round trips", async () => {
+	it("does not synthesize write during enabled-set round trips", async () => {
 		const session = await sessionWithCustomTools(["read"], [customTool("mcp__test__search", true)]);
-		expect(session.getActiveToolNames()).toContain("write");
 
 		await session.setActiveToolsByName(session.getEnabledToolNames());
+		expect(session.getActiveToolNames()).not.toContain("write");
 		await session.refreshMCPTools([]);
 
 		expect(session.getActiveToolNames()).not.toContain("write");
@@ -212,7 +216,10 @@ describe("generate_image tool gating", () => {
 
 	it("preserves write while a non-MCP device remains mounted", async () => {
 		const ambientTool = customTool("ambient_search");
-		const session = await sessionWithCustomTools(["read"], [ambientTool, customTool("mcp__test__search", true)]);
+		const session = await sessionWithCustomTools(
+			["read", "write"],
+			[ambientTool, customTool("mcp__test__search", true)],
+		);
 
 		await session.refreshMCPTools([]);
 
@@ -298,7 +305,7 @@ describe("generate_image tool gating", () => {
 		expect(session.getActiveToolNames()).toContain(rpcTool.name);
 		expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain(rpcTool.name);
 	});
-	it("activates write when an RPC host tool mounts under xd://", async () => {
+	it("mounts an RPC host tool when the read/write transport is explicitly active", async () => {
 		const { session } = await createAgentSession({
 			cwd: registryDir,
 			agentDir: registryDir,
@@ -308,11 +315,11 @@ describe("generate_image tool gating", () => {
 			model: getBundledModel("openai", "gpt-4o-mini"),
 			disableExtensionDiscovery: true,
 			enableMCP: false,
-			toolNames: ["read"],
+			toolNames: ["read", "write"],
 		});
 		sessions.push(session);
 		expect(session.getXdevToolEntries()).toEqual([]);
-		expect(session.getActiveToolNames()).not.toContain("write");
+		expect(session.getActiveToolNames()).toContain("write");
 
 		const rpcTool: AgentTool = {
 			name: "rpc_search",
@@ -327,6 +334,7 @@ describe("generate_image tool gating", () => {
 		await session.refreshRpcHostTools([rpcTool]);
 
 		expect(session.getXdevToolEntries().map(entry => entry.name)).toContain("rpc_search");
+		expect(session.getActiveToolNames()).not.toContain("rpc_search");
 		expect(session.getActiveToolNames()).toContain("write");
 	});
 });

@@ -33,6 +33,11 @@ export function registerOAuthProvider(provider: OAuthProviderInterface): void {
 	customOAuthProviders.set(provider.id, provider);
 }
 
+/** 删除一个按 ID 注册的自定义 OAuth provider。 */
+export function unregisterOAuthProvider(id: string): void {
+	customOAuthProviders.delete(id);
+}
+
 /**
  * Get a custom OAuth provider by ID.
  */
