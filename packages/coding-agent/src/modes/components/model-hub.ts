@@ -35,7 +35,9 @@ import { AUTO_THINKING, type ConfiguredThinkingLevel, getConfiguredThinkingLevel
 import { theme } from "../theme/theme";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../utils/keybinding-matchers";
 import {
+	type ActiveLogicalRouteSummary,
 	buildBrowserItems,
+	buildLogicalBrowserItems,
 	ModelBrowser,
 	type ModelBrowserItem,
 	type RoleAssignments,
@@ -110,12 +112,16 @@ export interface ModelHubOptions {
 	pickerHint?: string;
 	/** Current session effort preselected by pick-mode thinking strips. */
 	initialThinkingLevel?: ConfiguredThinkingLevel;
+	/** 当前会话选择器；Logical Model 激活时传 Logical Model ID。 */
+	currentSelector?: string;
+	/** 当前 Logical Model 的实际 route，用于展示真实 concrete route。 */
+	activeLogicalRoute?: ActiveLogicalRouteSummary;
 	initialQuery?: string;
 }
 
 interface SidebarEntry {
 	id: string;
-	kind: "recent" | "roles" | "all" | "separator" | "provider";
+	kind: "recent" | "roles" | "logical" | "all" | "separator" | "provider";
 	label: string;
 	providerId?: string;
 	locked?: boolean;
@@ -190,9 +196,11 @@ export class ModelHubComponent implements Component {
 	#mode: ModelHubMode;
 	#pickerHint: string;
 	#initialThinkingLevel: ConfiguredThinkingLevel | undefined;
+	#activeLogicalRoute: ActiveLogicalRouteSummary | undefined;
 
 	#browser: ModelBrowser;
 	#roles: RoleAssignments = {};
+	#logicalItems: ModelBrowserItem[] = [];
 	#availableItems: ModelBrowserItem[] = [];
 	#recentItems: ModelBrowserItem[] = [];
 	#configError: string | undefined;
@@ -205,6 +213,7 @@ export class ModelHubComponent implements Component {
 	#lockedProviderEntries: SidebarEntry[] = [];
 	/** Fuzzy match totals while searching: recent-scope hits and overall hits. */
 	#recentSearchCount = 0;
+	#logicalSearchCount = 0;
 	#searchTotal = 0;
 	#activeEntryId = "all";
 	#sidebarScroll = 0;
@@ -259,10 +268,12 @@ export class ModelHubComponent implements Component {
 		this.#mode = options.mode ?? "roles";
 		this.#pickerHint = options.pickerHint ?? PICK_MODE_HINT;
 		this.#initialThinkingLevel = options.initialThinkingLevel;
+		this.#activeLogicalRoute = options.activeLogicalRoute;
 
 		this.#browser = new ModelBrowser(settings, {
 			emptyText: () => this.#emptyStateMessage(),
 		});
+		this.#browser.setCurrentSelector(options.currentSelector);
 		this.#browser.onActivate = item => this.#activateItem(item);
 		this.#browser.onCancel = () => this.#callbacks.onCancel();
 		this.#browser.onQueryChange = query => this.#onQueryChanged(query);
@@ -275,6 +286,8 @@ export class ModelHubComponent implements Component {
 		const initialProvider = options.initialProviderId;
 		if (initialProvider && this.#entries.some(entry => entry.providerId === initialProvider)) {
 			this.#setActiveEntry(`provider:${initialProvider}`);
+		} else if (this.#activeLogicalRoute && this.#entries.some(entry => entry.kind === "logical")) {
+			this.#setActiveEntry("logical");
 		} else {
 			this.#setActiveEntry("all");
 		}
@@ -317,7 +330,7 @@ export class ModelHubComponent implements Component {
 	/** Resolve every known role: configured values first, auto-selection for the rest. */
 	#reloadRoles(autoCandidates: ReadonlyArray<Model>): void {
 		const allModels = this.#scopedModels.length > 0 ? autoCandidates : this.#registry.getAll();
-		this.#roles = resolveRoleAssignments(this.#settings, allModels, autoCandidates);
+		this.#roles = resolveRoleAssignments(this.#settings, allModels, autoCandidates, this.#registry);
 	}
 
 	/** Rebuild items, roles, and the sidebar from the registry's in-memory state. */
@@ -345,6 +358,11 @@ export class ModelHubComponent implements Component {
 
 		const storage = this.#settings.getStorage();
 		const mruOrder = storage?.getModelUsageOrder() ?? [];
+		this.#logicalItems =
+			this.#scopedModels.length > 0
+				? []
+				: buildLogicalBrowserItems(this.#settings, this.#registry, this.#activeLogicalRoute);
+		sortModelItems(this.#logicalItems, { roles: this.#roles, mruOrder });
 		this.#availableItems = buildBrowserItems(availableModels);
 		sortModelItems(this.#availableItems, { roles: this.#roles, mruOrder });
 		this.#browser.setRoles(this.#roles);
@@ -429,9 +447,18 @@ export class ModelHubComponent implements Component {
 			label: "All models",
 			annotation: String(availableModels.length),
 		};
+		const logicalEntry: SidebarEntry | undefined =
+			this.#logicalItems.length > 0
+				? {
+						id: "logical",
+						kind: "logical",
+						label: "Logical models",
+						annotation: String(this.#logicalItems.length),
+					}
+				: undefined;
 		const fixed: SidebarEntry[] =
 			this.#mode === "pick"
-				? [allEntry]
+				? [...(logicalEntry ? [logicalEntry] : []), allEntry]
 				: [
 						{
 							id: "roles",
@@ -439,6 +466,7 @@ export class ModelHubComponent implements Component {
 							label: "Roles",
 							annotation: `${assignedCount}/${visibleRoles.length}`,
 						},
+						...(logicalEntry ? [logicalEntry] : []),
 						allEntry,
 					];
 
@@ -528,6 +556,10 @@ export class ModelHubComponent implements Component {
 			case "roles":
 				this.#roleIndex = Math.min(this.#roleIndex, Math.max(0, this.#rolesRowCount - 1));
 				break;
+			case "logical":
+				this.#browser.setShowProvider(false);
+				this.#browser.setItems([...this.#logicalItems]);
+				break;
 			default:
 				this.#browser.setShowProvider(true);
 				this.#browser.setItems([...this.#availableItems]);
@@ -611,6 +643,11 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 		const matches = fuzzyFilter(this.#availableItems, query, ({ provider, id }) => `${provider}/${id}`);
+		this.#logicalSearchCount = fuzzyFilter(
+			this.#logicalItems,
+			query,
+			({ provider, id }) => `${provider}/${id}`,
+		).length;
 		const counts = new Map<string, number>();
 		for (const item of matches) {
 			counts.set(item.provider, (counts.get(item.provider) ?? 0) + 1);
@@ -643,6 +680,7 @@ export class ModelHubComponent implements Component {
 		if (!this.#searchCounts) return false;
 		if (entry.kind === "roles") return true;
 		if (entry.kind === "recent") return this.#recentSearchCount === 0;
+		if (entry.kind === "logical") return this.#logicalSearchCount === 0;
 		if (entry.kind === "provider") {
 			if (entry.locked) return true;
 			return (this.#searchCounts.get(entry.providerId ?? "") ?? 0) === 0;
@@ -806,7 +844,11 @@ export class ModelHubComponent implements Component {
 					? (this.#settings.getProjectModelRole(scopedRole) ?? this.#settings.getGlobalModelRole(scopedRole))
 					: this.#settings.getGlobalModelRole(scopedRole),
 		};
-		return resolveModelRoleValue(roleValue, allModels, { settings: this.#settings, roleLookup });
+		return resolveModelRoleValue(roleValue, allModels, {
+			settings: this.#settings,
+			roleLookup,
+			modelRegistry: this.#registry,
+		});
 	}
 
 	#thinkingLevelForScope(role: string, scope: ModelRoleSelectionScope): ConfiguredThinkingLevel {
@@ -859,13 +901,19 @@ export class ModelHubComponent implements Component {
 			const info = getRoleInfo(role, this.#settings);
 			const assignment = this.#roles[role];
 			for (const scope of scopes) {
+				const scopedResolution = scopedStorage ? this.#roleForScope(role, scope) : undefined;
 				const scopedModel = scopedStorage
-					? this.#roleForScope(role, scope).model
+					? scopedResolution?.model
 					: assignment && !assignment.autoSelected
 						? assignment.model
 						: undefined;
-				const assignedHere =
-					!!scopedModel && scopedModel.provider === item.model.provider && scopedModel.id === item.model.id;
+				const assignedLogicalModel = scopedStorage ? scopedResolution?.logicalModelId : assignment?.logicalModelId;
+				const assignedHere = item.logicalRoute
+					? assignedLogicalModel === item.logicalRoute.logicalModelId
+					: assignedLogicalModel === undefined &&
+						!!scopedModel &&
+						scopedModel.provider === item.model.provider &&
+						scopedModel.id === item.model.id;
 				const roleLabel = (info.tag ?? info.name ?? role).toLowerCase();
 				const label = scopedStorage ? `${scope} ${roleLabel}` : roleLabel;
 				chips.push({
@@ -1266,7 +1314,12 @@ export class ModelHubComponent implements Component {
 
 	#isBrowserView(entry: SidebarEntry): boolean {
 		if (this.#assigning !== null) return true;
-		return entry.kind === "recent" || entry.kind === "all" || (entry.kind === "provider" && !entry.locked);
+		return (
+			entry.kind === "recent" ||
+			entry.kind === "logical" ||
+			entry.kind === "all" ||
+			(entry.kind === "provider" && !entry.locked)
+		);
 	}
 
 	#handleStripInput(data: string): void {
@@ -1627,6 +1680,8 @@ export class ModelHubComponent implements Component {
 					matchCount = this.#searchCounts?.get(entry.providerId ?? "") ?? 0;
 				} else if (entry.kind === "recent") {
 					matchCount = this.#recentSearchCount;
+				} else if (entry.kind === "logical") {
+					matchCount = this.#logicalSearchCount;
 				} else if (entry.kind === "all") {
 					matchCount = this.#searchTotal;
 				}
@@ -1644,7 +1699,7 @@ export class ModelHubComponent implements Component {
 				icon = theme.icon.time;
 			} else if (entry.kind === "roles") {
 				icon = theme.icon.extensionSkill;
-			} else if (entry.kind === "all") {
+			} else if (entry.kind === "all" || entry.kind === "logical") {
 				icon = theme.icon.model;
 			} else {
 				icon = muted ? theme.status.shadowed : theme.status.enabled;
@@ -1714,6 +1769,9 @@ export class ModelHubComponent implements Component {
 				break;
 			case "roles":
 				text = "Model roles — f adds a retry fallback, cleared roles fall back to auto-selection";
+				break;
+			case "logical":
+				text = `${entry.annotation ?? "0"} Logical Models · Enter keeps logical intent and resolves a concrete route`;
 				break;
 			case "provider":
 				if (entry.locked) {
@@ -1816,7 +1874,10 @@ export class ModelHubComponent implements Component {
 			if (assignment && !assignment.autoSelected) {
 				dot = theme.fg(info.color ?? "muted", theme.status.enabled);
 				tagStyled = theme.fg(info.color ?? "muted", tag);
-				value = `${theme.fg("dim", `${assignment.model.provider}/`)}${selected ? theme.fg("accent", assignment.model.id) : assignment.model.id}`;
+				const concrete = `${assignment.model.provider}/${assignment.model.id}`;
+				value = assignment.logicalModelId
+					? `${selected ? theme.fg("accent", assignment.logicalModelId) : assignment.logicalModelId}${theme.fg("dim", ` → ${concrete}`)}`
+					: `${theme.fg("dim", `${assignment.model.provider}/`)}${selected ? theme.fg("accent", assignment.model.id) : assignment.model.id}`;
 				const glyph = thinkingLevelGlyph(assignment.thinkingLevel);
 				const label = getConfiguredThinkingLevelMetadata(assignment.thinkingLevel).label;
 				if (assignment.thinkingLevel !== ThinkingLevel.Inherit) {

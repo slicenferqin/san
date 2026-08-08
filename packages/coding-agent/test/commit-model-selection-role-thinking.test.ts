@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { Effort } from "@san/ai";
 import { getBundledModel } from "@san/catalog/models";
 import { resolvePrimaryModel, resolveSmolModel } from "@san/coding-agent/commit/model-selection";
+import { compileModelRouteRegistry, ModelRouteRegistry } from "@san/coding-agent/config/model-route-registry";
 
 function getModelOrThrow(id: string) {
 	const model = getBundledModel("anthropic", id);
@@ -9,7 +10,7 @@ function getModelOrThrow(id: string) {
 	return model;
 }
 
-function createSettings(modelRoles: Record<string, string>) {
+function createSettings(modelRoles: Record<string, string>, routingEnabled = false) {
 	return {
 		getModelRole(role: string) {
 			return modelRoles[role];
@@ -21,6 +22,7 @@ function createSettings(modelRoles: Record<string, string>) {
 			modelRoles[role] = value;
 		},
 		get(path: string) {
+			if (path === "routing.enabled") return routingEnabled;
 			if (path === "modelRoles") return modelRoles;
 			return undefined;
 		},
@@ -38,6 +40,10 @@ describe("commit role thinking selection", () => {
 		});
 		const registry = {
 			getAvailable: () => [defaultModel, commitModel],
+			getModelRouteRegistry: () => ModelRouteRegistry.empty(),
+			hasConfiguredAuth: () => true,
+			isProviderEnabled: () => true,
+			isSelectorSuppressed: () => false,
 			getApiKey: async () => "test-key",
 			getApiKeyForProvider: async () => "test-key",
 			authStorage: { rotateSessionCredential: async () => false as const },
@@ -51,5 +57,40 @@ describe("commit role thinking selection", () => {
 		const smol = await resolveSmolModel(settings, registry, commitModel, "fallback-key");
 		expect(smol.model.id).toBe(defaultModel.id);
 		expect(smol.thinkingLevel).toBe(Effort.Minimal);
+	});
+
+	it("resolves an explicit logical commit override through the route registry", async () => {
+		const fallbackModel = getModelOrThrow("claude-sonnet-4-5");
+		const commitModel = getModelOrThrow("claude-opus-4-5");
+		const routeRegistry = compileModelRouteRegistry(
+			{
+				"logical-commit": {
+					routes: [
+						{
+							id: "primary",
+							model: `${commitModel.provider}/${commitModel.id}`,
+							equivalence: "exact",
+						},
+					],
+				},
+			},
+			[fallbackModel, commitModel],
+		);
+		const settings = createSettings({}, true);
+		const registry = {
+			getAvailable: () => [fallbackModel, commitModel],
+			getModelRouteRegistry: () => routeRegistry,
+			hasConfiguredAuth: () => true,
+			isProviderEnabled: () => true,
+			isSelectorSuppressed: () => false,
+			getApiKey: async () => "test-key",
+			getApiKeyForProvider: async () => "test-key",
+			authStorage: { rotateSessionCredential: async () => false as const },
+			resolver: () => async () => "test-key",
+		};
+
+		const primary = await resolvePrimaryModel("logical-commit", settings, registry);
+
+		expect(primary.model).toBe(commitModel);
 	});
 });

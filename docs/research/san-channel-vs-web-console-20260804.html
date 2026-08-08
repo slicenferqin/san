@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
+<title>接渠道还是做独立 Web 站｜OpenClaw / Harness 一手核实与 San 判断 · 2026-08-04</title>
+<style>
+:root{--bg:#f4f6f8;--surface:#fff;--surface-2:#eef2f5;--ink:#17212b;--muted:#5c6975;--line:#d6dde3;--accent:#0c6b58;--accent-soft:#dff3ed;--warn:#9a5b00;--warn-soft:#fff1d8;--risk:#9b2c2c;--risk-soft:#fde6e6;--info:#2459a6;--info-soft:#e4edfb;--radius:18px;--shadow:0 16px 40px rgba(20,34,48,.08)}
+@media(prefers-color-scheme:dark){:root{--bg:#101315;--surface:#181c20;--surface-2:#212730;--ink:#eaeff3;--muted:#a3aeb8;--line:#333b44;--accent:#5fc9ac;--accent-soft:#153229;--warn:#e2a95f;--warn-soft:#3a2b13;--risk:#ef9296;--risk-soft:#3d1e20;--info:#7fb2ec;--info-soft:#182b42}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.72 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+a{color:var(--accent);text-underline-offset:3px}
+code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+code{background:var(--surface-2);padding:.12em .38em;border-radius:5px;font-size:.92em}
+pre{margin:14px 0 0;padding:15px 17px;overflow:auto;border:1px solid var(--line);border-radius:12px;background:#101820;color:#e9f0f5;line-height:1.55;font-size:13px}
+.wrapper{max-width:1200px;margin:0 auto;padding:26px 22px 70px}
+.hero{position:relative;overflow:hidden;padding:42px 44px;border-radius:24px;color:#f5fffb;background:linear-gradient(135deg,#082f2a 0%,#0b594b 58%,#123f58 100%);box-shadow:var(--shadow)}
+.hero::after{content:"";position:absolute;width:340px;height:340px;right:-125px;top:-165px;border-radius:50%;border:70px solid rgba(255,255,255,.06)}
+.eyebrow{margin:0 0 10px;font-size:12px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;opacity:.78}
+h1{margin:0;max-width:840px;font-size:clamp(30px,5.2vw,54px);line-height:1.08;letter-spacing:-.03em}
+.hero .lead{max-width:830px;margin:20px 0 0;font-size:17px;line-height:1.7;color:rgba(245,255,251,.87)}
+.hero-meta{display:flex;flex-wrap:wrap;gap:9px;margin-top:24px}
+.pill{display:inline-flex;align-items:center;min-height:29px;padding:5px 11px;border:1px solid rgba(255,255,255,.2);border-radius:999px;background:rgba(255,255,255,.08);font-size:12px;font-weight:700}
+.layout{display:grid;grid-template-columns:232px minmax(0,1fr);gap:26px;margin-top:26px;align-items:start}
+nav{position:sticky;top:16px;padding:18px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);box-shadow:0 8px 28px rgba(20,34,48,.05)}
+nav strong{display:block;margin-bottom:9px;font-size:12px;letter-spacing:.08em;color:var(--muted)}
+nav a{display:block;padding:7px 9px;border-radius:8px;color:var(--ink);text-decoration:none;font-size:13px}
+nav a:hover{background:var(--accent-soft);color:var(--accent)}
+main{min-width:0}
+section{margin-bottom:22px;padding:28px 30px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);box-shadow:0 8px 28px rgba(20,34,48,.045)}
+h2{margin:0 0 16px;font-size:26px;line-height:1.25;letter-spacing:-.02em}
+h3{margin:24px 0 9px;font-size:17px;line-height:1.35}
+p{margin:10px 0}
+ul,ol{margin:10px 0;padding-left:1.3em}
+li+li{margin-top:6px}
+.note{padding:14px 16px;border-radius:11px;border-left:4px solid var(--info);background:var(--info-soft)}
+.note.warn{border-left-color:var(--warn);background:var(--warn-soft)}
+.note.risk{border-left-color:var(--risk);background:var(--risk-soft)}
+.note.ok{border-left-color:var(--accent);background:var(--accent-soft)}
+.note+.note{margin-top:11px}
+.tag{display:inline-block;padding:2px 8px;border-radius:999px;background:var(--surface-2);color:var(--muted);font-size:11px;font-weight:800;letter-spacing:.04em}
+.tag.good{background:var(--accent-soft);color:var(--accent)}
+.tag.warn{background:var(--warn-soft);color:var(--warn)}
+.tag.risk{background:var(--risk-soft);color:var(--risk)}
+.tag.info{background:var(--info-soft);color:var(--info)}
+.table-wrap{overflow-x:auto;margin-top:13px}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:var(--surface-2);font-size:12px;letter-spacing:.03em;text-transform:uppercase;color:var(--muted)}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:14px}
+.card{padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2)}
+.card h4{margin:0 0 7px;font-size:15px}
+.card p{margin:6px 0 0;font-size:13.5px;color:var(--muted)}
+.verdict{padding:22px;border-radius:15px;background:var(--accent-soft);border-left:5px solid var(--accent)}
+.verdict strong{display:block;margin-bottom:7px;color:var(--accent);font-size:21px}
+footer{margin-top:26px;padding:20px 4px;color:var(--muted);font-size:12.5px;text-align:center}
+@media(max-width:900px){.layout{grid-template-columns:1fr}nav{position:static}.hero{padding:32px 26px}}
+</style>
+</head>
+<body>
+<div class="wrapper">
+<header class="hero">
+  <p class="eyebrow">Verified Research · 2026-08-04</p>
+  <h1>接渠道，还是做独立 Web 站？</h1>
+  <p class="lead">对 OpenClaw 与 Harness（Tencent Cloud）做了一手核实，再对照 San 仓库现有代码判断。结论是这个问题问错了方向：两家的"渠道接入"都不是通知层，而是完整交互面；但两家的执行模型都和你"两台电脑 + 一只手机"的场景不同。San 的正确形态既不是纯渠道插件，也不是又一个 Web 站。</p>
+  <div class="hero-meta">
+    <span class="pill">OpenClaw 一手文档核实</span>
+    <span class="pill">Harness / Octop 一手核实</span>
+    <span class="pill">San 仓库代码核实</span>
+    <span class="pill">结论：分层，不二选一</span>
+  </div>
+</header>
+
+<div class="layout">
+<nav>
+  <strong>目录</strong>
+  <a href="#verdict">结论</a>
+  <a href="#openclaw">OpenClaw 实测承担什么</a>
+  <a href="#harness">Harness 栈实测承担什么</a>
+  <a href="#san">San 现有底座</a>
+  <a href="#judgment">判断：分层而非替代</a>
+  <a href="#plan">落地顺序</a>
+  <a href="#risk">风险与反对意见</a>
+  <a href="#evidence">证据清单</a>
+</nav>
+
+<main>
+<section id="verdict">
+  <h2>结论</h2>
+  <div class="verdict">
+    <strong>IM 渠道和 Web 控制台解决不同粒度的问题，San 该做的是第三件事：多主机控制面。</strong>
+    <p>OpenClaw 和 Harness 的渠道接入都被证实是<b>完整交互面</b>（历史、审批、媒体、reply context 全在协议里），不是通知层——所以"接渠道 = 轻量、Web 站 = 重量"这个直觉不成立。但两家的 agent 都跑在 gateway 主机上：一个 Gateway 进程拥有所有会话与执行。你的场景是<b>执行环境分布在公司电脑和家里电脑</b>，控制权跟着人走，这与 gateway-owns-agent 模型正交。</p>
+    <p>San 已经有控制面所需的三件套（ACP server、RPC v2、E2EE collab relay + 浏览器客户端），缺的是常驻 runner、多主机注册、离线排队和推送。先补这四样；Web 控制台是它的第一个消费者；IM 渠道是<b>之后</b>挂在 relay 上的一个薄适配器，而不是让每台电脑各自连飞书。</p>
+  </div>
+</section>
+<section id="openclaw">
+  <h2>OpenClaw 的"渠道"实际承担什么 <span class="tag info">一手核实</span></h2>
+  <p>结论先说：<b>渠道是完整交互面，不是通知层</b>。判断依据是它的协议面而不是宣传语。</p>
+  <h3>架构事实</h3>
+  <ul>
+    <li>单一常驻 <b>Gateway</b> 进程拥有所有消息面（WhatsApp/Telegram/Slack/Discord/Signal/iMessage/WebChat），并且"one Gateway per host"。</li>
+    <li>控制面客户端（macOS app、CLI、Web Control UI、自动化）通过 <b>WebSocket</b> 连 Gateway，默认 <code>127.0.0.1:18789</code>。</li>
+    <li>渠道目录里有 30+ 个条目，绝大多数是 <b>official plugin</b> 按需装，核心只内置 Telegram、Reef 和 WebChat。飞书、WeCom、微信、元宝都在插件层，其中微信和 WeCom 还是 external plugin。</li>
+  </ul>
+  <h3>为什么说它是完整交互面</h3>
+  <p>WebChat 用的 RPC 方法是 <code>chat.history</code> / <code>chat.send</code> / <code>chat.inject</code> / <code>chat.message.get</code>——这套东西的复杂度已经说明问题：</p>
+  <ul>
+    <li><code>chat.history</code> 有<b>有界化</b>逻辑：超长文本截断、重负载元数据剔除、超大条目替换为占位串，客户端可按请求传 <code>maxChars</code> 覆盖；"Show more" 再走 <code>chat.message.get</code> 单条补全。</li>
+    <li>有<b>分支语义</b>：history 跟随 active transcript branch，<code>chat.send</code> 带 <code>expectedLeafEntryId</code> 做乐观并发校验，别的客户端切了分支就把消息 park 住而不是写到错分支。</li>
+    <li>有<b>幂等键</b>：<code>chat.send</code> 带 idempotency key，重试不会产生第二个 run。</li>
+    <li>有<b>reply context 注入</b>：右键 Reply 把目标 transcript id 作为 <code>replyToId</code> 送上去，Gateway 解析出与 Discord 同构的、标注为 untrusted 的 reply 上下文块给 agent。</li>
+    <li>有<b>显示归一化</b>：剥掉 runtime-only 上下文、inbound 信封、<code>[[reply_to_current]]</code> 一类投递指令、泄漏的 tool-call XML 和模型控制 token；<code>NO_REPLY</code> 整条丢弃；<code>isReasoning</code> 载荷不作为可见回复。</li>
+    <li>有<b>双数据路径</b>的明确划分：SQLite transcript 是持久模型日志，Gateway 的 <code>ReplyPayload</code> 事件是投递投影，两者不等同。</li>
+  </ul>
+  <div class="note">通知层不需要分支冲突检测、幂等键和 reply context 注入。这套东西的形状说明 OpenClaw 把 IM 当作与本地 UI 平权的一等交互面。</div>
+  <h3>它怎么跨机器</h3>
+  <ul>
+    <li><b>Node</b> 是外设，不是 gateway：nodes 显式声明 <code>role: "node"</code>，暴露 <code>canvas.*</code> / <code>camera.*</code> / <code>system.*</code> 命令，靠设备签名 + pairing 审批接入。文档原话是 "Nodes are <b>peripherals</b>, not gateways"，渠道消息只落在 gateway 上。</li>
+    <li>要在另一台机器执行命令，用 <b>remote node host</b>：模型仍然和 gateway 说话，gateway 在 <code>host=node</code> 时把 <code>exec</code> 转发到 node host。审批存在 node 本机的 SQLite（<code>exec_approvals_config</code>），走 per-node allowlist。</li>
+    <li>Gateway 默认 bind loopback，远程 node 要 SSH 隧道或 Tailscale 才连得上。</li>
+  </ul>
+  <div class="note warn"><b>关键差异</b>：OpenClaw 是"一个大脑（gateway）+ 多个手脚（node）"。跨机器共享的是<b>执行</b>，不是<b>会话所有权</b>。你的场景恰恰相反——公司电脑和家里电脑各自有完整的、正在跑的、带本机凭据和内网的会话，你要的是控制权漫游。</div>
+  <h3>它对 agent runtime 的态度值得抄</h3>
+  <p>OpenClaw 把 agent runtime 抽象成可插拔后端：内置 openclaw harness、Codex app-server harness（embedded 插件），以及通过 <b>ACP/acpx</b> 接入的一整排外部 harness——<code>claude</code>、<code>codex</code>、<code>copilot</code>、<code>cursor</code>、<code>droid</code>、<code>gemini</code>、<code>kimi</code>、<code>kiro</code>、<code>opencode</code>、<code>qwen</code>、<code>pi</code>…… 还有 <code>openclaw</code> 自己的 ACP bridge。</p>
+  <div class="note ok"><b>这是对 San 最实际的一条情报</b>：San 已经有 <code>san acp</code>（<code>src/commands/acp.ts</code>，<code>--mode acp</code>）。也就是说 <b>San 今天就能作为 acpx 的一个自定义 agent 被 OpenClaw 驱动</b>——通过 <code>plugins.entries.acpx.config.agents.&lt;id&gt;.command</code> 指向 <code>san acp</code>。"接入渠道"这件事的最低成本路径不是自己写飞书适配器，而是让别人的 gateway 来调 San。</div>
+</section>
+
+<section id="harness">
+  <h2>Harness 栈实际承担什么 <span class="tag info">一手核实</span></h2>
+  <p>先纠正一个容易混的命名：<b>Harness 不是一个产品，是 Tencent Cloud 的一组库</b>，组装成品叫 <b>Octop</b>。</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>组件</th><th>PyPI / 仓库</th><th>职责</th></tr></thead>
+    <tbody>
+      <tr><td>harness-agent</td><td><code>orcakit-harness-agent</code> 0.9.18</td><td>agent runtime，本质是 <b>LangChain Deep Agents 的生产化封装</b>——最终委托给 <code>deepagents.create_deep_agent</code></td></tr>
+      <tr><td>harness-gateway</td><td><code>harness-gateway</code> 0.8.8</td><td>多平台 IM 桥，9 个渠道：飞书、钉钉、QQ、WeCom、微信 iLink、元宝、小艺、MQTT、Telegram</td></tr>
+      <tr><td>harness-memory</td><td>TencentCloud/harness-memory</td><td>分层记忆 L0 原始事件 → L2 atom → L3 实体页</td></tr>
+      <tr><td>harness-browser</td><td>TencentCloud/harness-browser</td><td>CDP 浏览器自动化</td></tr>
+      <tr><td>Octop</td><td>TencentCloud/Octop</td><td>把上面四个组装成单进程自托管助手：FastAPI + React 控制台 + CLI + IM + cron，单一 SQLite <code>~/.octop/octop.db</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <h3>它的渠道抽象</h3>
+  <p>核心契约极简：<b>你的处理器是一个 <code>Callable[[InboundMessage], AsyncIterator[MessageEvent]]</code></b>。<code>MessageEvent</code> 分 <code>MESSAGE</code>（整条）/ <code>DELTA</code>（token 流）/ <code>COMPLETED</code>（flush）。<code>ChannelManager</code> 负责 async 队列、每渠道 worker 池、媒体后端（<code>MediaBackend</code>）、约束（限流 / 超时 / 正在输入指示）和主动推送（<code>push_text</code> / <code>push_content</code> / <code>push_to_all</code>）。多租户靠 <code>channel_id</code> 隔离，同一种渠道可以跑多个实例。</p>
+  <div class="note">这层抽象比 OpenClaw 薄得多，但也是<b>完整交互面</b>：有 token 流、有媒体、有 typing 指示、有主动推送。它同样不是通知层。</div>
+  <h3>它的执行模型</h3>
+  <ul>
+    <li>Octop 明确是<b>单进程</b>：dashboard、CLI、IM、cron 全在一个进程里，状态从 <code>~/.octop/octop.db</code> 重建，重启安全。</li>
+    <li>组装根是 <code>OctopServer.start()</code>，顺序拉起 SharedServices → ExpertCatalog → AgentManager（每个 agent 一套 HarnessAgentRuntime + GlobalProcessor + BackendWorkspace）→ Gateway → CronManager → UserManager。</li>
+    <li>跨机器能力靠 <b>pluggable backend</b> 换工作区（本地盘 / S3 / COS / PostgreSQL），而不是靠多主机 runner。</li>
+    <li>它也有 ACP：<code>acp/</code> 目录提供 stdio ACP server，让 IDE / 终端 AI 来驱动它——方向是"被别人调"，和 OpenClaw 的"调别人"互补。</li>
+  </ul>
+  <div class="note warn"><b>关键差异</b>：Octop 是"一台机器上的全能助手"。它连"多主机"这个问题都没进入视野——单进程 + 单 SQLite 是它的显式设计目标。你的两台电脑在这个模型下只能各跑一个互不知情的 Octop。</div>
+  <h3>顺带一个判断</h3>
+  <p>harness-agent 自述是 Deep Agents 的 façade，这意味着它的<b>差异化不在 loop 和上下文</b>，在工程外围（模型路由、17 个服务商预设、记忆、存储后端、安全策略、CLI）。这恰好是 San 的镜像：San 的差异化在 loop 和上下文工程，外围反而靠 omp 基座。两者不构成正面竞争。</p>
+</section>
+
+<section id="san">
+  <h2>San 现有底座：控制面已经有三分之二 <span class="tag good">仓库核实</span></h2>
+  <p>在决定"接渠道还是做 Web 站"之前，先看清 San 手里已有什么。以下都是仓库里跑得通的东西，不是计划。</p>
+  <div class="grid2">
+    <div class="card">
+      <h4>1 · Collab：E2EE 实时会话共享 + 浏览器客户端</h4>
+      <p><code>/collab</code> 已经做到了"手机看电脑上的会话"的雏形：AES-256-GCM 全载荷加密，relay 只看到 room id、连接数、密文帧大小和 4 字节路由前缀。<code>packages/collab-web</code> 是独立浏览器客户端，<b>guest 端不需要装 San</b>，relay 在 <code>/</code> 直接托管它，链接即点即入。</p>
+    </div>
+    <div class="card">
+      <h4>2 · 权限模型已经分级</h4>
+      <p>full link（48 字节：32 字节房间密钥 + 16 字节 write token）可 prompt / 打断 / 操作 Agent Hub；view-only link（裸 32 字节）只读。host 在 join 时校验 write token。变更宿主机的一切（<code>/model</code>、<code>/compact</code>、bash、python）是 host-only。</p>
+    </div>
+    <div class="card">
+      <h4>3 · Relay 已经是 content-blind 的可自托管服务</h4>
+      <p>一个小 Go 服务，除活跃连接外无状态：<code>GET /</code> 托管 web 客户端、<code>GET /r/&lt;roomId&gt;?role=host|guest</code> 升级 WebSocket、<code>POST /s</code> + <code>GET /s/&lt;id&gt;</code> 做 <code>/share</code>、<code>GET /healthz</code>。<b>这就是 Relay 方案的现成骨架。</b></p>
+    </div>
+    <div class="card">
+      <h4>4 · RPC v2：JSON-RPC 2.0 控制协议</h4>
+      <p><code>src/modes/rpc-v2/</code> 已有 envelope / errors / capability / ids、按域分文件的 methods、event catalog、Session / Run / Approval / Context / Evidence DTO、session-manager 的 lease 与 sync，以及 <code>crash-recovery.ts</code> 的 lease + recovery 文件（跟随 session 文件而非源码目录）、<code>backpressure-writer.ts</code> 的有界按序 NDJSON writer 和 stdout 纯净守卫。</p>
+    </div>
+    <div class="card">
+      <h4>5 · ACP server 已就绪</h4>
+      <p><code>san acp</code> / <code>--mode acp</code> 已实现：session/new 工厂、client bridge、event mapper、elicitation 桥接（skill/extension UI → ACP elicitation）、编辑工具的 diff metadata、<code>acp-bridge</code> 写穿透。这让 San 可以被任何 ACP 客户端驱动，包括 OpenClaw 的 acpx。</p>
+    </div>
+    <div class="card">
+      <h4>6 · Hub 拓扑已经是 host 权威</h4>
+      <p>guest 从不互联；<code>entry</code>（持久条目，在 blob 外化前广播，图片保持内联）、<code>event</code>（活事件，仅事件渲染防双渲染）、<code>state</code>（去抖 footer 快照，含 host 完整 model 对象与 thinking level）、<code>bus</code>（子 agent 生命周期）、<code>agents</code>（注册表快照）。guest→host 只有 <code>hello</code>/<code>prompt</code>/<code>abort</code>/<code>agent-cmd</code>/<code>fetch-transcript</code>。</p>
+    </div>
+  </div>
+  <h3>缺什么</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>能力</th><th>现状</th><th>差距</th></tr></thead>
+    <tbody>
+      <tr><td>常驻 runner</td><td><span class="tag risk">缺</span></td><td>collab 是"会话内临时开房"，<code>/collab</code> 必须先有一个人在终端里开着 San。没有开机自启、无人值守的 <code>san runner</code>。</td></tr>
+      <tr><td>多主机注册与发现</td><td><span class="tag risk">缺</span></td><td>relay 只有 room 概念，没有"我有哪几台机器、哪台在线、各自在跑什么"的注册表。</td></tr>
+      <tr><td>离线排队</td><td><span class="tag risk">缺</span></td><td>relay 显式无状态（除活跃连接）。机器离线时派发的任务会丢，不会等它上线。</td></tr>
+      <tr><td>推送通知</td><td><span class="tag risk">缺</span></td><td>没有"任务阻塞等审批 / 已完成"主动触达手机的通路。这正是 IM 渠道最有价值的地方。</td></tr>
+      <tr><td>跨会话总览</td><td><span class="tag warn">部分</span></td><td>Agent Hub 只覆盖单 host 的子 agent；没有跨主机、跨会话的任务看板。</td></tr>
+      <tr><td>渠道适配</td><td><span class="tag risk">缺</span></td><td>零个 IM 渠道。</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="note ok">六项缺口里，<b>只有最后一项是"渠道"问题</b>。前五项无论你接不接飞书都必须做，而且做完之后接渠道是薄薄一层。这就是为什么"接渠道 vs 独立 Web 站"是个伪二选一。</div>
+</section>
+
+<section id="judgment">
+  <h2>判断：分层，不二选一</h2>
+  <h3>先把问题重新定义</h3>
+  <p>你真正的约束是三条，两家的方案都不同时满足：</p>
+  <ol>
+    <li><b>执行必须在原机</b>。公司代码、内网、凭据、已有 worktree 都在公司电脑上；家里电脑有自己的项目。这不是"选一台跑 gateway"能解决的。</li>
+    <li><b>控制权跟人走</b>。在公司用公司电脑的 TUI，回家用家里电脑，路上用手机。同一个会话要能被不同前端接管。</li>
+    <li><b>手机上要的是低带宽介入</b>：看到卡在哪、批一个审批、发一句纠偏。不是在手机上读 diff。</li>
+  </ol>
+  <h3>三层结构</h3>
+  <pre>手机 / 任意浏览器 / 飞书
+        │
+        │  ← 低带宽介入：状态、审批、单句纠偏、通知
+        ▼
+┌───────────────────────────────┐
+│  Relay（自托管，content-blind）│  ← 已有骨架，需加：主机注册表 + 离线队列
+└───────────────────────────────┘
+      ▲                    ▲
+      │ E2EE               │ E2EE
+      │                    │
+┌───────────┐        ┌───────────┐
+│ 公司电脑   │        │ 家里电脑   │
+│ san runner│        │ san runner│  ← 需新建：常驻、无人值守、自注册
+│ + TUI     │        │ + TUI     │
+└───────────┘        └───────────┘
+   本机执行             本机执行</pre>
+  <div class="grid2">
+    <div class="card">
+      <h4>为什么不是"接飞书就完事"</h4>
+      <p>让两台电脑各自连飞书，你会得到两个互不知情的机器人，在同一个群里抢答，且无法回答"哪台在跑什么"。渠道解决<b>触达</b>，不解决<b>编排</b>。而且飞书是<b>公司</b>的 IM——把家里电脑的会话推进公司飞书，边界不干净。</p>
+    </div>
+    <div class="card">
+      <h4>为什么不是"做个 Web 站"</h4>
+      <p>Web 站给不了推送。任务卡在审批上，你不会主动去刷网页。而且 <code>packages/collab-web</code> 已经是 Web 客户端了——真正缺的不是页面，是页面背后的常驻 runner 和主机注册表。再起一个站是在缺口上盖房子。</p>
+    </div>
+    <div class="card">
+      <h4>为什么 relay 是正确的枢纽</h4>
+      <p>它已经 content-blind、已经自托管、已经有 room 语义和 E2EE 帧格式。加"主机注册 + 离线队列"是<b>扩展</b>现有服务，不是新架构。而且 relay 天然是唯一知道"所有机器"的地方——渠道适配器挂在这里，一个适配器覆盖所有主机。</p>
+    </div>
+    <div class="card">
+      <h4>渠道适配器该挂在哪</h4>
+      <p>挂 relay 侧，<b>不</b>挂每台电脑。这样：单点配置、单个机器人身份、天然跨主机路由、E2EE 边界清晰（适配器需要明文，所以它必须是你自己的可信组件，而不是公共 relay 的一部分——这点必须显式设计）。</p>
+    </div>
+  </div>
+  <div class="note risk"><b>必须正面处理的矛盾</b>：现有 relay 的核心卖点是 content-blind——它看不到明文。但 IM 适配器要把内容渲染成飞书消息，<b>必须</b>拿到明文。这意味着渠道适配器不能是 relay 的一个 handler，而应该是一个<b>持有房间密钥的特权 guest 进程</b>，跑在你信任的机器上（比如那台腾讯云服务器）。这样 relay 保持零知识，明文只在你自己的 bridge 里。这个设计约束不解决，"在 relay 上接渠道"就是把 E2EE 白送掉。</div>
+  <h3>与 ACP 的关系</h3>
+  <p>San 已有的 ACP server 提供一条<b>零成本的过渡路径</b>：现在就可以把 <code>san acp</code> 注册进 OpenClaw 的 acpx，用别人成熟的 gateway 和 30+ 渠道，验证"手机介入"这个需求到底值多少。代价是执行落在 OpenClaw gateway 所在的那台机器上——恰好不满足约束 1，所以它只能是<b>需求验证工具</b>，不是终态。</p>
+  <div class="note">先花一天用 acpx 挂上去试，比先花两周写飞书适配器更能回答"这个功能我到底会不会用"。</div>
+</section>
+
+<section id="plan">
+  <h2>落地顺序</h2>
+  <p>按"每一步单独可用"排序，不做大爆炸式改造。</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>#</th><th>动作</th><th>触碰</th><th>单独交付的价值</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>0</b></td>
+        <td>用 acpx 把 <code>san acp</code> 挂进 OpenClaw，从手机上真用几天</td>
+        <td>零改动（配置）</td>
+        <td>用真实使用回答"手机介入值不值得投入"，避免凭想象造功能</td>
+      </tr>
+      <tr>
+        <td><b>1</b></td>
+        <td><code>san runner</code>：常驻、无人值守、开机自启，启动即向 relay 注册 <code>{hostId, label, 能力, 当前会话列表}</code></td>
+        <td>新命令 + relay 注册表</td>
+        <td>两台电脑第一次能被同时看见。此时用现有 collab-web 就能远程接管，无需任何渠道</td>
+      </tr>
+      <tr>
+        <td><b>2</b></td>
+        <td>relay 加主机注册表 + 心跳 + 离线任务队列（仍不解密，队列存密文信封）</td>
+        <td><code>relay/</code></td>
+        <td>公司电脑关机时派活，开机自动接手</td>
+      </tr>
+      <tr>
+        <td><b>3</b></td>
+        <td>扩 collab-web 成多主机控制台：主机列表 / 会话列表 / 审批队列 / 单句纠偏</td>
+        <td><code>packages/collab-web</code></td>
+        <td>手机浏览器就是控制台。这一步之后 Web 站需求已经<b>被满足</b>，不需要新项目</td>
+      </tr>
+      <tr>
+        <td><b>4</b></td>
+        <td>推送：审批阻塞 / 任务完成事件出队 → Web Push 或直接进第 5 步</td>
+        <td>relay + web client</td>
+        <td>不用主动刷</td>
+      </tr>
+      <tr>
+        <td><b>5</b></td>
+        <td><code>san bridge</code>：持房间密钥的特权 guest，跑在腾讯云那台机器上，把明文渲染进 IM</td>
+        <td>新包</td>
+        <td>渠道接入。此时它只是一个 guest 客户端，<b>不改动 relay 的零知识属性</b></td>
+      </tr>
+      <tr>
+        <td><b>6</b></td>
+        <td>第一个渠道选<b>个人可控</b>的（Telegram / 自建 Bot），而非公司飞书</td>
+        <td><code>san bridge</code> 插件</td>
+        <td>先验证协议形状，避开公司数据边界问题</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="note ok"><b>0 和 1 就能解决你 80% 的痛点</b>，且第 1 步不依赖任何渠道决策。真正需要"选路线"的决策被推迟到第 5 步，那时你已经有真实使用数据。</div>
+  <h3>协议形状可以直接抄的部分</h3>
+  <ul>
+    <li><b>抄 OpenClaw 的 <code>chat.history</code> 有界化</b>：手机端带宽和渲染都受限，<code>maxChars</code> + 占位替换 + 单条按需补全这套三段式是被验证过的解法，比"传全量再前端截断"正确。</li>
+    <li><b>抄乐观并发校验</b>：<code>expectedLeafEntryId</code> 解决的问题（多客户端 + 分支切换）在 San 的多主机场景里更严重。San 的 RPC v2 已有 lease，把它和"预期叶节点"合并考虑。</li>
+    <li><b>抄 Harness 的处理器契约</b>：<code>Callable[[Inbound], AsyncIterator[Event]]</code> + <code>MESSAGE</code>/<code>DELTA</code>/<code>COMPLETED</code> 三态。San 的 bridge 插件接口用这个形状，写新渠道就是几十行。</li>
+    <li><b>抄 node pairing 的设备签名 + 审批</b>：runner 自注册必须有身份校验，否则 relay 上任何人都能声称自己是"公司电脑"。</li>
+  </ul>
+</section>
+
+<section id="risk">
+  <h2>风险与反对意见</h2>
+  <div class="note risk"><b>最大风险：E2EE 与渠道渲染的根本冲突</b>。上面用"特权 guest bridge"绕开了，但代价是多一个必须长期在线、持有密钥的组件。如果那台腾讯云服务器被攻破，攻击者拿到的是<b>明文会话流</b>。若不能接受，替代方案是渠道只推<b>不含内容的通知</b>（"会话 X 卡在审批"），点链接跳 Web 控制台看明文——牺牲便利换零明文外泄。这是个真实的取舍，必须显式决定。</div>
+  <div class="note warn"><b>常驻 runner 的安全面</b>。一个开机自启、能被远程派活执行 bash 的进程，等于把两台电脑变成远程执行端点。必须：默认拒绝、per-host allowlist、审批留在本机（照抄 OpenClaw 把 <code>exec_approvals_config</code> 存在 node 本机 SQLite 的做法）、relay 绝不能有绕过审批的通路。</div>
+  <div class="note warn"><b>公司设备边界</b>。公司电脑跑一个常驻远程可控进程，可能违反公司 IT 政策。这是非技术阻塞项，值得先确认再动手第 1 步。</div>
+  <div class="note"><b>"直接用 OpenClaw 就好了"这个反对意见部分成立</b>。如果你能接受把执行集中到一台机器（比如腾讯云服务器上跑 gateway，两台电脑当 node），OpenClaw 今天就能满足你，还白送 30+ 渠道。它不成立的地方只有一处：node 是外设，跑不了"公司电脑上那个已经有完整 worktree 和内网访问的会话"。<b>如果这个约束其实可以放松</b>，那第 1–5 步都不用做。这个前提值得你自己再确认一遍。</div>
+  <div class="note"><b>规模现实</b>：这是一人用的系统。第 2 步的离线队列不要做成消息中间件，SQLite 一张表足够。第 3 步不要引入前端框架，现有 collab-web 的形态就够。任何"为了以后扩展"的抽象在这个规模下都是净负债。</div>
+</section>
+
+<section id="evidence">
+  <h2>证据清单</h2>
+  <h3>一手核实（外部）</h3>
+  <ul>
+    <li><b>OpenClaw</b> — 官方文档与仓库：gateway 单进程 / 一主机一 gateway、控制面 WebSocket <code>127.0.0.1:18789</code>、渠道目录 30+（核心内置仅 Telegram / Reef / WebChat，飞书 WeCom 微信 元宝为插件，微信与 WeCom 为 external）、<code>chat.history</code>/<code>chat.send</code>/<code>chat.inject</code>/<code>chat.message.get</code> 四方法及其有界化、分支 <code>expectedLeafEntryId</code>、idempotency key、<code>replyToId</code> untrusted reply 块、显示归一化与 <code>NO_REPLY</code>、SQLite transcript 与 <code>ReplyPayload</code> 双路径、node "peripherals, not gateways" 与 <code>canvas.*</code>/<code>camera.*</code>/<code>system.*</code>、remote node host 的 <code>host=node</code> exec 转发与 <code>exec_approvals_config</code> 本机审批、loopback 默认绑定、agent runtime 插件化与 acpx 支持的 harness 列表及 <code>plugins.entries.acpx.config.agents.&lt;id&gt;.command</code>。</li>
+    <li><b>Harness / Octop</b>（Tencent Cloud） — <code>orcakit-harness-agent</code> 0.9.18 委托 <code>deepagents.create_deep_agent</code>；<code>harness-gateway</code> 0.8.8 支持飞书 / 钉钉 / QQ / WeCom / 微信 iLink / 元宝 / 小艺 / MQTT / Telegram；处理器契约 <code>Callable[[InboundMessage], AsyncIterator[MessageEvent]]</code> 与 <code>MESSAGE</code>/<code>DELTA</code>/<code>COMPLETED</code>；<code>ChannelManager</code> 的队列 / worker 池 / <code>MediaBackend</code> / 限流超时 typing / <code>push_text</code> <code>push_content</code> <code>push_to_all</code> / <code>channel_id</code> 多租户；harness-memory 的 L0→L2→L3 分层；harness-browser 走 CDP；Octop 单进程 + <code>~/.octop/octop.db</code>、<code>OctopServer.start()</code> 组装顺序、pluggable backend（本地 / S3 / COS / PostgreSQL）、<code>acp/</code> stdio ACP server。</li>
+  </ul>
+  <h3>仓库核实（San）</h3>
+  <ul>
+    <li><code>src/commands/acp.ts</code> 与 <code>--mode acp</code>：ACP session/new 工厂、client bridge、event mapper、elicitation 桥、编辑工具 diff metadata、<code>acp-bridge</code> 写穿透。</li>
+    <li><code>src/modes/rpc-v2/</code>：envelope / errors / capability / ids、按域 methods、event catalog、Session / Run / Approval / Context / Evidence DTO、session-manager lease 与 sync、<code>crash-recovery.ts</code>、<code>backpressure-writer.ts</code>（有界按序 NDJSON + stdout 纯净守卫）。</li>
+    <li>Collab：AES-256-GCM 全载荷加密；relay 仅见 room id / 连接数 / 帧大小 / 4 字节路由前缀；full link 48 字节（32 房间密钥 + 16 write token）vs view-only 32 字节；host 校验 write token；<code>/model</code> <code>/compact</code> bash python 为 host-only；hub 消息 <code>entry</code>/<code>event</code>/<code>state</code>/<code>bus</code>/<code>agents</code>，guest→host 仅 <code>hello</code>/<code>prompt</code>/<code>abort</code>/<code>agent-cmd</code>/<code>fetch-transcript</code>。</li>
+    <li><code>packages/collab-web</code>：独立浏览器 guest 客户端，由 relay 在 <code>/</code> 托管，guest 无需安装 San。</li>
+    <li>Relay 端点：<code>GET /</code>、<code>GET /r/&lt;roomId&gt;?role=host|guest</code>、<code>POST /s</code>、<code>GET /s/&lt;id&gt;</code>、<code>GET /healthz</code>；除活跃连接外无状态。</li>
+  </ul>
+  <div class="note"><b>标注</b>：文中所有架构对比与落地顺序属于基于上述事实的<span class="tag">[INFERENCE]</span>判断。未做的验证：未实际把 <code>san acp</code> 挂进 OpenClaw acpx 跑通（第 0 步本身就是这个验证）；未测 relay 在多主机注册下的行为（该能力尚不存在）。</div>
+</section>
+
+</main>
+</div>
+<footer>San Engineering Research · 2026-08-04 · 一手来源见文末证据清单</footer>
+</div>
+</body>
+</html>

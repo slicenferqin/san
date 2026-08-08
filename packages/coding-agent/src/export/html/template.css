@@ -816,6 +816,23 @@
       font-weight: 600;
     }
 
+    .model-route-change {
+      padding: 0 2px;
+      color: var(--dim);
+      font-size: 11px;
+    }
+
+    .route-change-logical,
+    .route-change-reason,
+    .route-change-cooldown {
+      color: var(--borderAccent, var(--accent));
+      font-weight: 600;
+    }
+
+    .tree-route-change {
+      color: var(--borderAccent);
+    }
+
     /* Compaction / Branch Summary - matches customMessage colors from TUI */
     .compaction {
       background: color-mix(in srgb, var(--customMessageBg, var(--container-bg)) 70%, var(--body-bg));

@@ -11,6 +11,8 @@ import type { AgentSessionEvent } from "../../session/agent-session";
 import type {
 	ContextMaintenanceCompletedData,
 	MessageCompletedData,
+	ModelRouteChangedData,
+	ModelRouteResolvedData,
 	SessionEvent,
 	SessionNoticeData,
 	ToolCompletedData,
@@ -291,6 +293,27 @@ export function adaptSessionEvent(
 				{ model: event.model, role: event.role },
 				{ durability: "durable", runId },
 			);
+
+		case "model_route_resolved": {
+			const data = {
+				logicalModel: sanitizeRpcText(event.logicalModel),
+				routeId: sanitizeRpcText(event.routeId),
+				model: sanitizeRpcText(event.model),
+				reason: event.reason,
+			} satisfies ModelRouteResolvedData;
+			return sequencer.emit("model.route.resolved", data, { durability: "durable", runId });
+		}
+
+		case "model_route_changed": {
+			const data = {
+				logicalModel: sanitizeRpcText(event.logicalModel),
+				fromRoute: sanitizeRpcText(event.fromRoute),
+				toRoute: sanitizeRpcText(event.toRoute),
+				trigger: event.trigger,
+				...(event.cooldownUntil !== undefined && { cooldownUntil: event.cooldownUntil }),
+			} satisfies ModelRouteChangedData;
+			return sequencer.emit("model.route.changed", data, { durability: "durable", runId });
+		}
 
 		// =================================================================
 		// Todo / Goal

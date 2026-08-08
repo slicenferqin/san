@@ -41,6 +41,7 @@ import type { AgentSession, AgentSessionEvent, Prewalk } from "../session/agent-
 import type { ArtifactManager } from "../session/artifacts";
 import type { AuthStorage } from "../session/auth-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
+import { activeModelRouteFromResolution } from "../session/model-route-lease";
 import { SessionManager } from "../session/session-manager";
 import { truncateTail } from "../session/streaming-output";
 import type { ConfiguredThinkingLevel } from "../thinking";
@@ -2312,6 +2313,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				model,
 				thinkingLevel: resolvedThinkingLevel,
 				explicitThinkingLevel,
+				routeResolution,
 				authFallbackUsed,
 				warning: modelResolutionWarning,
 			} = await awaitAbortable(
@@ -2462,6 +2464,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				modelRegistry,
 				settings: subagentSettings,
 				model,
+				initialModelRoute: activeModelRouteFromResolution(routeResolution, "default"),
 				modelPattern: model || modelOverride === undefined ? undefined : modelPatterns,
 				modelPatternAuthFallback:
 					model || modelOverride === undefined ? undefined : options.parentActiveModelPattern,

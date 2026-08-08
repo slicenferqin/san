@@ -217,6 +217,16 @@ interface WorkingMessageAccentCacheKey {
 	sessionAccentEnabled: boolean;
 }
 
+type PlanModeModelState =
+	| { model: Model; thinkingLevel?: ConfiguredThinkingLevel }
+	| {
+			model: Model;
+			thinkingLevel?: ConfiguredThinkingLevel;
+			logicalModelId: string;
+			routeId?: string;
+			role: string;
+	  };
+
 /**
  * Intern the shimmer palettes for each `WorkingMessageAccent` so `compile()`
  * inside `shimmerSegments` sees a stable palette object between animation
@@ -542,8 +552,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#goalTurnHadToolCalls = false;
 	#goalContinuationTurnInFlight = false;
 	#goalSuppressNextContinuation = false;
-	#planModePreviousModelState: { model: Model; thinkingLevel?: ConfiguredThinkingLevel } | undefined;
-	#pendingModelSwitch: { model: Model; thinkingLevel?: ConfiguredThinkingLevel } | undefined;
+	#planModePreviousModelState: PlanModeModelState | undefined;
+	#pendingModelSwitch: PlanModeModelState | undefined;
 	/** Whether #pendingModelSwitch was queued by the live plan-role reconciler. */
 	#pendingPlanModelSwitch = false;
 	#planModeHasEntered = false;
@@ -2087,12 +2097,21 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!resolved.model) return;
 
 		const currentModel = this.session.model;
+		const currentRoute = this.session.activeModelRoute;
 		// Capture the pre-plan model so #exitPlanMode can restore it. Only the
 		// entry path records this — a mid-planning role change (below) leaves the
 		// active model on the plan role, so overwriting here would restore the old
 		// plan model instead of the user's real pre-plan model.
 		this.#planModePreviousModelState = currentModel
-			? { model: currentModel, thinkingLevel: this.session.configuredThinkingLevel() }
+			? currentRoute
+				? {
+						model: currentModel,
+						thinkingLevel: this.session.configuredThinkingLevel(),
+						logicalModelId: currentRoute.logicalModelId,
+						routeId: currentRoute.routeId,
+						role: currentRoute.role,
+					}
+				: { model: currentModel, thinkingLevel: this.session.configuredThinkingLevel() }
 			: undefined;
 
 		await this.#applyPlanModelTransition(currentModel, resolved);
@@ -2141,12 +2160,27 @@ export class InteractiveMode implements InteractiveModeContext {
 				return;
 			case "apply":
 				if (transition.deferred) {
-					this.#pendingModelSwitch = { model: transition.model, thinkingLevel: transition.thinkingLevel };
+					this.#pendingModelSwitch = transition.logicalModelId
+						? {
+								model: transition.model,
+								thinkingLevel: transition.thinkingLevel,
+								logicalModelId: transition.logicalModelId,
+								...(transition.routeId !== undefined && { routeId: transition.routeId }),
+								role: "plan",
+							}
+						: { model: transition.model, thinkingLevel: transition.thinkingLevel };
 					this.#pendingPlanModelSwitch = true;
 					return;
 				}
 				try {
-					await this.session.setModelTemporary(transition.model, transition.thinkingLevel);
+					if (transition.logicalModelId) {
+						await this.session.selectLogicalModel(transition.logicalModelId, "plan", {
+							...(transition.routeId !== undefined && { routeId: transition.routeId }),
+							...(transition.thinkingLevel !== undefined && { thinkingLevel: transition.thinkingLevel }),
+						});
+					} else {
+						await this.session.setModelTemporary(transition.model, transition.thinkingLevel);
+					}
 				} catch (error) {
 					this.showWarning(
 						`Failed to switch to plan model for plan mode: ${error instanceof Error ? error.message : String(error)}`,
@@ -2163,7 +2197,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#pendingPlanModelSwitch = false;
 		if (!pending) return;
 		try {
-			await this.session.setModelTemporary(pending.model, pending.thinkingLevel);
+			if ("logicalModelId" in pending) {
+				await this.session.selectLogicalModel(pending.logicalModelId, pending.role, {
+					...(pending.routeId !== undefined && { routeId: pending.routeId }),
+					...(pending.thinkingLevel !== undefined && { thinkingLevel: pending.thinkingLevel }),
+				});
+			} else {
+				await this.session.setModelTemporary(pending.model, pending.thinkingLevel);
+			}
 		} catch (error) {
 			this.showWarning(
 				`Failed to switch model after streaming: ${error instanceof Error ? error.message : String(error)}`,
@@ -2364,8 +2405,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		};
 	}
 
-	async #restorePlanPreviousModel(prev: { model: Model; thinkingLevel?: ConfiguredThinkingLevel }): Promise<void> {
-		if (modelsAreEqual(this.session.model, prev.model)) {
+	async #restorePlanPreviousModel(prev: PlanModeModelState): Promise<void> {
+		if ("logicalModelId" in prev) {
+			if (this.session.isStreaming) {
+				this.#pendingModelSwitch = prev;
+				this.#pendingPlanModelSwitch = false;
+			} else {
+				await this.session.selectLogicalModel(prev.logicalModelId, prev.role, {
+					...(prev.routeId !== undefined && { routeId: prev.routeId }),
+					...(prev.thinkingLevel !== undefined && { thinkingLevel: prev.thinkingLevel }),
+				});
+			}
+		} else if (modelsAreEqual(this.session.model, prev.model)) {
 			// Same model — only thinking level may differ. Avoid setModelTemporary()
 			// which would reset provider-side sessions and break continuity.
 			this.session.setThinkingLevel(prev.thinkingLevel);

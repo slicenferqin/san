@@ -8,17 +8,27 @@ import * as path from "node:path";
 import type { AgentMessage, AgentTool } from "@san/agent";
 import type { ImageContent, TextContent } from "@san/ai";
 import { ModelRegistry } from "@san/coding-agent/config/model-registry";
-import { discoverAndLoadExtensions, ExtensionRuntime } from "@san/coding-agent/extensibility/extensions/loader";
+import type {
+	ExtensionError,
+	ExtensionFactory,
+	ModelRouteChangedEvent,
+	ModelRouteResolvedEvent,
+} from "@san/coding-agent/extensibility/extensions";
+import {
+	discoverAndLoadExtensions,
+	ExtensionRuntime,
+	loadExtensionFromFactory,
+} from "@san/coding-agent/extensibility/extensions/loader";
 import {
 	EXTENSION_HANDLER_TIMEOUT_MS,
 	ExtensionRunner,
 	testSetExtensionHandlerTimeoutMs,
 } from "@san/coding-agent/extensibility/extensions/runner";
-import type { ExtensionError } from "@san/coding-agent/extensibility/extensions/types";
 import { ExtensionToolWrapper } from "@san/coding-agent/extensibility/extensions/wrapper";
 import { Type } from "@san/coding-agent/extensibility/typebox";
 import { AuthStorage } from "@san/coding-agent/session/auth-storage";
 import { SessionManager } from "@san/coding-agent/session/session-manager";
+import { EventBus } from "@san/coding-agent/utils/event-bus";
 import { getProjectAgentDir, logger, TempDir } from "@san/utils";
 
 describe("ExtensionRunner", () => {
@@ -1718,6 +1728,43 @@ describe("ExtensionRunner", () => {
 
 			expect(runner.hasHandlers("tool_call")).toBe(true);
 			expect(runner.hasHandlers("agent_end")).toBe(false);
+		});
+	});
+
+	describe("model route events", () => {
+		it("exposes typed payloads and dispatches both route lifecycle events", async () => {
+			const events: Array<ModelRouteResolvedEvent | ModelRouteChangedEvent> = [];
+			const factory: ExtensionFactory = pi => {
+				pi.on("model_route_resolved", event => {
+					events.push(event);
+				});
+				pi.on("model_route_changed", event => {
+					events.push(event);
+				});
+			};
+			const runtime = new ExtensionRuntime();
+			const extension = await loadExtensionFromFactory(factory, tempDir.path(), new EventBus(), runtime);
+			const runner = new ExtensionRunner([extension], runtime, tempDir.path(), sessionManager, modelRegistry);
+			const resolvedEvent = {
+				type: "model_route_resolved",
+				logicalModel: "default",
+				routeId: "primary",
+				model: "openai/gpt-5.6",
+				reason: "primary",
+			} satisfies ModelRouteResolvedEvent;
+			const changedEvent = {
+				type: "model_route_changed",
+				logicalModel: "default",
+				fromRoute: "primary",
+				toRoute: "fallback",
+				trigger: "rate_limit",
+				cooldownUntil: 1_800_000_000_000,
+			} satisfies ModelRouteChangedEvent;
+
+			await runner.emit(resolvedEvent);
+			await runner.emit(changedEvent);
+
+			expect(events).toEqual([resolvedEvent, changedEvent]);
 		});
 	});
 

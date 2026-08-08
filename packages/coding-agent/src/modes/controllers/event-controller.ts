@@ -145,6 +145,8 @@ export class EventController {
 			auto_retry_end: e => this.#handleAutoRetryEnd(e),
 			retry_fallback_applied: e => this.#handleRetryFallbackApplied(e),
 			retry_fallback_succeeded: e => this.#handleRetryFallbackSucceeded(e),
+			model_route_resolved: e => this.#handleModelRouteResolved(e),
+			model_route_changed: e => this.#handleModelRouteChanged(e),
 			ttsr_triggered: e => this.#handleTtsrTriggered(e),
 			todo_reminder: e => this.#handleTodoReminder(e),
 			todo_auto_clear: e => this.#handleTodoAutoClear(e),
@@ -1341,6 +1343,25 @@ export class EventController {
 		event: Extract<AgentSessionEvent, { type: "retry_fallback_succeeded" }>,
 	): Promise<void> {
 		this.ctx.showStatus(`Fallback succeeded on ${event.model}`);
+	}
+
+	async #handleModelRouteResolved(
+		_event: Extract<AgentSessionEvent, { type: "model_route_resolved" }>,
+	): Promise<void> {
+		this.ctx.statusLine.invalidate();
+		this.ctx.updateEditorBorderColor();
+		this.ctx.ui.requestRender();
+	}
+
+	async #handleModelRouteChanged(event: Extract<AgentSessionEvent, { type: "model_route_changed" }>): Promise<void> {
+		this.ctx.statusLine.invalidate();
+		this.ctx.updateEditorBorderColor();
+		this.ctx.showWarning(
+			previewLine(
+				`Route fallback: ${event.logicalModel} ${event.fromRoute} -> ${event.toRoute} (${event.trigger})`,
+				TRUNCATE_LENGTHS.LINE,
+			),
+		);
 	}
 
 	async #handleTtsrTriggered(event: Extract<AgentSessionEvent, { type: "ttsr_triggered" }>): Promise<void> {

@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Logical Model Routing Phase 0–1 详细修复计划</title>
+	<style>
+		:root {
+			color-scheme: dark;
+			--bg: #08111f;
+			--panel: #101c2f;
+			--panel-2: #172740;
+			--panel-3: #0b1627;
+			--line: #30435f;
+			--text: #eef4ff;
+			--muted: #afbed3;
+			--blue: #83bdff;
+			--cyan: #71dbe6;
+			--green: #6edbb0;
+			--amber: #f4cc76;
+			--red: #ff929b;
+			--purple: #c5adff;
+			--max: 1240px;
+		}
+		* { box-sizing: border-box; }
+		html { scroll-behavior: smooth; }
+		body {
+			margin: 0;
+			font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			line-height: 1.68;
+			color: var(--text);
+			background:
+				radial-gradient(circle at 10% 0%, rgba(76, 135, 230, .21), transparent 34rem),
+				radial-gradient(circle at 92% 5%, rgba(113, 219, 230, .10), transparent 30rem),
+				var(--bg);
+		}
+		main { width: min(var(--max), calc(100% - 32px)); margin: 0 auto; padding: 42px 0 76px; }
+		a { color: var(--blue); text-decoration: none; }
+		a:hover, a:focus-visible { text-decoration: underline; }
+		h1, h2, h3, h4 { line-height: 1.26; letter-spacing: -.018em; }
+		h1 { max-width: 1080px; margin: 10px 0 16px; font-size: clamp(2rem, 5vw, 3.45rem); }
+		h2 { margin: 52px 0 18px; font-size: clamp(1.45rem, 3vw, 2.05rem); }
+		h3 { margin: 26px 0 10px; font-size: 1.24rem; }
+		h4 { margin: 17px 0 8px; font-size: 1rem; color: #dce9fb; }
+		p { margin: 8px 0 14px; }
+		ul, ol { padding-left: 1.35rem; }
+		li + li { margin-top: 5px; }
+		code {
+			font: .9em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+			color: #dcecff;
+			background: rgba(131, 189, 255, .09);
+			border: 1px solid rgba(131, 189, 255, .16);
+			padding: .08rem .32rem;
+			border-radius: 5px;
+			overflow-wrap: anywhere;
+		}
+		pre { margin: 11px 0; padding: 15px; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: #070e19; color: #d8e8fb; font: .86rem/1.58 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+		pre code { padding: 0; border: 0; background: transparent; color: inherit; }
+		.eyebrow { color: var(--green); font-size: .79rem; font-weight: 780; letter-spacing: .09em; text-transform: uppercase; }
+		.lead { max-width: 1080px; color: #ced9ea; font-size: clamp(1.03rem, 2vw, 1.2rem); }
+		.meta, .jump, .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+		.tag { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: rgba(16, 28, 47, .85); color: var(--muted); font-size: .88rem; }
+		.jump { margin: 24px 0 0; }
+		.jump a { padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: rgba(16, 28, 47, .72); }
+		.callout { margin: 24px 0; padding: 20px 22px; border: 1px solid rgba(110, 219, 176, .35); border-left: 5px solid var(--green); border-radius: 12px; background: linear-gradient(135deg, rgba(110, 219, 176, .10), rgba(16, 28, 47, .9)); }
+		.callout.risk { border-color: rgba(255, 146, 155, .38); border-left-color: var(--red); background: linear-gradient(135deg, rgba(255, 146, 155, .10), rgba(16, 28, 47, .9)); }
+		.callout.warn { border-color: rgba(244, 204, 118, .38); border-left-color: var(--amber); background: linear-gradient(135deg, rgba(244, 204, 118, .09), rgba(16, 28, 47, .9)); }
+		.grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
+		.card { grid-column: span 6; padding: 18px; border: 1px solid var(--line); border-radius: 13px; background: rgba(16, 28, 47, .9); }
+		.card.full { grid-column: 1 / -1; }
+		.card.third { grid-column: span 4; }
+		.card h3 { margin-top: 0; }
+		.small { color: var(--muted); font-size: .89rem; }
+		.risk-text { color: var(--red); }
+		.warn-text { color: var(--amber); }
+		.good { color: var(--green); }
+		.cyan { color: var(--cyan); }
+		.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 13px; }
+		table { width: 100%; min-width: 880px; border-collapse: collapse; background: rgba(16, 28, 47, .91); }
+		th, td { padding: 11px 13px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+		th { color: #d7e4f7; background: var(--panel-2); font-size: .79rem; letter-spacing: .045em; text-transform: uppercase; }
+		tr:last-child td { border-bottom: 0; }
+		.status { display: inline-block; padding: 2px 8px; border: 1px solid currentColor; border-radius: 999px; white-space: nowrap; font-size: .78rem; font-weight: 760; }
+		.status.high { color: var(--red); }
+		.status.medium { color: var(--amber); }
+		.status.track { color: var(--cyan); }
+		.track-flow { display: grid; grid-template-columns: repeat(6, 1fr); gap: 9px; margin: 20px 0; }
+		.step { position: relative; min-height: 120px; padding: 13px; border: 1px solid var(--line); border-top: 4px solid var(--blue); border-radius: 10px; background: var(--panel); }
+		.step:nth-child(2) { border-top-color: var(--red); }
+		.step:nth-child(3) { border-top-color: var(--purple); }
+		.step:nth-child(4) { border-top-color: var(--amber); }
+		.step:nth-child(5) { border-top-color: var(--cyan); }
+		.step:nth-child(6) { border-top-color: var(--green); }
+		.step strong { display: block; margin-bottom: 5px; }
+		.remediation { margin: 20px 0; border: 1px solid var(--line); border-radius: 15px; background: rgba(16, 28, 47, .93); overflow: hidden; }
+		.remediation.high { border-top: 4px solid var(--red); }
+		.remediation.medium { border-top: 4px solid var(--amber); }
+		.remediation > header { padding: 20px 21px 13px; background: linear-gradient(115deg, rgba(23, 39, 64, .95), rgba(16, 28, 47, .94)); }
+		.remediation > header h3 { margin: 0; }
+		.remediation-body { padding: 3px 21px 21px; }
+		.plan-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+		.plan-box { padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-3); }
+		.plan-box h4 { margin-top: 0; color: var(--cyan); }
+		.gate { padding: 14px; border: 1px solid rgba(110, 219, 176, .32); border-radius: 10px; background: rgba(110, 219, 176, .055); }
+		.rollback { padding: 14px; border: 1px solid rgba(255, 146, 155, .32); border-radius: 10px; background: rgba(255, 146, 155, .055); }
+		.command-label { margin: 13px 0 3px; color: var(--muted); font-size: .82rem; font-weight: 760; letter-spacing: .045em; text-transform: uppercase; }
+		.checks { list-style: none; padding: 0; }
+		.checks li { position: relative; padding-left: 1.5rem; }
+		.checks li::before { content: "□"; position: absolute; left: 0; color: var(--green); font-weight: 800; }
+		footer { margin-top: 54px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: .87rem; }
+		@media (max-width: 980px) {
+			.card, .card.third { grid-column: 1 / -1; }
+			.track-flow { grid-template-columns: 1fr 1fr; }
+			.plan-grid { grid-template-columns: 1fr; }
+		}
+		@media (max-width: 560px) {
+			main { width: min(100% - 22px, var(--max)); padding-top: 27px; }
+			.track-flow { grid-template-columns: 1fr; }
+		}
+		@media print {
+			:root { color-scheme: light; }
+			body { color: #182235; background: #fff; }
+			.card, .remediation, .plan-box, table, .step { color: #182235; background: #fff; }
+			th { color: #182235; background: #eef2f8; }
+			.small, .tag { color: #4c596b; }
+			a { color: #165ca8; }
+		}
+	</style>
+</head>
+<body>
+<main>
+	<header>
+		<div class="eyebrow">Detailed remediation plan · 2026-08-07</div>
+		<h1>Logical Model Routing<br>Phase 0–1 详细修复计划</h1>
+		<p class="lead">针对最终 HEAD <code>1de79dc98fe40c8037bfe0263a3b11f6b1f807a0</code> 的五项 source-verified finding，给出最小源修改、兼容/迁移行为、可观察合同测试、实施顺序、验证命令、回滚标准与完成门。另设完全独立的 baseline full-suite 修复轨。</p>
+		<div class="meta">
+			<span class="tag">范围：Phase 0–1 only</span>
+			<span class="tag">高 / P1：2</span>
+			<span class="tag">中 / P2：3</span>
+			<span class="tag">当前发布判定：NO-GO</span>
+			<span class="tag">Phase 2–4：明确不实施</span>
+		</div>
+		<nav class="jump" aria-label="文档导航">
+			<a href="#principles">原则与顺序</a>
+			<a href="#rem-lmr-01">LMR-01</a>
+			<a href="#rem-lmr-02">LMR-02</a>
+			<a href="#rem-lmr-03">LMR-03</a>
+			<a href="#rem-lmr-04">LMR-04</a>
+			<a href="#rem-lmr-05">LMR-05</a>
+			<a href="#baseline-suite-track">Baseline suite</a>
+			<a href="#final-gates">最终门禁</a>
+			<a href="logical-model-routing-phase0-1-contract-review-20260807.html">合同审查</a>
+			<a href="san-logical-model-routing-spec-20260804.html">权威 Spec</a>
+		</nav>
+	</header>
+
+	<section id="scope">
+		<h2>一、修复目标与硬边界</h2>
+		<div class="callout risk">
+			<strong class="risk-text">目标不是扩展功能，而是让已承诺的 Phase 0–1 合同成立。</strong>
+			完成后，同 ID route 的配置更新在请求边界正确重绑；billing override 成为 effective model 的成本；route change 在本地 tree/HTML 可审计；逻辑 picker 以整组 eligibility 判断上下文；配置只接受运行时可能执行的 fallback 类别；独立 package full suite 退出 0。
+		</div>
+		<div class="grid">
+			<div class="card">
+				<h3>必须保持</h3>
+				<ul>
+					<li><code>provider/model</code> exact concrete 永久绕过 logical resolver。</li>
+					<li>无 <code>logicalModels</code> / routing disabled 的行为与 session 兼容。</li>
+					<li>Logical Model intent 与 concrete route lease 分层；route switch 不改 harness profile。</li>
+					<li>每次 concrete target 切换继续走统一 provider session reset 入口。</li>
+					<li>RPC/Extension 采用现有 event 名与加法式可选字段，不创建第二协议。</li>
+				</ul>
+			</div>
+			<div class="card">
+				<h3>明确不做</h3>
+				<ul>
+					<li>不持久化 circuit/failure counters，不实现 half-open single-flight。</li>
+					<li>不做 Route Inspector、pin/drain、route health database 或 route-level perf 产品化。</li>
+					<li>不按 catalog 或 billing 自动排序；Phase 1 仍只信显式 priority/config order。</li>
+					<li>不引入 weighted/random routing、SLA policy、质量学习或 effort 自适应。</li>
+					<li>不自动迁移 fallbackChains，不自动把同 ID provider 归组。</li>
+				</ul>
+			</div>
+		</div>
+		<p>合同来源：<a href="san-logical-model-routing-spec-20260804.html">权威 Spec</a> 的 Phase 0/1、兼容策略与版本完成定义。缺陷详情与当前证据：<a href="logical-model-routing-phase0-1-contract-review-20260807.html">合同审查</a>。</p>
+	</section>
+
+	<section id="principles">
+		<h2>二、实施原则、依赖与总顺序</h2>
+		<ol>
+			<li><strong>以当前 registry snapshot 为真：</strong>route ID 只是稳定 identity，不代表 target 永远不变；policy version 与 model selector 共同决定 lease 是否需要重绑。</li>
+			<li><strong>effective model 单一流向：</strong>选中 route 后，执行、usage、预算、UI/RPC 汇总必须观察同一个 route-local Model；不得在多个 accounting consumer 各自补丁。</li>
+			<li><strong>一个 eligibility resolver：</strong>picker 不复制 context/auth/capability 判断；把当前请求约束传给现有 resolver。</li>
+			<li><strong>持久 entry 必有 reader：</strong>新增 session union variant 时，TUI tree、HTML tree/search、HTML transcript 与 filter 都必须显式处理。</li>
+			<li><strong>配置先失败：</strong>运行时出于安全永不执行的 policy 值，必须在配置路径上明确拒绝。</li>
+			<li><strong>不掩盖 baseline：</strong>web-search full-suite failure 独立修复，不允许 skip、过滤或归因给 routing。</li>
+		</ol>
+		<div class="track-flow" aria-label="推荐实施顺序">
+			<div class="step"><strong>1 · LMR-05</strong><span class="small">收紧配置输入，先固定 policy 合同。</span></div>
+			<div class="step"><strong>2 · LMR-01</strong><span class="small">修复请求边界的 lease/current registry 一致性。</span></div>
+			<div class="step"><strong>3 · LMR-02</strong><span class="small">建立 route-local effective model 与统一成本流。</span></div>
+			<div class="step"><strong>4 · LMR-04</strong><span class="small">复用 resolver 修正 Alt+P 上下文可选性。</span></div>
+			<div class="step"><strong>5 · LMR-03</strong><span class="small">补齐所有持久 reader 与导出。</span></div>
+			<div class="step"><strong>6 · Gates</strong><span class="small">焦点合同 → 本地体验 → baseline track → full suite。</span></div>
+		</div>
+		<p class="small">LMR-01 与 LMR-02 在代码上可独立实现；以上顺序用于降低调试歧义。Baseline suite track 可与路由轨并行，但最终门禁必须汇合。</p>
+	</section>
+
+	<section id="routing-track">
+		<h2>三、Routing 修复轨</h2>
+
+		<article class="remediation high" id="rem-lmr-01">
+			<header>
+				<div class="chips"><span class="status high">高 / P1</span><span class="tag">LMR-01</span><span class="tag">顺序 2</span></div>
+				<h3>配置热更新后重绑定 active route lease</h3>
+			</header>
+			<div class="remediation-body">
+				<div class="plan-grid">
+					<div class="plan-box"><h4>根因</h4><p><code>AgentSession.#ensurePromptModelRoute</code> 把“当前 registry 中同 route ID eligible”误当成“旧 active lease 仍指向同 target”；API key 检查使用旧 lease + 旧 model。<code>ModelRouteLeaseController.recover</code> 又在新 resolution 的 route ID 相同时提前返回。已有 <code>policyVersion</code>/<code>modelSelector</code> 没有参与 freshness 判断。</p></div>
+					<div class="plan-box"><h4>精确文件 / symbol</h4><ul><li><code>src/session/agent-session.ts</code>：<code>#ensurePromptModelRoute</code>（当前 <code>18390–18474</code>）、统一切换段 <code>18435–18468</code>。</li><li><code>src/session/model-route-lease.ts</code>：<code>ActiveModelRoute</code>、<code>activeRoute</code>、<code>recover</code>（<code>10–17, 42–56, 185–218</code>）。</li><li>测试：<code>test/model-route-lease.test.ts</code>、<code>test/sdk-logical-model-routing.test.ts</code>。</li></ul></div>
+					<div class="plan-box"><h4>最小源修改</h4><ol><li>在 lease controller 增加一个明确的 <em>reconcile/rebind current snapshot</em> 操作，或等价地扩展 recovery，但不得受 <code>policy.revert</code> 限制。</li><li>用当前 group resolution 比较：<code>active.policyVersion !== resolution.policyVersion</code>，或同 ID compiled route 的 <code>modelSelector !== active.modelSelector</code>。任一为真即视为 stale。</li><li>用当前 request constraints 重新解析；相同 route ID 但新 selector 也必须返回 selection，更新 active lease 的 selector/version，同时保留原 <code>role</code> 与已选定的 <code>harnessProfile</code>。</li><li><code>AgentSession</code> 在下一 provider 请求前完成 API-key 检查、metadata refresh、<code>#setModelWithProviderSessionReset</code>、thinking reapply 和 sync；失败则恢复 transition snapshot。</li><li>成功后发出包含新 model selector 的现有 <code>model_route_resolved</code>；session context 保持 logical intent，不追加会伪装成用户切模的普通 <code>model_change</code>。</li></ol></div>
+					<div class="plan-box"><h4>兼容 / 迁移行为</h4><ul><li>没有 config refresh 时无行为变化，不增加每 turn 的 catalog 扫描，只比较小型 group snapshot。</li><li>流式在途请求继续使用开始时的旧 model；只在下一请求边界重绑，符合 Phase 0 原子快照约束。</li><li>相同 ID + 相同 selector、仅无关配置版本变化时可刷新 lease version 而不 reset transport；相同 ID + selector/transport target 变化必须 reset。</li><li>旧 session 只保存 route ID，恢复逻辑仍把它作为 affinity；不需要迁移 JSONL。</li></ul></div>
+					<div class="plan-box"><h4>可观察合同测试</h4><ul class="checks"><li>Controller：registry V1 <code>main→provider/a</code>，V2 <code>main→provider/b</code>，route ID 相同；reconcile 返回 B，active selector/version 更新。</li><li>AgentSession：活动 logical lease 后热更新模型配置；下一 prompt 只调用 B，A 不再被调用，provider session reset 恰好发生一次。</li><li>请求边界：更新发生于一次流式请求期间，该请求仍由 A 完成；下一用户 turn 才用 B。</li><li>同 ID/同 selector 的无关 policy refresh 不做无意义 provider reset，但 active policy version 对齐。</li><li>B 无鉴权/不满足 context 时，resolver 选择下一 eligible route；全不可用时列出当前 trace，不静默回旧 A。</li><li>resolved event、activeModelRoute 与 RPC snapshot 最终都指向 B。</li></ul></div>
+					<div class="plan-box"><h4>依赖 / 实施顺序</h4><p>依赖现有 registry <code>policyVersion</code> 单调递增与 <code>#captureModelRouteTransition</code> 回滚语义；不依赖 LMR-02/03/04。建议在 LMR-05 固定 policy 输入后实施，随后再让 billing effective model 复用同一 selection 流。</p></div>
+				</div>
+				<div class="command-label">Focused verification</div>
+				<pre><code>cd packages/coding-agent
+bun test test/model-route-lease.test.ts test/sdk-logical-model-routing.test.ts</code></pre>
+				<div class="plan-grid">
+					<div class="rollback"><h4>回滚标准</h4><p>若修复导致请求在流式响应中途切 provider、相同 snapshot 每 turn reset session、harness profile 随 registry reload 改变、旧 concrete-only session 被纳入 logical reconcile，立即回滚该实现并保留失败测试。</p></div>
+					<div class="gate"><h4>完成门</h4><p>同 ID target change 的失败复现转绿；下一请求只到新 target；active lease version/selector 与 registry 一致；无配置刷新和 concrete-only 路径无新增 reset；失败路径可解释并可回滚。</p></div>
+				</div>
+			</div>
+		</article>
+
+		<article class="remediation high" id="rem-lmr-02">
+			<header>
+				<div class="chips"><span class="status high">高 / P1</span><span class="tag">LMR-02</span><span class="tag">顺序 3</span></div>
+				<h3>把 billing override 应用到 route-local effective model</h3>
+			</header>
+			<div class="remediation-body">
+				<div class="plan-grid">
+					<div class="plan-box"><h4>根因</h4><p>compiler 将 billing 作为旁路 metadata 保存，却把原 catalog <code>model</code> 原样放入 compiled route。所有 provider、Agent 硬预算与 usage consumer 只读 <code>Model.cost</code>，没有任何下游读取 <code>route.billing</code>，所以覆盖永远不生效。</p></div>
+					<div class="plan-box"><h4>精确文件 / symbol</h4><ul><li><code>src/config/model-route-registry.ts</code>：<code>CompiledModelRoute</code>（<code>27–37</code>）、<code>compileModelRouteRegistry</code>（<code>115–163</code>，尤其 <code>130–149</code>）。</li><li><code>src/config/model-routes-schema.ts</code>：<code>ModelRouteBillingSchema:13–19</code>、finite validation <code>116–122</code>。</li><li><code>src/sdk.ts</code>：hard cost calculation <code>2996–3015</code>、actual usage accumulation <code>3070–3074</code>（验证对象，不应补第二份 override 逻辑）。</li><li>测试：<code>test/model-route-registry.test.ts</code>、<code>test/sdk-logical-model-routing.test.ts</code>。</li></ul></div>
+					<div class="plan-box"><h4>最小源修改</h4><ol><li>在编译每条 route 时构造 <code>effectiveModel</code>：无 billing 时复用原 catalog model；有 override 时创建 route-local immutable Model，复制所有 transport/capability/thinking 字段，仅把 <code>cost</code> 替换为四个 override 值。</li><li><code>CompiledModelRoute.model</code> 指向 effective model；<code>modelSelector</code> 仍保持原 <code>provider/id</code>，<code>billing</code> metadata 可保留用于解释来源。</li><li>不得原地修改 catalog model 或共享 cost object；同一 concrete model 在其他非 route/其他 route 上继续使用自身价格。</li><li>resolver/lease/AgentSession 不增加 accounting 分支：它们已有统一 <code>selection.model</code> 流，确保 provider <code>calculateCost</code> 与 <code>maxTotalCost</code> 自然读到 effective cost。</li><li>对 provider 返回 authoritative charge 或 service-tier multiplier 保持现有后处理顺序；override 是基础单价，不应再次在 session/RPC consumer 乘价。</li></ol></div>
+					<div class="plan-box"><h4>兼容 / 迁移行为</h4><ul><li>没有 <code>billing</code> 的 route 与所有 concrete 模型字节/对象行为不变。</li><li>已有 billing 配置从“被静默忽略”变为真正生效；这会纠正历史错误汇总和预算行为，是有意的运行时修正，不回写旧 session 历史 usage。</li><li>旧 session 里已经记录的 <code>usage.cost</code> 保持不可变；只对修复后的新 provider response 生效。</li><li>若外部 RPC 客户端依赖错误的旧费用数值，不提供兼容开关；发布说明应明确该 bug fix，但不引入 schema migration。</li></ul></div>
+					<div class="plan-box"><h4>可观察合同测试</h4><ul class="checks"><li>编译：override route 的 <code>route.model.cost</code> 精确等于配置，原 catalog model cost 未变，对照无 override route 未克隆/未改变。</li><li>选择：<code>ModelRouteLeaseController.select/failover</code> 返回 effective model，selector 与 capability 仍正确。</li><li>usage：固定 token 数的 mock provider response 产生按 override 计算的 input/output/cacheRead/cacheWrite/total。</li><li>硬预算：catalog 低价、override 高价时 <code>maxTotalCost</code> 按高价截断；反向场景不被 catalog 高价过早截断。</li><li>汇总：session stats、footer/HTML 输入和 RPC usage analytics 观察同一个 assistant <code>usage.cost</code>，不重复应用 override。</li><li>route switch：primary/backup 各自 override，在 failover 后下一 response 使用 backup 单价。</li></ul></div>
+					<div class="plan-box"><h4>依赖 / 实施顺序</h4><p>应在 LMR-01 的 selection/rebind 流稳定后落地，使 config reload 后的新 target 同时带上自己的 effective price。无需改 provider API 或 RPC DTO；下游只需回归测试。</p></div>
+				</div>
+				<div class="command-label">Focused verification</div>
+				<pre><code>cd packages/coding-agent
+bun test test/model-route-registry.test.ts test/model-route-lease.test.ts test/sdk-logical-model-routing.test.ts</code></pre>
+				<div class="plan-grid">
+					<div class="rollback"><h4>回滚标准</h4><p>若 catalog model 被全局突变、provider-specific authoritative cost 被二次覆盖/重复乘价、无 billing 路径产生对象身份或行为回归、hard budget 与最终 usage 使用不同单价，立即回滚并保留最小 failing fixture。</p></div>
+					<div class="gate"><h4>完成门</h4><p>override 从 selected model 一直贯穿 provider usage 与 hard budget；四个成本分量和 total 正确；原 catalog/其他 route 隔离；无 override 与 concrete-only 路径完全不变。</p></div>
+				</div>
+			</div>
+		</article>
+
+		<article class="remediation medium" id="rem-lmr-03">
+			<header>
+				<div class="chips"><span class="status medium">中 / P2</span><span class="tag">LMR-03</span><span class="tag">顺序 5</span></div>
+				<h3>完整渲染 model_route_change 持久审计记录</h3>
+			</header>
+			<div class="remediation-body">
+				<div class="plan-grid">
+					<div class="plan-box"><h4>根因</h4><p><code>ModelRouteChangeEntry</code> 已进入 session union 和 persistence，但既有 reader 的 exhaustive switch 没有同步扩展。TUI 显示默认返回空，HTML 主 dispatcher 返回空；搜索索引也没有字段。</p></div>
+					<div class="plan-box"><h4>精确文件 / symbol</h4><ul><li><code>src/modes/components/tree-selector.ts</code>：<code>#applyFilter:273–339</code>、<code>#getSearchableText:355–407</code>、<code>#getEntryDisplayText:600–688</code>。</li><li><code>src/export/html/template.js</code>：<code>getSearchableText:303–337</code>、<code>getTreeNodeDisplayHtml:480–544</code>、<code>renderEntry:1023–1170</code>，以及内部 CSS class。</li><li><code>src/session/session-entries.ts</code>：只作为权威 payload，<code>83–91</code>；无需改 entry schema。</li><li>测试：新增 <code>test/modes/components/tree-selector-model-route-change.test.ts</code> 与 <code>test/export-html-model-route-change.test.ts</code>。</li></ul></div>
+					<div class="plan-box"><h4>最小源修改</h4><ol><li>TUI searchable text 明确加入 <code>route</code>、logical model、from/to、reason 与可选 cooldown。</li><li>TUI display 生成非空、单行、可截断文本，例如 <code>[route: logical primary → backup · rate_limit]</code>；所有值沿用现有 terminal sanitize/normalize 边界。</li><li>filter 明确把该类型定义为 operational audit：默认与 <code>no-tools</code> 可见，<code>user-only</code> 不可见，<code>all</code> 可见，<code>labeled-only</code> 仍按 label。</li><li>HTML tree search 与 tree label 添加同样字段并用 <code>escapeHtml</code>；主 transcript render 为独立、带 timestamp/id 的 route-change block，包含 logical/from/to/reason 和可选 cooldown。</li><li>仅加内部 CSS；无脚本依赖、无外部 asset，不修改已持久 entry 格式。</li></ol></div>
+					<div class="plan-box"><h4>兼容 / 迁移行为</h4><ul><li>现有 JSONL 无需迁移；旧 route-change entry 重新导出即可出现。</li><li>其他 entry 的 filter 和渲染不变；默认视图新增一条真实 operational row，这是修复空白行而非噪声扩展。</li><li>HTML 是静态导出，所有 session 值必须 HTML escape；不得把 route ID/model 作为未转义 markup。</li><li>RPC event 与 DTO 不改；本修复只补仓库内持久 reader。</li></ul></div>
+					<div class="plan-box"><h4>可观察合同测试</h4><ul class="checks"><li>TreeSelector 默认/all/no-tools 渲染非空，user-only 排除；搜索 logical、from route、to route、reason 均命中。</li><li>含换行、tab、<code>&lt;script&gt;</code> 的恶意字段不破坏 TUI/HTML，不产生可执行 markup。</li><li>cooldown 缺失时不显示 <code>undefined</code>；存在时以明确时间/epoch 语义输出。</li><li>HTML tree 与主 transcript 都只出现一条对应 audit，含 logical/from/to/reason；其它消息不回归。</li><li>完整 fallback session 导出后可在文本中找到同一 route change，且链接/entry id 可定位。</li></ul></div>
+					<div class="plan-box"><h4>依赖 / 实施顺序</h4><p>不依赖 core routing 修复；安排在最后是为了让 LMR-01 的 rebind 可观察语义先稳定。若同 ID target rebind 只发 <code>model_route_resolved</code> 而不追加 route-change entry，本项仍只渲染现有 entry，不扩大 persistence contract。</p></div>
+				</div>
+				<div class="command-label">Focused verification</div>
+				<pre><code>cd packages/coding-agent
+bun test test/modes/components/tree-selector-model-route-change.test.ts test/export-html-model-route-change.test.ts</code></pre>
+				<div class="plan-grid">
+					<div class="rollback"><h4>回滚标准</h4><p>若新 renderer 允许 HTML 注入、改变其他 entry 的默认 filter、重复输出相同 audit、把 model_route_change 当 user message 发给 LLM，立即回滚。</p></div>
+					<div class="gate"><h4>完成门</h4><p>真实 route fallback 产生的 entry 在 <code>/tree</code>、tree search、HTML tree 和 HTML transcript 均非空、可解释、安全转义；RPC 不变；旧 session 可直接重新导出。</p></div>
+				</div>
+			</div>
+		</article>
+
+		<article class="remediation medium" id="rem-lmr-04">
+			<header>
+				<div class="chips"><span class="status medium">中 / P2</span><span class="tag">LMR-04</span><span class="tag">顺序 4</span></div>
+				<h3>按 logical group eligibility 判断 Alt+P 上下文可选性</h3>
+			</header>
+			<div class="remediation-body">
+				<div class="plan-grid">
+					<div class="plan-box"><h4>根因</h4><p>Alt+P 已把 <code>currentContextTokens</code> 交给 ModelBrowser，但 <code>buildLogicalBrowserItems</code> 不接收该约束，resolver 先选 primary/active 代表模型。<code>#isDisabled</code> 随后把代表模型的 context window 当作整个 logical group 的上限，复制出与核心 resolver 不同的 eligibility。</p></div>
+					<div class="plan-box"><h4>精确文件 / symbol</h4><ul><li><code>src/modes/components/model-browser.ts</code>：<code>buildLogicalBrowserItems:167–217</code>、<code>ModelBrowserItem:65–74</code>、<code>#isDisabled:560–565</code>。</li><li><code>src/modes/components/model-picker.ts</code>：options <code>35–48</code>、constructor <code>84–123</code>、<code>#syncFromRegistryState:144–176</code>。</li><li><code>src/modes/components/model-hub.ts</code>：现有无上下文 assignment caller（当前约 <code>350–366</code>），应保持默认行为。</li><li>测试：<code>test/model-browser.test.ts</code>，必要时追加 picker contract fixture。</li></ul></div>
+					<div class="plan-box"><h4>最小源修改</h4><ol><li>给 <code>buildLogicalBrowserItems</code> 增加可选 resolution constraints（至少 <code>requiredContextTokens</code>；不要新写 eligibility 算法）。</li><li>ModelPicker 保存/传入已规范化的 <code>currentContextTokens</code>；函数把它传给现有 <code>routeRegistry.resolve</code>，并继续同时传 suppression/auth/provider availability。</li><li>只有 active route 在该 resolution trace 中仍 eligible 时才作为 representative；否则使用 resolver 选出的 eligible backup。</li><li>若任一 route 可用，logical item 的 effective representative/model 必须使 <code>#isDisabled</code> 返回 false，并确保 activation 仍传 logical selector，而非强制 concrete backup。</li><li>若无 route 可满足 context，整组禁用；提示应描述 logical group 无 eligible route，而不是只声称 primary 的 window 是整组上限。</li><li>ModelHub 的 role assignment caller不传 context，保持当前全局配置体验。</li></ol></div>
+					<div class="plan-box"><h4>兼容 / 迁移行为</h4><ul><li>只影响 session-switch picker 的逻辑条目 eligibility；concrete row 和 ModelHub 全局 assignment 不变。</li><li>逻辑 selector 仍是 group ID；选中 128k backup 不把 role/session intent 改成 concrete selector。</li><li>排序仍由 explicit priority + resolver eligibility 决定，不引入 max-context 优先或成本排序。</li><li>auth/suppression/unknown equivalence 继续使用同一 resolver；不能只取 group 的最大 context window绕过这些条件。</li></ul></div>
+					<div class="plan-box"><h4>可观察合同测试</h4><ul class="checks"><li>8k primary + 128k backup + 16k current context：logical row 可选，representative/active target 为 backup，onActivate selector 仍为 logical ID。</li><li>两条 route 都小于 16k：整组禁用，Enter 不触发 callback，提示无 eligible route。</li><li>128k backup 无 auth/被 suppress：不能用它“解锁”整组；trace/禁用一致。</li><li>active 8k route 在 16k session 中不压过 eligible 128k resolution；active 仍 eligible 时保持 affinity 展示。</li><li>concrete row 的 context 禁用、ModelHub assignment 与搜索/MRU 排序不回归。</li></ul></div>
+					<div class="plan-box"><h4>依赖 / 实施顺序</h4><p>依赖已有 resolver 的 <code>requiredContextTokens</code> 和 eligibility trace，不依赖 LMR-01/02。放在 core 修复后验证，确保 UI 最终选择与 AgentSession 当前 contract 相同。</p></div>
+				</div>
+				<div class="command-label">Focused verification</div>
+				<pre><code>cd packages/coding-agent
+bun test test/model-browser.test.ts test/model-route-resolver.test.ts</code></pre>
+				<div class="plan-grid">
+					<div class="rollback"><h4>回滚标准</h4><p>若 UI 通过取最大 context 绕过 auth/suppression/equivalence、activation 持久化成 concrete selector、ModelHub 角色配置受当前 session context 限制，立即回滚。</p></div>
+					<div class="gate"><h4>完成门</h4><p>任一 eligible backup 能承载当前 context 时 logical row 可选并保留 logical intent；全组无 eligible route 时才禁用；UI 与核心 resolver 对相同 constraints 选择一致。</p></div>
+				</div>
+			</div>
+		</article>
+
+		<article class="remediation medium" id="rem-lmr-05">
+			<header>
+				<div class="chips"><span class="status medium">中 / P2</span><span class="tag">LMR-05</span><span class="tag">顺序 1</span></div>
+				<h3>拒绝运行时永不执行的 fallbackOn 类别</h3>
+			</header>
+			<div class="remediation-body">
+				<div class="plan-grid">
+					<div class="plan-box"><h4>根因</h4><p>同一个宽泛 <code>RouteFailureCategory</code> 同时承担“分类/事件全集”和“可配置 replay policy 子集”。schema 允许全集，runtime 又硬编码禁止 <code>refusal</code>、<code>user_abort</code>、<code>context_overflow</code>，形成成功加载但永不生效的 policy。</p></div>
+					<div class="plan-box"><h4>精确文件 / symbol</h4><ul><li><code>src/config/model-routes-schema.ts</code>：<code>RouteFailureCategorySchema:7–11</code>、<code>ModelRoutePolicySchema:21–26</code>、<code>validateLogicalModelsConfiguration:75–108</code>。</li><li><code>src/config/model-route-registry.ts</code>：<code>DEFAULT_ROUTE_FALLBACK_ON:11–18</code>、<code>CompiledModelRoutePolicy:20–25</code>、<code>compileRoutePolicy:61–67</code>。</li><li><code>src/session/model-route-lease.ts</code>：<code>resolveFallbackDecision:139–160</code>（安全 defense-in-depth 保留）。</li><li>测试：<code>test/model-route-registry.test.ts</code>、<code>test/model-route-lease.test.ts</code>。</li></ul></div>
+					<div class="plan-box"><h4>最小源修改</h4><ol><li>保留完整 <code>RouteFailureCategory</code> 供 error classification、session entry 与 RPC event 使用。</li><li>新增窄类型/ArkType schema（例如 <code>RouteFallbackCategory</code>），只包含运行时允许的 policy categories；<code>fallbackOn</code> 与 compiled policy 使用该类型。</li><li>明确排除 <code>refusal</code>、<code>user_abort</code>、<code>context_overflow</code>。现有 default 数组本来不含这些值，默认不变。</li><li>custom validator 对非法项抛 <code>ModelRouteConfigurationError</code>，路径精确到 <code>logicalModels.&lt;id&gt;.policy.fallbackOn[index]</code>，问题文本说明 unsafe/non-replayable。</li><li>runtime 的三类硬禁止继续保留，作为 defense-in-depth；不要为了让 schema“诚实”而放开危险 replay。</li></ol></div>
+					<div class="plan-box"><h4>兼容 / 迁移行为</h4><ul><li>默认 policy 与所有实际可执行的现有配置不变。</li><li>已有列出三个禁止值的配置将从“成功但 no-op”变为启动/刷新明确失败；这是有意的验证收紧。</li><li>迁移方式是删除禁止项，并使用 compaction/user action/现有 cross-model 行为处理相应错误；不自动改写配置。</li><li>RPC 的 <code>trigger: RouteFailureCategory</code> 保持宽类型，因为事件分类合同不是 policy 配置合同。</li></ul></div>
+					<div class="plan-box"><h4>可观察合同测试</h4><ul class="checks"><li>分别配置 refusal/user_abort/context_overflow，每项都在正确 index 路径失败；混在允许项中也定位到对应 index。</li><li>rate_limit、quota、timeout、network、server_error、model_unavailable 继续接受并可 fallback。</li><li>auth_failed/invalid_request 的可配置语义必须与当前 runtime 实际允许集合逐项锁定；测试确保 schema 集合与 controller 行为没有差集。</li><li>重复 allowed category 仍报原有 duplicate 路径；default policy 数组不变。</li><li>runtime defense-in-depth 对手工构造的宽类型输入仍返回 not_allowed。</li></ul></div>
+					<div class="plan-box"><h4>依赖 / 实施顺序</h4><p>无代码依赖，建议最先实施以固定后续 fallback 测试的输入合同。若 ArkType 在 custom validator 前拦截导致路径不精确，应在 parse/validator 边界设计单一错误路径，不能接受模糊顶层错误。</p></div>
+				</div>
+				<div class="command-label">Focused verification</div>
+				<pre><code>cd packages/coding-agent
+bun test test/model-route-registry.test.ts test/model-route-lease.test.ts</code></pre>
+				<div class="plan-grid">
+					<div class="rollback"><h4>回滚标准</h4><p>若收紧意外改变 RPC event trigger 类型、默认 policy、允许类别，或错误只显示顶层 schema 而没有精确 index，回滚具体实现并保留窄类型设计/失败测试。</p></div>
+					<div class="gate"><h4>完成门</h4><p>配置可接受集合与 runtime 可能执行集合完全一致；三个 unsafe 类别逐项 fail fast 且路径精确；runtime 安全禁止仍存在；默认与 allowed policy 无回归。</p></div>
+				</div>
+			</div>
+		</article>
+	</section>
+
+	<section id="baseline-suite-track">
+		<h2>四、Baseline Suite Repair Track（与 routing 分离）</h2>
+		<div class="callout warn">
+			<strong class="warn-text">已知事实，不预判根因：</strong>精确 HEAD 上的 package full suite 运行 106 chunks、360.56s 后退出 1；唯一可见失败是 <code>test/tools/web-search-browser-headers.test.ts:33–54</code> 的隔离子进程 import/fallback 测试，期望 exit 0，实际 exit 1。该路径与 logical routing 无关，但 release gate 仍被阻断。
+		</div>
+		<div class="grid">
+			<div class="card third">
+				<h3>已知定位</h3>
+				<ul>
+					<li>测试：<code>test/tools/web-search-browser-headers.test.ts:33–54</code></li>
+					<li>实现：<code>src/web/search/providers/browser-headers.ts:1–24, 91–108</code></li>
+					<li>失败 chunk：native/tooling/browser/unit <code>52/58</code></li>
+					<li>chunk 结果：89 pass / 26 skip / 1 fail</li>
+				</ul>
+			</div>
+			<div class="card third">
+				<h3>诊断顺序</h3>
+				<ol>
+					<li>单独重跑失败测试，保留 child stdout/stderr 与 exit code。</li>
+					<li>确认失败发生于 import alias、<code>bun:test</code> mock 安装、dependency data lookup，还是 fallback 调用；不凭当前 assertion 猜测。</li>
+					<li>用与 full-suite 相同 cwd、<code>--no-install</code>、Bun 版本复现。</li>
+					<li>只修已证明根因；不得 skip、放宽 exit assertion 或吞掉真实 import error。</li>
+				</ol>
+			</div>
+			<div class="card third">
+				<h3>兼容目标</h3>
+				<ul>
+					<li>无 header-generator data files 时模块 clean import 并返回稳定 fallback headers。</li>
+					<li>randomization disabled 的固定 Mac Chrome profile 不变。</li>
+					<li>data 可用时 randomized path 仍使用 generator。</li>
+					<li>测试隔离不污染同进程其他依赖。</li>
+				</ul>
+			</div>
+		</div>
+		<h3>Baseline track 可观察测试与命令</h3>
+		<pre><code>cd packages/coding-agent
+bun test --parallel=1 test/tools/web-search-browser-headers.test.ts
+
+# 焦点通过后，回到同一 package 运行精确发布门禁：
+bun run test</code></pre>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>项</th><th>要求</th></tr></thead>
+				<tbody>
+					<tr><td>最小修改</td><td>在捕获 stderr 后才能决定；候选文件仅限上述 test/implementation 与经证据证明的 package export 配置。当前计划不把任何候选当成已确认根因。</td></tr>
+					<tr><td>Routing 隔离</td><td>Baseline commit/patch 不触碰 model route schema、registry、resolver、lease、session、TUI/RPC routing 文件；routing 验证也不得过滤这项测试。</td></tr>
+					<tr><td>回滚标准</td><td>若修复依赖本机现存 data_files、允许 installer/network、改变真实 randomized headers、或仅把 assertion 变宽而 child 仍 exit 1，回滚。</td></tr>
+					<tr><td>完成门</td><td>焦点测试在同 cwd/参数下退出 0，fallback 值精确匹配；随后完整 <code>bun run test</code> 退出 0。只有 full suite 绿，独立发布门才关闭。</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section id="combined-tests">
+		<h2>五、组合验证顺序与命令</h2>
+		<p>每个 finding 的焦点复现先独立转绿，再运行跨层 routing contract 集合；最后才运行 package full suite。下列命令是未来修复阶段的验收计划，本次只读文档任务没有执行。</p>
+		<div class="command-label">Routing cross-layer contract set</div>
+		<pre><code>cd packages/coding-agent
+bun test \
+  test/model-route-registry.test.ts \
+  test/model-route-resolver.test.ts \
+  test/model-route-lease.test.ts \
+  test/sdk-logical-model-routing.test.ts \
+  test/agent-session-retry-fallback.test.ts \
+  test/model-browser.test.ts \
+  test/modes/components/tree-selector-model-route-change.test.ts \
+  test/export-html-model-route-change.test.ts \
+  test/extensions-runner.test.ts \
+  src/modes/rpc-v2/event-adapter.test.ts</code></pre>
+		<div class="command-label">Focused baseline then final package gate</div>
+		<pre><code>cd packages/coding-agent
+bun test --parallel=1 test/tools/web-search-browser-headers.test.ts
+bun run test</code></pre>
+		<div class="callout"><strong>结果记录要求：</strong>保存分支、commit、初始 cleanliness、精确命令、exit code、duration、pass/fail/skip/chunk 汇总与每个失败 excerpt。任何焦点通过都不能替代最终 package full suite。</div>
+	</section>
+
+	<section id="manual-acceptance">
+		<h2>六、修复后的本地体验验收</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>旅程</th><th>操作</th><th>必须观察</th><th>失败归属</th></tr></thead>
+				<tbody>
+					<tr><td>零配置</td><td>不提供 <code>logicalModels</code> 启动、选择 concrete、resume。</td><td>模型 UI、selector precedence、session 与 fallback 无变化。</td><td>兼容回归，阻断发布。</td></tr>
+					<tr><td>Logical selection</td><td>配置三条 route，打开 <code>/models</code> 与 Alt+P，选择 logical ID。</td><td>显示 logical/current concrete/backup count；role/session 保存 logical ID。</td><td>Phase 1 UI 合同。</td></tr>
+					<tr><td>长上下文</td><td>8k primary + 128k backup，制造 16k context，再开 Alt+P。</td><td>logical row 可选；选后 route 为 128k backup，intent 仍为 logical。</td><td>LMR-04。</td></tr>
+					<tr><td>热更新</td><td>活动 <code>main→A</code>；配置改为同 ID <code>main→B</code>；发下一 turn。</td><td>当前流不被中断；下一请求仅到 B；provider session reset；active snapshot/RPC 为 B。</td><td>LMR-01。</td></tr>
+					<tr><td>Fallback 审计</td><td>让 primary 429/模型不可用并切 backup；打开 <code>/tree</code>、搜索 reason、导出 HTML。</td><td>四个视图都含 logical/from/to/reason/cooldown，不出现空白行。</td><td>LMR-03。</td></tr>
+					<tr><td>Billing</td><td>为 A/B 配不同 override，分别完成 turn 与 fallback，设置接近边界的 hard cost cap。</td><td>usage/footer/HTML/RPC/预算按各自 override，catalog concrete price 未受影响。</td><td>LMR-02。</td></tr>
+					<tr><td>非法 policy</td><td>分别配置三个 unsafe <code>fallbackOn</code> 值。</td><td>启动/refresh 立即失败并显示精确 index 路径；allowed values 正常。</td><td>LMR-05。</td></tr>
+					<tr><td>SDK / RPC</td><td>SDK resume；RPC v2 subscribe + snapshot；旧 concrete client path。</td><td>resolved/changed event 与 snapshot 一致；新增字段加法式；旧 concrete 路径可用。</td><td>兼容门禁。</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section id="final-gates">
+		<h2>七、最终完成门与发布决定</h2>
+		<div class="grid">
+			<div class="card full">
+				<h3>Phase 0–1 completion gate</h3>
+				<ul class="checks">
+					<li>LMR-01：同 ID 新 target 在下一请求边界重绑，旧 target 不再被调用。</li>
+					<li>LMR-02：billing override 成为 selected effective model 的 cost，并贯穿 usage 与 hard budget。</li>
+					<li>LMR-03：route-change entry 在 TUI/HTML search、tree、transcript 完整且安全渲染。</li>
+					<li>LMR-04：任一 eligible backup 能承载 context 时 logical row 可选，仍保存 logical intent。</li>
+					<li>LMR-05：配置可接受 fallback 类别与 runtime 可执行集合相同，unsafe 值精确 fail fast。</li>
+					<li>配置、解析、auth、capability、fallback、安全 replay、resume、UI、SDK、RPC 的 observable contract tests 通过。</li>
+					<li>本地体验表逐项通过；无 Logical Model 的 concrete-only 行为无回归。</li>
+					<li>独立 web-search baseline failure 已按根因修复，未 skip/豁免。</li>
+					<li>精确 <code>packages/coding-agent</code> <code>bun run test</code> 退出 0。</li>
+					<li>没有夹带 Phase 2–4 功能、第二套 resolver/accounting/event 协议或自动迁移。</li>
+				</ul>
+			</div>
+		</div>
+		<div class="callout risk"><strong class="risk-text">Rollback / stop-ship 总标准：</strong>任一修复导致 concrete-only 行为变化、unsafe replay、流中切 route、catalog model 全局突变、费用重复计算、HTML 注入、logical intent 丢失、RPC wire 破坏，或最终 full suite 非零，均保持 NO-GO；不得以“与 routing 无关”为由绕过全量门禁。</div>
+		<div class="callout"><strong>可发布条件：</strong>以上所有门同时关闭后，才可把<a href="logical-model-routing-phase0-1-contract-review-20260807.html">合同审查</a>中的 Phase 0–1 verdict 从 NO-GO 更新为 PASS。任何单项焦点测试、静态类型通过或 routing suite 通过都不足以单独发布。</div>
+	</section>
+
+	<footer>
+		<p>生成日期：2026-08-07。配套：<a href="logical-model-routing-phase0-1-contract-review-20260807.html">Phase 0–1 合同审查</a>；权威：<a href="san-logical-model-routing-spec-20260804.html">San Logical Model Routing Spec 2026-08-04</a>。</p>
+		<p><strong>只读确认：</strong>本次物化工作未修改 source、tests、config、patches、lockfiles 或其他文档，也未运行测试、格式化、lint、安装、生成器或 git mutation；仅写入合同允许的两份 HTML。</p>
+	</footer>
+</main>
+</body>
+</html>

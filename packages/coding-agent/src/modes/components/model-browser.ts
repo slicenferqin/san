@@ -16,12 +16,14 @@ import {
 	fuzzyRank,
 	Input,
 	matchesKey,
+	replaceTabs,
 	ScrollView,
 	type SgrMouseEvent,
 	truncateToWidth,
 	visibleWidth,
 } from "@san/tui";
 import { formatNumber } from "@san/utils";
+import type { ModelRegistry } from "../../config/model-registry";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../../config/model-resolver";
 import { getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS } from "../../config/model-roles";
 import type { Settings } from "../../config/settings";
@@ -36,12 +38,39 @@ import {
 	matchesSelectUp,
 } from "../utils/keybinding-matchers";
 
-/** One selectable row. `selector` is a canonical model key or host-specific virtual key. */
+export interface ActiveLogicalRouteSummary {
+	logicalModelId: string;
+	routeId: string;
+	modelSelector: string;
+}
+
+export interface LogicalModelRouteDisplay {
+	logicalModelId: string;
+	name: string;
+	currentRouteId?: string;
+	currentModelSelector?: string;
+	routes: ReadonlyArray<{
+		id: string;
+		modelSelector: string;
+		priority: number;
+		enabled: boolean;
+		equivalence: "exact" | "compatible" | "unknown";
+	}>;
+}
+
+function sanitizeLogicalDisplay(value: string): string {
+	return replaceTabs(value).replace(/[\r\n]+/g, " ");
+}
+
+/** One selectable row. `selector` is a canonical model key, Logical Model ID, or host-specific virtual key. */
 export interface ModelBrowserItem {
 	provider: string;
 	id: string;
 	model: Model;
 	selector: string;
+	logicalRoute?: LogicalModelRouteDisplay;
+	/** Set when the logical group has no route eligible under the current resolution constraints. */
+	noEligibleRoute?: boolean;
 	/** Optional foreground color for the row label. */
 	labelColor?: ThemeColor;
 }
@@ -52,6 +81,8 @@ export interface RoleAssignment {
 	thinkingLevel: ConfiguredThinkingLevel;
 	/** True when the role has no configured value and fell back to auto-selection. */
 	autoSelected: boolean;
+	logicalModelId?: string;
+	routeId?: string;
 }
 
 /** Map of role id to its resolved assignment (absent roles are unresolved). */
@@ -67,6 +98,7 @@ export function resolveRoleAssignments(
 	settings: Settings,
 	allModels: ReadonlyArray<Model>,
 	autoCandidates: ReadonlyArray<Model>,
+	modelRegistry?: ModelRegistry,
 ): RoleAssignments {
 	const resolvedThinkingLevel = (
 		role: string,
@@ -91,12 +123,14 @@ export function resolveRoleAssignments(
 		const roleValue = settings.getModelRole(role);
 		if (!roleValue) continue;
 		configuredRoles.add(role);
-		const resolved = resolveModelRoleValue(roleValue, catalog, { settings, matchPreferences });
+		const resolved = resolveModelRoleValue(roleValue, catalog, { settings, matchPreferences, modelRegistry });
 		if (resolved.model) {
 			roles[role] = {
 				model: resolved.model,
 				thinkingLevel: resolvedThinkingLevel(role, resolved),
 				autoSelected: false,
+				...(resolved.logicalModelId !== undefined && { logicalModelId: resolved.logicalModelId }),
+				...(resolved.routeId !== undefined && { routeId: resolved.routeId }),
 			};
 		}
 	}
@@ -128,6 +162,81 @@ export function buildBrowserItems(models: ReadonlyArray<Model>): ModelBrowserIte
 	}));
 }
 
+/**
+ * Optional constraints forwarded to the logical route resolver when projecting
+ * a Route Group. Mirrors the picker-relevant subset of `ModelRouteResolutionRequest`;
+ * eligibility is decided solely by the existing resolver (auth, suppression,
+ * provider availability, equivalence, and context window all apply).
+ */
+export interface LogicalBrowserResolutionConstraints {
+	/** Session token count; routes with a smaller context window are ineligible. */
+	requiredContextTokens?: number;
+}
+
+export function buildLogicalBrowserItems(
+	settings: Settings,
+	modelRegistry: ModelRegistry,
+	activeRoute?: ActiveLogicalRouteSummary,
+	constraints: LogicalBrowserResolutionConstraints = {},
+): ModelBrowserItem[] {
+	if (!settings.get("routing.enabled")) return [];
+	const routeRegistry = modelRegistry.getModelRouteRegistry();
+	const items: ModelBrowserItem[] = [];
+	for (const group of routeRegistry.getAll()) {
+		const suppressedRouteIds = new Set(
+			group.routes.filter(route => modelRegistry.isSelectorSuppressed(route.modelSelector)).map(route => route.id),
+		);
+		const resolution = routeRegistry.resolve(group.id, {
+			...(suppressedRouteIds.size > 0 && { suppressedRouteIds }),
+			...(constraints.requiredContextTokens !== undefined && {
+				requiredContextTokens: constraints.requiredContextTokens,
+			}),
+			hasAuth: route => modelRegistry.hasConfiguredAuth(route.model),
+			isAvailable: route => modelRegistry.isProviderEnabled(route.model.provider),
+		});
+		const activeForGroup = activeRoute?.logicalModelId === group.id ? activeRoute : undefined;
+		const activeCompiledRoute = activeForGroup ? routeRegistry.getRoute(group.id, activeForGroup.routeId) : undefined;
+		// The active lease is only a valid representative while it stays eligible
+		// in the same resolution trace; otherwise the resolver's eligible backup
+		// (or none at all) decides the row's model/context and selectability.
+		const activeEligible =
+			activeCompiledRoute !== undefined &&
+			resolution?.trace.some(entry => entry.routeId === activeCompiledRoute.id && entry.eligible) === true;
+		const representative = activeEligible ? activeCompiledRoute : (resolution?.route ?? group.routes[0]);
+		if (!representative) continue;
+		items.push({
+			provider: "logical",
+			id: group.id,
+			model: representative.model,
+			selector: group.id,
+			...(resolution?.route === undefined && { noEligibleRoute: true }),
+			logicalRoute: {
+				logicalModelId: group.id,
+				name: group.name,
+				...(activeForGroup
+					? {
+							currentRouteId: activeForGroup.routeId,
+							currentModelSelector: activeForGroup.modelSelector,
+						}
+					: resolution?.route
+						? {
+								currentRouteId: resolution.route.id,
+								currentModelSelector: resolution.route.modelSelector,
+							}
+						: {}),
+				routes: group.routes.map(route => ({
+					id: route.id,
+					modelSelector: route.modelSelector,
+					priority: route.priority,
+					enabled: route.enabled,
+					equivalence: route.equivalence,
+				})),
+			},
+		});
+	}
+	return items;
+}
+
 /** Extract the first version number from a model ID (e.g. "gemini-2.5-pro" → 2.5, "claude-sonnet-4-6" → 4.6). */
 function extractVersionNumber(id: string): number {
 	// Dot-separated version: "gemini-2.5-pro" → 2.5
@@ -142,12 +251,18 @@ function extractVersionNumber(id: string): number {
 	return 0;
 }
 
+function assignmentMatchesItem(assignment: RoleAssignment, item: ModelBrowserItem): boolean {
+	if (item.logicalRoute) return assignment.logicalModelId === item.logicalRoute.logicalModelId;
+	if (assignment.logicalModelId) return false;
+	return modelsAreEqual(assignment.model, item.model);
+}
+
 /** Rank a model by the first built-in role it is assigned to (lower = earlier role). */
-function computeModelRank(model: Model, roles: RoleAssignments): number {
+function computeModelRank(item: ModelBrowserItem, roles: RoleAssignments): number {
 	let i = 0;
 	while (i < MODEL_ROLE_IDS.length) {
 		const assigned = roles[MODEL_ROLE_IDS[i]];
-		if (assigned && modelsAreEqual(assigned.model, model)) {
+		if (assigned && assignmentMatchesItem(assigned, item)) {
 			break;
 		}
 		i++;
@@ -180,8 +295,8 @@ export function sortModelItems(items: ModelBrowserItem[], options: SortModelItem
 
 	items.sort((a, b) => {
 		if (!skipRoleRank) {
-			const aRank = computeModelRank(a.model, roles);
-			const bRank = computeModelRank(b.model, roles);
+			const aRank = computeModelRank(a, roles);
+			const bRank = computeModelRank(b, roles);
 			if (aRank !== bRank) return aRank - bRank;
 		}
 
@@ -464,6 +579,10 @@ export class ModelBrowser implements Component {
 
 	#isDisabled(item: ModelBrowserItem): boolean {
 		if (item.id === "separator") return true;
+		// A logical group with no resolver-eligible route is unselectable in
+		// context-sensitive (session-switch) mode; other modes keep the row
+		// enabled exactly as before.
+		if (item.noEligibleRoute) return this.#disableOverContext;
 		if (!this.#disableOverContext || this.#currentContextTokens <= 0) return false;
 		const contextWindow = item.model.contextWindow ?? 0;
 		return contextWindow > 0 && this.#currentContextTokens > contextWindow;
@@ -535,7 +654,7 @@ export class ModelBrowser implements Component {
 		if (this.#mruOrder.includes(item.selector)) return true;
 		for (const role in this.#roles) {
 			const r = this.#roles[role];
-			if (r && modelsAreEqual(r.model, item.model)) return true;
+			if (r && assignmentMatchesItem(r, item)) return true;
 		}
 		return false;
 	}
@@ -723,15 +842,14 @@ export class ModelBrowser implements Component {
 		const disabled = this.#isDisabled(item);
 		const prefix = selected && this.#focused ? `${theme.fg("accent", theme.nav.cursor)} ` : "  ";
 		const providerPrefix = this.#showProvider ? theme.fg("dim", `${item.provider}/`) : "";
-		const name = item.labelColor
-			? theme.fg(item.labelColor, item.id)
-			: selected
-				? theme.fg("accent", item.id)
-				: item.id;
+		const itemId = item.logicalRoute ? sanitizeLogicalDisplay(item.id) : item.id;
+		const name = item.labelColor ? theme.fg(item.labelColor, itemId) : selected ? theme.fg("accent", itemId) : itemId;
 		const currentMark =
 			item.selector === this.#currentSelector ? ` ${theme.fg("success", theme.status.enabled)}` : "";
 		const overLimit = disabled
-			? ` ${theme.status.disabled} context>${formatNumber(item.model.contextWindow ?? 0).toLowerCase()}`
+			? item.noEligibleRoute
+				? ` ${theme.status.disabled} no eligible route`
+				: ` ${theme.status.disabled} context>${formatNumber(item.model.contextWindow ?? 0).toLowerCase()}`
 			: "";
 		let left = `${prefix}${providerPrefix}${name}${currentMark}${overLimit}`;
 
@@ -760,6 +878,33 @@ export class ModelBrowser implements Component {
 		const selected = this.getSelected();
 		if (!selected) return ["", ""];
 		const model = selected.model;
+		const logicalRoute = selected.logicalRoute;
+		if (logicalRoute) {
+			const backupCount = logicalRoute.routes.filter(route => route.id !== logicalRoute.currentRouteId).length;
+			const current =
+				logicalRoute.currentRouteId && logicalRoute.currentModelSelector
+					? `current ${sanitizeLogicalDisplay(logicalRoute.currentRouteId)} → ${sanitizeLogicalDisplay(logicalRoute.currentModelSelector)}`
+					: "no eligible route";
+			const line1 = truncateToWidth(
+				theme.fg(
+					"muted",
+					`  ${sanitizeLogicalDisplay(logicalRoute.name)} · ${current} · ${backupCount} configured backup route${backupCount === 1 ? "" : "s"}`,
+				),
+				width,
+			);
+			const routeList = logicalRoute.routes
+				.map(route => {
+					const mark = route.id === logicalRoute.currentRouteId ? theme.status.enabled : theme.status.shadowed;
+					const disabled = route.enabled ? "" : " (disabled)";
+					return `${mark}${sanitizeLogicalDisplay(route.id)}→${sanitizeLogicalDisplay(route.modelSelector)}${disabled}`;
+				})
+				.join(" · ");
+			if (this.#isDisabled(selected) && selected.noEligibleRoute) {
+				const warning = `  ${theme.status.disabled} no eligible route in this logical group for the current session`;
+				return [line1, truncateToWidth(theme.fg("warning", warning), width)];
+			}
+			return [line1, truncateToWidth(theme.fg("dim", `  routes: ${routeList}`), width)];
+		}
 
 		const facts: string[] = [model.name];
 		if (model.contextWindow) facts.push(`${formatNumber(model.contextWindow).toLowerCase()} ctx`);
@@ -788,7 +933,7 @@ export class ModelBrowser implements Component {
 			if (seen.has(role)) return;
 			seen.add(role);
 			const assignment = this.#roles[role];
-			if (!assignment || !modelsAreEqual(assignment.model, model)) return;
+			if (!assignment || !assignmentMatchesItem(assignment, selected)) return;
 			if (getRoleInfo(role, this.#settings).hidden) return;
 			chips.push(formatRoleChip(role, assignment, this.#settings));
 		};

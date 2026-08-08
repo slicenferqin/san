@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>San Model Harness Profile 与 Effort Orchestration 方向文档</title>
+	<style>
+		:root {
+			color-scheme: dark;
+			--bg: #0a101c;
+			--panel: #121b2c;
+			--panel-2: #18243a;
+			--line: #2c3a55;
+			--text: #e9eef8;
+			--muted: #a8b5ca;
+			--blue: #7dbaff;
+			--green: #67d9a7;
+			--amber: #efc56c;
+			--purple: #c4a9ff;
+			--red: #ff9292;
+			--max: 1160px;
+		}
+		* { box-sizing: border-box; }
+		html { scroll-behavior: smooth; }
+		body {
+			margin: 0;
+			font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			background:
+				radial-gradient(circle at 12% 0%, rgba(77, 126, 216, .18), transparent 32rem),
+				radial-gradient(circle at 94% 8%, rgba(109, 214, 171, .10), transparent 28rem),
+				var(--bg);
+			color: var(--text);
+			line-height: 1.66;
+		}
+		main { width: min(var(--max), calc(100% - 32px)); margin: 0 auto; padding: 46px 0 78px; }
+		a { color: var(--blue); text-decoration: none; }
+		a:hover { text-decoration: underline; }
+		h1, h2, h3 { line-height: 1.26; letter-spacing: -.02em; }
+		h1 { max-width: 1020px; margin: 10px 0 18px; font-size: clamp(2rem, 5vw, 3.55rem); }
+		h2 { margin: 54px 0 18px; font-size: clamp(1.4rem, 3vw, 2.05rem); }
+		h3 { margin: 20px 0 9px; font-size: 1.14rem; }
+		p { margin: 8px 0 14px; }
+		ul, ol { padding-left: 1.35rem; }
+		li + li { margin-top: 6px; }
+		code {
+			font: .91em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+			color: #d9e9ff;
+			background: rgba(125, 186, 255, .09);
+			border: 1px solid rgba(125, 186, 255, .15);
+			padding: .08rem .32rem;
+			border-radius: 5px;
+		}
+		pre { margin: 14px 0; padding: 17px; overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: #070d17; color: #d4e4f8; font: .87rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+		pre code { padding: 0; border: 0; background: transparent; color: inherit; }
+		.eyebrow { color: var(--green); font-size: .79rem; font-weight: 760; letter-spacing: .085em; text-transform: uppercase; }
+		.lead { max-width: 1030px; color: #cbd6e8; font-size: clamp(1.04rem, 2vw, 1.23rem); }
+		.meta { display: flex; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: .9rem; }
+		.tag { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: rgba(18, 27, 44, .76); }
+		.callout { margin: 27px 0; padding: 20px 22px; border: 1px solid rgba(103, 217, 167, .38); border-left: 5px solid var(--green); border-radius: 12px; background: linear-gradient(135deg, rgba(103, 217, 167, .11), rgba(18, 27, 44, .86)); }
+		.callout.warn { border-color: rgba(239, 197, 108, .38); border-left-color: var(--amber); background: linear-gradient(135deg, rgba(239, 197, 108, .10), rgba(18, 27, 44, .86)); }
+		.grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 15px; }
+		.card { grid-column: span 6; padding: 18px; border: 1px solid var(--line); border-radius: 13px; background: rgba(18, 27, 44, .9); }
+		.card.third { grid-column: span 4; }
+		.card h3 { margin-top: 0; }
+		.card p:last-child, .card ul:last-child { margin-bottom: 0; }
+		.kicker { color: var(--muted); font-size: .81rem; letter-spacing: .065em; text-transform: uppercase; }
+		.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 13px; }
+		table { width: 100%; min-width: 760px; border-collapse: collapse; background: rgba(18, 27, 44, .9); }
+		th, td { padding: 12px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+		th { color: #d3dff1; background: var(--panel-2); font-size: .81rem; letter-spacing: .045em; text-transform: uppercase; }
+		tr:last-child td { border-bottom: 0; }
+		.arch { display: grid; grid-template-columns: 1fr auto 1.12fr auto 1.15fr auto 1.05fr; gap: 10px; align-items: stretch; margin: 22px 0; }
+		.node { padding: 15px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); }
+		.node strong { display: block; margin-bottom: 6px; color: #fff; }
+		.arrow { align-self: center; color: var(--blue); font-size: 1.35rem; }
+		.layers { display: grid; gap: 10px; counter-reset: layer; }
+		.layer { display: grid; grid-template-columns: 40px 185px 1fr; gap: 12px; align-items: start; padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+		.layer::before { counter-increment: layer; content: counter(layer); display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: var(--blue); background: rgba(125, 186, 255, .14); font-weight: 800; }
+		.roadmap { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+		.phase { min-height: 160px; padding: 15px; border: 1px solid var(--line); border-top: 4px solid var(--blue); border-radius: 10px; background: var(--panel); }
+		.phase:nth-child(2) { border-top-color: var(--green); }
+		.phase:nth-child(3) { border-top-color: var(--purple); }
+		.phase:nth-child(4) { border-top-color: var(--amber); }
+		.phase:nth-child(5) { border-top-color: #ed8fd2; }
+		.phase strong { display: block; margin-bottom: 6px; }
+		.small { color: var(--muted); font-size: .89rem; }
+		.good { color: var(--green); }
+		.warn-text { color: var(--amber); }
+		footer { margin-top: 56px; padding-top: 19px; border-top: 1px solid var(--line); color: var(--muted); font-size: .87rem; }
+		@media (max-width: 930px) {
+			.card, .card.third { grid-column: 1 / -1; }
+			.arch { grid-template-columns: 1fr; }
+			.arrow { justify-self: center; transform: rotate(90deg); }
+			.roadmap { grid-template-columns: 1fr 1fr; }
+			.layer { grid-template-columns: 36px 1fr; }
+			.layer span:last-child { grid-column: 2; }
+		}
+		@media (max-width: 580px) { main { width: min(100% - 22px, var(--max)); padding-top: 28px; } .roadmap { grid-template-columns: 1fr; } }
+	</style>
+</head>
+<body>
+<main>
+	<header>
+		<div class="eyebrow">Direction brief · 2026-08-04</div>
+		<h1>San Model Harness Profile 与 Effort Orchestration</h1>
+		<p class="lead">这是 Logical Model Routing 之后的下一层：不再要求用户理解每个模型和服务商，而是让用户表达任务需要多少努力，由 San 选择逻辑模型，并为该模型装配最能发挥其能力的 harness。</p>
+		<div class="meta">
+			<span class="tag">定位：下下个版本</span>
+			<span class="tag">状态：方向文档</span>
+			<span class="tag">依赖：Logical Model Routing</span>
+			<span class="tag">不包含：Remote Control</span>
+		</div>
+	</header>
+
+	<div class="callout">
+		<strong>核心判断：</strong>模型越强，Harness 越不应依靠大量 <code>must do / must not</code> 与模型争夺推理控制权。稳定内核只保留安全、权限、协议和状态不变量；其余部分应成为可版本化的指导与能力增强 Profile，并通过 eval 证明它提高了任务质量或智能效率。
+	</div>
+
+	<section>
+		<h2>一、与前后版本的边界</h2>
+		<div class="arch" role="img" aria-label="Effort to route architecture">
+			<div class="node"><strong>Task / Effort</strong>用户显式选择，后续可由 San 判断</div>
+			<div class="arrow">→</div>
+			<div class="node"><strong>Logical Model Policy</strong>选择模型或模型池，不感知 provider</div>
+			<div class="arrow">→</div>
+			<div class="node"><strong>Harness Profile</strong>指导、工具、上下文、推理与 loop policy</div>
+			<div class="arrow">→</div>
+			<div class="node"><strong>Provider Route</strong>由上一版本 Route Group 选择具体服务商</div>
+		</div>
+
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>层次</th><th>回答的问题</th><th>配置引用</th><th>不应该知道</th></tr></thead>
+				<tbody>
+					<tr><td>Effort Policy</td><td>这个任务需要多少资源与自主性？</td><td>Logical Model / model pool</td><td>服务商名称、baseUrl、凭证</td></tr>
+					<tr><td>Harness Profile</td><td>怎样让选中的模型发挥得最好？</td><td>逻辑模型、模型族、能力标签</td><td>价格排序、账号额度</td></tr>
+					<tr><td>Route Policy</td><td>同一逻辑模型由哪个服务商执行？</td><td>Concrete provider/model routes</td><td>任务应使用哪个模型</td></tr>
+					<tr><td>Remote Control</td><td>从哪台设备控制哪个 executor？</td><td>host/session/task identity</td><td>模型内部 prompt 与 provider secret</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section>
+		<h2>二、Profile 不是另一份巨型系统提示词</h2>
+		<div class="layers">
+			<div class="layer"><strong>Stable Kernel</strong><span>工具执行、权限、审批、session 状态、日志、错误边界。只有真正不可协商的不变量进入这里。</span></div>
+			<div class="layer"><strong>Generic Guidance</strong><span>简短的通用工作原则，例如先理解任务、使用工具验证、完成后报告。默认使用指导语气。</span></div>
+			<div class="layer"><strong>Family Profile</strong><span>OpenAI reasoning、Claude、DeepSeek、Qwen、GLM、Gemini 等模型族的推理、工具和 replay 特征。</span></div>
+			<div class="layer"><strong>Exact Model Profile</strong><span>具体模型的 lean/verbose posture、effort map、known quirks、工具暴露和 context policy。</span></div>
+			<div class="layer"><strong>Task / Effort Overlay</strong><span>任务阶段、风险、规模与努力档位带来的临时调整，不改写模型身份。</span></div>
+			<div class="layer"><strong>Transport Overlay</strong><span>由 concrete route 决定的 API dialect、wire encoding、headers、thinking 参数和 provider session。</span></div>
+			<div class="layer"><strong>User / Project Policy</strong><span>AGENTS.md、SYSTEM.md、权限与用户明确要求。用户意图和安全边界始终高于优化 Profile。</span></div>
+		</div>
+
+		<div class="callout warn">
+			<strong>约束分级：</strong>安全、权限、不可逆操作和协议正确性可以是硬约束；工作方法、探索路径、工具偏好和回答形式默认是建议。Profile 编译器必须能区分 <code>invariant</code> 与 <code>guidance</code>，不能把所有内容最终都渲染成同样强度的 system 命令。
+		</div>
+	</section>
+
+	<section>
+		<h2>三、模型适配维度</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>维度</th><th>Profile 要决定什么</th><th>评价信号</th></tr></thead>
+				<tbody>
+					<tr><td>Instruction posture</td><td>lean / guided / explicit；建议与硬约束的比例；重复提醒频率</td><td>任务成功、犹豫循环、规则冲突、无效解释</td></tr>
+					<tr><td>Tool surface</td><td>哪些工具 top-level 暴露，哪些 discoverable，哪些组合成 macro</td><td>schema tokens、tool discovery、选错工具、总 turns</td></tr>
+					<tr><td>Tool ABI</td><td>JSON/freeform、strict schema、tool id、结果格式、并行调用边界</td><td>解析失败、重试、非法参数、兼容错误</td></tr>
+					<tr><td>Reasoning / effort</td><td>用户 effort 到模型 wire value/budget 的映射，是否展示 thinking</td><td>质量、思考时长、reasoning tokens、停滞</td></tr>
+					<tr><td>Context / cache</td><td>稳定前缀、动态区顺序、cache boundary、append-only 策略</td><td>cache hit/write、first divergence、uncached input</td></tr>
+					<tr><td>Replay / message shape</td><td>thinking、signature、provider payload、tool history 如何重放</td><td>400、签名错误、上下文漂移、恢复成功率</td></tr>
+					<tr><td>Loop policy</td><td>自主推进程度、何时停下、何时验证、何时请求用户输入</td><td>完成率、空转 turns、过度询问、重复工具调用</td></tr>
+					<tr><td>Sampling / service tier</td><td>temperature、top_p、max output、provider tier 与 benchmark profile</td><td>稳定性、质量方差、成本、延迟</td></tr>
+					<tr><td>Compaction</td><td>何时 compact、保留什么、是否使用 provider-native compaction</td><td>长任务成功率、语义遗失、cache 代价</td></tr>
+					<tr><td>Recovery</td><td>截断、无进展、格式失败、provider 错误后的恢复方式</td><td>恢复率、重复副作用、额外 turns</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section>
+		<h2>四、建议配置形态</h2>
+		<pre><code>harnessProfiles:
+  openai-reasoning:
+    instructionPosture: guided
+    promptModules:
+      - core-workflow
+      - tool-use-guidance
+    tools:
+      exposure: essential-plus-discovery
+    context:
+      stablePrefix: strict
+      appendOnly: auto
+
+  gpt-5.6-sol:
+    extends: openai-reasoning
+    instructionPosture: lean
+    reasoning:
+      defaultEffort: medium
+      preserveModelAutonomy: true
+    loop:
+      progressReminders: on-stall
+
+effortPolicies:
+  low:
+    models: [gpt-5.6-terra, glm-5.2]
+    maxParallelAgents: 1
+  medium:
+    models: [gpt-5.6-sol]
+    defaultModelEffort: medium
+  high:
+    models: [gpt-5.6-sol, claude-fable-5]
+    defaultModelEffort: high
+  ultra:
+    models: [claude-fable-5, gpt-5.6-sol]
+    advisor: gpt-5.6-sol
+    defaultModelEffort: xhigh</code></pre>
+
+		<ul>
+			<li>Prompt 内容仍放在静态 <code>.md</code> 文件，通过 Handlebars 注入动态内容；YAML 只声明模块和政策。</li>
+			<li>Profile 必须有稳定 ID、版本、适用模型、最低 San 版本、来源和 eval provenance。</li>
+			<li>Exact model 不存在 Profile 时，按 <code>exact → family → API dialect → generic</code> 回退，并允许 inspect 最终组合。</li>
+			<li>切换 Logical Model 或 effort 时重新编译；同模型 provider route fallback 只重算 transport overlay。</li>
+		</ul>
+	</section>
+
+	<section>
+		<h2>五、Effort Dial 的产品语义</h2>
+		<div class="grid">
+			<article class="card third"><div class="kicker">Low</div><h3>低成本、低等待</h3><p>适合明确、局部、可快速验证的任务。优先小模型/低 effort，限制并行与反复审查。</p></article>
+			<article class="card third"><div class="kicker">Medium</div><h3>默认工作档</h3><p>选择综合能力和成本平衡的逻辑模型，允许正常工具循环与一次验证。</p></article>
+			<article class="card third"><div class="kicker">High</div><h3>复杂推理与高风险</h3><p>更强模型、更高 effort、完整验证；必要时加入 advisor，但仍避免无界并行。</p></article>
+			<article class="card third"><div class="kicker">Ultra</div><h3>昂贵但追求上限</h3><p>适合架构迁移、复杂调试和重要决策，可组合主模型与 oracle/reviewer。</p></article>
+			<article class="card third"><div class="kicker">Explicit first</div><h3>先由用户选择</h3><p>第一版 effort 是明确输入，不让分类器悄悄扩大成本或切换模型。</p></article>
+			<article class="card third"><div class="kicker">Auto later</div><h3>后续学习任务难度</h3><p>自动模式输出可解释的 effort decision；用户预算、项目政策和手动选择可覆盖。</p></article>
+		</div>
+
+		<p>Effort 的输出是一个 <strong>Execution Intent</strong>，至少包含 logical model、model effort、并行预算、验证强度和可选 advisor。它不直接输出 provider；provider route 由 Logical Model Routing 继续解析。</p>
+	</section>
+
+	<section>
+		<h2>六、版本路线</h2>
+		<div class="roadmap">
+			<div class="phase"><strong>H0 · Inspect</strong><span class="small">输出当前 resolved prompt、tool surface、effort、cache boundary、compat 与 token 成本。先知道实际发给模型什么。</span></div>
+			<div class="phase"><strong>H1 · Static Profiles</strong><span class="small">建立 profile registry、继承/组合、版本和切模重算；先落少量模型族 Profile。</span></div>
+			<div class="phase"><strong>H2 · Effort Intent</strong><span class="small">用户选择 low/medium/high/ultra；映射到 Logical Model、effort、并行和验证预算。</span></div>
+			<div class="phase"><strong>H3 · Eval Release</strong><span class="small">Metaharness 对比 baseline/candidate，质量非劣后灰度、晋级、回滚；Profile 独立发版。</span></div>
+			<div class="phase"><strong>H4 · Adaptive</strong><span class="small">自动判断 effort、基于受控数据调整 policy；保留预算上限、可解释与关闭开关。</span></div>
+		</div>
+
+		<div class="callout">
+			<strong>建议的“下下个版本”发布边界：</strong>完成 H0–H2。用户可以 inspect 实际 Harness、Logical Model 能解析到稳定 Profile，并使用显式 effort dial 调度模型；H3/H4 属于后续持续迭代，不应阻塞首版。
+		</div>
+	</section>
+
+	<section>
+		<h2>七、Eval 与晋级规则</h2>
+		<p>Profile 的目标不是“token 越少越好”，而是在质量门槛下提高智能效率。</p>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>指标层</th><th>核心指标</th><th>晋级规则</th></tr></thead>
+				<tbody>
+					<tr><td>质量</td><td>任务成功率、测试通过、正确性、安全性</td><td>先满足非劣或显著提升；不允许用便宜掩盖质量下降</td></tr>
+					<tr><td>Agent 效率</td><td>总 turns、工具调用、返工、无进展循环、用户打断</td><td>至少一个关键维度改善，且无严重回归</td></tr>
+					<tr><td>模型效率</td><td>输入/输出/reasoning tokens、TTFT、wall time</td><td>按任务类型分层比较，不用全局平均掩盖长尾</td></tr>
+					<tr><td>缓存</td><td>cache read/write、uncached input、first divergence</td><td>稳定前缀变化必须有 provenance 与收益说明</td></tr>
+					<tr><td>可靠性</td><td>tool parse failure、400、截断、retry、unsafe recovery</td><td>不得新增协议级或副作用风险</td></tr>
+					<tr><td>经济性</td><td>实际费用、premium requests、service tier</td><td>在质量门槛之后比较</td></tr>
+				</tbody>
+			</table>
+		</div>
+		<ul>
+			<li>每次 trace 记录 logical model、concrete route、profile ID/version、effort policy version 和工具集摘要。</li>
+			<li>同模型跨 route 的差异与不同 Profile 的差异必须分开实验，避免错误归因。</li>
+			<li>benchmark profile 与日常 profile 分离；官方榜单参数只用于提出候选，不直接成为默认。</li>
+			<li>任何自动晋级都必须可立即回滚到上一稳定版本。</li>
+		</ul>
+	</section>
+
+	<section>
+		<h2>八、非目标与风险</h2>
+		<div class="grid">
+			<article class="card">
+				<h3>首版不做</h3>
+				<ul>
+					<li>不为每个 provider fork 一套 agent。</li>
+					<li>不自动在线下载未经验证的 Profile。</li>
+					<li>不把所有模型差异都写成 prompt 文本。</li>
+					<li>不让 auto effort 无上限增加费用和并行 agent。</li>
+					<li>不以单个社区案例决定默认策略。</li>
+				</ul>
+			</article>
+			<article class="card">
+				<h3>主要风险</h3>
+				<ul>
+					<li>Profile 继承过深，最终组合无法解释。</li>
+					<li>指导语仍被渲染成大量强约束，与强模型冲突。</li>
+					<li>工具面变化破坏缓存，却被误认为 prompt 优化。</li>
+					<li>模型、route、Profile 同时变化，评测无法归因。</li>
+					<li>努力档位变成隐藏的模型营销名称，而非稳定资源语义。</li>
+				</ul>
+			</article>
+		</div>
+	</section>
+
+	<section>
+		<h2>九、完成定义</h2>
+		<ul>
+			<li><code>san harness inspect</code> 能解释最终 prompt 模块、工具面、effort、cache 和 transport overlay。</li>
+			<li>Profile 是独立、版本化、可灰度和可回滚的发布物，不再散落为 model ID <code>if/else</code>。</li>
+			<li>切换 Logical Model 会完整重算 Profile；切换同模型 provider route 只重算 transport。</li>
+			<li>显式 effort dial 只引用 Logical Model 与资源政策，不引用 provider。</li>
+			<li>Profile 默认采用指导语气；硬约束有明确类别和来源。</li>
+			<li>至少一组真实模型 Profile 通过质量非劣门禁，并在效率或可靠性上有可复现收益。</li>
+		</ul>
+	</section>
+
+	<footer>
+		<p>关联文档：<a href="./san-logical-model-routing-spec-20260804.html">Logical Model Routing Spec</a>、<a href="./san-harness-model-adaptation-20260804.html">Harness、模型适配与 Remote Control 竞品研究</a>。</p>
+		<p>本文是版本方向 brief；具体 schema、模块接口和逐 PR 实施计划在进入 H0 时再展开。</p>
+	</footer>
+</main>
+</body>
+</html>

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { ModelRouteChangedEvent, ModelRouteResolvedEvent } from "@san/coding-agent/extensibility/extensions";
 import { RpcClient } from "@san/coding-agent/modes/rpc/rpc-client";
 import {
 	handleRpcSessionChange,
@@ -358,7 +359,7 @@ describe("readRpcSubagentTranscript", () => {
 });
 
 describe("RpcClient subagent frames", () => {
-	test("dispatches subagent frames and session-specific events", async () => {
+	test("dispatches subagent frames, notices, and model route events", async () => {
 		const scriptPath = path.join(os.tmpdir(), `omp-rpc-subagent-client-${Date.now()}.js`);
 		tempPaths.push(scriptPath);
 		await Bun.write(
@@ -410,6 +411,8 @@ function handle(frame) {
 	if (frame.type === "prompt") {
 		write({ id: frame.id, type: "response", command: "prompt", success: true });
 		write({ type: "notice", level: "info", message: "subagent test" });
+		write({ type: "model_route_resolved", logicalModel: "default", routeId: "primary", model: "openai/gpt-5.6", reason: "primary" });
+		write({ type: "model_route_changed", logicalModel: "default", fromRoute: "primary", toRoute: "fallback", trigger: "rate_limit", cooldownUntil: 1800000000000 });
 		write({ type: "subagent_lifecycle", payload: { id: "SubagentA", index: 0, agent: "task", agentSource: "bundled", status: "started", sessionFile: "/tmp/subagent.jsonl" } });
 		write({ type: "subagent_progress", payload: { index: 0, agent: "task", agentSource: "bundled", task: "Do work", assignment: "Implement work", sessionFile: "/tmp/subagent.jsonl", progress } });
 		write({ type: "subagent_event", payload: { id: "SubagentA", event: { type: "agent_start" } } });
@@ -424,10 +427,16 @@ function handle(frame) {
 		const progressTasks: string[] = [];
 		const rawEventTypes: string[] = [];
 		const sessionEventTypes: string[] = [];
+		const modelRouteEvents: Array<ModelRouteResolvedEvent | ModelRouteChangedEvent> = [];
 		client.onSubagentLifecycle(payload => lifecycleIds.push(payload.id));
 		client.onSubagentProgress(payload => progressTasks.push(payload.task));
 		client.onSubagentEvent(payload => rawEventTypes.push(payload.event.type));
-		client.onSessionEvent(event => sessionEventTypes.push(event.type));
+		client.onSessionEvent(event => {
+			sessionEventTypes.push(event.type);
+			if (event.type === "model_route_resolved" || event.type === "model_route_changed") {
+				modelRouteEvents.push(event);
+			}
+		});
 
 		await client.start();
 		await expect(client.setSubagentSubscription("events")).resolves.toBe("events");
@@ -441,5 +450,22 @@ function handle(frame) {
 		expect(progressTasks).toEqual(["Do work"]);
 		expect(rawEventTypes).toEqual(["agent_start"]);
 		expect(sessionEventTypes).toContain("notice");
+		expect(modelRouteEvents).toEqual([
+			{
+				type: "model_route_resolved",
+				logicalModel: "default",
+				routeId: "primary",
+				model: "openai/gpt-5.6",
+				reason: "primary",
+			},
+			{
+				type: "model_route_changed",
+				logicalModel: "default",
+				fromRoute: "primary",
+				toRoute: "fallback",
+				trigger: "rate_limit",
+				cooldownUntil: 1_800_000_000_000,
+			},
+		]);
 	});
 });

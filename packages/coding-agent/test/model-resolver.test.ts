@@ -6,9 +6,11 @@ import {
 	expandRoleAlias,
 	extractExplicitThinkingSelector,
 	filterAvailableModelsByEnabledPatterns,
+	formatLogicalRouteFailure,
 	parseModelPattern,
 	parseModelString,
 	pickDefaultAvailableModel,
+	resolveAdvisorRoleSelection,
 	resolveAgentModelPatterns,
 	resolveAgentPrewalkPattern,
 	resolveAllowedModels,
@@ -17,8 +19,10 @@ import {
 	resolveModelOverride,
 	resolveModelRoleValue,
 	resolveModelScope,
+	resolveRoleSelection,
 } from "@san/coding-agent/config/model-resolver";
 import { DEFAULT_MODEL_ROLE_ALIAS, LEGACY_MODEL_ROLE_ALIAS_PREFIX } from "@san/coding-agent/config/model-roles";
+import { compileModelRouteRegistry } from "@san/coding-agent/config/model-route-registry";
 import { Settings } from "@san/coding-agent/config/settings";
 
 // Mock models for testing
@@ -358,6 +362,39 @@ function createOpusModel(provider: string, id: string, name: string): Model<"ant
 }
 
 const allModels = [...mockModels, ...mockOpenRouterModels, ...mockProviderOverlapModels, ...mockCodexOverlapModels];
+
+function createLogicalRoleRegistry() {
+	const routeRegistry = compileModelRouteRegistry(
+		{
+			"logical-fast": {
+				routes: [
+					{
+						id: "primary",
+						model: "anthropic/claude-sonnet-4-5",
+						equivalence: "exact",
+					},
+				],
+			},
+			"logical-advisor": {
+				routes: [
+					{
+						id: "primary",
+						model: "openai/gpt-4o",
+						equivalence: "exact",
+					},
+				],
+			},
+		},
+		allModels,
+	);
+	return {
+		getAvailable: () => allModels,
+		getModelRouteRegistry: () => routeRegistry,
+		hasConfiguredAuth: () => true,
+		isProviderEnabled: () => true,
+		isSelectorSuppressed: () => false,
+	};
+}
 
 describe("pickDefaultAvailableModel", () => {
 	test("prefers Codex OAuth over plain OpenAI for the shared GPT default", () => {
@@ -817,6 +854,26 @@ describe("resolveModelRoleValue", () => {
 		expect(result.explicitThinkingLevel).toBe(true);
 	});
 });
+
+describe("role selection helpers", () => {
+	test("resolves configured helper roles through logical routes", () => {
+		const settings = Settings.isolated({
+			"routing.enabled": true,
+			modelRoles: {
+				tiny: "logical-fast",
+				advisor: "logical-advisor",
+			},
+		});
+		const registry = createLogicalRoleRegistry();
+
+		const tiny = resolveRoleSelection(["tiny"], settings, registry);
+		const advisor = resolveAdvisorRoleSelection(settings, registry);
+
+		expect(tiny?.model).toBe(mockModels[0]);
+		expect(advisor?.model).toBe(mockModels[1]);
+	});
+});
+
 describe("resolveAgentPrewalkPattern", () => {
 	test("agent definition alone decides: true → default target, pattern → custom, false/absent → off", () => {
 		expect(resolveAgentPrewalkPattern({ agentPrewalk: true })).toBe("@smol");
@@ -966,6 +1023,29 @@ describe("resolveModelFromString", () => {
 });
 
 describe("resolveModelOverride", () => {
+	function createBlockedLogicalOverrideRegistry() {
+		const routeRegistry = compileModelRouteRegistry(
+			{
+				"blocked-logical": {
+					routes: [
+						{
+							id: "primary",
+							model: "anthropic/claude-sonnet-4-5",
+							enabled: false,
+							equivalence: "exact",
+						},
+					],
+				},
+			},
+			allModels,
+		);
+		const registry: Parameters<typeof resolveModelOverride>[1] = {
+			getAvailable: () => allModels,
+			getModelRouteRegistry: () => routeRegistry,
+		};
+		return { registry, routeRegistry };
+	}
+
 	test("preserves explicit off and explicit-thinking metadata", () => {
 		const registry = {
 			getAvailable: () => allModels,
@@ -989,6 +1069,61 @@ describe("resolveModelOverride", () => {
 		expect(result.model?.id).toBe("qwen/qwen3-coder:exacto");
 		expect(result.thinkingLevel).toBe(Effort.High);
 		expect(result.explicitThinkingLevel).toBe(true);
+	});
+
+	test("continues after an unavailable logical candidate and preserves its route trace warning", () => {
+		const { registry } = createBlockedLogicalOverrideRegistry();
+		const settings = Settings.isolated({ "routing.enabled": true });
+
+		const result = resolveModelOverride(["blocked-logical, openai/gpt-4o"], registry, settings);
+
+		expect(result.model).toBe(mockModels[1]);
+		expect(result.warning).toBe(
+			'No eligible route for logical model "blocked-logical": primary (anthropic/claude-sonnet-4-5): disabled: route primary is disabled by configuration',
+		);
+		expect(result.logicalModelId).toBeUndefined();
+		expect(result.routeResolution).toBeUndefined();
+	});
+
+	test("returns the first structured logical failure when every candidate fails", () => {
+		const { registry } = createBlockedLogicalOverrideRegistry();
+		const settings = Settings.isolated({ "routing.enabled": true });
+
+		const result = resolveModelOverride(["blocked-logical, missing/model"], registry, settings);
+
+		expect(result.model).toBeUndefined();
+		expect(result.logicalModelId).toBe("blocked-logical");
+		expect(result.routeResolution?.trace).toEqual([
+			expect.objectContaining({
+				routeId: "primary",
+				modelSelector: "anthropic/claude-sonnet-4-5",
+				rejections: [
+					expect.objectContaining({
+						code: "disabled",
+						message: "route primary is disabled by configuration",
+					}),
+				],
+			}),
+		]);
+		expect(result.warning).toBe(formatLogicalRouteFailure(result.routeResolution!));
+	});
+
+	test("formats resolver and runtime route rejections in one diagnostic", () => {
+		const { routeRegistry } = createBlockedLogicalOverrideRegistry();
+		const resolution = routeRegistry.resolve("blocked-logical");
+		expect(resolution).toBeDefined();
+
+		expect(
+			formatLogicalRouteFailure(resolution!, [
+				{
+					routeId: "primary",
+					code: "api_key_error",
+					message: "credential store lookup failed",
+				},
+			]),
+		).toBe(
+			'No eligible route for logical model "blocked-logical": primary (anthropic/claude-sonnet-4-5): disabled: route primary is disabled by configuration; api_key_error: credential store lookup failed',
+		);
 	});
 });
 describe("resolveCliModel", () => {
@@ -1283,15 +1418,12 @@ describe("resolveModelScope", () => {
 
 	test("resolves role aliases in --models scope to the role's model with its thinking level", async () => {
 		const settings = Settings.isolated({
-			modelRoles: { fable: "anthropic/claude-sonnet-4-5:high" },
+			"routing.enabled": true,
+			modelRoles: { fable: "logical-fast:high" },
 		});
+		const registry = createLogicalRoleRegistry();
 
-		const scoped = await resolveModelScope(
-			["@fable", "openai/gpt-4o"],
-			{ getAvailable: () => allModels },
-			undefined,
-			settings,
-		);
+		const scoped = await resolveModelScope(["@fable", "openai/gpt-4o"], registry, undefined, settings);
 
 		expect(scoped).toHaveLength(2);
 		expect(scoped[0].model.id).toBe("claude-sonnet-4-5");
@@ -1645,9 +1777,10 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 
 	test("resolves role aliases to the role's model when settings are provided", () => {
 		const settings = Settings.isolated({
-			modelRoles: { fable: "anthropic/claude-sonnet-4-5:high" },
+			"routing.enabled": true,
+			modelRoles: { fable: "logical-fast:high" },
 		});
-		const result = filterAvailableModelsByEnabledPatterns(models, ["@fable"], settings);
+		const result = filterAvailableModelsByEnabledPatterns(models, ["@fable"], settings, createLogicalRoleRegistry());
 		expect(result).toHaveLength(1);
 		expect(result[0].id).toBe("claude-sonnet-4-5");
 	});

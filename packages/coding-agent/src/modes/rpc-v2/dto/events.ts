@@ -5,6 +5,7 @@
  * envelope with stable identity, ordering, and durability classification.
  */
 
+import type { RouteFailureCategory } from "../../../config/model-routes-schema";
 import type { ContextMaintenanceFailureStage, ContextMaintenanceTrigger } from "../../../context-steady/types";
 
 import type {
@@ -122,6 +123,9 @@ export type SessionEventType =
 	| "retry.completed"
 	| "retry.fallback.applied"
 	| "retry.fallback.succeeded"
+	// 逻辑模型路由生命周期是增量事件；现有具体模型重试事件继续保留。
+	| "model.route.resolved"
+	| "model.route.changed"
 	// Integration / Auth
 	| "integration.changed"
 	| "integration.health.changed"
@@ -252,6 +256,21 @@ export interface EvidenceRecordedData {
 	kind: string;
 	verdict: string;
 	title: string;
+}
+
+export interface ModelRouteResolvedData {
+	logicalModel: string;
+	routeId: string;
+	model: string;
+	reason: "primary" | "affinity" | "recovery" | "manual";
+}
+
+export interface ModelRouteChangedData {
+	logicalModel: string;
+	fromRoute: string;
+	toRoute: string;
+	trigger: RouteFailureCategory;
+	cooldownUntil?: number;
 }
 
 export interface SessionNoticeData {

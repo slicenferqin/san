@@ -3,6 +3,7 @@ import { stripVTControlCharacters } from "node:util";
 import type { Model } from "@san/ai";
 import { buildModel } from "@san/catalog/build";
 import type { ModelRegistry } from "@san/coding-agent/config/model-registry";
+import { compileModelRouteRegistry } from "@san/coding-agent/config/model-route-registry";
 import { Settings } from "@san/coding-agent/config/settings";
 import { ModelPickerComponent, type ModelPickerOptions } from "@san/coding-agent/modes/components/model-picker";
 import { resolveSegmentPalette } from "@san/coding-agent/modes/components/segment-track";
@@ -204,4 +205,53 @@ describe("ModelPicker", () => {
 		picker.handleInput(ESC);
 		expect(onCancel).toHaveBeenCalledTimes(1);
 	});
+});
+
+test("forwards normalized session context into logical group eligibility (LMR-04)", () => {
+	const primary = makeModel("routes", "primary-a", 8_192);
+	const backup = makeModel("routes", "backup-b", 128_000);
+	const routeRegistry = compileModelRouteRegistry(
+		{
+			logical: {
+				routes: [
+					{ id: "primary", model: "routes/primary-a", priority: 0, equivalence: "exact" },
+					{ id: "backup", model: "routes/backup-b", priority: 10, equivalence: "exact" },
+				],
+			},
+		},
+		[primary, backup],
+	);
+	const registry = {
+		refresh: async () => {},
+		getError: () => undefined,
+		getAvailable: () => [primary, backup],
+		getAll: () => [primary, backup],
+		getModelRouteRegistry: () => routeRegistry,
+		isSelectorSuppressed: () => false,
+		hasConfiguredAuth: () => true,
+		isProviderEnabled: () => true,
+	} as unknown as ModelRegistry;
+	const ui = { requestRender: vi.fn(), terminal: { rows: 40 } } as unknown as TUI;
+	const onPick = vi.fn();
+	const picker = new ModelPickerComponent(
+		ui,
+		Settings.isolated({ "routing.enabled": true }),
+		registry,
+		[],
+		{
+			onPick,
+			onCancel: vi.fn(),
+			onPickRole: vi.fn(),
+		},
+		{
+			currentContextTokens: 16_000,
+		},
+	);
+
+	// The 8k primary is ineligible at 16k context; the 128k backup keeps the
+	// logical row selectable and Enter still activates the logical selector.
+	expect(normalize(picker.render(220))).toContain("logical");
+	picker.handleInput("\n");
+	expect(onPick).toHaveBeenCalledTimes(1);
+	expect(onPick.mock.calls[0]?.[1]).toBe("logical");
 });

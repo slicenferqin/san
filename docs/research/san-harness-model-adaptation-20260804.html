@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>San Harness、模型适配与 Remote Control 竞品研究</title>
+	<style>
+		:root {
+			color-scheme: dark;
+			--bg: #0b1020;
+			--panel: #121a2d;
+			--panel-2: #17223a;
+			--line: #2a3858;
+			--text: #e8edf8;
+			--muted: #a8b4ca;
+			--blue: #7bb8ff;
+			--green: #62d9a8;
+			--amber: #f0c56c;
+			--red: #ff8d8d;
+			--purple: #c3a7ff;
+			--max: 1180px;
+		}
+		* { box-sizing: border-box; }
+		html { scroll-behavior: smooth; }
+		body {
+			margin: 0;
+			font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			background:
+				radial-gradient(circle at 15% 0%, rgba(64, 122, 220, .18), transparent 32rem),
+				radial-gradient(circle at 95% 12%, rgba(100, 209, 168, .10), transparent 28rem),
+				var(--bg);
+			color: var(--text);
+			line-height: 1.65;
+		}
+		main { width: min(var(--max), calc(100% - 32px)); margin: 0 auto; padding: 48px 0 80px; }
+		a { color: var(--blue); text-decoration: none; }
+		a:hover { text-decoration: underline; }
+		h1, h2, h3 { line-height: 1.25; letter-spacing: -.02em; }
+		h1 { font-size: clamp(2rem, 5vw, 3.8rem); margin: 12px 0 18px; max-width: 980px; }
+		h2 { font-size: clamp(1.45rem, 3vw, 2.15rem); margin: 58px 0 20px; }
+		h3 { font-size: 1.12rem; margin: 0 0 10px; }
+		p { margin: 8px 0 14px; }
+		ul, ol { padding-left: 1.3rem; }
+		li + li { margin-top: 6px; }
+		code {
+			font: .92em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+			color: #d6e6ff;
+			background: rgba(123, 184, 255, .09);
+			border: 1px solid rgba(123, 184, 255, .14);
+			padding: .08rem .32rem;
+			border-radius: 5px;
+		}
+		.eyebrow { color: var(--green); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: .8rem; }
+		.meta { display: flex; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: .92rem; }
+		.tag { border: 1px solid var(--line); background: rgba(18, 26, 45, .75); padding: 4px 10px; border-radius: 999px; }
+		.lead { font-size: clamp(1.05rem, 2vw, 1.28rem); color: #cbd6e8; max-width: 1000px; }
+		.callout {
+			margin: 28px 0;
+			padding: 22px 24px;
+			border: 1px solid rgba(98, 217, 168, .4);
+			border-left: 5px solid var(--green);
+			border-radius: 12px;
+			background: linear-gradient(135deg, rgba(98, 217, 168, .11), rgba(18, 26, 45, .82));
+		}
+		.callout strong { color: #b9f5dc; }
+		.grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+		.card {
+			grid-column: span 6;
+			background: rgba(18, 26, 45, .88);
+			border: 1px solid var(--line);
+			border-radius: 14px;
+			padding: 20px;
+		}
+		.card.third { grid-column: span 4; }
+		.card.full { grid-column: 1 / -1; }
+		.card p:last-child, .card ul:last-child { margin-bottom: 0; }
+		.kicker { color: var(--muted); font-size: .83rem; text-transform: uppercase; letter-spacing: .06em; }
+		.stat { font-size: 2rem; font-weight: 760; line-height: 1.15; color: var(--blue); }
+		.small { font-size: .88rem; color: var(--muted); }
+		.good { color: var(--green); }
+		.warn { color: var(--amber); }
+		.risk { color: var(--red); }
+		.purple { color: var(--purple); }
+		.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; }
+		table { width: 100%; min-width: 760px; border-collapse: collapse; background: rgba(18, 26, 45, .88); }
+		th, td { padding: 13px 15px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+		th { color: #cbd8ed; font-size: .83rem; letter-spacing: .04em; text-transform: uppercase; background: #17213a; }
+		tr:last-child td { border-bottom: 0; }
+		.timeline { border-left: 2px solid var(--line); margin-left: 8px; padding-left: 24px; }
+		.event { position: relative; margin: 0 0 24px; }
+		.event::before { content: ""; position: absolute; left: -31px; top: 7px; width: 12px; height: 12px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 5px var(--bg); }
+		.event time { color: var(--green); font: 700 .82rem ui-monospace, monospace; }
+		.arch {
+			display: grid;
+			grid-template-columns: 1fr auto 1.15fr auto 1fr;
+			gap: 12px;
+			align-items: stretch;
+			margin: 22px 0;
+		}
+		.node { border: 1px solid var(--line); border-radius: 12px; padding: 16px; background: var(--panel); }
+		.node strong { display: block; color: #fff; margin-bottom: 6px; }
+		.arrow { align-self: center; color: var(--blue); font-size: 1.4rem; }
+		.layers { counter-reset: layer; display: grid; gap: 10px; }
+		.layer { display: grid; grid-template-columns: 42px 180px 1fr; gap: 12px; align-items: start; border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 13px; }
+		.layer::before { counter-increment: layer; content: counter(layer); display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: rgba(123,184,255,.16); color: var(--blue); font-weight: 800; }
+		.layer strong { color: #dce7fa; }
+		.meter { height: 9px; border-radius: 999px; background: #202d49; overflow: hidden; margin: 8px 0 5px; }
+		.meter > span { display: block; height: 100%; background: linear-gradient(90deg, var(--blue), var(--green)); }
+		.verdict { display: inline-block; font-size: .78rem; font-weight: 750; padding: 2px 8px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
+		.verdict.fact { color: var(--green); border-color: rgba(98,217,168,.5); background: rgba(98,217,168,.1); }
+		.verdict.report { color: var(--amber); border-color: rgba(240,197,108,.5); background: rgba(240,197,108,.1); }
+		.verdict.unknown { color: var(--red); border-color: rgba(255,141,141,.5); background: rgba(255,141,141,.1); }
+		.profile { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; font-size: .88rem; line-height: 1.55; background: #080d19; border: 1px solid var(--line); border-radius: 12px; padding: 18px; overflow-x: auto; color: #cfe0f7; }
+		.roadmap { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+		.phase { border-top: 4px solid var(--blue); border-radius: 10px; background: var(--panel); padding: 16px; }
+		.phase:nth-child(2) { border-color: var(--green); }
+		.phase:nth-child(3) { border-color: var(--amber); }
+		.phase:nth-child(4) { border-color: var(--purple); }
+		.sources { columns: 2; column-gap: 28px; }
+		.sources li { break-inside: avoid; margin-bottom: 9px; }
+		footer { margin-top: 58px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: .88rem; }
+		@media (max-width: 860px) {
+			.card, .card.third { grid-column: 1 / -1; }
+			.arch { grid-template-columns: 1fr; }
+			.arrow { transform: rotate(90deg); justify-self: center; }
+			.layer { grid-template-columns: 36px 1fr; }
+			.layer span:last-child { grid-column: 2; }
+			.roadmap { grid-template-columns: 1fr 1fr; }
+			.sources { columns: 1; }
+		}
+		@media (max-width: 560px) { .roadmap { grid-template-columns: 1fr; } main { width: min(100% - 22px, var(--max)); padding-top: 28px; } }
+	</style>
+</head>
+<body>
+<main>
+	<header>
+		<div class="eyebrow">Competitive research · 2026-08-04</div>
+		<h1>San Harness、模型适配与 Remote Control 竞品研究</h1>
+		<p class="lead">覆盖 Amp、Codex、Claude Code、OpenCode、Pi、DeepSeek Harness 与 Reasonix；重点不是罗列功能，而是回答三个问题：同一基模为何会在不同 agent 中表现不同、San 当前差距在哪里、以及多模型 harness 怎样避免永远追在模型发布之后。</p>
+		<div class="meta">
+			<span class="tag">结论截至 2026-08-04</span>
+			<span class="tag">官方资料优先</span>
+			<span class="tag">社区数据明确降权</span>
+			<span class="tag">本地代码实测</span>
+		</div>
+	</header>
+
+	<div class="callout">
+		<strong>核心判断：</strong>用户的方向判断成立，但问题不是“多模型产品必须为每个模型写一套 agent”。正确拆法是：保持一个稳定、通用的执行内核，把 prompt、工具 ABI、wire encoding、采样、缓存边界、压缩和 loop policy 做成<strong>可声明、可版本化、可 A/B、可快速回滚的 Model Harness Profile</strong>。San 已有这套架构的大部分底座，真正缺的是 profile 产品层和以 eval 为门禁的发布闭环。
+	</div>
+
+	<section>
+		<h2>一、先给结论</h2>
+		<div class="grid">
+			<article class="card third">
+				<div class="kicker">Remote Control</div>
+				<h3>Amp 在产品形态上推进最快</h3>
+				<p>Amp 已从“远程查看一个本地线程”推进到远程启动任意机器上的 agent、持久任务、定时唤醒和多人加入。Codex 与 Claude Code 则收敛到更清晰的安全架构：本机 executor + 出站 relay + Web/移动控制面。</p>
+			</article>
+			<article class="card third">
+				<div class="kicker">Model adaptation</div>
+				<h3>竞品都在做模型级适配</h3>
+				<p>Codex 直接为 GPT-5.6 Sol/Terra/Luna 刷新 bundled instructions；Claude 对新模型默认 lean prompt、对旧模型保留旧策略；OpenCode 源码中按模型族选择独立 prompt。趋势不是“一份提示词适配所有模型”。</p>
+			</article>
+			<article class="card third">
+				<div class="kicker">San</div>
+				<h3>底层强，profile 层弱</h3>
+				<p>San 的 provider 兼容、reasoning replay、tool dialect、append-only context、Context Steady、Metaharness 和 RPC v2 都很强；但 prompt/tool surface 仍偏重，模型切换时部分决策不会重算，也没有独立版本化的模型 profile。</p>
+			</article>
+			<article class="card third">
+				<div class="kicker">Evidence</div>
+				<h3>“Sol 在 Codex 不如 Pi/OpenCode”尚未被证实</h3>
+				<p>有可信的机制证据和社区个案证明 harness 会造成巨大效率差异，但目前缺少独立、同模型、同题集、同预算、多次重复的 Codex vs Pi/OpenCode 对照。不能把体感直接升级成普遍结论。</p>
+			</article>
+			<article class="card third">
+				<div class="kicker">DeepSeek</div>
+				<h3>0731 是“模型 × harness”联合成绩</h3>
+				<p>DeepSeek 明确披露 V4 Flash 0731 的 Code Agent 分数使用未发布 DeepSeek Harness minimal mode、max effort、特定采样参数；但 0731 同时做了 post-training，且未公布 harness ablation，因此无法把增幅单独归因给 harness。</p>
+			</article>
+			<article class="card third">
+				<div class="kicker">Priority</div>
+				<h3>先降低固定输入，再做 profile</h3>
+				<p>San 当前一次请求的固定输入约 12,068 tokens，其中工具 schema 8,047，占 66.7%。这比继续微调几百字系统提示词更值得优先处理；随后再对 Sol、Claude、DeepSeek 做受控 profile 实验。</p>
+			</article>
+		</div>
+	</section>
+
+	<section>
+		<h2>二、竞品近况：最近真正有方向意义的变化</h2>
+		<div class="timeline">
+			<div class="event">
+				<time>2026-05-06 → 07-22 · AMP</time>
+				<h3>从 remote-controllable CLI，扩到 runner、schedule 与 multiplayer</h3>
+				<p><a href="https://ampcode.com/news/neo">Neo</a> 重做 CLI，加入线程远程控制、90% 自动 compaction、steering/queue 和插件 API；<a href="https://ampcode.com/news/agents-everywhere">Agents Everywhere</a> 将所有活动线程汇总到 Web/移动/CLI；<a href="https://ampcode.com/news/agents-anywhere">Agents Anywhere</a> 支持从 Web 远程唤起任意已注册机器和目录上的 headless runner；随后又加入 <a href="https://ampcode.com/news/schedule">Schedule</a> 与 <a href="https://ampcode.com/news/multiplayer">Multiplayer</a>。</p>
+				<p class="small">值得注意的产品纠偏：Amp <a href="https://ampcode.com/news/end-of-public-threads">取消可发现的公开线程</a>，并为敏感远程操作加入 <a href="https://ampcode.com/news/proof-of-human">passkey proof-of-human</a>。这说明 remote 的安全边界不是附属能力，而是核心产品能力。</p>
+			</div>
+			<div class="event">
+				<time>2026-06-25 → 07-29 · CODEX</time>
+				<h3>Remote GA、MCP tool search、模型指令包与远程 Code Mode host</h3>
+				<p><a href="https://developers.openai.com/codex/changelog">Codex changelog</a> 显示：Remote 在 6 月 25 日 GA；MCP tools 对支持的模型默认走 tool search；7 月 18 日刷新 GPT-5.6 Sol/Terra/Luna bundled instructions；7 月底又加入 session 命名/固定、side conversations、Agent Plugins 和可通过 WebSocket 连接的远程 Code Mode host。</p>
+				<p class="small"><a href="https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md">app-server 协议</a> 已包含 thread/turn/item 生命周期、实验性 WebSocket、remoteControl pairing/client revoke、环境发现与 remote exec。它比“一个网页 UI”更像完整 agent control plane。</p>
+			</div>
+			<div class="event">
+				<time>当前 · CLAUDE CODE 2.1.x</time>
+				<h3>Lean prompt、prompt audit 与成熟的本地远程执行</h3>
+				<p><a href="https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md">Claude Code changelog</a> 记录：新模型默认 lean system prompt，但 Haiku、Sonnet/Opus 4.7 及更早型号保留旧 prompt；曾将日期移出 system prompt、增加跨用户可缓存动态 section 的排除开关，并持续修复 prompt cache invalidation。近期还加入 <code>prompt-audit</code>，专门检查 prompt/tool description 中面向旧模型的遗留模式。</p>
+				<p class="small"><a href="https://code.claude.com/docs/en/remote-control">Remote Control</a> 已支持 server mode、最多 32 并发 session、按 session 建 worktree、浏览器/手机同步 subagent 状态、断线恢复和 Trusted Devices。执行与文件访问留在本机，本机只发起出站 HTTPS 连接。</p>
+			</div>
+			<div class="event">
+				<time>当前 · OPENCODE / PI</time>
+				<h3>OpenCode 走模型族 prompt；Pi 坚持小内核</h3>
+				<p>OpenCode 的 <a href="https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/system.ts">system prompt selector</a> 会按模型 ID 选择 Anthropic、GPT、Codex、Gemini、Kimi、Meta 等独立 prompt；其 <a href="https://opencode.ai/docs/web/">Web UI</a> 与 <a href="https://opencode.ai/docs/server/">headless server</a> 提供本地/LAN 的 client-server 形态，但还不是 Amp/Codex/Claude 那种互联网出站 relay 产品。</p>
+				<p class="small">Pi 的 <a href="https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/system-prompt.ts">核心 prompt</a> 默认只围绕 read/bash/edit/write，扩展通过 tools、prompt snippets、provider payload hooks 接入。它的优势首先是低固定开销和可组合性，不等于已经对每个模型做了深适配。</p>
+			</div>
+			<div class="event">
+				<time>2026-07-31 · DEEPSEEK</time>
+				<h3>V4 Flash 0731 公开承认评测 harness 是结果的一部分</h3>
+				<p><a href="https://api-docs.deepseek.com/updates/">官方更新</a> 与 <a href="https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731">模型卡</a> 明确给出 Code Agent 评测设置：未发布的 DeepSeek Harness、minimal mode、max effort、<code>temperature=1</code>、<code>top_p=.95</code>。模型原生面向 Responses API，并专门适配 Codex；模型卡还提供独立 encoding/parser，而不是通用 Jinja chat template。</p>
+			</div>
+		</div>
+	</section>
+
+	<section>
+		<h2>三、Remote Control 正在收敛成同一种架构</h2>
+		<p>Amp、Codex、Claude Code 的产品名字不同，但底层方向高度一致：远程端不是“把代码仓库上传到网页再运行”，而是把本地 agent 进程提升为可寻址、可恢复、可审计的 executor。</p>
+		<div class="arch" role="img" aria-label="Remote Control architecture">
+			<div class="node"><strong>Web / Mobile / CLI</strong>查看线程、steer、cancel、approve、上传附件、接收通知</div>
+			<div class="arrow">⇄</div>
+			<div class="node"><strong>Auth + Relay + Event Log</strong>pairing、设备撤销、幂等命令、游标重放、状态同步、调度唤醒</div>
+			<div class="arrow">⇄</div>
+			<div class="node"><strong>Local / Remote Executor</strong>主动出站连接；持有 repo、凭证、MCP、工具、沙箱、worktree</div>
+		</div>
+
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>能力</th><th>Amp</th><th>Codex</th><th>Claude Code</th><th>OpenCode</th><th>San 判断</th></tr></thead>
+				<tbody>
+					<tr><td>本地执行 + 远程控制</td><td class="good">成熟</td><td class="good">Remote GA</td><td class="good">Research preview，能力完整</td><td>本地 Web/server</td><td>RPC v2 底座已有，缺产品化 relay</td></tr>
+					<tr><td>远程创建线程</td><td class="good">任意注册 runner/目录</td><td>环境发现 + remote exec</td><td class="good">server mode，可按需创建</td><td>调用本地 server API</td><td>需要稳定 environment identity</td></tr>
+					<tr><td>并发隔离</td><td>多目录/runner</td><td>线程/环境</td><td class="good">worktree spawn，capacity</td><td>session</td><td>应把 worktree 纳入 executor contract</td></tr>
+					<tr><td>断线/重放/幂等</td><td>durable execution</td><td>事件协议与队列</td><td>自动重连与状态补发</td><td>较基础</td><td class="good">San 已有 event sequence、backpressure、idempotency、crash recovery</td></tr>
+					<tr><td>调度/后台任务</td><td class="good">Schedule</td><td>云任务与桌面远程</td><td>背景 agent/workflow</td><td>需外部编排</td><td>应排在 relay MVP 之后</td></tr>
+					<tr><td>多人协作</td><td class="good">Multiplayer</td><td>未作为主能力</td><td>组织/设备控制</td><td>共享 server 风险较高</td><td>P2，不应早于鉴权、审批和审计</td></tr>
+				</tbody>
+			</table>
+		</div>
+
+		<div class="callout">
+			<strong>San 的正确切入点：</strong>不要先做“Web 版 TUI”。先把现有 RPC v2 包装成 <code>san runner</code>：稳定的 host + cwd + repo/environment ID、出站 relay、线程 inventory、event cursor replay、steer/cancel/approve、pair/revoke。Web/移动端只是这个协议的一个 client。现有 <a href="./san-channel-vs-web-console-20260804.html">San Channel vs Web Console 研究</a>给出的“本地 executor + relay + channels”方向与竞品演进一致。
+		</div>
+	</section>
+
+	<section>
+		<h2>四、Harness 不是系统提示词：至少有八层</h2>
+		<p>把表现差异都归因于 prompt 长短会误导优化。真正的 coding harness 是一个闭环系统，任一层都可能让同一个模型出现明显不同的成功率、token、延迟和稳定性。</p>
+		<div class="layers">
+			<div class="layer"><strong>Wire encoding / parser</strong><span>消息如何编码、reasoning block 如何回放、tool call 与截断 JSON 如何解析、provider 特有字段如何保真。DeepSeek 0731 单独发布 encoding/parser，说明这不是实现细节。</span></div>
+			<div class="layer"><strong>Sampling / effort</strong><span>effort 档位、temperature、top_p、max output、service tier。评测 profile 与日常 profile 不应该混用。</span></div>
+			<div class="layer"><strong>Tool ABI</strong><span>工具数量、schema 复杂度、native/freeform/programmatic tool、tool search、并行调用、patch/shell 的反馈质量。</span></div>
+			<div class="layer"><strong>Prompt posture</strong><span>lean/default/legacy，规则是否重复，是否按模型族选择措辞，动态内容是否放进稳定前缀。</span></div>
+			<div class="layer"><strong>Loop policy</strong><span>tool choice、续写、重试、no-progress、repair、delegation、并行策略、什么时候要求总结或切换模式。</span></div>
+			<div class="layer"><strong>Context / cache</strong><span>字节稳定前缀、显式 cache breakpoint、append-only log、compaction 触发点、压缩产物是否改写历史。</span></div>
+			<div class="layer"><strong>Environment quality</strong><span>搜索、编辑、诊断、测试、terminal stream、权限和错误反馈。工具成功率本身就是模型上限的一部分。</span></div>
+			<div class="layer"><strong>Eval / telemetry</strong><span>质量、回合、总输入、uncached input、cache write/read、tool parse failure、stall、wall time；没有这层，适配只能靠体感。</span></div>
+		</div>
+	</section>
+
+	<section>
+		<h2>五、几个关键说法，证据到底到哪一步</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>说法</th><th>证据</th><th>判断</th></tr></thead>
+				<tbody>
+					<tr>
+						<td>同一模型换 harness，效率与效果会显著变化</td>
+						<td>OpenAI 在 <a href="https://openai.com/index/gpt-5-6/">GPT-5.6 发布说明</a>中披露，同一模型改用 Programmatic Tool Calling 后，PlayCo 场景总 token 减少 63.5%、turn 减少 50.1%，结果相当。</td>
+						<td><span class="verdict fact">机制已证实</span><br>tool ABI/loop 可以产生数量级影响。</td>
+					</tr>
+					<tr>
+						<td>GPT-5.6 Sol 在 Codex 不如 OpenCode/Pi</td>
+						<td><a href="https://github.com/earendil-works/pi/discussions/6646">Pi 社区小样本</a>证明 Pi 在其他 Codex-auth 模型上固定输入更低；<a href="https://github.com/Tura-AI/tura">Tura 自测</a>称同一 Sol 在 20 个 DeepSWE 任务上能以更少 token 达到更高分。但前者不是 Sol，后者非独立且无 macro-tool ablation。公开榜单也没有同预算的 Sol×不同 harness 矩阵。</td>
+						<td><span class="verdict report">可信线索</span><br>不能视为普遍事实，San 应自行做控制实验。</td>
+					</tr>
+					<tr>
+						<td>Claude Code 大幅精简系统提示词，所以越短越好</td>
+						<td>Claude Code 确实让新模型默认 lean prompt，但明确排除 Haiku 和 4.7 及更早模型；Codex 也在 7 月 18 日专门刷新 Sol/Terra/Luna instructions；OpenCode 采用模型族 prompt。</td>
+						<td><span class="verdict fact">前半句成立</span><br>结论应是“按代际选 posture”，不是“一律最短”。</td>
+					</tr>
+					<tr>
+						<td>DeepSeek V4 Flash 0731 的分数是靠自家 harness 实现</td>
+						<td>官方明确披露分数使用未发布 harness 和特定参数；同时也明确 0731 相对 preview 继续 post-training，且没有发布 harness ablation。</td>
+						<td><span class="verdict unknown">不可拆分归因</span><br>准确表述是“模型与 harness 的联合系统分数”。</td>
+					</tr>
+					<tr>
+						<td>Reasonix 做了字节粒度缓存对齐</td>
+						<td><a href="https://github.com/esengine/deepseek-reasonix/blob/v1/docs/ARCHITECTURE.md">Reasonix v1 架构</a>明确设计 immutable prefix + append-only log + volatile scratch，并对 prefix 做 hash/pin；项目还包含 DeepSeek schema repair 与 reasoning replay。</td>
+						<td><span class="verdict fact">项目设计成立</span><br>但其性能收益仍主要是项目方自述，不等同于独立 benchmark。</td>
+					</tr>
+				</tbody>
+			</table>
+		</div>
+		<p class="small">补充：DeepSeek V4 当前 <a href="https://api-docs.deepseek.com/quick_start/pricing/">cache hit 与 miss 单价</a>差距约 50 倍，prefix 稳定对成本的价值极高；但缓存稳定主要降低成本/延迟，不应未经实验证明就宣称提高任务质量。</p>
+	</section>
+
+	<section>
+		<h2>六、San 当前 harness 到底是什么情况</h2>
+		<p>San 不是“完全没有模型适配”，相反，它在 provider/wire 与长上下文层已经做了大量深适配。问题是这些能力散落在 catalog、provider、session、prompt、tool registry 和配置分支里，尚未收束为一个可观察、可发版、可回滚的模型 profile。</p>
+
+		<h3>当前真实固定输入</h3>
+		<div class="grid">
+			<article class="card third"><div class="stat">12,068</div><div class="kicker">tokens · fixed input</div><p class="small">当前项目配置、当前默认模型下，实跑 <code>measure-prompt-tokens.ts --json</code>。</p></article>
+			<article class="card third"><div class="stat">8,047</div><div class="kicker">tokens · top-level tool schemas</div><p class="small">占固定输入 <strong>66.7%</strong>，是第一优化目标。</p></article>
+			<article class="card third"><div class="stat">3,792</div><div class="kicker">tokens · system prompt</div><p class="small">约占 31.4%；system context 另有 229 tokens。</p></article>
+			<article class="card"><h3>最大两个 schema</h3><div class="stat">3,792</div><p><code>edit</code> 1,981 + <code>hub</code> 1,811 tokens，恰好占整个固定输入 31.4%。只调 system prompt 而不动工具面，收益上限很低。</p></article>
+			<article class="card"><h3>xdev 已经减轻一部分负担</h3><div class="stat">3,420</div><p>9 个可发现 xdev 工具若全部内联，需要额外 3,420 tokens；当前项目使用 <code>xdevDocs: catalog</code>，只发送精简目录。但 top-level 仍有 10 个完整 schema。</p></article>
+		</div>
+
+		<h3 style="margin-top:30px">已经做得好的地方</h3>
+		<div class="grid">
+			<article class="card">
+				<h3>Provider / wire 深适配</h3>
+				<p>Catalog 中有 GPT-5.6 与 DeepSeek V4 的 effort 映射；provider 层处理 Responses、Anthropic、Gemini、reasoning replay、sampling 限制和工具兼容。非 native tool 模型还能按 GLM/Hermes/Kimi/XML/Anthropic/DeepSeek/Harmony/Qwen/Gemini 等 dialect 退化。</p>
+			</article>
+			<article class="card">
+				<h3>缓存架构与 Reasonix 同类</h3>
+				<p><a href="../../packages/agent/src/append-only-context.ts">AppendOnlyContextManager</a> 已有 <code>StablePrefix</code>、<code>AppendOnlyLog</code>、逐消息 deterministic digest，以及历史改写时寻找最长稳定前缀。DeepSeek、Xiaomi、本地推理/provider <code>supportsStore</code> 会在 auto 模式启用。</p>
+			</article>
+			<article class="card">
+				<h3>长上下文不是纸面设计</h3>
+				<p>Context Steady 的 30/30 质量门禁已通过；GPT-5.6 Sol xhigh 的 L5 超长任务中，steady 将总 prompt tokens 从 213.7M 降至 66.3M，成本从 126.91 降至 62.59。但 L1–L4 反而更贵，说明必须 workload-gated。</p>
+			</article>
+			<article class="card">
+				<h3>已有实验与远程底座</h3>
+				<p><a href="../../packages/metaharness/README.md">Metaharness</a> 已支持 experiment → arm → run → normalized trace，以及 score/token/cost 对比；<a href="../../packages/coding-agent/src/modes/rpc-v2/index.ts">RPC v2</a> 已有 sequence、backpressure、idempotency、resource upload、approval、crash recovery。这两块分别是 profile promotion 与 remote relay 的关键基础。</p>
+			</article>
+		</div>
+
+		<h3 style="margin-top:30px">真正的缺口</h3>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>层</th><th>现状</th><th>问题</th><th>优先动作</th></tr></thead>
+				<tbody>
+					<tr><td>Prompt profile</td><td>一个约 18.4K 字符的主模板，夹有 Codex task policy、intent/eager/secrets 等条件分支</td><td>通用政策与模型姿态耦合；缺少 Claude lean、Sol、DeepSeek 独立版本</td><td class="good">拆成稳定 kernel + 条件模块 + per-family posture</td></tr>
+					<tr><td>Tool surface</td><td>当前 10 个 top-level schemas + xdev catalog</td><td>schema 占固定输入 66.7%；<code>edit</code>/<code>hub</code> 最大；发现机制只覆盖部分工具</td><td class="good">按 profile/mode 选择 essential、discoverable、macro 三层</td></tr>
+					<tr><td>Model switch</td><td>append-only 会在切模时 invalidation</td><td><a href="../../packages/coding-agent/src/sdk.ts">SDK</a> 明确说明 inline descriptors 等按 session-start model 固定；切模可能保留错误姿态</td><td class="good">所有模型相关决策在切模时重新 resolve</td></tr>
+					<tr><td>Cache observability</td><td>内部有 fingerprint/digest，provider usage 有 hit/miss</td><td>用户看不到首个分歧 byte/token、稳定前缀长度、cache SLO 与动态块来源</td><td class="good">增加 harness inspect 与 first-divergence telemetry</td></tr>
+					<tr><td>Append-only auto</td><td>resolver 显式识别 DeepSeek、本地、Xiaomi、<code>supportsStore</code></td><td>settings 文案列出 Anthropic，但 resolver 没有直接 provider 分支；需确认 descriptor 是否始终注入 <code>supportsStore</code></td><td class="warn">补 contract test，按真实 provider capability 决策</td></tr>
+					<tr><td>Compaction</td><td>Context Steady 默认已启用在本项目</td><td>L1–L4 成本回归；“长上下文优化”不应全局等价开启</td><td class="good">按预计任务长度、cache economics 和模型 profile gate</td></tr>
+					<tr><td>Routing vs adaptation</td><td><code>.san/config.yml</code> 已把 Sol/Claude/DeepSeek 分配给不同角色</td><td>选对模型不等于让同一模型在最佳 harness 下工作</td><td class="good">把 profile ID 和 model role 同时记录进 trace</td></tr>
+					<tr><td>Release loop</td><td>Metaharness 能对比 arm</td><td>没有 profile registry、自动门禁、灰度、回滚和 provenance</td><td class="good">让 profile 成为独立发布物，而不是散落的 if/else</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section>
+		<h2>七、目标架构：通用 kernel + Model Harness Profile</h2>
+		<p>多模型接入并不意味着每家都 fork 一套 agent。最稳定的边界是：执行、权限、日志、工具实现、session state 属于 kernel；容易随模型变化的决策全部进入 profile。解析优先级应为 <code>exact model → model family → API dialect → generic</code>，并在每次切模时重新解析。</p>
+		<div class="profile">ModelHarnessProfile {
+  id, version, match: { provider, api, family, exactModel }
+  prompt: { posture, modules, legacyFallback }
+  tools: {
+    surface: essential | discoverable | macro,
+    schema: inline | deferred | simplified,
+    calling: native | freeform | programmatic,
+    parallelism
+  }
+  wire: { encoder, parser, reasoningReplay, repairPolicy }
+  sampling: { effortMap, temperature, topP, maxOutput, serviceTier }
+  loop: { toolChoice, continuation, retry, noProgress, delegation }
+  context: { stableRegions, cacheBreakpoints, compaction, dynamicPlacement }
+  eval: { suite, baseline, nonInferiority, efficiencyGate, provenance }
+}</div>
+
+		<div class="grid">
+			<article class="card">
+				<h3>GPT-5.6 Sol profile</h3>
+				<ul>
+					<li>Responses native；跟随官方 Sol 指令包做独立 A/B，而不是复用 generic prompt。</li>
+					<li>优先验证 freeform patch/shell、Programmatic Tool Calling 或等价 macro tool；这是最可能显著减少 turn 的位置。</li>
+					<li>显式 cache breakpoint；<code>max/ultra</code> 只给困难任务，简单任务不强制 subagent。</li>
+				</ul>
+			</article>
+			<article class="card">
+				<h3>Claude 新模型 profile</h3>
+				<ul>
+					<li>新模型走 lean；旧型号保留 legacy，按 Anthropic 自己的代际边界回退。</li>
+					<li>日期、MCP 动态说明等放到稳定缓存区之外；避免重复 harness reminder。</li>
+					<li>开启 tool search/按需 schema，并分别验证 adaptive thinking 与并行 agent。</li>
+				</ul>
+			</article>
+			<article class="card">
+				<h3>DeepSeek V4 Flash 0731 profile</h3>
+				<ul>
+					<li>单独做 encoding/parser golden tests、reasoning replay、截断与 tool JSON repair。</li>
+					<li>benchmark profile 使用官方 max + temp 1 + top_p .95；日常 profile 另行评估，不能照抄榜单参数。</li>
+					<li>append-only、首分歧定位和 cache cost 作为强制 telemetry；不发送不支持的 <code>tool_choice</code>。</li>
+				</ul>
+			</article>
+			<article class="card">
+				<h3>Profile 发布原则</h3>
+				<ul>
+					<li>profile 与 San 主版本解耦，可签名、灰度、回滚，并记录 catalog/CLI 最低版本。</li>
+					<li>每个 profile 携带 eval provenance，不允许只凭 anecdote 提升为默认。</li>
+					<li>用户 override 与 provider compat overlay 保留，但最终 resolved profile 必须可解释。</li>
+				</ul>
+			</article>
+		</div>
+	</section>
+
+	<section>
+		<h2>八、建议路线：先可观测，再适配，再远程产品化</h2>
+		<div class="roadmap">
+			<div class="phase">
+				<div class="kicker">P0 · 1–2 weeks</div>
+				<h3>Harness inspect</h3>
+				<p>增加 <code>san harness inspect --model</code>：输出 resolved profile、prompt/schema tokens、encoder、effort、cache boundary、动态 section。trace 记录 profile/version 与 first divergence。</p>
+			</div>
+			<div class="phase">
+				<div class="kicker">P0/P1 · 2–4 weeks</div>
+				<h3>瘦工具面 + profile MVP</h3>
+				<p>先处理 top-level schema；拆 prompt kernel/modules；切模时重算 tool/prompt/cache 决策。落地 Sol、Claude、DeepSeek 三个 profile。</p>
+			</div>
+			<div class="phase">
+				<div class="kicker">P1 · continuous</div>
+				<h3>Metaharness promotion gate</h3>
+				<p>同题、同模型、同预算、多 seed 比 baseline/lean/profile；质量须非劣，随后比较 turns、uncached/cache write、parse failure、stall、成本与延迟。</p>
+			</div>
+			<div class="phase">
+				<div class="kicker">P1/P2</div>
+				<h3>Runner + relay</h3>
+				<p>把 RPC v2 产品化为 headless executor 与出站 relay；先做 pair/revoke、inventory、replay、approve，再做 schedule/background，最后才是 multiplayer。</p>
+			</div>
+		</div>
+
+		<div class="callout">
+			<strong>实验门禁建议：</strong>每个候选 profile 至少覆盖 20–30 个任务、每配置多次重复；先设质量非劣阈值，再优化总 turn、总输入、uncached input、cache write、工具解析失败、无进展循环、wall time 与成本。公开 benchmark 只能用于提出假设，不能直接决定默认配置。
+		</div>
+	</section>
+
+	<section>
+		<h2>九、最终判断</h2>
+		<ol>
+			<li><strong>Harness 迭代确实开始落后于基模。</strong>原因不是工程师不会写 prompt，而是模型厂商同时改变 wire format、tool semantics、effort、缓存和并行能力；用散落 if/else 追版本必然越来越慢。</li>
+			<li><strong>San 不需要选择“通用”还是“深适配”。</strong>执行内核继续通用，profile 必须深适配；这是同时支持多 provider 与快速追模型的唯一可维护方案。</li>
+			<li><strong>San 当前最大短板不是推理 provider 支持。</strong>而是固定工具输入过重、模型姿态没有产品化、切模重算不完整、缓存边界不可见、Metaharness 还没变成发布门禁。</li>
+			<li><strong>Reasonix 与 DeepSeek 的信号应该吸收，但不用重造已有能力。</strong>San 已有同类 append-only 核心；下一步是 byte/token divergence telemetry、DeepSeek 0731 golden encoding tests 和官方参数 profile。</li>
+			<li><strong>Remote Control 应与 harness 解耦推进。</strong>它是控制面与执行面的协议工程；共享 session/event/approval substrate，但不会直接提高单模型能力。竞品已经证明，本地 executor + outbound relay 是当前最稳妥的产品边界。</li>
+		</ol>
+	</section>
+
+	<section>
+		<h2>来源与证据等级</h2>
+		<p class="small">产品能力、版本和模型设置优先引用官方文档/源码；GitHub discussion、issue 与第三方仓库只作为线索，文中均明确降权。San 数字来自当前工作区实跑与本地代码。</p>
+		<ul class="sources">
+			<li>Amp: <a href="https://ampcode.com/news/neo">Neo</a>, <a href="https://ampcode.com/news/agents-everywhere">Agents Everywhere</a>, <a href="https://ampcode.com/news/agents-anywhere">Agents Anywhere</a>, <a href="https://ampcode.com/news/schedule">Schedule</a>, <a href="https://ampcode.com/news/multiplayer">Multiplayer</a></li>
+			<li>OpenAI: <a href="https://developers.openai.com/codex/changelog">Codex changelog</a>, <a href="https://openai.com/index/work-with-codex-from-anywhere/">Work with Codex from anywhere</a>, <a href="https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md">app-server protocol</a></li>
+			<li>OpenAI: <a href="https://openai.com/index/gpt-5-6/">GPT-5.6 announcement</a>（Programmatic Tool Calling、cache breakpoints、effort）</li>
+			<li>Anthropic: <a href="https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md">Claude Code changelog</a>, <a href="https://code.claude.com/docs/en/remote-control">Remote Control docs</a></li>
+			<li>OpenCode: <a href="https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/system.ts">model prompt selector</a>, <a href="https://opencode.ai/docs/web/">Web docs</a>, <a href="https://opencode.ai/docs/server/">Server docs</a></li>
+			<li>Pi: <a href="https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/system-prompt.ts">system prompt builder</a>, <a href="https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md">extension model</a></li>
+			<li>DeepSeek: <a href="https://api-docs.deepseek.com/updates/">V4 Flash 0731 update</a>, <a href="https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731">model card</a>, <a href="https://api-docs.deepseek.com/quick_start/pricing/">pricing/cache</a></li>
+			<li>Reasonix: <a href="https://github.com/esengine/deepseek-reasonix/blob/v1/docs/ARCHITECTURE.md">v1 architecture</a>, <a href="https://github.com/esengine/deepseek-reasonix">current repository</a></li>
+			<li>社区线索：<a href="https://github.com/earendil-works/pi/discussions/6646">Pi/OpenCode/Codex token comparison</a>, <a href="https://github.com/Tura-AI/tura">Tura same-model self-benchmark</a></li>
+			<li>San 本地：<a href="../../packages/coding-agent/src/system-prompt.ts">system-prompt.ts</a>, <a href="../../packages/coding-agent/src/sdk.ts">sdk.ts</a>, <a href="../../packages/agent/src/append-only-context.ts">append-only-context.ts</a>, <a href="../../packages/metaharness/README.md">Metaharness</a>, <a href="./san-context-steady-release-benchmark-summary-20260718.json">Context Steady benchmark</a></li>
+		</ul>
+	</section>
+
+	<footer>
+		生成于 San 当前工作区。报告只新增本 HTML，不修改现有产品代码；工作区原有未提交改动未触碰。
+	</footer>
+</main>
+</body>
+</html>

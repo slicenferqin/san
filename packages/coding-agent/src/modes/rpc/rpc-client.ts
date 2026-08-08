@@ -115,6 +115,8 @@ const sessionEventTypes = new Set<AgentSessionEvent["type"]>([
 	"auto_retry_end",
 	"retry_fallback_applied",
 	"retry_fallback_succeeded",
+	"model_route_resolved",
+	"model_route_changed",
 	"ttsr_triggered",
 	"todo_reminder",
 	"todo_auto_clear",

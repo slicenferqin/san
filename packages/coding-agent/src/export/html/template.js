@@ -329,6 +329,10 @@
           case 'thinking_level_change':
             parts.push('thinking', entry.thinkingLevel);
             break;
+          case 'model_route_change':
+            parts.push('route', entry.logicalModel, entry.fromRoute, entry.toRoute, entry.reason);
+            if (Number.isFinite(entry.cooldownUntil)) parts.push(new Date(entry.cooldownUntil).toISOString());
+            break;
           case 'mode_change':
             parts.push('mode', entry.mode);
             break;
@@ -538,6 +542,13 @@
             return labelHtml + `<span class="tree-muted">[thinking: ${entry.thinkingLevel}]</span>`;
           case 'mode_change':
             return labelHtml + `<span class="tree-muted">[mode: ${escapeHtml(entry.mode)}]</span>`;
+          case 'model_route_change': {
+            const cooldown = Number.isFinite(entry.cooldownUntil)
+              ? ` · cooldown until ${new Date(entry.cooldownUntil).toISOString()}`
+              : '';
+            const text = truncate(normalize(`${entry.logicalModel} ${entry.fromRoute} → ${entry.toRoute} · ${entry.reason}${cooldown}`));
+            return labelHtml + `<span class="tree-route-change">[route: ${escapeHtml(text)}]</span>`;
+          }
           default:
             return labelHtml + `<span class="tree-muted">[${entry.type}]</span>`;
         }
@@ -1140,6 +1151,14 @@
 
         if (entry.type === 'thinking_level_change') {
           const html = `<div class="thinking-change" id="${entryId}">${tsHtml}Thinking level: <span class="thinking-level">${escapeHtml(entry.thinkingLevel)}</span></div>`;
+          return html;
+        }
+
+        if (entry.type === 'model_route_change') {
+          const cooldown = Number.isFinite(entry.cooldownUntil)
+            ? ` · cooldown until <span class="route-change-cooldown">${escapeHtml(new Date(entry.cooldownUntil).toISOString())}</span>`
+            : '';
+          const html = `<div class="model-route-change" id="${entryId}">${tsHtml}Route change: <span class="route-change-logical">${escapeHtml(entry.logicalModel)}</span> ${escapeHtml(entry.fromRoute)} → ${escapeHtml(entry.toRoute)} <span class="route-change-reason">· ${escapeHtml(entry.reason)}</span>${cooldown}</div>`;
           return html;
         }
 

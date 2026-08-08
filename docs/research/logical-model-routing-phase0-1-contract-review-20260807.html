@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Logical Model Routing Phase 0–1 合同审查</title>
+	<style>
+		:root {
+			color-scheme: dark;
+			--bg: #08111f;
+			--panel: #101c2f;
+			--panel-2: #16263e;
+			--line: #30435f;
+			--text: #eef4ff;
+			--muted: #afbed3;
+			--blue: #83bdff;
+			--green: #6edbb0;
+			--amber: #f4cc76;
+			--red: #ff929b;
+			--purple: #c5adff;
+			--max: 1240px;
+		}
+		* { box-sizing: border-box; }
+		html { scroll-behavior: smooth; }
+		body {
+			margin: 0;
+			font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			line-height: 1.68;
+			color: var(--text);
+			background:
+				radial-gradient(circle at 8% 0%, rgba(75, 132, 229, .22), transparent 34rem),
+				radial-gradient(circle at 92% 4%, rgba(197, 173, 255, .12), transparent 30rem),
+				var(--bg);
+		}
+		main { width: min(var(--max), calc(100% - 32px)); margin: 0 auto; padding: 42px 0 76px; }
+		a { color: var(--blue); text-decoration: none; }
+		a:hover, a:focus-visible { text-decoration: underline; }
+		h1, h2, h3, h4 { line-height: 1.26; letter-spacing: -.018em; }
+		h1 { max-width: 1050px; margin: 10px 0 16px; font-size: clamp(2rem, 5vw, 3.45rem); }
+		h2 { margin: 52px 0 18px; font-size: clamp(1.45rem, 3vw, 2.05rem); }
+		h3 { margin: 27px 0 10px; font-size: 1.22rem; }
+		h4 { margin: 18px 0 8px; font-size: 1rem; color: #dce9fb; }
+		p { margin: 8px 0 14px; }
+		ul, ol { padding-left: 1.35rem; }
+		li + li { margin-top: 5px; }
+		code {
+			font: .9em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+			color: #dcecff;
+			background: rgba(131, 189, 255, .09);
+			border: 1px solid rgba(131, 189, 255, .16);
+			padding: .08rem .32rem;
+			border-radius: 5px;
+			overflow-wrap: anywhere;
+		}
+		.eyebrow { color: var(--green); font-size: .79rem; font-weight: 780; letter-spacing: .09em; text-transform: uppercase; }
+		.lead { max-width: 1080px; color: #ced9ea; font-size: clamp(1.03rem, 2vw, 1.2rem); }
+		.meta, .jump { display: flex; flex-wrap: wrap; gap: 8px; }
+		.tag { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: rgba(16, 28, 47, .85); color: var(--muted); font-size: .88rem; }
+		.jump { margin: 24px 0 0; }
+		.jump a { padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: rgba(16, 28, 47, .72); }
+		.callout { margin: 25px 0; padding: 20px 22px; border: 1px solid rgba(110, 219, 176, .35); border-left: 5px solid var(--green); border-radius: 12px; background: linear-gradient(135deg, rgba(110, 219, 176, .10), rgba(16, 28, 47, .88)); }
+		.callout.risk { border-color: rgba(255, 146, 155, .38); border-left-color: var(--red); background: linear-gradient(135deg, rgba(255, 146, 155, .10), rgba(16, 28, 47, .9)); }
+		.callout.warn { border-color: rgba(244, 204, 118, .38); border-left-color: var(--amber); background: linear-gradient(135deg, rgba(244, 204, 118, .09), rgba(16, 28, 47, .9)); }
+		.verdict { display: grid; grid-template-columns: 1.15fr .85fr; gap: 15px; margin: 24px 0; }
+		.card { padding: 18px; border: 1px solid var(--line); border-radius: 13px; background: rgba(16, 28, 47, .9); }
+		.card h3 { margin-top: 0; }
+		.metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+		.metric { padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #0b1627; }
+		.metric strong { display: block; font-size: 1.5rem; line-height: 1.2; }
+		.metric span { color: var(--muted); font-size: .84rem; }
+		.risk-text { color: var(--red); }
+		.warn-text { color: var(--amber); }
+		.good { color: var(--green); }
+		.purple { color: var(--purple); }
+		.small { color: var(--muted); font-size: .89rem; }
+		.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 13px; }
+		table { width: 100%; min-width: 880px; border-collapse: collapse; background: rgba(16, 28, 47, .91); }
+		th, td { padding: 11px 13px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+		th { color: #d7e4f7; background: var(--panel-2); font-size: .79rem; letter-spacing: .045em; text-transform: uppercase; }
+		tr:last-child td { border-bottom: 0; }
+		.status { display: inline-block; padding: 2px 8px; border: 1px solid currentColor; border-radius: 999px; white-space: nowrap; font-size: .78rem; font-weight: 760; }
+		.status.fail { color: var(--red); }
+		.status.partial { color: var(--amber); }
+		.status.pass { color: var(--green); }
+		.status.info { color: var(--blue); }
+		.finding { margin: 18px 0; padding: 21px; border: 1px solid var(--line); border-radius: 14px; background: rgba(16, 28, 47, .93); }
+		.finding.high { border-top: 4px solid var(--red); }
+		.finding.medium { border-top: 4px solid var(--amber); }
+		.finding-head { display: flex; justify-content: space-between; align-items: start; gap: 16px; }
+		.finding-head h3 { margin: 0; }
+		.finding-meta { display: flex; flex-wrap: wrap; gap: 7px; margin: 9px 0 14px; }
+		.finding-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+		.fact { padding: 13px 14px; border: 1px solid var(--line); border-radius: 10px; background: #0b1627; }
+		.fact h4 { margin-top: 0; color: var(--blue); }
+		.evidence { margin: 8px 0; padding: 12px 14px; border-left: 3px solid var(--purple); background: rgba(197, 173, 255, .065); }
+		.checklist { list-style: none; padding: 0; }
+		.checklist li { position: relative; padding: 10px 12px 10px 38px; border-bottom: 1px solid var(--line); }
+		.checklist li::before { content: "待"; position: absolute; left: 9px; top: 11px; color: var(--amber); font-size: .76rem; font-weight: 800; }
+		.checklist li.blocked::before { content: "阻"; color: var(--red); }
+		.checklist li.source::before { content: "审"; color: var(--blue); }
+		.checklist li:last-child { border-bottom: 0; }
+		footer { margin-top: 54px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: .87rem; }
+		@media (max-width: 900px) {
+			.verdict, .finding-grid { grid-template-columns: 1fr; }
+			.metric-grid { grid-template-columns: 1fr 1fr; }
+		}
+		@media (max-width: 560px) {
+			main { width: min(100% - 22px, var(--max)); padding-top: 27px; }
+			.metric-grid { grid-template-columns: 1fr; }
+			.finding-head { display: block; }
+		}
+		@media print {
+			:root { color-scheme: light; }
+			body { color: #182235; background: #fff; }
+			.card, .finding, table, .metric, .fact { color: #182235; background: #fff; }
+			th { color: #182235; background: #eef2f8; }
+			.small, .tag { color: #4c596b; }
+			a { color: #165ca8; }
+		}
+	</style>
+</head>
+<body>
+<main>
+	<header>
+		<div class="eyebrow">Source contract review · 2026-08-07</div>
+		<h1>Logical Model Routing<br>Phase 0–1 合同审查</h1>
+		<p class="lead">以 2026-08-04 路由 Spec 的 Phase 0/1 为唯一产品合同，对基线 <code>50fa2eeb7</code>、实现栈 <code>7a5677f46..1de79dc98</code> 与最终 <code>HEAD</code> 做只读源代码审查，并把并发 package full-suite 结果作为独立发布门禁。</p>
+		<div class="meta">
+			<span class="tag">分支：work/next-20260801</span>
+			<span class="tag">基线：50fa2eeb7</span>
+			<span class="tag">实现栈：7a5677f46..1de79dc98</span>
+			<span class="tag">HEAD：1de79dc98fe40c8037bfe0263a3b11f6b1f807a0</span>
+			<span class="tag">审查范围：Phase 0–1</span>
+		</div>
+		<nav class="jump" aria-label="文档导航">
+			<a href="#verdict">结论</a>
+			<a href="#matrix">验收矩阵</a>
+			<a href="#findings">五项发现</a>
+			<a href="#compat">SDK / RPC</a>
+			<a href="#suite-gate">全量门禁</a>
+			<a href="logical-model-routing-phase0-1-remediation-plan-20260807.html">详细修复计划</a>
+			<a href="san-logical-model-routing-spec-20260804.html">权威 Spec</a>
+		</nav>
+	</header>
+
+	<section id="verdict">
+		<h2>一、执行结论</h2>
+		<div class="callout risk">
+			<strong class="risk-text">Phase 0–1 结论：NO-GO / 未完成合同验收。</strong>
+			核心架构已经形成，确定性 resolver、显式 Route Group、会话意图、同模型 fallback、SDK/RPC 增量投影均有实质实现；但最终 HEAD 仍有 <strong>2 项高严重度、3 项中严重度</strong>的已确认缺陷。它们分别破坏配置热更新、账单与硬成本预算、路由审计可见性、长上下文下的逻辑模型可选性，以及配置验证与运行时安全策略的一致性。因此不能依据 Spec 第十四节宣告 Phase 0 + Phase 1 完成。
+		</div>
+		<div class="verdict">
+			<div class="card">
+				<h3>审查判定</h3>
+				<ul>
+					<li><strong>核心路径：</strong>主体实现可辨认，常规优先级选择和 provider route fallback 有覆盖。</li>
+					<li><strong>阻断点：</strong><code>LMR-01</code>、<code>LMR-02</code> 为高严重度发布阻断；<code>LMR-03</code> 至 <code>LMR-05</code> 共同阻断“UI、session、配置错误明确且可观察”的完成定义。</li>
+					<li><strong>发布门禁：</strong>并发 full suite 退出码为 1；唯一可见失败位于 web-search browser headers 测试，不是路由缺陷，但仍使基线回归门禁不绿。</li>
+					<li><strong>审查方式：</strong>当前任务未运行测试、格式化、lint 或生成器；测试事实仅引用并发只读执行结果。</li>
+				</ul>
+			</div>
+			<div class="card">
+				<h3>严重度统计</h3>
+				<div class="metric-grid">
+					<div class="metric"><strong class="risk-text">2</strong><span>高 / P1</span></div>
+					<div class="metric"><strong class="warn-text">3</strong><span>中 / P2</span></div>
+					<div class="metric"><strong>0</strong><span>低</span></div>
+					<div class="metric"><strong class="risk-text">阻断</strong><span>发布状态</span></div>
+				</div>
+				<p class="small">五项发现均为 source-verified；置信度：两项 1.00，三项 0.99。</p>
+			</div>
+		</div>
+	</section>
+
+	<section id="scope">
+		<h2>二、范围、权威与方法</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>维度</th><th>本次采用</th><th>边界</th></tr></thead>
+				<tbody>
+					<tr><td>产品合同</td><td><a href="san-logical-model-routing-spec-20260804.html">san-logical-model-routing-spec-20260804.html</a> Phase 0/1，尤其第九、十二、十四节</td><td>Phase 2–4 的持久 circuit、Route Inspector、成本策略、多策略与 effort 自适应不作为本次实现缺陷。</td></tr>
+					<tr><td>代码范围</td><td>基线 <code>50fa2eeb7</code>；实现栈 <code>7a5677f46..1de79dc98</code>；最终 HEAD <code>1de79dc98fe40c8037bfe0263a3b11f6b1f807a0</code></td><td>行号锚点均对应最终 HEAD；后续改动可能导致行号漂移，应以稳定 ID、文件和 symbol 复核。</td></tr>
+					<tr><td>证据</td><td><code>agent://reviewer</code> 的五项已确认发现；当前源文件与合同测试；<code>agent://task</code> 的并发 full-suite 结果</td><td>没有把推测列为确认缺陷；并发 suite 失败单列，不计入五项路由缺陷。</td></tr>
+					<tr><td>方法</td><td>合同条款 → 类型/编译器 → resolver → lease/AgentSession → persistence/UI → SDK/RPC → 测试覆盖的纵向追踪</td><td>只读源审查；未执行交互式本地体验、测试、lint、format、安装或生成。</td></tr>
+					<tr><td>严重度</td><td><strong>高/P1</strong>：可持续使用错误 route、错误计费或破坏硬预算；<strong>中/P2</strong>：用户入口、审计或配置合同失真</td><td>优先级取自 source reviewer；本文件用“高/中”呈现，不重新解释为 suite failure。</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section id="matrix">
+		<h2>三、Phase 0/1 验收矩阵</h2>
+		<p>状态表示最终 HEAD 相对 Spec 的静态合同判断；“通过”不等价于本次 full suite 通过。只要任一发布级条款失败，整体仍为 NO-GO。</p>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>Phase / 合同</th><th>权威要求</th><th>最终 HEAD 证据</th><th>状态</th><th>关联</th></tr></thead>
+				<tbody>
+					<tr><td>0 · 显式小型索引</td><td>仅编译用户声明的 Route Group；不得恢复 catalog-wide canonical index。</td><td><code>model-route-registry.ts:52–58, 70–73, 115–163</code>；<code>model-route-registry.test.ts:59–74</code>。</td><td><span class="status pass">静态通过</span></td><td>无确认缺陷</td></tr>
+					<tr><td>0 · 确定性 resolver</td><td>priority/config order 稳定，不依赖 Map 偶然顺序或 MRU。</td><td><code>model-route-resolver.ts:181–226</code>；<code>model-route-resolver.test.ts:41–73</code> 重复解析并断言顺序。</td><td><span class="status pass">静态通过</span></td><td>无确认缺陷</td></tr>
+					<tr><td>0 · 配置诊断</td><td>未知 model、重复 route id、非法 logical id、空组必须给出精确路径；接受的策略必须与运行时一致。</td><td><code>model-routes-schema.ts:75–145</code> 覆盖多数跨字段校验；但 <code>fallbackOn</code> 接受三个运行时永不执行的类别。</td><td><span class="status partial">部分通过</span></td><td><a href="#lmr-05">LMR-05</a></td></tr>
+					<tr><td>0 · 原子刷新边界</td><td>registry 原子替换；在途请求沿用旧 policy，下一请求边界按新 policy 重新解析。</td><td><code>model-registry.ts:1061–1081</code> 正确递增/替换 snapshot；但 active lease 仅按相同 route ID 判可用，会继续使用旧 selector。</td><td><span class="status fail">失败</span></td><td><a href="#lmr-01">LMR-01</a></td></tr>
+					<tr><td>0 · 零配置兼容</td><td>无 <code>logicalModels</code> 时原选择、fallback、session 字节行为不变。</td><td>路由有 <code>routing.enabled</code> 门控，空 registry 路径存在；禁用路由的 resume 测试在 <code>sdk-logical-model-routing.test.ts:298–313</code>。然而 full suite 未全绿。</td><td><span class="status partial">代码满足，门禁未绿</span></td><td><a href="#suite-gate">独立 suite gate</a></td></tr>
+					<tr><td>1 · 选择器与优先级</td><td>exact concrete → exact logical → legacy；首个已鉴权且满足能力的 route 稳定胜出。</td><td><code>model-resolver.ts:1964–2006</code>；<code>model-route-resolver.test.ts:96–147</code> 覆盖 auth、availability、image、tools、context、output、effort。</td><td><span class="status pass">核心通过</span></td><td>UI 投影另见 LMR-04</td></tr>
+					<tr><td>1 · 会话亲和与安全 fallback</td><td>route fallback 先于 cross-model；安全重放；失败后 recovery；route budget 与 model budget 分离。</td><td><code>model-route-lease.ts:124–218</code>；<code>agent-session.ts:18107–18189</code>；常规 model-unavailable failover 测试见 <code>agent-session-retry-fallback.test.ts:641–737</code>。</td><td><span class="status partial">主要路径通过</span></td><td><a href="#lmr-01">LMR-01</a>、<a href="#lmr-05">LMR-05</a></td></tr>
+					<tr><td>1 · 能力/上下文一致性</td><td>UI 可选择 resolver 实际可路由的逻辑模型；候选逐条按当前请求能力过滤。</td><td>resolver 支持 <code>requiredContextTokens</code>，但逻辑浏览条目构建未传当前上下文，picker 又只检查代表模型。</td><td><span class="status fail">失败</span></td><td><a href="#lmr-04">LMR-04</a></td></tr>
+					<tr><td>1 · Route billing</td><td>显式 route 账单覆盖必须进入 usage、会话/RPC 汇总与硬成本预算。</td><td>compiler 保存 <code>route.billing</code>，选择仍返回 catalog <code>route.model</code>；全源仅有保存/校验读取。</td><td><span class="status fail">失败</span></td><td><a href="#lmr-02">LMR-02</a></td></tr>
+					<tr><td>1 · Session/UI 可观察性</td><td>session、UI、RPC 同时呈现 Logical Model 与 concrete route；route switch 保留审计。</td><td>事件和 RPC DTO 已添加；<code>model_route_change</code> 已持久化，但 TUI tree 和 HTML transcript 缺分支。</td><td><span class="status fail">失败</span></td><td><a href="#lmr-03">LMR-03</a></td></tr>
+					<tr><td>1 · Resume / logical intent</td><td>临时 fallback 不覆盖 Logical Model intent；保存 route 作为 affinity 恢复。</td><td><code>session-context.ts:243–283</code>；<code>sdk-logical-model-routing.test.ts:281–337</code> 覆盖 affinity、禁用路由、已移除 route recovery。</td><td><span class="status pass">静态通过</span></td><td>热更新中的同 ID 换 target 仍受 LMR-01 影响</td></tr>
+					<tr><td>1 · 版本完成定义</td><td>配置、解析、鉴权、能力、fallback、安全重放、resume、UI、RPC 合同测试全部通过，concrete-only 无回归。</td><td>五项确认缺陷；package full suite 退出 1。</td><td><span class="status fail">整体失败</span></td><td>NO-GO</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section id="evidence-map">
+		<h2>四、证据地图</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>合同层</th><th>主要文件 / symbol / 当前行</th><th>审查意义</th></tr></thead>
+				<tbody>
+					<tr><td>权威 Spec</td><td><code>docs/research/san-logical-model-routing-spec-20260804.html:587–668</code>；完成定义 <code>:912–924</code></td><td>Phase 0/1 边界、验收与兼容的唯一产品权威。</td></tr>
+					<tr><td>Schema / validator</td><td><code>model-routes-schema.ts:7–50</code>、<code>validateLogicalModelsConfiguration:75–145</code></td><td>Logical Model、route、billing、policy 和具体路径诊断。</td></tr>
+					<tr><td>编译快照</td><td><code>compileModelRouteRegistry:115–163</code>；<code>ModelRegistry.#compileModelRoutes:1061–1081</code></td><td>显式索引、policy version、原子刷新与 billing 丢失点。</td></tr>
+					<tr><td>纯 resolver</td><td><code>resolveModelRoute:181–226</code>；request eligibility <code>:45–52, 96–176</code></td><td>priority、affinity、capability、context、trace 与拒绝原因。</td></tr>
+					<tr><td>Lease / runtime</td><td><code>ModelRouteLeaseController:72–218</code>；<code>AgentSession.#ensurePromptModelRoute:18390–18474</code>；<code>#maybeRecoverModelRoute:18476–18521</code></td><td>会话亲和、fallback/recovery、配置热更新请求边界。</td></tr>
+					<tr><td>持久 session</td><td><code>ModelRouteChangeEntry:83–91</code>；<code>SessionManager.appendModelRouteChange:1594–1601</code>；<code>session-context.ts:266–283</code></td><td>Logical intent 与 concrete route lease 分离，并产生 route audit entry。</td></tr>
+					<tr><td>TUI / HTML</td><td><code>buildLogicalBrowserItems:167–217</code>；<code>ModelBrowser.#isDisabled:560–565</code>；<code>TreeSelector:355–406, 600–688</code>；<code>template.js:303–337, 1023–1170</code></td><td>逻辑模型选择、长上下文禁用、tree 搜索/显示和导出审计。</td></tr>
+					<tr><td>SDK / RPC</td><td><code>shared-events.ts:152–184</code>；<code>rpc-v2/dto/events.ts:126–128, 261–274</code>；<code>event-adapter.ts:297–315</code>；<code>dto/session.ts:104–111</code></td><td>增量事件、durable adapter、snapshot 可选字段与安全文本投影。</td></tr>
+					<tr><td>成本下游</td><td><code>sdk.ts:2996–3015, 3070–3074</code>；<code>export/html/template.js:1193–1200</code>；<code>rpc-v2/usage-analytics.ts:185–187</code></td><td>下游均信任 effective model / assistant usage；上游 route billing 未生效会贯穿所有汇总与预算。</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section id="findings">
+		<h2>五、确认发现（按优先级）</h2>
+
+		<article class="finding high" id="lmr-01">
+			<div class="finding-head">
+				<h3>LMR-01 · 配置热更新后，同 ID route 未重绑定新 target</h3>
+				<span class="status fail">高 / P1</span>
+			</div>
+			<div class="finding-meta"><span class="tag">置信度 0.99</span><span class="tag">Phase 0 刷新边界</span><span class="tag">Phase 1 session affinity</span></div>
+			<div class="evidence"><strong>精确证据：</strong><code>packages/coding-agent/src/session/agent-session.ts</code>，<code>AgentSession.#ensurePromptModelRoute</code>，<code>18405–18416</code>：新 registry 只按 <code>routeId</code> 查 eligibility，随后把旧 lease 与旧 <code>model</code> 交给 API-key 检查并直接返回。<code>packages/coding-agent/src/session/model-route-lease.ts</code>，<code>ModelRouteLeaseController.recover</code>，<code>185–209</code>：解析结果 route ID 相同即在 <code>197</code> 行返回，不比较 <code>policyVersion</code> 或 <code>modelSelector</code>。活动 lease 本身已保存这两个字段，见 <code>10–17</code>。</div>
+			<div class="finding-grid">
+				<div class="fact"><h4>失败场景</h4><p>会话持有逻辑模型 <code>coding</code> 的 route <code>main → provider/a</code>。用户成功热更新 <code>models.yml</code>，保持 route ID 为 <code>main</code>，把 target 改为 <code>provider/b</code>。新 registry 认为 <code>main</code> 合法；旧模型 <code>provider/a</code> 的 key 可用，于是每个后续 turn 继续请求已经从配置移除的端点。</p></div>
+				<div class="fact"><h4>合同影响</h4><p>违反 Phase 0 “registry refresh 后原子替换 compiled index；在途 session 到请求边界使用旧 version”的后半段，也违反 Phase 1 实际 route 必须由当前 Logical Model policy 决定。配置显示与真实执行发生永久分叉。</p></div>
+				<div class="fact"><h4>用户影响</h4><p>用户以为已切换 provider/endpoint，实际仍向旧服务发送请求；可能持续失败、继续使用已撤销或昂贵端点，亦可能形成合规与数据驻留风险。重启会“修好”，增加隐蔽性。</p></div>
+				<div class="fact"><h4>测试缺口</h4><p><code>model-route-registry.test.ts:115–143</code> 只验证 registry snapshot 被替换；<code>model-route-lease.test.ts:7–66</code> 的 reload 保持 selector 不变。缺少“相同 route ID、不同 selector/policy version、活动 AgentSession 在下一请求边界重绑”的合同测试。</p></div>
+			</div>
+			<p><strong>修复摘要：</strong>在请求边界比较 active lease 的 <code>policyVersion</code> 与当前 group，以及 route ID 对应的当前 <code>modelSelector</code>；任一变化都必须重新解析、更新 lease、刷新 concrete metadata，并通过统一 provider-session-reset 入口切换后才能继续。详见<a href="logical-model-routing-phase0-1-remediation-plan-20260807.html#rem-lmr-01">修复计划 LMR-01</a>。</p>
+		</article>
+
+		<article class="finding high" id="lmr-02">
+			<div class="finding-head">
+				<h3>LMR-02 · Route billing override 未应用到 effective model</h3>
+				<span class="status fail">高 / P1</span>
+			</div>
+			<div class="finding-meta"><span class="tag">置信度 1.00</span><span class="tag">计费正确性</span><span class="tag">硬预算</span></div>
+			<div class="evidence"><strong>精确证据：</strong><code>packages/coding-agent/src/config/model-route-registry.ts</code>，<code>compileModelRouteRegistry</code>，<code>130–149</code>：<code>model</code> 永远是 catalog 对象（<code>131, 143</code>），<code>billing</code> 只被单独冻结保存（<code>148</code>）。全源对 route billing 的读取仅见 schema 校验和该保存点。provider 以传入 <code>model.cost</code> 计算 <code>usage.cost</code>；硬成本上限直接读取 active model cost，见 <code>packages/coding-agent/src/sdk.ts:2997–3015</code>。</div>
+			<div class="finding-grid">
+				<div class="fact"><h4>失败场景</h4><p>route 为代理或私有 endpoint 配置 <code>billing: { source: "override", input, output, cacheRead, cacheWrite }</code>，价格不同于 catalog。resolver 选中该 route 后仍把未修改的 catalog model 交给 Agent/provider。</p></div>
+				<div class="fact"><h4>合同影响</h4><p>配置字段被接受、编译、保留，却不产生承诺的可观察行为，违反显式 route 账单和版本完成定义中的准确 RPC/session 输出。错误不仅是展示问题，而是 accounting source 错误。</p></div>
+				<div class="fact"><h4>用户影响</h4><p>session footer、HTML 导出、usage analytics/RPC 和累计费用全部错误；<code>maxTotalCost</code> 可能过早停止，也可能超过用户硬预算。任何基于成本的外部审计都会继承错误值。</p></div>
+				<div class="fact"><h4>测试缺口</h4><p>没有测试断言 billing override 改变 selected model cost、provider usage、session/RPC 汇总或硬成本预算；也没有断言 catalog model 不被全局突变。</p></div>
+			</div>
+			<p><strong>修复摘要：</strong>在 route 编译或选择边界创建 route-local effective model，仅以 billing override 替换 <code>cost</code>，保留 selector/transport/capability 且绝不修改 catalog 对象；所有执行和预算路径使用该对象。详见<a href="logical-model-routing-phase0-1-remediation-plan-20260807.html#rem-lmr-02">修复计划 LMR-02</a>。</p>
+		</article>
+
+		<article class="finding medium" id="lmr-03">
+			<div class="finding-head">
+				<h3>LMR-03 · Route-change journal 在 /tree 与 HTML transcript 中为空</h3>
+				<span class="status partial">中 / P2</span>
+			</div>
+			<div class="finding-meta"><span class="tag">置信度 1.00</span><span class="tag">可观察性</span><span class="tag">审计</span></div>
+			<div class="evidence"><strong>精确证据：</strong>新持久化 union 成员定义于 <code>packages/coding-agent/src/session/session-entries.ts</code>，<code>ModelRouteChangeEntry:83–91</code>。TUI tree 的搜索 switch <code>tree-selector.ts:364–404</code> 无该 case，显示 switch <code>:606–685</code> 落到 <code>result = ""</code>。HTML tree 搜索 <code>export/html/template.js:303–335</code> 无该 case；主 transcript dispatcher <code>:1136–1169</code> 无该类型并返回空字符串。</div>
+			<div class="finding-grid">
+				<div class="fact"><h4>失败场景</h4><p>首 route 因 429、配额、网络或模型不可用而自动切换。SessionManager 正确追加 <code>logicalModel/fromRoute/toRoute/reason/cooldownUntil</code>，但用户打开 <code>/tree</code> 看到空白行，导出 HTML 后主 transcript 完全没有该记录。</p></div>
+				<div class="fact"><h4>合同影响</h4><p>违反 Phase 1 “session/UI/RPC 同时展示逻辑模型和实际 route”。RPC live event 虽存在，持久 session 的本地查看与分享导出却丢失同一审计事实。</p></div>
+				<div class="fact"><h4>用户影响</h4><p>用户无法从本地会话解释为何 provider 改变；故障复盘、费用核对与支持工单失去关键触发原因和 cooldown 时间。</p></div>
+				<div class="fact"><h4>测试缺口</h4><p>现有测试验证 entry 写入和 RPC event adapter，但没有把 <code>model_route_change</code> fixture 送入 TreeSelector 的搜索/显示/过滤，也没有断言 HTML tree 与 transcript 输出包含 logical/from/to/reason。</p></div>
+			</div>
+			<p><strong>修复摘要：</strong>为 TUI 搜索、显示与 filter 分类，以及 HTML 搜索、tree 标签和主 transcript dispatcher 添加显式分支；所有用户字段转义，cooldown 可选。详见<a href="logical-model-routing-phase0-1-remediation-plan-20260807.html#rem-lmr-03">修复计划 LMR-03</a>。</p>
+		</article>
+
+		<article class="finding medium" id="lmr-04">
+			<div class="finding-head">
+				<h3>LMR-04 · 备用 route 可承载上下文时，逻辑模型仍被 picker 禁用</h3>
+				<span class="status partial">中 / P2</span>
+			</div>
+			<div class="finding-meta"><span class="tag">置信度 0.99</span><span class="tag">Alt+P</span><span class="tag">context eligibility</span></div>
+			<div class="evidence"><strong>精确证据：</strong><code>packages/coding-agent/src/modes/components/model-browser.ts</code>，<code>buildLogicalBrowserItems:167–217</code>；核心缺口在 <code>179–187</code>：resolver request 只有 suppression/auth/provider availability，没有当前 context requirement，条目只持有 active/primary 代表模型。随后 <code>ModelBrowser.#isDisabled:560–565</code> 仅比较 <code>item.model.contextWindow</code>。Alt+P 在 <code>model-picker.ts:104–107</code> 启用该禁用逻辑，尽管 picker 已收到 <code>currentContextTokens</code>。</div>
+			<div class="finding-grid">
+				<div class="fact"><h4>失败场景</h4><p>逻辑组包含 8k primary 与 128k backup；当前 session 为 16k。真实 <code>selectLogicalModel</code> resolver 能拒绝 primary 并选择 backup，但 Alt+P 以 8k 代表模型判断整组超限，Enter 无法激活。</p></div>
+				<div class="fact"><h4>合同影响</h4><p>UI eligibility 与核心 resolver 不一致，破坏“请求能力过滤”和“用户只选择 Logical Model”的 Phase 1 产品入口。</p></div>
+				<div class="fact"><h4>用户影响</h4><p>用户被迫直接选择 concrete backup，丢失 logical intent、session affinity 与后续 route fallback；或误以为整个逻辑模型不支持当前上下文。</p></div>
+				<div class="fact"><h4>测试缺口</h4><p><code>model-route-resolver.test.ts:125–146</code> 只测核心 context rejection；<code>model-browser.test.ts</code> 只有搜索/性能显示测试。没有 8k/128k logical group + 16k picker 的可激活合同测试。</p></div>
+			</div>
+			<p><strong>修复摘要：</strong>让逻辑条目构建接收当前 context requirement，并用同一 registry resolver 选择满足条件的代表 route；active route 只有在同一 trace 下仍 eligible 才可优先。详见<a href="logical-model-routing-phase0-1-remediation-plan-20260807.html#rem-lmr-04">修复计划 LMR-04</a>。</p>
+		</article>
+
+		<article class="finding medium" id="lmr-05">
+			<div class="finding-head">
+				<h3>LMR-05 · Schema 接受运行时永不执行的 fallback 类别</h3>
+				<span class="status partial">中 / P2</span>
+			</div>
+			<div class="finding-meta"><span class="tag">置信度 0.99</span><span class="tag">Fail fast</span><span class="tag">安全策略</span></div>
+			<div class="evidence"><strong>精确证据：</strong><code>packages/coding-agent/src/config/model-routes-schema.ts:7–11</code> 定义完整 <code>RouteFailureCategory</code>，<code>ModelRoutePolicySchema:21–26</code> 允许其全部进入 <code>fallbackOn</code>；custom validator <code>:97–108</code> 只检查重复。运行时 <code>packages/coding-agent/src/session/model-route-lease.ts</code>，<code>resolveFallbackDecision:139–149</code> 即使策略列出 <code>refusal</code>、<code>user_abort</code>、<code>context_overflow</code> 也无条件返回 <code>not_allowed</code>。</div>
+			<div class="finding-grid">
+				<div class="fact"><h4>失败场景</h4><p>用户配置 <code>fallbackOn: [refusal]</code> 或另外两个类别。配置校验成功、服务正常启动；触发该错误时 route 不切换，且没有配置错误说明该值不可执行。</p></div>
+				<div class="fact"><h4>合同影响</h4><p>接受的配置与安全运行时语义不一致，违反 Phase 0 的明确配置诊断和 Phase 1 的“unsafe replay 明确失败，不静默降级”。运行时的安全禁止是正确的，错误在配置边界。</p></div>
+				<div class="fact"><h4>用户影响</h4><p>运维人员依据已成功加载的 policy 预期 failover，实际行为不同；只有生产错误发生时才发现策略是 no-op。</p></div>
+				<div class="fact"><h4>测试缺口</h4><p>没有逐项断言 policy schema/validator 拒绝三类安全禁止值并给出 <code>logicalModels.&lt;id&gt;.policy.fallbackOn[index]</code>；也没有测试允许集合与运行时可执行集合完全相等。</p></div>
+			</div>
+			<p><strong>修复摘要：</strong>保留完整 failure category 供分类和事件使用，新增更窄的 policy fallback category type/schema，并在配置边界拒绝三个不可重放类别，保留精确路径。详见<a href="logical-model-routing-phase0-1-remediation-plan-20260807.html#rem-lmr-05">修复计划 LMR-05</a>。</p>
+		</article>
+	</section>
+
+	<section id="compat">
+		<h2>六、SDK 与 RPC 兼容性评估</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>表面</th><th>兼容判断</th><th>证据</th><th>限制 / 风险</th></tr></thead>
+				<tbody>
+					<tr><td>SDK session 创建/恢复</td><td><span class="status pass">结构上增量兼容</span></td><td><code>sdk.ts</code> 的 <code>initialModelRoute?</code> 为可选输入；恢复先尝试 persisted logical intent，routing disabled 时保留 concrete 路径。测试见 <code>sdk-logical-model-routing.test.ts:115–337</code>。</td><td>LMR-01 使长生命周期 SDK session 在配置热更新后可能执行旧 target；因此行为兼容不等于合同完成。</td></tr>
+					<tr><td>Extension SDK events</td><td><span class="status pass">新增事件，不改旧 payload</span></td><td><code>shared-events.ts:152–184</code> 新增 <code>ModelRouteResolvedEvent</code>/<code>ModelRouteChangedEvent</code>；<code>extensions/types.ts:1122–1123</code> 添加 typed handlers。</td><td>事件 consumers 必须容忍新 event type；LMR-02 会让事件关联会话的 cost 仍错误，LMR-03 影响持久查看而非 live extension dispatch。</td></tr>
+					<tr><td>RPC v2 live events</td><td><span class="status pass">加法式、durable</span></td><td><code>dto/events.ts:126–128, 261–274</code>；<code>event-adapter.ts:297–315</code> 生成 <code>model.route.resolved</code>/<code>model.route.changed</code>，文本先 sanitize；schema 包含新 enum。</td><td>严格封闭枚举客户端若未按版本更新可能拒绝未知事件，这是 additive event 的常规升级要求；不是本次确认缺陷。LMR-01 可上报与实际新配置不一致的 route。</td></tr>
+					<tr><td>RPC v2 snapshot</td><td><span class="status pass">可选字段兼容</span></td><td><code>dto/session.ts:104–111</code> 在 ModelSnapshot 增加可选 <code>logicalModel?</code>/<code>routeId?</code>；旧 concrete-only snapshot 不需要字段。</td><td>账单汇总从 assistant usage 读取，受 LMR-02 污染；snapshot 字段本身未见破坏性改名。</td></tr>
+					<tr><td>Legacy concrete selectors</td><td><span class="status pass">保留优先级</span></td><td><code>model-resolver.ts:1964–2006</code> 先 exact concrete，再 exact logical；Spec 第十二节要求 <code>provider/model</code> 永久有效。</td><td>full suite 未全绿，仍不能宣布 concrete-only 无回归门禁通过。</td></tr>
+				</tbody>
+			</table>
+		</div>
+		<div class="callout warn"><strong>兼容结论：</strong>公开类型和 RPC 形状以可选字段/新增事件为主，未发现确认的破坏性 wire 改动；但 LMR-01、LMR-02 与 LMR-03 使“兼容且正确”的运行时/审计承诺尚未满足。修复应继续采用加法式字段与现有事件名，不引入第二套路由协议。</div>
+	</section>
+
+	<section id="local-checklist">
+		<h2>七、本地体验验收清单</h2>
+		<p class="small">这是修复后必须实际执行的用户旅程。当前文档只做源审查，下面不把未执行项伪装成通过；阻断项直接对应确认发现。</p>
+		<div class="card">
+			<ul class="checklist">
+				<li class="source"><strong>零配置启动：</strong>不配置 <code>logicalModels</code>，模型列表、concrete selector、resume 与 fallback 行为保持原样；当前有静态门控证据，仍需 full suite 绿。</li>
+				<li><strong>显式逻辑模型：</strong>配置同模型三条 route，<code>/models</code> 与 Alt+P 显示 Logical Models、当前 concrete route、备用数量，Enter 保存 logical intent。</li>
+				<li><strong>确定性选择：</strong>首个已鉴权、provider enabled、支持 tools/image/effort/context/output 的 route 稳定胜出；拒绝原因不泄露 secret。</li>
+				<li class="blocked"><strong>长上下文选择：</strong>8k primary + 128k backup，在 16k 会话中 logical row 仍可选并路由到 backup；当前被 <a href="#lmr-04">LMR-04</a> 阻断。</li>
+				<li><strong>安全 fallback：</strong>首 route 429 时先轮转凭证，凭证耗尽后当前 turn 切第二 route 成功；已有 tool call 时不得 replay。</li>
+				<li><strong>Cooldown recovery：</strong>fallback 后保持 affinity；cooldown 结束后的下一用户 turn 才恢复更高优先级 route，harness profile 不变。</li>
+				<li class="blocked"><strong>配置热更新：</strong>活动 route ID 不变但 target 从 provider A 改 B，下一请求边界必须重绑 B、reset provider session 且不再请求 A；当前被 <a href="#lmr-01">LMR-01</a> 阻断。</li>
+				<li><strong>Resume：</strong>重启/切 session 后 logical intent 保留；已移除或失效 route 改选合法 route，临时 fallback assistant message 不覆盖 intent。</li>
+				<li class="blocked"><strong>审计：</strong><code>/tree</code>、搜索和 HTML 导出均展示 logical/from/to/reason/cooldown；当前被 <a href="#lmr-03">LMR-03</a> 阻断。</li>
+				<li class="blocked"><strong>费用与预算：</strong>route billing override 贯穿 footer、HTML、RPC usage 与 <code>maxTotalCost</code>；当前被 <a href="#lmr-02">LMR-02</a> 阻断。</li>
+				<li class="blocked"><strong>错误配置：</strong>非法 ID、空组、重复 route、未知 model 和不可执行 <code>fallbackOn</code> 都在启动/刷新时给出精确 YAML 路径；当前被 <a href="#lmr-05">LMR-05</a> 部分阻断。</li>
+				<li><strong>RPC / SDK：</strong>snapshot 同时含 logical/route；live client 收到 resolved/changed durable events；旧 concrete-only client 路径继续工作。</li>
+			</ul>
+		</div>
+	</section>
+
+	<section id="suite-gate">
+		<h2>八、并发 package full-suite：独立发布门禁</h2>
+		<div class="callout risk">
+			<strong class="risk-text">门禁状态：失败 / BLOCKED，但不是已确认的 routing defect。</strong>
+			并发只读执行在同一分支与精确 HEAD 上运行 <code>bun run test</code>（cwd <code>packages/coding-agent</code>，解析为 <code>bun ../../scripts/ci-test-ts.ts coding-agent-heavy --full</code>），退出码 <strong>1</strong>，wall time <strong>360.56s</strong>，共 <strong>106 chunks</strong>。初始 <code>git status --short</code> 为空。
+		</div>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>项目</th><th>观测结果</th></tr></thead>
+				<tbody>
+					<tr><td>分支 / commit</td><td><code>work/next-20260801</code> / <code>1de79dc98fe40c8037bfe0263a3b11f6b1f807a0</code></td></tr>
+					<tr><td>唯一可见失败</td><td><code>packages/coding-agent/test/tools/web-search-browser-headers.test.ts:33–54</code>，测试 “imports cleanly and falls back when header-generator data files are absent”；<code>expect(exitCode).toBe(0)</code> 实际收到 1。</td></tr>
+					<tr><td>失败 chunk</td><td>native/tooling/browser/unit bucket，chunk <code>52/58</code>：<strong>89 pass / 26 skip / 1 fail</strong>，116 tests。</td></tr>
+					<tr><td>分类</td><td>测试目标为 browser navigation headers 的隔离 import/fallback；从位置和断言看与 Logical Model Routing 无调用关系。应单独诊断，不能计入五项 routing finding，也不能因“不相关”而豁免 release gate。</td></tr>
+					<tr><td>发布要求</td><td>路由五项修复完成后，该 baseline-suite 轨也必须修复/稳定复现并让相同 package full suite 以退出码 0 完成。</td></tr>
+				</tbody>
+			</table>
+		</div>
+		<p>独立处理步骤见<a href="logical-model-routing-phase0-1-remediation-plan-20260807.html#baseline-suite-track">修复计划的 Baseline Suite Track</a>。</p>
+	</section>
+
+	<section id="residual-risks">
+		<h2>九、残余风险与结案条件</h2>
+		<ul>
+			<li><strong>验证缺口：</strong>本次写文档任务按合同未运行测试或交互体验；除并发 full-suite 事实外，所有“通过”均是静态源证据，不应提升为动态通过。</li>
+			<li><strong>热更新竞态：</strong>LMR-01 修复必须证明在途请求继续用旧 snapshot，而下一请求边界原子重绑；不能在流式响应中途切 transport。</li>
+			<li><strong>费用语义：</strong>LMR-02 修复需明确 route override 与 provider 回报 authoritative cost、service-tier multiplier 的优先级，并覆盖至少通用计算、硬预算和汇总；避免重复乘价。</li>
+			<li><strong>外部消费者：</strong>session JSONL union 新增 entry 对仓库外旧 reader 的行为未在本次范围动态验证；仓库内 reader 必须先做到非空、可搜索和安全转义。</li>
+			<li><strong>Phase 边界：</strong>不得为修复本次问题顺带实现 Phase 2–4 的持久 circuit、half-open、Route Inspector、自动成本排序、在线学习或 effort 调度。</li>
+			<li><strong>行号稳定性：</strong>本报告行号只锚定最终 HEAD；实施时以 stable finding ID + symbol 为主，修改后更新测试而非依赖旧行号。</li>
+		</ul>
+		<div class="callout"><strong>结案门：</strong>五项 finding 的可观察合同测试全部通过；本地体验清单无阻断；SDK/RPC additive compatibility 保持；同一 package full suite 退出 0。满足前，Phase 0–1 继续判定为 <strong>NO-GO</strong>。</div>
+	</section>
+
+	<footer>
+		<p>生成日期：2026-08-07。权威 Spec：<a href="san-logical-model-routing-spec-20260804.html">San Logical Model Routing Spec 2026-08-04</a>。配套文档：<a href="logical-model-routing-phase0-1-remediation-plan-20260807.html">Phase 0–1 详细修复计划</a>。</p>
+		<p><strong>只读确认：</strong>本审查阶段未修改 source、tests、config、patches、lockfiles 或其他文档；仅物化本合同审查 HTML 与其配套修复计划 HTML。</p>
+	</footer>
+</main>
+</body>
+</html>

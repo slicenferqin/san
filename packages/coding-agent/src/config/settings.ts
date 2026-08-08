@@ -107,6 +107,12 @@ function getByPath(obj: RawSettings, segments: readonly string[]): unknown {
 const SETTING_PATH_SEGMENTS: Record<SettingPath, readonly string[]> = Object.fromEntries(
 	(Object.keys(SETTINGS_SCHEMA) as SettingPath[]).map(settingPath => [settingPath, settingPath.split(".")]),
 ) as unknown as Record<SettingPath, readonly string[]>;
+const ROUTING_SETTING_PATHS = [
+	"routing.enabled",
+	"routing.routeFallback",
+	"routing.defaultAffinity",
+	"routing.diagnostics",
+] as const satisfies readonly SettingPath[];
 
 /**
  * Set a nested value in an object by path segments.
@@ -174,6 +180,29 @@ function normalizePathPrefix(prefix: string): string {
 function pathMatchesPrefix(cwd: string, prefix: string): boolean {
 	const relative = path.relative(normalizePathPrefix(prefix), path.resolve(cwd));
 	return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function validateRoutingSetting(path: SettingPath, value: unknown): void {
+	switch (path) {
+		case "routing.enabled":
+		case "routing.routeFallback":
+			if (typeof value !== "boolean") {
+				throw new Error(`${path} must be a boolean; received ${JSON.stringify(value)}`);
+			}
+			return;
+		case "routing.defaultAffinity":
+			if (value !== "session") {
+				throw new Error(`routing.defaultAffinity only supports "session" in V1; received ${JSON.stringify(value)}`);
+			}
+			return;
+		case "routing.diagnostics":
+			if (value !== "summary") {
+				throw new Error(`routing.diagnostics only supports "summary" in V1; received ${JSON.stringify(value)}`);
+			}
+			return;
+		default:
+			return;
+	}
 }
 
 function stringArrayFromUnknown(value: unknown): string[] {
@@ -560,6 +589,7 @@ export class Settings {
 		const value = getByPath(this.#merged, SETTING_PATH_SEGMENTS[path]);
 		const resolved =
 			value !== undefined ? (resolvePathScopedStringArray(path, value, this.#cwd) ?? value) : getDefault(path);
+		validateRoutingSetting(path, resolved);
 		this.#resolvedCache.set(path, resolved);
 		return resolved as SettingValue<P>;
 	}
@@ -1931,6 +1961,10 @@ export class Settings {
 		this.#merged = this.#deepMerge(this.#merged, this.#overrides);
 		this.#resolvedCache.clear();
 		this.#editVariantCache = undefined;
+		for (const path of ROUTING_SETTING_PATHS) {
+			const configured = getByPath(this.#merged, SETTING_PATH_SEGMENTS[path]);
+			validateRoutingSetting(path, configured === undefined ? getDefault(path) : configured);
+		}
 	}
 
 	#fireAllHooks(): void {

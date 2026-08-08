@@ -72,6 +72,8 @@ import type {
 	AutoRetryStartEvent,
 	ContextEvent,
 	GoalUpdatedEvent,
+	ModelRouteChangedEvent,
+	ModelRouteResolvedEvent,
 	SessionBeforeBranchEvent,
 	SessionBeforeBranchResult,
 	SessionBeforeCompactEvent,
@@ -621,6 +623,8 @@ export interface ResourcesDiscoverResult {
 // ============================================================================
 
 export type {
+	ModelRouteChangedEvent,
+	ModelRouteResolvedEvent,
 	SessionBeforeBranchEvent,
 	SessionBeforeCompactEvent,
 	SessionBeforeSwitchEvent,
@@ -1115,6 +1119,8 @@ export interface ExtensionAPI {
 	on(event: "session_shutdown", handler: ExtensionHandler<SessionShutdownEvent>): void;
 	on(event: "session_before_tree", handler: ExtensionHandler<SessionBeforeTreeEvent, SessionBeforeTreeResult>): void;
 	on(event: "session_tree", handler: ExtensionHandler<SessionTreeEvent>): void;
+	on(event: "model_route_resolved", handler: ExtensionHandler<ModelRouteResolvedEvent>): void;
+	on(event: "model_route_changed", handler: ExtensionHandler<ModelRouteChangedEvent>): void;
 	on(event: "context", handler: ExtensionHandler<ContextEvent, ContextEventResult>): void;
 	on(
 		event: "before_provider_request",

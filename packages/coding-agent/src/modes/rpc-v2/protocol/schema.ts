@@ -73,6 +73,8 @@ const sessionEventTypes = [
 	"retry.completed",
 	"retry.fallback.applied",
 	"retry.fallback.succeeded",
+	"model.route.resolved",
+	"model.route.changed",
 	"integration.changed",
 	"integration.health.changed",
 	"auth.login.state.changed",

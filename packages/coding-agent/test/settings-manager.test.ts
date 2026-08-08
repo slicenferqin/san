@@ -165,9 +165,31 @@ describe("Settings", () => {
 			expect(values).toContain(Effort.Ultra);
 			expect(new Set(values).size).toBe(values.length);
 		});
+
+		it("keeps logical-model routing opt-in with V1-only policy values", () => {
+			const isolated = Settings.isolated();
+			expect(isolated.getGroup("routing")).toEqual({
+				enabled: false,
+				routeFallback: true,
+				defaultAffinity: "session",
+				diagnostics: "summary",
+			});
+			expect(getEnumValues("routing.defaultAffinity")).toEqual(["session"]);
+			expect(getEnumValues("routing.diagnostics")).toEqual(["summary"]);
+		});
 	});
 
 	describe("get()", () => {
+		it("rejects future routing policies instead of silently treating them as V1 session affinity", () => {
+			expect(() => Settings.isolated({ "routing.defaultAffinity": "turn" })).toThrow(
+				'routing.defaultAffinity only supports "session" in V1; received "turn"',
+			);
+
+			expect(() => Settings.isolated({ "routing.diagnostics": "verbose" })).toThrow(
+				'routing.diagnostics only supports "summary" in V1; received "verbose"',
+			);
+		});
+
 		it("resolves overrides, schema defaults, and falsey values", () => {
 			const isolated = Settings.isolated({
 				"display.showTokenUsage": false,

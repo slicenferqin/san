@@ -49,6 +49,8 @@ function makeEmptyContext(): SessionContext {
 		thinkingLevel: "off",
 		serviceTier: undefined,
 		models: {},
+		logicalModels: {},
+		modelRoutes: {},
 		injectedTtsrRules: [],
 		mode: "none",
 	};

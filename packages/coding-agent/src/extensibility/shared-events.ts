@@ -16,6 +16,7 @@ import type { AgentMessage } from "@san/agent";
 import type { CompactionPreparation, CompactionResult } from "@san/agent/compaction";
 import type { AssistantRetryRecovery, ImageContent, TextContent, ToolResultMessage } from "@san/ai";
 import type { Rule } from "../capability/rule";
+import type { RouteFailureCategory } from "../config/model-routes-schema";
 import type { ContextMaintenanceFailureStage, ContextMaintenanceTrigger } from "../context-steady/types";
 import type { Goal, GoalModeState } from "../goals/state";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry } from "../session/session-entries";
@@ -148,6 +149,23 @@ export interface GoalUpdatedEvent {
 	state?: GoalModeState;
 }
 
+export interface ModelRouteResolvedEvent {
+	type: "model_route_resolved";
+	logicalModel: string;
+	routeId: string;
+	model: string;
+	reason: "primary" | "affinity" | "recovery" | "manual";
+}
+
+export interface ModelRouteChangedEvent {
+	type: "model_route_changed";
+	logicalModel: string;
+	fromRoute: string;
+	toRoute: string;
+	trigger: RouteFailureCategory;
+	cooldownUntil?: number;
+}
+
 export type SessionEvent =
 	| SessionStartEvent
 	| SessionBeforeSwitchEvent
@@ -161,7 +179,9 @@ export type SessionEvent =
 	| SessionShutdownEvent
 	| SessionBeforeTreeEvent
 	| SessionTreeEvent
-	| GoalUpdatedEvent;
+	| GoalUpdatedEvent
+	| ModelRouteResolvedEvent
+	| ModelRouteChangedEvent;
 
 // ============================================================================
 // Agent / Turn Events

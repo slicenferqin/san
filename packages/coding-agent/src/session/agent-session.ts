@@ -197,10 +197,12 @@ import type { ModelRegistry } from "../config/model-registry";
 import {
 	extractExplicitThinkingSelector,
 	filterAvailableModelsByEnabledPatterns,
+	formatLogicalRouteFailure,
 	formatModelSelectorValue,
 	formatModelString,
 	formatModelStringWithRouting,
 	getModelMatchPreferences,
+	type ModelRouteRuntimeRejection,
 	parseModelString,
 	type ResolvedModelRoleValue,
 	resolveAdvisorRoleSelection,
@@ -208,6 +210,8 @@ import {
 	resolveModelRoleValue,
 } from "../config/model-resolver";
 import { getKnownRoleIds, MODEL_ROLE_IDS, MODEL_ROLES } from "../config/model-roles";
+import type { ModelRouteResolutionRequest } from "../config/model-route-resolver";
+import type { RouteFailureCategory } from "../config/model-routes-schema";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily, serviceTierForAllFamilies, serviceTierSettingToTier } from "../config/service-tier";
 import type { Settings, SkillsSettings } from "../config/settings";
@@ -217,6 +221,7 @@ import {
 	onModelRolesChanged,
 	validateProviderMaxInFlightRequests,
 } from "../config/settings";
+import { resolveDialect } from "../config/tool-dialect";
 import { resolveContextPlanBudget } from "../context-steady/budget";
 import { appendContextCheckpoint, buildContextCheckpoint } from "../context-steady/checkpoint";
 import {
@@ -309,6 +314,8 @@ import type {
 	MessageEndEvent,
 	MessageStartEvent,
 	MessageUpdateEvent,
+	ModelRouteChangedEvent,
+	ModelRouteResolvedEvent,
 	SessionBeforeBranchResult,
 	SessionBeforeCompactResult,
 	SessionBeforeSwitchResult,
@@ -409,6 +416,7 @@ import {
 	clampAutoThinkingEffort,
 	concreteThinkingLevel,
 	parseConfiguredThinkingLevel,
+	parseThinkingLevel,
 	resolveProvisionalAutoLevel,
 	resolveThinkingLevelForModel,
 	shouldDisableReasoning,
@@ -483,8 +491,18 @@ import {
 	stripImagesFromMessage,
 	USER_INTERRUPT_LABEL,
 } from "./messages";
+import {
+	type ActiveModelRoute,
+	ModelRouteLeaseController,
+	type ModelRouteLeaseState,
+	type ModelRouteSelection,
+} from "./model-route-lease";
 import type { BuildSessionContextOptions, SessionContext } from "./session-context";
-import { getLatestCompactionEntry, getRestorableSessionModels } from "./session-context";
+import {
+	getLatestCompactionEntry,
+	getRestorableSessionLogicalModels,
+	getRestorableSessionModels,
+} from "./session-context";
 import { formatSessionDumpText } from "./session-dump-format";
 import type { BranchSummaryEntry, CompactionEntry, NewSessionOptions, SessionEntry } from "./session-entries";
 import { EPHEMERAL_MODEL_CHANGE_ROLE } from "./session-entries";
@@ -792,6 +810,21 @@ export type AgentSessionEvent =
 	  }
 	| { type: "retry_fallback_applied"; from: string; to: string; role: string }
 	| { type: "retry_fallback_succeeded"; model: string; role: string }
+	| {
+			type: "model_route_resolved";
+			logicalModel: string;
+			routeId: string;
+			model: string;
+			reason: "primary" | "affinity" | "recovery" | "manual";
+	  }
+	| {
+			type: "model_route_changed";
+			logicalModel: string;
+			fromRoute: string;
+			toRoute: string;
+			trigger: RouteFailureCategory;
+			cooldownUntil?: number;
+	  }
 	| { type: "ttsr_triggered"; rules: Rule[] }
 	| { type: "todo_reminder"; todos: TodoItem[]; attempt: number; maxAttempts: number }
 	| { type: "todo_auto_clear" }
@@ -1018,6 +1051,8 @@ export interface AgentSessionConfig {
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 	/** Initial session thinking selector. */
 	thinkingLevel?: ConfiguredThinkingLevel;
+	/** 启动或恢复时已经解析出的 Logical Model route lease。 */
+	initialModelRoute?: ActiveModelRoute;
 	/** Prewalk from the starting model to a fast/cheap target at the first edit/write once the todo list exists. */
 	prewalk?: Prewalk;
 	/** Force read-only plan mode at start, auto-approve on the model's first
@@ -1261,6 +1296,28 @@ export interface ResolvedRoleModel {
 	model: Model;
 	thinkingLevel?: ConfiguredThinkingLevel;
 	explicitThinkingLevel: boolean;
+	logicalModelId?: string;
+	routeId?: string;
+}
+
+type PromptModelRouteRequirements = Pick<
+	ModelRouteResolutionRequest,
+	"requiredContextTokens" | "requiredOutputTokens" | "requiresImages"
+>;
+
+interface ModelRouteTransitionSnapshot {
+	model: Model | undefined;
+	routeState: ModelRouteLeaseState;
+	thinkingLevel: ThinkingLevel | undefined;
+	autoThinking: boolean;
+	autoResolvedLevel: Effort | undefined;
+	baseSystemPrompt: string[];
+	baseSystemPromptBeforeMemoryPromotion: string[] | undefined;
+	systemPrompt: string[];
+	lastAppliedToolSignature: string | undefined;
+	promptModelKey: string | undefined;
+	inheritedProviderPromptCacheKey: string | undefined;
+	agentPromptCacheKey: string | undefined;
 }
 
 /** The set of resolvable role models plus the index of the currently active
@@ -1430,6 +1487,7 @@ interface ActiveRetryFallbackState {
 	role: string;
 	originalSelector: string;
 	originalThinkingLevel: ConfiguredThinkingLevel | undefined;
+	originalModelRoute?: ActiveModelRoute;
 	lastAppliedFallbackThinkingLevel: ConfiguredThinkingLevel | undefined;
 	pinned: boolean;
 }
@@ -2090,6 +2148,8 @@ export class AgentSession {
 	#retryPromise: Promise<void> | undefined = undefined;
 	#retryResolve: (() => void) | undefined = undefined;
 	#activeRetryFallback: ActiveRetryFallbackState | undefined = undefined;
+	#modelRouteLease: ModelRouteLeaseController;
+	#promptModelRouteRequirements: PromptModelRouteRequirements | undefined;
 	#pendingRecoveredRetryErrors: PendingRecoveredRetryError[] = [];
 	// Todo completion reminder state
 	#todoReminderCount = 0;
@@ -2841,6 +2901,10 @@ export class AgentSession {
 		this.#skillsReloadable = config.skillsReloadable ?? true;
 		this.#skillsSettings = config.skillsSettings;
 		this.#modelRegistry = config.modelRegistry;
+		this.#modelRouteLease = new ModelRouteLeaseController(
+			() => this.#modelRegistry.getModelRouteRegistry(),
+			config.initialModelRoute,
+		);
 		this.#recoverPersistedSanLoopRun();
 		// Resolve the wire service-tier per request so the Fireworks Priority
 		// toggle scopes priority to Fireworks alone, without mutating the shared
@@ -3165,7 +3229,7 @@ export class AgentSession {
 					continue;
 				}
 			} else {
-				const sel = resolveAdvisorRoleSelection(this.settings, this.#modelRegistry.getAvailable());
+				const sel = resolveAdvisorRoleSelection(this.settings, this.#modelRegistry);
 				if (!sel) {
 					this.#advisorStatuses.set(slug, { name: config.name, status: "no_model" });
 					if (emitWarnings) {
@@ -4904,12 +4968,14 @@ export class AgentSession {
 				if (this.#handoffAbortController) {
 					this.#skipPostTurnMaintenanceAssistantTimestamp = assistantMsg.timestamp;
 				}
-				if (
+				const assistantSucceeded =
 					assistantMsg.stopReason !== "error" &&
 					assistantMsg.stopReason !== "aborted" &&
-					!this.#isEmptyAssistantStop(assistantMsg) &&
-					this.#retryAttempt > 0
-				) {
+					!this.#isEmptyAssistantStop(assistantMsg);
+				if (assistantSucceeded && this.#modelRouteLease.matchesModel(this.model)) {
+					this.#modelRouteLease.markSuccess();
+				}
+				if (assistantSucceeded && this.#retryAttempt > 0) {
 					if (this.#activeRetryFallback && this.model) {
 						await this.#emitSessionEvent({
 							type: "retry_fallback_succeeded",
@@ -5188,6 +5254,15 @@ export class AgentSession {
 			}
 			if (this.#isRetryableError(msg)) {
 				const didRetry = await this.#handleRetryableError(msg);
+				if (didRetry) {
+					await emitAgentEndNotification({ willContinue: true });
+					return;
+				}
+			} else if (this.#isHardErrorModelRouteFallbackEligible(msg)) {
+				// Logical routes own provider/model-unavailable hard errors before
+				// cross-model fallback. A successful route switch retries immediately;
+				// otherwise the original non-retryable error remains terminal.
+				const didRetry = await this.#handleRetryableError(msg, { hardErrorRouteFallback: true });
 				if (didRetry) {
 					await emitAgentEndNotification({ willContinue: true });
 					return;
@@ -7117,6 +7192,25 @@ export class AgentSession {
 				goal: event.goal,
 				state: event.state,
 			});
+		} else if (event.type === "model_route_resolved") {
+			const extensionEvent: ModelRouteResolvedEvent = {
+				type: "model_route_resolved",
+				logicalModel: event.logicalModel,
+				routeId: event.routeId,
+				model: event.model,
+				reason: event.reason,
+			};
+			await this.#extensionRunner.emit(extensionEvent);
+		} else if (event.type === "model_route_changed") {
+			const extensionEvent: ModelRouteChangedEvent = {
+				type: "model_route_changed",
+				logicalModel: event.logicalModel,
+				fromRoute: event.fromRoute,
+				toRoute: event.toRoute,
+				trigger: event.trigger,
+				cooldownUntil: event.cooldownUntil,
+			};
+			await this.#extensionRunner.emit(extensionEvent);
 		}
 	}
 
@@ -7745,19 +7839,32 @@ export class AgentSession {
 		return resolveEditMode(this.#getEditModeSession());
 	}
 
-	/** Cache key for model-dependent prompt content: displayed id or hidden-policy cohort. */
+	#currentHarnessProfile(): string | undefined {
+		const model = this.model;
+		if (!model) return undefined;
+		const activeRoute = this.#modelRouteLease.active;
+		if (activeRoute && this.#modelRouteLease.matchesModel(model)) return activeRoute.harnessProfile;
+		return formatModelString(model);
+	}
+
+	/** 行为 profile 与 concrete tool dialect 共同决定模型相关 prompt 内容。 */
 	#currentPromptModelKey(): string | undefined {
-		const model = this.model ? formatModelString(this.model) : undefined;
-		if (!model || this.settings.get("includeModelInPrompt")) return model;
-		return usesCodexTaskPrompt(model) ? "task-policy:gpt-5.6" : "task-policy:default";
+		const harnessProfile = this.#currentHarnessProfile();
+		if (!harnessProfile) return undefined;
+		const guidanceKey = this.settings.get("includeModelInPrompt")
+			? `profile:${harnessProfile}`
+			: usesCodexTaskPrompt(harnessProfile)
+				? "task-policy:gpt-5.6"
+				: "task-policy:default";
+		const dialect = resolveDialect(this.settings.get("tools.format"), this.model) ?? "native";
+		return `${guidanceKey}|tool-dialect:${dialect}`;
 	}
 
 	async #syncAfterModelChange(previousEditMode: EditMode): Promise<void> {
 		const currentEditMode = this.#resolveActiveEditMode();
 		const editModeChanged = previousEditMode !== currentEditMode && this.getActiveToolNames().includes("edit");
-		// The system prompt selects model-specific policy even when it does not display the model id.
-		const modelChanged = this.#currentPromptModelKey() !== this.#promptModelKey;
-		if (editModeChanged || modelChanged) {
+		const promptProfileChanged = this.#currentPromptModelKey() !== this.#promptModelKey;
+		if (editModeChanged || promptProfileChanged) {
 			await this.refreshBaseSystemPrompt();
 		}
 	}
@@ -8815,6 +8922,7 @@ export class AgentSession {
 			const resolved = resolveModelRoleValue(roleValue, availableModels, {
 				settings: this.settings,
 				matchPreferences,
+				modelRegistry: this.#modelRegistry,
 			});
 			if (!resolved.explicitThinkingLevel || resolved.thinkingLevel === undefined || !resolved.model) continue;
 			if (modelsAreEqual(resolved.model, model)) return resolved.thinkingLevel;
@@ -10577,6 +10685,18 @@ export class AgentSession {
 	): Promise<void> {
 		this.#beginInFlight();
 		const generation = this.#promptGeneration;
+		const previousRouteRequirements = this.#promptModelRouteRequirements;
+		const pendingRouteMessages = [...(options?.prependMessages ?? []), message, ...this.#pendingNextTurnMessages];
+		this.#promptModelRouteRequirements = {
+			requiredContextTokens: this.#estimateStoredContextTokens(pendingRouteMessages),
+			requiredOutputTokens: this.agent.maxTokens,
+			requiresImages: pendingRouteMessages.some(
+				pending =>
+					"content" in pending &&
+					Array.isArray(pending.content) &&
+					pending.content.some(content => content.type === "image"),
+			),
+		};
 		try {
 			this.#contextSteadyRequestPlan = undefined;
 			// Flush any pending bash messages before the new prompt
@@ -10593,6 +10713,8 @@ export class AgentSession {
 			this.#acceptTerminalEmptyStopForPrompt = options?.acceptTerminalEmptyStop === true;
 
 			await this.#maybeRestoreRetryFallbackPrimary();
+			const routeRuntimeRejections: ModelRouteRuntimeRejection[] = [];
+			await this.#maybeRecoverModelRoute(routeRuntimeRejections);
 
 			// Validate model
 			if (!this.model) {
@@ -10603,14 +10725,7 @@ export class AgentSession {
 				);
 			}
 
-			// Validate API key
-			const apiKey = await this.#modelRegistry.getApiKey(this.model, this.sessionId);
-			if (!apiKey) {
-				throw new Error(
-					`No API key found for ${this.model.provider}.\n\n` +
-						`Use /login, set an API key environment variable, or create ${getAgentDbPath()}`,
-				);
-			}
+			await this.#ensurePromptModelRoute(routeRuntimeRejections);
 
 			// Check if we need to compact before sending (catches aborted responses). Run
 			// inline (allowDefer=false) so the handoff/maintenance fully settles before this
@@ -10795,6 +10910,7 @@ export class AgentSession {
 		} finally {
 			// Drop the in-flight request plan, but keep last plan for idle status parity.
 			this.#contextSteadyRequestPlan = undefined;
+			this.#promptModelRouteRequirements = previousRouteRequirements;
 			this.#endInFlight();
 		}
 	}
@@ -11880,6 +11996,186 @@ export class AgentSession {
 	// Model Management
 	// =========================================================================
 
+	get activeModelRoute(): ActiveModelRoute | undefined {
+		return this.#modelRouteLease.matchesModel(this.model) ? this.#modelRouteLease.active : undefined;
+	}
+
+	#modelRouteResolutionRequest(
+		logicalModelId: string,
+		overrides: ModelRouteResolutionRequest = {},
+	): ModelRouteResolutionRequest {
+		const group = this.#modelRegistry.getModelRouteRegistry().get(logicalModelId);
+		const suppressedRouteIds = new Set(overrides.suppressedRouteIds ?? []);
+		for (const route of group?.routes ?? []) {
+			if (this.#modelRegistry.isSelectorSuppressed(route.modelSelector)) {
+				suppressedRouteIds.add(route.id);
+			}
+		}
+		const requiredContextTokens = Math.max(
+			this.getContextUsage()?.tokens ?? 0,
+			this.#estimateStoredContextTokens(),
+			this.#promptModelRouteRequirements?.requiredContextTokens ?? 0,
+			overrides.requiredContextTokens ?? 0,
+		);
+		const historyRequiresImages = this.messages.some(
+			message =>
+				"content" in message &&
+				Array.isArray(message.content) &&
+				message.content.some(content => content.type === "image"),
+		);
+		return {
+			requiredOutputTokens:
+				overrides.requiredOutputTokens ??
+				this.#promptModelRouteRequirements?.requiredOutputTokens ??
+				this.agent.maxTokens,
+			requiresImages:
+				overrides.requiresImages ??
+				(historyRequiresImages || this.#promptModelRouteRequirements?.requiresImages === true),
+			requiresTools: this.agent.state.tools.length > 0,
+			thinkingLevel: this.configuredThinkingLevel(),
+			isAvailable: route =>
+				this.#modelRegistry.isProviderEnabled(route.model.provider) &&
+				this.#modelRegistry.find(route.model.provider, route.model.id) !== undefined,
+			hasAuth: route => this.#modelRegistry.hasConfiguredAuth(route.model),
+			...overrides,
+			requiredContextTokens: requiredContextTokens > 0 ? requiredContextTokens : undefined,
+			suppressedRouteIds: suppressedRouteIds.size > 0 ? suppressedRouteIds : undefined,
+		};
+	}
+
+	#captureModelRouteTransition(): ModelRouteTransitionSnapshot {
+		return {
+			model: this.model,
+			routeState: this.#modelRouteLease.captureState(),
+			thinkingLevel: this.#thinkingLevel,
+			autoThinking: this.#autoThinking,
+			autoResolvedLevel: this.#autoResolvedLevel,
+			baseSystemPrompt: [...this.#baseSystemPrompt],
+			baseSystemPromptBeforeMemoryPromotion: this.#baseSystemPromptBeforeMemoryPromotion
+				? [...this.#baseSystemPromptBeforeMemoryPromotion]
+				: undefined,
+			systemPrompt: [...this.agent.state.systemPrompt],
+			lastAppliedToolSignature: this.#lastAppliedToolSignature,
+			promptModelKey: this.#promptModelKey,
+			inheritedProviderPromptCacheKey: this.#inheritedProviderPromptCacheKey,
+			agentPromptCacheKey: this.agent.promptCacheKey,
+		};
+	}
+
+	#restoreModelRouteTransition(snapshot: ModelRouteTransitionSnapshot): void {
+		this.#modelRouteLease.restoreState(snapshot.routeState);
+		if (snapshot.model) this.#setModelWithProviderSessionReset(snapshot.model);
+		this.#thinkingLevel = snapshot.thinkingLevel;
+		this.#autoThinking = snapshot.autoThinking;
+		this.#autoResolvedLevel = snapshot.autoResolvedLevel;
+		this.#applyThinkingLevelToAgent(snapshot.thinkingLevel);
+		this.#baseSystemPrompt = snapshot.baseSystemPrompt;
+		this.#baseSystemPromptBeforeMemoryPromotion = snapshot.baseSystemPromptBeforeMemoryPromotion;
+		this.#lastAppliedToolSignature = snapshot.lastAppliedToolSignature;
+		this.#promptModelKey = snapshot.promptModelKey;
+		this.#inheritedProviderPromptCacheKey = snapshot.inheritedProviderPromptCacheKey;
+		this.agent.promptCacheKey = snapshot.agentPromptCacheKey;
+		this.agent.setSystemPrompt(snapshot.systemPrompt);
+	}
+
+	async #getRouteApiKeyRejection(
+		selection: Pick<ModelRouteSelection, "route" | "model">,
+	): Promise<{ available: boolean; rejection?: ModelRouteRuntimeRejection; error?: Error }> {
+		try {
+			const apiKey = await this.#modelRegistry.getApiKey(selection.model, this.sessionId);
+			if (apiKey) return { available: true };
+			const error = new Error(`No API key found for ${selection.model.provider}`);
+			return {
+				available: false,
+				error,
+				rejection: { routeId: selection.route.routeId, code: "api_key_unavailable", message: error.message },
+			};
+		} catch (cause) {
+			const error = cause instanceof Error ? cause : new Error(String(cause), { cause });
+			return {
+				available: false,
+				error,
+				rejection: { routeId: selection.route.routeId, code: "api_key_error", message: error.message },
+			};
+		}
+	}
+
+	async #emitModelRouteResolved(selection: ModelRouteSelection): Promise<void> {
+		const reason = selection.reason === "failover" ? "recovery" : selection.reason;
+		await this.#emitSessionEvent({
+			type: "model_route_resolved",
+			logicalModel: selection.route.logicalModelId,
+			routeId: selection.route.routeId,
+			model: selection.route.modelSelector,
+			reason,
+		});
+	}
+
+	async selectLogicalModel(
+		logicalModelId: string,
+		role: string = "default",
+		options?: {
+			thinkingLevel?: ConfiguredThinkingLevel;
+			persist?: boolean;
+			routeId?: string;
+		},
+	): Promise<{ switched: boolean; route: ActiveModelRoute }> {
+		if (!this.settings.get("routing.enabled")) {
+			throw new Error(`Logical model routing is disabled; cannot select "${logicalModelId}"`);
+		}
+		const registry = this.#modelRegistry.getModelRouteRegistry();
+		if (!registry.has(logicalModelId)) {
+			throw new Error(`Unknown logical model "${logicalModelId}"`);
+		}
+
+		const previousRoute = this.#modelRouteLease.snapshot();
+		const transitionSnapshot = this.#captureModelRouteTransition();
+		const affinityRouteId =
+			options?.routeId === undefined && previousRoute?.logicalModelId === logicalModelId
+				? previousRoute.routeId
+				: undefined;
+		const request = this.#modelRouteResolutionRequest(logicalModelId, {
+			...(options?.routeId !== undefined && { manualRouteId: options.routeId }),
+			...(affinityRouteId !== undefined && { affinityRouteId }),
+			thinkingLevel: options?.thinkingLevel ?? this.configuredThinkingLevel(),
+		});
+		const selection = this.#modelRouteLease.select(logicalModelId, role, request);
+		if (!selection) {
+			const failedResolution = registry.resolve(logicalModelId, request);
+			if (!failedResolution) throw new Error(`Unknown logical model "${logicalModelId}"`);
+			throw new Error(formatLogicalRouteFailure(failedResolution));
+		}
+
+		const previousEditMode = this.#resolveActiveEditMode();
+		let targetModel: Model;
+		try {
+			targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(selection.model);
+			this.#setModelWithProviderSessionReset(targetModel);
+			await this.#syncAfterModelChange(previousEditMode);
+		} catch (error) {
+			this.#restoreModelRouteTransition(transitionSnapshot);
+			throw error;
+		}
+
+		this.#clearActiveRetryFallback();
+		this.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, role, {
+			logicalModel: logicalModelId,
+			routeId: selection.route.routeId,
+		});
+		if (options?.persist) {
+			this.settings.setModelRole(role, formatModelSelectorValue(logicalModelId, options.thinkingLevel));
+		}
+		this.settings.getStorage()?.recordModelUsage(`${targetModel.provider}/${targetModel.id}`);
+
+		if (options?.thinkingLevel !== undefined) {
+			this.setThinkingLevel(options.thinkingLevel);
+		} else {
+			this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
+		}
+		await this.#emitModelRouteResolved(selection);
+		return { switched: true, route: selection.route };
+	}
+
 	/**
 	 * Set model directly.
 	 * Validates that a credential source is configured (synchronously, without
@@ -11908,6 +12204,7 @@ export class AgentSession {
 
 		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#clearActiveRetryFallback();
+		this.#modelRouteLease.clear();
 		this.#setModelWithProviderSessionReset(targetModel);
 		this.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, role);
 		if (options?.persist) {
@@ -11946,6 +12243,7 @@ export class AgentSession {
 
 		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#clearActiveRetryFallback();
+		this.#modelRouteLease.clear();
 		this.#setModelWithProviderSessionReset(targetModel);
 		this.sessionManager.appendModelChange(
 			`${targetModel.provider}/${targetModel.id}`,
@@ -12005,6 +12303,7 @@ export class AgentSession {
 			const resolved = resolveModelRoleValue(roleModelStr, availableModels, {
 				settings: this.settings,
 				matchPreferences,
+				modelRegistry: this.#modelRegistry,
 			});
 			if (!resolved.model) continue;
 
@@ -12013,6 +12312,8 @@ export class AgentSession {
 				model: resolved.model,
 				thinkingLevel: resolved.thinkingLevel,
 				explicitThinkingLevel: resolved.explicitThinkingLevel,
+				logicalModelId: resolved.logicalModelId,
+				routeId: resolved.routeId,
 			});
 		}
 
@@ -12041,6 +12342,13 @@ export class AgentSession {
 	 * settings. Shared with role cycling and the plan-approval model slider.
 	 */
 	async applyRoleModel(entry: ResolvedRoleModel): Promise<void> {
+		if (entry.logicalModelId) {
+			await this.selectLogicalModel(entry.logicalModelId, entry.role, {
+				routeId: entry.routeId,
+				thinkingLevel: entry.explicitThinkingLevel ? entry.thinkingLevel : undefined,
+			});
+			return;
+		}
 		await this.setModel(entry.model, entry.role);
 		if (entry.explicitThinkingLevel && entry.thinkingLevel !== undefined) {
 			this.setThinkingLevel(entry.thinkingLevel);
@@ -12106,6 +12414,7 @@ export class AgentSession {
 		// Apply model
 		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(next.model));
 		this.#clearActiveRetryFallback();
+		this.#modelRouteLease.clear();
 		this.#setModelWithProviderSessionReset(next.model);
 		this.sessionManager.appendModelChange(`${next.model.provider}/${next.model.id}`);
 		this.settings.getStorage()?.recordModelUsage(`${next.model.provider}/${next.model.id}`);
@@ -12137,6 +12446,7 @@ export class AgentSession {
 
 		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(nextModel));
 		this.#clearActiveRetryFallback();
+		this.#modelRouteLease.clear();
 		this.#setModelWithProviderSessionReset(nextModel);
 		this.sessionManager.appendModelChange(`${nextModel.provider}/${nextModel.id}`);
 		this.settings.getStorage()?.recordModelUsage(`${nextModel.provider}/${nextModel.id}`);
@@ -12155,7 +12465,7 @@ export class AgentSession {
 		const all = this.#modelRegistry.getAvailable();
 		const patterns = this.settings.get("enabledModels");
 		if (!patterns || patterns.length === 0) return all;
-		return filterAvailableModelsByEnabledPatterns(all, patterns, this.settings);
+		return filterAvailableModelsByEnabledPatterns(all, patterns, this.settings, this.#modelRegistry);
 	}
 
 	// =========================================================================
@@ -15220,6 +15530,7 @@ export class AgentSession {
 			}
 		}
 		this.agent.setModel(model);
+		this.agent.setDialect(resolveDialect(this.settings.get("tools.format"), model));
 
 		// Re-evaluate append-only context mode — provider or setting may have changed
 		this.#syncAppendOnlyContext(model);
@@ -15553,6 +15864,7 @@ export class AgentSession {
 		return resolveModelRoleValue(roleModelStr, availableModels, {
 			settings: this.settings,
 			matchPreferences: getModelMatchPreferences(this.settings),
+			modelRegistry: this.#modelRegistry,
 		});
 	}
 
@@ -17352,6 +17664,38 @@ export class AgentSession {
 		return stopType === "refusal" || stopType === "sensitive";
 	}
 
+	#classifyModelRouteFailure(
+		message: AssistantMessage,
+		id: number = this.#classifyRetryMessage(message),
+	): RouteFailureCategory | undefined {
+		if (message.stopReason !== "error") return undefined;
+		if (this.#isClassifierRefusal(message) || AIError.is(id, AIError.Flag.ContentBlocked)) return "refusal";
+		if (AIError.is(id, AIError.Flag.Abort) || AIError.is(id, AIError.Flag.UserInterrupt)) return "user_abort";
+		if (AIError.isContextOverflow(message, this.model?.contextWindow ?? 0)) return "context_overflow";
+		if (AIError.is(id, AIError.Flag.AuthFailed)) return "auth_failed";
+
+		const status = message.errorStatus ?? extractHttpStatusFromError({ message: message.errorMessage });
+		if (status === 429) return "rate_limit";
+		if (AIError.is(id, AIError.Flag.UsageLimit)) return "quota";
+		if (AIError.is(id, AIError.Flag.Timeout)) return "timeout";
+		if (status === 404 || AIError.is(id, AIError.Flag.FastModeUnsupported)) {
+			return "model_unavailable";
+		}
+		if (status !== undefined && status >= 500) return "server_error";
+		if (
+			AIError.is(id, AIError.Flag.ThinkingLoop) ||
+			AIError.is(id, AIError.Flag.StaleResponsesItem) ||
+			AIError.is(id, AIError.Flag.MalformedFunctionCall) ||
+			AIError.is(id, AIError.Flag.ProviderFinishError) ||
+			AIError.is(id, AIError.Flag.Grammar)
+		) {
+			return undefined;
+		}
+		if (status === 400 || status === 409 || status === 413 || status === 422) return "invalid_request";
+		if (AIError.is(id, AIError.Flag.Transient)) return "network";
+		return undefined;
+	}
+
 	/** True when any registered model belongs to `provider`. */
 	#hasProviderModels(provider: string): boolean {
 		return this.#modelRegistry.getAll().some(model => model.provider === provider);
@@ -17428,6 +17772,8 @@ export class AgentSession {
 					}
 					continue;
 				}
+				const logical = resolveModelOverride([selectorStr], this.#modelRegistry, this.settings);
+				if (logical.logicalModelId) continue;
 				const parsed = parseRetryFallbackSelector(selectorStr, this.#modelRegistry);
 				if (!parsed) {
 					const msg = `Invalid fallback selector format in ${keyKind} '${key}': ${selectorStr}`;
@@ -17453,7 +17799,7 @@ export class AgentSession {
 		if (isRetryFallbackWildcardKey(role)) return undefined;
 		if (isRetryFallbackModelKey(role)) return parseRetryFallbackSelector(role, this.#modelRegistry);
 		const configuredSelector = this.settings.getModelRole(role);
-		return configuredSelector ? parseRetryFallbackSelector(configuredSelector, this.#modelRegistry) : undefined;
+		return configuredSelector ? this.#parseRetryFallbackChainEntry(configuredSelector, undefined) : undefined;
 	}
 
 	#clearActiveRetryFallback(): void {
@@ -17464,13 +17810,15 @@ export class AgentSession {
 		return this.#modelRegistry.isSelectorSuppressed(selector.raw);
 	}
 
-	#noteRetryFallbackCooldown(currentSelector: string, retryAfterMs: number | undefined, errorMessage: string): void {
+	#noteRetryFallbackCooldown(currentSelector: string, retryAfterMs: number | undefined, errorMessage: string): number {
 		let cooldownMs = retryAfterMs;
 		if (!cooldownMs || cooldownMs <= 0) {
 			const reason = parseRateLimitReason(errorMessage);
 			cooldownMs = reason === "UNKNOWN" ? 5 * 60 * 1000 : calculateRateLimitBackoffMs(reason);
 		}
-		this.#modelRegistry.suppressSelector(currentSelector, Date.now() + cooldownMs);
+		const cooldownUntil = Date.now() + cooldownMs;
+		this.#modelRegistry.suppressSelector(currentSelector, cooldownUntil);
+		return cooldownUntil;
 	}
 
 	/**
@@ -17579,6 +17927,15 @@ export class AgentSession {
 			}
 			return { raw: `${provider}/${id}`, provider, id, thinkingLevel: undefined };
 		}
+		const logical = resolveModelOverride([entry], this.#modelRegistry, this.settings);
+		if (logical.logicalModelId && logical.model) {
+			return {
+				raw: entry.trim(),
+				provider: logical.model.provider,
+				id: logical.model.id,
+				thinkingLevel: concreteThinkingLevel(logical.thinkingLevel),
+			};
+		}
 		return parseRetryFallbackSelector(entry, this.#modelRegistry);
 	}
 
@@ -17664,31 +18021,72 @@ export class AgentSession {
 		selector: RetryFallbackSelector,
 		currentSelector: string,
 		options?: { pinFallback?: boolean },
-	): Promise<void> {
+	): Promise<boolean> {
 		const resolved = resolveModelOverride([selector.raw], this.#modelRegistry, this.settings);
-		const candidate = resolved.model ?? this.#modelRegistry.find(selector.provider, selector.id);
-		if (!candidate) {
-			throw new Error(`Retry fallback model not found: ${selector.raw}`);
-		}
-		const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
-		if (!apiKey) {
-			throw new Error(`No API key for retry fallback ${selector.raw}`);
-		}
-
 		// Capture the configured selector (auto-aware) so a fallback chain preserves
 		// `auto` instead of collapsing it to the level it resolved to this turn.
 		const currentThinkingLevel = this.configuredThinkingLevel();
-		const nextThinkingLevel = selector.thinkingLevel ?? currentThinkingLevel;
-		const candidateSelector = formatModelStringWithRouting(candidate);
-		this.#setModelWithProviderSessionReset(candidate);
-		this.sessionManager.appendModelChange(candidateSelector, EPHEMERAL_MODEL_CHANGE_ROLE);
+		const nextThinkingLevel = resolved.explicitThinkingLevel
+			? resolved.thinkingLevel
+			: (selector.thinkingLevel ?? currentThinkingLevel);
+		const previousEditMode = this.#resolveActiveEditMode();
+		const transitionSnapshot = this.#captureModelRouteTransition();
+		const originalModelRoute = this.#modelRouteLease.matchesModel(this.model)
+			? transitionSnapshot.routeState.active
+			: undefined;
+		let routeSelection: ModelRouteSelection | undefined;
+		let targetModel: Model;
+		try {
+			if (resolved.logicalModelId) {
+				const request = this.#modelRouteResolutionRequest(resolved.logicalModelId, {
+					thinkingLevel: nextThinkingLevel,
+				});
+				routeSelection = this.#modelRouteLease.select(
+					resolved.logicalModelId,
+					EPHEMERAL_MODEL_CHANGE_ROLE,
+					request,
+				);
+				while (routeSelection) {
+					const keyResult = await this.#getRouteApiKeyRejection(routeSelection);
+					if (keyResult.available) break;
+					routeSelection = this.#modelRouteLease.failover(request);
+				}
+				if (!routeSelection) {
+					this.#modelRouteLease.restoreState(transitionSnapshot.routeState);
+					return false;
+				}
+				targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(routeSelection.model);
+			} else {
+				const candidate = resolved.model ?? this.#modelRegistry.find(selector.provider, selector.id);
+				if (!candidate) return false;
+				const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
+				if (!apiKey) return false;
+				this.#modelRouteLease.clear();
+				targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(candidate);
+			}
+			this.#setModelWithProviderSessionReset(targetModel);
+			this.setThinkingLevel(nextThinkingLevel);
+			await this.#syncAfterModelChange(previousEditMode);
+		} catch (error) {
+			this.#restoreModelRouteTransition(transitionSnapshot);
+			throw error;
+		}
+
+		const candidateSelector = formatModelStringWithRouting(targetModel);
+		this.sessionManager.appendModelChange(
+			candidateSelector,
+			EPHEMERAL_MODEL_CHANGE_ROLE,
+			routeSelection
+				? { logicalModel: routeSelection.route.logicalModelId, routeId: routeSelection.route.routeId }
+				: undefined,
+		);
 		this.settings.getStorage()?.recordModelUsage(candidateSelector);
-		this.setThinkingLevel(nextThinkingLevel);
 		if (!this.#activeRetryFallback) {
 			this.#activeRetryFallback = {
 				role,
 				originalSelector: currentSelector,
 				originalThinkingLevel: currentThinkingLevel,
+				originalModelRoute,
 				lastAppliedFallbackThinkingLevel: nextThinkingLevel,
 				pinned: options?.pinFallback === true,
 			};
@@ -17696,12 +18094,99 @@ export class AgentSession {
 			this.#activeRetryFallback.lastAppliedFallbackThinkingLevel = nextThinkingLevel;
 			this.#activeRetryFallback.pinned = this.#activeRetryFallback.pinned || options?.pinFallback === true;
 		}
+		if (routeSelection) await this.#emitModelRouteResolved(routeSelection);
 		await this.#emitSessionEvent({
 			type: "retry_fallback_applied",
 			from: currentSelector,
 			to: selector.raw,
 			role,
 		});
+		return true;
+	}
+
+	async #tryModelRouteFallback(
+		message: AssistantMessage,
+		id: number,
+		retryAfterMs: number | undefined,
+		errorMessage: string,
+		skipSameRouteRetry: boolean,
+	): Promise<{ switched: boolean; deferCrossModelFallback: boolean }> {
+		const routing = this.settings.getGroup("routing");
+		const previousRoute = this.#modelRouteLease.snapshot();
+		if (
+			!routing.enabled ||
+			!routing.routeFallback ||
+			!previousRoute ||
+			!this.#modelRouteLease.matchesModel(this.model) ||
+			this.#hasReplayUnsafeToolOutput(message)
+		) {
+			return { switched: false, deferCrossModelFallback: false };
+		}
+
+		const category = this.#classifyModelRouteFailure(message, id);
+		if (!category) return { switched: false, deferCrossModelFallback: false };
+		const decision = this.#modelRouteLease.resolveFallbackDecision(category, { skipSameRouteRetry });
+		if (decision === "not_allowed") return { switched: false, deferCrossModelFallback: false };
+		if (decision === "retry_same_route") return { switched: false, deferCrossModelFallback: true };
+
+		const cooldownUntil = this.#noteRetryFallbackCooldown(previousRoute.modelSelector, retryAfterMs, errorMessage);
+		const transitionSnapshot = this.#captureModelRouteTransition();
+		const runtimeRejections: ModelRouteRuntimeRejection[] = [
+			{
+				routeId: previousRoute.routeId,
+				code: "provider_failure",
+				message: errorMessage,
+			},
+		];
+		const request = this.#modelRouteResolutionRequest(previousRoute.logicalModelId, {
+			selectionReason: "failover",
+		});
+		const resolution = this.#modelRegistry.getModelRouteRegistry().resolve(previousRoute.logicalModelId, request);
+		for (;;) {
+			const selection = this.#modelRouteLease.failover(request);
+			if (!selection) {
+				this.#modelRouteLease.restoreState(transitionSnapshot.routeState);
+				if (resolution) message.errorMessage = formatLogicalRouteFailure(resolution, runtimeRejections);
+				return { switched: false, deferCrossModelFallback: false };
+			}
+			const keyResult = await this.#getRouteApiKeyRejection(selection);
+			if (!keyResult.available) {
+				if (keyResult.rejection) runtimeRejections.push(keyResult.rejection);
+				continue;
+			}
+
+			const previousEditMode = this.#resolveActiveEditMode();
+			let targetModel: Model;
+			try {
+				targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(selection.model);
+				this.#setModelWithProviderSessionReset(targetModel);
+				this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
+				await this.#syncAfterModelChange(previousEditMode);
+			} catch (error) {
+				this.#restoreModelRouteTransition(transitionSnapshot);
+				throw error;
+			}
+
+			if (this.#sessionWritesEnabled) {
+				this.sessionManager.appendModelRouteChange({
+					logicalModel: previousRoute.logicalModelId,
+					fromRoute: previousRoute.routeId,
+					toRoute: selection.route.routeId,
+					reason: category,
+					cooldownUntil,
+				});
+			}
+			this.settings.getStorage()?.recordModelUsage(selection.route.modelSelector);
+			await this.#emitSessionEvent({
+				type: "model_route_changed",
+				logicalModel: previousRoute.logicalModelId,
+				fromRoute: previousRoute.routeId,
+				toRoute: selection.route.routeId,
+				trigger: category,
+				cooldownUntil,
+			});
+			return { switched: true, deferCrossModelFallback: false };
+		}
 	}
 
 	async #tryRetryModelFallback(currentSelector: string, options?: { pinFallback?: boolean }): Promise<boolean> {
@@ -17710,13 +18195,7 @@ export class AgentSession {
 
 		for (const selector of this.#findRetryFallbackCandidates(role, currentSelector)) {
 			if (this.#isRetryFallbackSelectorSuppressed(selector)) continue;
-			const resolved = resolveModelOverride([selector.raw], this.#modelRegistry, this.settings);
-			const candidate = resolved.model ?? this.#modelRegistry.find(selector.provider, selector.id);
-			if (!candidate) continue;
-			const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
-			if (!apiKey) continue;
-			await this.#applyRetryFallbackCandidate(role, selector, currentSelector, options);
-			return true;
+			if (await this.#applyRetryFallbackCandidate(role, selector, currentSelector, options)) return true;
 		}
 
 		return false;
@@ -17751,6 +18230,15 @@ export class AgentSession {
 		if (AIError.is(id, AIError.Flag.UsageLimit)) return false;
 		if (AIError.is(id, AIError.Flag.AuthFailed)) return false;
 		return this.#modelRegistry.find("fireworks", toFireworksBaseModelId(model.id)) !== undefined;
+	}
+
+	#isHardErrorModelRouteFallbackEligible(message: AssistantMessage): boolean {
+		if (message.stopReason !== "error") return false;
+		const routing = this.settings.getGroup("routing");
+		if (!routing.enabled || !routing.routeFallback) return false;
+		if (!this.#modelRouteLease.active || !this.#modelRouteLease.matchesModel(this.model)) return false;
+		if (this.#hasReplayUnsafeToolOutput(message)) return false;
+		return this.#classifyModelRouteFailure(message) !== undefined;
 	}
 
 	/**
@@ -17815,6 +18303,7 @@ export class AgentSession {
 		const {
 			originalSelector: originalSelectorRaw,
 			originalThinkingLevel,
+			originalModelRoute,
 			lastAppliedFallbackThinkingLevel,
 		} = this.#activeRetryFallback;
 		const originalSelector = parseRetryFallbackSelector(originalSelectorRaw, this.#modelRegistry);
@@ -17834,22 +18323,244 @@ export class AgentSession {
 		}
 		if (this.#isRetryFallbackSelectorSuppressed(originalSelector)) return;
 
-		const resolvedPrimary = resolveModelOverride([originalSelector.raw], this.#modelRegistry, this.settings);
-		const primaryModel =
-			resolvedPrimary.model ?? this.#modelRegistry.find(originalSelector.provider, originalSelector.id);
-		if (!primaryModel) return;
-		const apiKey = await this.#modelRegistry.getApiKey(primaryModel, this.sessionId);
-		if (!apiKey) return;
-
 		const currentThinkingLevel = this.configuredThinkingLevel();
 		const thinkingToApply =
 			currentThinkingLevel === lastAppliedFallbackThinkingLevel ? originalThinkingLevel : currentThinkingLevel;
+		const previousEditMode = this.#resolveActiveEditMode();
+		const transitionSnapshot = this.#captureModelRouteTransition();
+		let routeSelection: ModelRouteSelection | undefined;
+		let primaryModel: Model;
+		try {
+			if (
+				originalModelRoute &&
+				this.settings.get("routing.enabled") &&
+				this.#modelRegistry.getModelRouteRegistry().has(originalModelRoute.logicalModelId)
+			) {
+				const request = this.#modelRouteResolutionRequest(originalModelRoute.logicalModelId, {
+					affinityRouteId: originalModelRoute.routeId,
+					selectionReason: "recovery",
+					thinkingLevel: thinkingToApply,
+				});
+				routeSelection = this.#modelRouteLease.select(
+					originalModelRoute.logicalModelId,
+					originalModelRoute.role,
+					request,
+				);
+				while (routeSelection) {
+					const keyResult = await this.#getRouteApiKeyRejection(routeSelection);
+					if (keyResult.available) break;
+					routeSelection = this.#modelRouteLease.failover(request);
+				}
+				if (!routeSelection) {
+					this.#modelRouteLease.restoreState(transitionSnapshot.routeState);
+					return;
+				}
+				primaryModel = await this.#modelRegistry.refreshSelectedModelMetadata(routeSelection.model);
+			} else {
+				const resolvedPrimary = resolveModelOverride([originalSelector.raw], this.#modelRegistry, this.settings);
+				const candidate =
+					resolvedPrimary.model ?? this.#modelRegistry.find(originalSelector.provider, originalSelector.id);
+				if (!candidate) return;
+				const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
+				if (!apiKey) return;
+				this.#modelRouteLease.clear();
+				primaryModel = await this.#modelRegistry.refreshSelectedModelMetadata(candidate);
+			}
+			this.#setModelWithProviderSessionReset(primaryModel);
+			this.setThinkingLevel(thinkingToApply);
+			await this.#syncAfterModelChange(previousEditMode);
+		} catch (error) {
+			this.#restoreModelRouteTransition(transitionSnapshot);
+			throw error;
+		}
+
 		const primarySelector = formatModelStringWithRouting(primaryModel);
-		this.#setModelWithProviderSessionReset(primaryModel);
-		this.sessionManager.appendModelChange(primarySelector, EPHEMERAL_MODEL_CHANGE_ROLE);
+		this.sessionManager.appendModelChange(
+			primarySelector,
+			EPHEMERAL_MODEL_CHANGE_ROLE,
+			routeSelection
+				? { logicalModel: routeSelection.route.logicalModelId, routeId: routeSelection.route.routeId }
+				: undefined,
+		);
 		this.settings.getStorage()?.recordModelUsage(primarySelector);
-		this.setThinkingLevel(thinkingToApply);
 		this.#clearActiveRetryFallback();
+		if (routeSelection) await this.#emitModelRouteResolved(routeSelection);
+	}
+
+	async #ensurePromptModelRoute(runtimeRejections: ModelRouteRuntimeRejection[]): Promise<void> {
+		const model = this.model;
+		if (!model) return;
+		const activeRoute = this.#modelRouteLease.active;
+		if (!activeRoute || !this.#modelRouteLease.matchesModel(model)) {
+			const apiKey = await this.#modelRegistry.getApiKey(model, this.sessionId);
+			if (!apiKey) {
+				throw new Error(
+					`No API key found for ${model.provider}.\n\n` +
+						`Use /login, set an API key environment variable, or create ${getAgentDbPath()}`,
+				);
+			}
+			return;
+		}
+
+		const registry = this.#modelRegistry.getModelRouteRegistry();
+		const request = this.#modelRouteResolutionRequest(activeRoute.logicalModelId);
+
+		// LMR-01：配置热更新后，同 route ID 的 modelSelector/policyVersion 已变化时，
+		// 旧 active lease 视为 stale，在请求边界用当前 constraints 重绑（保留 role
+		// 与已选 harnessProfile）；在途 stream 不切 provider，只在下一请求前生效。
+		// LMR-02：同 selector 的 billing override 变化（costRefresh）只切换 effective
+		// cost，不关闭 provider session、不重建 transport 状态。
+		const rebindSelection = this.#modelRouteLease.reconcile(request);
+		let rebindKeyRejected = false;
+		if (rebindSelection) {
+			if (rebindSelection.costRefresh) {
+				const costRefreshTransition = this.#captureModelRouteTransition();
+				try {
+					const refreshedModel = await this.#modelRegistry.refreshSelectedModelMetadata(rebindSelection.model);
+					this.agent.setModel(refreshedModel);
+				} catch (error) {
+					this.#restoreModelRouteTransition(costRefreshTransition);
+					throw error;
+				}
+				return;
+			}
+			const rebindTransition = this.#captureModelRouteTransition();
+			const rebindKey = await this.#getRouteApiKeyRejection(rebindSelection);
+			if (rebindKey.available) {
+				const previousEditMode = this.#resolveActiveEditMode();
+				let targetModel: Model;
+				try {
+					targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(rebindSelection.model);
+					this.#setModelWithProviderSessionReset(targetModel);
+					this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
+					await this.#syncAfterModelChange(previousEditMode);
+				} catch (error) {
+					this.#restoreModelRouteTransition(rebindTransition);
+					throw error;
+				}
+				this.settings.getStorage()?.recordModelUsage(rebindSelection.route.modelSelector);
+				await this.#emitModelRouteResolved(rebindSelection);
+				return;
+			}
+			if (rebindKey.rejection) runtimeRejections.push(rebindKey.rejection);
+			this.#modelRouteLease.restoreState(rebindTransition.routeState);
+			rebindKeyRejected = true;
+		}
+
+		const resolution = registry.resolve(activeRoute.logicalModelId, request);
+		if (!resolution) {
+			throw new Error(`Unknown logical model "${activeRoute.logicalModelId}"`);
+		}
+		const activeTrace = resolution.trace.find(route => route.routeId === activeRoute.routeId);
+		const activeEligible = activeTrace?.eligible === true && !rebindKeyRejected;
+		let originalError: Error | undefined;
+		if (activeEligible) {
+			const keyResult = await this.#getRouteApiKeyRejection({ route: activeRoute, model });
+			if (keyResult.available) return;
+			if (keyResult.rejection) runtimeRejections.push(keyResult.rejection);
+			originalError = keyResult.error;
+		}
+
+		const transitionSnapshot = this.#captureModelRouteTransition();
+		const excludedRouteIds = new Set(runtimeRejections.map(rejection => rejection.routeId));
+		for (;;) {
+			const selection = this.#modelRouteLease.failover({ ...request, excludedRouteIds });
+			if (!selection) break;
+			const keyResult = await this.#getRouteApiKeyRejection(selection);
+			if (!keyResult.available) {
+				if (keyResult.rejection) {
+					runtimeRejections.push(keyResult.rejection);
+					excludedRouteIds.add(keyResult.rejection.routeId);
+				}
+				continue;
+			}
+
+			const previousEditMode = this.#resolveActiveEditMode();
+			let targetModel: Model;
+			try {
+				targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(selection.model);
+				this.#setModelWithProviderSessionReset(targetModel);
+				this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
+				await this.#syncAfterModelChange(previousEditMode);
+			} catch (error) {
+				this.#restoreModelRouteTransition(transitionSnapshot);
+				throw error;
+			}
+
+			if (this.#sessionWritesEnabled) {
+				this.sessionManager.appendModelRouteChange({
+					logicalModel: activeRoute.logicalModelId,
+					fromRoute: activeRoute.routeId,
+					toRoute: selection.route.routeId,
+					reason: activeEligible ? "auth_failed" : "recovery",
+				});
+			}
+			this.settings.getStorage()?.recordModelUsage(selection.route.modelSelector);
+			if (activeEligible) {
+				await this.#emitSessionEvent({
+					type: "model_route_changed",
+					logicalModel: activeRoute.logicalModelId,
+					fromRoute: activeRoute.routeId,
+					toRoute: selection.route.routeId,
+					trigger: "auth_failed",
+				});
+			} else {
+				await this.#emitModelRouteResolved(selection);
+			}
+			return;
+		}
+
+		this.#restoreModelRouteTransition(transitionSnapshot);
+		throw new Error(formatLogicalRouteFailure(resolution, runtimeRejections), {
+			...(originalError ? { cause: originalError } : {}),
+		});
+	}
+
+	async #maybeRecoverModelRoute(runtimeRejections: ModelRouteRuntimeRejection[]): Promise<void> {
+		if (!this.settings.get("routing.enabled")) return;
+		const previousRoute = this.#modelRouteLease.snapshot();
+		if (!previousRoute || !this.#modelRouteLease.matchesModel(this.model)) return;
+		const transitionSnapshot = this.#captureModelRouteTransition();
+		const request = this.#modelRouteResolutionRequest(previousRoute.logicalModelId, {
+			selectionReason: "recovery",
+		});
+		let selection = this.#modelRouteLease.recover(request);
+		if (!selection) return;
+
+		for (;;) {
+			const keyResult = await this.#getRouteApiKeyRejection(selection);
+			if (keyResult.available) break;
+			if (keyResult.rejection) runtimeRejections.push(keyResult.rejection);
+			const nextSelection = this.#modelRouteLease.failover(request);
+			if (!nextSelection || nextSelection.route.routeId === previousRoute.routeId) {
+				this.#modelRouteLease.restoreState(transitionSnapshot.routeState);
+				return;
+			}
+			selection = nextSelection;
+		}
+
+		const previousEditMode = this.#resolveActiveEditMode();
+		let targetModel: Model;
+		try {
+			targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(selection.model);
+			this.#setModelWithProviderSessionReset(targetModel);
+			this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
+			await this.#syncAfterModelChange(previousEditMode);
+		} catch (error) {
+			this.#restoreModelRouteTransition(transitionSnapshot);
+			throw error;
+		}
+
+		if (this.#sessionWritesEnabled) {
+			this.sessionManager.appendModelRouteChange({
+				logicalModel: selection.route.logicalModelId,
+				fromRoute: previousRoute.routeId,
+				toRoute: selection.route.routeId,
+				reason: "recovery",
+			});
+		}
+		this.settings.getStorage()?.recordModelUsage(selection.route.modelSelector);
+		await this.#emitModelRouteResolved(selection);
 	}
 
 	#parseRetryAfterMsFromError(errorMessage: string): number | undefined {
@@ -17913,7 +18624,12 @@ export class AgentSession {
 	 */
 	async #handleRetryableError(
 		message: AssistantMessage,
-		options?: { allowModelFallback?: boolean; fireworksFastFallback?: boolean; hardErrorFallback?: boolean },
+		options?: {
+			allowModelFallback?: boolean;
+			fireworksFastFallback?: boolean;
+			hardErrorFallback?: boolean;
+			hardErrorRouteFallback?: boolean;
+		},
 	): Promise<boolean> {
 		const retrySettings = this.settings.getGroup("retry");
 		// The Fireworks Fast→base degrade is an intrinsic model-selection safety net,
@@ -17950,6 +18666,8 @@ export class AgentSession {
 			: calculateRetryBackoffDelayMs(retrySettings.baseDelayMs, this.#retryAttempt);
 		let switchedCredential = false;
 		let switchedModel = false;
+		let switchedRoute = false;
+		let deferCrossModelFallback = false;
 		// Set when a usage-limit error pinned the wait to credential
 		// availability — suppresses the generic retry-after bump below.
 		let usageLimitWaitMs: number | undefined;
@@ -18009,9 +18727,26 @@ export class AgentSession {
 		const allowModelFallback = options?.allowModelFallback !== false;
 		const currentSelector = this.model ? formatRetryFallbackSelector(this.model, this.thinkingLevel) : undefined;
 		if (!staleOpenAIResponsesReplayError && !switchedCredential && currentSelector) {
+			if (allowModelFallback) {
+				const routeFallback = await this.#tryModelRouteFallback(
+					message,
+					id,
+					parsedRetryAfterMs,
+					errorMessage,
+					retryBudgetExhausted,
+				);
+				switchedRoute = routeFallback.switched;
+				deferCrossModelFallback = routeFallback.deferCrossModelFallback;
+			}
 			// A refusal chain stops at the retry budget: the exhausted-attempt
 			// last resort is for provider failures, not classifier decisions.
-			if (allowModelFallback && retrySettings.modelFallback && !(retryBudgetExhausted && classifierRefusal)) {
+			if (
+				!switchedRoute &&
+				!deferCrossModelFallback &&
+				allowModelFallback &&
+				retrySettings.modelFallback &&
+				!(retryBudgetExhausted && classifierRefusal)
+			) {
 				if (!classifierRefusal) {
 					this.#noteRetryFallbackCooldown(currentSelector, parsedRetryAfterMs, errorMessage);
 				}
@@ -18021,17 +18756,23 @@ export class AgentSession {
 			// of the role-fallback setting: it's intrinsic to the Fast contract (speed
 			// best-effort, degrade to Standard on failure) and triggers on hard router
 			// errors the generic retry classifier would otherwise reject.
-			if (!switchedModel && allowModelFallback && options?.fireworksFastFallback) {
+			if (
+				!switchedRoute &&
+				!switchedModel &&
+				!deferCrossModelFallback &&
+				allowModelFallback &&
+				options?.fireworksFastFallback
+			) {
 				switchedModel = await this.#tryFireworksFastFallback(currentSelector);
 			}
-			if (switchedModel) {
+			if (switchedRoute || switchedModel) {
 				delayMs = 0;
 			} else if (usageLimitWaitMs === undefined && parsedRetryAfterMs && parsedRetryAfterMs > delayMs) {
 				delayMs = parsedRetryAfterMs;
 			}
 		}
 		if (retryBudgetExhausted) {
-			if (!switchedModel) {
+			if (!switchedRoute && !switchedModel) {
 				await this.#persistRetryLifecycleErrorMessage(message);
 				// Max retries exceeded and no fallback model to switch to: emit
 				// final failure and reset.
@@ -18050,6 +18791,9 @@ export class AgentSession {
 			// counter in place would exhaust it again on its first error.
 			this.#retryAttempt = 1;
 		}
+		if (switchedRoute) {
+			this.#retryAttempt = 1;
+		}
 		if (classifierRefusal && !switchedModel) {
 			this.#retryAttempt = 0;
 			this.#resolveRetry();
@@ -18061,7 +18805,8 @@ export class AgentSession {
 		// failing model for an error the generic classifier wouldn't retry —
 		// surface it instead.
 		if (
-			(options?.fireworksFastFallback || options?.hardErrorFallback) &&
+			(options?.fireworksFastFallback || options?.hardErrorFallback || options?.hardErrorRouteFallback) &&
+			!switchedRoute &&
 			!switchedModel &&
 			!this.#isRetryableError(message)
 		) {
@@ -18078,7 +18823,7 @@ export class AgentSession {
 		// assistant error message is preserved in agent state so the caller
 		// can act on it.
 		const maxDelayMs = retrySettings.maxDelayMs;
-		if (maxDelayMs > 0 && delayMs > maxDelayMs && !switchedCredential && !switchedModel) {
+		if (maxDelayMs > 0 && delayMs > maxDelayMs && !switchedCredential && !switchedRoute && !switchedModel) {
 			await this.#persistRetryLifecycleErrorMessage(message);
 			const attempt = this.#retryAttempt;
 			this.#retryAttempt = 0;
@@ -18093,7 +18838,11 @@ export class AgentSession {
 			return false;
 		}
 
-		await this.#recordPendingRecoveredRetryError(message, id, { switchedCredential, switchedModel, delayMs });
+		await this.#recordPendingRecoveredRetryError(message, id, {
+			switchedCredential,
+			switchedModel: switchedRoute || switchedModel,
+			delayMs,
+		});
 
 		await this.#emitSessionEvent({
 			type: "auto_retry_start",
@@ -19184,6 +19933,8 @@ export class AgentSession {
 		const previousPendingNextTurnMessages = [...this.#pendingNextTurnMessages];
 		const previousScheduledHiddenNextTurnGeneration = this.#scheduledHiddenNextTurnGeneration;
 		const previousModel = this.model;
+		const previousEditMode = this.#resolveActiveEditMode();
+		const previousModelRouteState = this.#modelRouteLease.captureState();
 		const previousThinkingLevel = this.#thinkingLevel;
 		const previousAutoThinking = this.#autoThinking;
 		const previousAutoResolvedLevel = this.#autoResolvedLevel;
@@ -19192,8 +19943,11 @@ export class AgentSession {
 		const previousBaseSystemPrompt = this.#baseSystemPrompt;
 		const previousSystemPrompt = this.agent.state.systemPrompt;
 		const previousBaseSystemPromptBeforeMemoryPromotion = this.#baseSystemPromptBeforeMemoryPromotion;
+		const previousLastAppliedToolSignature = this.#lastAppliedToolSignature;
+		const previousPromptModelKey = this.#promptModelKey;
 		const previousFreshProviderSessionId = this.#freshProviderSessionId;
 		const previousInheritedProviderPromptCacheKey = this.#inheritedProviderPromptCacheKey;
+		const previousAgentPromptCacheKey = this.agent.promptCacheKey;
 
 		// Snapshot the full checkpoint runtime state: the success path calls
 		// #rehydrateCheckpointRewindState(), which clears and rebuilds all four
@@ -19209,6 +19963,14 @@ export class AgentSession {
 		this.#scheduledHiddenNextTurnGeneration = undefined;
 
 		try {
+			let pendingRouteSelection: ModelRouteSelection | undefined;
+			let pendingRouteChange:
+				| {
+						logicalModel: string;
+						fromRoute: string;
+						toRoute: string;
+				  }
+				| undefined;
 			await this.sessionManager.setSessionFile(sessionPath);
 			this.#markBashSessionTransition(bashTransition);
 			if (switchingToDifferentSession) {
@@ -19250,24 +20012,43 @@ export class AgentSession {
 				this.#closeAllProviderSessions("session reload");
 			}
 
-			// Restore model if saved
-			const targetModelStrings = getRestorableSessionModels(
-				sessionContext.models,
-				this.sessionManager.getLastModelChangeRole(),
+			// Restore Logical Model intent before falling back to the persisted
+			// concrete selector. The saved route is affinity only; policy/auth/
+			// capability changes may recover onto another route in the same group.
+			const lastModelChangeRole = this.sessionManager.getLastModelChangeRole();
+			const targetLogicalModelIds = getRestorableSessionLogicalModels(
+				sessionContext.logicalModels,
+				lastModelChangeRole,
 			);
-			if (targetModelStrings.length > 0) {
-				const availableModels = this.#modelRegistry.getAvailable();
-				let match: Model | undefined;
-				for (const targetModelStr of targetModelStrings) {
-					const slashIdx = targetModelStr.indexOf("/");
-					if (slashIdx <= 0) continue;
-					const provider = targetModelStr.slice(0, slashIdx);
-					const modelId = targetModelStr.slice(slashIdx + 1);
-					match = availableModels.find(m => m.provider === provider && m.id === modelId);
-					if (match) break;
-				}
-				if (match) {
+			this.#modelRouteLease.clear();
+			let restoredLogicalRoute = false;
+			if (this.settings.get("routing.enabled")) {
+				const routeRegistry = this.#modelRegistry.getModelRouteRegistry();
+				for (const logicalModelId of targetLogicalModelIds) {
+					if (!routeRegistry.has(logicalModelId)) continue;
+					const role =
+						lastModelChangeRole && sessionContext.logicalModels[lastModelChangeRole] === logicalModelId
+							? lastModelChangeRole
+							: "default";
+					const savedRouteId = sessionContext.modelRoutes[logicalModelId];
+					const request = this.#modelRouteResolutionRequest(logicalModelId, {
+						thinkingLevel:
+							parseConfiguredThinkingLevel(sessionContext.configuredThinkingLevel) ??
+							parseThinkingLevel(sessionContext.thinkingLevel),
+						...(savedRouteId !== undefined && {
+							affinityRouteId: savedRouteId,
+							selectionReason: "recovery" as const,
+						}),
+					});
+					const selection = this.#modelRouteLease.select(logicalModelId, role, request);
+					if (!selection) {
+						const resolution = routeRegistry.resolve(logicalModelId, request);
+						if (!resolution) throw new Error(`Unknown logical model "${logicalModelId}"`);
+						throw new Error(formatLogicalRouteFailure(resolution));
+					}
+
 					const currentModel = this.model;
+					const match = selection.model;
 					const shouldResetProviderState =
 						switchingToDifferentSession ||
 						(currentModel !== undefined &&
@@ -19278,6 +20059,48 @@ export class AgentSession {
 						this.#setModelWithProviderSessionReset(match);
 					} else {
 						this.agent.setModel(match);
+						this.agent.setDialect(resolveDialect(this.settings.get("tools.format"), match));
+					}
+					if (savedRouteId && savedRouteId !== selection.route.routeId) {
+						pendingRouteChange = {
+							logicalModel: logicalModelId,
+							fromRoute: savedRouteId,
+							toRoute: selection.route.routeId,
+						};
+					}
+					pendingRouteSelection = selection;
+					restoredLogicalRoute = true;
+					break;
+				}
+			}
+
+			if (!restoredLogicalRoute) {
+				const targetModelStrings = getRestorableSessionModels(sessionContext.models, lastModelChangeRole);
+				if (targetModelStrings.length > 0) {
+					const availableModels = this.#modelRegistry.getAvailable();
+					let match: Model | undefined;
+					for (const targetModelStr of targetModelStrings) {
+						const slashIdx = targetModelStr.indexOf("/");
+						if (slashIdx <= 0) continue;
+						const provider = targetModelStr.slice(0, slashIdx);
+						const modelId = targetModelStr.slice(slashIdx + 1);
+						match = availableModels.find(m => m.provider === provider && m.id === modelId);
+						if (match) break;
+					}
+					if (match) {
+						const currentModel = this.model;
+						const shouldResetProviderState =
+							switchingToDifferentSession ||
+							(currentModel !== undefined &&
+								(currentModel.provider !== match.provider ||
+									currentModel.id !== match.id ||
+									currentModel.api !== match.api));
+						if (shouldResetProviderState) {
+							this.#setModelWithProviderSessionReset(match);
+						} else {
+							this.agent.setModel(match);
+							this.agent.setDialect(resolveDialect(this.settings.get("tools.format"), match));
+						}
 					}
 				}
 			}
@@ -19337,9 +20160,19 @@ export class AgentSession {
 			this.#serviceTierByFamily = hasServiceTierEntry
 				? (sessionContext.serviceTier ?? {})
 				: configuredServiceTierByFamily;
+			await this.#syncAfterModelChange(previousEditMode);
 
 			if (switchingToDifferentSession) {
 				await this.#resetMemoryContextForNewTranscript();
+			}
+			if (pendingRouteChange && this.#sessionWritesEnabled) {
+				this.sessionManager.appendModelRouteChange({
+					...pendingRouteChange,
+					reason: "recovery",
+				});
+			}
+			if (pendingRouteSelection) {
+				await this.#emitModelRouteResolved(pendingRouteSelection);
 			}
 			this.#reconnectToAgent();
 			try {
@@ -19361,18 +20194,22 @@ export class AgentSession {
 			this.agent.setTools(previousTools);
 			this.#baseSystemPrompt = previousBaseSystemPrompt;
 			this.#baseSystemPromptBeforeMemoryPromotion = previousBaseSystemPromptBeforeMemoryPromotion;
+			this.#lastAppliedToolSignature = previousLastAppliedToolSignature;
+			this.#promptModelKey = previousPromptModelKey;
 			this.agent.setSystemPrompt(previousSystemPrompt);
 			this.agent.replaceMessages(previousAgentMessages);
 			this.agent.replaceQueues(previousSteeringMessages, previousFollowUpMessages);
 			this.#pendingNextTurnMessages = previousPendingNextTurnMessages;
 			this.#scheduledHiddenNextTurnGeneration = previousScheduledHiddenNextTurnGeneration;
 			this.#inheritedProviderPromptCacheKey = previousInheritedProviderPromptCacheKey;
+			this.agent.promptCacheKey = previousAgentPromptCacheKey;
 			this.#checkpointState = previousCheckpointState;
 			this.#pendingRewindReport = previousPendingRewindReport;
 			this.#lastCompletedRewind = previousLastCompletedRewind;
 			this.#rewoundToolResultIds = previousRewoundToolResultIds;
+			this.#modelRouteLease.restoreState(previousModelRouteState);
 			if (previousModel) {
-				this.agent.setModel(previousModel);
+				this.#setModelWithProviderSessionReset(previousModel);
 			}
 			this.#thinkingLevel = previousThinkingLevel;
 			this.#autoThinking = previousAutoThinking;
