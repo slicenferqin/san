@@ -161,8 +161,8 @@ function writeModelsJson(fixture: ProviderFixture): void {
 
 function loadDefaultRegistryModel(lookup: ModelLookup): ModelSnapshot | undefined {
 	const script = `
-		import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-		import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+		import { ModelRegistry } from "@san/coding-agent/config/model-registry";
+		import { AuthStorage } from "@san/coding-agent/session/auth-storage";
 
 		const authStorage = await AuthStorage.create(":memory:");
 		try {

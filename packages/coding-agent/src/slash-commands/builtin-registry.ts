@@ -1023,6 +1023,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			const resolved = resolveCliModel({
 				cliModel: rolePattern,
 				modelRegistry: runtime.session.modelRegistry,
+				settings: runtime.settings,
 				preferences: getModelMatchPreferences(runtime.settings),
 			});
 			if (resolved.error || !resolved.model) {

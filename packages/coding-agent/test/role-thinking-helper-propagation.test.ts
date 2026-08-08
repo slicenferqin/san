@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as ai from "@san/ai";
 import { Effort } from "@san/ai";
 import { getBundledModel } from "@san/catalog/models";
+import { compileModelRouteRegistry } from "@san/coding-agent/config/model-route-registry";
 import { generateCommitMessage } from "@san/coding-agent/utils/commit-message-generator";
 import { generateSessionTitle } from "@san/coding-agent/utils/title-generator";
 
@@ -11,12 +12,16 @@ function getModelOrThrow(id: string) {
 	return model;
 }
 
-function createSettings(modelRoles: Record<string, string>) {
+function createSettings(modelRoles: Record<string, string>, routingEnabled = false) {
 	return {
 		getModelRole(role: string) {
 			return modelRoles[role];
 		},
 		getStorage() {
+			return undefined;
+		},
+		get(path: string) {
+			if (path === "routing.enabled") return routingEnabled;
 			return undefined;
 		},
 	} as never;
@@ -75,6 +80,44 @@ describe("role thinking helper propagation", () => {
 		expect(completeSimpleMock.mock.calls[0]?.[2]).toMatchObject({
 			maxTokens: 1024,
 		});
+	});
+
+	it("uses the concrete route selected by a logical smol role", async () => {
+		const fallbackModel = getModelOrThrow("claude-sonnet-4-5");
+		const routedModel = getModelOrThrow("claude-opus-4-5");
+		const settings = createSettings({ smol: "logical-smol" }, true);
+		const routeRegistry = compileModelRouteRegistry(
+			{
+				"logical-smol": {
+					routes: [
+						{
+							id: "primary",
+							model: `${routedModel.provider}/${routedModel.id}`,
+							equivalence: "exact",
+						},
+					],
+				},
+			},
+			[fallbackModel, routedModel],
+		);
+		const registry = {
+			getAvailable: () => [fallbackModel, routedModel],
+			getModelRouteRegistry: () => routeRegistry,
+			hasConfiguredAuth: () => true,
+			isProviderEnabled: () => true,
+			isSelectorSuppressed: () => false,
+			getApiKey: async () => "test-key",
+			resolver: vi.fn(() => async () => "test-key"),
+		};
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "end_turn",
+			content: [{ type: "text", text: "route commit helper" }],
+		} as never);
+
+		const message = await generateCommitMessage(`diff --git a/x b/x\n+change\n`, registry as never, settings);
+
+		expect(message).toBe("route commit helper");
+		expect(completeSimpleMock.mock.calls[0]?.[0]).toBe(routedModel);
 	});
 
 	it("disables reasoning for title generation even when smol role has thinking", async () => {

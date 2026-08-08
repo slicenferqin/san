@@ -1736,6 +1736,99 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(registryModel?.maxTokens).toBe(4096);
 	});
 
+	test("llama.cpp route effective model 经 metadata refresh 保留 billing override，catalog cost 不被污染", async () => {
+		writeModelCache(
+			"llama.cpp",
+			Date.now(),
+			[
+				buildModel({
+					id: "paid-route",
+					name: "paid-route",
+					provider: "llama.cpp",
+					api: "openai-responses",
+					baseUrl: "http://127.0.0.1:8080",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 128000,
+					maxTokens: 32768,
+				}),
+			],
+			true,
+			"",
+			cacheDbPath,
+		);
+		fs.writeFileSync(
+			modelsJsonPath,
+			JSON.stringify({
+				providers: {
+					"llama.cpp": {
+						baseUrl: "http://127.0.0.1:8080",
+						api: "openai-responses",
+						auth: "none",
+						discovery: { type: "llama.cpp" },
+					},
+				},
+				logicalModels: {
+					"local-llm": {
+						routes: [
+							{
+								id: "main",
+								model: "llama.cpp/paid-route",
+								equivalence: "exact",
+								billing: { source: "override", input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+							},
+						],
+					},
+				},
+			}),
+		);
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:8080/models") {
+				return new Response(JSON.stringify({ data: [{ id: "paid-route", meta: { n_ctx: 239104 } }] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			if (url === "http://127.0.0.1:8080/props") {
+				return new Response(
+					JSON.stringify({
+						default_generation_settings: {
+							n_ctx: 239104,
+							params: { max_tokens: -1, n_predict: -1 },
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const routeModel = registry.getModelRouteRegistry().resolve("local-llm")?.route?.model;
+		if (!routeModel) throw new Error("route-local llama.cpp model missing");
+		expect(routeModel.cost).toEqual({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4 });
+
+		const refreshed = await registry.refreshSelectedModelMetadata(routeModel);
+		// 动态能力字段照常更新。
+		expect(refreshed.contextWindow).toBe(239104);
+		expect(refreshed.maxTokens).toBe(239104);
+		// route-local override cost 保留。
+		expect(refreshed.cost).toEqual({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4 });
+		// catalog 条目保持 catalog cost，仅能力字段被动态 patch。
+		expect(registry.find("llama.cpp", "paid-route")?.cost).toEqual({
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+		});
+		expect(registry.find("llama.cpp", "paid-route")?.contextWindow).toBe(239104);
+		// 重编译后的 route 仍携带 billing override 与新能力字段。
+		const rerouted = registry.getModelRouteRegistry().resolve("local-llm")?.route?.model;
+		expect(rerouted?.cost).toEqual({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4 });
+		expect(rerouted?.contextWindow).toBe(239104);
+	});
+
 	test("llama.cpp refresh bypasses fresh cache so server restarts update n_ctx", async () => {
 		writeModelCache(
 			"llama.cpp",

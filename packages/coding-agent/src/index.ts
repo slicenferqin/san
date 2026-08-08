@@ -10,6 +10,9 @@ export * as zod from "zod/v4";
 export { z } from "zod/v4";
 export * from "./config/keybindings";
 export * from "./config/model-registry";
+export * from "./config/model-route-registry";
+export * from "./config/model-route-resolver";
+export * from "./config/model-routes-schema";
 // Prompt templates
 export type * from "./config/prompt-templates";
 export * from "./config/prompt-templates";

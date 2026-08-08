@@ -570,6 +570,75 @@ describe("LLM digest orchestration", () => {
 		expect(result?.digest).toMatchObject({ fallback: false, model: "anthropic/claude-sonnet-4-5" });
 	});
 
+	test("does not force the named tool_choice for deepseek-family reasoning digest models", async () => {
+		const response = assistantWithDigest({
+			userIntent: "Digest via deepseek without a forced tool_choice.",
+			actionsTaken: [],
+			decisions: [],
+			filesTouched: [],
+			factsLearned: [],
+			openQuestions: [],
+			risks: [],
+			nextSteps: [],
+			memoryCandidates: [],
+		});
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue(response);
+		const source = { sessionId: "s", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 };
+		const sessionManager = createSessionManager();
+
+		const model = getBundledModel("deepseek", "deepseek-v4-flash");
+		expect(model?.reasoning).toBe(true);
+
+		const result = await generateDigest(
+			asM([umsg("Fix src/app.ts"), amsg("Done.")]),
+			source,
+			sessionManager as never,
+			{} as never,
+			steadySettings(true),
+			{ model: model!, apiKey: async () => "test-key" },
+		);
+
+		const options = completeSimpleMock.mock.calls[0]?.[2];
+		expect(options?.toolChoice).toBeUndefined();
+		expect(options?.disableReasoning).toBe(true);
+		const context = completeSimpleMock.mock.calls[0]?.[1];
+		expect(context?.tools?.map(tool => tool.name)).toContain("record_turn_digest");
+		expect(result?.digest).toMatchObject({ fallback: false });
+		expect(sessionManager.getEntries()).toHaveLength(1);
+	});
+
+	test("still forces the named tool_choice for non-deepseek digest models", async () => {
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue(
+			assistantWithDigest({
+				userIntent: "Digest with a forced tool_choice.",
+				actionsTaken: [],
+				decisions: [],
+				filesTouched: [],
+				factsLearned: [],
+				openQuestions: [],
+				risks: [],
+				nextSteps: [],
+				memoryCandidates: [],
+			}),
+		);
+		const source = { sessionId: "s", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 };
+		const sessionManager = createSessionManager();
+
+		await generateDigest(
+			asM([umsg("Fix src/app.ts"), amsg("Done.")]),
+			source,
+			sessionManager as never,
+			{} as never,
+			steadySettings(true),
+			{ model: getDigestModel(), apiKey: async () => "test-key" },
+		);
+
+		expect(completeSimpleMock.mock.calls[0]?.[2]?.toolChoice).toEqual({
+			type: "tool",
+			name: "record_turn_digest",
+		});
+	});
+
 	test("append-only upgrades an existing fallback digest when the LLM model becomes available", async () => {
 		vi.spyOn(ai, "completeSimple").mockResolvedValue(
 			assistantWithDigest({

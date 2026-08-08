@@ -1,0 +1,1044 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Session 019fca60 多 Agent 语义活锁故障修复方案</title>
+  <style>
+    :root {
+      --ink: #17222b;
+      --muted: #5b6872;
+      --line: #d7e0e5;
+      --paper: #ffffff;
+      --wash: #f4f7f8;
+      --navy: #173f4d;
+      --blue: #176f91;
+      --green: #17705a;
+      --green-soft: #eaf7f2;
+      --amber: #9b6716;
+      --amber-soft: #fff7e6;
+      --red: #a53a36;
+      --red-soft: #fff0ef;
+      --violet: #6549a4;
+      --violet-soft: #f3effc;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font: 15px/1.72 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+    code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+    code { padding: 1px 5px; border-radius: 4px; background: #eef3f5; font-size: 0.92em; overflow-wrap: anywhere; }
+    pre {
+      overflow-x: auto;
+      margin: 14px 0;
+      padding: 16px 18px;
+      border: 1px solid #2a4c58;
+      border-radius: 8px;
+      color: #eaf4f5;
+      background: #17323c;
+      line-height: 1.55;
+    }
+    pre code { padding: 0; color: inherit; background: transparent; font-size: 13px; overflow-wrap: normal; }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    h1, h2, h3, h4 { color: var(--navy); line-height: 1.28; }
+    h1 { margin: 8px 0 14px; font-size: clamp(31px, 5vw, 48px); }
+    h2 { margin: 0 0 18px; font-size: 27px; }
+    h3 { margin: 24px 0 10px; font-size: 20px; }
+    h4 { margin: 16px 0 7px; font-size: 16px; }
+    p { margin: 9px 0; }
+    ul, ol { margin: 8px 0; padding-left: 24px; }
+    li + li { margin-top: 5px; }
+    .page { width: min(1180px, calc(100% - 36px)); margin: 0 auto; }
+    .masthead { padding: 54px 0 44px; color: #eff8fa; background: linear-gradient(128deg, #112f3a, #1b596b 62%, #1f6e72); }
+    .masthead h1 { color: white; }
+    .masthead code { color: #e8fbff; background: rgba(255,255,255,.12); }
+    .masthead-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(280px, .7fr); gap: 42px; align-items: start; }
+    .kicker { color: #9de0dc; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; }
+    .lede { max-width: 780px; color: #d9ebee; font-size: 18px; }
+    .snapshot { padding: 18px 20px; border: 1px solid rgba(255,255,255,.2); border-radius: 10px; background: rgba(4, 28, 35, .28); }
+    .snapshot dl, .snapshot dd { margin: 0; }
+    .snapshot div + div { margin-top: 13px; }
+    .snapshot dt { color: #9de0dc; font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+    .snapshot dd { margin-top: 2px; color: #f4fbfc; }
+    main { padding: 30px 0 64px; }
+    section { padding: 34px 0; border-bottom: 1px solid var(--line); }
+    section:last-child { border-bottom: 0; }
+    .notice { margin: 0 0 24px; padding: 16px 18px; border-left: 6px solid var(--amber); background: var(--amber-soft); }
+    .callout { margin: 16px 0; padding: 16px 18px; border: 1px solid var(--line); border-left-width: 6px; border-radius: 7px; }
+    .callout.green { border-left-color: var(--green); background: var(--green-soft); }
+    .callout.amber { border-left-color: var(--amber); background: var(--amber-soft); }
+    .callout.red { border-left-color: var(--red); background: var(--red-soft); }
+    .callout.violet { border-left-color: var(--violet); background: var(--violet-soft); }
+    .toc { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; margin: 18px 0; }
+    .toc a { padding: 9px 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--wash); font-weight: 700; }
+    .grid-2, .grid-3, .grid-4 { display: grid; gap: 14px; }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .card { padding: 16px 17px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+    .card h3, .card h4 { margin-top: 0; }
+    .metric { color: var(--blue); font-size: 27px; font-weight: 900; line-height: 1.15; }
+    .muted { color: var(--muted); }
+    .tag { display: inline-block; margin-right: 6px; padding: 2px 8px; border-radius: 999px; color: white; font-size: 11px; font-weight: 900; letter-spacing: .04em; }
+    .observed { background: var(--green); }
+    .proposed { background: var(--violet); }
+    .risk { background: var(--amber); }
+    .p0 { background: var(--red); }
+    .p1 { background: var(--violet); }
+    .table-wrap { overflow-x: auto; margin: 14px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 10px 11px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: white; background: #244b59; }
+    tbody tr:nth-child(even) { background: #f8fafb; }
+    .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+    .step { position: relative; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--wash); }
+    .step strong { display: block; margin-bottom: 5px; color: var(--navy); }
+    .step .n { color: var(--blue); font-size: 12px; font-weight: 900; }
+    .diagram { margin: 18px 0; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: #f8fbfc; }
+    .diagram-title { margin-bottom: 14px; color: var(--navy); font-weight: 900; }
+    .diagram-row { display: flex; align-items: stretch; gap: 8px; }
+    .diagram-row + .diagram-row { margin-top: 10px; }
+    .diagram-node { flex: 1 1 0; min-width: 0; padding: 12px; border: 1px solid #b9cbd2; border-radius: 7px; background: white; text-align: center; }
+    .diagram-node strong { display: block; color: var(--navy); }
+    .diagram-node.primary { border-color: var(--blue); background: #eaf5f9; }
+    .diagram-node.good { border-color: var(--green); background: var(--green-soft); }
+    .diagram-node.warn { border-color: var(--amber); background: var(--amber-soft); }
+    .diagram-node.danger { border-color: var(--red); background: var(--red-soft); }
+    .diagram-arrow { flex: 0 0 auto; align-self: center; color: var(--blue); font-size: 21px; font-weight: 900; }
+    .diagram-branch { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+    .authority { display: grid; grid-template-columns: 165px minmax(0, 1fr); gap: 10px; align-items: start; }
+    .authority + .authority { margin-top: 10px; }
+    .authority-label { padding: 8px 10px; border-radius: 6px; color: white; background: var(--navy); font-weight: 850; text-align: center; }
+    .authority-body { padding: 8px 11px; border-left: 3px solid var(--line); }
+    .phase { margin-top: 15px; padding: 17px 19px; border-left: 6px solid var(--blue); background: var(--wash); }
+    .phase h3 { margin-top: 0; }
+    .decision { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+    .decision:last-child { border-bottom: 0; }
+    .decision strong { color: var(--navy); }
+    .done { list-style: none; padding-left: 0; }
+    .done li { position: relative; padding-left: 26px; }
+    .done li::before { position: absolute; left: 0; content: "✓"; color: var(--green); font-weight: 900; }
+    .blocked { list-style: none; padding-left: 0; }
+    .blocked li { position: relative; padding-left: 26px; }
+    .blocked li::before { position: absolute; left: 0; content: "×"; color: var(--red); font-weight: 900; }
+    .small { font-size: 13px; }
+    footer { padding: 26px 0 48px; color: var(--muted); text-align: center; }
+    @media (max-width: 920px) {
+      .masthead-grid, .grid-3, .grid-4, .flow, .toc { grid-template-columns: 1fr 1fr; }
+      .grid-2 { grid-template-columns: 1fr; }
+      .diagram-row { flex-wrap: wrap; }
+      .diagram-branch { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 620px) {
+      .masthead-grid, .grid-3, .grid-4, .flow, .toc { grid-template-columns: 1fr; }
+      .decision { grid-template-columns: 1fr; gap: 3px; }
+      .diagram-row { flex-direction: column; }
+      .diagram-arrow { transform: rotate(90deg); }
+      .diagram-branch, .authority { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<header class="masthead">
+  <div class="page masthead-grid">
+    <div>
+      <div class="kicker">Executable Repair Plan · Revised 2026-08-05</div>
+      <h1>Session <code>019fca60</code><br />多 Agent 语义活锁故障修复方案</h1>
+      <p class="lede">针对“一夜运行、187 个子 Agent、约 6.99 亿累计 Prompt Token”的事故，改用完成导向的旁路监督：不以总 Token、请求、时长或任务数终止有效工作，由确定性 Watchdog、证据门、按需 Supervisor 与持久化恢复共同发现并纠正语义活锁。</p>
+    </div>
+    <aside class="snapshot" aria-label="方案摘要">
+      <dl>
+        <div><dt>事故分类</dt><dd>跨 Agent、跨压缩边界的语义活锁</dd></div>
+        <div><dt>主修复</dt><dd>确定性 Watchdog + 证据门 + 按需 Supervisor</dd></div>
+        <div><dt>运行原则</dt><dd>有效进展无限续期；只阻断已确认的无效路径</dd></div>
+        <div><dt>数据兼容</dt><dd>append-only；不重写旧 session JSONL</dd></div>
+      </dl>
+    </aside>
+  </div>
+</header>
+
+<main class="page">
+  <div class="notice">
+    <strong>文档状态：</strong>这是基于当前源码与事故记录形成的实施设计，<strong>不是已落地代码</strong>。文中的“已确认”表示已有日志/源码证据；“拟议”表示需要按本文实施并通过测试后才能成立。
+  </div>
+
+  <section id="decision">
+    <h2>1. 修复决策</h2>
+    <div class="callout green">
+      <strong>结论：</strong>默认取消累计 Token、Provider 请求、墙钟时长和 assignment 数量的硬终止。共享账本保留为事实与成本遥测；真正的控制对象是“重复失败路径”而不是“总工作量”。确定性 Watchdog 在 Agent 上下文之外识别已知故障与状态漂移，按需 Supervisor 只提出语义纠偏方案，所有高影响决策仍由 host-owned evidence、最新 revision 和显式验收门裁决。
+    </div>
+    <div class="toc" aria-label="目录">
+      <a href="#facts">事故约束</a>
+      <a href="#architecture">目标架构</a>
+      <a href="#supervision">监督防误判</a>
+      <a href="#breaker">Provider 熔断</a>
+      <a href="#convergence">语义收敛</a>
+      <a href="#persistence">账本与压缩</a>
+      <a href="#todo">Todo 防覆盖</a>
+      <a href="#steady">Context Steady A/B</a>
+      <a href="#containment">立即止损</a>
+      <a href="#implementation">实现顺序</a>
+      <a href="#tests">测试矩阵</a>
+      <a href="#rollout">发布与回滚</a>
+    </div>
+    <div class="grid-4">
+      <div class="card"><div class="metric">∞</div><h4>有效工作</h4><p class="muted">只要验收状态持续前进，就不因累计资源量终止。</p></div>
+      <div class="card"><div class="metric">2 层</div><h4>旁路监督</h4><p class="muted">确定性 Watchdog 常驻；LLM Supervisor 仅在语义疑难时按需运行。</p></div>
+      <div class="card"><div class="metric">CAS</div><h4>防陈旧裁决</h4><p class="muted">监督决策绑定 basis revision；期间一旦有新进展，旧决策自动作废。</p></div>
+      <div class="card"><div class="metric">Gate</div><h4>完成权威</h4><p class="muted">Supervisor 不能宣布完成；只有类型化 host evidence 能通过验收门。</p></div>
+    </div>
+  </section>
+
+  <section id="facts">
+    <h2>2. 事故事实与修复边界</h2>
+    <div class="grid-3">
+      <div class="card"><span class="tag observed">已确认</span><div class="metric">699.25M</div><h4>累计 Prompt Token</h4><p>其中 605.72M 发生于核心失控回合，占 86.6%。</p></div>
+      <div class="card"><span class="tag observed">已确认</span><div class="metric">7,843</div><h4>主 + 子 Provider 请求</h4><p>主 2,351，子 5,492；81.1% Prompt 为 cache read。</p></div>
+      <div class="card"><span class="tag observed">已确认</span><div class="metric">1,972</div><h4>子 Agent 错误回合</h4><p>全部 0 token；1,149 次 <code>auth_unavailable</code>、706 次 <code>stream_stalled</code>。</p></div>
+      <div class="card"><span class="tag observed">已确认</span><div class="metric">187</div><h4>子 Agent 会话</h4><p>07:39 后新派 167 个子任务；63% 子会话无成功 mutation。</p></div>
+      <div class="card"><span class="tag observed">已确认</span><div class="metric">1,712</div><h4>Hub 操作</h4><p><code>hub</code> 当前被 ToolProgressGuard 完全豁免，未累计 no-progress。</p></div>
+      <div class="card"><span class="tag observed">已确认</span><div class="metric">84 / 84</div><h4>Steady-only 物理压缩</h4><p>均由 <code>steady_target</code> 单独触发，未到 217.6K native threshold。</p></div>
+    </div>
+
+    <h3>2.1 当前控制面为什么失效</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>当前机制</th><th>源码事实</th><th>本次盲点</th></tr></thead>
+        <tbody>
+          <tr><td>单子 Agent 软预算</td><td><code>task/executor.ts</code>：scout/sonic 100、default 200；1.5× 后强制 yield。</td><td>约束单个 Agent，却不能判断 187 个 Agent 是否在重复同一失败策略；总量上限又可能误杀真实长任务。</td></tr>
+          <tr><td>并发与墙钟</td><td><code>task.maxConcurrency</code> 默认 32，Semaphore 为每个 TaskTool/session 独立；<code>maxRuntimeMs</code> 默认 0。</td><td>并发是背压，不是收敛；墙钟无法区分长时间有效构建与无意义等待。</td></tr>
+          <tr><td>San execution loop</td><td><code>runner.ts</code> 已有 Commander、Worker、Supervisor、Oracle 和 ledger，但主要服务显式 loop。</td><td>自由 <code>task</code>/<code>hub</code> 编排未统一进入旁路监督；现有 retry/turn 终止仍可能以次数代替语义判断。</td></tr>
+          <tr><td>完成证据门</td><td><code>applySanLoopReview()</code> 已拒绝无 host receipt 的 Supervisor pass。</td><td>当前门只要求当前批次任一 host-owned bash <code>exitCode 0</code>；无关命令可能误放行，UI/研究等无 bash 合同又可能被误拒。</td></tr>
+          <tr><td>错误分类</td><td><code>auth_unavailable</code> 同时命中 AuthFailed 和 Transient；<code>retriable()</code> 因 Transient 返回 true。</td><td>Provider 内部凭证恢复已经失败，AgentSession 仍可做最多 10 次同模型退避。</td></tr>
+          <tr><td>ToolProgressGuard</td><td>新 resource 或新 result hash 即 progress；默认豁免 <code>hub</code>/<code>yield</code>。</td><td>新文件、V2/V3 名称、不同 hub 调用持续把 no-progress 清零；它也无法识别合法长任务心跳。</td></tr>
+          <tr><td>Context continuity</td><td><code>ActiveContinuationState</code> 已保护当前 user request 和工具证据。</td><td>没有 owner、工作族、acceptance gate、策略 revision、Provider 健康与监督决策的跨压缩运行账本。</td></tr>
+          <tr><td>Todo</td><td><code>todo init</code> 直接返回新列表并替换旧状态。</td><td>物理压缩后模型可无条件重建 Todo，丢失尚未完成的约束和阶段。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>2.2 修复后的硬不变量</h3>
+    <div class="grid-2">
+      <div class="card"><h4>A-1 事实优先于模型判断</h4><p>Supervisor 只能引用 ledger 中存在、类型与 scope 匹配且仍新鲜的 evidence；不能凭文字声明 pass、blocked 或 needs_user。</p></div>
+      <div class="card"><h4>A-2 不确定时必须 abstain</h4><p>证据冲突、置信不足或仍有合法活动时，默认继续观察或请求 Oracle，不得中断有效工作。</p></div>
+      <div class="card"><h4>A-3 陈旧决策永不落地</h4><p>每个决策绑定 <code>basisRevision</code> 和 <code>basisHash</code>；运行态已变化就丢弃并重新评估。</p></div>
+      <div class="card"><h4>L-1 有效进展可无限续期</h4><p>默认资源阈值只记录和提醒；只要验收门、任务依赖或可验证产物发生变化，run 就继续。</p></div>
+      <div class="card"><h4>F-1 故障只封锁故障路径</h4><p>Auth/stall breaker 跨会话共享；受影响任务 park，其他任务继续，恢复后自动 resume。</p></div>
+      <div class="card"><h4>C-1 名称不是身份</h4><p><code>ProcessHostV3/V4/Final/Repair</code> 若 family/scope/gates/strategy 相同，就是同一工作合同。</p></div>
+      <div class="card"><h4>P-1 Compaction 无权重置执行态</h4><p>summary 只描述历史；任务合同、gate、progress revision、breaker 和监督结论来自 append-only ledger。</p></div>
+      <div class="card"><h4>R-1 可恢复等待不是终态</h4><p>Provider 或外部资源暂不可用时进入 durable waiting；只有 host evidence 全通过、用户取消或运行时不变量损坏才终结。</p></div>
+    </div>
+  </section>
+
+  <section id="architecture">
+    <h2>3. 目标架构</h2>
+    <div class="flow" aria-label="目标执行链">
+      <div class="step"><span class="n">1 · FACTS</span><strong>Event producers</strong><span>主/子 Agent、task、hub、Provider、验证器产生类型化事件。</span></div>
+      <div class="step"><span class="n">2 · DURABILITY</span><strong>ExecutionLedger</strong><span>保存 scope、合同、gate、usage、revision 与 evidence refs。</span></div>
+      <div class="step"><span class="n">3 · CONTROL</span><strong>Deterministic Watchdog</strong><span>去重、故障分类、合法等待识别、进展租约与状态一致性。</span></div>
+      <div class="step"><span class="n">4 · SEMANTICS</span><strong>Supervisor / Oracle</strong><span>仅在规则无法确定时诊断；输出受限结构化建议。</span></div>
+      <div class="step"><span class="n">5 · RECOVERY</span><strong>Durable Scheduler</strong><span>重规划、改派、park、健康探测、自动 resume，直到验收完成。</span></div>
+    </div>
+
+    <div class="diagram" aria-label="旁路监督数据流">
+      <div class="diagram-title">旁路监督数据流：监督不依赖主 Agent 记得自我反省</div>
+      <div class="diagram-row">
+        <div class="diagram-node"><strong>主 / 子 Agent</strong>工具、任务、Hub、Provider 事件</div>
+        <div class="diagram-arrow">→</div>
+        <div class="diagram-node primary"><strong>Host normalizer</strong>类型、scope、freshness、hash</div>
+        <div class="diagram-arrow">→</div>
+        <div class="diagram-node primary"><strong>ExecutionLedger</strong>单调 revision + evidence refs</div>
+        <div class="diagram-arrow">→</div>
+        <div class="diagram-node warn"><strong>Watchdog</strong>活动 / 进展 / 回归 / 阻塞</div>
+      </div>
+      <div class="diagram-branch">
+        <div class="diagram-node good"><strong>规则可确定</strong>去重、熔断、恢复、续租</div>
+        <div class="diagram-node warn"><strong>需要语义判断</strong>构造有界诊断包调用 Supervisor</div>
+        <div class="diagram-node danger"><strong>运行时不变量损坏</strong>保存现场并进入 runtime_fault</div>
+      </div>
+      <div class="diagram-row">
+        <div class="diagram-node"><strong>Supervisor 建议</strong>continue / replan / reassign / park / needs_user</div>
+        <div class="diagram-arrow">→</div>
+        <div class="diagram-node primary"><strong>Host decision gate</strong>revision CAS + evidence policy + authority matrix</div>
+        <div class="diagram-arrow">→</div>
+        <div class="diagram-node good"><strong>Scheduler</strong>执行可逆纠偏，run 保持存活</div>
+      </div>
+    </div>
+
+    <h3>3.1 新模块边界</h3>
+    <pre><code>packages/coding-agent/src/execution-control/
+  types.ts                 // Scope、合同、gate、evidence、decision 类型
+  execution-ledger.ts      // append-only 事实、usage 遥测、单调 revision
+  progress-classifier.ts   // activity / progress / regression / blocker
+  watchdog.ts              // 确定性检测、进展租约、已知故障纠偏
+  supervisor-protocol.ts   // 诊断包、受限决策、revision CAS、abstain
+  evidence-gates.ts        // 按任务类型验证 host-owned receipts
+  durable-scheduler.ts     // replan / reassign / park / probe / resume
+  orchestration-guard.ts   // task/hub 合同与策略指纹
+  provider-health.ts       // endpoint/model 熔断与 half-open probe
+  persistence.ts           // san.execution_scope 事件、快照与恢复
+  errors.ts                // CircuitOpen / RuntimeInvariant 等结构化错误</code></pre>
+    <p><span class="tag observed">已有基础</span><code>san-loop/runner.ts</code> 已定义 Commander、Worker、Supervisor、Oracle；<code>orchestrator.ts</code> 已有 host-side pass evidence gate。本方案将这些能力提升为 root logical turn 的通用控制面，并把单一 “bash exit 0” 门扩展为按 acceptance gate 类型验证。</p>
+
+    <h3>3.2 Scope 生命周期</h3>
+    <ol>
+      <li>主 <code>AgentSession.prompt()</code> 持久化新的非 steering 用户 entry 后，创建 <code>scopeId = rootSessionId:logicalTurnId</code>。</li>
+      <li>同一 logical turn 的 steer、自动继续、compaction、handoff 保留 scope；新的独立用户 turn 关闭旧 scope，再创建新 scope。</li>
+      <li><code>TaskTool</code> 与 <code>hub send/resume</code> 继承 scope 和 assignment/strategy revision；旧 scope 消息不得跨 scope 偷渡执行。</li>
+      <li>Provider 或外部资源暂不可用时，scope 进入 durable waiting；健康事件触发自动 resume，不依赖用户重新发消息。</li>
+      <li>只有全部 host evidence gates 通过、用户显式取消，或 host 运行时不变量损坏时进入终态；迟到结果只追加 evidence，不得逆转已验证的终态。</li>
+    </ol>
+  </section>
+
+  <section id="supervision">
+    <h2>4. <span class="tag p0">P0</span> 旁路监督与防误判协议</h2>
+    <p>关键不是“再放一个更聪明的模型盯着”，而是把判断权拆开：Host 负责事实、时序和准入；Watchdog 负责确定性模式；Supervisor 只处理剩余语义；Oracle 仅复核高影响且低置信的建议。资源总量不参与默认终止。</p>
+    <div class="callout violet"><strong>准确性边界：</strong>不能承诺任意 LLM 在开放世界里“零分类误判”。可工程化保证的是：语义误判不能伪造完成、删除目标、丢失已有工作或直接终止 root run；不确定就 abstain，陈旧就丢弃，高影响结论由 host facts 与 policy 裁决。</div>
+
+    <h3>4.1 权威模型：谁能决定什么</h3>
+    <div class="authority"><div class="authority-label">Host verifier</div><div class="authority-body">唯一能把 acceptance gate 设为 pass；验证 evidence 类型、scope、assignment、freshness 和断言结果。</div></div>
+    <div class="authority"><div class="authority-label">Watchdog</div><div class="authority-body">可直接拒绝字节/合同级重复、打开已知 Provider breaker、停止无变化 polling、修复 ledger/Todo 漂移；不能仅凭计数宣布目标失败。</div></div>
+    <div class="authority"><div class="authority-label">Supervisor</div><div class="authority-body">可以诊断假设、提出 replan/reassign/switch/park/needs_user；不能伪造 evidence、删除 gate、直接 spawn 或宣布 completed。</div></div>
+    <div class="authority"><div class="authority-label">Oracle</div><div class="authority-body">提供独立反证；只在证据冲突、低置信或准备进入 needs_user 时按需调用，不以“两个模型投票”代替 host facts。</div></div>
+    <div class="authority"><div class="authority-label">Scheduler</div><div class="authority-body">仅执行通过 CAS 和 policy 校验的动作；动作尽量可逆，保留 mutation 和迟到 evidence。</div></div>
+
+    <h3>4.2 类型化协议</h3>
+    <pre><code>export type ExecutionScopeState =
+  | "running"
+  | "suspected_stall"
+  | "diagnosing"
+  | "recovering"
+  | "waiting_for_provider"
+  | "waiting_for_external_resource"
+  | "needs_user"
+  | "completed"
+  | "aborted_by_user"
+  | "runtime_fault";
+
+export type ProgressClass = "activity" | "progress" | "regression" | "blocker";
+
+export type EvidenceVerifier =
+  | { kind: "command"; checkId: string; expectedExitCode: number }
+  | { kind: "browser"; scenarioId: string; assertionIds: string[] }
+  | { kind: "api"; requestId: string; assertionIds: string[] }
+  | { kind: "artifact"; artifactKind: string; schemaId: string }
+  | { kind: "review"; rubricId: string; requiredEvidenceKinds: string[] }
+  | { kind: "external"; dependencyId: string };
+
+export interface AcceptanceGate {
+  gateId: string;
+  contractRevision: number;
+  verifier: EvidenceVerifier;
+  status: "unknown" | "pass" | "fail" | "blocked";
+  evidenceRefs: string[];
+}
+
+export interface SupervisorDecision {
+  scopeId: string;
+  basisRevision: number;
+  basisHash: string;
+  action: "continue" | "replan" | "reassign" | "switch_route" | "park" | "needs_user" | "abstain";
+  diagnosis: string;
+  evidenceRefs: string[];
+  invalidatedHypotheses: string[];
+  nextStrategy?: string;
+  confidence: "low" | "medium" | "high";
+}</code></pre>
+
+    <h3>4.3 停滞只能由多信号确认</h3>
+    <p>单一计数、单次超时、没有 mutation 或长时间运行都不能独立触发纠偏。进入 <code>suspected_stall</code> 至少同时满足：</p>
+    <ol>
+      <li><strong>目标无变化：</strong>观察窗内没有 gate、依赖、有效产物或 blocker revision 的单调变化。</li>
+      <li><strong>策略重复：</strong>同一 strategy fingerprint、failure signature、Hub cursor 或等价工作合同重复。</li>
+      <li><strong>不存在合法等待：</strong>没有带 heartbeat 的 build/test/job，没有 Provider <code>retryAt</code>，也没有已登记外部事件订阅。</li>
+      <li><strong>没有新权威输入：</strong>用户 steer、凭证变化、Provider 健康变化或新 host receipt 都会使旧判断失效。</li>
+    </ol>
+    <div class="callout amber"><strong>默认偏置：</strong>不确定时宁可继续观察，不打断有效工作。阈值只创建诊断快照和触发审查；不会完成、失败或终止 root run。</div>
+
+    <h3>4.4 防误判决策流程</h3>
+    <div class="diagram" aria-label="监督防误判决策流程">
+      <div class="diagram-title">任何高影响动作都必须经过事实、时序与证据三道门</div>
+      <div class="diagram-row">
+        <div class="diagram-node"><strong>候选异常</strong>重复、停滞、错误、状态漂移</div>
+        <div class="diagram-arrow">→</div>
+        <div class="diagram-node primary"><strong>多信号检查</strong>目标无变化 + 策略重复 + 非合法等待</div>
+        <div class="diagram-arrow">→</div>
+        <div class="diagram-node"><strong>冻结 basis</strong>revision + evidence hash + active heartbeat</div>
+      </div>
+      <div class="diagram-row">
+        <div class="diagram-node warn"><strong>Supervisor</strong>受限诊断包；允许 abstain</div>
+        <div class="diagram-arrow">→</div>
+        <div class="diagram-node primary"><strong>Host validator</strong>evidence 存在？scope 匹配？revision 未变？</div>
+        <div class="diagram-arrow">→</div>
+        <div class="diagram-node good"><strong>可逆执行</strong>改派、切路线、park 或继续观察</div>
+      </div>
+      <div class="diagram-branch">
+        <div class="diagram-node good"><strong>期间出现新进展</strong>旧决策 stale，直接丢弃</div>
+        <div class="diagram-node warn"><strong>低置信 / 证据冲突</strong>Oracle 反证或继续观察</div>
+        <div class="diagram-node danger"><strong>建议 completed / needs_user</strong>必须满足独立 host policy，模型意见不充分</div>
+      </div>
+    </div>
+
+    <h3>4.5 完成证据必须按合同类型验证</h3>
+    <p><span class="tag observed">现有局限</span><code>validatePassEvidence()</code> 当前只检查当前 assignment batch 是否存在任一 host-owned bash <code>exitCode 0</code>。这比信任模型文本安全，但仍可能让无关的 <code>bun --version</code> 放行，也会误拒绝纯浏览器、API 或研究任务。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>任务类型</th><th>可接受 evidence</th><th>明确拒绝</th></tr></thead>
+        <tbody>
+          <tr><td>Bug 修复</td><td>同一 reproduction gate 的修复前 fail + 修复后 pass；receipt 属于当前 contract revision。</td><td>无关命令成功、旧 retry 的测试、worker 文字声称“已修复”。</td></tr>
+          <tr><td>永久功能/API</td><td>覆盖新可观察合同的 host test/check；必要时附实际 smoke。</td><td>仅编译通过、仅文件发生 mutation、模型自评。</td></tr>
+          <tr><td>UI</td><td>浏览器 scenario assertions、页面状态与视觉 evidence refs。</td><td>强制要求 bash receipt，或只看源码存在组件。</td></tr>
+          <tr><td>研究/调查</td><td>结构化 artifact、来源 refs、实验输出与问题覆盖矩阵。</td><td>因为没有 mutation 就判停滞，或只以文本长度判完成。</td></tr>
+          <tr><td>外部依赖</td><td>类型化 permission/auth/resource receipt，且证明无独立 runnable work。</td><td>模型猜测“可能需要用户”、单次网络错误。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>4.6 进展租约与资源策略</h3>
+    <p>租约绑定当前策略，不绑定整个任务时长。有效 gate/evidence/dependency revision 自动续期；重复 activity 只提升监督强度。资源总量默认只做遥测：</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>信号</th><th>默认动作</th><th>是否终止 root run</th></tr></thead>
+        <tbody>
+          <tr><td>累计 Token / 请求 / 成本 / 时长</td><td>记录、趋势告警、TUI/通知；可降并发或提高监督频率。</td><td>否；只有用户显式配置预算才执行。</td></tr>
+          <tr><td>并发达到配置值</td><td>排队和背压。</td><td>否。</td></tr>
+          <tr><td>同一策略与错误签名重复</td><td>冻结该路径，确定性恢复或触发 Supervisor。</td><td>否；允许实质不同策略。</td></tr>
+          <tr><td>Provider breaker open</td><td>受影响 assignment park；切已验证 fallback；single-flight probe。</td><td>否。</td></tr>
+          <tr><td>host 运行时不变量损坏</td><td>保存现场，进入 <code>runtime_fault</code>，防止不可审计执行。</td><td>是；这是实现故障，不是资源耗尽。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>4.7 Supervisor 自身的防活锁</h3>
+    <ul>
+      <li>同一 <code>basisRevision + basisHash</code> 只允许一次 Supervisor 调用；没有新 evidence 不重复审查。</li>
+      <li>Supervisor 使用有界结构化诊断包，不读完整 transcript：目标、gate、任务图、最新失败指纹、active heartbeat、Provider 健康和 evidence refs。</li>
+      <li>Supervisor 不持有 task/hub 工具；只能输出 schema 约束的建议，由 host 验证后执行。</li>
+      <li><code>confidence=low</code>、证据冲突或 action 不满足 policy 时必须 abstain；默认回到观察，不做破坏性动作。</li>
+      <li><code>needs_user</code> 必须证明具体外部依赖，并确认没有可独立执行的剩余节点；否则只能 park 或 replan。</li>
+      <li>所有改派、park、取消 duplicate 都保留已有 mutation 和 evidence；新进展到达时可立即撤销干预。</li>
+    </ul>
+    <h3>4.8 验收门本身也必须防误解</h3>
+    <ul>
+      <li>真实 user entry 是目标权威；Commander 生成的 gate 必须携带 <code>objectiveClauseRefs</code> 和不可变 <code>contractHash</code>，不能只保存改写后的摘要。</li>
+      <li>Supervisor 可以补充更严格的检查，但不能删除、放宽或把未完成 gate 改成 out-of-scope；只有新的权威用户输入才能改变目标语义。</li>
+      <li>存在歧义时优先执行可逆、对各解释都有效的工作；互斥且不可逆的选择才进入 <code>needs_user</code>，并明确列出冲突解释。</li>
+      <li>Gate revision 必须说明由哪条用户输入或哪项 host evidence 触发；compaction summary、worker summary 和 Supervisor rationale 都不是 revision authority。</li>
+    </ul>
+  </section>
+
+  <section id="breaker">
+    <h2>5. <span class="tag p0">P0</span> 错误语义与 Provider 级熔断</h2>
+
+    <h3>5.1 先修正错误优先级</h3>
+    <p><span class="tag observed">已确认</span><code>packages/ai/src/error/flags.ts</code> 中 <code>auth_unavailable</code> 同时命中 <code>AUTH_FAILURE_PATTERN</code> 与含 “unavailable” 的 transient pattern；<code>retriable()</code> 因 Transient 返回 true。Provider 内部凭证轮换最终失败后，AgentSession 因此仍可能重复同模型请求。</p>
+    <p><span class="tag proposed">拟议</span>将 AuthFailed/OAuthExpiry 设为 ordinary retry veto，但保留一次能够证明发生真实切换的 route/model fallback：</p>
+    <pre><code>export function retriable(id: number | undefined, opts?: { replayUnsafe?: boolean }): boolean {
+  if (is(id, Flag.AuthFailed) || is(id, Flag.OAuthExpiry)) return false;
+  if (is(id, Flag.ContentBlocked)) return false;
+  if (is(id, Flag.MalformedFunctionCall)) return true;
+  if (opts?.replayUnsafe) return false;
+  return ((id ?? 0) &amp; RETRIABLE_KINDS) !== 0;
+}</code></pre>
+    <ul>
+      <li>Provider driver/api-key resolver 先完成自身 401 refresh/sibling rotation；只有其最终失败事件才进入 shared breaker。</li>
+      <li><code>#isHardErrorModelRouteFallbackEligible()</code> / <code>#isHardErrorFallbackEligible()</code> 仍可尝试一次真实 route/model switch；没有 <code>switchedRoute</code>/<code>switchedModel</code> 就不能退回同模型 backoff。</li>
+      <li>纯 503、network error、规范化 stream stall 仍可短暂恢复；用户主动 abort、client backpressure 或仍有活跃字节流不计为 stall。</li>
+    </ul>
+
+    <h3>5.2 ProviderHealthRegistry 与证据</h3>
+    <pre><code>export type ProviderFailureKind = "auth_unavailable" | "stream_stalled";
+export type CircuitState = "closed" | "open" | "half_open";
+
+export interface ProviderHealthKey {
+  provider: string;
+  normalizedBaseUrl: string;
+  modelId?: string;
+}
+
+export interface ProviderCircuitSnapshot {
+  key: ProviderHealthKey;
+  state: CircuitState;
+  failureKind: ProviderFailureKind;
+  consecutiveFailures: number;
+  distinctSessionCount: number;
+  evidenceRefs: string[];
+  lastSuccessAt?: string;
+  openedAt?: string;
+  retryAt?: string;
+  halfOpenProbeSessionId?: string;
+  generation: number;
+}</code></pre>
+    <p>Key 必须包含规范化 base URL，避免同 provider id 的不同代理端点互相污染。每次 open 都必须指向标准化 Provider terminal receipt；Supervisor 的自然语言判断不能直接打开 breaker。</p>
+
+    <h3>5.3 阈值只控制故障路径</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>故障</th><th>确认条件</th><th>局部动作</th><th>自动恢复</th></tr></thead>
+        <tbody>
+          <tr><td><code>auth_unavailable</code></td><td>Provider 内部凭证轮换已耗尽，且本次没有真实 route/model switch。</td><td>按 endpoint 立即 open；相关 assignment 转 <code>waiting_for_provider</code>，不结束 root run。</td><td>凭证变更事件立即 probe；否则按退避 single-flight half-open。</td></tr>
+          <tr><td><code>stream_stalled</code></td><td>无 terminal、无有效 heartbeat、非用户 abort；同 key 在时间窗内多次出现，最好跨 session 交叉确认。</td><td>按 model/endpoint open；冻结相同 retry path，保留本地 edit/test。</td><td>首次短退避，复开逐级延长；只放行一个 probe，成功才 closed。</td></tr>
+          <tr><td>成功响应</td><td>收到有效 assistant terminal message，而非仅建立 HTTP 连接。</td><td>清零连续失败并发布 provider health revision。</td><td>唤醒依赖该 key 的 parked assignments。</td></tr>
+          <tr><td>429 / usage limit</td><td>使用 Provider retry-after 和现有 credential block receipt。</td><td>park 到明确 <code>retryAt</code>；继续运行不依赖该 Provider 的任务。</td><td><code>retryAt</code> 到期后 single-flight probe。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>5.4 四个入口必须共享同一状态</h3>
+    <ol>
+      <li><strong>SDK Provider dispatch：</strong>最终防线；open 时返回 typed <code>ProviderCircuitOpenError</code> 和 <code>retryAt</code>，不进入普通 retry。</li>
+      <li><strong>Task spawn：</strong>目标 route open 时不创建会立即请求同一 Provider 的 child；assignment 进入 waiting 队列，有已验证 fallback 则改派。</li>
+      <li><strong>Hub revive/send：</strong>消息若会触发 open route 的新 turn，则持久化为待投递，不反复唤醒；只读 roster/list 不阻塞。</li>
+      <li><strong>San loop worker dispatch：</strong>Commander/Scheduler 跳过 open route，继续无依赖节点；不能把整个 run 转成终态 blocked。</li>
+    </ol>
+    <div class="diagram" aria-label="Provider 故障自动恢复流程">
+      <div class="diagram-title">Provider 故障不会耗尽整个 run，也不会要求睡眠中的用户重新发消息</div>
+      <div class="diagram-row">
+        <div class="diagram-node danger"><strong>Terminal failure receipt</strong>Auth exhausted / confirmed stall</div>
+        <div class="diagram-arrow">→</div>
+        <div class="diagram-node warn"><strong>Breaker open</strong>仅冻结受影响 route</div>
+        <div class="diagram-arrow">→</div>
+        <div class="diagram-node"><strong>Park assignments</strong>保存合同、cursor、evidence</div>
+        <div class="diagram-arrow">→</div>
+        <div class="diagram-node primary"><strong>Single-flight probe</strong>凭证事件或 retryAt</div>
+        <div class="diagram-arrow">→</div>
+        <div class="diagram-node good"><strong>Auto resume</strong>从原 assignment revision 继续</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="convergence">
+    <h2>6. <span class="tag p0">P0</span> 编排语义收敛守卫</h2>
+    <p>保留 per-session <code>ToolProgressGuard</code> 作为局部信号，但 root-scope <code>OrchestrationGuard</code> 才负责团队级判断。它必须同时避免两类错误：把同一失败策略当新工作，以及把真正独立的并行方案误判为重复。</p>
+
+    <h3>6.1 工作合同与策略身份分离</h3>
+    <pre><code>export interface TaskStrategy {
+  strategyId: string;
+  hypothesis: string;
+  expectedEvidenceKinds: string[];
+  independenceKey?: string;
+}
+
+export interface TaskContract {
+  family: string;
+  scope: string[];
+  acceptanceGateIds: string[];
+  strategy: TaskStrategy;
+  retryOf?: string;
+  changeReason?: string;
+}</code></pre>
+    <ul>
+      <li><strong>Work key</strong> = family + normalized scope + acceptance gate revision，表示“要完成什么”。V2/V3/Final 名称不参与。</li>
+      <li><strong>Strategy key</strong> = work key + hypothesis + expected evidence，表示“准备怎么证明”。同一 active strategy 直接复用现有 Agent，不重复 spawn。</li>
+      <li>不同 hypothesis 或不同独立 scope 的策略可以并行；共享写作用域时仍由 concurrency/exclusive lock 串行化，不能因 family 相同一刀切。</li>
+      <li>同一策略失败后不能靠改措辞重启；必须由 Supervisor 给出被推翻的假设和新的 expected evidence。</li>
+      <li>不设置“全 run 最多几个策略”的默认硬上限；重复策略被永久去重，实质不同且仍有验收价值的策略可继续。</li>
+    </ul>
+
+    <h3>6.2 Activity、Progress 与合法等待</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>事件</th><th>分类</th><th>如何避免误判</th></tr></thead>
+        <tbody>
+          <tr><td>在声明 scope 内 mutation</td><td>通常是 activity</td><td>只有关联 gate、预期 evidence 或依赖解锁时才升级为 progress；防止无意义改文件续租。</td></tr>
+          <tr><td>Gate unknown/fail → pass，或 blocker 被证实</td><td>progress</td><td>必须有当前 contract revision 的 host receipt。</td></tr>
+          <tr><td>研究 artifact 增加已覆盖问题或新来源</td><td>progress</td><td>按 artifact schema/coverage key 去重，不要求 mutation 或 bash。</td></tr>
+          <tr><td>长时间 build/test/job 有 heartbeat</td><td>legitimate waiting</td><td>暂停该策略的 stall 观察；heartbeat 停止后才重新评估。</td></tr>
+          <tr><td>读到新文件/URL</td><td>activity</td><td>可支持工作，但单独不改变目标 revision。</td></tr>
+          <tr><td>相同失败 hash、Hub cursor、策略指纹</td><td>no progress</td><td>重复次数只触发诊断；不终止其他策略或 root run。</td></tr>
+          <tr><td>Verification 从 pass 回到 fail</td><td>regression</td><td>重新打开 gate，优先 Supervisor 诊断；不能保持 completed。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>6.3 Hub 操作的 delta 规则</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>操作</th><th>有效 delta</th><th>无变化处理</th></tr></thead>
+        <tbody>
+          <tr><td><code>send</code></td><td>目标首次接收新 assignment/strategy revision，或 parked → running。</td><td>同 target + strategy + revision 重发被去重并记录 activity；不唤醒新 turn。</td></tr>
+          <tr><td><code>jobs</code>/<code>inbox</code>/<code>list</code></td><td>job status、message cursor、roster status hash 改变。</td><td>多次不变标记 suspected stall；只停止该 polling pattern，转事件等待。</td></tr>
+          <tr><td><code>wait</code></td><td>新消息、job terminal、heartbeat 或 Provider health revision。</td><td>已登记 wait 可合法休眠；超时只触发诊断，不等于任务失败。</td></tr>
+          <tr><td><code>cancel</code></td><td>被证实 duplicate/stale 的 assignment running → cancelled。</td><td>唯一 active worker、仍有 heartbeat 或 basis 已变化时拒绝取消。</td></tr>
+          <tr><td><code>resume</code>/<code>activate</code></td><td>通过 contract、strategy、scope lock 和 breaker admission。</td><td>失败则持久化 waiting reason；不创建空 turn。</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><span class="tag proposed">拟议</span>从 <code>DEFAULT_TOOL_PROGRESS_GUARD_EXEMPT_TOOLS</code> 移除 <code>hub</code>；但不能简单把所有 hub 调用都记 no-progress。OrchestrationGuard 必须读取 cursor、status、heartbeat 与 assignment revision。</p>
+
+    <h3>6.4 Root-scope 自纠正状态机</h3>
+    <div class="diagram" aria-label="自纠正状态机">
+      <div class="diagram-row">
+        <div class="diagram-node good"><strong>running</strong>有效工作或合法等待</div>
+        <div class="diagram-arrow">→</div>
+        <div class="diagram-node warn"><strong>suspected_stall</strong>多信号成立；不终止</div>
+        <div class="diagram-arrow">→</div>
+        <div class="diagram-node warn"><strong>diagnosing</strong>冻结 basis，规则恢复或 Supervisor</div>
+        <div class="diagram-arrow">→</div>
+        <div class="diagram-node primary"><strong>recovering</strong>新策略、改派、切 route</div>
+        <div class="diagram-arrow">→</div>
+        <div class="diagram-node good"><strong>running</strong>新 revision 续租</div>
+      </div>
+      <div class="diagram-branch">
+        <div class="diagram-node good"><strong>任何新进展</strong>旧诊断作废，回 running</div>
+        <div class="diagram-node warn"><strong>外部暂不可用</strong>durable waiting + 自动 probe</div>
+        <div class="diagram-node danger"><strong>确需用户</strong>host policy 证明后 needs_user</div>
+      </div>
+    </div>
+    <p><code>completed</code> 只来自全部 acceptance gates 的 host pass；<code>aborted_by_user</code> 只来自权威用户取消；<code>runtime_fault</code> 只用于 ledger/CAS/生命周期不变量损坏。任何重复计数都不能直接生成终态。</p>
+  </section>
+
+  <section id="persistence">
+    <h2>7. <span class="tag p1">P1</span> 压缩边界外的结构化执行账本</h2>
+    <p>旁路监督若依赖当前上下文，就会在 compaction 后失忆。采用 append-only custom entry 保存事实、策略和监督过程；LLM summary 仍然只是非权威历史。</p>
+
+    <h3>7.1 Journal 协议</h3>
+    <pre><code>customType: "san.execution_scope"
+
+type ExecutionScopeJournalRecord =
+  | { schemaVersion: 1; type: "scope_started"; snapshot: ExecutionScopeSnapshot }
+  | { schemaVersion: 1; type: "request_started"; request: ProviderRequestSnapshot }
+  | { schemaVersion: 1; type: "request_finished"; requestId: string; usage: UsageDelta; outcome: string }
+  | { schemaVersion: 1; type: "assignment_transition"; assignment: AssignmentSnapshot }
+  | { schemaVersion: 1; type: "gate_transition"; gate: GateSnapshot }
+  | { schemaVersion: 1; type: "progress_observed"; observation: ProgressObservation }
+  | { schemaVersion: 1; type: "supervisor_decision"; decision: SupervisorDecision }
+  | { schemaVersion: 1; type: "provider_circuit"; circuit: ProviderCircuitSnapshot }
+  | { schemaVersion: 1; type: "scheduler_transition"; transition: SchedulerTransition }
+  | { schemaVersion: 1; type: "scope_snapshot"; snapshot: ExecutionScopeSnapshot };</code></pre>
+    <ul>
+      <li><code>request_started</code> 在网络 dispatch 前 append，<code>request_finished</code> 记录真实 usage 与 outcome；用于审计和错误指纹，不作为默认余额。</li>
+      <li>每个 gate、assignment、strategy、breaker、progress class、Supervisor decision 和 waiting/resume 迁移都增加单调 execution revision。</li>
+      <li>每次 compaction/handoff、监督干预、Provider 状态变化以及固定事件间隔写 snapshot；记录 refs/hash，不复制完整 prompt、tool output 或凭证。</li>
+      <li>崩溃恢复时未完成 request 标记 interrupted；按 replay safety 与 breaker policy 决定恢复，不因“账没结完”重置整个执行态。</li>
+      <li>Legacy active turn 无完整 ledger 时以低置信 observe 模式重建已存在的任务/evidence；在获得足够新事件前不得取消工作或判 needs_user。</li>
+    </ul>
+
+    <h3>7.2 Provider 上下文注入顺序</h3>
+    <pre><code>System / Developer rules
+Historical compaction summary          (非权威历史)
+ActiveContinuationState                (当前 user request + 工具证据权威)
+ExecutionScopeSnapshot                 (合同 / gates / strategies / health / progress 权威)
+SupervisorDecisionPacket               (仅当前 basis revision；可被 CAS 丢弃)
+Kept recent messages
+Current steer / recovery notice</code></pre>
+    <p><code>ExecutionScopeSnapshot</code> 只拥有执行控制状态，不拥有用户 Goal。Compaction LLM 无权生成、修改或宣布 gate 完成；materializer 只从 journal 读取最新有效 snapshot 并渲染有界 JSON。</p>
+
+    <h3>7.3 与现有模块的关系</h3>
+    <ul>
+      <li><code>ActiveContinuationState.executionEvidence</code> 继续证明 mutation/verification；ledger 保存 owner、family、strategy、gate、progress、Provider health 和 usage telemetry，二者引用同一 tool result id。</li>
+      <li><code>AgentRegistry</code> 只保存 <code>executionScopeId</code>、assignmentId 和 strategyId；park/revive 时恢复引用，不复制 ledger。</li>
+      <li><code>ContextProbe</code> 从 schema v3 升 v4，增加 scope、strategy、gate、watchdog、supervisor、breaker 与 usage counters；reader 兼容 v3。</li>
+      <li><code>SanLoopRunSnapshot</code> 继续保存领域计划；既有显式用户预算保持可选，但默认监督不以 usage 终止。</li>
+    </ul>
+  </section>
+
+  <section id="todo">
+    <h2>8. <span class="tag p1">P1</span> Todo 未完成时禁止无条件替换</h2>
+    <p><span class="tag observed">已确认</span><code>todo.ts</code> 的 <code>applyEntry("init")</code> 当前直接返回 <code>initPhases()</code>；只验证新列表内部重复，不检查旧列表是否仍有 pending/in_progress。</p>
+
+    <h3>8.1 新操作合同</h3>
+    <ul>
+      <li><code>init</code> 仅在当前列表为空，或所有现存任务均为 completed/abandoned 时允许。</li>
+      <li>若存在 pending/in_progress，<code>init</code> 返回 error，携带现有 phases；不得修改 session state。</li>
+      <li>新增 <code>reconcile</code>：同内容任务保留原状态，新任务追加为 pending；未出现在新列表中的 unfinished 任务仍保留。</li>
+      <li>要删除 unfinished 任务，必须先显式 <code>drop</code> 或 <code>rm</code>；然后才能 init/reconcile。不能用一个 <code>replace=true</code> 参数绕过审计。</li>
+      <li>完成任务也保留在 reconcile 结果中，直到显式 <code>rm</code>；避免压缩后模型把已完成阶段重新变成 pending。</li>
+    </ul>
+    <pre><code>case "init":
+  if (hasUnfinished(phases)) {
+    errors.push("Todo list has unfinished tasks; use reconcile, or explicitly drop/rm them before init");
+    return phases;
+  }
+  return initPhases(entry, errors);
+
+case "reconcile":
+  return reconcilePhases(phases, entry, errors);</code></pre>
+
+    <h3>8.2 与执行账本联动</h3>
+    <ul>
+      <li>Todo completion 只能更新展示计划；Acceptance gate 的 pass/fail 仍由 verification evidence 决定。</li>
+      <li>每次 init/reconcile/drop/rm 记录 todo revision 到 execution ledger；重复 init 失败不增加 progress revision。</li>
+      <li>compaction 后恢复时，最新 Todo snapshot 与 execution scope 的 assignment/gate 做一致性校验；有冲突时以 journal 工具结果和 execution ledger 为准，并向 main 注入 reconcile 提示。</li>
+    </ul>
+  </section>
+
+  <section id="steady">
+    <h2>9. <span class="tag p1">P1</span> Context Steady 的处理：先隔离状态，再做 A/B</h2>
+    <div class="callout amber"><strong>不直接永久关闭。</strong>本事故 84 次物理压缩全部由 steady target 触发，说明它是放大器；但压缩请求只占总 Prompt 的 1.54%，关闭后自由编排和 Provider 重试仍可能活锁。先让 ledger/watchdog 跨压缩稳定，再比较。</div>
+
+    <h3>9.1 A/B 设计</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>变量</th><th>A · Native</th><th>B · Steady</th></tr></thead>
+        <tbody>
+          <tr><td>代码、任务、Provider</td><td colspan="2">同 commit、固定任务集、同模型/故障注入、同 Watchdog/Supervisor policy、同最大并发；均不设默认累计资源硬上限。</td></tr>
+          <tr><td>上下文策略</td><td><code>san.contextSteady.enabled=false</code></td><td>保持当前 steady 配置；记录每次 physical compaction。</td></tr>
+          <tr><td>样本</td><td colspan="2">至少 20 组配对运行；随机先后顺序；Provider 故障和长任务 heartbeat 使用可重复 fixture。</td></tr>
+          <tr><td>主要指标</td><td colspan="2">acceptance pass、误报/漏报、stale decision discard、charged tokens、Provider requests、assignment/revival、Todo reconcile、plan rebuild、wall time。</td></tr>
+          <tr><td>发布门槛</td><td colspan="2">0 次 false completion；0 次合法长任务被中断；0 次目标/账本漂移；0 次 compaction 后重复派已完成策略。</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3>9.2 决策规则</h3>
+    <ul>
+      <li>Steady 只有在 acceptance pass rate 不劣于 Native 超过 5 个百分点，且监督误报率不增加时，才可保留为多 Agent 默认。</li>
+      <li>若 charged tokens、assignment/revival 或 Supervisor 调用显著增长，先调整 compaction hysteresis 和诊断包，而不是增加终止预算。</li>
+      <li>重点分析 physical compaction 后短时间内的 Todo reconcile、strategy 重派和 stale supervisor decision。</li>
+      <li>所有 A/B 均保持 Provider breaker、typed evidence gate、Watchdog 与 durable recovery 开启；不得用资源硬停掩盖活锁。</li>
+    </ul>
+  </section>
+
+  <section id="containment">
+    <h2>10. 立即止损方案（代码修复上线前）</h2>
+    <div class="callout red"><strong>当前边界：</strong>仅靠配置无法得到本文的旁路 Watchdog、跨 session breaker、durable waiting 和自动 resume。下面只能缩小重复失败的速率，同时保持总工作量不设硬终止；不能把它描述成完整无人值守修复。</div>
+    <pre><code>task:
+  maxConcurrency: 8
+  maxRuntimeMs: 0
+retry:
+  maxRetries: 2
+
+san:
+  executionLoop:
+    enabled: true
+    maxWorkers: 4
+    budget:
+      maxTokens: 0
+      maxCost: 0
+      maxDurationMs: 0
+      maxProviderRequests: 0</code></pre>
+    <ul>
+      <li>大型无人值守任务暂时优先走已有 Commander/Worker/Supervisor/Oracle 的 <code>/team</code> 管线；自由 task/hub 尚无 root-scope Supervisor。</li>
+      <li><code>maxConcurrency</code> 只做瞬时背压；累计 Token、请求、时长与 assignment 保持 0（disabled），不因工作量大停止。</li>
+      <li><code>retry.maxRetries=2</code> 仅临时限制单个 AgentSession 的同路径 transient 重试；它不是 root run 上限。Auth precedence 与 breaker 上线后按故障类型替代此粗粒度配置。</li>
+      <li>配置至少一个已验证 fallback route；同一 work family 不要通过 V2/V3 名称并行重复同一策略。</li>
+      <li>不要只关闭 Context Steady 后继续跑一夜；Native 更大的每请求上下文可能放大消耗，且不能发现团队级语义活锁。</li>
+    </ul>
+  </section>
+
+  <section id="implementation">
+    <h2>11. 可执行实现顺序与代码落点</h2>
+    <p>拆成 8 个依赖单向的变更集。先建立 host facts 和局部故障恢复，再让语义 Supervisor 获得有限权力；不能先上线会主动取消任务、却没有 typed evidence/CAS 的模型监督。</p>
+
+    <div class="phase">
+      <h3>Change 1 · Auth retry precedence（独立止血）</h3>
+      <p><strong>改动：</strong><code>packages/ai/src/error/flags.ts</code>、<code>packages/coding-agent/src/session/agent-session.ts</code>。</p>
+      <ul><li>AuthFailed/OAuthExpiry veto ordinary retry。</li><li>保留一次有真实 switch receipt 的 route/model fallback。</li><li>用户 abort 与 client backpressure 不进入 stream-stall 计数。</li></ul>
+      <p><strong>完成证据：</strong>无 fallback 的最终 <code>auth_unavailable</code> 不产生第二次同模型 AgentSession 请求；有 fallback 只切换一次。</p>
+    </div>
+
+    <div class="phase">
+      <h3>Change 2 · Typed acceptance evidence</h3>
+      <p><strong>改动：</strong><code>san-loop/orchestrator.ts</code>、<code>san-loop/checks.ts</code>、<code>san-loop/types.ts</code>；新增 <code>execution-control/evidence-gates.ts</code>。</p>
+      <ul><li>将当前“任一 host bash exit 0”改为 gate-specific verifier。</li><li>Receipt 绑定 gateId、contractRevision、assignmentId、check/scenario id 和 freshness。</li><li>支持 command、browser、API、artifact、review、external dependency；Supervisor 文本永不直接 pass。</li></ul>
+    </div>
+
+    <div class="phase">
+      <h3>Change 3 · ProviderHealthRegistry + durable waiting</h3>
+      <p><strong>新增：</strong><code>execution-control/provider-health.ts</code>、<code>execution-control/errors.ts</code>。</p>
+      <p><strong>接入：</strong><code>config/model-registry.ts</code>、<code>sdk.ts</code>、<code>session/agent-session.ts</code>、task/hub dispatch。</p>
+      <ul><li>closed/open/half_open、single-flight probe、标准化 terminal receipts。</li><li>受影响 assignment park，健康 revision 自动 resume；无关任务继续。</li></ul>
+    </div>
+
+    <div class="phase">
+      <h3>Change 4 · Root ExecutionLedger 与 scope</h3>
+      <p><strong>新增：</strong><code>execution-control/types.ts</code>、<code>execution-ledger.ts</code>、<code>scope-registry.ts</code>、<code>persistence.ts</code>。</p>
+      <p><strong>接入：</strong><code>sdk.ts</code> 发 request started/finished 与 usage telemetry；<code>ToolSession</code>/<code>AgentRegistry</code> 保存 scope/assignment/strategy 引用。</p>
+      <ul><li>append-only facts、单调 revision、snapshot/replay。</li><li>默认不按 usage 拒绝；已有用户显式 SDK/run budget 继续作为 opt-in 合同。</li></ul>
+    </div>
+
+    <div class="phase">
+      <h3>Change 5 · ProgressClassifier + Deterministic Watchdog</h3>
+      <p><strong>新增：</strong><code>execution-control/progress-classifier.ts</code>、<code>watchdog.ts</code>。</p>
+      <ul><li>activity/progress/regression/blocker、合法 heartbeat/wait、策略与失败指纹。</li><li>先 shadow 输出诊断快照；规则稳定后只 enforce 可证明的 duplicate、stale poll、state drift。</li><li>进展租约绑定 strategy revision，不绑定总时长。</li></ul>
+    </div>
+
+    <div class="phase">
+      <h3>Change 6 · Task/Hub contract 与团队级去重</h3>
+      <p><strong>改动：</strong><code>task/{types,index,executor}.ts</code>、<code>prompts/tools/task.md</code>、<code>tools/hub/*.ts</code>、<code>context-steady/tool-progress-guard.ts</code>。</p>
+      <ul><li>work key 与 strategy key 分离，声明 hypothesis、expected evidence、independence key。</li><li>同策略复用/拒绝；实质独立策略允许并行；Hub 按 cursor/status/heartbeat 计算 delta。</li></ul>
+    </div>
+
+    <div class="phase">
+      <h3>Change 7 · Supervisor protocol、Oracle gate 与 DurableScheduler</h3>
+      <p><strong>新增：</strong><code>execution-control/supervisor-protocol.ts</code>、<code>durable-scheduler.ts</code>；复用 <code>san-loop</code> 既有 Supervisor/Oracle executor 和静态 prompt 体系。</p>
+      <ul><li>有界诊断包、受限决策 schema、abstain、basis revision CAS。</li><li>Supervisor 无 task/hub 工具；host policy 执行可逆 replan/reassign/switch/park。</li><li><code>needs_user</code> 要求 external receipt、无 runnable 节点和高影响 policy；恢复事件自动继续。</li></ul>
+    </div>
+
+    <div class="phase">
+      <h3>Change 8 · Compaction/Todo/San loop 统一与 A/B</h3>
+      <p><strong>改动：</strong><code>context-steady/*</code>、<code>tools/todo.ts</code>、Todo controller、<code>san-loop/{runner,agents,ledger}.ts</code>。</p>
+      <ul><li><code>san.execution_scope</code> v1、ContextProbe v4、unfinished Todo reconcile。</li><li>自由编排与显式 San loop 共用 scope/watchdog/evidence；默认取消 San loop 资源硬终止，保留用户显式预算。</li><li>运行第 9 节 A/B；实现和 smoke 通过后更新两个受影响 package 的 Unreleased Changelog。</li></ul>
+    </div>
+
+    <h3>11.1 文件级改动矩阵</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>文件/模块</th><th>具体改动</th><th>主要风险</th></tr></thead>
+        <tbody>
+          <tr><td><code>packages/ai/src/error/flags.ts</code></td><td>Auth/OAuth ordinary-retry veto；保留诊断 bit。</td><td>混合 flags 优先级。</td></tr>
+          <tr><td><code>san-loop/{orchestrator,checks,types}.ts</code></td><td>gate-specific evidence 与 host verdict。</td><td>旧 bash-only 合同兼容。</td></tr>
+          <tr><td><code>coding-agent/src/sdk.ts</code></td><td>request/usage receipts、Provider health hook；显式预算仍可选。</td><td>Provider 请求主路径与 exactly-once terminal。</td></tr>
+          <tr><td><code>session/agent-session.ts</code></td><td>scope 生命周期、错误 receipts、park/resume 与 recovery notice。</td><td>compaction/retry 并发。</td></tr>
+          <tr><td><code>execution-control/*</code></td><td>ledger、evidence、classifier、watchdog、supervisor、scheduler。</td><td>revision CAS 与 crash replay。</td></tr>
+          <tr><td><code>task/{types,index,executor}.ts</code></td><td>work/strategy contract、scope 继承、去重和 heartbeat。</td><td>flat/batch/legacy wire。</td></tr>
+          <tr><td><code>tools/hub/*.ts</code></td><td>scope rebind、待投递消息、cursor/status delta。</td><td>迟到消息与重复唤醒。</td></tr>
+          <tr><td><code>registry/agent-registry.ts</code></td><td>scopeId/assignmentId/strategyId 引用。</td><td>idle/parked/revive 生命周期。</td></tr>
+          <tr><td><code>context-steady/*</code></td><td>权威执行快照 materialize、Probe v4。</td><td>不得让 summary 覆盖 ledger。</td></tr>
+          <tr><td><code>tools/todo.ts</code></td><td>init guard、reconcile、revision evidence。</td><td>slash/UI/edit round-trip。</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="tests">
+    <h2>12. 防误判回归、故障注入与验收</h2>
+    <p>测试重点不是“Supervisor 给出一个答案”，而是证明错误裁决无法落地、真实进展不会被中断、Provider 恢复后无需用户输入即可继续。所有测试断言运行时可观察状态，不读取源码文本。</p>
+
+    <h3>12.1 单元与契约测试</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>测试文件</th><th>场景</th><th>通过条件</th></tr></thead>
+        <tbody>
+          <tr><td><code>packages/ai/test/error-id.test.ts</code></td><td><code>auth_unavailable</code>、401+unavailable、503、用户 abort、stream stall。</td><td>Auth 不走 ordinary retry；503/stall 可分类；用户 abort 不污染 breaker。</td></tr>
+          <tr><td><code>san-loop/orchestrator.test.ts</code></td><td>Supervisor pass 携带无关 bash success、旧 assignment receipt、UI browser receipt。</td><td>无关/陈旧 receipt 被拒绝；匹配 gate 的 browser receipt 可 pass。</td></tr>
+          <tr><td><code>execution-control/evidence-gates.test.ts</code>（新）</td><td>command/browser/API/artifact/review/external 六类 gate。</td><td>类型、scope、revision、freshness 任一不匹配均不能 pass。</td></tr>
+          <tr><td><code>execution-control/progress-classifier.test.ts</code>（新）</td><td>mutation、研究 artifact、重复 read、verification regression、长 job heartbeat。</td><td>准确区分 activity/progress/regression/legitimate waiting。</td></tr>
+          <tr><td><code>execution-control/watchdog.test.ts</code>（新）</td><td>单信号、组合信号、并发新 evidence、重复 strategy。</td><td>单信号不干预；多信号才 suspect；新 revision 立即撤销诊断。</td></tr>
+          <tr><td><code>execution-control/supervisor-protocol.test.ts</code>（新）</td><td>伪造 evidence、低置信、stale basis、非法 action、needs_user。</td><td>分别 reject/abstain/discard；没有 host policy 不进入高影响状态。</td></tr>
+          <tr><td><code>execution-control/provider-health.test.ts</code>（新）</td><td>跨 session stall、auth exhausted、half-open 并发、凭证恢复。</td><td>只允许一个 probe；健康 revision 唤醒 parked assignments。</td></tr>
+          <tr><td><code>execution-control/durable-scheduler.test.ts</code>（新）</td><td>park、进程恢复、迟到 result、独立 runnable 节点。</td><td>恢复后续跑原 revision；迟到 evidence 不丢；无关节点不停。</td></tr>
+          <tr><td><code>task/task-spawn.test.ts</code></td><td>同 work/strategy duplicate 与同 work/不同 hypothesis。</td><td>前者复用/拒绝，后者在 independence/scope lock 合法时可并行。</td></tr>
+          <tr><td><code>tools/hub-wait.test.ts</code></td><td>unchanged poll、真实 heartbeat、新 cursor、待投递 send。</td><td>停止重复 polling 但不终止 run；新事件准确 resume。</td></tr>
+          <tr><td><code>context-steady/continuation.test.ts</code></td><td>compaction/handoff 期间 Supervisor 正在判断。</td><td>scope/gates/revision 保留；旧 basis decision 被丢弃。</td></tr>
+          <tr><td><code>tools/todo.test.ts</code></td><td>unfinished init、reconcile、显式 drop 后 init。</td><td>init 原子失败；reconcile 保留状态；Supervisor 不能静默删任务。</td></tr>
+          <tr><td><code>san-loop/runner.test.ts</code></td><td>默认无总资源终止与用户显式预算。</td><td>默认 productive run 可持续；显式 budget 仍按用户合同执行。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>12.2 专门的误报 / 漏报矩阵</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>容易误判的场景</th><th>期望裁决</th><th>防线</th></tr></thead>
+        <tbody>
+          <tr><td>构建运行 45 分钟但持续 heartbeat</td><td>合法等待，不 suspect、不取消。</td><td>job heartbeat + process lifecycle receipt。</td></tr>
+          <tr><td>研究任务没有 mutation，但 coverage/artifact 增长</td><td>progress，续租。</td><td>artifact schema + coverage key。</td></tr>
+          <tr><td>连续读不同文件，但 gate/假设/evidence 均不变</td><td>activity；组合信号成立后诊断。</td><td>activity 与 progress 分层。</td></tr>
+          <tr><td>Supervisor 调用期间 worker 刚通过测试</td><td>Supervisor decision stale，完全不应用。</td><td>basis revision CAS。</td></tr>
+          <tr><td>Supervisor 声称完成并引用不存在的 receipt</td><td>拒绝；gate 保持原状态。</td><td>host evidence lookup。</td></tr>
+          <tr><td>同 family 两个真正不同 hypothesis</td><td>允许并行。</td><td>strategy key + independence key + scope lock。</td></tr>
+          <tr><td>相同策略仅改名 V3/Final</td><td>duplicate，不创建新 turn。</td><td>规范化 strategy fingerprint。</td></tr>
+          <tr><td>Provider 暂时故障后恢复</td><td>park → probe → 自动 resume → 完成。</td><td>durable waiting + health revision。</td></tr>
+          <tr><td>单次网络错误</td><td>不能判 needs_user 或永久 open。</td><td>错误语义、时间窗和跨 session evidence。</td></tr>
+          <tr><td>所有外部节点等待，但仍有本地验证可执行</td><td>继续本地节点，不进入 needs_user。</td><td>runnable graph host check。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>12.3 事故回放测试</h3>
+    <p>新增确定性 fixture：70 个 V2/V3/Final/Repair 候选、连续 hub poll、合法长 job heartbeat、并发 auth/stall、两次 compaction、一个无关 bash success；随后模拟 Provider 恢复并返回真正的 gate evidence。</p>
+    <ul class="done">
+      <li>相同 strategy 只保留一个 active assignment；不同 hypothesis 不被误杀。</li>
+      <li>无关 bash success 不能完成任何 gate；合法 heartbeat 不触发取消。</li>
+      <li>Auth breaker 打开后相同 route 新 dispatch 为 0，但独立任务继续。</li>
+      <li>两次 compaction 后 scope、contractHash、gates、strategy、progress revision、breaker generation 不变。</li>
+      <li>Provider health revision 到达后 parked assignment 自动 resume，无用户消息。</li>
+      <li>最终只有真实 host evidence gates 全部通过后进入 completed；累计 usage 大小不影响结论。</li>
+    </ul>
+
+    <h3>12.4 Smoke 与验证命令</h3>
+    <pre><code>bun test packages/ai/test/error-id.test.ts
+bun test packages/coding-agent/test/san-loop/orchestrator.test.ts
+bun test packages/coding-agent/test/execution-control/evidence-gates.test.ts
+bun test packages/coding-agent/test/execution-control/progress-classifier.test.ts
+bun test packages/coding-agent/test/execution-control/watchdog.test.ts
+bun test packages/coding-agent/test/execution-control/supervisor-protocol.test.ts
+bun test packages/coding-agent/test/execution-control/provider-health.test.ts
+bun test packages/coding-agent/test/execution-control/durable-scheduler.test.ts
+bun test packages/coding-agent/test/task/task-spawn.test.ts
+bun test packages/coding-agent/test/tools/hub-wait.test.ts
+bun test packages/coding-agent/test/tools/todo.test.ts
+bun test packages/coding-agent/test/context-steady/continuation.test.ts
+bun test packages/coding-agent/test/san-loop/runner.test.ts
+bun test packages/coding-agent/test/execution-control/incident-019fca60-replay.test.ts
+bun check</code></pre>
+    <p><strong>真实 smoke：</strong>启动本地可控 Provider，先返回最终 auth/stall，再发布健康恢复；同时运行一个带 heartbeat 的长 child 和一个独立策略。无人 steer 条件下必须观察到 park、单次 probe、自动 resume、合法长任务未被取消、所有 gate 通过并最终 completed。</p>
+
+    <h3>12.5 发布门禁</h3>
+    <ul class="done">
+      <li>任何路径都不能让 Supervisor 文本绕过 host evidence gate。</li>
+      <li>任何 stale decision 都不能改变 assignment、gate、Provider 或 scope 状态。</li>
+      <li>合法 heartbeat、研究 artifact、独立策略和 UI evidence 均有防误报覆盖。</li>
+      <li>重复策略、伪 evidence、无变化 Hub、跨 session Provider 故障均有防漏报覆盖。</li>
+      <li>默认资源遥测永不生成终态；用户显式预算仍保持现有合同。</li>
+      <li>旧 session、旧 task wire、ContextProbe v3、Todo transcript 均可读取；不重写历史文件。</li>
+    </ul>
+  </section>
+
+  <section id="observability">
+    <h2>13. 可观测性、解释与软提醒</h2>
+    <h3>13.1 结构化事件</h3>
+    <pre><code>execution_scope_started
+execution_usage_recorded
+execution_progress_observed
+execution_stall_suspected
+execution_stall_cleared
+supervisor_decision_proposed
+supervisor_decision_abstained
+supervisor_decision_stale
+supervisor_action_applied
+acceptance_gate_transition
+assignment_parked
+assignment_resumed
+provider_circuit_opened
+provider_circuit_half_open
+provider_circuit_closed
+todo_reconcile_required
+execution_scope_terminal</code></pre>
+    <p>事件字段至少含 <code>scopeId</code>、logicalTurnId、agentId、assignmentId、work/strategy hash、basis revision/hash、evidence refs、Provider health key、usage totals 和 reason；不记录凭证或完整 task prompt。</p>
+
+    <h3>13.2 必须可直接回答的问题</h3>
+    <div class="grid-2">
+      <div class="card"><h4>“为什么介入？”</h4><p>展示满足了哪些多信号、哪个策略/失败签名重复、哪些合法等待已被排除。</p></div>
+      <div class="card"><h4>“为什么没有介入？”</h4><p>展示 heartbeat、fresh evidence、独立 hypothesis 或低置信 abstain。</p></div>
+      <div class="card"><h4>“为什么还在等待？”</h4><p>Provider/dependency key、retryAt、probe generation、仍可运行的独立节点。</p></div>
+      <div class="card"><h4>“为什么需要用户？”</h4><p>具体 external receipt、已尝试路线、无 runnable 节点的 host 证明和冲突解释。</p></div>
+      <div class="card"><h4>“资源花在哪里？”</h4><p>按 work/strategy/Provider 分类 Token、请求、成本、时长；仅遥测和软提醒。</p></div>
+      <div class="card"><h4>“监督是否误判？”</h4><p>stale discard、abstain、Oracle disagreement、干预撤销和 shadow false-positive proxy。</p></div>
+    </div>
+
+    <h3>13.3 提醒与异常信号</h3>
+    <ul>
+      <li>累计 Token/请求/成本/时长按绝对值和增长率发 warning/notification；默认不改变 run 状态。</li>
+      <li>同 strategy/failure signature 重复、assignment churn 或 Supervisor 调用频率异常时，提高诊断强度并降低并发，不结束 root run。</li>
+      <li>任一 Provider key 出现最终 auth_unavailable 或确认 stall 时发送 breaker alert，并展示自动 probe/recovery 状态。</li>
+      <li>physical compaction 后 Todo reconcile、已完成策略重派或 gate 回退，记录为高优先级一致性事件。</li>
+      <li>线上持续统计“suspect 后在无干预情况下迅速出现合法 progress”的 shadow 误报代理指标，用于收紧/放宽多信号 policy。</li>
+    </ul>
+  </section>
+
+  <section id="rollout">
+    <h2>14. 迁移、准确性灰度与回滚</h2>
+
+    <h3>14.1 灰度顺序</h3>
+    <ol>
+      <li><strong>先发 Auth precedence。</strong>独立正确性修复；保持 Provider 内 401 rotation 和真实 route/model fallback。</li>
+      <li><strong>上线 typed evidence gate。</strong>先把 false completion 风险封住，并为 UI/研究/API 补齐非 bash verifier。</li>
+      <li><strong>ExecutionLedger 只写事实。</strong>影子记录 request、usage、progress、strategy、heartbeat、breaker 和 revision，不改变调度。</li>
+      <li><strong>Watchdog shadow。</strong>在事故回放与健康长会话语料上输出 would-suspect/would-act；suspect 后很快出现合法 progress 记为误报代理。</li>
+      <li><strong>只 enforce 确定性动作。</strong>先启用 exact duplicate、stale Hub poll、最终 Auth breaker、revision CAS；这些不依赖模型判断。</li>
+      <li><strong>Supervisor advisory。</strong>记录建议、abstain、Oracle 分歧和后续真实结果；不自动改派。</li>
+      <li><strong>启用可逆语义动作。</strong>只开放 replan/reassign/park/switch；completed、needs_user、唯一 worker cancel 继续由高影响 host policy 控制。</li>
+      <li><strong>启用 durable recovery。</strong>验证进程/compaction/Provider 恢复后自动 resume，再开展 Native/Steady A/B。</li>
+    </ol>
+
+    <h3>14.2 兼容策略</h3>
+    <ul>
+      <li>新 <code>san.execution_scope</code> 为未知 custom entry；旧二进制忽略，不重写旧 JSONL。</li>
+      <li>旧 Task contract 缺失 strategy 时生成 low-confidence compatibility key；在证据不足前 observe，不自动取消。</li>
+      <li>旧 San loop bash receipt 继续可作为 command gate evidence，但必须绑定具体 check；不再接受任意成功命令。</li>
+      <li>旧 Todo tool result 继续可读；新 init guard 只影响新调用。</li>
+      <li>ContextProbe v4 writer 配套 v3/v4 reader；legacy active turn 以 observe 模式重建，不能从零猜 gate。</li>
+      <li>已有用户显式 <code>maxTokens/maxCost/maxDurationMs/maxProviderRequests</code> 继续生效；默认值为 disabled，不再由产品强加。</li>
+    </ul>
+
+    <h3>14.3 功能开关与回滚边界</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>组件</th><th>开关</th><th>允许回滚</th><th>禁止回滚</th></tr></thead>
+        <tbody>
+          <tr><td>Execution telemetry</td><td><code>supervision.telemetry.enabled</code></td><td>高开销字段可采样。</td><td>删除 ledger 权威事实或让 summary 替代。</td></tr>
+          <tr><td>Watchdog</td><td><code>supervision.watchdog.mode=observe|enforce</code></td><td>语义规则回 observe。</td><td>关闭 revision CAS、exact duplicate 和 runtime invariant checks。</td></tr>
+          <tr><td>Semantic supervisor</td><td><code>supervision.semantic.mode=off|advisory|reversible</code></td><td>误报时回 advisory。</td><td>允许模型直接 completed、删 gate 或直接 spawn。</td></tr>
+          <tr><td>Provider breaker</td><td><code>providerHealth.mode=observe|enforce</code></td><td>stall 可回 observe。</td><td>恢复 AuthFailed 普通同模型 10 次 retry。</td></tr>
+          <tr><td>Todo reconcile</td><td><code>todo.requireReconcileBeforeReplace</code></td><td>紧急兼容期可关闭。</td><td>重写历史 Todo/session 伪造状态。</td></tr>
+          <tr><td>Context Steady</td><td>现有 setting</td><td>A/B 内切换。</td><td>用关闭 Steady 或资源硬停冒充完整修复。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>14.4 主要风险与控制</h3>
+    <div class="decision"><strong>误判合法长任务</strong><span>heartbeat/active process 是合法等待；单信号不干预；不确定时 abstain。</span></div>
+    <div class="decision"><strong>无意义 mutation 伪装进展</strong><span>mutation 默认只算 activity；关联当前 gate/evidence/dependency 才算 progress。</span></div>
+    <div class="decision"><strong>Supervisor 幻觉</strong><span>结构化 refs 必须在 ledger 存在；模型不能改变 gate；host verifier 裁决。</span></div>
+    <div class="decision"><strong>并发导致陈旧建议</strong><span>basis revision/hash CAS；期间任一新 progress 使建议失效。</span></div>
+    <div class="decision"><strong>模型共识仍然错误</strong><span>Oracle 只提供反证，不投票；事实与类型化 verifier 始终高于模型多数。</span></div>
+    <div class="decision"><strong>Provider 永久不恢复</strong><span>durable waiting 不烧模型请求；明确需登录时按 host receipt 进入 needs_user 并保留可恢复队列。</span></div>
+    <div class="decision"><strong>恢复后重复执行副作用</strong><span>request/tool replay safety、assignment revision 和幂等 receipt；不可安全重放时等待人工，而非猜测。</span></div>
+
+    <h3>14.5 准确性晋级门槛</h3>
+    <ul>
+      <li><strong>标签来源：</strong>用事故回放、健康长任务、研究/UI/API、Provider 恢复、并发迟到 evidence 构成固定语料；ground truth 来自 host receipts 与人工确认的目标合同，不能让 Supervisor 自己给自己打分。</li>
+      <li><strong>确定性 enforce：</strong>语料中高影响误报必须为 0，所有预期 exact duplicate、stale poll、terminal Auth 和 revision race 必须命中；任一反例即阻断晋级。</li>
+      <li><strong>语义 advisory：</strong>必须先收集“建议后真实发生的 progress / regression / blocker”结果；无法归因的样本计入 abstain，不得从分母删除来美化 precision。</li>
+      <li><strong>可逆动作：</strong>只在无 artifact/evidence 丢失、stale action 应用数为 0、fixture 自动恢复率为 100% 时开启；线上出现一次不可恢复误干预立即回 advisory。</li>
+      <li><strong>高影响结论：</strong><code>completed</code> 永远不授予语义 Supervisor；<code>needs_user</code> 永远不靠模型置信度单独晋级，因此不依赖一个虚假的“模型准确率阈值”。</li>
+    </ul>
+  </section>
+
+  <section id="non-solutions">
+    <h2>15. 明确不采用的方案</h2>
+    <div class="grid-2">
+      <div class="card"><h4>默认累计资源硬上限</h4><p>会把仍在产生真实进展的长任务人为截断；资源默认只做遥测，用户显式配置除外。</p></div>
+      <div class="card"><h4>只向主 Agent 发软提醒</h4><p>主 Agent 可能忽略、压缩后遗忘，或自身就是活锁源；旁路 Watchdog 必须有局部控制权。</p></div>
+      <div class="card"><h4>常驻第二个 LLM 监工</h4><p>监督者也会循环和消耗；确定性规则常驻，LLM 只在语义疑难时按 revision 调用一次。</p></div>
+      <div class="card"><h4>Supervisor/Oracle 多数投票</h4><p>模型共识不是事实；完成、外部阻塞和高影响动作必须由 host evidence policy 决定。</p></div>
+      <div class="card"><h4>只降低 retry 或 concurrency</h4><p>只能减速局部爆炸，不能识别跨 187 个 session 的同一语义策略。</p></div>
+      <div class="card"><h4>任务名正则去掉 V2/V3</h4><p>名称可任意改写；必须区分稳定 work key、strategy hypothesis 和 independence key。</p></div>
+      <div class="card"><h4>“新文件 = 新进展”</h4><p>新资源和 mutation 默认只是 activity；必须关联 gate/evidence/dependency 才续期。</p></div>
+      <div class="card"><h4>让 compaction summary 保存监督态</h4><p>LLM 输出不是数据库；合同、revision、gate、breaker 和决策必须来自 append-only ledger。</p></div>
+    </div>
+  </section>
+
+  <section id="dod">
+    <h2>16. Definition of Done</h2>
+    <ul class="done">
+      <li>默认累计 Token、请求、成本、时长与 assignment 数不终止 productive root run；用户显式预算仍可选。</li>
+      <li>主、子、嵌套、revived Agent 共享 root execution scope；compaction/handoff/restart 后 revision、gate、strategy 和 waiting 状态不回退。</li>
+      <li>Supervisor 无法凭文本、无关命令、陈旧 receipt 或不存在的 evidence 把 gate 设为 pass。</li>
+      <li>command/browser/API/artifact/review/external gate 均有 host verifier；当前 bash-only evidence 门完成迁移。</li>
+      <li>单信号、合法 heartbeat、研究 artifact、不同 hypothesis 不会被误判为语义活锁。</li>
+      <li>相同 strategy、失败 signature、无变化 Hub poll 和 V2/V3 改名无法绕过去重与诊断。</li>
+      <li>Supervisor 决策绑定 basis revision/hash；期间出现任何新进展时旧决策必然丢弃。</li>
+      <li><code>needs_user</code> 只有在 external receipt 存在、无 runnable 节点且高影响 policy 通过时成立。</li>
+      <li>Auth/stall breaker 跨 session 生效；只 park 故障路径，half-open single-flight，健康后无人 steer 自动 resume。</li>
+      <li>Provider 故障等待期间不重复消耗 LLM 请求；独立任务继续运行。</li>
+      <li>Todo 有 unfinished 时 <code>init</code> 原子拒绝；<code>reconcile</code> 保留状态，Supervisor 不能静默删除目标。</li>
+      <li>事故回放在无用户输入下经历故障、compaction、恢复并最终通过所有 gate；合法长任务未被取消。</li>
+      <li>Watchdog shadow、语义 advisory、可逆 enforce 三阶段均达到第 12/14 节门禁后才能默认开启。</li>
+      <li>20 组 Native/Steady 配对 A/B 后再决定多 Agent 默认上下文策略；两组都不以资源硬停掩盖活锁。</li>
+      <li>实现、focused tests、真实 smoke 与 <code>bun check</code> 通过后，更新 <code>packages/ai</code> 和 <code>packages/coding-agent</code> Unreleased Changelog。</li>
+    </ul>
+  </section>
+
+  <section id="evidence">
+    <h2>17. 源码与事故证据索引</h2>
+    <ul>
+      <li>事故分析：<code>docs/research/session-019fca60-multi-agent-runaway-analysis-20260805.html</code></li>
+      <li>San loop 角色与运行管线：<code>packages/coding-agent/src/san-loop/runner.ts</code> 的 Commander、Worker、Supervisor、Oracle executor。</li>
+      <li>现有 host pass evidence 门：<code>packages/coding-agent/src/san-loop/orchestrator.ts</code> 的 <code>validatePassEvidence()</code>、<code>applySanLoopReview()</code>。</li>
+      <li>现有 checks 选择：<code>packages/coding-agent/src/san-loop/checks.ts</code> 的 <code>selectSanLoopChecks()</code>。</li>
+      <li>单子 Agent monitor：<code>packages/coding-agent/src/task/executor.ts</code> 的 <code>SOFT_REQUEST_BUDGET</code>、<code>SubagentRunMonitor</code>。</li>
+      <li>Task wire/schema：<code>packages/coding-agent/src/task/types.ts</code>、<code>task/index.ts</code>。</li>
+      <li>SDK usage/显式严格预算基础：<code>packages/coding-agent/src/sdk.ts</code> 的 <code>strictUsageTokens</code>、<code>maxTokensResolver</code>。</li>
+      <li>全局 Agent 地址与生命周期：<code>packages/coding-agent/src/registry/agent-registry.ts</code>。</li>
+      <li>错误 flags：<code>packages/ai/src/error/flags.ts</code> 的 <code>AUTH_FAILURE_PATTERN</code>、<code>TRANSIENT_TRANSPORT_PATTERN</code>、<code>retriable()</code>。</li>
+      <li>重试/fallback：<code>packages/coding-agent/src/session/agent-session.ts</code> 的 <code>#isRetryableError()</code>、<code>#handleRetryableError()</code>。</li>
+      <li>模型 selector cooldown：<code>packages/coding-agent/src/config/model-registry.ts</code> 的 <code>suppressSelector()</code>。</li>
+      <li>per-session 进展守卫：<code>packages/coding-agent/src/context-steady/tool-progress-guard.ts</code>。</li>
+      <li>Continuation authority：<code>packages/coding-agent/src/context-steady/types.ts</code>、<code>continuation.ts</code>。</li>
+      <li>Todo 替换行为：<code>packages/coding-agent/src/tools/todo.ts</code> 的 <code>initPhases()</code>、<code>applyEntry()</code>。</li>
+      <li>现有 San loop 可选预算：<code>packages/coding-agent/src/san-loop/runner.ts</code>；设置默认位于 <code>config/settings-schema.ts</code>。</li>
+    </ul>
+  </section>
+</main>
+
+<footer class="page">San incident repair plan · Session 019fca60-a3ce-7000-9df1-8c3a8cef6c85 · 2026-08-05</footer>
+</body>
+</html>

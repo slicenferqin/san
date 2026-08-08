@@ -34,9 +34,11 @@ import {
 	type LabelEntry,
 	type ModeChangeEntry,
 	type ModelChangeEntry,
+	type ModelRouteChangeEntry,
 	type NewSessionOptions,
 	type ServiceTierChangeEntry,
 	type SessionEntry,
+	type SessionEntryBase,
 	type SessionHeader,
 	type SessionInitEntry,
 	type SessionMessageEntry,
@@ -165,6 +167,7 @@ function isDraftOnlyMetadataEntry(entry: SessionEntry): boolean {
 	// reach this branch and always keep the file resumable.
 	switch (entry.type) {
 		case "model_change":
+		case "model_route_change":
 		case "thinking_level_change":
 		case "service_tier_change":
 		case "mode_change":
@@ -1575,8 +1578,25 @@ export class SessionManager {
 	 * @param model Model in "provider/modelId" format
 	 * @param role Optional role (default: "default")
 	 */
-	appendModelChange(model: string, role?: string): string {
-		const entry: ModelChangeEntry = { type: "model_change", ...this.#freshEntryFields(), model, role };
+	appendModelChange(model: string, role?: string, route?: { logicalModel: string; routeId: string }): string {
+		const entry: ModelChangeEntry = {
+			type: "model_change",
+			...this.#freshEntryFields(),
+			model,
+			role,
+			logicalModel: route?.logicalModel,
+			routeId: route?.routeId,
+		};
+		this.#recordEntry(entry);
+		return entry.id;
+	}
+
+	appendModelRouteChange(change: Omit<ModelRouteChangeEntry, keyof SessionEntryBase | "type">): string {
+		const entry: ModelRouteChangeEntry = {
+			type: "model_route_change",
+			...this.#freshEntryFields(),
+			...change,
+		};
 		this.#recordEntry(entry);
 		return entry.id;
 	}

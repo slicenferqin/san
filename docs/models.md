@@ -30,19 +30,25 @@ Legacy behavior still present:
 providers:
   <provider-id>:
     # provider-level config
-equivalence:
-  overrides:
-    <provider-id>/<model-id>: <canonical-model-id>
-  exclude:
-    - <provider-id>/<model-id>
+logicalModels:
+  <logical-model-id>:
+    name: Optional display name
+    policy:
+      strategy: priority
+      affinity: session
+      revert: next-turn-after-cooldown
+      fallbackOn: [rate_limit, quota, timeout, network, server_error, model_unavailable]
+    routes:
+      - id: stable-route-id
+        model: <provider-id>/<model-id>
+        priority: 0
+        enabled: true
+        equivalence: exact
 ```
 
 `provider-id` is the canonical provider key used across selection and auth lookup.
 
-`equivalence` is optional and configures canonical model grouping on top of concrete provider models:
-
-- `overrides` maps an exact concrete selector (`provider/modelId`) to an official upstream canonical id
-- `exclude` opts a concrete selector out of canonical grouping
+`logicalModels` is optional. It declares explicit user-owned routing groups; concrete models are never grouped by matching names or inferred provider equivalence.
 
 ## Provider-level fields
 
@@ -180,71 +186,51 @@ the static + dynamic merge is bypassed entirely. The fingerprint is
 memoized per process by tagging the static-models array with a symbol
 property, so repeated cold-start calls do not re-hash.
 
-## Canonical model equivalence and coalescing
+## Logical Model routing
 
-The registry keeps every concrete provider model and then builds a canonical layer above them.
-
-Canonical ids are official upstream ids only, for example:
-
-- `claude-opus-4-6`
-- `claude-haiku-4-5`
-- `gpt-5.3-codex`
-
-### `models.yml` equivalence config
-
-Example:
+Logical Models preserve a stable user intent while selecting one concrete `provider/model` route. Routing is disabled by default; enable it in `config.yml`:
 
 ```yaml
-providers:
-  zenmux:
-    baseUrl: https://api.zenmux.example/v1
-    apiKey: ZENMUX_API_KEY
-    api: openai-codex-responses
-    models:
-      - id: codex
-        name: Zenmux Codex
-        reasoning: true
-        input: [text]
-        cost:
-          input: 0
-          output: 0
-          cacheRead: 0
-          cacheWrite: 0
-        contextWindow: 200000
-        maxTokens: 32768
+routing:
+  enabled: true
+  routeFallback: true
 
-equivalence:
-  overrides:
-    zenmux/codex: gpt-5.3-codex
-    p-codex/codex: gpt-5.3-codex
-  exclude:
-    - demo/codex-preview
+modelRoles:
+  default: coding
 ```
 
-Build order for canonical grouping:
+Define the group in `models.yml`:
 
-1. exact user override from `equivalence.overrides`
-2. bundled official-id matches from built-in model metadata
-3. conservative heuristic normalization for gateway/provider variants
-4. fallback to the concrete model's own id
+```yaml
+logicalModels:
+  coding:
+    name: Coding
+    policy:
+      strategy: priority
+      affinity: session
+      revert: next-turn-after-cooldown
+      fallbackOn: [rate_limit, quota, timeout, network, server_error, model_unavailable]
+    routes:
+      - id: primary
+        model: openai-codex/gpt-5.3-codex
+        priority: 0
+        equivalence: exact
+      - id: backup
+        model: openrouter/openai/gpt-5.3-codex
+        priority: 10
+        equivalence: exact
+```
 
-Current heuristics are intentionally narrow:
+Current routing contract:
 
-- embedded upstream prefixes can be stripped when present, for example `anthropic/...` or `openai/...`
-- dotted and dashed version variants can normalize only when they map to an existing official id, for example `4.6 -> 4-6`
-- ambiguous families or versions are not merged without a bundled match or explicit override
+- every route uses an exact concrete `provider/model` selector
+- lower `priority` wins; configuration order breaks ties
+- a healthy saved route is retained for the session through affinity
+- configured transient/provider failures retry the current route once, then try the next eligible route before cross-model fallback
+- a concrete `provider/model` selector bypasses Logical Model routing
+- session state records both the logical intent and the concrete route that executed
 
-### Canonical resolution behavior
-
-When multiple concrete variants share a canonical id, resolution uses:
-
-1. availability and auth
-2. `config.yml` `modelProviderOrder`
-3. existing registry/provider order if `modelProviderOrder` is unset
-
-Disabled or unauthenticated providers are skipped.
-
-Session state and transcripts continue to record the concrete provider/model that actually executed the turn.
+`equivalence: exact` and `compatible` participate in automatic routing. `unknown` routes require an explicit manual route selection. A concrete selector may belong to only one logical group.
 
 Provider defaults vs per-model overrides:
 
@@ -418,7 +404,7 @@ So a model can exist in registry but not be selectable until auth is available.
 `model-resolver.ts` supports:
 
 - exact `provider/modelId`
-- exact canonical model id
+- exact Logical Model id when `routing.enabled` is true
 - exact model id (provider inferred)
 - fuzzy/substring matching
 - glob scope patterns in `--models` (e.g. `openai/*`, `*sonnet*`)
@@ -428,8 +414,8 @@ So a model can exist in registry but not be selectable until auth is available.
 
 Resolution precedence for exact selectors:
 
-1. exact `provider/modelId` bypasses coalescing
-2. exact canonical id resolves through the canonical index
+1. exact `provider/modelId` bypasses routing
+2. exact Logical Model id resolves through its eligible route list
 3. exact bare concrete id still works
 4. fuzzy and glob matching run after the exact paths
 
@@ -459,18 +445,17 @@ Related settings:
 
 - `modelRoles` (record)
 - `enabledModels` (scoped pattern list)
-- `modelProviderOrder` (global canonical-provider precedence)
+- `modelProviderOrder` (provider precedence for ambiguous concrete matches)
 - `providers.kimiApiFormat` (`openai` or `anthropic` request format)
 - `providers.openaiWebsockets` (`auto|off|on` websocket preference for OpenAI Codex transport)
 
 `modelRoles` may store either:
 
 - `provider/modelId` to pin a concrete provider variant
-- a canonical id such as `gpt-5.3-codex` to allow provider coalescing
+- a configured Logical Model id such as `coding` to preserve route intent
 
 For `enabledModels` and CLI `--models`:
 
-- exact canonical ids expand to all concrete variants in that canonical group
 - explicit `provider/modelId` entries stay exact
 - globs and fuzzy matches still operate on concrete models
 
@@ -495,12 +480,9 @@ String entries apply everywhere. Scoped entries apply when the current working d
 
 Both surfaces keep provider-prefixed models visible and selectable.
 
-They now also expose canonical/coalesced models:
+When routing is enabled, `/model` also shows configured Logical Model groups, the active route, and the number of remaining eligible routes. Selecting a logical row stores the Logical Model id; selecting a provider row stores the explicit `provider/modelId` and bypasses routing.
 
-- `/model` includes a canonical view alongside provider tabs
-- `san models` prints provider-grouped tables of every concrete model, and `san models canonical` prints the coalesced canonical view
-
-Selecting a canonical entry stores the canonical selector. Selecting a provider row stores the explicit `provider/modelId`.
+`san models` continues to print provider-grouped concrete models.
 
 ## Context promotion (model-level fallback chains)
 

@@ -1,4 +1,5 @@
 import { scope } from "arktype";
+import { LogicalModelsSchema } from "./model-routes-schema";
 
 // Config schemas validate at most a handful of times per process (on config
 // load), so the eager JIT codegen ArkType runs at definition time is pure
@@ -293,6 +294,7 @@ const ProviderConfigSchema = type({
 
 export const ModelsConfigSchema = type({
 	"providers?": { "[string]": ProviderConfigSchema },
+	"logicalModels?": LogicalModelsSchema,
 });
 
 export type ModelsConfig = typeof ModelsConfigSchema.infer;

@@ -1,0 +1,940 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>San 逻辑模型路由：完整能力、分阶段 Spec 与技术实现</title>
+	<style>
+		:root {
+			color-scheme: dark;
+			--bg: #09101d;
+			--panel: #111b2d;
+			--panel-2: #17243a;
+			--panel-3: #0d1626;
+			--line: #2b3a55;
+			--text: #e9eef8;
+			--muted: #a8b5ca;
+			--blue: #79b8ff;
+			--cyan: #71d8e8;
+			--green: #68d8a7;
+			--amber: #f0c66e;
+			--red: #ff9292;
+			--purple: #c4a8ff;
+			--max: 1220px;
+		}
+		* { box-sizing: border-box; }
+		html { scroll-behavior: smooth; }
+		body {
+			margin: 0;
+			font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			background:
+				radial-gradient(circle at 14% 0%, rgba(57, 113, 205, .20), transparent 34rem),
+				radial-gradient(circle at 94% 6%, rgba(83, 199, 175, .11), transparent 30rem),
+				var(--bg);
+			color: var(--text);
+			line-height: 1.66;
+		}
+		main { width: min(var(--max), calc(100% - 32px)); margin: 0 auto; padding: 46px 0 80px; }
+		a { color: var(--blue); text-decoration: none; }
+		a:hover { text-decoration: underline; }
+		h1, h2, h3, h4 { line-height: 1.26; letter-spacing: -.02em; }
+		h1 { max-width: 1050px; margin: 10px 0 18px; font-size: clamp(2rem, 5vw, 3.65rem); }
+		h2 { margin: 58px 0 20px; font-size: clamp(1.45rem, 3vw, 2.12rem); }
+		h3 { margin: 24px 0 10px; font-size: 1.18rem; }
+		h4 { margin: 18px 0 8px; font-size: 1rem; color: #dce7f9; }
+		p { margin: 8px 0 14px; }
+		ul, ol { padding-left: 1.35rem; }
+		li + li { margin-top: 6px; }
+		code {
+			font: .91em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+			color: #d9e9ff;
+			background: rgba(121, 184, 255, .09);
+			border: 1px solid rgba(121, 184, 255, .15);
+			padding: .08rem .32rem;
+			border-radius: 5px;
+		}
+		pre {
+			margin: 14px 0;
+			padding: 18px;
+			overflow-x: auto;
+			border: 1px solid var(--line);
+			border-radius: 12px;
+			background: #070d18;
+			color: #d3e4f9;
+			font: .87rem/1.56 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+		}
+		pre code { padding: 0; border: 0; background: transparent; color: inherit; }
+		.eyebrow { color: var(--green); font-weight: 760; letter-spacing: .085em; text-transform: uppercase; font-size: .79rem; }
+		.lead { max-width: 1060px; color: #cbd6e8; font-size: clamp(1.04rem, 2vw, 1.25rem); }
+		.meta { display: flex; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: .91rem; }
+		.tag { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: rgba(17, 27, 45, .76); }
+		.callout {
+			margin: 28px 0;
+			padding: 21px 23px;
+			border: 1px solid rgba(104, 216, 167, .38);
+			border-left: 5px solid var(--green);
+			border-radius: 12px;
+			background: linear-gradient(135deg, rgba(104, 216, 167, .11), rgba(17, 27, 45, .86));
+		}
+		.callout.warn { border-color: rgba(240, 198, 110, .38); border-left-color: var(--amber); background: linear-gradient(135deg, rgba(240, 198, 110, .10), rgba(17, 27, 45, .86)); }
+		.callout.risk { border-color: rgba(255, 146, 146, .38); border-left-color: var(--red); background: linear-gradient(135deg, rgba(255, 146, 146, .09), rgba(17, 27, 45, .86)); }
+		.grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 15px; }
+		.card { grid-column: span 6; padding: 19px; border: 1px solid var(--line); border-radius: 13px; background: rgba(17, 27, 45, .9); }
+		.card.third { grid-column: span 4; }
+		.card.full { grid-column: 1 / -1; }
+		.card h3 { margin-top: 0; }
+		.card p:last-child, .card ul:last-child { margin-bottom: 0; }
+		.kicker { color: var(--muted); font-size: .81rem; letter-spacing: .065em; text-transform: uppercase; }
+		.good { color: var(--green); }
+		.warn-text { color: var(--amber); }
+		.risk-text { color: var(--red); }
+		.purple { color: var(--purple); }
+		.small { color: var(--muted); font-size: .89rem; }
+		.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 13px; }
+		table { width: 100%; min-width: 790px; border-collapse: collapse; background: rgba(17, 27, 45, .9); }
+		th, td { padding: 12px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+		th { color: #d3dff1; background: var(--panel-2); font-size: .81rem; letter-spacing: .045em; text-transform: uppercase; }
+		tr:last-child td { border-bottom: 0; }
+		.arch {
+			display: grid;
+			grid-template-columns: 1fr auto 1.2fr auto 1.2fr auto 1fr;
+			gap: 10px;
+			align-items: stretch;
+			margin: 22px 0;
+		}
+		.node { padding: 15px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); }
+		.node strong { display: block; margin-bottom: 6px; color: #fff; }
+		.arrow { align-self: center; color: var(--blue); font-size: 1.35rem; }
+		.flow { display: grid; gap: 10px; margin: 18px 0; }
+		.flow-row { display: grid; grid-template-columns: 190px 1fr; gap: 14px; align-items: start; padding: 13px 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+		.flow-row strong { color: var(--cyan); }
+		.phase-nav { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 22px 0; }
+		.phase-pill { min-height: 122px; padding: 14px; border: 1px solid var(--line); border-top: 4px solid var(--blue); border-radius: 10px; background: var(--panel); }
+		.phase-pill:nth-child(2) { border-top-color: var(--green); }
+		.phase-pill:nth-child(3) { border-top-color: var(--cyan); }
+		.phase-pill:nth-child(4) { border-top-color: var(--amber); }
+		.phase-pill:nth-child(5) { border-top-color: var(--purple); }
+		.phase-pill strong { display: block; margin-bottom: 5px; }
+		.phase-spec { margin-top: 24px; padding: 22px; border: 1px solid var(--line); border-radius: 14px; background: rgba(17, 27, 45, .9); }
+		.phase-head { display: flex; justify-content: space-between; gap: 16px; align-items: start; margin-bottom: 12px; }
+		.phase-head h3 { margin: 0; font-size: 1.35rem; }
+		.badge { display: inline-block; white-space: nowrap; padding: 3px 9px; border: 1px solid rgba(121, 184, 255, .44); border-radius: 999px; color: var(--blue); background: rgba(121, 184, 255, .09); font-size: .79rem; font-weight: 720; }
+		.badge.release { color: var(--green); border-color: rgba(104, 216, 167, .45); background: rgba(104, 216, 167, .09); }
+		.spec-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+		.spec-box { padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-3); }
+		.spec-box h4 { margin-top: 0; }
+		.state-machine { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 16px 0; }
+		.state { padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+		.state strong { display: block; color: var(--cyan); margin-bottom: 5px; }
+		.checks { list-style: none; padding: 0; }
+		.checks li { position: relative; padding-left: 1.55rem; }
+		.checks li::before { content: "✓"; position: absolute; left: 0; color: var(--green); font-weight: 800; }
+		.nope { list-style: none; padding: 0; }
+		.nope li { position: relative; padding-left: 1.55rem; }
+		.nope li::before { content: "—"; position: absolute; left: 0; color: var(--amber); font-weight: 800; }
+		.file-map { columns: 2; column-gap: 26px; }
+		.file-map li { break-inside: avoid; margin-bottom: 9px; }
+		footer { margin-top: 58px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: .88rem; }
+		@media (max-width: 960px) {
+			.card, .card.third { grid-column: 1 / -1; }
+			.arch { grid-template-columns: 1fr; }
+			.arrow { justify-self: center; transform: rotate(90deg); }
+			.phase-nav { grid-template-columns: 1fr 1fr; }
+			.spec-grid { grid-template-columns: 1fr; }
+			.state-machine { grid-template-columns: 1fr 1fr; }
+		}
+		@media (max-width: 620px) {
+			main { width: min(100% - 22px, var(--max)); padding-top: 28px; }
+			.phase-nav, .state-machine { grid-template-columns: 1fr; }
+			.flow-row { grid-template-columns: 1fr; }
+			.phase-head { display: block; }
+			.phase-head .badge { margin-top: 8px; }
+			.file-map { columns: 1; }
+		}
+	</style>
+</head>
+<body>
+<main>
+	<header>
+		<div class="eyebrow">Architecture proposal · 2026-08-04</div>
+		<h1>San 逻辑模型路由：完整能力、分阶段 Spec 与技术实现</h1>
+		<p class="lead">目标是让用户选择 <code>gpt-5.6-sol</code> 这样的逻辑模型，由 San 在多个服务商提供的同一模型之间执行便宜优先、会话亲和、故障切换和恢复回切；同时把“同模型换路由”与“换成另一个模型”彻底分开。</p>
+		<div class="meta">
+			<span class="tag">状态：设计提案</span>
+			<span class="tag">建议：下一版本核心能力</span>
+			<span class="tag">作用域：packages/coding-agent 为主</span>
+			<span class="tag">兼容：provider/model 永久保留</span>
+		</div>
+	</header>
+
+	<div class="callout">
+		<strong>核心决策：</strong>不恢复已经删除的 catalog-wide canonical 启发式归并，而是引入显式的 <strong>Logical Model → Route Group</strong>。现有 <code>Model&lt;Api&gt;</code> 继续表示可执行的具体端点；新增逻辑模型、路由策略和路由租约，不污染 provider transport，也不在冷启动阶段扫描并猜测数千个模型的等价关系。
+	</div>
+
+	<section>
+		<h2>一、最终产品形态</h2>
+		<div class="arch" role="img" aria-label="Logical model routing architecture">
+			<div class="node"><strong>任务 / Effort</strong>用户指定或 Agent 判断任务需要多少资源</div>
+			<div class="arrow">→</div>
+			<div class="node"><strong>Logical Model</strong><code>gpt-5.6-sol</code><br>稳定的能力与 harness 身份</div>
+			<div class="arrow">→</div>
+			<div class="node"><strong>Route Policy</strong>鉴权、能力、价格、健康、亲和性与预算</div>
+			<div class="arrow">→</div>
+			<div class="node"><strong>Concrete Route</strong><code>asxs/gpt-5.6-sol</code><br>真实 API、凭证、协议和账单</div>
+		</div>
+
+		<div class="grid">
+			<article class="card third">
+				<div class="kicker">User contract</div>
+				<h3>用户选择模型，不选择供应链</h3>
+				<p><code>modelRoles.default</code> 保存逻辑模型。服务商新增、降价或故障时，不需要修改角色和会话语义。</p>
+			</article>
+			<article class="card third">
+				<div class="kicker">Determinism</div>
+				<h3>第一版是优先级，不是随机权重</h3>
+				<p>便宜路由健康时始终使用它；只有失败或不满足请求能力时才进入下一条。随机流量权重是后续可选策略。</p>
+			</article>
+			<article class="card third">
+				<div class="kicker">Semantics</div>
+				<h3>路由切换不等于模型切换</h3>
+				<p>同一逻辑模型切换服务商时保持 harness profile、effort 和任务语义，只重算 transport、凭证、上下文上限和 provider session。</p>
+			</article>
+			<article class="card third">
+				<div class="kicker">Cache</div>
+				<h3>默认保持会话亲和</h3>
+				<p>路由解析不是每次请求重新抽签。正常情况下保持当前 route lease，避免 provider cache、Responses session 和 KV 前缀反复失效。</p>
+			</article>
+			<article class="card third">
+				<div class="kicker">Recovery</div>
+				<h3>Agent 原生理解安全边界</h3>
+				<p>San 知道请求是否已输出文本、是否产生 tool call、能否安全丢弃失败消息；这是外部 HTTP 路由器无法完整判断的状态。</p>
+			</article>
+			<article class="card third">
+				<div class="kicker">Debuggability</div>
+				<h3>逻辑身份与实际执行同时可见</h3>
+				<p>会话、日志和 stats 同时记录 <code>logicalModel</code>、<code>route</code>、选择原因、fallback 触发原因与实际费用。</p>
+			</article>
+		</div>
+	</section>
+
+	<section>
+		<h2>二、术语与不变量</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>术语</th><th>定义</th><th>示例</th><th>必须保持的不变量</th></tr></thead>
+				<tbody>
+					<tr><td>Logical Model</td><td>用户与 harness 面向的稳定模型身份</td><td><code>gpt-5.6-sol</code></td><td>路由切换不得改变其行为 profile 和用户选择</td></tr>
+					<tr><td>Concrete Model</td><td>现有 <code>Model&lt;Api&gt;</code>，一个可执行 provider endpoint</td><td><code>asxs/gpt-5.6-sol</code></td><td>保留真实 api、baseUrl、compat、thinking、cost 和 contextWindow</td></tr>
+					<tr><td>Route</td><td>Concrete Model 加上路由级政策元数据</td><td>priority、billing override、equivalence</td><td>route 不能携带密钥，凭证仍由 AuthStorage 管理</td></tr>
+					<tr><td>Route Group</td><td>同一 Logical Model 的有序路由集合</td><td>asxs → self-botcf → cpa</td><td>V1 只接受用户显式声明，不做模糊自动归并</td></tr>
+					<tr><td>Route Lease</td><td>某个 session/turn 当前绑定的具体路由</td><td><code>session:gpt-5.6-sol→asxs</code></td><td>未失败、未被禁用、未触发回切政策时保持稳定</td></tr>
+					<tr><td>Route Fallback</td><td>逻辑模型不变，只换 provider route</td><td>asxs → self-botcf</td><td>先于 cross-model fallback 执行</td></tr>
+					<tr><td>Model Fallback</td><td>切换到另一个 Logical Model 或 concrete model</td><td>gpt-5.6-sol → claude-fable-5</td><td>继续由现有 fallback chain 表达，不能与 route fallback 混为一层</td></tr>
+					<tr><td>Credential Rotation</td><td>同一 concrete route 下切换账号/凭证</td><td>Anthropic account A → B</td><td>发生在 route fallback 之前</td></tr>
+				</tbody>
+			</table>
+		</div>
+
+		<div class="callout warn">
+			<strong>“同名”不自动等于“同模型”。</strong>不同服务商可能用相同 ID 指向不同快照、量化版本、上下文上限或隐藏系统提示词。Route Group 是用户对等价性的显式声明；San 仍然按具体路由校验 tools、图像、effort、context 和 wire compatibility。
+		</div>
+	</section>
+
+	<section>
+		<h2>三、San 当前状态与可复用底座</h2>
+		<p>当前执行主键仍是 <code>provider/model</code>。裸模型 ID 只是在完全相同 ID 的候选中挑选一个具体模型，并不会形成持久的逻辑路由池。v16.2.12 已删除 canonical-alias grouping；<code>equivalence</code> 现在 inert，但 <code>docs/models.md</code> 仍保留旧说明，需要在 Phase 0 修正。</p>
+
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>现有能力</th><th>代码位置</th><th>可复用方式</th><th>当前缺口</th></tr></thead>
+				<tbody>
+					<tr><td>具体模型库存与 provider metadata</td><td><code>config/model-registry.ts</code></td><td>Route 最终仍解析成现有 <code>Model&lt;Api&gt;</code></td><td>没有 Logical Model / Route Group 索引</td></tr>
+					<tr><td>鉴权、keyless provider、credential rotation</td><td><code>ModelRegistry.getApiKey</code>、<code>AuthStorage</code></td><td>路由 eligibility 快筛 + 执行前最终鉴权</td><td>没有跨 provider 的统一 route lease</td></tr>
+					<tr><td>裸 ID 与 provider preference</td><td><code>config/model-resolver.ts</code></td><td>保留为 legacy selector fallback</td><td>MRU 优先于 provider order；不是严格 cheap-first</td></tr>
+					<tr><td>selector cooldown</td><td><code>ModelRegistry.suppressSelector</code></td><td>Phase 1 直接作为进程内 route suppression</td><td>没有持久 circuit breaker 与 half-open</td></tr>
+					<tr><td>模型 fallback chain</td><td><code>AgentSession #tryRetryModelFallback</code></td><td>复用错误分类、安全重放和切模动作</td><td>同模型换 provider 与换模型混在同一 chain</td></tr>
+					<tr><td>provider session reset</td><td><code>#setModelWithProviderSessionReset</code></td><td>每次 route switch 必须走同一入口</td><td>当前会被视作普通 model change</td></tr>
+					<tr><td>TTFT/TPS 统计</td><td><code>session/agent-storage.ts</code></td><td>Phase 2 扩展为 route health/perf</td><td>没有成功率、错误分类、fallback 与 cache 指标</td></tr>
+					<tr><td>session events / RPC v2</td><td><code>AgentSessionEvent</code>、<code>rpc-v2/event-adapter.ts</code></td><td>增加 route resolved/changed 事件</td><td>当前只有 <code>retry_fallback_applied</code></td></tr>
+				</tbody>
+			</table>
+		</div>
+
+		<h3>为什么不恢复旧 canonical 实现</h3>
+		<ul>
+			<li>旧实现依赖 catalog-wide 归并、字符串启发式和 canonical index，曾因冷启动成本被删除。</li>
+			<li>路由关系是用户的供应链政策，不只是模型 ID 规范化问题；价格、订阅、可靠性和服务商信任都无法从 ID 猜出。</li>
+			<li>显式 Route Group 的复杂度只与每组路由数量相关，通常为 2–10，编译后解析为 O(group routes)。</li>
+			<li>后续可以提供“发现同 ID 候选并建议加入”的 UX，但不得静默把候选加入可执行路由组。</li>
+		</ul>
+	</section>
+
+	<section>
+		<h2>四、完整能力边界</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>能力</th><th>最终 Spec</th><th>阶段</th></tr></thead>
+				<tbody>
+					<tr><td>显式逻辑模型</td><td>角色、CLI、UI 和 SDK 可保存 Logical Model intent</td><td>Phase 1</td></tr>
+					<tr><td>确定性便宜优先</td><td>按显式 priority/config order 选择首个健康可用 route</td><td>Phase 1</td></tr>
+					<tr><td>请求能力过滤</td><td>鉴权、tools、image、context、effort、API/transport 均参与 eligibility</td><td>Phase 1</td></tr>
+					<tr><td>会话亲和</td><td>健康 route 默认保持 lease；失败时才切换</td><td>Phase 1</td></tr>
+					<tr><td>安全 route fallback</td><td>错误分类、凭证优先、安全重放、冷却与回切</td><td>Phase 1</td></tr>
+					<tr><td>持久健康状态</td><td>closed/open/half-open circuit，跨 session 生效</td><td>Phase 2</td></tr>
+					<tr><td>Route Inspector</td><td>查看当前 route、拒绝原因、健康、延迟、成本；支持 session pin</td><td>Phase 2</td></tr>
+					<tr><td>完整可观测性</td><td>route 级成功率、TTFT/TPS、错误、fallback、cache、费用</td><td>Phase 2</td></tr>
+					<tr><td>真实成本排序</td><td>按当前请求的 input/output/cache 估算 effective cost</td><td>Phase 3</td></tr>
+					<tr><td>预算与 SLA 策略</td><td>lowest-cost、balanced、latency-first、budget ceiling</td><td>Phase 3</td></tr>
+					<tr><td>防抖与恢复探测</td><td>min dwell、hysteresis、单飞 half-open probe，避免抖动</td><td>Phase 3</td></tr>
+					<tr><td>可选流量权重</td><td>用于负载分散/A-B，不参与默认 cheap-first</td><td>Phase 3</td></tr>
+					<tr><td>Effort → Logical Model</td><td>任务难度先选逻辑模型，再做 provider route</td><td>Phase 4</td></tr>
+					<tr><td>自适应选择</td><td>基于受控 eval 与历史遥测，在质量约束下优化价格/速度</td><td>Phase 4</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section>
+		<h2>五、配置 Spec</h2>
+		<p>模型库存与 Route Group 放在 <code>models.yml</code>；角色选择和全局运行策略放在 <code>config.yml</code>。这样 provider/model 定义与用户运行偏好保持分层。</p>
+
+		<h3>5.1 <code>models.yml</code>：逻辑模型与路由</h3>
+		<pre><code>providers:
+  asxs:
+    baseUrl: https://example-a.invalid/v1
+    api: openai-responses
+    models:
+      - id: gpt-5.6-sol
+        # 现有 Model cost 仍是该具体 route 的默认价格来源
+        cost:
+          input: 1.00
+          output: 8.00
+          cacheRead: 0.10
+          cacheWrite: 1.00
+
+  self-botcf:
+    baseUrl: https://example-b.invalid/v1
+    api: openai-responses
+    models:
+      - id: gpt-5.6-sol
+
+logicalModels:
+  gpt-5.6-sol:
+    name: GPT-5.6 Sol
+    harnessProfile: gpt-5.6-sol
+    policy:
+      strategy: priority
+      affinity: session
+      revert: next-turn-after-cooldown
+      fallbackOn:
+        - rate_limit
+        - quota
+        - timeout
+        - network
+        - server_error
+        - model_unavailable
+    routes:
+      - id: asxs-cheap
+        model: asxs/gpt-5.6-sol
+        priority: 10
+        equivalence: exact
+      - id: botcf-backup
+        model: self-botcf/gpt-5.6-sol
+        priority: 20
+        equivalence: exact
+      - id: cpa-last-resort
+        model: cpa/asxs/gpt-5.6-sol
+        priority: 30
+        equivalence: compatible
+        billing:
+          source: override
+          input: 1.50
+          output: 10.00
+          cacheRead: 0.15
+          cacheWrite: 1.50</code></pre>
+
+		<h3>5.2 <code>config.yml</code>：选择逻辑模型</h3>
+		<pre><code>modelRoles:
+  default: gpt-5.6-sol:xhigh
+  plan: gpt-5.6-sol:xhigh
+
+routing:
+  enabled: true
+  routeFallback: true
+  defaultAffinity: session
+  diagnostics: summary
+
+retry:
+  # Route Group 全部耗尽后，才进入不同模型 fallback。
+  modelFallback: true
+  fallbackChains:
+    default:
+      - self-botcf/claude-opus-4-8</code></pre>
+
+		<h3>5.3 字段语义</h3>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>字段</th><th>类型 / 默认</th><th>规范</th></tr></thead>
+				<tbody>
+					<tr><td><code>logicalModels.&lt;id&gt;</code></td><td>record</td><td>ID 在 V1 必须匹配 <code>[a-z0-9][a-z0-9._-]*</code>；不得含 <code>/</code> 或 thinking suffix</td></tr>
+					<tr><td><code>harnessProfile</code></td><td>string / logical id</td><td>行为 profile 锚点；route switch 不重选，除非 route 显式声明非等价 override</td></tr>
+					<tr><td><code>routes[].id</code></td><td>string / selector 派生</td><td>组内唯一且稳定；显式配置后用于遥测、健康状态和 UI</td></tr>
+					<tr><td><code>routes[].model</code></td><td>exact provider/model</td><td>必须精确解析；禁止 fuzzy selector 和 role alias</td></tr>
+					<tr><td><code>priority</code></td><td>number / config order</td><td>数值越小越优先；同值按配置顺序稳定排序</td></tr>
+					<tr><td><code>equivalence</code></td><td><code>exact | compatible | unknown</code></td><td><code>unknown</code> 默认不参加自动路由，只能手动 pin</td></tr>
+					<tr><td><code>strategy</code></td><td><code>priority</code> / V1</td><td>Phase 3 增加 <code>lowest-cost</code>、<code>balanced</code>、<code>latency-first</code>、<code>weighted</code></td></tr>
+					<tr><td><code>affinity</code></td><td><code>session | turn | request</code> / session</td><td>V1 实现 session；其他值先校验拒绝或在对应阶段开放，不能静默降级</td></tr>
+					<tr><td><code>revert</code></td><td><code>next-turn-after-cooldown | never</code></td><td>禁止在一个正在运行的 tool loop 中途为“回到便宜路由”主动切换</td></tr>
+					<tr><td><code>fallbackOn</code></td><td>error category[]</td><td>只允许稳定的内部错误枚举，不匹配任意错误字符串</td></tr>
+					<tr><td><code>billing</code></td><td>optional</td><td>V1 只保存/展示；Phase 3 才参与 scorer。缺失时使用 concrete <code>Model.cost</code></td></tr>
+				</tbody>
+			</table>
+		</div>
+
+		<h3>5.4 Selector 解析优先级</h3>
+		<ol>
+			<li>角色 alias（例如 <code>@default</code>）。</li>
+			<li>精确 <code>provider/model</code>：永久表示强制具体路由，绕过 Route Group。</li>
+			<li>精确 Logical Model ID：进入 route resolver。</li>
+			<li>现有裸 concrete ID、variant alias 和 fuzzy legacy matching。</li>
+		</ol>
+		<p class="small">因此配置了 Logical Model <code>gpt-5.6-sol</code> 后，裸选择优先解释为逻辑模型；需要绕过时必须写完整 <code>provider/model</code>。</p>
+	</section>
+
+	<section>
+		<h2>六、运行时 Spec</h2>
+		<h3>6.1 Route resolution 输入与输出</h3>
+		<pre><code>interface RouteResolutionRequest {
+  logicalModelId: string;
+  thinkingLevel: ConfiguredThinkingLevel | undefined;
+  requiredContextTokens: number;
+  requiresImages: boolean;
+  requiresTools: boolean;
+  sessionId: string;
+  turnId: string;
+  nowMs: number;
+}
+
+interface ResolvedModelRoute {
+  logicalModelId: string;
+  routeId: string;
+  model: Model&lt;Api&gt;;
+  reason: "primary" | "affinity" | "failover" | "recovery" | "manual";
+  policyVersion: number;
+}</code></pre>
+
+		<p>逻辑路由类型属于 <code>packages/coding-agent</code>，不加入 catalog 的 <code>Model</code>。这样 provider SDK、模型目录和 transport handler 继续只处理具体模型。</p>
+
+		<h3>6.2 Eligibility pipeline</h3>
+		<div class="flow">
+			<div class="flow-row"><strong>1. Config validity</strong><span>route enabled；selector 能精确找到 concrete model；provider 未被禁用。</span></div>
+			<div class="flow-row"><strong>2. Authentication</strong><span>快速阶段用 <code>hasAuth</code>/keyless 判断；真正发请求前调用 <code>getApiKey(model, sessionId)</code>，允许现有 credential rotation 重新排序。</span></div>
+			<div class="flow-row"><strong>3. Health</strong><span>route 不在 selector cooldown / open circuit；half-open 只允许一个探测请求。</span></div>
+			<div class="flow-row"><strong>4. Request capability</strong><span>检查 image、tools、required context、max output、API transport 和请求需要的特殊能力。</span></div>
+			<div class="flow-row"><strong>5. Effort compatibility</strong><span>显式 effort 默认不得静默降档。V1 route 必须支持相同语义 effort；不支持则拒绝该 route 并给出诊断。</span></div>
+			<div class="flow-row"><strong>6. Equivalence</strong><span><code>exact</code> 和 <code>compatible</code> 可自动选择；<code>unknown</code> 只能手动 pin。</span></div>
+			<div class="flow-row"><strong>7. Ranking</strong><span>手动 pin → 可用 affinity lease → policy score → priority → config order。所有 tie-break 必须稳定。</span></div>
+		</div>
+
+		<h3>6.3 请求与 fallback 顺序</h3>
+		<ol>
+			<li>解析 Logical Model 和当前有效 Route Lease。</li>
+			<li>在具体 route 内执行现有 credential selection/rotation。</li>
+			<li>对短暂 network/timeout/5xx 按政策进行有限次 same-route retry。</li>
+			<li>route 失败且满足 <code>fallbackOn</code> 时，标记 cooldown，切换同一 Route Group 的下一条路由。</li>
+			<li>Route Group 全部不可用后，才进入现有 cross-model <code>retry.fallbackChains</code>。</li>
+			<li>所有候选耗尽后返回结构化错误，列出每条 route 的拒绝原因；不得无限回绕。</li>
+		</ol>
+
+		<h3>6.4 错误分类与动作</h3>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>错误类别</th><th>same-route retry</th><th>credential rotation</th><th>route fallback</th><th>说明</th></tr></thead>
+				<tbody>
+					<tr><td>429 / quota / usage limit</td><td>通常否</td><td class="good">先尝试</td><td class="good">凭证耗尽后立即</td><td>沿用 Retry-After/cooldown</td></tr>
+					<tr><td>network / timeout</td><td>有限 1 次</td><td>否</td><td class="good">可</td><td>避免一次抖动立刻破坏缓存</td></tr>
+					<tr><td>5xx / overload</td><td>有限 1 次</td><td>否</td><td class="good">可</td><td>相同 route 连续失败后 open</td></tr>
+					<tr><td>model unavailable / router 404</td><td>否</td><td>否</td><td class="good">立即</td><td>明显是路由能力问题</td></tr>
+					<tr><td>auth failed</td><td>否</td><td class="good">先尝试</td><td>可配置</td><td>如果该 provider 所有凭证均失效，可换 route</td></tr>
+					<tr><td>context overflow</td><td>否</td><td>否</td><td class="risk-text">默认否</td><td>交给 compaction/context promotion；Phase 3 可选择足够窗口的同模型 route</td></tr>
+					<tr><td>invalid request / schema 400</td><td>否</td><td>否</td><td class="risk-text">默认否</td><td>可能是 San/transport bug，盲目换路由会掩盖根因</td></tr>
+					<tr><td>refusal / safety / sensitive</td><td>否</td><td>否</td><td class="risk-text">否</td><td>模型决策，不伪装成 provider 故障</td></tr>
+					<tr><td>user abort / interrupt</td><td>否</td><td>否</td><td class="risk-text">否</td><td>必须立即终止</td></tr>
+				</tbody>
+			</table>
+		</div>
+
+		<h3>6.5 安全重放边界</h3>
+		<ul>
+			<li>不得在同一个 streaming request 内“无缝换 provider”；route switch 总是产生一个新请求。</li>
+			<li>失败消息只有 text/thinking partial 时，可沿用现有逻辑从 active context 移除后重试。</li>
+			<li>失败消息已包含 tool call 时，默认不可自动重放，避免重复执行写文件、部署、发送消息等副作用。</li>
+			<li>已完成一个完整 tool round 后的下一次 provider request，可以使用新 route；此时历史已经有确定的 tool result。</li>
+			<li>切换 route 必须调用现有 provider session reset 入口，关闭不兼容的 Responses/WebSocket/session state。</li>
+		</ul>
+	</section>
+
+	<section>
+		<h2>七、Harness、缓存与 Context Steady 集成</h2>
+		<div class="callout">
+			<strong>组合公式：</strong><code>Resolved Execution = Logical Harness Profile + Concrete Model Capabilities + Provider Transport Profile + Route Policy</code>。其中行为层由逻辑模型决定，wire 编码、thinking 参数、headers、API 和 provider session 由具体 route 决定。
+		</div>
+
+		<div class="grid">
+			<article class="card">
+				<h3>Harness profile</h3>
+				<ul>
+					<li>route fallback 不重选 system guidance、tool policy、loop policy。</li>
+					<li>具体 route 的 <code>compat</code>、API dialect、thinking map 仍需重新解析。</li>
+					<li><code>equivalence: compatible</code> 可声明 route-level profile overlay，但必须显式，不能由 provider 名推断。</li>
+				</ul>
+			</article>
+			<article class="card">
+				<h3>Prompt cache</h3>
+				<ul>
+					<li>缓存域至少包含 provider/baseUrl/model/credential family；跨 route 默认视为 cache cold。</li>
+					<li>session affinity 是默认排名前置条件，不因每次价格计算反复切换。</li>
+					<li>route switch 记录明确的 cache reset reason，stats 不把预期 miss 误判为回归。</li>
+				</ul>
+			</article>
+			<article class="card">
+				<h3>Context Steady</h3>
+				<ul>
+					<li>逻辑模型不变时，不触发语义 profile reset。</li>
+					<li>仍按新 route 的真实 contextWindow/maxTokens 重新做 preflight。</li>
+					<li>新 route 容量更小时，切换前必须完成 compaction 或拒绝候选，不能等 provider 400。</li>
+				</ul>
+			</article>
+			<article class="card">
+				<h3>Provider payload replay</h3>
+				<ul>
+					<li>Responses reasoning item、Anthropic signature、tool call IDs 按目标 route 的 transport policy 转换。</li>
+					<li>不能把 provider-private state 当作逻辑模型上下文直接搬运。</li>
+					<li>复用现有跨模型切换时的 provider payload 清理路径，不另造一套宽松兜底。</li>
+				</ul>
+			</article>
+		</div>
+	</section>
+
+	<section>
+		<h2>八、状态、持久化与事件 Spec</h2>
+		<h3>8.1 Session persistence</h3>
+		<p>保留现有 <code>model_change.model</code> 的 concrete selector，确保旧版本仍能恢复；新增可选逻辑意图字段，并用独立 route entry 记录运行时切换。</p>
+		<pre><code>// 用户选择或角色解析
+{
+  "type": "model_change",
+  "model": "asxs/gpt-5.6-sol",
+  "logicalModel": "gpt-5.6-sol",
+  "routeId": "asxs-cheap",
+  "role": "default"
+}
+
+// 运行时 route fallback，不覆盖用户的 logical intent
+{
+  "type": "model_route_change",
+  "logicalModel": "gpt-5.6-sol",
+  "fromRoute": "asxs-cheap",
+  "toRoute": "botcf-backup",
+  "reason": "rate_limit",
+  "cooldownUntil": 1785830400000
+}</code></pre>
+		<ul>
+			<li>恢复会话时优先恢复 Logical Model intent。</li>
+			<li>若原 route 仍存在且健康，恢复 lease；否则重新解析并记录原因。</li>
+			<li>若新版本不认识 Logical Model 或配置已删除，退回已保存 concrete model，并生成明确 warning。</li>
+			<li>assistant message 继续记录真实 provider/model，保证账单、重放与调查准确。</li>
+		</ul>
+
+		<h3>8.2 Runtime events</h3>
+		<pre><code>type ModelRouteResolvedEvent = {
+  type: "model_route_resolved";
+  logicalModel: string;
+  routeId: string;
+  model: string;
+  reason: "primary" | "affinity" | "recovery" | "manual";
+};
+
+type ModelRouteChangedEvent = {
+  type: "model_route_changed";
+  logicalModel: string;
+  fromRoute: string;
+  toRoute: string;
+  trigger: RouteFailureCategory;
+  cooldownUntil?: number;
+};</code></pre>
+		<p>RPC v2、print mode、TUI 和 extension event 均通过同一 adapter 映射。候选拒绝明细默认只进 debug log；用户界面显示压缩后的主原因，避免事件体积随 route 数量膨胀。</p>
+
+		<h3>8.3 Route health state</h3>
+		<div class="state-machine">
+			<div class="state"><strong>Healthy / Closed</strong>正常参与选择；成功请求更新延迟和最后成功时间。</div>
+			<div class="state"><strong>Cooling / Open</strong>在 <code>cooldownUntil</code> 前不可自动选择；手动 pin 需明确提示。</div>
+			<div class="state"><strong>Half-open</strong>冷却结束后只允许一个探测请求，其他并发继续使用 fallback。</div>
+			<div class="state"><strong>Disabled</strong>配置禁用或用户手动 drain；不自动恢复。</div>
+		</div>
+		<p class="small">Phase 1 只使用当前进程内 selector suppression；Phase 2 才将 circuit 状态与 failure counters 持久化到 AgentStorage。</p>
+	</section>
+
+	<section>
+		<h2>九、分阶段实施</h2>
+		<div class="phase-nav">
+			<div class="phase-pill"><strong>Phase 0</strong><span class="small">边界抽取与 shadow resolver<br>无用户行为变化</span></div>
+			<div class="phase-pill"><strong>Phase 1</strong><span class="small">显式优先级路由 MVP<br>下一版本发布边界</span></div>
+			<div class="phase-pill"><strong>Phase 2</strong><span class="small">健康、观测与产品化<br>可运营能力</span></div>
+			<div class="phase-pill"><strong>Phase 3</strong><span class="small">成本、SLA 与多策略<br>经济性优化</span></div>
+			<div class="phase-pill"><strong>Phase 4</strong><span class="small">Effort 与自适应调度<br>Agent 级资源系统</span></div>
+		</div>
+
+		<article class="phase-spec">
+			<div class="phase-head">
+				<div><div class="kicker">Phase 0 · Internal foundation</div><h3>显式边界与纯函数 resolver</h3></div>
+				<span class="badge">不对用户开放</span>
+			</div>
+			<p><strong>目标：</strong>在不改变任何现有选择行为的前提下建立数据结构、验证器和执行边界，避免直接把更多分支塞进已经很大的 <code>AgentSession</code>。</p>
+			<div class="spec-grid">
+				<div class="spec-box">
+					<h4>Spec</h4>
+					<ul>
+						<li>新增 Logical Model / Route Group schema，但默认不启用。</li>
+						<li>实现精确 selector 编译、重复 route 检查、循环/冲突诊断。</li>
+						<li>实现纯函数 eligibility + priority resolver。</li>
+						<li>可选 shadow mode：只记录“如果启用会选哪条 route”，不切换。</li>
+						<li>修正文档中已经 inert 的 canonical/equivalence 描述。</li>
+					</ul>
+				</div>
+				<div class="spec-box">
+					<h4>技术实现</h4>
+					<ul>
+						<li><code>config/model-routes-schema.ts</code>：ArkType schema 和强类型。</li>
+						<li><code>config/model-route-registry.ts</code>：在 concrete ModelRegistry 完成加载后编译小型 route index。</li>
+						<li><code>config/model-route-resolver.ts</code>：无 I/O 的 deterministic resolver。</li>
+						<li>不得把逻辑字段加入 catalog <code>Model</code>，不得恢复 catalog-wide canonical index。</li>
+						<li>registry refresh 后原子替换 compiled index；解析中的 session 继续使用旧 policy version 到请求边界。</li>
+					</ul>
+				</div>
+			</div>
+			<h4>验收标准</h4>
+			<ul class="checks">
+				<li>没有 <code>logicalModels</code> 配置时，现有 model selection、fallback、启动耗时和 session 文件字节行为不变。</li>
+				<li>相同输入的 resolver 输出稳定，不依赖 Map 迭代偶然顺序或 MRU。</li>
+				<li>未知 model、重复 route id、非法 logical id、空 route group 在启动时给出具体配置路径。</li>
+			</ul>
+		</article>
+
+		<article class="phase-spec">
+			<div class="phase-head">
+				<div><div class="kicker">Phase 1 · Next-version MVP</div><h3>显式同模型优先级路由与故障切换</h3></div>
+				<span class="badge release">建议下一版本发布</span>
+			</div>
+			<p><strong>目标：</strong>用户配置多个服务商的同一模型后，只选择 Logical Model；San 确定性使用首个健康 route，并在安全错误上自动切换。</p>
+			<div class="spec-grid">
+				<div class="spec-box">
+					<h4>用户可见 Spec</h4>
+					<ul>
+						<li><code>models.yml.logicalModels</code> 和 <code>modelRoles: logical-id</code> 生效。</li>
+						<li>策略只支持 <code>priority</code>；便宜 route 由用户显式排在前面。</li>
+						<li>默认 session affinity；fallback 后在 cooldown 结束的下一用户 turn 回切。</li>
+						<li>route fallback 先于 cross-model fallback。</li>
+						<li><code>provider/model</code> 继续强制具体 route。</li>
+						<li><code>/models</code> 显示 Logical Models 分组、当前 route 和备用 route 数。</li>
+					</ul>
+				</div>
+				<div class="spec-box">
+					<h4>技术实现</h4>
+					<ul>
+						<li>扩展 model selector parser：exact concrete → exact logical → legacy bare/fuzzy。</li>
+						<li><code>AgentSession</code> 增加 active logical intent 和 route lease；Agent 仍只接收 concrete <code>Model</code>。</li>
+						<li>从现有 fallback 代码提取 route candidate 遍历；复用 AIError 分类、selector suppression 和安全重放。</li>
+						<li>每次切换调用 <code>#setModelWithProviderSessionReset</code>，并重新校验 context/effort。</li>
+						<li>扩展 session entry、AgentSessionEvent、RPC v2 DTO 和 event adapter。</li>
+						<li>route retry budget 与 model fallback budget 分开，route 切换不能消耗完后者。</li>
+					</ul>
+				</div>
+			</div>
+			<h4>明确不做</h4>
+			<ul class="nope">
+				<li>不按 catalog 价格自动排序；V1 只信显式 priority。</li>
+				<li>不持久化跨进程 circuit；沿用进程内 cooldown。</li>
+				<li>不做随机 weight、在线探测、质量学习和 task effort 自动判断。</li>
+				<li>不自动把同 ID provider 加入 route group。</li>
+			</ul>
+			<h4>验收标准</h4>
+			<ul class="checks">
+				<li>三个 route 中首个已鉴权且满足能力的 route 必须稳定胜出。</li>
+				<li>首 route 429 后先轮转同 provider 凭证；凭证耗尽后切第二 route，当前 turn 成功完成。</li>
+				<li>失败消息包含 tool call 时不得自动重放。</li>
+				<li>resume 后 Logical Model intent 不被临时 fallback assistant message 覆盖。</li>
+				<li>所有 route 不可用时，错误列出每条候选的精确拒绝原因。</li>
+				<li>没有 Logical Model 配置的现有用户行为完全兼容。</li>
+			</ul>
+		</article>
+
+		<article class="phase-spec">
+			<div class="phase-head">
+				<div><div class="kicker">Phase 2 · Operations</div><h3>持久健康、Route Inspector 与完整遥测</h3></div>
+				<span class="badge">可运营</span>
+			</div>
+			<p><strong>目标：</strong>路由不只“能 fallback”，还要能解释、观察、恢复和远程控制。</p>
+			<div class="spec-grid">
+				<div class="spec-box">
+					<h4>用户可见 Spec</h4>
+					<ul>
+						<li>Route Inspector 展示 route 状态、最后错误、cooldown、TTFT/TPS、成功率和最近费用。</li>
+						<li>支持 session pin、unpin、disable/drain route；手动 concrete 选择仍等价于 pin。</li>
+						<li>支持 <code>san models routes</code> 和 JSON 输出，便于脚本/Remote Control 消费。</li>
+						<li>RPC v2 客户端能收到 route resolved/changed/health changed 事件。</li>
+						<li>路由状态跨 session 和进程重启保留，但有过期时间。</li>
+					</ul>
+				</div>
+				<div class="spec-box">
+					<h4>技术实现</h4>
+					<ul>
+						<li>AgentStorage 新增 <code>model_route_health</code> 与 <code>model_route_perf</code> 表；route key 使用 logical id + stable route id。</li>
+						<li>被动 circuit breaker：连续失败阈值、openUntil、half-open single-flight；启动不主动发网络探测。</li>
+						<li>扩展现有 perf drain，批量记录 success/error category/TTFT/TPS/cache ratio/cost。</li>
+						<li>TUI 在 model hub 中新增 logical group detail，不复制另一套 picker。</li>
+						<li>stats 包按 logical model 和 concrete route 两个维度聚合。</li>
+						<li>所有事件不包含 API key、完整 headers 或敏感 baseUrl query。</li>
+					</ul>
+				</div>
+			</div>
+			<h4>验收标准</h4>
+			<ul class="checks">
+				<li>同 route 连续失败达到阈值后 open，多个并发 session 不再同时冲击故障服务。</li>
+				<li>cooldown 到期只有一个 half-open 请求；成功后 close，失败后指数延长。</li>
+				<li>UI、RPC、session dump 和 stats 对同一次 route switch 使用相同 route id 与原因。</li>
+				<li>健康数据库损坏或不可写时明确报错/告警，不静默伪装为全健康。</li>
+			</ul>
+		</article>
+
+		<article class="phase-spec">
+			<div class="phase-head">
+				<div><div class="kicker">Phase 3 · Economics & SLA</div><h3>请求级成本估算、多策略与防抖</h3></div>
+				<span class="badge">经济性优化</span>
+			</div>
+			<p><strong>目标：</strong>从“用户手工把便宜 route 排前面”升级为“San 能基于当前请求、账单模型和 SLA 做可解释排序”。</p>
+			<div class="spec-grid">
+				<div class="spec-box">
+					<h4>用户可见 Spec</h4>
+					<ul>
+						<li><code>lowest-cost</code>：在满足质量/健康约束后选择预估边际成本最低的 route。</li>
+						<li><code>balanced</code>：成本、成功率、TTFT/TPS 的显式可配置线性/分层策略。</li>
+						<li><code>latency-first</code>：在预算上限内选择最快健康 route。</li>
+						<li><code>weighted</code>：仅用于流量分散或 A/B，必须显式开启。</li>
+						<li>支持 per-turn/per-day budget ceiling 与超限动作。</li>
+					</ul>
+				</div>
+				<div class="spec-box">
+					<h4>技术实现</h4>
+					<ul>
+						<li>新增 <code>RouteScorer</code>，输入不可变 snapshot：request estimate、billing、perf、health、affinity。</li>
+						<li>预估成本公式使用 uncached input、cache read/write、expected output 和 fixed request/premium charge。</li>
+						<li><code>Model.cost</code> 是默认 route price；用户 billing override 优先，并记录来源。</li>
+						<li>subscription/free route 不能简单写成零成本无限使用；需同时建模 quota window 与剩余额度。</li>
+						<li>加入 min dwell、switch penalty、hysteresis，防止几毫秒/几分钱波动导致 cache thrash。</li>
+						<li>score breakdown 进入 debug/inspector，最终选择必须可解释。</li>
+					</ul>
+				</div>
+			</div>
+			<h4>成本公式</h4>
+			<pre><code>estimatedCost =
+  uncachedInputTokens × inputRate
+  cacheReadTokens     × cacheReadRate
+  cacheWriteTokens    × cacheWriteRate
+  expectedOutput      × outputRate
+  fixedRequestCost
+  premiumRequestCost
+  switchPenalty       // cache 失效与 provider session 重建的估算成本</code></pre>
+			<h4>验收标准</h4>
+			<ul class="checks">
+				<li>相同请求与相同 metrics snapshot 得到稳定 score 和选择结果。</li>
+				<li>未知价格 route 不得被当作免费；默认排在已知价格 route 之后，除非显式 priority/pin。</li>
+				<li>策略选出的 route、预估费用和实际费用差异可被 stats 追踪。</li>
+				<li>启用 affinity 后，微小价格差不得触发频繁切换。</li>
+			</ul>
+		</article>
+
+		<article class="phase-spec">
+			<div class="phase-head">
+				<div><div class="kicker">Phase 4 · Adaptive scheduling</div><h3>Effort → Logical Model → Provider Route</h3></div>
+				<span class="badge">长期能力</span>
+			</div>
+			<p><strong>目标：</strong>把 provider routing 接到更上层的资源调度：用户只表达任务努力程度，San 先选逻辑模型，再在该模型的 Route Group 中选择执行端点。</p>
+			<div class="spec-grid">
+				<div class="spec-box">
+					<h4>用户可见 Spec</h4>
+					<ul>
+						<li>effort tier 映射到一个或多个 Logical Model，而不是具体 provider/model。</li>
+						<li>Agent 可基于任务阶段、上下文规模、工具风险和用户预算建议/选择 effort。</li>
+						<li>质量底线满足后优化价格与延迟；不同模型的 fallback 位于 route exhaustion 之后。</li>
+						<li>项目可固定模型政策，禁止自适应探索。</li>
+					</ul>
+				</div>
+				<div class="spec-box">
+					<h4>技术实现</h4>
+					<ul>
+						<li>新增独立 <code>EffortPolicy</code>；不得把 effort 模型选择塞进 RouteScorer。</li>
+						<li>执行管线固定为：task policy → logical model → route resolver → concrete model。</li>
+						<li>质量数据只来自版本化 eval、明确用户反馈和可审计 outcome，不能用“请求没报错”冒充质量。</li>
+						<li>自适应 exploration 默认关闭或严格限额；生产 route 选择有可复现实验 ID。</li>
+						<li>harness profile 版本参与 eval key，避免把 profile 变化错误归因给 provider route。</li>
+					</ul>
+				</div>
+			</div>
+			<h4>验收标准</h4>
+			<ul class="checks">
+				<li>effort 政策不引用 provider 名称，只引用 Logical Model。</li>
+				<li>同一 logical choice 在所有 route 上使用相同 harness profile version。</li>
+				<li>自适应决策可通过记录的 inputs/policy version 离线重放。</li>
+				<li>质量门禁未满足时，成本再低的 route/model 也不得进入生产候选。</li>
+			</ul>
+		</article>
+	</section>
+
+	<section>
+		<h2>十、建议的代码组织与改动点</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>文件 / 模块</th><th>职责</th><th>阶段</th></tr></thead>
+				<tbody>
+					<tr><td><code>config/models-config-schema.ts</code></td><td>增加 <code>logicalModels</code> 配置入口；保留 providers schema</td><td>0</td></tr>
+					<tr><td><code>config/model-routes-schema.ts</code></td><td>LogicalModel、Route、Policy、Billing 的独立强类型 schema</td><td>0</td></tr>
+					<tr><td><code>config/model-route-registry.ts</code></td><td>编译配置、精确绑定 concrete models、生成 diagnostics 和 policy version</td><td>0</td></tr>
+					<tr><td><code>config/model-route-resolver.ts</code></td><td>eligibility、stable ranking、resolution trace；纯函数为主</td><td>0–3</td></tr>
+					<tr><td><code>config/model-resolver.ts</code></td><td>加入 exact logical selector 层；不把 route scorer 塞入现有 fuzzy matcher</td><td>1</td></tr>
+					<tr><td><code>session/model-route-controller.ts</code></td><td>route lease、失败推进、回切与 retry budget；组合现有 AgentSession</td><td>1</td></tr>
+					<tr><td><code>session/agent-session.ts</code></td><td>接入 controller；保留错误分类、安全重放和 provider session reset 的最终权威入口</td><td>1</td></tr>
+					<tr><td><code>session/session-entries.ts</code></td><td>扩展 logical intent，新增 route change entry</td><td>1</td></tr>
+					<tr><td><code>modes/components/model-hub.ts</code></td><td>Logical Model 分组、route detail、pin/health UI</td><td>1–2</td></tr>
+					<tr><td><code>modes/rpc-v2/dto/events.ts</code></td><td>route lifecycle DTO</td><td>1–2</td></tr>
+					<tr><td><code>session/agent-storage.ts</code></td><td>route health/perf schema 与批量写入</td><td>2</td></tr>
+					<tr><td><code>packages/stats</code></td><td>logical/route 双维度成本、健康与性能看板</td><td>2–3</td></tr>
+					<tr><td><code>routing/route-scorer.ts</code></td><td>成本、延迟、SLA scorer 与 breakdown</td><td>3</td></tr>
+					<tr><td><code>routing/effort-policy.ts</code></td><td>任务 effort 到 Logical Model 的独立上层策略</td><td>4</td></tr>
+				</tbody>
+			</table>
+		</div>
+
+		<div class="callout warn">
+			<strong>实现约束：</strong>不要让 <code>AgentSession</code> 同时承担 schema 解析、候选排序、健康存储和 UI diagnostics。它负责在请求边界应用已解析决策，并保留错误分类、安全重放与上下文变更的最终控制权。
+		</div>
+	</section>
+
+	<section>
+		<h2>十一、测试、Eval 与发布门禁</h2>
+		<div class="grid">
+			<article class="card">
+				<h3>配置与 resolver 合同</h3>
+				<ul>
+					<li>精确 route 绑定、非法 ID、重复 route、未知 model、空 group。</li>
+					<li>priority、config order、affinity、manual pin 的稳定排序。</li>
+					<li>auth、tools、image、context、effort、suppression 的逐项拒绝原因。</li>
+					<li>provider/model 永久绕过 logical routing。</li>
+				</ul>
+			</article>
+			<article class="card">
+				<h3>AgentSession 集成合同</h3>
+				<ul>
+					<li>429 → credential rotation → route fallback → model fallback 的严格顺序。</li>
+					<li>text/thinking partial 可安全重试；tool call partial 不重放。</li>
+					<li>route switch 关闭旧 provider session，并按新 context window preflight。</li>
+					<li>fallback 得到独立 retry budget，不产生无限环。</li>
+				</ul>
+			</article>
+			<article class="card">
+				<h3>持久化与远程合同</h3>
+				<ul>
+					<li>resume 保持 logical intent，临时 route 不覆盖用户选择。</li>
+					<li>旧 session 没有 logical 字段时照常恢复。</li>
+					<li>TUI、print、RPC v2、ACP/extension 对事件的处理不崩溃。</li>
+					<li>route health schema migration 与 full-suite isolation。</li>
+				</ul>
+			</article>
+			<article class="card">
+				<h3>Harness route-invariance eval</h3>
+				<ul>
+					<li>同 Logical Model、同 profile、同任务分别固定到每条 route。</li>
+					<li>比较 tool schema、system prefix、effort wire mapping、上下文 replay。</li>
+					<li>检测 provider 注入、模型快照漂移和能力缺失。</li>
+					<li>质量显著偏离的 route 自动标记 <code>unknown/degraded</code>，不直接归因于基模。</li>
+				</ul>
+			</article>
+		</div>
+
+		<h3>故障注入矩阵</h3>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>注入</th><th>期望行为</th><th>必须断言</th></tr></thead>
+				<tbody>
+					<tr><td>首 route 429 + Retry-After</td><td>标记 cooldown，选择次 route</td><td>不等待超长窗口；记录 trigger/cooldown</td></tr>
+					<tr><td>首 route 单次网络断开</td><td>有限同 route retry 后再切换</td><td>无 cache thrash；retry 次数有界</td></tr>
+					<tr><td>首 route 5xx 持续失败</td><td>open circuit，后续 session 直接跳过</td><td>half-open 单飞恢复</td></tr>
+					<tr><td>候选 contextWindow 过小</td><td>请求前拒绝候选</td><td>不向 provider 发出必然失败请求</td></tr>
+					<tr><td>失败消息已有 tool call</td><td>停止自动 route replay</td><td>工具副作用只发生一次</td></tr>
+					<tr><td>所有 route 无鉴权</td><td>进入 cross-model fallback 或明确失败</td><td>诊断列出每个 provider 的 auth 原因，不泄露 secret</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section>
+		<h2>十二、兼容与迁移策略</h2>
+		<ul>
+			<li><strong>零配置兼容：</strong>没有 <code>logicalModels</code> 时，所有现有行为、模型 UI 和 session 恢复保持不变。</li>
+			<li><strong>显式 concrete 永久有效：</strong><code>provider/model</code> 始终绕过 route resolver，适用于调试、基准测试和强制服务商。</li>
+			<li><strong><code>modelProviderOrder</code> 保留：</strong>只服务 legacy 裸 ID 歧义选择，不作为 Route Group 的成本政策。</li>
+			<li><strong><code>retry.fallbackChains</code> 保留：</strong>Phase 1 起定义为 Route Group 耗尽后的 cross-model fallback；旧 concrete primary 仍按原逻辑工作。</li>
+			<li><strong>不自动迁移 fallbackChains：</strong>现有 chain 可能混合不同模型、不同 effort 和 provider wildcard，静默转成等价 route 有语义风险。</li>
+			<li><strong>可提供只读建议：</strong>CLI 可以检测“多个 provider 存在同 ID + chain 只换 provider”，生成候选 YAML diff，但必须由用户确认写入。</li>
+			<li><strong>旧 canonical 文档：</strong>删除 inert <code>equivalence</code> 示例，增加迁移说明，避免用户误以为当前已经支持逻辑路由。</li>
+		</ul>
+	</section>
+
+	<section>
+		<h2>十三、主要风险与控制</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>风险</th><th>表现</th><th>控制措施</th></tr></thead>
+				<tbody>
+					<tr><td>同名模型不等价</td><td>质量、上下文、tool behavior 漂移</td><td>显式 equivalence；route-invariance eval；unknown 不自动参与</td></tr>
+					<tr><td>缓存抖动</td><td>每轮重选“略便宜/略快” route</td><td>session affinity、switch penalty、min dwell、hysteresis</td></tr>
+					<tr><td>重复副作用</td><td>partial tool call 后切 route 重放</td><td>沿用 replay-unsafe guard；请求边界切换；工具调用幂等不作为默认假设</td></tr>
+					<tr><td>掩盖协议 bug</td><td>400 后换服务商看似恢复</td><td>invalid request 默认不 fallback；错误需保留原始 route 与 request category</td></tr>
+					<tr><td>错误价格</td><td>零价格/旧价格导致选错 route</td><td>unknown ≠ free；记录价格来源与更新时间；V1 先用显式 priority</td></tr>
+					<tr><td>路由雪崩</td><td>故障恢复时所有 session 同时探测</td><td>持久 circuit + half-open single-flight + jitter</td></tr>
+					<tr><td>双层路由不可见</td><td>San 选择 OpenRouter/CPA，后者再次动态路由</td><td>把外部 router 视为 opaque concrete route；只承诺 San 可观测的外层行为</td></tr>
+					<tr><td>冷启动回归</td><td>重新扫描整个 catalog 建等价索引</td><td>只编译用户显式 group；无网络探测；按 group 局部解析</td></tr>
+					<tr><td>远程信息泄露</td><td>RPC/log 暴露 key、header、敏感 URL</td><td>事件只携带 route id 和安全 selector；敏感配置不序列化</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section>
+		<h2>十四、版本完成定义</h2>
+		<div class="callout">
+			<strong>下一版本可宣告完成的边界：</strong>完成 Phase 0 + Phase 1。也就是用户能显式定义 Route Group、角色保存 Logical Model、San 以确定性优先级选择 route、在安全错误上完成同模型 provider fallback、保持 session affinity，并在 session/UI/RPC 中同时展示逻辑模型和实际 route。
+		</div>
+		<ul class="checks">
+			<li>配置、解析、鉴权、能力过滤、fallback、安全重放、resume、UI 与 RPC 的合同测试通过。</li>
+			<li>现有 concrete-only 用户全量测试无行为回归。</li>
+			<li>冷启动没有恢复 catalog-wide canonical index 或新增启动网络请求。</li>
+			<li>同模型 route fallback 与 cross-model fallback 在类型、状态和事件上已经分层。</li>
+			<li>route switch 不改变 Logical Harness Profile，只重新解析 concrete transport。</li>
+			<li>配置错误、无可用 route 和 unsafe replay 都明确失败，不静默降级。</li>
+		</ul>
+
+		<h3>推荐发布表述</h3>
+		<pre><code>选择模型，而不是服务商。
+
+为同一个逻辑模型配置多个 provider route，San 会优先使用你排序最靠前的
+健康路由；遇到配额、限流、超时或服务故障时，在不改变模型 profile 和
+effort 的前提下自动切换，并保留具体执行路由的完整可观测性。</code></pre>
+	</section>
+
+	<footer>
+		<p>文档依据 San 当前本地实现编写。重点核对文件：<code>packages/coding-agent/src/config/model-registry.ts</code>、<code>model-resolver.ts</code>、<code>models-config-schema.ts</code>、<code>session/agent-session.ts</code>、<code>session/agent-storage.ts</code>、<code>session/session-context.ts</code>、<code>modes/components/model-hub.ts</code>、<code>packages/catalog/src/types.ts</code>。</p>
+		<p>设计原则：显式优于猜测；逻辑身份与执行端点分离；同模型 route fallback 先于跨模型 fallback；缓存亲和与安全重放优先于动态最优。</p>
+	</footer>
+</main>
+</body>
+</html>

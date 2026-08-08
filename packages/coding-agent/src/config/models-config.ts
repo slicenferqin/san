@@ -4,6 +4,7 @@
 
 import type { Api, ModelSpec } from "@san/ai/types";
 import { ConfigFile } from "./config-file";
+import { validateLogicalModelsConfiguration } from "./model-routes-schema";
 import {
 	type ModelsConfig,
 	ModelsConfigSchema,
@@ -135,5 +136,6 @@ export const ModelsConfigFile = new ConfigFile<ModelsConfig>("models", ModelsCon
 				"models-config",
 			);
 		}
+		validateLogicalModelsConfiguration(config.logicalModels);
 	},
 );

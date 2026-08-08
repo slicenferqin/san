@@ -64,6 +64,10 @@ export interface SessionContext {
 	serviceTier?: ServiceTierByFamily;
 	/** Model roles: { default: "provider/modelId", small: "provider/modelId", ... } */
 	models: Record<string, string>;
+	/** 按角色保存的逻辑模型意图；具体模型会话和旧会话中为空。 */
+	logicalModels: Record<string, string>;
+	/** 按逻辑模型 ID 保存的当前 route lease。 */
+	modelRoutes: Record<string, string>;
 	/** Names of TTSR rules that have been injected this session */
 	injectedTtsrRules: string[];
 	/** Active mode (e.g. "plan") or "none" if no special mode is active */
@@ -94,6 +98,26 @@ export function getRestorableSessionModels(
 	}
 
 	const roleModel = models[lastModelChangeRole];
+	if (!roleModel) return defaultModel ? [defaultModel] : [];
+	if (!defaultModel || roleModel === defaultModel) return [roleModel];
+	return [roleModel, defaultModel];
+}
+
+/** 按具体模型恢复时相同的角色顺序，列出可恢复的逻辑模型意图。 */
+export function getRestorableSessionLogicalModels(
+	logicalModels: Readonly<Record<string, string>>,
+	lastModelChangeRole: string | undefined,
+): string[] {
+	const defaultModel = logicalModels.default;
+	if (
+		!lastModelChangeRole ||
+		lastModelChangeRole === "default" ||
+		lastModelChangeRole === EPHEMERAL_MODEL_CHANGE_ROLE
+	) {
+		return defaultModel ? [defaultModel] : [];
+	}
+
+	const roleModel = logicalModels[lastModelChangeRole];
 	if (!roleModel) return defaultModel ? [defaultModel] : [];
 	if (!defaultModel || roleModel === defaultModel) return [roleModel];
 	return [roleModel, defaultModel];
@@ -176,6 +200,8 @@ export function buildSessionContext(
 			thinkingLevel: "off",
 			serviceTier: undefined,
 			models: {},
+			logicalModels: {},
+			modelRoutes: {},
 			injectedTtsrRules: [],
 			mode: "none",
 		};
@@ -194,6 +220,8 @@ export function buildSessionContext(
 			thinkingLevel: "off",
 			serviceTier: undefined,
 			models: {},
+			logicalModels: {},
+			modelRoutes: {},
 			injectedTtsrRules: [],
 			mode: "none",
 		};
@@ -213,6 +241,8 @@ export function buildSessionContext(
 	let configuredThinkingLevel: string | undefined;
 	let serviceTier: ServiceTierByFamily | undefined;
 	const models: Record<string, string> = {};
+	const logicalModels: Record<string, string> = {};
+	const modelRoutes: Record<string, string> = {};
 	let compaction: CompactionEntry | null = null;
 	const injectedTtsrRulesSet = new Set<string>();
 	let mode = "none";
@@ -234,11 +264,22 @@ export function buildSessionContext(
 			// New format: { model: "provider/id", role?: string }
 			if (entry.model) {
 				const role = entry.role ?? "default";
+				const previousLogicalModel = logicalModels[role];
+				delete logicalModels[role];
+				if (previousLogicalModel && !Object.values(logicalModels).includes(previousLogicalModel)) {
+					delete modelRoutes[previousLogicalModel];
+				}
 				models[role] = entry.model;
+				if (entry.logicalModel) {
+					logicalModels[role] = entry.logicalModel;
+					if (entry.routeId) modelRoutes[entry.logicalModel] = entry.routeId;
+				}
 				if (role === "default") {
 					hasExplicitDefaultModel = true;
 				}
 			}
+		} else if (entry.type === "model_route_change") {
+			modelRoutes[entry.logicalModel] = entry.toRoute;
 		} else if (entry.type === "service_tier_change") {
 			serviceTier = coerceServiceTierByFamily(entry.serviceTier);
 		} else if (entry.type === "message" && entry.message.role === "assistant") {
@@ -286,6 +327,8 @@ export function buildSessionContext(
 		if (entry.type === "compaction") {
 			pendingReset = true;
 		} else if (entry.type === "model_change") {
+			pendingReset = true;
+		} else if (entry.type === "model_route_change") {
 			pendingReset = true;
 		} else if (entry.type === "mode_change") {
 			const isPlanTransition = (entry.mode === "plan") !== (currentMode === "plan");
@@ -537,6 +580,8 @@ export function buildSessionContext(
 		configuredThinkingLevel,
 		serviceTier,
 		models,
+		logicalModels,
+		modelRoutes,
 		injectedTtsrRules,
 		mode,
 		modeData,

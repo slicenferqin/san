@@ -395,6 +395,16 @@ class TreeList implements Component {
 			case "thinking_level_change":
 				parts.push("thinking", entry.thinkingLevel ?? ThinkingLevel.Off);
 				break;
+			case "model_route_change":
+				parts.push(
+					"route",
+					entry.logicalModel,
+					entry.fromRoute,
+					entry.toRoute,
+					entry.reason,
+					...(Number.isFinite(entry.cooldownUntil) ? [new Date(entry.cooldownUntil as number).toISOString()] : []),
+				);
+				break;
 			case "custom":
 				parts.push("custom", entry.customType);
 				break;
@@ -674,6 +684,18 @@ class TreeList implements Component {
 			case "thinking_level_change":
 				result = theme.fg("dim", `[thinking: ${entry.thinkingLevel ?? ThinkingLevel.Off}]`);
 				break;
+			case "model_route_change": {
+				const cooldown = Number.isFinite(entry.cooldownUntil)
+					? ` · cooldown until ${new Date(entry.cooldownUntil as number).toISOString()}`
+					: "";
+				result = theme.fg(
+					"dim",
+					normalize(
+						`[route: ${entry.logicalModel} ${entry.fromRoute} → ${entry.toRoute} · ${entry.reason}${cooldown}]`,
+					),
+				);
+				break;
+			}
 			case "custom":
 				result = theme.fg("dim", `[custom: ${entry.customType}]`);
 				break;

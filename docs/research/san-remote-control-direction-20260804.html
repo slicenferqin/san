@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>San Remote Control 产品方向与阶段路线</title>
+	<style>
+		:root {
+			color-scheme: dark;
+			--bg: #09111d;
+			--panel: #111d2e;
+			--panel-2: #17263b;
+			--line: #2a3c58;
+			--text: #e8eef8;
+			--muted: #a7b6cb;
+			--blue: #79bbff;
+			--cyan: #70d8e8;
+			--green: #66d8a6;
+			--amber: #efc56d;
+			--red: #ff9191;
+			--purple: #c5a9ff;
+			--max: 1160px;
+		}
+		* { box-sizing: border-box; }
+		html { scroll-behavior: smooth; }
+		body {
+			margin: 0;
+			font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			background:
+				radial-gradient(circle at 12% 0%, rgba(64, 132, 219, .19), transparent 32rem),
+				radial-gradient(circle at 96% 8%, rgba(91, 207, 180, .10), transparent 29rem),
+				var(--bg);
+			color: var(--text);
+			line-height: 1.66;
+		}
+		main { width: min(var(--max), calc(100% - 32px)); margin: 0 auto; padding: 46px 0 78px; }
+		a { color: var(--blue); text-decoration: none; }
+		a:hover { text-decoration: underline; }
+		h1, h2, h3 { line-height: 1.26; letter-spacing: -.02em; }
+		h1 { max-width: 1000px; margin: 10px 0 18px; font-size: clamp(2rem, 5vw, 3.55rem); }
+		h2 { margin: 54px 0 18px; font-size: clamp(1.4rem, 3vw, 2.05rem); }
+		h3 { margin: 20px 0 9px; font-size: 1.14rem; }
+		p { margin: 8px 0 14px; }
+		ul, ol { padding-left: 1.35rem; }
+		li + li { margin-top: 6px; }
+		code { font: .91em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #d9e9ff; background: rgba(121, 187, 255, .09); border: 1px solid rgba(121, 187, 255, .15); padding: .08rem .32rem; border-radius: 5px; }
+		pre { margin: 14px 0; padding: 17px; overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: #070e18; color: #d4e4f8; font: .87rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+		pre code { padding: 0; border: 0; background: transparent; color: inherit; }
+		.eyebrow { color: var(--green); font-size: .79rem; font-weight: 760; letter-spacing: .085em; text-transform: uppercase; }
+		.lead { max-width: 1030px; color: #cbd7e8; font-size: clamp(1.04rem, 2vw, 1.23rem); }
+		.meta { display: flex; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: .9rem; }
+		.tag { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: rgba(17, 29, 46, .76); }
+		.callout { margin: 27px 0; padding: 20px 22px; border: 1px solid rgba(102, 216, 166, .38); border-left: 5px solid var(--green); border-radius: 12px; background: linear-gradient(135deg, rgba(102, 216, 166, .11), rgba(17, 29, 46, .86)); }
+		.callout.warn { border-color: rgba(239, 197, 109, .38); border-left-color: var(--amber); background: linear-gradient(135deg, rgba(239, 197, 109, .10), rgba(17, 29, 46, .86)); }
+		.callout.risk { border-color: rgba(255, 145, 145, .38); border-left-color: var(--red); background: linear-gradient(135deg, rgba(255, 145, 145, .09), rgba(17, 29, 46, .86)); }
+		.grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 15px; }
+		.card { grid-column: span 6; padding: 18px; border: 1px solid var(--line); border-radius: 13px; background: rgba(17, 29, 46, .9); }
+		.card.third { grid-column: span 4; }
+		.card h3 { margin-top: 0; }
+		.card p:last-child, .card ul:last-child { margin-bottom: 0; }
+		.kicker { color: var(--muted); font-size: .81rem; letter-spacing: .065em; text-transform: uppercase; }
+		.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 13px; }
+		table { width: 100%; min-width: 760px; border-collapse: collapse; background: rgba(17, 29, 46, .9); }
+		th, td { padding: 12px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+		th { color: #d3dff1; background: var(--panel-2); font-size: .81rem; letter-spacing: .045em; text-transform: uppercase; }
+		tr:last-child td { border-bottom: 0; }
+		.arch { display: grid; grid-template-columns: 1fr auto 1.15fr auto 1.15fr; gap: 11px; align-items: stretch; margin: 22px 0; }
+		.node { padding: 15px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); }
+		.node strong { display: block; margin-bottom: 6px; color: #fff; }
+		.arrow { align-self: center; color: var(--blue); font-size: 1.35rem; }
+		.identity { display: grid; grid-template-columns: repeat(5, 1fr); gap: 9px; margin: 16px 0; }
+		.identity div { padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+		.identity strong { display: block; color: var(--cyan); margin-bottom: 4px; }
+		.roadmap { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+		.phase { min-height: 165px; padding: 15px; border: 1px solid var(--line); border-top: 4px solid var(--blue); border-radius: 10px; background: var(--panel); }
+		.phase:nth-child(2) { border-top-color: var(--green); }
+		.phase:nth-child(3) { border-top-color: var(--cyan); }
+		.phase:nth-child(4) { border-top-color: var(--amber); }
+		.phase:nth-child(5) { border-top-color: var(--purple); }
+		.phase strong { display: block; margin-bottom: 6px; }
+		.good { color: var(--green); }
+		.warn-text { color: var(--amber); }
+		.risk-text { color: var(--red); }
+		.small { color: var(--muted); font-size: .89rem; }
+		footer { margin-top: 56px; padding-top: 19px; border-top: 1px solid var(--line); color: var(--muted); font-size: .87rem; }
+		@media (max-width: 930px) {
+			.card, .card.third { grid-column: 1 / -1; }
+			.arch { grid-template-columns: 1fr; }
+			.arrow { justify-self: center; transform: rotate(90deg); }
+			.identity { grid-template-columns: 1fr 1fr; }
+			.roadmap { grid-template-columns: 1fr 1fr; }
+		}
+		@media (max-width: 580px) { main { width: min(100% - 22px, var(--max)); padding-top: 28px; } .identity, .roadmap { grid-template-columns: 1fr; } }
+	</style>
+</head>
+<body>
+<main>
+	<header>
+		<div class="eyebrow">Product direction brief · 2026-08-04</div>
+		<h1>San Remote Control</h1>
+		<p class="lead">Remote Control 不是“把 TUI 搬到网页”，而是把分布在公司电脑、家里电脑和远程主机上的 San executor 变成可寻址、可恢复、可审计的执行网络，让手机和浏览器成为控制端。</p>
+		<div class="meta">
+			<span class="tag">状态：方向文档</span>
+			<span class="tag">产品核心：多主机控制面</span>
+			<span class="tag">执行位置：用户机器</span>
+			<span class="tag">网络：runner 主动出站</span>
+		</div>
+	</header>
+
+	<div class="callout">
+		<strong>核心判断：</strong>San 应先产品化 <code>runner + relay + event log</code>，再建设 Web/移动/IM 客户端。代码、工具、MCP、provider credentials 和最终审批权留在 runner；relay 负责身份、寻址、密文队列、事件游标和设备撤销，不成为远程 shell 的超级管理员。
+	</div>
+
+	<section>
+		<h2>一、核心用户场景</h2>
+		<div class="grid">
+			<article class="card third"><div class="kicker">Start</div><h3>从手机发起任务</h3><p>选择“公司电脑 / 某仓库”，指定 prompt、effort 和分支策略，runner 在本地创建 session/worktree 并执行。</p></article>
+			<article class="card third"><div class="kicker">Observe</div><h3>随时查看进度</h3><p>跨设备查看文本、thinking 摘要、tool 状态、subagent、diff、todo 和资源使用，断线后按 cursor 补齐。</p></article>
+			<article class="card third"><div class="kicker">Control</div><h3>Steer、Cancel、Approve</h3><p>追加要求、取消当前 turn、处理审批。敏感操作仍受 runner 本机策略约束。</p></article>
+			<article class="card third"><div class="kicker">Resume</div><h3>控制权跟人走</h3><p>在 CLI 开始的 task 可由手机接管；回到电脑后继续在 TUI 操作，不创建平行副本。</p></article>
+			<article class="card third"><div class="kicker">Background</div><h3>长任务与定时任务</h3><p>机器在线时后台运行；完成、失败或等待审批时推送通知。调度属于后续阶段。</p></article>
+			<article class="card third"><div class="kicker">Multi-host</div><h3>一个账号管理多台机器</h3><p>看到每台 host 的在线状态、可用目录、能力和当前 sessions，不再靠分别打开 SSH/TUI。</p></article>
+		</div>
+	</section>
+
+	<section>
+		<h2>二、目标架构</h2>
+		<div class="arch" role="img" aria-label="Remote control architecture">
+			<div class="node"><strong>Web / Mobile / CLI / IM</strong>任务列表、流式事件、steer/cancel/approve、附件与通知</div>
+			<div class="arrow">⇄</div>
+			<div class="node"><strong>Control Plane + Relay</strong>设备身份、host inventory、密文队列、event cursor、pair/revoke、push</div>
+			<div class="arrow">⇄</div>
+			<div class="node"><strong>San Runner</strong>主动出站连接；持有 repo、凭证、工具、MCP、沙箱、worktree 与 AgentSession</div>
+		</div>
+
+		<h3>身份层级必须稳定</h3>
+		<div class="identity">
+			<div><strong>Account</strong>用户或组织</div>
+			<div><strong>Device</strong>浏览器、手机、CLI 控制端</div>
+			<div><strong>Host</strong>公司电脑、家里电脑、runner VM</div>
+			<div><strong>Environment</strong>host 上的 repo/cwd/worktree 模板</div>
+			<div><strong>Session</strong>可恢复的 San task/thread</div>
+		</div>
+		<p>Task/turn/item 属于 session 内部协议。Remote Control 不应继续用临时 room ID 代替 host、environment 和 session 的长期身份。</p>
+	</section>
+
+	<section>
+		<h2>三、San 已有底座与缺口</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>能力</th><th>当前基础</th><th>Remote 产品化缺口</th></tr></thead>
+				<tbody>
+					<tr><td>Agent control protocol</td><td class="good">RPC v2 已有 sequence、backpressure、idempotency、resource upload、approval、crash recovery</td><td>稳定公开 contract、远程 transport、版本协商</td></tr>
+					<tr><td>Local process ownership</td><td class="good">daemon broker、launch client、presence 已能管理本地 session</td><td>常驻 runner、开机自启、host-wide inventory</td></tr>
+					<tr><td>Browser client</td><td class="good"><code>packages/collab-web</code> 已有浏览器交互雏形</td><td>账号/设备、host picker、任务创建和完整 RPC UI</td></tr>
+					<tr><td>Relay / E2EE</td><td class="good">collab relay 已有 content-blind WebSocket 与 AES-256-GCM</td><td>持久 host registry、密文离线队列、cursor replay、push</td></tr>
+					<tr><td>Session protocol compatibility</td><td>ACP server 与 RPC v2 均可驱动 AgentSession</td><td>选择 RPC v2 为 Remote 权威协议，ACP 保持 IDE 兼容面</td></tr>
+					<tr><td>Multi-host identity</td><td class="risk-text">缺失</td><td>签名 host identity、environment discovery、capability advertisement</td></tr>
+					<tr><td>Remote scheduling</td><td class="risk-text">缺失</td><td>持久任务、离线唤醒、schedule、worktree capacity</td></tr>
+					<tr><td>Notification</td><td>事件已有，但缺产品出口</td><td>Web Push / APNs / IM bridge，阻塞与完成触发器</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section>
+		<h2>四、Runner 与控制协议的最小 Contract</h2>
+		<h3>Runner 上报</h3>
+		<pre><code>HostDescriptor {
+  hostId
+  label
+  platform
+  runnerVersion
+  environments[]   // stable id、display path、repo、capabilities
+  capacity         // sessions、worktrees、resource hints
+  activeSessions[]
+  lastSeenAt
+}</code></pre>
+
+		<h3>控制命令</h3>
+		<ul>
+			<li><code>session.create</code>：host/environment、prompt、effort、logical model、worktree policy。</li>
+			<li><code>turn.start</code>、<code>turn.steer</code>、<code>turn.followUp</code>、<code>turn.cancel</code>。</li>
+			<li><code>approval.resolve</code>：签名的用户决策，必须带 approval ID、scope 和 expected state。</li>
+			<li><code>resource.upload</code>：附件使用 content hash 和 resumable chunks。</li>
+			<li><code>session.list/get/archive</code>：控制面 inventory，不复制 session 权威状态。</li>
+		</ul>
+
+		<h3>事件与恢复</h3>
+		<ul>
+			<li>runner 为 session event stream 分配单调 sequence；client 记录 cursor。</li>
+			<li>断线重连从 cursor replay；重复命令由 idempotency key 消除。</li>
+			<li>控制命令带 expected generation/leaf，防止两个设备在旧分支上同时操作。</li>
+			<li>relay 可以保存密文事件信封，但 session 真相仍由 runner 的持久状态决定。</li>
+		</ul>
+	</section>
+
+	<section>
+		<h2>五、安全边界</h2>
+		<div class="grid">
+			<article class="card">
+				<h3>必须成立</h3>
+				<ul>
+					<li>runner 只建立出站连接，不要求给用户电脑开放入站端口。</li>
+					<li>provider key、MCP credential、repo 内容默认不进入 relay 明文。</li>
+					<li>每台 host 使用可撤销设备密钥，pairing 需要已有可信设备或一次性 proof。</li>
+					<li>审批最终由 runner 执行；relay/client 不能绕过本地 allowlist 和 policy。</li>
+					<li>高风险操作可以要求 proof-of-human 或只允许本机确认。</li>
+				</ul>
+			</article>
+			<article class="card">
+				<h3>必须记录</h3>
+				<ul>
+					<li>哪个 device 在何时向哪个 host/session 发出什么控制命令。</li>
+					<li>approval 的请求摘要、决策、scope、签名和 runner 执行结果。</li>
+					<li>host key 轮换、设备撤销、pairing 与异常重放。</li>
+					<li>不记录 secret、完整敏感 header 或无界工具输出。</li>
+				</ul>
+			</article>
+		</div>
+
+		<div class="callout risk">
+			<strong>E2EE 与 IM 渠道存在真实冲突：</strong>公共 relay 可以保持 content-blind，但飞书/Slack bridge 要渲染明文，就必须持有会话密钥。渠道适配器应作为用户信任环境中的 privileged guest 运行，而不是让公共 relay 获得明文；若不能接受，则渠道只发无内容通知，点击进入 Web 客户端查看。
+		</div>
+	</section>
+
+	<section>
+		<h2>六、阶段路线</h2>
+		<div class="roadmap">
+			<div class="phase"><strong>R0 · Protocol</strong><span class="small">冻结 host/environment/session identity，补齐 RPC v2 remote contract、版本协商、cursor 与 expected state。</span></div>
+			<div class="phase"><strong>R1 · Runner</strong><span class="small"><code>san runner</code> 常驻、开机自启、环境发现、session inventory；先在本地/LAN 或自托管环境验证。</span></div>
+			<div class="phase"><strong>R2 · Relay</strong><span class="small">主动出站、pair/revoke、E2EE、跨网 Web 控制、断线 replay、基础 push。形成首个可用 Remote Control。</span></div>
+			<div class="phase"><strong>R3 · Background</strong><span class="small">密文离线队列、schedule、持久任务、worktree capacity、唤醒与完成通知。</span></div>
+			<div class="phase"><strong>R4 · Channels</strong><span class="small">飞书/Slack/其他 IM 作为 privileged guest；随后再考虑 multiplayer 和组织策略。</span></div>
+		</div>
+
+		<div class="callout">
+			<strong>首个可发布边界：</strong>完成 R0–R2。用户能注册至少两台 host，从手机浏览器选择 environment、创建 task、实时查看、steer/cancel/approve，并在断线后完整恢复。Schedule、离线派发和 IM 不阻塞首版。
+		</div>
+	</section>
+
+	<section>
+		<h2>七、首版明确不做</h2>
+		<ul>
+			<li>不先复制一套完整 Web TUI；Web 只实现 remote 核心流程。</li>
+			<li>不把 repo、provider credentials 或工具执行迁移到中心云端。</li>
+			<li>不让 relay 直接执行 shell、修改审批 policy 或伪造 runner event。</li>
+			<li>不先做飞书/Slack 渠道；没有 host/session control plane 时，渠道只会固化错误架构。</li>
+			<li>不做公开可发现 task/thread。</li>
+			<li>不在首版承诺多人同时编辑同一 session；先保证多设备单用户的一致性。</li>
+		</ul>
+	</section>
+
+	<section>
+		<h2>八、与模型路线的集成</h2>
+		<ul>
+			<li>Remote client 发送 effort 或 Logical Model intent；不发送具体 provider key。</li>
+			<li>Logical Model、Harness Profile 和 Provider Route 都由 runner 根据本机配置解析。</li>
+			<li>控制面展示 resolved logical model、route 和 profile version，但 provider credentials 永不上传。</li>
+			<li>同一远程 task 在不同 host 上可能解析到不同 route；UI 必须展示差异，不能假设服务商一致。</li>
+			<li>Remote Control 与 Harness/Route 可并行开发，共享 session/event/approval substrate，但发版门禁独立。</li>
+		</ul>
+	</section>
+
+	<section>
+		<h2>九、完成定义</h2>
+		<ul>
+			<li>runner 重启后恢复 host identity、environment inventory 和活动 session。</li>
+			<li>所有远程连接均由 runner 主动出站，设备可独立撤销。</li>
+			<li>Web client 能创建、观察、steer、cancel、approve，并从 cursor 恢复。</li>
+			<li>两个控制设备并发操作时，过期 expected state 被明确拒绝，不覆盖新分支。</li>
+			<li>relay 无法读取 E2EE 会话内容，也无法绕过 runner 本地审批政策。</li>
+			<li>CLI 创建的 session 与 Web 控制的是同一个持久 task，不产生状态分叉。</li>
+		</ul>
+	</section>
+
+	<footer>
+		<p>关联文档：<a href="./san-harness-model-adaptation-20260804.html">Harness、模型适配与 Remote Control 竞品研究</a>、<a href="./san-channel-vs-web-console-20260804.html">Channel vs Web Console 调研</a>、<a href="./san-harness-profile-effort-orchestration-20260804.html">Harness Profile 与 Effort Orchestration</a>。</p>
+		<p>本文只固定产品边界与阶段顺序；协议字段、E2EE key schedule、relay storage 和部署拓扑在进入 R0 时单独写详细 Spec。</p>
+	</footer>
+</main>
+</body>
+</html>

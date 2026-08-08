@@ -14,6 +14,7 @@ import {
 	type SimpleStreamOptions,
 	type Tool,
 } from "@san/ai";
+import { isDeepseekModelIdOrName } from "@san/catalog/identity";
 import { logger, prompt } from "@san/utils";
 
 import type { Settings } from "../config/settings";
@@ -315,7 +316,17 @@ async function generateLlmDigest(
 		apiKey: digestModel.apiKey,
 		maxTokens: digestModel.model.reasoning ? Math.max(DIGEST_MAX_TOKENS, 4096) : DIGEST_MAX_TOKENS,
 		disableReasoning: true,
-		toolChoice: { type: "tool", name: RECORD_TURN_DIGEST_TOOL_NAME },
+		// DeepSeek-family reasoning models always think and reject `tool_choice`
+		// while thinking is enabled (`Thinking mode does not support this
+		// tool_choice`). Only the built-in deepseek provider resolves
+		// `supportsToolChoice: false`; custom proxies in front of DeepSeek do
+		// not, so the forced named choice would 400 upstream. Keep the tool
+		// offered, let the provider default to auto, and recover structured
+		// output from the tool call or the text-JSON fallback.
+		toolChoice:
+			digestModel.model.reasoning && isDeepseekModelIdOrName(digestModel.model.id)
+				? undefined
+				: { type: "tool", name: RECORD_TURN_DIGEST_TOOL_NAME },
 		metadata: {
 			...(digestModel.metadata ?? {}),
 			sanSideRequest: "context_steady.turn_digest",

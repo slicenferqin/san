@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@san/agent";
 import type { ImageContent, MessageAttribution, ServiceTierByFamily, TextContent } from "@san/ai";
+import type { RouteFailureCategory } from "../config/model-routes-schema";
 
 export const CURRENT_SESSION_VERSION = 3;
 
@@ -73,6 +74,20 @@ export interface ModelChangeEntry extends SessionEntryBase {
 	model: string;
 	/** Role: "default", "smol", "slow", etc. Undefined treated as "default" */
 	role?: string;
+	/** 用户选择的逻辑模型；缺失表示显式 concrete model 或旧会话。 */
+	logicalModel?: string;
+	/** 此次逻辑模型解析出的具体 route。 */
+	routeId?: string;
+}
+
+/** 运行时同一逻辑模型内的 route 切换；不得覆盖 model_change 中的用户意图。 */
+export interface ModelRouteChangeEntry extends SessionEntryBase {
+	type: "model_route_change";
+	logicalModel: string;
+	fromRoute: string;
+	toRoute: string;
+	reason: RouteFailureCategory | "recovery";
+	cooldownUntil?: number;
 }
 
 export interface ServiceTierChangeEntry extends SessionEntryBase {
@@ -145,6 +160,7 @@ export interface TitleChangeEntry extends SessionEntryBase {
 declare module "@san/agent/compaction/entries" {
 	interface CustomCompactionSessionEntries {
 		titleChange: TitleChangeEntry;
+		modelRouteChange: ModelRouteChangeEntry;
 	}
 }
 
@@ -208,6 +224,7 @@ export type SessionEntry =
 	| SessionMessageEntry
 	| ThinkingLevelChangeEntry
 	| ModelChangeEntry
+	| ModelRouteChangeEntry
 	| ServiceTierChangeEntry
 	| CompactionEntry
 	| BranchSummaryEntry
