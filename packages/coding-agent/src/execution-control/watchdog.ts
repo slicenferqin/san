@@ -10,6 +10,7 @@ import {
 	stableValueFingerprint,
 	stableWorkFingerprint,
 } from "./progress-classifier";
+import type { ExecutionLedgerRecord } from "./types";
 
 export type WatchdogMode = "observe" | "enforce";
 export type WatchdogAction =
@@ -175,6 +176,7 @@ export class Watchdog {
 	readonly #assignmentStrategies = new Map<string, string>();
 	#lastLedgerRevision: number;
 	#suspicion?: DiagnosisSnapshot;
+	#windowRevision: number;
 	#unsubscribe: (() => void) | undefined;
 
 	constructor(options: WatchdogOptions);
@@ -190,14 +192,18 @@ export class Watchdog {
 		this.#maxDiagnosisAssignments = Math.max(1, Math.floor(options.maxDiagnosisAssignments ?? 16));
 		this.#classifier = new ProgressClassifier({ now: this.#now });
 		this.#lastLedgerRevision = this.#ledger.revision;
-		this.#unsubscribe = this.#ledger.subscribe((_record, snapshot) => {
+		this.#windowRevision = this.#ledger.revision;
+		this.#unsubscribe = this.#ledger.subscribe((record, snapshot) => {
 			if (snapshot.revision <= this.#lastLedgerRevision) return;
 			this.#lastLedgerRevision = snapshot.revision;
+			// 运行时对当前跟踪的同一观察写入的 progress_observed 日志回显只是记账，不是新证据：
+			// 不得重置指纹重复窗口，也不得使当前诊断失效。
+			if (this.#isSameObservationEcho(record)) return;
+			this.#windowRevision = snapshot.revision;
 			for (const tracker of this.#trackers.values()) tracker.repeatCount = 0;
 			if (this.#suspicion && snapshot.revision > this.#suspicion.basisRevision) this.#suspicion = undefined;
 		});
 	}
-
 	get mode(): WatchdogMode {
 		return this.#mode;
 	}
@@ -251,6 +257,7 @@ export class Watchdog {
 		const currentRevision = this.#ledger.revision;
 		if (currentRevision > this.#lastLedgerRevision) {
 			this.#lastLedgerRevision = currentRevision;
+			this.#windowRevision = currentRevision;
 			for (const tracker of this.#trackers.values()) tracker.repeatCount = 0;
 			if (this.#suspicion && currentRevision > this.#suspicion.basisRevision) this.#suspicion = undefined;
 		}
@@ -396,6 +403,7 @@ export class Watchdog {
 
 	#buildDiagnosis(classification: ClassifiedProgress, createdAt: string): DiagnosisSnapshot {
 		const snapshot = this.#ledger.getSnapshot();
+		this.#windowRevision = snapshot.revision;
 		const evidenceRefs = snapshot.evidenceRefs
 			.map(evidence => evidence.evidenceId)
 			.slice(-this.#maxDiagnosisEvidenceRefs);
@@ -431,7 +439,7 @@ export class Watchdog {
 	}
 
 	#isDiagnosisCurrent(diagnosis: DiagnosisSnapshot): boolean {
-		if (diagnosis.scopeId !== this.#ledger.scopeId || diagnosis.basisRevision !== this.#ledger.revision) return false;
+		if (diagnosis.scopeId !== this.#ledger.scopeId || diagnosis.basisRevision !== this.#windowRevision) return false;
 		const snapshot = this.#ledger.getSnapshot();
 		const evidenceRefs = snapshot.evidenceRefs
 			.map(evidence => evidence.evidenceId)
@@ -442,7 +450,7 @@ export class Watchdog {
 			.slice(-this.#maxDiagnosisAssignments);
 		const basisHash = stableValueFingerprint({
 			scopeId: snapshot.scopeId,
-			revision: snapshot.revision,
+			revision: this.#windowRevision,
 			state: snapshot.state,
 			gates: gateIds,
 			evidenceRefs,
@@ -455,6 +463,15 @@ export class Watchdog {
 		return basisHash === diagnosis.basisHash;
 	}
 
+	/** 运行时写入的、当前 tracker 正持有的 progress_observed 日志回显。 */
+	#isSameObservationEcho(record: Readonly<ExecutionLedgerRecord>): boolean {
+		if (record.type !== "progress_observed") return false;
+		const fingerprint = record.observation.fingerprint;
+		for (const tracker of this.#trackers.values()) {
+			if (tracker.lastPollFingerprint === fingerprint) return true;
+		}
+		return false;
+	}
 	#isDecision(value: HostObservation | WatchdogInput | WatchdogDecision): value is WatchdogDecision {
 		return "classification" in value && "action" in value && "repeatCount" in value;
 	}

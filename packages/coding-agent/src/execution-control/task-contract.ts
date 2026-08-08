@@ -1,3 +1,4 @@
+import { logger } from "@san/utils";
 import { stableValueFingerprint } from "./progress-classifier";
 
 /** Version for the host-owned task admission contract. */
@@ -61,16 +62,20 @@ export interface TaskContractAdmission {
 	readonly reason?: "duplicate" | "invalid";
 }
 
-export interface TaskContractChange {
-	readonly type: "admitted" | "updated" | "removed";
-	readonly snapshot: Readonly<TaskContractSnapshot>;
-}
+export type TaskContractChange =
+	| { readonly type: "admitted" | "updated" | "removed"; readonly snapshot: Readonly<TaskContractSnapshot> }
+	| { readonly type: "reset" };
 
 export interface TaskContractRegistryOptions {
 	/** Root session identity used when callers omit `scopeId`/`rootSessionId`. */
 	readonly rootSessionId?: string;
 	readonly now?: () => number;
 	readonly initialContracts?: readonly TaskContractSnapshot[];
+}
+
+export interface TaskContractResetOptions {
+	/** 强制分支切换：即使快照与当前完全一致，也拒绝旧分支 waiter 并重新发布 reset。 */
+	readonly force?: boolean;
 }
 
 export interface TaskContractUpdate {
@@ -177,6 +182,35 @@ function signalError(signal: AbortSignal): Error {
 	return signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
 }
 
+function snapshotsEqual(left: TaskContractSnapshot, right: TaskContractSnapshot): boolean {
+	return (
+		left.contractId === right.contractId &&
+		left.scopeId === right.scopeId &&
+		left.workKey === right.workKey &&
+		left.strategyKey === right.strategyKey &&
+		left.taskId === right.taskId &&
+		left.schemaVersion === right.schemaVersion &&
+		left.status === right.status &&
+		left.heartbeatAt === right.heartbeatAt &&
+		left.cursor === right.cursor &&
+		left.revision === right.revision &&
+		left.createdAt === right.createdAt &&
+		left.updatedAt === right.updatedAt &&
+		left.jobId === right.jobId
+	);
+}
+
+function branchStateEqual(
+	left: ReadonlyMap<string, MutableTaskContract>,
+	right: ReadonlyMap<string, MutableTaskContract>,
+): boolean {
+	if (left.size !== right.size) return false;
+	for (const [key, contract] of left) {
+		const other = right.get(key);
+		if (!other || !snapshotsEqual(contract, other)) return false;
+	}
+	return true;
+}
 /**
  * Root-scoped task contract registry. A child session receives the same object
  * through the SDK runtime wiring; independent roots receive separate objects.
@@ -382,6 +416,32 @@ export class TaskContractRegistry {
 		this.#contracts.clear();
 	}
 
+	/**
+	 * 替换整个分支状态：移除当前全部 contract、安装供给的快照（不产生逐项
+	 * 生命周期事件）、确定性 settle 所有旧 waiter，且仅在状态实际变化时发布
+	 * 恰好一次 `reset` 通知。完全相同的分支状态默认是真正的 no-op：waiters
+	 * 与订阅者均不受扰动；真实分支 cutover 应传 `{ force: true }`，即使快照
+	 * 相同也会拒绝旧 waiter、原子重装并单次发布 reset。registry 对象身份与
+	 * 订阅者存活；调用方自行从持久化水合，不会写回。
+	 */
+	reset(contracts: readonly TaskContractSnapshot[] = [], options: TaskContractResetOptions = {}): void {
+		const nextContracts = new Map<string, MutableTaskContract>();
+		const nextKeyByJobId = new Map<string, string>();
+		for (const initial of contracts) {
+			const snapshot = cloneSnapshot(initial);
+			nextContracts.set(identityKey(snapshot), { ...snapshot });
+			if (snapshot.jobId) nextKeyByJobId.set(snapshot.jobId, identityKey(snapshot));
+		}
+		if (!options.force && branchStateEqual(this.#contracts, nextContracts)) return;
+		for (const waiter of this.#waiters) waiter.reject(new Error("Task contract registry was reset."));
+		this.#waiters.clear();
+		this.#keyByJobId.clear();
+		for (const [jobId, key] of nextKeyByJobId) this.#keyByJobId.set(jobId, key);
+		this.#contracts.clear();
+		for (const [key, contract] of nextContracts) this.#contracts.set(key, contract);
+		this.#publish({ type: "reset" });
+	}
+
 	#require(
 		input: TaskContractDerivationInput | TaskContractRef | Readonly<TaskContractSnapshot>,
 	): Readonly<TaskContractSnapshot> {
@@ -403,8 +463,16 @@ export class TaskContractRegistry {
 		for (const listener of [...this.#listeners]) {
 			try {
 				listener(change);
-			} catch {
-				// Contract observers are advisory and cannot break admission.
+			} catch (error) {
+				// 合约观察者只是建议性的，不能阻断 admission；但订阅者抛错必须
+				// 显式落日志，不能静默吞掉。
+				logger.error("Task contract subscriber failed", {
+					type: change.type,
+					...(change.type === "reset"
+						? {}
+						: { contractId: change.snapshot.contractId, scopeId: change.snapshot.scopeId }),
+					error: error instanceof Error ? error.message : String(error),
+				});
 			}
 		}
 	}

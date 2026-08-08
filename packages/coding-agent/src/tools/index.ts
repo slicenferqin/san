@@ -10,6 +10,7 @@ import { EditTool } from "../edit";
 import { checkJuliaKernelAvailability } from "../eval/jl/kernel";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
 import { checkRubyKernelAvailability } from "../eval/rb/kernel";
+import type { ExecutionRuntime } from "../execution-control/execution-runtime";
 import type { ProviderHealthRegistry } from "../execution-control/provider-health";
 import type { TaskContractRegistry } from "../execution-control/task-contract";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
@@ -203,6 +204,10 @@ export interface ToolSession {
 	getRootSessionId?: () => string | null;
 	/** Root-scoped task admission registry shared with child sessions. */
 	taskContractRegistry?: TaskContractRegistry;
+	/** 本根会话及其子会话共享的宿主执行 runtime。此处只读：子会话禁止 start/sync/dispose 作用域。 */
+	executionRuntime?: ExecutionRuntime;
+	/** 会话的固定/活动执行作用域 id（子会话继承父会话的精确 scope id；根会话跟随 runtime 的活动作用域）。 */
+	getExecutionScopeId?: () => string | undefined;
 	/** Get shared eval executor session ID. Subagents inherit this to share JS/Python/Ruby/Julia state. */
 	getEvalSessionId?: () => string | null;
 	/** Get session file */

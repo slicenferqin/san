@@ -24,6 +24,7 @@ import type { UsageStatistics } from "@san/coding-agent/session/session-entries"
 import type { SessionManager } from "@san/coding-agent/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "@san/coding-agent/slash-commands/acp-builtins";
 import { removeWithRetries, setProjectDir } from "@san/utils";
+import type { ExecutionRuntime } from "../src/execution-control/execution-runtime";
 import * as sanLoopModule from "../src/san-loop";
 
 interface FakeAcpBuiltinSession {
@@ -67,6 +68,8 @@ interface FakeAcpBuiltinSession {
 	setModel(model: unknown): Promise<void>;
 	listResetCredits: () => Promise<ResetCreditAccountStatus[]>;
 	redeemResetCredit: (target: ResetCreditTarget) => Promise<ResetCreditRedeemOutcome>;
+	getExecutionRuntime(): ExecutionRuntime | undefined;
+	getActiveExecutionScopeId(): string | undefined;
 }
 
 interface FakeAcpBuiltinSessionManager {
@@ -92,6 +95,18 @@ interface FakeAcpBuiltinSessionManager {
 	setSessionName(name: string, source: string): Promise<boolean>;
 }
 
+const ACP_EXECUTION_SCOPE_ID = "scope:fake-session";
+const ACP_OBJECTIVE_CONTRACT = {
+	ref: {
+		contractId: "contract:fake-session",
+		revision: 1,
+		contractHash: "sha256:fake-session",
+		clauseRefs: ["clause:fake-session"],
+	},
+	authoritativeUserTurnId: "turn:fake-session",
+	source: "authoritative_user" as const,
+};
+
 function reasoningModel(provider: string, id: string, efforts: readonly Effort[]): Model<Api> {
 	return buildModel({
 		provider,
@@ -112,6 +127,12 @@ function createRuntime() {
 	const settings = Settings.isolated();
 	const output: string[] = [];
 	let fakeSessionManager: FakeAcpBuiltinSessionManager | undefined;
+	const executionRuntime = {
+		getScope: (scopeId: string) =>
+			scopeId === ACP_EXECUTION_SCOPE_ID
+				? { snapshot: () => ({ objectiveContract: ACP_OBJECTIVE_CONTRACT }) }
+				: undefined,
+	} as unknown as ExecutionRuntime;
 	const session: FakeAcpBuiltinSession = {
 		fastMode: false,
 		forcedToolChoice: undefined as string | undefined,
@@ -191,6 +212,8 @@ function createRuntime() {
 		getContextUsage: () => undefined,
 		getAvailableModels: () => [] as Array<{ provider: string; id: string; contextWindow?: number }>,
 		async setModel(_model: unknown) {},
+		getExecutionRuntime: () => executionRuntime,
+		getActiveExecutionScopeId: () => ACP_EXECUTION_SCOPE_ID,
 	};
 	const typedSession = session as unknown as AgentSession & FakeAcpBuiltinSession;
 	fakeSessionManager = {
@@ -258,6 +281,7 @@ function createRuntime() {
 		output,
 		session,
 		fakeSessionManager,
+		executionRuntime,
 		runtime: {
 			session: typedSession,
 			sessionManager: fakeSessionManager as unknown as SessionManager,
@@ -350,7 +374,7 @@ describe("ACP builtin slash commands", () => {
 	});
 
 	it("runs the San execution loop instead of only creating a ledger entry", async () => {
-		const { output, runtime } = createRuntime();
+		const { executionRuntime, output, runtime } = createRuntime();
 		runtime.settings.set("san.executionLoop.enabled", true);
 		runtime.sessionManager.appendCustomEntry(CONTEXT_PLAN_CUSTOM_TYPE, { planId: "plan-old" });
 		const latestPlanEntryId = runtime.sessionManager.appendCustomEntry(CONTEXT_PLAN_CUSTOM_TYPE, {
@@ -406,6 +430,10 @@ describe("ACP builtin slash commands", () => {
 				maxRetries: 2,
 				maxTurns: 3,
 				contextPlanRefs: ["fake-entry-1", latestPlanEntryId],
+				executionRuntime,
+				executionScopeId: ACP_EXECUTION_SCOPE_ID,
+				contractRevision: ACP_OBJECTIVE_CONTRACT.ref.revision,
+				contractHash: ACP_OBJECTIVE_CONTRACT.ref.contractHash,
 			});
 			expect(output[0]).toContain("San execution loop loop-acp finished with status passed.");
 			expect(output[0]).toContain("Final verdict: pass");

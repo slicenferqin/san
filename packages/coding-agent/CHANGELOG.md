@@ -101,6 +101,7 @@
 - Fixed Linux NVIDIA GPU discovery so descendants inheriting the probe's stdout pipe have time to drain without turning a successful probe into a timeout.
 - Fixed San execution loop terminal budget races so post-review overspend writes a single blocked envelope instead of persisting `passed` then failing on a conflicting `blocked` transition.
 - Fixed San evidence gate to require successful commands from the current assignment batch only; prior-retry successes no longer unlock a new pass.
+- Fixed San v0.2 read-only acceptance runs becoming permanently blocked by typed evidence enforcement: the acceptance runner now binds a bounded inspection gate to the immutable objective contract, and San workers derive matching receipts from successful host `read`, `grep`, and `glob` completions.
 - Fixed council mode silently degrading without Oracle: `requireOracle=true` with no Oracle executor (or settings-disabled Oracle) now blocks immediately.
 - Fixed San role context projecting session-global latest ContextPlan materials; only `run.contextPlanRefs` are bound and projected.
 - Fixed `san.loop_transition` rebuild accepting envelopes whose event/review runId or sessionId disagreed with the embedded run snapshot.

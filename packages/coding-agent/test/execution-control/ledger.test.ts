@@ -1,14 +1,23 @@
 import { describe, expect, test } from "bun:test";
-import type { AcceptanceGate, AcceptanceVerifier, ImmutableObjectiveContract } from "../../src/execution-control";
+import type {
+	AcceptanceGate,
+	AcceptanceVerifier,
+	EvidenceRef,
+	ImmutableObjectiveContract,
+	SupervisorExternalBlocker,
+	TaskContractSnapshot,
+} from "../../src/execution-control";
 import {
 	compactExecutionScopeJournal,
 	ExecutionLedger,
 	ExecutionScopePersistence,
 	ExecutionScopeRegistry,
+	isTerminalExecutionState,
 	parseExecutionScopeJournalRecord,
 	readExecutionScopeJournal,
 	rebuildExecutionScopeLedger,
 	StaleExecutionRevisionError,
+	TASK_CONTRACT_SCHEMA_VERSION,
 	TerminalExecutionStateError,
 } from "../../src/execution-control";
 import type { CustomEntry, SessionEntry } from "../../src/session/session-entries";
@@ -42,6 +51,7 @@ function gate(
 	status: AcceptanceGate["status"] = "unknown",
 	verifier: AcceptanceVerifier = { kind: "command", checkId: "check:focused-tests", expectedExitCode: 0 },
 	gateId = "gate:deliver",
+	evidenceRefs: readonly EvidenceRef[] = [],
 ): AcceptanceGate {
 	return {
 		gateId,
@@ -50,7 +60,35 @@ function gate(
 		objectiveClauseRefs: ["clause:deliver"],
 		verifier,
 		status,
-		evidenceRefs: [],
+		evidenceRefs,
+	};
+}
+
+function evidence(gateId = "gate:deliver", contractRevision = 1): EvidenceRef {
+	return {
+		evidenceId: `evidence:${gateId}:${contractRevision}`,
+		kind: "command",
+		receiptRef: "host-receipt-1",
+		gateId,
+		contractRevision,
+	};
+}
+
+function taskContract(contractId = "contract:task-1"): TaskContractSnapshot {
+	return {
+		contractId,
+		scopeId: "scope:session-1:turn-1",
+		workKey: "work:task-1",
+		strategyKey: "strategy:task-1",
+		taskId: "task-1",
+		schemaVersion: TASK_CONTRACT_SCHEMA_VERSION,
+		status: "running",
+		heartbeatAt: 1_783_000_000_000,
+		cursor: 0,
+		revision: 1,
+		createdAt: 1_782_000_000_000,
+		updatedAt: 1_783_000_000_000,
+		jobId: "job-1",
 	};
 }
 
@@ -154,12 +192,22 @@ describe("ExecutionLedger", () => {
 		expect(ledger.snapshot().usage.outputTokens).toBe(4);
 	});
 
-	test("allows completion when only optional acceptance gates remain", () => {
+	test("allows completion when required gates pass while optional gates remain", () => {
 		const ledger = makeLedger();
 		ledger.append({
 			recordId: "evt-optional-gate",
 			type: "acceptance_gate_recorded",
-			gate: { ...gate("unknown"), required: false },
+			gate: { ...gate("unknown", undefined, "gate:optional"), required: false },
+		});
+		ledger.append({
+			recordId: "evt-record-evidence",
+			type: "evidence_recorded",
+			evidence: evidence(),
+		});
+		ledger.append({
+			recordId: "evt-required-gate",
+			type: "acceptance_gate_recorded",
+			gate: gate("pass", undefined, undefined, [evidence()]),
 		});
 
 		ledger.append({ recordId: "evt-optional-complete", type: "state_changed", state: "completed" });
@@ -258,6 +306,12 @@ describe("ExecutionLedger", () => {
 		const ledger = makeLedger();
 		ledger.append({ recordId: "evt-usage", type: "usage_recorded", delta: { totalTokens: 100, cost: 2.5 } });
 		const snapshot = ledger.snapshot();
+		ledger.append({ recordId: "evt-record-evidence", type: "evidence_recorded", evidence: evidence() });
+		ledger.append({
+			recordId: "evt-pass-gate",
+			type: "acceptance_gate_recorded",
+			gate: gate("pass", undefined, undefined, [evidence()]),
+		});
 		ledger.append({ recordId: "evt-complete", type: "state_changed", state: "completed" });
 		ledger.append({ recordId: "evt-after-terminal-usage", type: "usage_recorded", delta: { totalTokens: 5 } });
 
@@ -286,6 +340,12 @@ describe("ExecutionLedger", () => {
 
 	test("does not reverse a terminal state", () => {
 		const ledger = makeLedger();
+		ledger.append({ recordId: "evt-record-evidence", type: "evidence_recorded", evidence: evidence() });
+		ledger.append({
+			recordId: "evt-pass-gate",
+			type: "acceptance_gate_recorded",
+			gate: gate("pass", undefined, undefined, [evidence()]),
+		});
 		ledger.append({ recordId: "evt-complete", type: "state_changed", state: "completed" });
 
 		expect(() => ledger.append({ recordId: "evt-recover", type: "state_changed", state: "recovering" })).toThrow(
@@ -302,6 +362,182 @@ describe("ExecutionLedger", () => {
 			ledger.append({ recordId: "evt-invalid-complete", type: "state_changed", state: "completed" }),
 		).toThrow(/acceptance gate is not passed/);
 		expect(ledger.state).toBe("running");
+	});
+	test("rejects completion without a required acceptance gate", () => {
+		const ledger = makeLedger();
+		ledger.append({
+			recordId: "evt-optional-only",
+			type: "acceptance_gate_recorded",
+			gate: { ...gate("pass"), required: false },
+		});
+
+		expect(() => ledger.append({ recordId: "evt-bare-complete", type: "state_changed", state: "completed" })).toThrow(
+			/required acceptance gate/,
+		);
+		expect(ledger.state).toBe("running");
+	});
+	test("rejects completion when a required pass gate lacks recorded host evidence", () => {
+		const ledger = makeLedger();
+		ledger.append({
+			recordId: "evt-pass-without-evidence",
+			type: "acceptance_gate_recorded",
+			gate: gate("pass"),
+		});
+
+		expect(() =>
+			ledger.append({ recordId: "evt-complete-without-evidence", type: "state_changed", state: "completed" }),
+		).toThrow(/recorded host evidence/);
+		expect(ledger.state).toBe("running");
+	});
+
+	test("keeps acceptance gate identity immutable across status updates", () => {
+		const ledger = makeLedger();
+		const original: AcceptanceGate = {
+			...gate(),
+			assignmentId: "assignment:deliver",
+			freshnessRevision: 1,
+			required: true,
+		};
+		ledger.append({ recordId: "evt-gate-original", type: "acceptance_gate_recorded", gate: original });
+
+		const changedIdentities: readonly AcceptanceGate[] = [
+			{ ...original, verifier: { kind: "external", dependencyId: "dependency:approval" } },
+			{ ...original, assignmentId: "assignment:other" },
+			{ ...original, freshnessRevision: 2 },
+			{ ...original, required: false },
+		];
+		for (const [index, changed] of changedIdentities.entries()) {
+			expect(() =>
+				ledger.append({
+					recordId: `evt-gate-identity-change-${index}`,
+					type: "acceptance_gate_recorded",
+					gate: changed,
+				}),
+			).toThrow(/identity cannot change/);
+		}
+
+		ledger.append({
+			recordId: "evt-gate-blocked",
+			type: "acceptance_gate_recorded",
+			gate: { ...original, status: "blocked" },
+		});
+		expect(ledger.snapshot().gates).toEqual([{ ...original, status: "blocked" }]);
+	});
+
+	test("rejects completion when recorded evidence is bound to a different gate", () => {
+		const ledger = makeLedger();
+		ledger.append({
+			recordId: "evt-other-gate",
+			type: "acceptance_gate_recorded",
+			gate: gate("unknown", undefined, "gate:other"),
+		});
+		// 同 evidenceId 的证据记录在别 gate 名下：gate:deliver 不能借它通过。
+		ledger.append({
+			recordId: "evt-borrowed-evidence",
+			type: "evidence_recorded",
+			evidence: { ...evidence("gate:other"), evidenceId: "evidence:shared" },
+		});
+		ledger.append({
+			recordId: "evt-pass-borrowed",
+			type: "acceptance_gate_recorded",
+			gate: gate("pass", undefined, undefined, [{ ...evidence(), evidenceId: "evidence:shared" }]),
+		});
+
+		expect(() =>
+			ledger.append({ recordId: "evt-complete-borrowed", type: "state_changed", state: "completed" }),
+		).toThrow(/recorded host evidence/);
+		expect(ledger.state).toBe("running");
+	});
+
+	test("rejects a gate whose evidence misses assignment or freshness binding", () => {
+		const ledger = makeLedger();
+		ledger.append({
+			recordId: "evt-unbound-evidence",
+			type: "evidence_recorded",
+			evidence: evidence(),
+		});
+
+		expect(() =>
+			ledger.append({
+				recordId: "evt-pass-bound",
+				type: "acceptance_gate_recorded",
+				gate: {
+					...gate("pass", undefined, undefined, [evidence()]),
+					assignmentId: "assignment:one",
+					freshnessRevision: 2,
+				},
+			}),
+		).toThrow(/different assignment/);
+		expect(ledger.state).toBe("running");
+	});
+
+	test("rejects task contract revision/cursor rollbacks and same-revision rewrites", () => {
+		const ledger = makeLedger();
+		const original = taskContract();
+		ledger.append({ recordId: "evt-task-original", type: "task_contract_recorded", contract: original });
+		// 同 revision 同值：幂等 no-op，不重复物化。
+		ledger.append({ recordId: "evt-task-same", type: "task_contract_recorded", contract: original });
+		expect(ledger.snapshot().taskContracts).toEqual([original]);
+		// revision 回退。
+		expect(() =>
+			ledger.append({
+				recordId: "evt-task-stale-revision",
+				type: "task_contract_recorded",
+				contract: { ...original, revision: 0 },
+			}),
+		).toThrow(/revision is stale/);
+		// 同 revision 改值。
+		expect(() =>
+			ledger.append({
+				recordId: "evt-task-rewritten",
+				type: "task_contract_recorded",
+				contract: { ...original, status: "completed" },
+			}),
+		).toThrow(/cannot change at the same revision/);
+		// cursor 回退：revision 前进但 cursor 后退仍拒绝。
+		ledger.append({
+			recordId: "evt-task-cursor-advance",
+			type: "task_contract_recorded",
+			contract: { ...original, revision: 2, cursor: 1, status: "completed" },
+		});
+		expect(() =>
+			ledger.append({
+				recordId: "evt-task-stale-cursor",
+				type: "task_contract_recorded",
+				contract: { ...original, revision: 3, cursor: 0 },
+			}),
+		).toThrow(/cursor is stale/);
+		// removed 墓碑：存在条目时身份不可变；墓碑先于移除发生。
+		expect(() =>
+			ledger.append({
+				recordId: "evt-task-removed-mismatch",
+				type: "task_contract_recorded",
+				contract: { ...original, workKey: "work:other" },
+				removed: true,
+			}),
+		).toThrow(/identity cannot change/);
+		// removed 墓碑：移除现条目、对未知条目幂等。
+		ledger.append({
+			recordId: "evt-task-removed",
+			type: "task_contract_recorded",
+			contract: { ...original, revision: 3, cursor: 1 },
+			removed: true,
+		});
+		expect(ledger.snapshot().taskContracts).toEqual([]);
+		ledger.append({
+			recordId: "evt-task-removed-again",
+			type: "task_contract_recorded",
+			contract: { ...original, revision: 3, cursor: 1 },
+			removed: true,
+		});
+		expect(ledger.snapshot().taskContracts).toEqual([]);
+		// 移除后重新准入：revision 从 0 重新开始。
+		ledger.append({
+			recordId: "evt-task-readmitted",
+			type: "task_contract_recorded",
+			contract: { ...original, revision: 0 },
+		});
+		expect(ledger.snapshot().taskContracts).toEqual([{ ...original, revision: 0 }]);
 	});
 
 	test("replays snapshots and journal events to the same materialized state", () => {
@@ -320,7 +556,19 @@ describe("ExecutionLedger", () => {
 				contractRevision: 1,
 			},
 		});
-		ledger.append({ recordId: "evt-gate-pass", type: "acceptance_gate_recorded", gate: gate("pass") });
+		ledger.append({
+			recordId: "evt-gate-pass",
+			type: "acceptance_gate_recorded",
+			gate: gate("pass", undefined, undefined, [
+				{
+					evidenceId: "evidence-1",
+					kind: "command",
+					receiptRef: "host-receipt-1",
+					gateId: "gate:deliver",
+					contractRevision: 1,
+				},
+			]),
+		});
 		ledger.append({ recordId: "evt-complete", type: "state_changed", state: "completed" });
 		for (const record of ledger.entries()) persistence.append(record);
 		persistence.appendSnapshot(ledger.snapshot(), "snapshot-final");
@@ -412,7 +660,8 @@ describe("ExecutionScopeRegistry", () => {
 		expect(repeatedPrevious).toBe(first);
 		expect(next.scopeId).toBe("scope:session-1:turn-2");
 		expect(registry.list("session-1")).toHaveLength(2);
-		expect(registry.current("session-1")?.scopeId).toBe(next.scopeId);
+		// 重入旧轮次后 current 必须重新指回该轮次的作用域，而非停留在最新轮次。
+		expect(registry.current("session-1")?.scopeId).toBe(first.scopeId);
 		expect(() =>
 			registry.startAuthoritativeTurn({
 				rootSessionId: "session-1",
@@ -421,6 +670,66 @@ describe("ExecutionScopeRegistry", () => {
 			}),
 		).toThrow(/different immutable objective contract/);
 		expect(registry.list("session-1")).toHaveLength(2);
+	});
+
+	test("reset replaces old-branch scopes and restores supplied references", () => {
+		const registry = new ExecutionScopeRegistry({ now: () => NOW });
+		const oldFirst = registry.startAuthoritativeTurn({
+			rootSessionId: "session-1",
+			logicalTurnId: "turn-1",
+			objectiveContract: contract(),
+		});
+		const oldSecond = registry.startAuthoritativeTurn({
+			rootSessionId: "session-1",
+			logicalTurnId: "turn-2",
+			objectiveContract: { ...contract(), authoritativeUserTurnId: "turn-2" },
+		});
+
+		const branch = new ExecutionScopeRegistry({ now: () => NOW });
+		const fresh = branch.startAuthoritativeTurn({
+			rootSessionId: "session-1",
+			logicalTurnId: "turn-10",
+			objectiveContract: { ...contract(), authoritativeUserTurnId: "turn-10" },
+		});
+		const freshNext = branch.startAuthoritativeTurn({
+			rootSessionId: "session-1",
+			logicalTurnId: "turn-11",
+			objectiveContract: { ...contract(), authoritativeUserTurnId: "turn-11" },
+		});
+		const otherRoot = branch.startAuthoritativeTurn({
+			rootSessionId: "session-2",
+			logicalTurnId: "turn-1",
+			objectiveContract: { ...contract(2), authoritativeUserTurnId: "turn-1" },
+		});
+		registry.reset([fresh, freshNext, otherRoot]);
+
+		expect(registry.get(oldFirst.scopeId)).toBeUndefined();
+		expect(registry.get(oldSecond.scopeId)).toBeUndefined();
+		expect(registry.getForTurn("session-1", "turn-1")).toBeUndefined();
+		expect(
+			registry.resolve({ rootSessionId: "session-1", logicalTurnId: "turn-1", kind: "steering" }),
+		).toBeUndefined();
+		expect(registry.list("session-1").map(reference => reference.scopeId)).toEqual([
+			fresh.scopeId,
+			freshNext.scopeId,
+		]);
+		expect(registry.current("session-1")?.scopeId).toBe(freshNext.scopeId);
+		expect(registry.current("session-2")?.scopeId).toBe(otherRoot.scopeId);
+	});
+
+	test("reset with no references clears every scope and current pointer", () => {
+		const registry = new ExecutionScopeRegistry({ now: () => NOW });
+		registry.startAuthoritativeTurn({
+			rootSessionId: "session-1",
+			logicalTurnId: "turn-1",
+			objectiveContract: contract(),
+		});
+		registry.reset();
+
+		expect(registry.list()).toHaveLength(0);
+		expect(registry.current("session-1")).toBeUndefined();
+		expect(registry.getForTurn("session-1", "turn-1")).toBeUndefined();
+		expect(registry.resolve({ rootSessionId: "session-1", kind: "handoff" })).toBeUndefined();
 	});
 });
 
@@ -538,5 +847,239 @@ describe("execution-scope journal tolerance", () => {
 		});
 
 		expect(parsed).toBeUndefined();
+	});
+	test("round-trips provider health retry, last success, and evidence refs", () => {
+		const session = new MemorySession();
+		const persistence = new ExecutionScopePersistence(session);
+		const ledger = makeLedger();
+		ledger.append({
+			recordId: "evt-health-fields",
+			type: "provider_health_recorded",
+			health: {
+				providerKey: "provider:one",
+				endpoint: "https://provider.test",
+				normalizedUrl: "https://provider.test",
+				state: "open",
+				healthRevision: 2,
+				generation: 1,
+				retryAt: 1_784_000_000_000,
+				lastSuccess: 1_783_000_000_000,
+				evidenceRefs: ["evidence:provider-1"],
+			},
+		});
+		for (const record of ledger.entries()) persistence.append(record);
+
+		const rebuilt = persistence.replay(ledger.scopeId);
+		expect(rebuilt?.snapshot().providerHealth).toEqual([
+			{
+				providerKey: "provider:one",
+				endpoint: "https://provider.test",
+				normalizedUrl: "https://provider.test",
+				state: "open",
+				healthRevision: 2,
+				generation: 1,
+				retryAt: 1_784_000_000_000,
+				lastSuccess: 1_783_000_000_000,
+				evidenceRefs: ["evidence:provider-1"],
+			},
+		]);
+	});
+	test("round-trips full task contract snapshots and tombstones through the journal", () => {
+		const session = new MemorySession();
+		const persistence = new ExecutionScopePersistence(session);
+		const ledger = makeLedger();
+		const taskSnapshot = taskContract();
+		ledger.append({
+			recordId: "evt-task-contract",
+			type: "task_contract_recorded",
+			contract: taskSnapshot,
+		});
+		for (const record of ledger.entries()) persistence.append(record);
+		persistence.appendSnapshot(ledger.snapshot(), "snapshot-task-contract");
+
+		const replayed = persistence.replay(ledger.scopeId);
+		expect(replayed?.snapshot().taskContracts).toEqual([taskSnapshot]);
+
+		ledger.append({
+			recordId: "evt-task-contract-removed",
+			type: "task_contract_recorded",
+			contract: taskSnapshot,
+			removed: true,
+		});
+		expect(ledger.snapshot().taskContracts).toEqual([]);
+		for (const record of ledger.entries()) persistence.append(record);
+		const afterRemoval = persistence.replay(ledger.scopeId);
+		expect(afterRemoval?.snapshot().taskContracts).toEqual([]);
+	});
+
+	test("full snapshots retain strategies and task contracts through compaction and rebuild", () => {
+		const session = new MemorySession();
+		const persistence = new ExecutionScopePersistence(session);
+		const ledger = makeLedger();
+		ledger.append({
+			recordId: "evt-strategy",
+			type: "strategy_recorded",
+			strategy: {
+				strategyId: "strategy:one",
+				scopeId: ledger.scopeId,
+				strategyKey: "strategy:one",
+				revision: 1,
+				hypothesisRef: "hypothesis:one",
+				expectedEvidenceRefs: ["evidence:one"],
+				status: "active",
+			},
+		});
+		ledger.append({ recordId: "evt-task-contract", type: "task_contract_recorded", contract: taskContract() });
+		for (const record of ledger.entries()) persistence.append(record);
+		persistence.appendSnapshot(ledger.snapshot(), "snapshot-full");
+
+		// 压缩为纯 snapshot 后，strategies 与 taskContracts 都不能丢失。
+		const compacted = compactExecutionScopeJournal(persistence.read(ledger.scopeId), ledger.snapshot());
+		expect(compacted).toHaveLength(1);
+		expect(compacted[0]?.journalType).toBe("snapshot");
+		const replayed = rebuildExecutionScopeLedger(session.getEntries());
+		expect(replayed?.snapshot().strategies).toEqual(ledger.snapshot().strategies);
+		expect(replayed?.snapshot().taskContracts).toEqual(ledger.snapshot().taskContracts);
+		expect(replayed?.snapshot()).toEqual(ledger.snapshot());
+	});
+});
+
+describe("execution terminal schema", () => {
+	test("treats budget_exhausted as a stable terminal state that round-trips", () => {
+		const session = new MemorySession();
+		const persistence = new ExecutionScopePersistence(session);
+		const ledger = makeLedger();
+		ledger.append({ recordId: "evt-budget", type: "state_changed", state: "budget_exhausted" });
+		expect(ledger.state).toBe("budget_exhausted");
+		expect(isTerminalExecutionState(ledger.state)).toBe(true);
+
+		for (const record of ledger.entries()) persistence.append(record);
+		persistence.appendSnapshot(ledger.snapshot(), "snapshot-budget");
+		const replayed = persistence.replay(ledger.scopeId);
+
+		expect(replayed?.snapshot().state).toBe("budget_exhausted");
+		expect(replayed?.snapshot()).toEqual(ledger.snapshot());
+	});
+	test("treats no_provider_available as a stable terminal state that round-trips", () => {
+		const session = new MemorySession();
+		const persistence = new ExecutionScopePersistence(session);
+		const ledger = makeLedger();
+		ledger.append({ recordId: "evt-no-provider", type: "state_changed", state: "no_provider_available" });
+		expect(ledger.state).toBe("no_provider_available");
+		expect(isTerminalExecutionState(ledger.state)).toBe(true);
+
+		for (const record of ledger.entries()) persistence.append(record);
+		persistence.appendSnapshot(ledger.snapshot(), "snapshot-no-provider");
+		const replayed = persistence.replay(ledger.scopeId);
+
+		expect(replayed?.snapshot().state).toBe("no_provider_available");
+		expect(replayed?.snapshot()).toEqual(ledger.snapshot());
+	});
+
+	test("reads legacy ledger records without remapping states", () => {
+		const budget = parseExecutionScopeJournalRecord({
+			recordId: "evt-legacy-budget",
+			scopeId: "scope:session-1:turn-1",
+			rootSessionId: "session-1",
+			logicalTurnId: "turn-1",
+			revision: 1,
+			occurredAt: NOW,
+			type: "state_changed",
+			state: "budget_exhausted",
+		});
+		expect(budget?.journalType).toBe("event");
+		expect(
+			budget?.journalType === "event" && budget.record.type === "state_changed" ? budget.record.state : undefined,
+		).toBe("budget_exhausted");
+
+		const needsUser = parseExecutionScopeJournalRecord({
+			recordId: "evt-legacy-needs-user",
+			scopeId: "scope:session-1:turn-1",
+			rootSessionId: "session-1",
+			logicalTurnId: "turn-1",
+			revision: 1,
+			occurredAt: NOW,
+			type: "state_changed",
+			state: "needs_user",
+		});
+		expect(
+			needsUser?.journalType === "event" && needsUser.record.type === "state_changed"
+				? needsUser.record.state
+				: undefined,
+		).toBe("needs_user");
+	});
+
+	test("requires a typed supervisor external blocker to enter needs_user", () => {
+		const ledger = makeLedger();
+		expect(() =>
+			ledger.append({ recordId: "evt-bare-needs-user", type: "state_changed", state: "needs_user" }),
+		).toThrow(/typed external blocker/);
+		expect(ledger.state).not.toBe("needs_user");
+
+		ledger.append({
+			recordId: "evt-decision-untyped",
+			type: "supervisor_decision_recorded",
+			decision: {
+				decisionId: "decision:needs-user-untyped",
+				scopeId: ledger.scopeId,
+				basisRevision: 0,
+				basisHash: "hash",
+				action: "needs_user",
+				evidenceRefs: [],
+				invalidatedHypothesisRefs: [],
+				confidence: "high",
+				createdAt: NOW,
+				externalBlocker: {
+					kind: "other",
+					dependencyId: "dependency:approval",
+					evidenceRef: "evidence:external",
+				} as unknown as SupervisorExternalBlocker,
+			},
+		});
+		expect(() =>
+			ledger.append({ recordId: "evt-untyped-needs-user", type: "state_changed", state: "needs_user" }),
+		).toThrow(/typed external blocker/);
+	});
+
+	test("accepts needs_user when the latest supervisor decision carries a typed blocker", () => {
+		const ledger = makeLedger();
+		ledger.append({
+			recordId: "evt-decision-typed",
+			type: "supervisor_decision_recorded",
+			decision: {
+				decisionId: "decision:needs-user",
+				scopeId: ledger.scopeId,
+				basisRevision: 0,
+				basisHash: "hash",
+				action: "needs_user",
+				evidenceRefs: ["evidence:external"],
+				invalidatedHypothesisRefs: [],
+				confidence: "high",
+				createdAt: NOW,
+				externalBlocker: {
+					kind: "external",
+					dependencyId: "dependency:approval",
+					evidenceRef: "evidence:external",
+				},
+			},
+		});
+		ledger.append({ recordId: "evt-typed-needs-user", type: "state_changed", state: "needs_user" });
+		expect(ledger.state).toBe("needs_user");
+	});
+
+	test("rejects late state writes and stale revisions after budget_exhausted", () => {
+		const ledger = makeLedger();
+		ledger.append({ recordId: "evt-budget", type: "state_changed", state: "budget_exhausted" });
+
+		expect(() => ledger.append({ recordId: "evt-recover", type: "state_changed", state: "running" })).toThrow(
+			TerminalExecutionStateError,
+		);
+		expect(() =>
+			ledger.append(
+				{ recordId: "evt-stale", type: "usage_recorded", delta: { totalTokens: 1 } },
+				{ expectedRevision: 0 },
+			),
+		).toThrow(StaleExecutionRevisionError);
+		expect(ledger.state).toBe("budget_exhausted");
 	});
 });

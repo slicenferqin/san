@@ -22,6 +22,7 @@ import type { PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily, resolveSubagentServiceTier } from "../config/service-tier";
 import { Settings } from "../config/settings";
 import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
+import type { ExecutionRuntime } from "../execution-control/execution-runtime";
 import type { ProviderHealthRegistry } from "../execution-control/provider-health";
 import type { TaskContractRegistry } from "../execution-control/task-contract";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
@@ -308,6 +309,10 @@ export interface ExecutorOptions {
 	taskContractRegistry?: TaskContractRegistry;
 	/** Root session identity used to derive child task contracts. */
 	rootSessionId?: string;
+	/** 与子会话共享的宿主执行 runtime。只读：子会话禁止 start/sync/dispose 作用域。 */
+	executionRuntime?: ExecutionRuntime;
+	/** 该子会话及其后代运行所处的精确执行作用域 id（整棵树内逐字节一致）。 */
+	executionScopeId?: string;
 	/**
 	 * Override the `task.maxRuntimeMs` wall-clock cap for this run. When provided
 	 * it wins over the settings value; `0` disables the per-subagent wall-clock
@@ -2465,6 +2470,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// of the original run (same agent id, tools, model, system prompt,
 			// artifacts dir) — only the SessionManager differs.
 			const buildSubagentSessionOptions = (sessionManagerForRun: SessionManager): CreateAgentSessionOptions => ({
+				executionRuntime: options.executionRuntime,
+				executionScopeId: options.executionScopeId,
 				cwd: worktree ?? cwd,
 				authStorage,
 				modelRegistry,

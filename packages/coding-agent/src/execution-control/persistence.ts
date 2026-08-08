@@ -1,6 +1,7 @@
 import type { SessionEntry } from "../session/session-entries";
 import { ExecutionLedger } from "./execution-ledger";
 import { normalizeProviderBaseUrl } from "./provider-health";
+import { TASK_CONTRACT_SCHEMA_VERSION, type TaskContractSnapshot } from "./task-contract";
 import type {
 	AcceptanceGate,
 	AcceptanceVerifier,
@@ -78,6 +79,8 @@ function isExecutionScopeState(value: unknown): value is ExecutionScopeState {
 		value === "needs_user" ||
 		value === "completed" ||
 		value === "aborted_by_user" ||
+		value === "budget_exhausted" ||
+		value === "no_provider_available" ||
 		value === "runtime_fault"
 	);
 }
@@ -190,6 +193,9 @@ function sanitizeHealth(health: ProviderHealthRef): ProviderHealthRef {
 		healthRevision: health.healthRevision,
 		generation: health.generation,
 		...(health.terminalReceiptRef === undefined ? {} : { terminalReceiptRef: health.terminalReceiptRef }),
+		...(health.retryAt === undefined ? {} : { retryAt: health.retryAt }),
+		...(health.lastSuccess === undefined ? {} : { lastSuccess: health.lastSuccess }),
+		...(health.evidenceRefs === undefined ? {} : { evidenceRefs: [...health.evidenceRefs] }),
 	};
 }
 
@@ -235,6 +241,24 @@ function sanitizeProgress(observation: ProgressObservation): ProgressObservation
 		...(observation.strategyKey === undefined ? {} : { strategyKey: observation.strategyKey }),
 		...(observation.failureFingerprint === undefined ? {} : { failureFingerprint: observation.failureFingerprint }),
 		...(observation.cursor === undefined ? {} : { cursor: observation.cursor }),
+	};
+}
+
+function sanitizeTaskContract(contract: TaskContractSnapshot): TaskContractSnapshot {
+	return {
+		contractId: contract.contractId,
+		scopeId: contract.scopeId,
+		workKey: contract.workKey,
+		strategyKey: contract.strategyKey,
+		taskId: contract.taskId,
+		schemaVersion: contract.schemaVersion,
+		status: contract.status,
+		heartbeatAt: contract.heartbeatAt,
+		cursor: contract.cursor,
+		revision: contract.revision,
+		createdAt: contract.createdAt,
+		updatedAt: contract.updatedAt,
+		...(contract.jobId === undefined ? {} : { jobId: contract.jobId }),
 	};
 }
 
@@ -308,6 +332,13 @@ function sanitizeRecord(record: ExecutionLedgerRecord): ExecutionLedgerRecord {
 			return { ...base, type: "request_finished", requestId: record.requestId, status: record.status };
 		case "progress_observed":
 			return { ...base, type: "progress_observed", observation: sanitizeProgress(record.observation) };
+		case "task_contract_recorded":
+			return {
+				...base,
+				type: "task_contract_recorded",
+				contract: sanitizeTaskContract(record.contract),
+				...(record.removed === true ? { removed: true } : {}),
+			};
 	}
 }
 
@@ -340,6 +371,7 @@ function sanitizeSnapshot(snapshot: ExecutionScopeSnapshot): ExecutionScopeSnaps
 		gates: snapshot.gates.map(sanitizeGate),
 		evidenceRefs: snapshot.evidenceRefs.map(sanitizeEvidence),
 		assignments: snapshot.assignments.map(sanitizeAssignment),
+		taskContracts: snapshot.taskContracts.map(sanitizeTaskContract),
 		strategies: snapshot.strategies.map(sanitizeStrategy),
 		usage: sanitizeUsage(snapshot.usage),
 		providerHealth: snapshot.providerHealth.map(sanitizeHealth),
@@ -600,6 +632,11 @@ function parseHealth(value: unknown): ProviderHealthRef | undefined {
 		healthRevision: value.healthRevision,
 		generation: value.generation,
 		...(isString(value.terminalReceiptRef) ? { terminalReceiptRef: value.terminalReceiptRef } : {}),
+		...(isNumber(value.retryAt) && value.retryAt >= 0 ? { retryAt: value.retryAt } : {}),
+		...(isNumber(value.lastSuccess) && value.lastSuccess >= 0 ? { lastSuccess: value.lastSuccess } : {}),
+		...(Array.isArray(value.evidenceRefs) && value.evidenceRefs.every(isString)
+			? { evidenceRefs: [...value.evidenceRefs] }
+			: {}),
 	};
 }
 
@@ -669,6 +706,42 @@ function parseProgress(value: unknown): ProgressObservation | undefined {
 		...(isString(value.strategyKey) ? { strategyKey: value.strategyKey } : {}),
 		...(isString(value.failureFingerprint) ? { failureFingerprint: value.failureFingerprint } : {}),
 		...(isString(value.cursor) ? { cursor: value.cursor } : {}),
+	};
+}
+
+function parseTaskContract(value: unknown): TaskContractSnapshot | undefined {
+	if (
+		!isRecord(value) ||
+		!isString(value.contractId) ||
+		!isString(value.scopeId) ||
+		!isString(value.workKey) ||
+		!isString(value.strategyKey) ||
+		!isString(value.taskId) ||
+		value.schemaVersion !== TASK_CONTRACT_SCHEMA_VERSION ||
+		!isString(value.status) ||
+		!["queued", "running", "completed", "failed", "cancelled", "rejected"].includes(value.status) ||
+		!isInteger(value.heartbeatAt) ||
+		!isInteger(value.cursor) ||
+		!isInteger(value.revision) ||
+		!isInteger(value.createdAt) ||
+		!isInteger(value.updatedAt) ||
+		(value.jobId !== undefined && !isString(value.jobId))
+	)
+		return undefined;
+	return {
+		contractId: value.contractId,
+		scopeId: value.scopeId,
+		workKey: value.workKey,
+		strategyKey: value.strategyKey,
+		taskId: value.taskId,
+		schemaVersion: TASK_CONTRACT_SCHEMA_VERSION,
+		status: value.status as TaskContractSnapshot["status"],
+		heartbeatAt: value.heartbeatAt,
+		cursor: value.cursor,
+		revision: value.revision,
+		createdAt: value.createdAt,
+		updatedAt: value.updatedAt,
+		...(isString(value.jobId) ? { jobId: value.jobId } : {}),
 	};
 }
 
@@ -769,6 +842,17 @@ function parseRecord(value: unknown): ExecutionLedgerRecord | undefined {
 			const observation = parseProgress(value.observation);
 			return observation ? { ...base, type: "progress_observed", observation } : undefined;
 		}
+		case "task_contract_recorded": {
+			const contract = parseTaskContract(value.contract);
+			return contract
+				? {
+						...base,
+						type: "task_contract_recorded",
+						contract,
+						...(value.removed === true ? { removed: true } : {}),
+					}
+				: undefined;
+		}
 		default:
 			return undefined;
 	}
@@ -797,12 +881,14 @@ function parseSnapshot(value: unknown): ExecutionScopeSnapshot | undefined {
 		? value.supervisorDecisions.map(parseDecision)
 		: [];
 	const progress = Array.isArray(value.progress) ? value.progress.map(parseProgress) : [];
+	const taskContracts = Array.isArray(value.taskContracts) ? value.taskContracts.map(parseTaskContract) : [];
 	if (
 		[
 			...gates,
 			...evidenceRefs,
 			...assignments,
 			...strategies,
+			...taskContracts,
 			...providerHealth,
 			...supervisorDecisions,
 			...progress,
@@ -840,6 +926,7 @@ function parseSnapshot(value: unknown): ExecutionScopeSnapshot | undefined {
 		gates: gates as AcceptanceGate[],
 		evidenceRefs: evidenceRefs as EvidenceRef[],
 		assignments: assignments as ExecutionAssignment[],
+		taskContracts: taskContracts as TaskContractSnapshot[],
 		strategies: strategies as ExecutionStrategy[],
 		usage,
 		providerHealth: providerHealth as ProviderHealthRef[],

@@ -231,38 +231,167 @@ describe("DurableScheduler host policy", () => {
 		).toMatchObject({ renewed: false, reason: "missing_authoritative_evidence" });
 	});
 
-	test("requires typed external evidence and no runnable node before needs_user", () => {
+	test("needs_user requires gate-bound external evidence with matching dependency and no runnable node", () => {
 		const hostLedger = ledger();
 		const scheduler = new DurableScheduler({ ledger: hostLedger, runnableNodeIds: ["node:ready"] });
-		const rejected = scheduler.applySupervisorDecision({
-			...decision(scheduler, "needs_user"),
-			externalBlocker: { kind: "external", dependencyId: "dependency:approval", evidenceRef: "fake" },
-		});
-		expect(rejected.applied).toBe(false);
-		expect(rejected.reason).toContain("typed external blocker");
 
+		// 记录 external acceptance gate 与绑定该 gate 的 external evidence。
 		hostLedger.append({
-			recordId: "evidence:external",
+			recordId: "gate:approval",
+			type: "acceptance_gate_recorded",
+			gate: {
+				gateId: "gate:approval",
+				contractRef: CONTRACT.ref,
+				contractRevision: CONTRACT.ref.revision,
+				objectiveClauseRefs: [...CONTRACT.ref.clauseRefs],
+				verifier: { kind: "external", dependencyId: "dependency:approval" },
+				status: "blocked",
+				evidenceRefs: [
+					{
+						evidenceId: "evidence:approval",
+						kind: "external",
+						receiptRef: "receipt:approval",
+						gateId: "gate:approval",
+						contractRevision: CONTRACT.ref.revision,
+						freshnessRevision: 2,
+					},
+				],
+				freshnessRevision: 2,
+			},
+		});
+		hostLedger.append({
+			recordId: "evidence:approval",
 			type: "evidence_recorded",
 			evidence: {
-				evidenceId: "evidence:external",
+				evidenceId: "evidence:approval",
 				kind: "external",
-				receiptRef: "receipt:external",
+				receiptRef: "receipt:approval",
+				gateId: "gate:approval",
+				contractRevision: CONTRACT.ref.revision,
+				freshnessRevision: 2,
 			},
 		});
+
+		const needsUser = (decisionId: string, evidenceRef: string, dependencyId: string) =>
+			scheduler.applySupervisorDecision({
+				...decision(scheduler, "needs_user"),
+				decisionId,
+				evidenceRefs: [evidenceRef],
+				externalBlocker: { kind: "external", dependencyId, evidenceRef },
+			});
+
+		// 仍有 runnable node 时拒绝，即使 gate 与 evidence 完全匹配。
+		expect(needsUser("decision:needs-user-runnable", "evidence:approval", "dependency:approval").applied).toBe(false);
 		scheduler.setRunnableNodes([]);
-		const accepted = scheduler.applySupervisorDecision({
-			...decision(scheduler, "needs_user"),
-			decisionId: "decision:needs-user",
-			evidenceRefs: ["evidence:external"],
-			externalBlocker: {
-				kind: "external",
-				dependencyId: "dependency:approval",
-				evidenceRef: "evidence:external",
-			},
-		});
+
+		// 匹配的 external gate + evidence：可 needs_user。
+		const accepted = needsUser("decision:needs-user-accepted", "evidence:approval", "dependency:approval");
 		expect(accepted.applied).toBe(true);
 		expect(hostLedger.state).toBe("needs_user");
+
+		// 伪造 evidence ref：未记录于 ledger。
+		expect(
+			scheduler.applySupervisorDecision({
+				...decision(scheduler, "needs_user"),
+				decisionId: "decision:needs-user-fake",
+				evidenceRefs: ["fake"],
+				externalBlocker: { kind: "external", dependencyId: "dependency:approval", evidenceRef: "fake" },
+			}).applied,
+		).toBe(false);
+
+		// evidence 已记录但未出现在决策引用中：拒绝。
+		expect(
+			scheduler.applySupervisorDecision({
+				...decision(scheduler, "needs_user"),
+				decisionId: "decision:needs-user-no-ref",
+				evidenceRefs: [],
+				externalBlocker: {
+					kind: "external",
+					dependencyId: "dependency:approval",
+					evidenceRef: "evidence:approval",
+				},
+			}).applied,
+		).toBe(false);
+
+		// 无 gate：external evidence 未绑定任何 acceptance gate。
+		hostLedger.append({
+			recordId: "evidence:unbound",
+			type: "evidence_recorded",
+			evidence: { evidenceId: "evidence:unbound", kind: "external", receiptRef: "receipt:unbound" },
+		});
+		expect(needsUser("decision:needs-user-unbound", "evidence:unbound", "dependency:approval").applied).toBe(false);
+
+		// 错 gate ref：evidence 绑定的 gate 不存在。
+		hostLedger.append({
+			recordId: "evidence:missing-gate",
+			type: "evidence_recorded",
+			evidence: {
+				evidenceId: "evidence:missing-gate",
+				kind: "external",
+				receiptRef: "receipt:missing-gate",
+				gateId: "gate:missing",
+				contractRevision: CONTRACT.ref.revision,
+				freshnessRevision: 3,
+			},
+		});
+		expect(
+			needsUser("decision:needs-user-missing-gate", "evidence:missing-gate", "dependency:approval").applied,
+		).toBe(false);
+
+		// 错 gate ref：evidence 声称绑定 gate:approval，但该 gate 的 evidenceRefs 并不包含它。
+		hostLedger.append({
+			recordId: "evidence:orphan",
+			type: "evidence_recorded",
+			evidence: {
+				evidenceId: "evidence:orphan",
+				kind: "external",
+				receiptRef: "receipt:orphan",
+				gateId: "gate:approval",
+				contractRevision: CONTRACT.ref.revision,
+				freshnessRevision: 3,
+			},
+		});
+		expect(needsUser("decision:needs-user-orphan", "evidence:orphan", "dependency:approval").applied).toBe(false);
+
+		// 错 dependency：gate verifier 的 dependencyId 与 blocker 不一致。
+		hostLedger.append({
+			recordId: "gate:other-dep",
+			type: "acceptance_gate_recorded",
+			gate: {
+				gateId: "gate:other-dep",
+				contractRef: CONTRACT.ref,
+				contractRevision: CONTRACT.ref.revision,
+				objectiveClauseRefs: [...CONTRACT.ref.clauseRefs],
+				verifier: { kind: "external", dependencyId: "dependency:other" },
+				status: "blocked",
+				evidenceRefs: [
+					{
+						evidenceId: "evidence:other-dep",
+						kind: "external",
+						receiptRef: "receipt:other-dep",
+						gateId: "gate:other-dep",
+						contractRevision: CONTRACT.ref.revision,
+						freshnessRevision: 3,
+					},
+				],
+				freshnessRevision: 3,
+			},
+		});
+		hostLedger.append({
+			recordId: "evidence:other-dep",
+			type: "evidence_recorded",
+			evidence: {
+				evidenceId: "evidence:other-dep",
+				kind: "external",
+				receiptRef: "receipt:other-dep",
+				gateId: "gate:other-dep",
+				contractRevision: CONTRACT.ref.revision,
+				freshnessRevision: 3,
+			},
+		});
+		expect(needsUser("decision:needs-user-other-dep", "evidence:other-dep", "dependency:approval").applied).toBe(
+			false,
+		);
 	});
 
 	test("does not let generic evidence text satisfy a typed command gate", () => {

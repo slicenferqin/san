@@ -1,10 +1,10 @@
+import type { TaskContractSnapshot } from "./task-contract";
+
 /**
- * Host-owned execution-control facts.
+ * 宿主持有的执行控制事实。
  *
- * These types deliberately contain references, hashes and bounded facts only. They
- * do not carry prompts, model output, credentials or tool output. The execution
- * ledger and its journal are therefore safe to replay independently of an LLM
- * context transcript.
+ * 这些类型刻意只携带引用、哈希与有界事实；不携带提示词、模型输出、凭据或工具输出。
+ * 因此执行账本及其 journal 可以脱离 LLM 上下文记录独立重放。
  */
 
 export const EXECUTION_SCOPE_SCHEMA_VERSION = 1 as const;
@@ -20,6 +20,8 @@ export type ExecutionScopeState =
 	| "needs_user"
 	| "completed"
 	| "aborted_by_user"
+	| "budget_exhausted"
+	| "no_provider_available"
 	| "runtime_fault";
 
 export type ProgressClass = "activity" | "progress" | "regression" | "blocker";
@@ -52,7 +54,7 @@ export interface ExecutionScopeIdentity {
 	readonly logicalTurnId: string;
 }
 
-/** A reference to the immutable contract supplied by an authoritative user turn. */
+/** 权威用户轮次提供的不可变契约引用。 */
 export interface ObjectiveContractRef {
 	readonly contractId: string;
 	readonly revision: number;
@@ -61,8 +63,7 @@ export interface ObjectiveContractRef {
 }
 
 /**
- * The only accepted source of a new objective contract. A summary or model
- * message can carry references to this value but cannot create or replace it.
+ * 新目标契约唯一被接受的来源。摘要或模型消息可以携带对该值的引用，但不能创建或替换它。
  */
 export interface ImmutableObjectiveContract {
 	readonly ref: ObjectiveContractRef;
@@ -189,12 +190,12 @@ export type EvidenceReceipt =
 	| ExternalEvidenceReceipt;
 
 export type AcceptanceEvidenceReceipt = EvidenceReceipt;
-/** A host-owned receipt reference; no receipt body is stored here. */
+/** 宿主持有的回执引用；此处不存储回执正文。 */
 export interface EvidenceRef {
 	readonly evidenceId: string;
 	readonly kind: EvidenceVerifierKind;
 	readonly receiptRef: string;
-	/** Optional explicit receipt identity accepted for legacy readers. */
+	/** 兼容旧读者的可选显式回执身份。 */
 	readonly receiptId?: string;
 	readonly gateId?: string;
 	readonly contractRevision?: number;
@@ -279,6 +280,12 @@ export interface ProviderHealthRef {
 	readonly healthRevision: number;
 	readonly generation: number;
 	readonly terminalReceiptRef?: string;
+	/** 宿主允许重试的 epoch-ms 时间戳；仅宿主可赋值。 */
+	readonly retryAt?: number;
+	/** 最近一次成功健康观察的 epoch-ms 时间戳。 */
+	readonly lastSuccess?: number;
+	/** 支撑该健康快照的宿主证据回执引用。 */
+	readonly evidenceRefs?: readonly string[];
 }
 
 export interface SupervisorDecisionRef {
@@ -299,7 +306,7 @@ export interface ExecutionRequestFact {
 	readonly status: ExecutionRequestStatus;
 	readonly startedAt: string;
 	readonly finishedAt?: string;
-	/** True when the host restarted while this request was active. */
+	/** 宿主在该请求进行期间重启时为 true。 */
 	readonly interrupted: boolean;
 }
 
@@ -321,13 +328,15 @@ export interface ExecutionScopeSnapshot extends ExecutionScopeIdentity {
 	readonly gates: readonly AcceptanceGate[];
 	readonly evidenceRefs: readonly EvidenceRef[];
 	readonly assignments: readonly ExecutionAssignment[];
+	/** 已物化的任务契约快照；journal 压缩为纯 snapshot 后仍可无损恢复。 */
+	readonly taskContracts: readonly TaskContractSnapshot[];
 	readonly strategies: readonly ExecutionStrategy[];
 	readonly usage: UsageTelemetry;
 	readonly providerHealth: readonly ProviderHealthRef[];
 	readonly supervisorDecisions: readonly SupervisorDecisionRef[];
 	readonly requests: readonly ExecutionRequestFact[];
 	readonly progress: readonly ProgressObservation[];
-	/** Record identities included by this snapshot, used for compacted replay. */
+	/** 本快照包含的记录身份集合，用于压缩后重放。 */
 	readonly recordIds: readonly string[];
 	readonly updatedAt: string;
 }
@@ -406,6 +415,13 @@ export interface ProgressObservedEvent extends ExecutionLedgerEventBase {
 	readonly observation: ProgressObservation;
 }
 
+export interface TaskContractRecordedEvent extends ExecutionLedgerEventBase {
+	readonly type: "task_contract_recorded";
+	/** 完整宿主契约快照；移除墓碑携带移除前的快照。 */
+	readonly contract: TaskContractSnapshot;
+	readonly removed?: boolean;
+}
+
 export type ExecutionLedgerEvent =
 	| ScopeStartedEvent
 	| ObjectiveContractBoundEvent
@@ -419,14 +435,15 @@ export type ExecutionLedgerEvent =
 	| SupervisorDecisionRecordedEvent
 	| RequestStartedEvent
 	| RequestFinishedEvent
-	| ProgressObservedEvent;
+	| ProgressObservedEvent
+	| TaskContractRecordedEvent;
 
-/** A journal-ready event with host-assigned monotonic revision and identity. */
+/** 携带宿主分配的自增 revision 与身份、可直接落盘的 journal 记录。 */
 export type ExecutionLedgerRecord = ExecutionLedgerEvent &
 	ExecutionScopeIdentity & {
 		readonly revision: number;
 		readonly occurredAt: string;
-		/** Repeated bounded contract reference keeps event-only journals recoverable. */
+		/** 重复的有界契约引用让纯事件 journal 仍可恢复。 */
 		readonly objectiveContract?: ImmutableObjectiveContract;
 	};
 

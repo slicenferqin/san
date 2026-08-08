@@ -50,6 +50,7 @@ import type { InteractiveModeContext } from "../modes/types";
 import { extractLastCodeBlock, extractLastCommand } from "../modes/utils/copy-targets";
 import {
 	abortSanLoopRun,
+	bindSanLoopChecks,
 	cancelRunningSanLoop,
 	createSanLoopTaskAgentExecutor,
 	discoverSanLoopChecks,
@@ -233,6 +234,22 @@ async function runConfiguredSanLoop(options: {
 	cwd: string;
 }): Promise<RunSanLoopResult> {
 	if (!sanLoopEnabled(options.settings)) throw new Error(SAN_LOOP_DISABLED_MESSAGE);
+	const executionRuntime = options.session.getExecutionRuntime();
+	if (!executionRuntime) {
+		throw new Error("San execution loop requires a session execution runtime; none is bound.");
+	}
+	const executionScopeId = options.session.getActiveExecutionScopeId();
+	if (!executionScopeId) {
+		throw new Error("San execution loop requires an active execution scope; none is started.");
+	}
+	// 目标契约从 active scope snapshot 的不可变 objectiveContract 取；缺失或
+	// clauseRefs 为空一律 fail-fast，绝不静默降级到无 host gate 运行。
+	const contractRef = executionRuntime.getScope(executionScopeId)?.snapshot().objectiveContract?.ref;
+	if (!contractRef?.clauseRefs?.length) {
+		throw new Error(
+			"San execution loop requires an immutable objective contract with clause refs on the active execution scope.",
+		);
+	}
 	const checks = options.settings.get("san.executionLoop.checks.enabled")
 		? await discoverSanLoopChecks({
 				cwd: options.cwd,
@@ -240,8 +257,35 @@ async function runConfiguredSanLoop(options: {
 				projectDir: options.settings.get("san.executionLoop.checks.projectDir"),
 			})
 		: [];
+	const boundChecks = bindSanLoopChecks(checks, {
+		objectiveClauseRefs: contractRef.clauseRefs,
+		contractRevision: contractRef.revision,
+		contractHash: contractRef.contractHash,
+	});
+	// 带 host verifier 的 bound checks 物化为 acceptance gate templates；
+	// runner 在 assignment 产生后按 assignment 绑定 freshness/assignmentId。
+	const acceptanceGates = boundChecks
+		.filter(check => check.verifier !== undefined)
+		.map(check => ({
+			gateId: check.name,
+			contractRef: {
+				contractId: contractRef.contractId,
+				revision: contractRef.revision,
+				contractHash: contractRef.contractHash,
+				clauseRefs: [...contractRef.clauseRefs],
+			},
+			contractRevision: contractRef.revision,
+			contractHash: contractRef.contractHash,
+			objectiveClauseRefs: [...check.objectiveClauseRefs!],
+			verifier: check.verifier!,
+			status: "unknown" as const,
+			evidenceRefs: [],
+			required: true,
+		}));
 	return runSanLoop({
 		sessionManager: options.sessionManager,
+		executionRuntime,
+		executionScopeId,
 		objective: options.objective,
 		mode: options.mode,
 		maxRetries: options.settings.get("san.executionLoop.maxRetries"),
@@ -254,10 +298,15 @@ async function runConfiguredSanLoop(options: {
 		reserveRatio: options.settings.get("san.executionLoop.budget.reserveRatio"),
 		oracleEnabledInModes: options.settings.get("san.executionLoop.roles.oracle.enabledInModes"),
 		contextPlanRefs: latestContextPlanRefs(options.sessionManager.getBranch()),
-		checks,
+		checks: boundChecks,
+		contractRevision: contractRef.revision,
+		contractHash: contractRef.contractHash,
+		acceptanceGates,
 		executor: createSanLoopTaskAgentExecutor({
 			session: options.session,
 			cwd: options.cwd,
+			executionRuntime,
+			executionScopeId,
 			hardBudget: {
 				maxTokens: positiveBudgetLimit(options.settings.get("san.executionLoop.budget.maxTokens")),
 				maxCost: positiveBudgetLimit(options.settings.get("san.executionLoop.budget.maxCost")),

@@ -1,3 +1,7 @@
+import type { AcceptanceGate, ImmutableObjectiveContract } from "../execution-control";
+import { createExecutionRuntime, ProviderHealthRegistry, TaskContractRegistry } from "../execution-control";
+import { createCommandEvidenceReceipt } from "../execution-control/evidence-gates";
+import type { ExecutionRuntime } from "../execution-control/execution-runtime";
 import type { SessionEntry } from "../session/session-entries";
 import { SessionManager } from "../session/session-manager";
 import { buildSanLoopReportText } from "../slash-commands/helpers/san-loop-report";
@@ -5,6 +9,50 @@ import { appendSanLoopRunSnapshot, createSanLoopRunSnapshot, rebuildSanLoopLedge
 import { defaultSanLoopModePolicy } from "./orchestrator";
 import { cancelRunningSanLoop, runSanLoop, type SanLoopAgentExecutor } from "./runner";
 import type { SanLoopMode, SanLoopReviewVerdict, SanLoopStatus, SanLoopTaskNode } from "./types";
+
+const DOGFOOD_CONTRACT: ImmutableObjectiveContract = {
+	ref: {
+		contractId: "contract-dogfood",
+		revision: 1,
+		contractHash: "sha256-contract-dogfood",
+		clauseRefs: ["clause:dogfood"],
+	},
+	authoritativeUserTurnId: "turn-1",
+	source: "authoritative_user",
+};
+const DOGFOOD_COMMAND = "bun test packages/coding-agent/test/san-loop";
+const DOGFOOD_CHECK_ID = `command:${DOGFOOD_COMMAND}`;
+
+function dogfoodAcceptanceGate(): AcceptanceGate {
+	return {
+		gateId: "gate:dogfood-command",
+		contractRef: DOGFOOD_CONTRACT.ref,
+		contractRevision: DOGFOOD_CONTRACT.ref.revision,
+		contractHash: DOGFOOD_CONTRACT.ref.contractHash,
+		objectiveClauseRefs: [...DOGFOOD_CONTRACT.ref.clauseRefs],
+		verifier: { kind: "command", checkId: DOGFOOD_CHECK_ID, expectedExitCode: 0 },
+		status: "unknown",
+		evidenceRefs: [],
+		required: true,
+	};
+}
+
+function dogfoodRunContract() {
+	return {
+		contractRevision: DOGFOOD_CONTRACT.ref.revision,
+		contractHash: DOGFOOD_CONTRACT.ref.contractHash,
+		objectiveClauseRefs: [...DOGFOOD_CONTRACT.ref.clauseRefs],
+		acceptanceGates: [dogfoodAcceptanceGate()],
+	};
+}
+
+function dogfoodScope(runtime: ExecutionRuntime, session: SessionManager, logicalTurnId: string): string {
+	return runtime.startScope({
+		rootSessionId: session.getSessionId() || DEFAULT_SESSION_ID,
+		logicalTurnId,
+		objectiveContract: DOGFOOD_CONTRACT,
+	}).scopeId;
+}
 
 export interface SanLoopDogfoodOptions {
 	cwd?: string;
@@ -64,11 +112,14 @@ function makeExecutor(options: {
 	taskId: string;
 	taskTitle: string;
 	reviews: readonly SanLoopReviewVerdict[];
+	runtime: ExecutionRuntime;
+	scopeId: string;
 	oracle?: boolean;
 }): SanLoopAgentExecutor {
 	let commanderCalls = 0;
 	let workerCalls = 0;
 	let supervisorCalls = 0;
+	const evidenceRefsByAssignment = new Map<string, string>();
 	return {
 		async commander(invocation) {
 			commanderCalls += 1;
@@ -86,27 +137,48 @@ function makeExecutor(options: {
 		},
 		async worker(invocation) {
 			workerCalls += 1;
+			const gate = options.runtime
+				.getScope(options.scopeId)
+				?.snapshot()
+				.gates.find(candidate => candidate.assignmentId === invocation.assignment.assignmentId);
+			if (!gate || gate.freshnessRevision === undefined || gate.verifier.kind !== "command") {
+				throw new Error(`Dogfood command gate is missing for assignment ${invocation.assignment.assignmentId}.`);
+			}
+			const receiptId = `receipt:${invocation.assignment.assignmentId}:${gate.gateId}`;
+			evidenceRefsByAssignment.set(invocation.assignment.assignmentId, receiptId);
 			return {
 				resultId: `${options.taskId}-result-${workerCalls}`,
 				assignmentId: invocation.assignment.assignmentId,
 				status: "completed",
 				summary: `Completed ${invocation.assignment.objective} on attempt ${workerCalls}.`,
 				changedFiles: [`packages/coding-agent/src/san-loop/${options.taskId}.ts`],
-				commandsRun: [
-					{
-						command: "bun test packages/coding-agent/test/san-loop",
-						exitCode: 0,
-						summary: "passed",
-						source: "host",
-					},
-				],
+				commandsRun: [{ command: DOGFOOD_COMMAND, exitCode: 0, summary: "passed", source: "host" }],
 				verification: ["focused san-loop tests pass"],
+				evidenceReceipts: [
+					createCommandEvidenceReceipt({
+						receiptId,
+						scopeId: options.scopeId,
+						gateId: gate.gateId,
+						contractRevision: gate.contractRevision,
+						contractHash: gate.contractHash ?? gate.contractRef.contractHash,
+						freshnessRevision: gate.freshnessRevision,
+						assignmentId: invocation.assignment.assignmentId,
+						outcome: "pass",
+						timestamp: new Date().toISOString(),
+						checkId: gate.verifier.checkId,
+						exitCode: 0,
+					}),
+				],
 				risks: workerCalls > 1 ? ["retry path exercised"] : [],
 			};
 		},
-		async supervisor() {
+		async supervisor(invocation) {
 			const verdict = options.reviews[Math.min(supervisorCalls, options.reviews.length - 1)] ?? "pass";
 			supervisorCalls += 1;
+			const evidenceRefs = invocation.assignments.flatMap(assignment => {
+				const receiptId = evidenceRefsByAssignment.get(assignment.assignmentId);
+				return receiptId ? [receiptId] : [];
+			});
 			if (verdict === "needs_fix") {
 				return {
 					reportId: `${options.taskId}-review-fix-${supervisorCalls}`,
@@ -147,12 +219,13 @@ function makeExecutor(options: {
 				verdict: "pass",
 				testsRun: ["bun test packages/coding-agent/test/san-loop"],
 				evidence: ["all deterministic checks pass"],
+				evidenceRefs,
 				retryable: false,
 				requiredNextActions: [],
 				confidence: "high",
 			};
 		},
-		async oracle() {
+		async oracle(invocation) {
 			if (!options.oracle) {
 				return {
 					reviewer: "oracle",
@@ -173,11 +246,16 @@ function makeExecutor(options: {
 					confidence: "low",
 				};
 			}
+			const evidenceRefs = invocation.assignments.flatMap(assignment => {
+				const receiptId = evidenceRefsByAssignment.get(assignment.assignmentId);
+				return receiptId ? [receiptId] : [];
+			});
 			return {
 				reviewer: "oracle",
 				verdict: "pass",
 				testsRun: [],
 				evidence: ["oracle second opinion reviewed deterministic council-mode evidence"],
+				evidenceRefs,
 				retryable: false,
 				requiredNextActions: ["continue supervisor gate"],
 				confidence: "high",
@@ -216,48 +294,87 @@ export async function runSanLoopDogfood(options: SanLoopDogfoodOptions = {}): Pr
 	const session = SessionManager.inMemory(options.cwd);
 	const sessionId = session.getSessionId() || DEFAULT_SESSION_ID;
 
+	const runtime = createExecutionRuntime({
+		rootSessionId: session.getSessionId() || DEFAULT_SESSION_ID,
+		branchEntries: session.getEntries(),
+		sessionManager: session,
+		taskRegistry: new TaskContractRegistry({
+			rootSessionId: session.getSessionId() || DEFAULT_SESSION_ID,
+		}),
+		providerRegistry: new ProviderHealthRegistry({ now: () => 0 }),
+		now: () => new Date().toISOString(),
+	});
+
+	const soloScopeId = dogfoodScope(runtime, session, "turn-solo-pass");
 	await runSanLoop({
 		sessionManager: session,
+		executionRuntime: runtime,
+		executionScopeId: soloScopeId,
 		objective: "Dogfood solo mode pass loop",
 		mode: "solo",
 		runId: "loop_dogfood_solo_pass",
-		executor: makeExecutor({ taskId: "solo-pass", taskTitle: "solo pass implementation", reviews: ["pass"] }),
+		...dogfoodRunContract(),
+		executor: makeExecutor({
+			taskId: "solo-pass",
+			taskTitle: "solo pass implementation",
+			reviews: ["pass"],
+			runtime,
+			scopeId: soloScopeId,
+		}),
 	});
 
+	const teamScopeId = dogfoodScope(runtime, session, "turn-team-retry");
 	await runSanLoop({
 		sessionManager: session,
+		executionRuntime: runtime,
+		executionScopeId: teamScopeId,
 		objective: "Dogfood team mode retry loop",
 		mode: "team",
 		runId: "loop_dogfood_team_retry",
+		...dogfoodRunContract(),
 		executor: makeExecutor({
 			taskId: "team-retry",
 			taskTitle: "team retry implementation",
 			reviews: ["needs_fix", "pass"],
+			runtime,
+			scopeId: teamScopeId,
 		}),
 	});
 
+	const councilScopeId = dogfoodScope(runtime, session, "turn-council-blocked");
 	await runSanLoop({
 		sessionManager: session,
+		executionRuntime: runtime,
+		executionScopeId: councilScopeId,
 		objective: "Dogfood council mode blocked loop",
 		mode: "council",
 		runId: "loop_dogfood_council_blocked",
+		...dogfoodRunContract(),
 		executor: makeExecutor({
 			taskId: "council-blocked",
 			taskTitle: "council blocked implementation",
 			reviews: ["blocked"],
 			oracle: true,
+			runtime,
+			scopeId: councilScopeId,
 		}),
 	});
 
+	const budgetScopeId = dogfoodScope(runtime, session, "turn-budget-exhausted");
 	await runSanLoop({
 		sessionManager: session,
 		objective: "Dogfood hard turn budget",
+		executionRuntime: runtime,
+		executionScopeId: budgetScopeId,
 		mode: "team",
 		runId: "loop_dogfood_budget_exhausted",
+		...dogfoodRunContract(),
 		executor: makeExecutor({
 			taskId: "budget-exhausted",
 			taskTitle: "budget exhausted implementation",
 			reviews: ["pass"],
+			runtime,
+			scopeId: budgetScopeId,
 		}),
 		maxTurns: 2,
 	});
@@ -271,12 +388,15 @@ export async function runSanLoopDogfood(options: SanLoopDogfoodOptions = {}): Pr
 	appendSanLoopRunSnapshot(session, activeRun);
 	recoverSanLoopRun(session, activeRun, { reason: "Dogfood recovered active run without a child process." });
 
+	const abortScopeId = dogfoodScope(runtime, session, "turn-operator-abort");
 	const workerStarted = Promise.withResolvers<void>();
 	const workerAbortObserved = Promise.withResolvers<void>();
 	const abortExecutor = makeExecutor({
 		taskId: "operator-abort",
 		taskTitle: "operator abort implementation",
 		reviews: ["pass"],
+		runtime,
+		scopeId: abortScopeId,
 	});
 	abortExecutor.worker = async invocation => {
 		workerStarted.resolve();
@@ -295,8 +415,11 @@ export async function runSanLoopDogfood(options: SanLoopDogfoodOptions = {}): Pr
 	const abortRun = runSanLoop({
 		sessionManager: session,
 		objective: "Dogfood operator abort",
+		executionRuntime: runtime,
+		executionScopeId: abortScopeId,
 		mode: "solo",
 		runId: "loop_dogfood_aborted",
+		...dogfoodRunContract(),
 		executor: abortExecutor,
 	});
 	await workerStarted.promise;

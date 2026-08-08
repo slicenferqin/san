@@ -258,6 +258,60 @@ describe("Watchdog", () => {
 		expect(afterFreshRevision.repeatCount).toBe(1);
 	});
 
+	test("runtime progress echoes of the same observation do not reset the repeat window; new evidence does", () => {
+		const ledger = makeLedger();
+		const watchdog = new Watchdog({ ledger, mode: "enforce", repeatThreshold: 3 });
+		const observation = repeatedFailure();
+		const classified = watchdog.classifier.classify(observation);
+		const echo = (recordId: string, observationId: string) =>
+			ledger.append({
+				recordId,
+				type: "progress_observed",
+				observation: {
+					observationId,
+					progressClass: classified.progressClass === "legitimate_waiting" ? "activity" : classified.progressClass,
+					fingerprint: classified.fingerprint,
+					revision: 0,
+				},
+			});
+
+		const first = watchdog.observe(observation);
+		echo("progress:echo:1", "obs:1");
+		const second = watchdog.observe(observation);
+		echo("progress:echo:2", "obs:2");
+		const third = watchdog.observe(observation);
+
+		expect(first.repeatCount).toBe(1);
+		expect(second.repeatCount).toBe(2);
+		expect(third.repeatCount).toBe(3);
+		expect(third.suspicious).toBe(true);
+		expect(third.action).toBe("suppress_unchanged_poll");
+		expect(third.waitFor).toBe("external_event");
+		expect(third.diagnosis?.basisRevision).toBe(2);
+
+		// 同一观察的进一步回显不会破坏抑制窗口与诊断。
+		echo("progress:echo:3", "obs:3");
+		const stillSuppressed = watchdog.observe(observation);
+		expect(stillSuppressed.repeatCount).toBe(4);
+		expect(stillSuppressed.suspicious).toBe(true);
+		expect(stillSuppressed.action).toBe("suppress_unchanged_poll");
+		expect(stillSuppressed.stale).toBe(false);
+
+		// 真正的新宿主证据会重置重复窗口。
+		ledger.append({
+			recordId: "evidence:new",
+			type: "evidence_recorded",
+			evidence: {
+				evidenceId: "evidence:new",
+				kind: "artifact",
+				receiptRef: "receipt:new",
+			},
+		});
+		const reset = watchdog.observe(observation);
+		expect(reset.suspicious).toBe(false);
+		expect(reset.repeatCount).toBe(1);
+	});
+
 	test("heartbeat clears a suspected stall and huge telemetry never becomes terminal", () => {
 		const ledger = makeLedger();
 		const watchdog = new Watchdog({ ledger, mode: "enforce", repeatThreshold: 2 });

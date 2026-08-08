@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>San 失控循环治理：并行实施计划</title>
+	<style>
+		:root { color-scheme: light; --ink:#15202b; --muted:#566272; --line:#d8dee8; --panel:#f7f9fc; --blue:#1456a0; --green:#176b3a; --amber:#895900; --red:#a02525; }
+		* { box-sizing: border-box; }
+		body { margin:0; color:var(--ink); background:#fff; font:15px/1.58 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+		main { max-width:1180px; margin:0 auto; padding:40px 28px 72px; }
+		h1,h2,h3 { line-height:1.22; }
+		h1 { margin:0 0 8px; font-size:32px; }
+		h2 { margin-top:38px; padding-bottom:8px; border-bottom:2px solid var(--line); font-size:23px; }
+		h3 { margin:24px 0 8px; font-size:18px; }
+		p,li { max-width:100ch; }
+		.meta,.muted { color:var(--muted); }
+		.badge { display:inline-block; margin:2px 5px 2px 0; padding:2px 8px; border:1px solid var(--line); border-radius:999px; background:var(--panel); font-size:12px; font-weight:700; }
+		.decision { border-left:5px solid var(--blue); background:#eef5ff; padding:14px 18px; }
+		.warn { border-left:5px solid var(--amber); background:#fff8e8; padding:12px 16px; }
+		.ok { border-left:5px solid var(--green); background:#eef9f2; padding:12px 16px; }
+		table { width:100%; border-collapse:collapse; margin:14px 0 24px; font-size:14px; }
+		th,td { border:1px solid var(--line); padding:9px 11px; text-align:left; vertical-align:top; }
+		th { background:#edf1f7; }
+		code { padding:1px 4px; border-radius:4px; background:#eef1f5; font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; }
+		pre { overflow:auto; padding:14px; border:1px solid var(--line); border-radius:7px; background:#111923; color:#e7edf5; font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+		ol.wave > li { margin-bottom:14px; }
+		.packet { margin:18px 0; padding:1px 18px 14px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+		.must { color:var(--red); font-weight:700; }
+		@media (max-width:760px) { main { padding:24px 15px 48px; } table { display:block; overflow-x:auto; } h1 { font-size:27px; } }
+	</style>
+</head>
+<body>
+<main>
+	<header>
+		<h1>San 失控循环治理：并行实施计划</h1>
+		<p class="meta">计划基线：2026-08-07 · 范围：<code>packages/coding-agent</code> · 实施策略：前置串行收口，后续按文件所有权并行</p>
+		<span class="badge">Clean cutover</span><span class="badge">Host authority</span><span class="badge">Branch-scoped runtime</span><span class="badge">Deterministic fault injection</span>
+	</header>
+
+	<section>
+		<h2>1. 结论与完成标准</h2>
+		<div class="decision">
+			<strong>决策：</strong>不新增第二套执行控制。以现有 <code>ExecutionRuntime</code>、<code>TaskContractRegistry</code>、<code>ProviderHealthRegistry</code>、<code>ExecutionScheduler</code>、<code>Watchdog</code> 为唯一控制面；把它们接入真实的 AgentSession、task 子代理和 San Loop 路径。所有运行状态由宿主持有，模型文本只提供建议或观测，不能批准完成、切换终态或解除外部阻塞。
+		</div>
+		<p>用户问题不是“缺少重试”，而是控制面未接线：实现已存在，但关键运行路径没有共享同一 scope、没有在 provider/task 事件后更新 scheduler、San Loop 仍允许绕过 scheduler。最终验收必须同时证明：</p>
+		<ul>
+			<li>同一父请求及其 task 子代理共享一个 <code>executionScopeId</code>；独立用户请求和并发父请求隔离。</li>
+			<li>provider 冷却、认证失败、速率限制会改变 scheduler 可运行性；无健康 provider 时不再发起模型调用。</li>
+			<li>重复 work/strategy/failure 被 Watchdog 识别；无新证据时转诊断、等待或终止，而不是继续消耗 token。</li>
+			<li>只有满足 host evidence gate 才能 <code>completed</code>；只有类型化外部阻塞证据才进入 <code>needs_user</code>。</li>
+			<li>分支切换、会话重放、abort、dispose 后不遗留订阅、活动 scope 或幽灵运行。</li>
+			<li>确定性故障注入覆盖 Grok 鉴权失败、流中断、重复工作、无新证据、外部依赖、预算耗尽。</li>
+		</ul>
+	</section>
+
+	<section>
+		<h2>2. 冻结的跨模块契约</h2>
+		<table>
+			<thead><tr><th>契约</th><th>冻结规则</th><th>原因</th></tr></thead>
+			<tbody>
+				<tr><td>Scope 身份</td><td>每个顶层用户执行创建一个 scope；父任务通过只读字段把该 ID 传给子代理。子代理不得创建、切换或释放 scope。</td><td>保证父子预算、证据和 provider 状态共享，同时隔离并发父请求。</td></tr>
+				<tr><td>Scope 解析优先级</td><td>显式 task contract scope → child 固定 scope → runtime active scope → 根会话按 host request 新建。禁止用全局单例猜测。</td><td>避免 active scope 在并发/分支切换时串线。</td></tr>
+				<tr><td>持久化</td><td>仅使用当前 SessionManager 分支的自定义 entries；回放恢复 scope、task contracts、provider health、progress window 与终态。不得扫描其他分支。</td><td>防止分叉会话污染。</td></tr>
+				<tr><td>事件职责</td><td>AgentSession 发布 request/response/provider 观测；task registry 发布 contract 生命周期；ExecutionRuntime 订阅并推进 ledger/scheduler；San Loop 只调用 runtime 公共 API。</td><td>单一写入路径，避免各模块重复计算状态。</td></tr>
+				<tr><td>终态</td><td><code>completed</code> 需 host-owned evidence gate；<code>needs_user</code> 需 <code>SupervisorExternalBlocker</code>；预算耗尽使用新增 <code>budget_exhausted</code>，不伪装成外部阻塞。</td><td>保护终态语义和 UI/自动恢复决策。</td></tr>
+				<tr><td>Provider 观测</td><td>仅持久化脱敏字段：provider、model、失败类别、冷却时间、请求计数、稳定失败指纹。原始错误、token、headers 不进入 ledger。</td><td>避免凭据泄漏，同时保留可诊断性。</td></tr>
+				<tr><td>Watchdog 动作</td><td><code>reject/reuse_duplicate</code> 不重新调度；<code>suppress_unchanged_poll</code> 事件驱动等待；<code>diagnose</code> 触发一次 supervisor 恢复决策；<code>repair_state_drift</code> 重新同步分支/runtime。</td><td>将“检测”变为可执行控制，而不是日志。</td></tr>
+			</tbody>
+		</table>
+		<div class="warn"><strong>禁止：</strong>以 worker/supervisor 自述文本作为外部阻塞证据；在 task 子会话中自行创建 runtime；用 <code>blocked</code> 同时表示外部依赖、预算耗尽和 provider 暂不可用；保留旧的 scheduler 可选旁路。</div>
+	</section>
+
+	<section>
+		<h2>3. 执行波次与依赖图</h2>
+		<pre>Wave 0  Main：收口当前 ProviderHealth WIP + 固化共享适配器/测试基线
+              │
+              ▼
+Wave 1  RuntimeCore：分支感知 ExecutionRuntime、持久化、budget_exhausted、订阅契约
+              │ 冻结 API 后广播接口
+       ┌──────┼──────────────────┐
+       ▼      ▼                  ▼
+Wave 2 SessionWire        TaskWire            SanLoopWire
+       AgentSession       task 子代理          scheduler/watchdog/终态
+       └──────┬──────────────────┘
+              ▼
+Wave 3 EvidenceLab：确定性跨层回归 + dogfood 扩展
+        ReadOnlyReviewer：并行审查 host authority、并发隔离、泄密风险
+              │
+              ▼
+Final   Main：整合审查修复 → focused suites → bun check → dogfood CLI → package suite → smoke</pre>
+		<ol class="wave">
+			<li><strong>Wave 0 必须串行。</strong>所有后续 agent 依赖 provider snapshot→ref 转换器和绿色基线；Main 完成，不委派。</li>
+			<li><strong>Wave 1 必须串行。</strong>RuntimeCore 独占 execution-control 核心文件；完成后 Main 广播最终公共 API。后续 agent 不得猜接口。</li>
+			<li><strong>Wave 2 三路并行。</strong>Session、Task、SanLoop 文件互斥；仅通过 Wave 1 公共接口连接。任何需要修改别人所有权文件的需求先发消息，禁止越界编辑。</li>
+			<li><strong>Wave 3 两路并行。</strong>EvidenceLab 只新增/修改测试和 dogfood 场景；Reviewer 只读。生产代码补丁退回原文件 owner 或由 Main 在 owner 释放后处理。</li>
+		</ol>
+	</section>
+
+	<section>
+		<h2>4. 文件所有权矩阵</h2>
+		<table>
+			<thead><tr><th>Owner</th><th>独占文件/目录</th><th>允许读取，不允许修改</th></tr></thead>
+			<tbody>
+				<tr><td>Main / Wave 0</td><td><code>src/execution-control/provider-health.ts</code>、当前迁移中的 provider-health 测试、计划文档</td><td>全部</td></tr>
+				<tr><td>RuntimeCore</td><td><code>src/execution-control/{types,execution-ledger,persistence,runtime,index}.ts</code>；对应 execution-control 单测</td><td>AgentSession、task、san-loop</td></tr>
+				<tr><td>SessionWire</td><td><code>src/agent-session.ts</code>、<code>src/sdk.ts</code>；新建/对应 session lifecycle 测试</td><td>execution-control 公共 API、task、san-loop</td></tr>
+				<tr><td>TaskWire</td><td><code>src/tools/task.ts</code>、<code>src/task-tool/**</code>；对应 task 测试</td><td>session、execution-control、san-loop</td></tr>
+				<tr><td>SanLoopWire</td><td><code>src/san-loop/**</code>（dogfood 场景暂不改）；对应 runner/ledger 测试</td><td>session、task、execution-control</td></tr>
+				<tr><td>EvidenceLab</td><td>新建跨层测试；<code>src/san-loop/dogfood.ts</code>、<code>scripts/san-loop-dogfood.ts</code>、dogfood 测试</td><td>全部生产代码</td></tr>
+				<tr><td>Reviewer</td><td>无，严格只读</td><td>所有改动</td></tr>
+			</tbody>
+		</table>
+		<p class="muted">同一文件在同一波次只有一个 owner。若测试文件已有 owner，EvidenceLab 新建独立跨层测试，不追加到该文件。所有 owner 跳过 formatter、lint 和项目全量测试；这些只由 Main 最终执行一次。</p>
+	</section>
+
+	<section>
+		<h2>5. Work Packet：Wave 0 / Main</h2>
+		<div class="packet">
+			<h3>目标</h3>
+			<ul>
+				<li>收口当前 WIP：<code>provider-health.test.ts</code> 从 <code>src</code> 移到标准 <code>test/execution-control</code>；保留“连续认证失败冷却”和“健康复位”两个可观察契约。</li>
+				<li>保留并验证 <code>providerHealthRefFromSnapshot()</code>；它是 SessionWire/SanLoopWire 唯一的 snapshot→ledger ref 适配器。</li>
+				<li>确认 <code>clear()</code> 通知订阅者、<code>subscribe()</code> 可解除订阅、快照不含 secrets/raw error。</li>
+			</ul>
+			<h3>验收</h3>
+			<pre>bun test packages/coding-agent/test/execution-control/provider-health.test.ts
+bun test packages/coding-agent/test/execution-control</pre>
+			<p>基线失败则先修复根因；不得把失败留给下游 agent。</p>
+		</div>
+	</section>
+
+	<section>
+		<h2>6. Work Packet：Wave 1 / RuntimeCore</h2>
+		<div class="packet">
+			<h3>变更</h3>
+			<ol>
+				<li>新增 <code>budget_exhausted</code> 终态/原因，贯通类型、ledger transition、序列化/反序列化和回放；已有 <code>needs_user</code> 只接受类型化外部 blocker。</li>
+				<li>扩展 <code>ExecutionRuntime</code>：创建或接受共享 registries；启动时从当前分支 entries 回放；暴露 <code>startScope</code>、<code>activeScopeId</code>、<code>syncBranch</code>、<code>recordHostObservation</code>、<code>recordProviderSnapshot</code>、<code>finishScope</code>、幂等 <code>dispose</code>。</li>
+				<li>订阅 TaskContractRegistry 和 ProviderHealthRegistry。事件到达后更新 execution ledger、刷新 runnable nodes、调用 scheduler <code>observe/enforce</code>；subscriber 抛错不得吞掉，错误需带 scope/event。</li>
+				<li>分支切换执行：取消旧分支订阅/活动 scope → 从新分支回放 → 重建 registries/scheduler → 发布新 active state。只读/历史查看不得持久化新 entry。</li>
+				<li>终态 CAS：scope 已终止后拒绝晚到 provider/task 事件改变终态；dispose 后拒绝新写入。</li>
+			</ol>
+			<h3>公共 API 交接</h3>
+			<p>完成后向 Main 返回：导出的类型/方法签名、事件顺序、哪些方法可能抛错、测试命令。Main 将该结果广播给 Wave 2；Wave 2 只能消费这些 API。</p>
+			<h3>验收</h3>
+			<ul>
+				<li>回放后 active scope、任务状态、provider 冷却、progress window 与原分支一致；另一分支状态不可见。</li>
+				<li>重复 dispose 不报错且订阅计数归零。</li>
+				<li>预算终态序列化往返稳定；旧 ledger 仍可读取。</li>
+			</ul>
+			<pre>bun test packages/coding-agent/test/execution-control</pre>
+		</div>
+	</section>
+
+	<section>
+		<h2>7. Work Packets：Wave 2 并行三路</h2>
+		<div class="packet">
+			<h3>SessionWire：顶层生命周期与 provider 观测</h3>
+			<ol>
+				<li>在 <code>createAgentSession()</code> 完成 SessionManager/ProviderHealthRegistry/TaskContractRegistry 初始化后创建唯一 ExecutionRuntime，并交给 AgentSession 和 task 工具。</li>
+				<li>每个宿主用户执行在首次 provider 调用前创建 scope；记录用户消息 entry ID 为 evidence ref。请求完成、abort、异常分别由宿主推进对应 transition。</li>
+				<li>provider 调用成功/失败后用现有失败分类器和 snapshot→ref 适配器发布脱敏观测；无可用 provider 时由 scheduler gate 阻止调用，不能先调用再记录。</li>
+				<li>分支切换调用 runtime <code>syncBranch</code>；根会话 dispose 释放 runtime。read-only SDK 路径不产生执行 ledger 写入。</li>
+			</ol>
+			<p><strong>验收：</strong>第一轮 provider 调用已带 scope；两个并发 session/scope 不串证据；abort 后迟到响应不能复活 scope；dispose 无监听器泄漏。</p>
+		</div>
+		<div class="packet">
+			<h3>TaskWire：父子共享 scope 与 contract 驱动调度</h3>
+			<ol>
+				<li>为 ToolSession 增加只读 ExecutionRuntime/固定 scope 访问，不引入全局状态。</li>
+				<li>父 task invocation 通过 TaskContractRegistry 注册稳定 contract：<code>contractId/scopeId/taskId/workKey/strategyKey</code>；子 AgentSession 接收固定 <code>executionScopeId</code>。</li>
+				<li>子代理不得调用 <code>startScope</code>、<code>syncBranch</code> 或 <code>dispose</code>。完成、失败、abort 映射为 contract 状态和 host observation。</li>
+				<li>相同 scope 下重复 work/strategy contract 命中 Watchdog 时复用/拒绝，不重新 spawn；已有运行任务由 TaskManager 结果唤醒，不轮询。</li>
+			</ol>
+			<p><strong>验收：</strong>父→子→孙三层 scope 不变；并行兄弟任务 contract 独立；一个兄弟失败不污染另一个；重复任务不增加 spawn 次数。</p>
+		</div>
+		<div class="packet">
+			<h3>SanLoopWire：强制 scheduler、Watchdog 与终态治理</h3>
+			<ol>
+				<li><code>runSanLoop</code> 必须接收共享 runtime 或从 executor/session 得到它；删除 scheduler 可选旁路。runId/assignments 创建后立即生成 TaskContract 并设置 runnable nodes。</li>
+				<li>每个 commander/worker/supervisor/oracle 调用前执行 scheduler dispatch gate；provider unhealthy 或 contract 不可运行时不消耗 role budget/provider request。</li>
+				<li>worker 结果转换为 host observation：新文件/测试/receipt 为 evidence；同一错误转换为稳定 failure fingerprint；heartbeat 只更新时间，不算进展。</li>
+				<li>处理 Watchdog 动作：duplicate 复用/拒绝；unchanged poll 等待外部事件；diagnose 只运行一次 supervisor 恢复；state drift 同步 runtime 后以 CAS basis 重试。</li>
+				<li>review 通过仍需 evidence gate 才完成。外部 check 只能由匹配 <code>dependencyId</code> 的 host external receipt 生成 <code>needs_user</code>；turn/token/cost/time/provider-request 限额统一生成 <code>budget_exhausted</code>。</li>
+				<li>依赖无法调度但无外部 receipt 时保持内部 blocked/diagnose，不向用户伪报缺权限或缺输入。</li>
+			</ol>
+			<p><strong>验收：</strong>现有 solo/team/council/recovery/abort 场景保持；新增 duplicate、provider cooldown、budget_exhausted、external blocker 的事件和终态断言。</p>
+		</div>
+	</section>
+
+	<section>
+		<h2>8. Work Packets：Wave 3 验证与只读审查</h2>
+		<div class="packet">
+			<h3>EvidenceLab：确定性故障注入</h3>
+			<table>
+				<thead><tr><th>场景</th><th>注入</th><th>必须观察到</th></tr></thead>
+				<tbody>
+					<tr><td>认证失败风暴</td><td>同 provider 连续 auth failure，时间使用注入时钟</td><td>达到阈值后 cooldown；期间零新增 provider 调用；健康成功复位。</td></tr>
+					<tr><td>流中断</td><td>相同 stream failure fingerprint 重复返回</td><td>首次记录失败，后续被判重复；诊断有硬上限，不循环重派。</td></tr>
+					<tr><td>无新证据</td><td>worker 多次返回相同声明、无 host receipt</td><td>不计 progress；进入 diagnose/等待，最终由宿主终态收口。</td></tr>
+					<tr><td>重复 work</td><td>同 scope/workKey/strategyKey 并发注册</td><td>只 spawn 一次；第二个复用或拒绝，并记录 stable decision。</td></tr>
+					<tr><td>外部阻塞</td><td>匹配 check dependencyId 的 host receipt</td><td>生成 <code>needs_user</code>；仅模型文本声明时不得生成。</td></tr>
+					<tr><td>预算耗尽</td><td>turn/token/cost/provider-request 任一触顶</td><td><code>budget_exhausted</code>；不再调用 supervisor/provider。</td></tr>
+					<tr><td>分支与并发</td><td>两个 scope 并发后切换分支并回放</td><td>ledger/health/contracts 完全隔离；旧分支晚到事件被拒。</td></tr>
+					<tr><td>中止清理</td><td>worker 运行时 abort + dispose</td><td>contract/scope 终止；订阅释放；晚到结果不改变终态。</td></tr>
+				</tbody>
+			</table>
+			<p>测试断言运行行为、entry/receipt/transition 和调用次数；禁止读取实现源码做字符串断言。Dogfood CLI 必须返回非零退出码处理失败 assertion，并输出每个场景的稳定摘要。</p>
+		</div>
+		<div class="packet">
+			<h3>ReadOnlyReviewer：独立审查</h3>
+			<ul>
+				<li>检查所有终态写入点，证明 model-authored payload 不能直达 completed/needs_user。</li>
+				<li>检查 runtime/session/task 的 scope 所有权、分支隔离、dispose 顺序和晚到事件。</li>
+				<li>检查 provider evidence 不含 token、header、raw response、home path。</li>
+				<li>检查所有 scheduler 可选旁路已删除，所有 role dispatch 都经过 gate。</li>
+				<li>按严重度输出具体 <code>file:line</code>、可复现场景和修复建议；无问题时明确列出已审查的不变量。</li>
+			</ul>
+		</div>
+	</section>
+
+	<section>
+		<h2>9. Agent 协作协议</h2>
+		<ul>
+			<li>Main 一次批量派发同一 wave 的所有独立任务；不会“spawn 一个然后空等”。</li>
+			<li>每个任务都包含 Target / Change / Acceptance，明确非目标和文件所有权；agent 跳过 formatter、lint、全量测试。</li>
+			<li>公共 API 变更由 owner 先消息通知 Main；Main 广播给依赖者。依赖者不得通过兼容 shim 绕过新契约。</li>
+			<li>发现需跨所有权修改：停止该文件编辑，向 owner/Main 发送精确 symbol、原因、所需签名；能继续的本地工作继续。</li>
+			<li>同一波次结束后 Main 收集结果并执行一次接口级检查；失败只重派受影响 slice，不回滚用户或其他 agent 的无关变更。</li>
+			<li>Reviewer 发现 blocker 后，原 owner 优先修复；owner 已释放时 Main 接管。修复后只重跑相关 regression，再进入最终验证。</li>
+		</ul>
+		<h3>Wave 2 任务共用 context 模板</h3>
+		<pre># Goal
+把现有 execution-control 接入真实运行路径，消除无新证据的循环消耗。
+
+# Constraints
+- 只修改分配的文件；不得创建第二控制面或兼容 shim。
+- Host owns scope/evidence/terminal state；模型文本不能授权完成或 needs_user。
+- 使用 Wave 1 已冻结的 ExecutionRuntime API；接口不符先消息 Main。
+- 跳过 formatter、lint、项目全量测试；仅运行 assignment 指定的 focused tests。
+
+# Contract
+executionScopeId 顶层创建、子代理继承；provider/task 事件进入共享 runtime；
+completed 需 host evidence；needs_user 需 typed external blocker；budget 为 budget_exhausted。</pre>
+	</section>
+
+	<section>
+		<h2>10. 最终验证顺序与退出门</h2>
+		<p>只有所有 wave 合并且审查 blocker 清零后，Main 按下列顺序执行。任一步失败：修根因、重跑该步及其后步骤；不得跳过。</p>
+		<pre># 1. 最窄契约
+bun test packages/coding-agent/test/execution-control/provider-health.test.ts
+bun test packages/coding-agent/test/execution-control
+bun test packages/coding-agent/test/task-tool packages/coding-agent/test/tools/task.test.ts
+bun test packages/coding-agent/test/san-loop
+bun test packages/coding-agent/test/execution-scope-lifecycle.test.ts
+
+# 2. 静态检查
+bun check
+
+# 3. 真实 dogfood 可执行路径
+bun run packages/coding-agent/scripts/san-loop-dogfood.ts
+
+# 4. 包级回归
+bun test packages/coding-agent/test
+
+# 5. 编译/安装关键路径 smoke
+bun run ci:test:smoke</pre>
+		<div class="ok">
+			<strong>退出门：</strong>所有命令通过；dogfood 每个场景 <code>ok=true</code>；无未处理 reviewer blocker；无 source 目录测试残留；无新增动态 import、<code>any</code>、<code>ReturnType&lt;&gt;</code>、console 输出或新 prompt 内联字符串。此后才做 changelog 与临时脚手架清理；不提交，除非用户另行要求。
+		</div>
+	</section>
+
+	<section>
+		<h2>11. 主要风险与预防</h2>
+		<table>
+			<thead><tr><th>风险</th><th>预防/检测</th></tr></thead>
+			<tbody>
+				<tr><td>父子 scope 串线</td><td>固定 scope 显式下传；并发父请求 + 三层子代理测试；禁止 global active lookup 作为 child 首选。</td></tr>
+				<tr><td>分支回放重复订阅</td><td>syncBranch 先释放旧订阅；幂等 dispose；订阅计数和晚到事件测试。</td></tr>
+				<tr><td>provider 健康事件递归写 ledger</td><td>runtime 区分 registry-origin 与 replay-origin；回放不触发再次持久化。</td></tr>
+				<tr><td>误把自述当证据</td><td>evidence gate 只解析 host receipts；对抗测试提交看似可信的 supervisor 文本。</td></tr>
+				<tr><td>scheduler gate 消耗预算后才拒绝</td><td>dispatch gate 必须位于 role/provider 调用和预算 reservation 之前；断言 providerRequests/turns 不增加。</td></tr>
+				<tr><td>并行修改冲突</td><td>文件 owner 互斥；共享类型只由 RuntimeCore 修改；EvidenceLab 新建跨层测试。</td></tr>
+			</tbody>
+		</table>
+	</section>
+</main>
+</body>
+</html>

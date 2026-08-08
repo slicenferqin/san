@@ -78,6 +78,8 @@ export class ExecutionScopeRegistry {
 			if (!objectiveContractsEqual(prior.objectiveContract, request.objectiveContract)) {
 				throw new Error(`Execution scope ${priorScopeId} already has a different immutable objective contract.`);
 			}
+			// 重入旧轮次：即使最新轮次已经 cutover，current 指针也必须重新指回该轮次的作用域。
+			this.#currentByRoot.set(request.rootSessionId, priorScopeId);
 			return prior;
 		}
 		const scopeId = `scope:${request.rootSessionId}:${request.logicalTurnId}`;
@@ -144,6 +146,23 @@ export class ExecutionScopeRegistry {
 	list(rootSessionId?: string): readonly Readonly<ExecutionScopeReference>[] {
 		const values = [...this.#scopesById.values()];
 		return values.filter(reference => rootSessionId === undefined || reference.rootSessionId === rootSessionId);
+	}
+
+	/**
+	 * 替换整个分支状态：移除全部现有作用域与 current 指针，再恢复提供的引用。
+	 * 每个 root session 以最后一个提供的引用作为 current 作用域，因此调用方应
+	 * 按时间顺序提供引用。registry 对象身份保持不变；本类没有订阅者需要通知。
+	 */
+	reset(references: readonly ExecutionScopeReference[] = []): void {
+		this.#scopesById.clear();
+		this.#scopeIdByKey.clear();
+		this.#currentByRoot.clear();
+		for (const reference of references) {
+			const installed = cloneFrozen(reference);
+			this.#scopesById.set(installed.scopeId, installed);
+			this.#scopeIdByKey.set(keyFor(installed.rootSessionId, installed.logicalTurnId), installed.scopeId);
+			this.#currentByRoot.set(installed.rootSessionId, installed.scopeId);
+		}
 	}
 }
 

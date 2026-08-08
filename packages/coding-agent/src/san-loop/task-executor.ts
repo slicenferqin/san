@@ -1,12 +1,20 @@
 import * as fs from "node:fs/promises";
 
 import { prompt } from "@san/utils";
+import { createArtifactEvidenceReceipt, createCommandEvidenceReceipt } from "../execution-control/evidence-gates";
+import type { ExecutionRuntime } from "../execution-control/execution-runtime";
+import type {
+	AcceptanceGate,
+	ArtifactAcceptanceVerifier,
+	ArtifactEvidenceReceipt,
+	CommandAcceptanceVerifier,
+	CommandEvidenceReceipt,
+} from "../execution-control/types";
 import { extractMessages } from "../hindsight/transcript";
 import commanderTaskTemplate from "../prompts/san-loop/commander-task.md" with { type: "text" };
 import oracleTaskTemplate from "../prompts/san-loop/oracle-task.md" with { type: "text" };
 import supervisorTaskTemplate from "../prompts/san-loop/supervisor-task.md" with { type: "text" };
 import workerTaskTemplate from "../prompts/san-loop/worker-task.md" with { type: "text" };
-
 import type { AgentSession } from "../session/agent-session";
 import type { SessionManager } from "../session/session-manager";
 import { getBundledAgent } from "../task/agents";
@@ -60,6 +68,17 @@ const SAN_LOOP_ROLE_TOOLS: Record<SanLoopRoleName, readonly string[]> = {
 	oracle: ["read", "grep", "glob", "yield"],
 };
 
+export const SAN_LOOP_INSPECTION_ARTIFACT_KIND = "san-loop-host-inspection";
+export const SAN_LOOP_INSPECTION_SCHEMA_ID = "san-loop-host-inspection-v1";
+
+const SAN_LOOP_INSPECTION_TOOLS = ["read", "grep", "glob"] as const;
+type SanLoopInspectionTool = (typeof SAN_LOOP_INSPECTION_TOOLS)[number];
+
+interface HostInspectionEvidence {
+	tool: SanLoopInspectionTool;
+	succeeded: boolean;
+}
+
 // Host-owned bash receipts for San worker evidence. Registered once so
 // subprocess tool_execution_end events populate extractedToolData.bash.
 subprocessToolRegistry.register<{ command: string; exitCode?: number; summary: string }>("bash", {
@@ -85,12 +104,23 @@ subprocessToolRegistry.register<{ command: string; exitCode?: number; summary: s
 	},
 });
 
+// 只保留宿主观察到的工具种类与成功状态；路径、查询和正文不会进入 receipt。
+for (const tool of SAN_LOOP_INSPECTION_TOOLS) {
+	subprocessToolRegistry.register<HostInspectionEvidence>(tool, {
+		extractData: event => ({ tool, succeeded: event.isError !== true }),
+	});
+}
+
 export interface SanLoopTaskAgentExecutorOptions {
 	session: TaskExecutorSession;
 	cwd: string;
 	eventBus?: EventBus;
 	signal?: AbortSignal;
 	parentToolCallId?: string;
+	/** 共享的宿主执行 runtime；所有 child 继承同一实例，只读使用。 */
+	executionRuntime: ExecutionRuntime;
+	/** child 运行所在的精确执行 scope id；与 runtime 一起透传给每个角色子进程。 */
+	executionScopeId: string;
 	/** Remaining-aware hard budgets enforced on each role subprocess. */
 	hardBudget?: {
 		maxTokens?: number;
@@ -693,6 +723,21 @@ function extractHostBashReceipts(result: SingleResult): SanLoopCommandEvidence[]
 	return receipts;
 }
 
+function extractHostInspectionEvidence(result: SingleResult): HostInspectionEvidence[] {
+	const evidence: HostInspectionEvidence[] = [];
+	for (const tool of SAN_LOOP_INSPECTION_TOOLS) {
+		const values = result.extractedToolData?.[tool];
+		if (!Array.isArray(values)) continue;
+		for (const value of values) {
+			if (value === null || typeof value !== "object" || Array.isArray(value)) continue;
+			if (!("tool" in value) || value.tool !== tool) continue;
+			if (!("succeeded" in value) || typeof value.succeeded !== "boolean") continue;
+			evidence.push({ tool, succeeded: value.succeeded });
+		}
+	}
+	return evidence;
+}
+
 function compactEvidenceValue(value: unknown): string | undefined {
 	if (value === undefined || value === null) return undefined;
 	const text = typeof value === "string" ? value.trim() : JSON.stringify(value);
@@ -707,6 +752,7 @@ function workerEvidenceSummary(record: Record<string, unknown>): string | undefi
 		"checked_path",
 		"checkedPath",
 		"finding",
+
 		"issue",
 		"bug_found",
 		"bugFound",
@@ -768,6 +814,99 @@ function workerEvidenceSummary(record: Record<string, unknown>): string | undefi
 	].filter((item): item is string => item !== undefined);
 	if (facts.length > 0) return facts.join("; ");
 	return compactEvidenceValue(record);
+}
+
+/**
+ * 只从 host-owned extracted bash 构造 typed command receipt：checkId 对真实
+ * command 稳定派生（`command:${exactTrimmedCommand}`），并在当前 scope
+ * snapshot 中找该 assignment + command verifier 对应的 gate，直接读 gate 的
+ * contract/freshness/assignment 绑定；model claims 永不生成 receipt。
+ * 同一 gate 只保留一条证据：有 pass 命令取 pass，否则取首条失败命令。
+ */
+function buildCommandEvidenceReceipts(
+	hostBash: readonly SanLoopCommandEvidence[],
+	assignment: SanLoopWorkerAssignment,
+	executionRuntime: ExecutionRuntime,
+	executionScopeId: string,
+): CommandEvidenceReceipt[] {
+	const gates = executionRuntime.getScope(executionScopeId)?.snapshot().gates ?? [];
+	const matched: Array<{
+		command: SanLoopCommandEvidence;
+		gate: AcceptanceGate & { readonly verifier: CommandAcceptanceVerifier };
+	}> = [];
+	for (const command of hostBash) {
+		if (command.source !== "host") continue;
+		const checkId = `command:${command.command.trim()}`;
+		const gate = gates.find(
+			(candidate): candidate is AcceptanceGate & { readonly verifier: CommandAcceptanceVerifier } =>
+				candidate.assignmentId === assignment.assignmentId &&
+				candidate.verifier.kind === "command" &&
+				candidate.verifier.checkId === checkId,
+		);
+		if (!gate) continue;
+		matched.push({ command, gate });
+	}
+	if (matched.length === 0) return [];
+	const passing = matched.filter(entry => entry.command.exitCode === entry.gate.verifier.expectedExitCode);
+	const chosen = passing.length > 0 ? passing : matched.slice(0, 1);
+	const receipts: CommandEvidenceReceipt[] = [];
+	for (const entry of chosen) {
+		const gate = entry.gate;
+		const verifier = gate.verifier;
+		if (gate.freshnessRevision === undefined) continue;
+		receipts.push(
+			createCommandEvidenceReceipt({
+				receiptId: `receipt:${assignment.assignmentId}:${gate.gateId}`,
+				scopeId: executionScopeId,
+				gateId: gate.gateId,
+				contractRevision: gate.contractRevision,
+				contractHash: gate.contractHash ?? gate.contractRef.contractHash,
+				freshnessRevision: gate.freshnessRevision,
+				assignmentId: assignment.assignmentId,
+				outcome: entry.command.exitCode === verifier.expectedExitCode ? "pass" : "fail",
+				timestamp: new Date().toISOString(),
+				checkId: verifier.checkId,
+				exitCode: entry.command.exitCode ?? verifier.expectedExitCode,
+			}),
+		);
+	}
+	return receipts;
+}
+
+function buildInspectionEvidenceReceipts(
+	hostInspection: readonly HostInspectionEvidence[],
+	assignment: SanLoopWorkerAssignment,
+	executionRuntime: ExecutionRuntime,
+	executionScopeId: string,
+): ArtifactEvidenceReceipt[] {
+	if (hostInspection.length === 0) return [];
+	const gates = executionRuntime.getScope(executionScopeId)?.snapshot().gates ?? [];
+	const inspectionGates = gates.filter(
+		(candidate): candidate is AcceptanceGate & { readonly verifier: ArtifactAcceptanceVerifier } =>
+			candidate.assignmentId === assignment.assignmentId &&
+			candidate.verifier.kind === "artifact" &&
+			candidate.verifier.artifactKind === SAN_LOOP_INSPECTION_ARTIFACT_KIND &&
+			candidate.verifier.schemaId === SAN_LOOP_INSPECTION_SCHEMA_ID,
+	);
+	const succeeded = hostInspection.some(evidence => evidence.succeeded);
+	return inspectionGates.flatMap(gate => {
+		if (gate.freshnessRevision === undefined) return [];
+		return [
+			createArtifactEvidenceReceipt({
+				receiptId: `receipt:${assignment.assignmentId}:${gate.gateId}`,
+				scopeId: executionScopeId,
+				gateId: gate.gateId,
+				contractRevision: gate.contractRevision,
+				contractHash: gate.contractHash ?? gate.contractRef.contractHash,
+				freshnessRevision: gate.freshnessRevision,
+				assignmentId: assignment.assignmentId,
+				outcome: succeeded ? "pass" : "fail",
+				timestamp: new Date().toISOString(),
+				artifactKind: gate.verifier.artifactKind,
+				schemaId: gate.verifier.schemaId,
+			}),
+		];
+	});
 }
 
 function workerVerification(record: Record<string, unknown>): string[] {
@@ -844,8 +983,8 @@ function parseWorkerResult(
 	) {
 		risks.push("Worker reported that modifications were attempted.");
 	}
-	// Model-claimed commands are retained only as untrusted audit noise. The
-	// pass gate exclusively trusts host receipts extracted from bash tool ends.
+	// model 声明的 commands 只作不可信审计噪音保留；pass gate 只信任从 bash
+	// tool 结束事件提取的 host receipts。
 	const modelClaims = parseCommandEvidence(recordValue(record, ["commandsRun", "commands_run"]), "model");
 	if (modelClaims.length > 0 && hostReceipts.length === 0) {
 		risks.push("Worker claimed commandsRun without host bash receipts; claims ignored by pass gate.");
@@ -1094,6 +1233,8 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 				eventBus: options.eventBus,
 				signal: combinedSignal,
 				parentToolCallId: options.parentToolCallId,
+				executionRuntime: options.executionRuntime,
+				executionScopeId: options.executionScopeId,
 				modelOverride: modelOverrideForRole(role),
 				parentActiveModelPattern: undefined,
 				parentServiceTier: options.session.serviceTierByFamily ?? null,
@@ -1159,6 +1300,7 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 				invocation.budget,
 			);
 			const hostReceipts = extractHostBashReceipts(result);
+			const hostInspection = extractHostInspectionEvidence(result);
 			const data = latestYieldData(result);
 			if (result.exitCode !== 0 || data === undefined) {
 				return {
@@ -1171,7 +1313,21 @@ export function createSanLoopTaskAgentExecutor(options: SanLoopTaskAgentExecutor
 					risks: ["Worker failed before yielding structured evidence."],
 				};
 			}
-			return parseWorkerResult(invocation.assignment, data, hostReceipts);
+			const evidenceReceipts = [
+				...buildCommandEvidenceReceipts(
+					hostReceipts,
+					invocation.assignment,
+					options.executionRuntime,
+					options.executionScopeId,
+				),
+				...buildInspectionEvidenceReceipts(
+					hostInspection,
+					invocation.assignment,
+					options.executionRuntime,
+					options.executionScopeId,
+				),
+			];
+			return { ...parseWorkerResult(invocation.assignment, data, hostReceipts), evidenceReceipts };
 		},
 		async supervisor(invocation) {
 			const result = await runAgent(

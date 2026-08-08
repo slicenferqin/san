@@ -298,7 +298,14 @@ import {
 import { disposeRubyKernelSessionsByOwner } from "../eval/rb/executor";
 import { defaultEvalSessionId } from "../eval/session-id";
 import { type BashResult, executeBash as executeBashCommand } from "../exec/bash-executor";
-import { type ProviderHealthRegistry, providerHealthKeyFromModel } from "../execution-control/provider-health";
+import type {
+	ExecutionLedgerAppendResult,
+	ExecutionRuntime,
+	ExecutionScopeHandle,
+	ImmutableObjectiveContract,
+} from "../execution-control";
+import { ProviderCircuitOpenError, StaleExecutionRevisionError } from "../execution-control";
+import { stableValueFingerprint } from "../execution-control/progress-classifier";
 import type { TaskContractRegistry } from "../execution-control/task-contract";
 import type { TtsrManager, TtsrMatchContext } from "../export/ttsr";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands";
@@ -1046,9 +1053,19 @@ export interface AgentSessionConfig {
 	skillsSettings?: SkillsSettings;
 	/** Model registry for API key resolution and model discovery */
 	modelRegistry: ModelRegistry;
-	/** Optional provider-health registry closed by successful assistant terminals. */
-	providerHealthRegistry?: ProviderHealthRegistry;
-	/** Root-scoped task admission registry shared with nested sessions. */
+	/**
+	 * 共享 execution runtime。根会话创建实例并向下传递；子会话采纳父 runtime，
+	 * 自身不得 start/sync/dispose。
+	 */
+	executionRuntime?: ExecutionRuntime;
+	/**
+	 * 本会话拥有的 execution runtime（创建它的根会话）。子/采纳会话保持
+	 * undefined，不得拆除；只有 owner 的 {@link AgentSession.dispose} 释放它。
+	 */
+	ownedExecutionRuntime?: ExecutionRuntime;
+	/** 从父会话继承的固定不可变 execution scope（子会话）。 */
+	executionScopeId?: string;
+	/** 与嵌套会话共享的 root 级 Task 准入注册表。 */
 	taskContractRegistry?: TaskContractRegistry;
 	/** Tool registry for LSP and settings */
 	toolRegistry?: Map<string, AgentTool>;
@@ -1986,6 +2003,35 @@ function titleConversationTurnFromMessage(message: AgentMessage): TitleConversat
 	return { role: message.role, ...(text ? { text } : {}), ...(thinking ? { thinking } : {}) };
 }
 
+/**
+ * 由真实 journal entry 派生 host-minted user-turn objective contract。
+ *
+ * 仅使用 entryId（真实持久化身份）与消息内容（稳定 fingerprint）推导，
+ * 绝不读取模型文本。同一 entry 重入必然得到完全相同的契约（scope registry
+ * 以此校验不可变绑定）。clauseRefs 必须非空且从 entryId 派生：typed
+ * acceptance gate 的 objectiveClauseRefs 必须属于契约，空 clauseRefs 会让
+ * 任何 gate 都无法通过验证，scope 将永远无法 completed。
+ */
+export function buildAuthoritativeUserObjectiveContract(
+	entryId: string,
+	message: AgentMessage,
+): ImmutableObjectiveContract {
+	if (message.role !== "user") {
+		throw new Error(`Authoritative objective contracts require a user message, received ${message.role}.`);
+	}
+	const fingerprintText = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+	return {
+		source: "authoritative_user",
+		authoritativeUserTurnId: entryId,
+		ref: {
+			contractId: `user-turn:${entryId}`,
+			revision: 1,
+			contractHash: stableValueFingerprint(fingerprintText),
+			clauseRefs: [`user-turn:${entryId}:objective`],
+		},
+	};
+}
+
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -2197,10 +2243,14 @@ export class AgentSession {
 
 	// Model registry for API key resolution
 	#modelRegistry: ModelRegistry;
-	#providerHealthRegistry: ProviderHealthRegistry | undefined;
 	#taskContractRegistry: TaskContractRegistry | undefined;
-
-	// Tool registry and prompt builder for extensions
+	#executionRuntime: ExecutionRuntime | undefined;
+	#ownedExecutionRuntime: ExecutionRuntime | undefined;
+	#executionScopeId: string | undefined;
+	/** 本会话的 active execution scope handle（仅 root 会话）。 */
+	#executionHandle: ExecutionScopeHandle | undefined;
+	/** 本会话已驱动到终态的 scope；永不重复 finish。 */
+	#finishedExecutionScopes = new Set<string>();
 	#toolRegistry: Map<string, AgentTool>;
 	#createVibeTools: (() => AgentTool[]) | undefined;
 	#installedVibeToolNames = new Set<string>();
@@ -2849,8 +2899,10 @@ export class AgentSession {
 		this.#customCommands = config.customCommands ?? [];
 		this.#skillsReloadable = config.skillsReloadable ?? true;
 		this.#skillsSettings = config.skillsSettings;
+		this.#executionRuntime = config.executionRuntime;
+		this.#ownedExecutionRuntime = config.ownedExecutionRuntime;
+		this.#executionScopeId = config.executionScopeId;
 		this.#modelRegistry = config.modelRegistry;
-		this.#providerHealthRegistry = config.providerHealthRegistry;
 		this.#taskContractRegistry = config.taskContractRegistry;
 		this.#recoverPersistedSanLoopRun();
 		// Resolve the wire service-tier per request so the Fireworks Priority
@@ -4693,20 +4745,6 @@ export class AgentSession {
 			}
 		}
 
-		if (event.type === "message_end" && event.message.role === "assistant") {
-			const message = event.message as AssistantMessage;
-			const activeModel = this.model;
-			if (
-				this.#providerHealthRegistry &&
-				activeModel &&
-				activeModel.provider === message.provider &&
-				activeModel.id === message.model &&
-				message.stopReason !== "aborted" &&
-				message.stopReason !== "error"
-			) {
-				this.#providerHealthRegistry.recordSuccess(providerHealthKeyFromModel(activeModel));
-			}
-		}
 		const interruptedThinkingMessage =
 			event.type === "message_end" && event.message.role === "assistant"
 				? this.#demoteInterruptedThinkingOnUserInterrupt(event.message as AssistantMessage)
@@ -7517,6 +7555,12 @@ export class AgentSession {
 				logger.warn("Failed to disconnect owned MCP manager during dispose", { error: String(error) });
 			}
 		}
+		// 释放本会话拥有的 execution runtime（创建它的根会话）。采纳会话共享父
+		// runtime，不得拆除。runtime dispose 按契约幂等；失败会上抛，绝不静默。
+		if (this.#ownedExecutionRuntime) {
+			this.#ownedExecutionRuntime.dispose();
+			this.#ownedExecutionRuntime = undefined;
+		}
 		// Flush the retain queue BEFORE clearing the session's pointer so
 		// `HindsightRetainQueue.#doFlush` still sees `session.getHindsightSessionState() === state`.
 		// Reversed, the spliced batch survives just long enough to fail the
@@ -8606,7 +8650,118 @@ export class AgentSession {
 	get sessionId(): string {
 		return this.#activeProviderSessionId();
 	}
-	/** Root-scoped task admission registry, if this session can spawn work. */
+	/** 共享 execution runtime（根创建或父采纳）；execution control 未接线时为 undefined。 */
+	getExecutionRuntime(): ExecutionRuntime | undefined {
+		return this.#executionRuntime;
+	}
+	/**
+	 * 真实分支/会话切换后重同步 execution runtime。sync 必须发生在任何新分支
+	 * replay（agent.replaceMessages 等）之前：runtime 依据传入的当前分支
+	 * entries 重建 ledger/scheduler/registries。错误绝不吞掉——runtime 自身的
+	 * CAS 规则拒绝过期/迟到状态，失败必须上抛以便调用方处理。固定 scope 的
+	 * 子会话共享父 runtime，不得 syncBranch。
+	 */
+	async #syncExecutionBranch(): Promise<void> {
+		if (!this.#executionRuntime || this.#executionScopeId !== undefined) return;
+		await this.#executionRuntime.syncBranch(this.sessionManager.getBranch());
+	}
+	/**
+	 * 真实宿主用户 turn 在首次 provider 派发前 mint 根 scope；同一 turn 内的
+	 * continuation/steering/compaction/handoff/recovery 只复用当前 active
+	 * scope，绝不新建。用户消息先持久化进 journal，其真实 entry id 同时作为
+	 * logicalTurnId 与 host evidence ref（objectiveContract.authoritativeUserTurnId），
+	 * 契约由 buildAuthoritativeUserObjectiveContract 从 entryId 稳定派生。
+	 * synthetic/model 文本永远不能 mint scope；read-only 会话与固定 scope 的
+	 * child 同样零 scope 写入。
+	 */
+	async #ensureExecutionScopeForTurn(message: AgentMessage): Promise<void> {
+		const runtime = this.#executionRuntime;
+		if (!runtime || this.#executionScopeId !== undefined || !this.#sessionWritesEnabled) return;
+		// 非真实用户消息：只复用当前 active scope（存在时），绝不新建。
+		if (message.role !== "user") {
+			const activeScopeId = runtime.activeScopeId();
+			if (activeScopeId !== undefined) {
+				this.#executionHandle = runtime.getScope(activeScopeId);
+			}
+			return;
+		}
+		// 每个新的顶层用户 prompt 都是独立 authoritative turn：即使上一 scope
+		// 仍 active（evidence gate 未满足而保持运行），也不能因“已有 active”
+		// 复用它——先持久化拿到真实 entryId，再 mint 新 scope。
+		let entryId: string | undefined;
+		if (this.#sessionMessageAlreadyPersisted(message)) {
+			const key = sessionMessagePersistenceKey(message);
+			const branch = this.sessionManager.getBranch();
+			for (let index = branch.length - 1; index >= 0; index--) {
+				const entry = branch[index];
+				if (entry.type !== "message") continue;
+				if (sessionMessagePersistenceKey(entry.message) !== key) continue;
+				if (sameMessageContent(entry.message, message)) {
+					entryId = entry.id;
+					break;
+				}
+			}
+		} else {
+			entryId = this.#appendSessionMessage(message);
+		}
+		if (entryId === undefined) return;
+		this.#executionHandle = runtime.startScope({
+			rootSessionId: runtime.rootSessionId,
+			logicalTurnId: entryId,
+			objectiveContract: buildAuthoritativeUserObjectiveContract(entryId, message),
+		});
+	}
+
+	/**
+	 * 以 revision CAS 把 active scope 驱动到终态。仅 root（固定 scope 的 child
+	 * 永不 finish）；每个 scope 恰好一次被接受的 finish——runtime 的终态守卫与
+	 * 本会话的 one-shot 集合共同拒绝任何迟到 re-finish（如 host abort 之后才
+	 * 到达的 provider 响应）。CAS 过期时以最新 revision 做单次权威重试；仍冲突
+	 * 则上抛，绝不静默。`completed` 仅在 required host evidence gate 全部 pass
+	 * 且带 host evidence 时才尝试；缺证据保持 scope 运行，永不转成用户可见失败。
+	 */
+	async #finishExecutionScope(
+		state: "completed" | "aborted_by_user" | "budget_exhausted" | "runtime_fault" | "no_provider_available",
+	): Promise<void> {
+		const runtime = this.#executionRuntime;
+		if (!runtime || this.#executionScopeId !== undefined) return;
+		const scopeId = runtime.activeScopeId();
+		if (scopeId === undefined || this.#finishedExecutionScopes.has(scopeId)) return;
+		const handle = runtime.getScope(scopeId);
+		if (!handle) return;
+		if (state === "completed") {
+			const snapshot = handle.snapshot();
+			const requiredGates = snapshot.gates.filter(gate => gate.required !== false);
+			const evidenceSatisfied =
+				requiredGates.length > 0 &&
+				requiredGates.every(gate => gate.status === "pass" && gate.evidenceRefs.length > 0);
+			if (!evidenceSatisfied) return;
+		}
+		const finishOnce = (expectedRevision: number): ExecutionLedgerAppendResult =>
+			runtime.finishScope(scopeId, { expectedRevision, state });
+		let result: ExecutionLedgerAppendResult;
+		try {
+			result = finishOnce(handle.snapshot().revision);
+		} catch (error) {
+			if (!(error instanceof StaleExecutionRevisionError)) throw error;
+			// 单次权威重试：以最新 revision 重新 CAS；仍过期则向上抛，绝不吞掉。
+			const fresh = runtime.getScope(scopeId);
+			if (!fresh) return;
+			result = finishOnce(fresh.snapshot().revision);
+		}
+		if (result.accepted) {
+			this.#finishedExecutionScopes.add(scopeId);
+			if (this.#executionHandle?.scopeId === scopeId) this.#executionHandle = undefined;
+		}
+	}
+	/** 从父会话继承的固定不可变 execution scope（子会话）。 */
+	getExecutionScopeId(): string | undefined {
+		return this.#executionScopeId;
+	}
+	getActiveExecutionScopeId(): string | undefined {
+		return this.#executionScopeId ?? this.#executionRuntime?.activeScopeId();
+	}
+	/** 当前会话可派生任务时使用的 root 级 Task 准入注册表。 */
 	getTaskContractRegistry(): TaskContractRegistry | undefined {
 		return this.#taskContractRegistry;
 	}
@@ -10798,19 +10953,46 @@ export class AgentSession {
 			// Context steady: capture leaf entry ID before this prompt cycle's
 			// entries are appended, so the source range spans the full turn.
 			this.#contextSteadyPreTurnLeafId = this.sessionManager.getLeafId();
+			// Execution control：真实宿主用户 turn 在首次 provider 派发前 mint
+			// 根 scope；continuation/steering 复用 active scope。用户消息 entry
+			// id 即 host evidence ref（authoritativeUserTurnId）。synthetic/
+			// model 文本永远不能 mint scope。
+			await this.#ensureExecutionScopeForTurn(message);
+			if (this.#promptGeneration !== generation) {
+				return;
+			}
+			// Provider 派发 gate 位于 SDK provider wrapper：每次调用先以
+			// Snowflake requestId 向 runtime 登记（任何 provider/network 工作
+			// 之前），scheduler gate 拒绝即零网络。ProviderHealthRegistry 保持
+			// 为传输层电路 gate。
 			try {
 				await this.#promptAgentWithIdleRetry(messages, agentPromptOptions);
-			} finally {
-				// Remap pending_* refs after journal append. Persist the audit only after
-				// post-prompt recovery so TurnDigest settledLeafId is not the plan entry.
-				if (this.#contextSteadyRequestPlan) {
-					this.#contextSteadyRequestPlan = this.#remapContextSteadyPlanPendingRefs(this.#contextSteadyRequestPlan);
-					this.#contextSteadyLastPlan = this.#contextSteadyPlanInputsChanged(this.#contextSteadyRequestPlan)
-						? undefined
-						: this.#contextSteadyRequestPlan;
+			} catch (error) {
+				// `abort()` 自行决定当前 Scope 是否需要终态化；其等待 Agent idle
+				// 期间保持该标记，避免 prompt 的并发失败路径抢先写入 runtime_fault。
+				// 内部手动压缩会继续同一执行，因此不得终结 Scope。
+				if (!this.#abortInProgress) {
+					if (error instanceof ProviderCircuitOpenError) {
+						await this.#finishExecutionScope("no_provider_available");
+					} else {
+						await this.#finishExecutionScope("runtime_fault");
+					}
 				}
-				this.#setPendingContextSnapshot(undefined);
+				throw error;
 			}
+			// 正常完成：尝试终态迁移；仅当 required host evidence gate 全部
+			// pass 且带 host evidence 时 runtime 才接受 `completed`——assistant
+			// 文本永远不是 evidence，缺 evidence 不是用户错误，scope 保持运行。
+			await this.#finishExecutionScope("completed");
+			// 追加 journal 后重映射 pending_* 引用；仅在后提示恢复之后持久化
+			// 审计，以便 TurnDigest settledLeafId 指向非 plan entry。
+			if (this.#contextSteadyRequestPlan) {
+				this.#contextSteadyRequestPlan = this.#remapContextSteadyPlanPendingRefs(this.#contextSteadyRequestPlan);
+				this.#contextSteadyLastPlan = this.#contextSteadyPlanInputsChanged(this.#contextSteadyRequestPlan)
+					? undefined
+					: this.#contextSteadyRequestPlan;
+			}
+			this.#setPendingContextSnapshot(undefined);
 			if (!options?.skipPostPromptRecoveryWait) {
 				await this.#waitForPostPromptRecovery(generation);
 			}
@@ -11694,6 +11876,11 @@ export class AgentSession {
 			this.abortEval();
 			const postPromptDrain = this.#cancelPostPromptTasks();
 			this.agent.abort(options?.reason);
+			// 手动压缩只暂停当前 provider turn，随后仍在同一执行 Scope 中恢复；
+			// 其余宿主中止则立即终态化，拒绝任何迟到 provider 响应复活 Scope。
+			if (!options?.preserveCompaction) {
+				await this.#finishExecutionScope("aborted_by_user");
+			}
 			await postPromptDrain;
 			await this.agent.waitForIdle();
 			await this.#drainAutolearnCapture();
@@ -19289,6 +19476,11 @@ export class AgentSession {
 				});
 			}
 
+			// 会话切换与分支切换同序：SessionManager 已切到目标会话后，先重同步
+			// runtime（按目标分支 entries 重建 ledger/registries），再 replay
+			// 目标上下文（agent.replaceMessages）。
+			await this.#syncExecutionBranch();
+
 			this.agent.replaceMessages(sessionContext.messages);
 			this.#resetAdvisorSessionState();
 			this.#syncTodoPhasesFromBranch();
@@ -19408,6 +19600,8 @@ export class AgentSession {
 			return true;
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
+			// 回滚同样要重同步 runtime：否则 runtime 仍持有目标会话的分支状态。
+			await this.#syncExecutionBranch();
 			this.#freshProviderSessionId = previousFreshProviderSessionId;
 			this.#syncAgentSessionId(previousSessionState.sessionId);
 			this.#rekeyHindsightMemoryForCurrentSessionId();
@@ -19522,6 +19716,12 @@ export class AgentSession {
 			});
 		}
 
+		// SessionManager 已切到新分支：先重同步 execution runtime（ledger/
+		// scheduler/registries 依据当前分支 entries 重建），再 replay 新分支
+		// 上下文（agent.replaceMessages）。顺序不可颠倒；错误绝不吞掉，直接
+		// 上抛由调用方处理。
+		await this.#syncExecutionBranch();
+
 		if (!skipConversationRestore) {
 			this.agent.replaceMessages(sessionContext.messages);
 			this.#resetAdvisorSessionState();
@@ -19622,6 +19822,9 @@ export class AgentSession {
 				previousSessionFile,
 			});
 		}
+
+		// /btw 分支切换同样先重同步 runtime 再 replay 新分支上下文。
+		await this.#syncExecutionBranch();
 
 		this.agent.replaceMessages(sessionContext.messages);
 		this.#resetAdvisorSessionState();

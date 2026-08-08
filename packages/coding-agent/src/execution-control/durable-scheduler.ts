@@ -435,7 +435,9 @@ export class DurableScheduler {
 
 	#validNeedsUserDecision(decision: DurableSupervisorDecision): boolean {
 		const blocker = decision.externalBlocker;
+		// 仅接受携带 dependencyId 与 evidenceRef 的 typed external blocker。
 		if (blocker?.kind !== "external" || !blocker.dependencyId || !blocker.evidenceRef) return false;
+		// evidence 必须同时出现在决策引用与 scope 已记录的 ledger evidence 中。
 		if (!decision.evidenceRefs.includes(blocker.evidenceRef)) return false;
 		const snapshot = this.#ledger.snapshot();
 		const runnableNodes = this.#runnableNodesSpecified
@@ -443,9 +445,18 @@ export class DurableScheduler {
 			: snapshot.assignments
 					.filter(assignment => assignment.status === "pending")
 					.map(assignment => assignment.assignmentId);
+		// needs_user 不允许仍有可运行节点。
 		if (runnableNodes.length > 0) return false;
+		// ledger evidence 必须是 external 且绑定到某个 acceptance gate。
 		const evidence = snapshot.evidenceRefs.find(ref => ref.evidenceId === blocker.evidenceRef);
-		return evidence?.kind === "external";
+		if (evidence?.kind !== "external" || !evidence.gateId) return false;
+		// 对应 gate 必须存在且由 external verifier 验证。
+		const gate = snapshot.gates.find(candidate => candidate.gateId === evidence.gateId);
+		if (gate?.verifier.kind !== "external") return false;
+		// gate 的 external verifier dependencyId 必须与 blocker 完全一致。
+		if (gate.verifier.dependencyId !== blocker.dependencyId) return false;
+		// gate 的 evidenceRefs 必须确实包含该 evidence，未绑定/错绑的 evidence 一律拒绝。
+		return gate.evidenceRefs.some(ref => ref.evidenceId === blocker.evidenceRef);
 	}
 }
 

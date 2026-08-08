@@ -22,7 +22,13 @@ import { $env, logger, prompt, Snowflake } from "@san/utils";
 import type { ToolSession } from "..";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
 import { formatModelRoleAlias, LEGACY_MODEL_ROLE_ALIAS_PREFIX } from "../config/model-roles";
-import type { TaskContractIdentity, TaskContractSnapshot } from "../execution-control/task-contract";
+import type { DurableScheduler } from "../execution-control/durable-scheduler";
+import { stableValueFingerprint } from "../execution-control/progress-classifier";
+import type {
+	TaskContractAdmission,
+	TaskContractIdentity,
+	TaskContractSnapshot,
+} from "../execution-control/task-contract";
 import { MCPManager } from "../mcp/manager";
 import type { Theme } from "../modes/theme/theme";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
@@ -76,6 +82,15 @@ function isTaskRoleModelBinding(model: AgentDefinition["model"]): boolean {
 		values.length === 1 &&
 		(values[0] === formatModelRoleAlias("task") || values[0] === `${LEGACY_MODEL_ROLE_ALIAS_PREFIX}task`)
 	);
+}
+
+/**
+ * 解析任务准入/派生所用的执行作用域：显式 `contract.scopeId` 优先，其次取会话的
+ * 固定/活动作用域（子会话继承父会话的精确 scope id；根会话跟随 runtime 的活动
+ * 作用域）。两者皆缺省时回退到 registry 的 root-session 兜底。
+ */
+function resolveTaskContractScope(session: ToolSession, explicitScopeId?: string): string | undefined {
+	return explicitScopeId ?? session.getExecutionScopeId?.();
 }
 
 function renderSubagentUserPrompt(assignment: string): string {
@@ -636,7 +651,130 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	}
 
 	/**
-	 * Create a TaskTool instance with async agent discovery.
+	 * 在进入任何 spawn 机制之前，对已准入的 contract 强制执行 runtime
+	 * scheduler/watchdog 决策。runtime 按作用域在宿主侧跟踪 assignment 去重：
+	 * `reuse_duplicate` 表示完全相同的 scope/workKey/strategyKey assignment
+	 * 已存在，不得再 spawn（复用既有 contract）。watchdog 只产生
+	 * `reuse_duplicate`（`reject_duplicate` 没有产生源，不可达分支已删除）；
+	 * registry 自己判定的重复（kind=reused）保持原样返回。无 scheduler
+	 * （未接线 runtime/registry）时为 no-op。返回（可能被修改的）admission。
+	 */
+	#enforceContract(admission: TaskContractAdmission, scheduler?: DurableScheduler): TaskContractAdmission {
+		if (!scheduler) return admission;
+		// 每次准入（包括 registry 判重的重复准入）都产生一次稳定的 runtime 决策，
+		// 让宿主 watchdog 观察到重复尝试；registry 自身的决策（reuse）仍决定是否 spawn。
+		const decision = scheduler.enforce({
+			observation: {
+				workKey: admission.contract.workKey,
+				strategyKey: admission.contract.strategyKey,
+				assignmentId: admission.contract.contractId,
+				requestKind: "assignment",
+				duplicateCandidate: true,
+			},
+		});
+		if (admission.kind !== "admitted" || decision.action !== "reuse_duplicate") return admission;
+		return {
+			kind: "reused",
+			accepted: false,
+			reused: true,
+			contract: admission.contract,
+			existing: admission.contract,
+			reason: "duplicate",
+		};
+	}
+
+	/** 稳定失败指纹：同一 contract 的同一失败（重放/重试）产生同一 signature。 */
+	#failureSignatureFor(contract: TaskContractIdentity | undefined, errorText?: string): string | undefined {
+		if (!contract) return undefined;
+		const reason = errorText?.trim() ? errorText.trim().slice(0, 500) : "unknown";
+		return `task:failed:${stableValueFingerprint({ contractId: contract.contractId, reason })}`;
+	}
+
+	/**
+	 * contract 终态收尾：registry 状态 + 宿主观测，每个终态恰好一次。
+	 * completed 提供稳定的 evidence 观察（evidenceId = contractId，首次即进度）；
+	 * failed 使用稳定 failureSignature；cancelled 只声明进程不再存活，绝不伪造
+	 * failure。heartbeat 不经过这里——它只更新 registry，绝不当作完成。
+	 */
+	#settleContract(
+		contract: TaskContractIdentity | undefined,
+		status: "completed" | "failed" | "cancelled",
+		failureSignature?: string,
+	): void {
+		const registry = this.session.taskContractRegistry;
+		if (registry && contract) registry.setStatus(contract, status);
+		const runtime = this.session.executionRuntime;
+		if (!runtime || !contract) return;
+		const identity = {
+			workKey: contract.workKey,
+			strategyKey: contract.strategyKey,
+			assignmentId: contract.contractId,
+			requestKind: "assignment" as const,
+		};
+		if (status === "failed") {
+			runtime.recordHostObservation({
+				scopeId: contract.scopeId,
+				observation: {
+					...identity,
+					type: "failure",
+					failureSignature: failureSignature ?? `task:failed:${contract.contractId}`,
+					cursor: "failed",
+				},
+			});
+			return;
+		}
+		if (status === "cancelled") {
+			runtime.recordHostObservation({
+				scopeId: contract.scopeId,
+				observation: {
+					...identity,
+					type: "process_heartbeat",
+					live: false,
+					cursor: "cancelled",
+				},
+			});
+			return;
+		}
+		runtime.recordHostObservation({
+			scopeId: contract.scopeId,
+			observation: {
+				...identity,
+				type: "evidence",
+				evidenceId: contract.contractId,
+				evidenceKind: "task-completed",
+				receiptRef: contract.contractId,
+				cursor: "completed",
+			},
+		});
+	}
+
+	/** settle 之后刷新 payload 里的 contract 快照，避免展示 stale 的 running 状态。 */
+	#withTerminalContractSnapshot(
+		result: AgentToolResult<TaskToolDetails>,
+		contract: TaskContractIdentity | undefined,
+	): AgentToolResult<TaskToolDetails> {
+		const registry = this.session.taskContractRegistry;
+		if (!contract || !registry || !result.details?.taskContracts) return result;
+		const snapshot = registry.get(contract);
+		if (!snapshot) return result;
+		return { ...result, details: { ...result.details, taskContracts: [snapshot] } };
+	}
+
+	/** 派生 spawn 的 contract identity（与准入时完全一致的确定性派生）。 */
+	#deriveSpawnContract(params: TaskParams): TaskContractIdentity | undefined {
+		const registry = this.session.taskContractRegistry;
+		if (!registry) return undefined;
+		return registry.derive({
+			...params.contract,
+			scopeId: resolveTaskContractScope(this.session, params.contract?.scopeId),
+			rootSessionId: this.session.getRootSessionId?.() ?? undefined,
+			task: params.task,
+			agent: params.agent,
+		});
+	}
+
+	/**
+	 * 创建 TaskTool 实例（异步发现 agent）。
 	 */
 	static async create(session: ToolSession): Promise<TaskTool> {
 		const { agents } = await discoverAgentsForCreate(session.cwd);
@@ -662,14 +800,25 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 
 		const requestedSpawnItems = resolveSpawnItems(params);
 		const contractRegistry = this.session.taskContractRegistry;
-		const contractAdmissions = requestedSpawnItems.map(item =>
-			contractRegistry?.admit({
+		const contractAdmissions = requestedSpawnItems.map(item => {
+			const agent = item.agent?.trim() || defaultAgent;
+			const derivation = {
 				...item.contract,
+				scopeId: resolveTaskContractScope(this.session, item.contract?.scopeId),
 				rootSessionId: this.session.getRootSessionId?.() ?? undefined,
 				task: item.task,
-				agent: item.agent?.trim() || defaultAgent,
-			}),
-		);
+				agent,
+			};
+			// 先初始化 runtime scheduler（其 seed 只含 admission 前历史），再
+			// admit + enforce：否则首个 identity 会被自己刚 admit 的 contract
+			// 在 seed 中误判为 duplicate，导致第一个任务永远无法 spawn。
+			const scheduler =
+				contractRegistry && this.session.executionRuntime
+					? this.session.executionRuntime.schedulerFor(contractRegistry.derive(derivation).scopeId)
+					: undefined;
+			const admission = contractRegistry?.admit(derivation);
+			return admission ? this.#enforceContract(admission, scheduler) : undefined;
+		});
 		const duplicateContracts = contractAdmissions.flatMap(admission =>
 			admission && admission.kind !== "admitted" ? [admission.contract] : [],
 		);
@@ -787,6 +936,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			const assignment = (item.task ?? "").trim();
 			const contract = contractRegistry?.derive({
 				...item.contract,
+				scopeId: resolveTaskContractScope(this.session, item.contract?.scopeId),
 				rootSessionId: this.session.getRootSessionId?.() ?? undefined,
 				task: item.task,
 				agent: agentType,
@@ -871,7 +1021,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				failedSchedules.push(`${spawn.agentId}: ${message}`);
-				if (spawn.contract && contractRegistry) contractRegistry.setStatus(spawn.contract, "failed");
+				// schedule 失败同样是一次终态：registry 状态 + 宿主观测各一次。
+				this.#settleContract(spawn.contract, "failed", this.#failureSignatureFor(spawn.contract, message));
 				spawn.progress.status = "failed";
 				settledCount += 1;
 				failedCount += 1;
@@ -1082,9 +1233,13 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				if (!semaphoreHeld || runSignal.aborted) {
 					releasePermit();
 					progress.status = "aborted";
-					if (contract && this.session.taskContractRegistry) {
-						this.session.taskContractRegistry.setStatus(contract, runSignal.aborted ? "cancelled" : "failed");
-					}
+					// acquire 中止也是终态：registry 状态 + 宿主观测各一次。
+					const status = runSignal.aborted ? "cancelled" : "failed";
+					this.#settleContract(
+						contract,
+						status,
+						status === "failed" ? this.#failureSignatureFor(contract, "semaphore acquire failed") : undefined,
+					);
 					onSettled?.(true);
 					throw new Error("Aborted before execution");
 				}
@@ -1174,19 +1329,26 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		if (spawnItems.length === 1) {
 			const semaphore = this.#getSpawnSemaphore();
 			const invokedAt = Date.now();
-			await semaphore.acquire(signal);
+			const spawnParams = spawnParamsFor(params, spawnItems[0], defaultAgent);
+			try {
+				await semaphore.acquire(signal);
+			} catch (error) {
+				// acquire 中止（调用方 abort）：contract 终态恰好一次，再向上抛。
+				const contract = this.#deriveSpawnContract(spawnParams);
+				const status = signal?.aborted ? "cancelled" : "failed";
+				this.#settleContract(
+					contract,
+					status,
+					status === "failed" ? this.#failureSignatureFor(contract, "semaphore acquire failed") : undefined,
+				);
+				throw error;
+			}
 			const acquiredAt = Date.now();
 			try {
-				return await this.#executeSync(
-					toolCallId,
-					spawnParamsFor(params, spawnItems[0], defaultAgent),
-					signal,
-					onUpdate,
-					undefined,
-					0,
-					false,
-					{ invokedAt, acquiredAt },
-				);
+				return await this.#executeSync(toolCallId, spawnParams, signal, onUpdate, undefined, 0, false, {
+					invokedAt,
+					acquiredAt,
+				});
 			} finally {
 				this.#releaseSpawnSemaphore();
 			}
@@ -1261,7 +1423,22 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			spawns.length,
 			async (spawn, _position, workerSignal) => {
 				const invokedAt = Date.now();
-				await semaphore.acquire(workerSignal);
+				const spawnParams = spawnParamsFor(params, spawn.item, defaultAgent);
+				try {
+					await semaphore.acquire(workerSignal);
+				} catch (error) {
+					// acquire 中止：contract 终态（cancelled/failed）恰好一次；随后
+					// mapWithConcurrencyLimit 在 abort 下吞掉该异常，payload 缺行
+					// 按“未开始”渲染——终态与渲染各司其职。
+					const contract = this.#deriveSpawnContract(spawnParams);
+					const status = workerSignal.aborted ? "cancelled" : "failed";
+					this.#settleContract(
+						contract,
+						status,
+						status === "failed" ? this.#failureSignatureFor(contract, "semaphore acquire failed") : undefined,
+					);
+					throw error;
+				}
 				const acquiredAt = Date.now();
 				try {
 					const itemOnUpdate: AgentToolUpdateCallback<TaskToolDetails> | undefined = onItemProgress
@@ -1272,7 +1449,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						: undefined;
 					return await this.#executeSync(
 						toolCallId,
-						spawnParamsFor(params, spawn.item, defaultAgent),
+						spawnParams,
 						workerSignal,
 						itemOnUpdate,
 						spawn.preAllocatedId,
@@ -1306,12 +1483,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		launchTiming?: { invokedAt: number; acquiredAt: number },
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const contractRegistry = this.session.taskContractRegistry;
-		const contract = contractRegistry?.derive({
-			...params.contract,
-			rootSessionId: this.session.getRootSessionId?.() ?? undefined,
-			task: params.task,
-			agent: params.agent,
-		});
+		const contract = this.#deriveSpawnContract(params);
 		if (contract && contractRegistry) contractRegistry.setStatus(contract, "running");
 		try {
 			const result = await this.#runSpawn(
@@ -1323,16 +1495,30 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				spawnIndex,
 				detached,
 				launchTiming,
+				contract,
 			);
 			const singleResult = result.details?.results[0];
+			// 工具级失败（validation early return / spawn 前检查）没有 result 行；
+			// 此时若调用方已 abort 按 cancelled 收尾，否则按 failed。
+			const aborted = (singleResult?.aborted ?? false) || (!singleResult && Boolean(signal?.aborted));
 			const failed = !singleResult || (singleResult.aborted ?? false) || singleResult.exitCode !== 0;
-			if (contract && contractRegistry) {
-				contractRegistry.setStatus(contract, singleResult?.aborted ? "cancelled" : failed ? "failed" : "completed");
-			}
-			return result;
+			const status: "completed" | "failed" | "cancelled" = aborted ? "cancelled" : failed ? "failed" : "completed";
+			// #executeSync 是唯一 settle 点：registry 状态 + 宿主观测各恰好一次。
+			this.#settleContract(
+				contract,
+				status,
+				status === "failed" ? this.#failureSignatureFor(contract, singleResult?.error) : undefined,
+			);
+			return this.#withTerminalContractSnapshot(result, contract);
 		} catch (error) {
-			if (contract && contractRegistry)
-				contractRegistry.setStatus(contract, signal?.aborted ? "cancelled" : "failed");
+			const status = signal?.aborted ? "cancelled" : "failed";
+			this.#settleContract(
+				contract,
+				status,
+				status === "failed"
+					? this.#failureSignatureFor(contract, error instanceof Error ? error.message : String(error))
+					: undefined,
+			);
 			throw error;
 		}
 	}
@@ -1347,6 +1533,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		spawnIndex = 0,
 		detached = false,
 		launchTiming?: { invokedAt: number; acquiredAt: number },
+		contract?: TaskContractIdentity,
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const startTime = Date.now();
 		const { agents, projectAgentsDir } = await discoverAgents(this.session.cwd);
@@ -1354,12 +1541,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const sharedContext = this.#isBatchEnabled() ? params.context?.trim() || undefined : undefined;
 		const assignment = (params.task ?? "").trim();
 		const contractRegistry = this.session.taskContractRegistry;
-		const contract = contractRegistry?.derive({
-			...params.contract,
-			rootSessionId: this.session.getRootSessionId?.() ?? undefined,
-			task: assignment,
-			agent: agentName,
-		});
+		// contract 由 #executeSync 派生并传入；#runSpawn 不再自行派生/收尾，
+		// registry 状态与宿主观测全部收敛到唯一的 settle 点。
 		const isolationMode = this.session.settings.get("task.isolation.mode");
 		const isolationRequested = "isolated" in params ? params.isolated === true : false;
 		const isIsolated = isolationMode !== "none" && isolationRequested;
@@ -1521,7 +1704,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					this.session.agentOutputManager ?? new AgentOutputManager(this.session.getArtifactsDir ?? (() => null));
 				agentId = await outputManager.allocate(params.name?.trim() || generateTaskName());
 			}
-			if (contract && contractRegistry) contractRegistry.setStatus(contract, "running");
 
 			const availableSkills = [...(this.session.skills ?? [])];
 			// Resolve autoload skills from agent definition against available skills
@@ -1608,6 +1790,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				providerHealthRegistry: this.session.providerHealthRegistry,
 				taskContractRegistry: contractRegistry,
 				rootSessionId: this.session.getRootSessionId?.() ?? undefined,
+				executionRuntime: this.session.executionRuntime,
+				executionScopeId: contract?.scopeId,
 				settings: this.session.settings,
 				mcpManager,
 				contextFiles,
@@ -1703,17 +1887,11 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			if (shouldCleanupTempArtifacts) {
 				await fs.rm(tempArtifactsDir, { recursive: true, force: true });
 			}
-			if (contract && contractRegistry) {
-				contractRegistry.setStatus(
-					contract,
-					result.aborted ? "cancelled" : result.exitCode === 0 && !result.error ? "completed" : "failed",
-				);
-			}
-
+			// 收尾全部由 #executeSync 唯一负责（registry 状态 + 宿主观测恰好一次）；
+			// 这里只构建 payload。
 			return this.#buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary, contract);
 		} catch (err) {
-			if (contract && contractRegistry)
-				contractRegistry.setStatus(contract, signal?.aborted ? "cancelled" : "failed");
+			// 不在此收尾：抛给 #executeSync 统一 settle，避免双写。
 			return {
 				content: [{ type: "text", text: `Task execution failed: ${err}` }],
 				details: {

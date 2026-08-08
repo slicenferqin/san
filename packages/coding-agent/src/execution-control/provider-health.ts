@@ -89,7 +89,12 @@ export type ProviderHealthEventType =
 	| "provider_health_wake"
 	| "parked"
 	| "resumed"
-	| "heartbeat";
+	| "heartbeat"
+	| "request_completed"
+	| "request_failed"
+	| "request_interrupted"
+	| "cleared"
+	| "reset";
 
 export interface ParkedProviderAssignment {
 	readonly assignmentId: string;
@@ -105,8 +110,14 @@ export interface ParkedProviderAssignment {
 
 export interface ProviderHealthEvent {
 	readonly type: ProviderHealthEventType;
-	readonly key: ProviderHealthKey;
-	readonly snapshot: ProviderHealthSnapshot;
+	/**
+	 * cleared/reset 是注册表级生命周期事件，不携带任何单一路由，因此 key/snapshot
+	 * 仅在路由级事件上存在。
+	 */
+	readonly key?: ProviderHealthKey;
+	readonly snapshot?: ProviderHealthSnapshot;
+	/** 已捕获 requestId 的请求终结事件携带该身份，供宿主路由到捕获 scope。 */
+	readonly requestId?: string;
 	readonly assignment?: ParkedProviderAssignment;
 }
 
@@ -135,6 +146,8 @@ export interface ProviderHealthAdmission {
 	readonly snapshot: ProviderHealthSnapshot;
 	readonly generation: number;
 	readonly probe: boolean;
+	/** 登记时的分支 epoch；reset/clear 后晚到 terminal 无任何副作用。 */
+	readonly branchEpoch: number;
 }
 
 export interface ProviderHealthRegistryOptions {
@@ -180,19 +193,22 @@ interface PendingWake {
 	readonly key: ProviderHealthKey;
 	readonly promise: Promise<ProviderHealthSnapshot>;
 	readonly resolve: (snapshot: ProviderHealthSnapshot) => void;
-}
-
-interface LedgerProviderHealthRef extends ProviderHealthRef {
-	readonly retryAt?: number;
-	readonly lastSuccess?: number;
-	readonly evidenceRefs?: readonly string[];
+	readonly reject: (error: unknown) => void;
 }
 
 function asFiniteTimestamp(value: number | undefined, fallback: number): number {
 	return value !== undefined && Number.isFinite(value) ? value : fallback;
 }
 
-/** Normalize an endpoint without retaining credentials or credential-like query values. */
+/**
+ * 脱敏 home 目录路径段：`/Users/<name>` 与 `/home/<name>` 的用户名段不得进入
+ * 路由身份或持久化 ref；`://home/` 形式的 host 段不属于 home 路径，予以保留。
+ * 普通 HTTP API 的 pathname（如 `/v1/chat/completions`）不含这些前缀，路由身份完整保留。
+ */
+function redactHomePath(value: string): string {
+	return value.replace(/(?<!:)\/(?:Users|home)\/[^/]+/u, "/_");
+}
+/** 归一化 endpoint：不保留凭据、敏感 query 与用户名/home 路径。 */
 export function normalizeProviderBaseUrl(baseUrl: string | undefined): string {
 	const trimmed = baseUrl?.trim() ?? "";
 	if (!trimmed) return "";
@@ -207,19 +223,21 @@ export function normalizeProviderBaseUrl(baseUrl: string | undefined): string {
 		if ((url.protocol === "https:" && url.port === "443") || (url.protocol === "http:" && url.port === "80")) {
 			url.port = "";
 		}
-		url.pathname = url.pathname.replace(/\/{2,}/gu, "/").replace(/\/+$/u, "") || "/";
+		url.pathname = redactHomePath(url.pathname.replace(/\/{2,}/gu, "/").replace(/\/+$/u, "")) || "/";
 		const serialized = url.toString();
 		return serialized.endsWith("/") && url.pathname === "/" && !url.search ? serialized.slice(0, -1) : serialized;
 	} catch {
-		// A custom provider may use a non-URL endpoint (for example `mock://`).
-		// Strip obvious userinfo/query secrets while retaining a stable identity.
-		return trimmed
-			.replace(/:\/\/[^/@]+@/u, "://")
-			.replace(
-				/([?&](?:api[-_]?key|access[-_]?token|authorization|auth|bearer|credential|password|secret|token)=[^&]*)/giu,
-				"",
-			)
-			.replace(/\/{2,}$/u, "");
+		// 自定义 provider 可能使用非 URL endpoint（例如 `mock://`）；同样剥离
+		// 明显的 userinfo/敏感 query/home 路径，同时保留稳定身份。
+		return redactHomePath(
+			trimmed
+				.replace(/:\/\/[^/@]+@/u, "://")
+				.replace(
+					/([?&](?:api[-_]?key|access[-_]?token|authorization|auth|bearer|credential|password|secret|token)=[^&]*)/giu,
+					"",
+				)
+				.replace(/\/{2,}$/u, ""),
+		);
 	}
 }
 
@@ -306,7 +324,7 @@ function isRetryAfterFailure(errorOrReceipt: unknown): boolean {
 
 function isStallFailure(errorOrReceipt: unknown): boolean {
 	const status = AIError.classify(errorOrReceipt);
-	if (AIError.is(status, AIError.Flag.Timeout) || AIError.is(status, AIError.Flag.Transient)) return true;
+	if (AIError.is(status, AIError.Flag.Timeout)) return true;
 	return STALL_TEXT.test(errorText(errorOrReceipt));
 }
 
@@ -369,7 +387,7 @@ function mutableFromSnapshot(snapshot: ProviderHealthSnapshot): MutableHealth {
 	};
 }
 
-function toLedgerHealth(snapshot: ProviderHealthSnapshot): LedgerProviderHealthRef {
+export function providerHealthRefFromSnapshot(snapshot: ProviderHealthSnapshot): ProviderHealthRef {
 	return {
 		providerKey: snapshot.providerKey,
 		endpoint: snapshot.endpoint,
@@ -385,7 +403,7 @@ function toLedgerHealth(snapshot: ProviderHealthSnapshot): LedgerProviderHealthR
 	};
 }
 
-function fromLedgerHealth(health: LedgerProviderHealthRef): ProviderHealthSnapshot {
+export function providerHealthSnapshotFromRef(health: ProviderHealthRef): ProviderHealthSnapshot {
 	return cloneSnapshot({
 		key: createProviderHealthKey({
 			provider: health.providerKey,
@@ -400,6 +418,24 @@ function fromLedgerHealth(health: LedgerProviderHealthRef): ProviderHealthSnapsh
 		terminalReceiptRef: health.terminalReceiptRef,
 		evidenceRefs: [...(health.evidenceRefs ?? [])],
 	});
+}
+
+/** 分支恢复比较：entries 集合与每个 route 的可观察健康状态完全一致才算 equal。 */
+function branchHealthEqual(left: Map<string, MutableHealth>, right: Map<string, MutableHealth>): boolean {
+	if (left.size !== right.size) return false;
+	for (const [id, entry] of left) {
+		const other = right.get(id);
+		if (!other) return false;
+		if (entry.state !== other.state) return false;
+		if (entry.healthRevision !== other.healthRevision) return false;
+		if (entry.generation !== other.generation) return false;
+		if (entry.retryAt !== other.retryAt) return false;
+		if (entry.lastSuccess !== other.lastSuccess) return false;
+		if (entry.terminalReceiptRef !== other.terminalReceiptRef) return false;
+		if (entry.evidenceRefs.length !== other.evidenceRefs.length) return false;
+		if (!entry.evidenceRefs.every((ref, index) => ref === other.evidenceRefs[index])) return false;
+	}
+	return true;
 }
 
 /**
@@ -422,9 +458,13 @@ export class ProviderHealthRegistry {
 	readonly #probes = new Map<string, PendingProbe>();
 	readonly #wakes = new Map<string, Set<PendingWake>>();
 	readonly #parked = new Map<string, ParkedProviderAssignment>();
+	/** 已发布终结事件的 requestId（按 route 分表）；保证每个请求恰好一次 terminal。 */
+	readonly #requestTerminals = new Set<string>();
 	readonly #subscribers = new Set<(event: ProviderHealthEvent) => void>();
 	#ledgerSequence = 0;
 	#replayingLedger = false;
+	/** 分支 epoch：reset/clear 递增；旧 epoch 的 admit 请求晚到 terminal 无副作用。 */
+	#branchEpoch = 0;
 	readonly #unsubscribeLedger?: () => void;
 
 	constructor(options: ProviderHealthRegistryOptions = {}) {
@@ -440,12 +480,12 @@ export class ProviderHealthRegistry {
 		for (const snapshot of options.initialHealth ?? [])
 			this.#entries.set(providerHealthKeyId(snapshot.key), mutableFromSnapshot(snapshot));
 		if (this.#ledger) {
-			for (const health of this.#ledger.getSnapshot().providerHealth as readonly LedgerProviderHealthRef[]) {
+			for (const health of this.#ledger.getSnapshot().providerHealth as readonly ProviderHealthRef[]) {
 				this.#hydrateLedgerHealth(health);
 			}
 			this.#unsubscribeLedger = this.#ledger.subscribe(record => {
 				if (record.type !== "provider_health_recorded") return;
-				this.#hydrateLedgerHealth(record.health as LedgerProviderHealthRef);
+				this.#hydrateLedgerHealth(record.health as ProviderHealthRef);
 			});
 		}
 		if (options.onEvent) this.#subscribers.add(options.onEvent);
@@ -483,6 +523,95 @@ export class ProviderHealthRegistry {
 		return [...this.#entries.values()].map(cloneSnapshot);
 	}
 
+	/**
+	 * 无副作用可用性查询：任一 route 当前可 dispatch（按注入 clock 判定）。
+	 * - closed：可 dispatch。
+	 * - open：仅 retryAt 已到期（可放行一次 probe）才可 dispatch。
+	 * - half_open：已有在途 probe 时新请求只会排队，不视为可 dispatch；
+	 *   无在途 probe 才可 dispatch。
+	 * 空 entries 返回 false，由调用方用 all().length 区分“尚无观测”与
+	 * “观测过但全部不可用”。
+	 */
+	hasDispatchableRoute(): boolean {
+		const now = this.#now();
+		for (const [id, entry] of this.#entries) {
+			if (entry.state === "closed") return true;
+			if (entry.state === "open") {
+				if (entry.retryAt !== undefined && entry.retryAt <= now) return true;
+				continue;
+			}
+			if (entry.state === "half_open" && !this.#probes.has(id)) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * 用分支 journal 恢复出的 snapshots 整体替换注册表状态。
+	 * 默认（force=false）时 snapshots 与当前 entries 完全相等则严格 no-op：
+	 * waiter/probe/debt/in-flight 请求全部保留且不 publish；不同则视为分支切换，
+	 * 原子清旧分支状态并单次 reset。force=true 是真实 branch cutover：即使
+	 * snapshots 相同也清 stalls/failureIds/probes/wakes/parked、reject 旧 waiter
+	 * 与在途请求（epoch 失效），并单次 reset。
+	 */
+	reset(snapshots: readonly ProviderHealthSnapshot[] = [], options: { readonly force?: boolean } = {}): void {
+		const next = new Map<string, MutableHealth>();
+		for (const snapshot of snapshots) {
+			const entry = mutableFromSnapshot(snapshot);
+			next.set(providerHealthKeyId(entry.key), entry);
+		}
+		if (!options.force && branchHealthEqual(this.#entries, next)) return;
+		// 分支切换：旧 epoch 的 probe/waiter 必须明确失效（reject），不得把旧分支
+		// 的 unhealthy snapshot 当作“成功”resolve；随后原子替换 entries 并清全部债务。
+		this.#branchEpoch++;
+		for (const probe of this.#probes.values()) {
+			probe.reject(new ProviderHealthError("Provider health registry was reset."));
+		}
+		this.#probes.clear();
+		for (const pending of this.#wakes.values()) {
+			for (const waiter of pending) {
+				waiter.reject(new ProviderHealthError("Provider health registry was reset."));
+			}
+		}
+		this.#wakes.clear();
+		this.#stalls.clear();
+		this.#failureIds.clear();
+		this.#requestTerminals.clear();
+		this.#parked.clear();
+		this.#entries.clear();
+		for (const [id, entry] of next) this.#entries.set(id, entry);
+		this.#publish("reset");
+	}
+
+	/** 清空全部健康状态与行为债务（含 parked）；无状态时严格 no-op，仅单次 publish cleared。 */
+	clear(): void {
+		if (
+			this.#entries.size === 0 &&
+			this.#stalls.size === 0 &&
+			this.#failureIds.size === 0 &&
+			this.#probes.size === 0 &&
+			this.#wakes.size === 0 &&
+			this.#requestTerminals.size === 0
+		)
+			return;
+		this.#branchEpoch++;
+		for (const probe of this.#probes.values()) {
+			probe.reject(new ProviderHealthError("Provider health registry was cleared."));
+		}
+		this.#probes.clear();
+		for (const pending of this.#wakes.values()) {
+			for (const waiter of pending) {
+				waiter.reject(new ProviderHealthError("Provider health registry was cleared."));
+			}
+		}
+		this.#wakes.clear();
+		this.#stalls.clear();
+		this.#failureIds.clear();
+		this.#requestTerminals.clear();
+		this.#parked.clear();
+		this.#entries.clear();
+		this.#publish("cleared");
+	}
+
 	/** Admit a request, waiting behind a single half-open probe when necessary. */
 	async admit(request: ProviderHealthRequest): Promise<ProviderHealthAdmission> {
 		const key = isProviderHealthKey(request.key) ? request.key : createProviderHealthKey(request.key);
@@ -510,10 +639,25 @@ export class ProviderHealthRegistry {
 					reject: pending.reject,
 					generation: entry.generation,
 				};
+				// 零消费者场景（无人排队等待 probe）下，拒绝必须被观察，否则会成为
+				// unhandled rejection 并可能崩溃进程；排队请求仍通过 race 收到拒绝。
+				void pending.promise.catch(() => undefined);
 				this.#probes.set(id, probe);
-				return { key, snapshot: cloneSnapshot(entry), generation: probe.generation, probe: true };
+				return {
+					key,
+					snapshot: cloneSnapshot(entry),
+					generation: probe.generation,
+					probe: true,
+					branchEpoch: this.#branchEpoch,
+				};
 			}
-			return { key, snapshot: cloneSnapshot(entry), generation: entry.generation, probe: false };
+			return {
+				key,
+				snapshot: cloneSnapshot(entry),
+				generation: entry.generation,
+				probe: false,
+				branchEpoch: this.#branchEpoch,
+			};
 		}
 	}
 
@@ -521,14 +665,23 @@ export class ProviderHealthRegistry {
 		const admission = await this.admit(request);
 		try {
 			const result = await operation();
-			this.recordSuccess(admission.key, {
-				generation: admission.probe ? admission.generation : undefined,
-				sessionId: request.sessionId,
-			});
+			// requestId terminal claim 先于任何 health mutation：同 requestId 的
+			// 二次 terminal 对 snapshot/debt/event 均严格 no-op。
+			if (this.#claimRequestTerminal(admission, request)) {
+				this.recordSuccess(admission.key, {
+					generation: admission.probe ? admission.generation : undefined,
+					sessionId: request.sessionId,
+				});
+				this.#publishRequestTerminal(admission, request, "request_completed");
+			}
 			return result;
 		} catch (error) {
-			if (admission.probe) this.#failProbe(admission.key, admission.generation, error, request);
-			else this.#recordThrownFailure(admission.key, error, request);
+			const status = isProviderHealthExcludedFailure(error) ? "request_interrupted" : "request_failed";
+			if (this.#claimRequestTerminal(admission, request)) {
+				if (admission.probe) this.#failProbe(admission.key, admission.generation, error, request);
+				else this.#recordThrownFailure(admission.key, error, request);
+				this.#publishRequestTerminal(admission, request, status);
+			}
 			throw error;
 		}
 	}
@@ -547,8 +700,12 @@ export class ProviderHealthRegistry {
 		try {
 			source = await dispatch();
 		} catch (error) {
-			if (admission.probe) this.#failProbe(admission.key, admission.generation, error, request);
-			else this.#recordThrownFailure(admission.key, error, request);
+			const status = isProviderHealthExcludedFailure(error) ? "request_interrupted" : "request_failed";
+			if (this.#claimRequestTerminal(admission, request)) {
+				if (admission.probe) this.#failProbe(admission.key, admission.generation, error, request);
+				else this.#recordThrownFailure(admission.key, error, request);
+				this.#publishRequestTerminal(admission, request, status);
+			}
 			throw error;
 		}
 		const observed = new AssistantMessageEventStream();
@@ -666,7 +823,8 @@ export class ProviderHealthRegistry {
 
 	recordHeartbeat(keyLike: ProviderHealthKeyLike, sessionId?: string): ProviderHealthSnapshot {
 		const entry = this.#entry(keyLike);
-		this.#publish("heartbeat", entry, undefined, sessionId);
+		void sessionId;
+		this.#publish("heartbeat", entry);
 		return cloneSnapshot(entry);
 	}
 
@@ -707,7 +865,7 @@ export class ProviderHealthRegistry {
 		const pending = Promise.withResolvers<ProviderHealthSnapshot>();
 		const id = providerHealthKeyId(key);
 		const waiters = this.#wakes.get(id) ?? new Set<PendingWake>();
-		const wake: PendingWake = { key, promise: pending.promise, resolve: pending.resolve };
+		const wake: PendingWake = { key, promise: pending.promise, resolve: pending.resolve, reject: pending.reject };
 		waiters.add(wake);
 		this.#wakes.set(id, waiters);
 		return this.#raceAbort(pending.promise, signal).finally(() => {
@@ -882,24 +1040,39 @@ export class ProviderHealthRegistry {
 		let sawHeartbeat = false;
 		try {
 			for await (const event of source as AsyncIterable<AssistantMessageEvent>) {
+				// 旧分支 cutover 后的晚到流事件：仅转发给消费者，注册表零副作用。
+				if (!this.#isCurrentBranch(admission)) {
+					observed.push(event);
+					continue;
+				}
 				if (event.type !== "done" && event.type !== "error") {
 					sawHeartbeat = true;
 					this.recordHeartbeat(admission.key, request.sessionId);
 				} else if (event.type === "done") {
-					this.recordSuccess(admission.key, {
-						generation: admission.probe ? admission.generation : undefined,
-						sessionId: request.sessionId,
-					});
+					if (this.#claimRequestTerminal(admission, request)) {
+						this.recordSuccess(admission.key, {
+							generation: admission.probe ? admission.generation : undefined,
+							sessionId: request.sessionId,
+						});
+						this.#publishRequestTerminal(admission, request, "request_completed");
+					}
 				} else {
 					const receipt = {
 						...this.#receiptFromError(event.error, request),
 						noTerminal: true,
 						noHeartbeat: !sawHeartbeat,
 					};
-					if (admission.probe) {
-						this.#failProbe(admission.key, admission.generation, event.error, { ...request, receipt });
-					} else if (!isProviderHealthExcludedFailure(event.error)) {
-						this.recordTerminalReceipt(admission.key, receipt);
+					if (this.#claimRequestTerminal(admission, request)) {
+						if (admission.probe) {
+							this.#failProbe(admission.key, admission.generation, event.error, { ...request, receipt });
+						} else if (!isProviderHealthExcludedFailure(event.error)) {
+							this.recordTerminalReceipt(admission.key, receipt);
+						}
+						this.#publishRequestTerminal(
+							admission,
+							request,
+							isProviderHealthExcludedFailure(event.error) ? "request_interrupted" : "request_failed",
+						);
 					}
 				}
 				observed.push(event);
@@ -909,24 +1082,51 @@ export class ProviderHealthRegistry {
 				observed.end(result);
 			}
 		} catch (error) {
-			if (admission.probe) {
-				this.#failProbe(admission.key, admission.generation, error, {
-					...request,
-					receipt: {
+			if (this.#claimRequestTerminal(admission, request)) {
+				if (admission.probe) {
+					this.#failProbe(admission.key, admission.generation, error, {
+						...request,
+						receipt: {
+							...this.#receiptFromError(error, request),
+							noTerminal: true,
+							noHeartbeat: !sawHeartbeat,
+						},
+					});
+				} else {
+					this.recordTerminalReceipt(admission.key, {
 						...this.#receiptFromError(error, request),
 						noTerminal: true,
 						noHeartbeat: !sawHeartbeat,
-					},
-				});
-			} else {
-				this.recordTerminalReceipt(admission.key, {
-					...this.#receiptFromError(error, request),
-					noTerminal: true,
-					noHeartbeat: !sawHeartbeat,
-				});
+					});
+				}
+				this.#publishRequestTerminal(
+					admission,
+					request,
+					isProviderHealthExcludedFailure(error) ? "request_interrupted" : "request_failed",
+				);
 			}
 			if (!observed.done) observed.fail(error);
 		}
+	}
+
+	/** 分支 epoch 校验：旧分支的 admit 请求晚到 terminal 不得产生任何副作用。 */
+	#isCurrentBranch(admission: Pick<ProviderHealthAdmission, "branchEpoch">): boolean {
+		return admission.branchEpoch === this.#branchEpoch;
+	}
+
+	/**
+	 * 请求终结声明：必须在任何 health mutation 之前调用。无 requestId 的请求
+	 * 不参与去重（健康统计照常）；有 requestId 时仅首个 terminal 获得 claim，
+	 * 后续同 requestId terminal 对 snapshot/debt/event 均严格 no-op。
+	 */
+	#claimRequestTerminal(admission: ProviderHealthAdmission, request: ProviderHealthRequest): boolean {
+		if (!this.#isCurrentBranch(admission)) return false;
+		const requestId = request.requestId?.trim();
+		if (!requestId) return true;
+		const terminalKey = `${providerHealthKeyId(admission.key)}\u0000${requestId}`;
+		if (this.#requestTerminals.has(terminalKey)) return false;
+		this.#requestTerminals.add(terminalKey);
+		return true;
 	}
 
 	#receiptRef(kind: ProviderHealthReceiptKind): string {
@@ -973,23 +1173,34 @@ export class ProviderHealthRegistry {
 
 	#publish(
 		type: ProviderHealthEventType,
-		entry: MutableHealth,
+		entry?: MutableHealth,
 		assignment?: ParkedProviderAssignment,
-		_sessionId?: string,
+		requestId?: string,
 	): void {
 		const event: ProviderHealthEvent = Object.freeze({
 			type,
-			key: entry.key,
-			snapshot: cloneSnapshot(entry),
+			...(entry ? { key: entry.key, snapshot: cloneSnapshot(entry) } : {}),
 			...(assignment ? { assignment } : {}),
+			...(requestId ? { requestId } : {}),
 		});
 		for (const listener of [...this.#subscribers]) {
 			try {
 				listener(event);
 			} catch {
-				// Health notifications are advisory and must never break dispatch.
+				// 健康通知是建议性的，绝不能破坏派发。
 			}
 		}
+	}
+
+	/** 每个已捕获 requestId 的请求恰好发布一次 terminal（claim 已先行去重）。 */
+	#publishRequestTerminal(
+		admission: ProviderHealthAdmission,
+		request: ProviderHealthRequest,
+		status: "request_completed" | "request_failed" | "request_interrupted",
+	): void {
+		const requestId = request.requestId?.trim();
+		if (!requestId) return;
+		this.#publish(status, this.#entry(admission.key), undefined, requestId);
 	}
 
 	#persist(entry: MutableHealth): void {
@@ -999,15 +1210,15 @@ export class ProviderHealthRegistry {
 			this.#ledger.append({
 				type: "provider_health_recorded",
 				recordId: `provider-health:${providerHealthKeyId(entry.key)}:${snapshot.healthRevision}`,
-				health: toLedgerHealth(snapshot),
+				health: providerHealthRefFromSnapshot(snapshot),
 			});
 		} catch {
 			// A health cache must not turn a provider request into a ledger failure.
 		}
 	}
 
-	#hydrateLedgerHealth(health: LedgerProviderHealthRef): void {
-		const snapshot = fromLedgerHealth(health);
+	#hydrateLedgerHealth(health: ProviderHealthRef): void {
+		const snapshot = providerHealthSnapshotFromRef(health);
 		const id = providerHealthKeyId(snapshot.key);
 		const existing = this.#entries.get(id);
 		if (existing && existing.healthRevision >= snapshot.healthRevision) return;

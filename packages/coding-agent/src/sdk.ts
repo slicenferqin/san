@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import {
 	Agent,
 	type AgentEvent,
@@ -54,6 +55,7 @@ import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate
 import { buildServiceTierByFamily } from "./config/service-tier";
 import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
+import { createExecutionRuntime, type ExecutionRuntime } from "./execution-control";
 import { ProviderHealthRegistry, providerHealthKeyFromModel } from "./execution-control/provider-health";
 import { TaskContractRegistry } from "./execution-control/task-contract";
 import "./discovery";
@@ -379,11 +381,15 @@ export interface CreateAgentSessionOptions {
 	authStorage?: AuthStorage;
 	/** Model registry. Default: discoverModels(authStorage, agentDir) */
 	modelRegistry?: ModelRegistry;
-	/** Optional per-root provider health circuit registry shared by provider dispatches. */
+	/** 可选的 root 级 Provider 健康熔断注册表，由所有 Provider 派发共享。 */
 	providerHealthRegistry?: ProviderHealthRegistry;
-	/** Root-scoped task admission registry shared by nested sessions. */
+	/** 可选的共享执行运行时。根会话未传入时自行创建，子会话继承父实例。 */
+	executionRuntime?: ExecutionRuntime;
+	/** 从父会话继承的固定且不可变的执行 Scope（供子会话使用）。 */
+	executionScopeId?: string;
+	/** 嵌套会话共享的 root 级 Task 准入注册表。 */
 	taskContractRegistry?: TaskContractRegistry;
-	/** Root session identity used when creating a registry for this session. */
+	/** 为当前会话创建注册表时使用的根会话身份。 */
 	rootSessionId?: string;
 	/** 仅保存在内存中的额外敏感值；传入后即使全局开关关闭也会启用出站脱敏。 */
 	additionalSecretEntries?: readonly SecretEntry[];
@@ -1201,7 +1207,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// / session would silently miss credential_disabled events.
 	const modelRegistry =
 		options.modelRegistry ??
-		new ModelRegistry(options.authStorage ?? (await logger.time("discoverModels", discoverAuthStorage, agentDir)));
+		new ModelRegistry(
+			options.authStorage ?? (await logger.time("discoverModels", discoverAuthStorage, agentDir)),
+			path.join(agentDir, "models.yml"),
+		);
 	// Track whether we internally created the authStorage so we can close it
 	// if construction fails before the session takes ownership.
 	const ownsAuthStorage = !options.authStorage && !options.modelRegistry;
@@ -1305,12 +1314,46 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		logger.time("sessionManager", () =>
 			SessionManager.create(cwd, SessionManager.getDefaultSessionDir(cwd, agentDir)),
 		);
-	const providerHealthRegistry = options.providerHealthRegistry ?? new ProviderHealthRegistry();
-	const taskContractRegistry =
-		options.taskContractRegistry ??
-		new TaskContractRegistry({
+	// Registry 身份：被采纳的 execution runtime 是共享 task/provider
+	// registry 的唯一事实来源。一旦提供 runtime，其 registry 优先；调用方
+	// 若同时传入不同的 registry 实例则快速失败，绝不静默割裂控制面。
+	const adoptedRuntime = options.executionRuntime;
+	if (adoptedRuntime) {
+		if (options.providerHealthRegistry && options.providerHealthRegistry !== adoptedRuntime.providerRegistry) {
+			throw new Error(
+				"options.providerHealthRegistry must be the execution runtime's providerRegistry when both are provided",
+			);
+		}
+		if (options.taskContractRegistry && options.taskContractRegistry !== adoptedRuntime.taskRegistry) {
+			throw new Error(
+				"options.taskContractRegistry must be the execution runtime's taskRegistry when both are provided",
+			);
+		}
+	}
+	const providerHealthRegistry = adoptedRuntime
+		? adoptedRuntime.providerRegistry
+		: (options.providerHealthRegistry ?? new ProviderHealthRegistry());
+	const taskContractRegistry = adoptedRuntime
+		? adoptedRuntime.taskRegistry
+		: (options.taskContractRegistry ??
+			new TaskContractRegistry({
+				rootSessionId: options.rootSessionId ?? sessionManager.getSessionId(),
+			}));
+	// Execution runtime：根会话每个 root 恰好创建一个（并拥有）实例；
+	// 子会话采纳父的共享 runtime 与固定 scope，绝不 start/sync/dispose。
+	// runtime 经 session manager 持久化其 ledger，并共享上述解析出的
+	// task/provider registry。
+	const executionRuntime =
+		adoptedRuntime ??
+		createExecutionRuntime({
 			rootSessionId: options.rootSessionId ?? sessionManager.getSessionId(),
+			branchEntries: sessionManager.getBranch(),
+			sessionManager,
+			taskRegistry: taskContractRegistry,
+			providerRegistry: providerHealthRegistry,
 		});
+	const ownedExecutionRuntime = adoptedRuntime ? undefined : executionRuntime;
+	const executionScopeId = options.executionScopeId;
 	const providerSessionId = options.providerSessionId ?? sessionManager.getSessionId();
 	const forkCacheShapeChanged =
 		options.model !== undefined ||
@@ -1659,6 +1702,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getRootSessionId: () => taskContractRegistry.rootSessionId ?? sessionManager.getSessionId(),
 			taskContractRegistry,
 			providerHealthRegistry,
+			executionRuntime: executionRuntime,
+			getExecutionScopeId: () => executionScopeId ?? session?.getActiveExecutionScopeId(),
 			isToolActive: name => activeToolNames.has(name),
 			setActiveToolNames,
 			hasUI: options.hasUI ?? false,
@@ -2737,11 +2782,22 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		};
 		const providerHealthStreamFn: StreamFn = (...args) => {
 			const [streamModel, _context, streamOptions] = args;
+			// 每次 provider 派发都用 Snowflake 生成唯一 requestId：先解析当前
+			// 固定/active scope 并向 runtime 登记（任何 provider/network 工作
+			// 之前；登记失败——终态 scope、scheduler gate 拒绝——即零网络抛错），
+			// 再进入 ProviderHealthRegistry.dispatchStream 并同步传入 requestId。
+			// 未登记的请求结果绝不猜测进任何 scope。
+			const requestId = Snowflake.next();
+			const dispatchScopeId = executionScopeId ?? executionRuntime.activeScopeId();
+			if (executionRuntime && dispatchScopeId !== undefined) {
+				executionRuntime.registerProviderDispatch(dispatchScopeId, requestId);
+			}
 			return providerHealthRegistry.dispatchStream(
 				{
 					key: providerHealthKeyFromModel(streamModel),
 					sessionId: providerSessionId,
 					signal: streamOptions?.signal,
+					requestId,
 				},
 				() => dispatchStreamFn(...args),
 			);
@@ -2968,7 +3024,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			skillsReloadable: options.skills === undefined,
 			skillsSettings: settings.getGroup("skills"),
 			modelRegistry,
-			providerHealthRegistry,
+			executionRuntime,
+			ownedExecutionRuntime,
+			executionScopeId,
 			taskContractRegistry,
 			toolRegistry,
 			createVibeTools:

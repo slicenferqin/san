@@ -2,6 +2,7 @@ export * from "./durable-scheduler";
 export * from "./errors";
 export * from "./evidence-gates";
 export * from "./execution-ledger";
+export * from "./execution-runtime";
 export * from "./persistence";
 export * from "./provider-health";
 export * from "./scope-registry";

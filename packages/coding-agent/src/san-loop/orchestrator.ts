@@ -4,7 +4,7 @@ import {
 	legacyCommandCheckId,
 	verifyAcceptanceGates,
 } from "../execution-control/evidence-gates";
-import type { EvidenceReceipt, EvidenceRef } from "../execution-control/types";
+import type { EvidenceReceipt, EvidenceRef, SupervisorExternalBlocker } from "../execution-control/types";
 import {
 	type LegacySanLoopMode,
 	normalizeSanLoopMode,
@@ -80,6 +80,8 @@ export interface SanLoopReviewInput {
 	assignmentId?: string;
 	createdAt?: string;
 	evidenceRefs?: readonly string[];
+	/** typed external blocker：只有 host 提供的 typed blocker 才能驱动 needs_user。 */
+	externalBlocker?: SupervisorExternalBlocker;
 }
 
 export interface SanLoopTransition {
@@ -356,6 +358,8 @@ export function createSanLoopReviewReport(run: SanLoopRunSnapshot, input: SanLoo
 	};
 }
 export interface SanLoopEvidenceValidationOptions {
+	/** 与 runtime 对齐的 execution scope id；缺省兼容旧调用方使用 runId。 */
+	readonly scopeId?: string;
 	readonly currentBatchAssignmentIds?: readonly string[];
 	readonly hostReceipts?: readonly EvidenceReceipt[];
 	readonly freshnessRevision?: number;
@@ -444,7 +448,12 @@ export function validatePassEvidence(
 			if (!receipt.assignmentId || batchIds.length === 0) return true;
 			return batchIds.includes(receipt.assignmentId);
 		});
-		const freshnessRevision = options.freshnessRevision ?? run.revision;
+		// 绑定后的 gate 携带 materialize 时刻的 scope snapshot revision；
+		// receipt 直接读 gate 值，review 侧与 gate 保持一致，而非 run.revision。
+		const freshnessRevision =
+			options.freshnessRevision ??
+			gates.find(gate => gate.freshnessRevision !== undefined)?.freshnessRevision ??
+			run.revision;
 		const boundGates = gates.map(gate => {
 			if (gate.evidenceRefs.length > 0 || !report.evidenceRefs || report.evidenceRefs.length === 0) return gate;
 			const reported = currentReceipts.filter(
@@ -453,7 +462,7 @@ export function validatePassEvidence(
 			return { ...gate, evidenceRefs: reported.map(evidenceRefForReceipt) };
 		});
 		return verifyAcceptanceGates({
-			scopeId: run.runId,
+			scopeId: options.scopeId ?? run.runId,
 			contractRevision,
 			contractHash,
 			freshnessRevision,

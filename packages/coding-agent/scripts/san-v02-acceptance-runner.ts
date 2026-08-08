@@ -4,14 +4,18 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "../src/config/settings";
+import type { AcceptanceGate, ImmutableObjectiveContract } from "../src/execution-control";
 import {
 	createSanLoopTaskAgentExecutor,
 	isSanLoopTerminalStatus,
 	normalizeSanLoopMode,
 	runSanLoop,
+	SAN_LOOP_INSPECTION_ARTIFACT_KIND,
+	SAN_LOOP_INSPECTION_SCHEMA_ID,
 	type SanLoopMode,
 } from "../src/san-loop";
 import { createAgentSession } from "../src/sdk";
+import { buildAuthoritativeUserObjectiveContract } from "../src/session/agent-session";
 import { buildSanLoopReportText } from "../src/slash-commands/helpers/san-loop-report";
 
 export interface RunnerArgs {
@@ -274,6 +278,25 @@ export async function writeAcceptanceOutput(output: AcceptanceRunOutput, outPath
 	await Bun.write(Bun.stdout, text);
 }
 
+function acceptanceGates(contract: ImmutableObjectiveContract): AcceptanceGate[] {
+	return [
+		{
+			gateId: "gate:host-inspection",
+			contractRef: contract.ref,
+			contractRevision: contract.ref.revision,
+			contractHash: contract.ref.contractHash,
+			objectiveClauseRefs: [...contract.ref.clauseRefs],
+			verifier: {
+				kind: "artifact",
+				artifactKind: SAN_LOOP_INSPECTION_ARTIFACT_KIND,
+				schemaId: SAN_LOOP_INSPECTION_SCHEMA_ID,
+			},
+			status: "unknown",
+			evidenceRefs: [],
+			required: true,
+		},
+	];
+}
 export async function runAcceptanceTask(args: RunnerArgs): Promise<AcceptanceRunOutput> {
 	const startedAt = Date.now();
 	const settings = await Settings.init({
@@ -290,6 +313,16 @@ export async function runAcceptanceTask(args: RunnerArgs): Promise<AcceptanceRun
 		autoApprove: true,
 	});
 	const session = created.session;
+	const objectiveMessage = { role: "user", content: args.objective, timestamp: Date.now() } as const;
+	const objectiveEntryId = session.sessionManager.appendMessage(objectiveMessage);
+	const objectiveContract = buildAuthoritativeUserObjectiveContract(objectiveEntryId, objectiveMessage);
+	const executionRuntime = session.getExecutionRuntime();
+	if (!executionRuntime) throw new Error("San v0.2 acceptance runner requires an execution runtime.");
+	const executionScope = executionRuntime.startScope({
+		rootSessionId: session.sessionManager.getSessionId(),
+		logicalTurnId: objectiveEntryId,
+		objectiveContract,
+	});
 
 	try {
 		const result = await runSanLoop({
@@ -303,7 +336,16 @@ export async function runAcceptanceTask(args: RunnerArgs): Promise<AcceptanceRun
 				session,
 				cwd: args.cwd,
 				eventBus: created.eventBus,
+				executionRuntime,
+				executionScopeId: executionScope.scopeId,
 			}),
+			executionRuntime,
+			executionScopeId: executionScope.scopeId,
+			objectiveContract: objectiveContract.ref,
+			contractRevision: objectiveContract.ref.revision,
+			contractHash: objectiveContract.ref.contractHash,
+			objectiveClauseRefs: objectiveContract.ref.clauseRefs,
+			acceptanceGates: acceptanceGates(objectiveContract),
 		});
 		const reportText = buildSanLoopReportText(session.sessionManager.getEntries(), { count: 5 });
 		const changedFiles = uniqueStrings(result.run.workerResults.flatMap(worker => worker.changedFiles));

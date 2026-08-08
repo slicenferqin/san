@@ -1,4 +1,5 @@
 import { logger } from "@san/utils";
+import type { TaskContractSnapshot } from "./task-contract";
 import type {
 	AcceptanceGate,
 	EvidenceRef,
@@ -24,7 +25,14 @@ import type {
 } from "./types";
 import { emptyUsageTelemetry } from "./types";
 
-const TERMINAL_STATES: readonly ExecutionScopeState[] = ["completed", "aborted_by_user", "runtime_fault"];
+/** 终结状态集合；终结后的执行作用域不可逆转。 */
+const TERMINAL_STATES: readonly ExecutionScopeState[] = [
+	"completed",
+	"aborted_by_user",
+	"budget_exhausted",
+	"no_provider_available",
+	"runtime_fault",
+];
 
 function isTerminalState(state: ExecutionScopeState): boolean {
 	return TERMINAL_STATES.includes(state);
@@ -206,6 +214,7 @@ export class ExecutionLedger {
 				logger.error("Execution ledger subscriber failed", {
 					scopeId: record.scopeId,
 					recordId: record.recordId,
+					eventType: record.type,
 					error: error instanceof Error ? error.message : String(error),
 				});
 			});
@@ -243,6 +252,7 @@ export class ExecutionLedger {
 			gates: [],
 			evidenceRefs: [],
 			assignments: [],
+			taskContracts: [],
 			strategies: [],
 			usage: emptyUsageTelemetry(),
 			providerHealth: [],
@@ -475,13 +485,27 @@ export class ExecutionLedger {
 				break;
 			case "state_changed":
 				if (isTerminalState(snapshot.state)) throw new TerminalExecutionStateError(snapshot.state);
-				if (
-					event.state === "completed" &&
-					snapshot.gates.some(gate => gate.required !== false && gate.status !== "pass")
-				) {
+				if (event.state === "needs_user" && !this.#hasTypedNeedsUserDecision(snapshot.supervisorDecisions)) {
 					throw new ExecutionLedgerError(
-						"An execution scope cannot complete while an acceptance gate is not passed.",
+						"An execution scope can only enter needs_user through a supervisor decision with a typed external blocker.",
 					);
+				}
+				if (event.state === "completed") {
+					const requiredGates = snapshot.gates.filter(gate => gate.required !== false);
+					if (requiredGates.length === 0) {
+						throw new ExecutionLedgerError(
+							"An execution scope cannot complete without at least one required acceptance gate.",
+						);
+					}
+					if (
+						requiredGates.some(
+							gate => gate.status !== "pass" || !this.#gateHasRecordedHostEvidence(snapshot, gate),
+						)
+					) {
+						throw new ExecutionLedgerError(
+							"An execution scope cannot complete while an acceptance gate is not passed with recorded host evidence.",
+						);
+					}
 				}
 				next = { ...next, state: event.state };
 				break;
@@ -531,8 +555,84 @@ export class ExecutionLedger {
 			case "progress_observed":
 				next = { ...next, progress: this.#upsertProgress(next.progress, event.observation) };
 				break;
+			case "task_contract_recorded":
+				this.#validateNestedScope(event.contract.scopeId);
+				next = {
+					...next,
+					taskContracts: this.#upsertTaskContract(next.taskContracts, event.contract, event.removed === true),
+				};
+				break;
 		}
 		return next;
+	}
+
+	#hasTypedNeedsUserDecision(decisions: readonly SupervisorDecisionRef[]): boolean {
+		const latest = decisions[decisions.length - 1];
+		if (latest?.action !== "needs_user") return false;
+		const blocker = latest.externalBlocker;
+		return (
+			blocker !== undefined &&
+			blocker.kind === "external" &&
+			typeof blocker.dependencyId === "string" &&
+			blocker.dependencyId.length > 0 &&
+			typeof blocker.evidenceRef === "string" &&
+			blocker.evidenceRef.length > 0
+		);
+	}
+	/** 完成校验：每个 required pass gate 必须带有已记录进 scope 的宿主证据引用。 */
+
+	#gateHasRecordedHostEvidence(snapshot: Readonly<ExecutionScopeSnapshot>, gate: AcceptanceGate): boolean {
+		return gate.evidenceRefs.some(
+			ref =>
+				ref.gateId === gate.gateId &&
+				ref.contractRevision === gate.contractRevision &&
+				(gate.assignmentId === undefined || ref.assignmentId === gate.assignmentId) &&
+				(gate.freshnessRevision === undefined || ref.freshnessRevision === gate.freshnessRevision) &&
+				// snapshot 中同 evidenceId 的已记录证据必须绑定同 gate/contract/freshness/assignment；
+				// 只凭 evidenceId 匹配会让别 gate 的同 ID 证据借道通过。
+				snapshot.evidenceRefs.some(
+					recorded =>
+						recorded.evidenceId === ref.evidenceId &&
+						recorded.gateId === gate.gateId &&
+						recorded.contractRevision === gate.contractRevision &&
+						(gate.assignmentId === undefined || recorded.assignmentId === gate.assignmentId) &&
+						(gate.freshnessRevision === undefined || recorded.freshnessRevision === gate.freshnessRevision),
+				),
+		);
+	}
+	/** 任务契约物化：按 contractId 保留最新快照；removed 墓碑移除对应条目。 */
+	#upsertTaskContract(
+		contracts: readonly TaskContractSnapshot[],
+		contract: TaskContractSnapshot,
+		removed: boolean,
+	): readonly TaskContractSnapshot[] {
+		const existing = getById(contracts, "contractId", contract.contractId);
+		// 物化条目的身份字段不可变更；removed 墓碑同样校验，防止误删同名不同身份条目。
+		if (
+			existing &&
+			(existing.scopeId !== contract.scopeId ||
+				existing.workKey !== contract.workKey ||
+				existing.strategyKey !== contract.strategyKey ||
+				existing.taskId !== contract.taskId)
+		) {
+			throw new ExecutionLedgerError(`Task contract ${contract.contractId} identity cannot change.`);
+		}
+		if (removed) return existing ? contracts.filter(item => item.contractId !== contract.contractId) : contracts;
+		if (!existing) return [...contracts, cloneFrozen(contract)];
+		// revision/cursor 单调：回退或同 revision 改值都视为篡改。
+		if (contract.revision < existing.revision) {
+			throw new ExecutionLedgerError(`Task contract ${contract.contractId} revision is stale.`);
+		}
+		if (contract.cursor < existing.cursor) {
+			throw new ExecutionLedgerError(`Task contract ${contract.contractId} cursor is stale.`);
+		}
+		if (contract.revision === existing.revision) {
+			if (!sameValue(existing, contract)) {
+				throw new ExecutionLedgerError(`Task contract ${contract.contractId} cannot change at the same revision.`);
+			}
+			return contracts;
+		}
+		return updateById(contracts, "contractId", cloneFrozen(contract));
 	}
 
 	#bindContract(
@@ -558,6 +658,15 @@ export class ExecutionLedger {
 		if (gate.contractRevision !== gate.contractRef.revision) {
 			throw new ExecutionLedgerError(`Acceptance gate ${gate.gateId} has mismatched contract revision.`);
 		}
+		if ((gate.contractHash ?? gate.contractRef.contractHash) !== gate.contractRef.contractHash) {
+			throw new ExecutionLedgerError(`Acceptance gate ${gate.gateId} has mismatched contract hash.`);
+		}
+		if (
+			gate.objectiveClauseRefs.length === 0 ||
+			!gate.objectiveClauseRefs.every(clauseRef => gate.contractRef.clauseRefs.includes(clauseRef))
+		) {
+			throw new ExecutionLedgerError(`Acceptance gate ${gate.gateId} is not bound to an objective clause.`);
+		}
 		const contract = scopeContractRef(snapshot);
 		if (contract && !objectiveRefsEqual(contract, gate.contractRef)) {
 			throw new ImmutableObjectiveContractError(
@@ -568,7 +677,34 @@ export class ExecutionLedger {
 			if (evidence.gateId !== gate.gateId || evidence.contractRevision !== gate.contractRevision) {
 				throw new ExecutionLedgerError(`Evidence ${evidence.evidenceId} is not bound to gate ${gate.gateId}.`);
 			}
+			if (gate.assignmentId !== undefined && evidence.assignmentId !== gate.assignmentId) {
+				throw new ExecutionLedgerError(`Evidence ${evidence.evidenceId} is bound to a different assignment.`);
+			}
+			if (gate.freshnessRevision !== undefined && evidence.freshnessRevision !== gate.freshnessRevision) {
+				throw new ExecutionLedgerError(`Evidence ${evidence.evidenceId} is stale for gate ${gate.gateId}.`);
+			}
 		}
+	}
+	#upsertGate(gates: readonly AcceptanceGate[], gate: AcceptanceGate): readonly AcceptanceGate[] {
+		const existing = getById(gates, "gateId", gate.gateId);
+		if (!existing) return [...gates, cloneFrozen(gate)];
+		if (
+			existing.contractRevision !== gate.contractRevision ||
+			!objectiveRefsEqual(existing.contractRef, gate.contractRef) ||
+			(existing.contractHash ?? existing.contractRef.contractHash) !==
+				(gate.contractHash ?? gate.contractRef.contractHash) ||
+			!sameValue(existing.objectiveClauseRefs, gate.objectiveClauseRefs) ||
+			!sameValue(existing.verifier, gate.verifier) ||
+			existing.assignmentId !== gate.assignmentId ||
+			existing.freshnessRevision !== gate.freshnessRevision ||
+			existing.required !== gate.required
+		) {
+			throw new ImmutableObjectiveContractError(`Acceptance gate ${gate.gateId} identity cannot change.`);
+		}
+		if (existing.status === "pass" && gate.status !== "pass") {
+			throw new ExecutionLedgerError(`Acceptance gate ${gate.gateId} cannot regress after passing.`);
+		}
+		return updateById(gates, "gateId", cloneFrozen(gate));
 	}
 
 	#validateEvidence(snapshot: MutableExecutionScopeSnapshot, evidence: EvidenceRef): void {
@@ -585,21 +721,6 @@ export class ExecutionLedger {
 	#validateNestedScope(scopeId: string): void {
 		if (scopeId !== this.scopeId)
 			throw new ExecutionLedgerError(`Nested execution fact belongs to scope ${scopeId}, not ${this.scopeId}.`);
-	}
-
-	#upsertGate(gates: readonly AcceptanceGate[], gate: AcceptanceGate): readonly AcceptanceGate[] {
-		const existing = getById(gates, "gateId", gate.gateId);
-		if (!existing) return [...gates, cloneFrozen(gate)];
-		if (
-			existing.contractRevision !== gate.contractRevision ||
-			!objectiveRefsEqual(existing.contractRef, gate.contractRef)
-		) {
-			throw new ImmutableObjectiveContractError(`Acceptance gate ${gate.gateId} cannot change contract binding.`);
-		}
-		if (existing.status === "pass" && gate.status !== "pass") {
-			throw new ExecutionLedgerError(`Acceptance gate ${gate.gateId} cannot regress after passing.`);
-		}
-		return updateById(gates, "gateId", cloneFrozen(gate));
 	}
 
 	#upsertEvidence(evidenceRefs: readonly EvidenceRef[], evidence: EvidenceRef): readonly EvidenceRef[] {

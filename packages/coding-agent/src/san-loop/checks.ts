@@ -284,15 +284,17 @@ export function bindSanLoopChecks(checks: readonly SanLoopCheck[], binding: SanL
 	return checks
 		.filter(check => {
 			const clauses = check.objectiveClauseRefs;
-			return (
-				clauses !== undefined &&
-				clauses.length > 0 &&
-				clauses.every(clause => binding.objectiveClauseRefs.includes(clause))
-			);
+			// 无显式 clauses 的 host check 绑定为 contract 全部 clauseRefs；
+			// 有显式 clauses 的校验 subset 必须全部落在 contract 内。
+			if (clauses === undefined || clauses.length === 0) return true;
+			return clauses.every(clause => binding.objectiveClauseRefs.includes(clause));
 		})
 		.map(check => ({
 			...check,
-			objectiveClauseRefs: [...check.objectiveClauseRefs!],
+			objectiveClauseRefs:
+				check.objectiveClauseRefs && check.objectiveClauseRefs.length > 0
+					? [...check.objectiveClauseRefs]
+					: [...binding.objectiveClauseRefs],
 			contractRevision: binding.contractRevision,
 			contractHash: binding.contractHash,
 		}));
