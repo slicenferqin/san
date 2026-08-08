@@ -38,7 +38,7 @@ describe("/prewalk slash command", () => {
 			isProviderEnabled: () => true,
 			isSelectorSuppressed: () => false,
 		};
-		const armPrewalk = vi.fn();
+		const armPrewalk = vi.fn(() => true);
 		const setText = vi.fn();
 		const showStatus = vi.fn();
 		const ctx = {

@@ -93,7 +93,7 @@
 
 ### Fixed
 
-- Fixed `xd://` parity with upstream: enabled-tool activation and SDK all-tool mode now honor mounted devices; dynamic summaries are byte-bounded, sanitized, and marked untrusted; mount notices survive resume and transcript transitions without replay; and device failures keep structured error envelopes.
+- Fixed `xd://` parity with upstream: enabled-tool activation and SDK all-tool mode now honor mounted devices without implicitly granting `write`; ambient tools remain top-level unless the read/write transport is explicitly active; dynamic summaries are byte-bounded, sanitized, and marked untrusted; mount notices survive resume and transcript transitions without replay; and device failures keep structured error envelopes.
 - Fixed prewalk's one-shot lifecycle: transient plan nudges no longer persist, same-model or conflicting arm requests no longer report false activation, and each re-arm requires a fresh todo gate before handoff.
 - Fixed post-fork runtime regressions: turn-scoped system-prompt overrides now survive concurrent base rebuilds, Bash safely extracts leading quoted `cd` targets, failed or replaced extension providers roll back registrations and credentials, refreshed task-agent discovery reaches live tools, cooldown fallback reverts re-check smaller context windows, and provider `AbortError`s no longer masquerade as cancelled handoffs.
 - Fixed logical model routing to reject unsafe fallback policies, rebind stale leases after config refresh, apply route-specific billing, select context-eligible fallback routes in the model picker, and render persisted route-change audits in the TUI and HTML exports.
