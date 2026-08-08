@@ -29,12 +29,14 @@ import { parseStreamingJson } from "@san/utils";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { XD_URL_PREFIX } from "../internal-urls/xd-protocol";
 import type { Theme } from "../modes/theme/theme";
+import { truncateHeadBytes } from "../session/streaming-output";
+import { resolveToolTier, type ToolTier } from "./approval";
 import type { Tool } from "./index";
 import { replaceTabs } from "./render-utils";
 import type { ToolRenderer } from "./renderers";
-import { ToolError } from "./tool-errors";
+import { renderError, ToolAbortError, ToolError } from "./tool-errors";
 
-export type XdevDocsMode = "full" | "catalog";
+export type XdevDocsMode = "inline" | "builtins" | "catalog";
 
 /**
  * Discoverable built-ins that must stay top-level even when xdev mounting is
@@ -43,7 +45,7 @@ export type XdevDocsMode = "full" | "catalog";
  * the bash interceptor rules — each loses its harness integration if hidden
  * behind dispatch.
  */
-export const XDEV_KEEP_TOP_LEVEL: Record<string, true> = { todo: true, ask: true, grep: true };
+export const XDEV_KEEP_TOP_LEVEL: Record<string, true> = { todo: true, ask: true, grep: true, web_search: true };
 
 /**
  * Tools that carry the `xd://` transport itself and therefore can never be
@@ -73,6 +75,8 @@ export interface XdevDispatch {
 	mode: "help" | "execute";
 	/** Validated inner args, kept for renderer delegation on result rebuilds. */
 	args?: Record<string, unknown>;
+	/** Approval tier resolved for the wrapped call. Absent for help and unresolved calls. */
+	tier?: ToolTier;
 	/** Details object returned by the wrapped tool, when executed. */
 	inner?: unknown;
 }
@@ -164,6 +168,36 @@ function toolSummary(inst: Tool): string {
 	return firstLine?.trim() ?? inst.label ?? inst.name;
 }
 
+/** C0/C1 controls and Unicode line separators; catalog summaries must remain one line. */
+const SUMMARY_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
+const SUMMARY_ELLIPSIS = "…";
+const SUMMARY_ELLIPSIS_BYTES = Buffer.byteLength(SUMMARY_ELLIPSIS, "utf-8");
+
+/** Strip controls and bound prompt-facing summaries by UTF-8 bytes. */
+function sanitizeCatalogSummary(summary: string, maxBytes?: number): string {
+	const cleaned = summary.replace(SUMMARY_CONTROL_CHARS, " ").trim();
+	if (maxBytes === undefined || Buffer.byteLength(cleaned, "utf-8") <= maxBytes) return cleaned;
+	if (maxBytes <= 0) return "";
+	if (maxBytes < SUMMARY_ELLIPSIS_BYTES) return truncateHeadBytes(cleaned, maxBytes).text;
+	const body = truncateHeadBytes(cleaned, maxBytes - SUMMARY_ELLIPSIS_BYTES).text.trimEnd();
+	return `${body}${SUMMARY_ELLIPSIS}`;
+}
+
+function promptCatalogSummary(inst: Tool, maxBytes?: number): string {
+	return sanitizeCatalogSummary(toolSummary(inst), maxBytes) || inst.name;
+}
+
+/** Compile the inline-device allowlist once per render. Malformed raw config degrades to no matches. */
+function compileInlineGlobs(patterns: readonly string[]): Bun.Glob[] {
+	if (!Array.isArray(patterns)) return [];
+	const globs: Bun.Glob[] = [];
+	for (const pattern of patterns) {
+		if (typeof pattern !== "string" || pattern.length === 0) continue;
+		globs.push(new Bun.Glob(pattern));
+	}
+	return globs;
+}
+
 /** Decode the (possibly partially streamed) inner args JSON string into display args. */
 function decodeInnerArgs(raw: unknown): Record<string, unknown> {
 	if (typeof raw !== "string" || raw.length === 0) return {};
@@ -222,9 +256,16 @@ export class XdevRegistry {
 		return this.#builtins.get(name) ?? this.#dynamic.get(name);
 	}
 
-	/** `{name, summary}` pairs for prompt templates and /tools display. */
-	entries(): Array<{ name: string; summary: string }> {
-		return this.list().map(tool => ({ name: tool.name, summary: toolSummary(tool) }));
+	/** `{name, summary, dynamic}` entries for prompt templates and /tools display. */
+	entries(): Array<{ name: string; summary: string; dynamic: boolean }> {
+		return this.list().map(tool => {
+			const dynamic = this.#dynamic.has(tool.name);
+			return {
+				name: tool.name,
+				summary: promptCatalogSummary(tool, dynamic ? XdevRegistry.EXTERNAL_DESCRIPTION_CAP : undefined),
+				dynamic,
+			};
+		});
 	}
 
 	/** `read xd://` listing with one device per line. */
@@ -260,19 +301,20 @@ export class XdevRegistry {
 	static readonly EXTERNAL_DESCRIPTION_CAP = 200;
 
 	/**
-	 * Render mounted-device guidance for the system prompt. Catalog mode emits
-	 * only names and summaries; callers can fetch complete docs with
-	 * `read xd://<tool>`. Full mode inlines docs and schemas in catalog order
-	 * until {@link DOCS_TOTAL_BUDGET} is spent, then lists the overflow.
-	 * Dynamic mounts embed at most {@link EXTERNAL_DESCRIPTION_CAP} description
-	 * chars in full mode; `read xd://<tool>` always returns the full text.
+	 * Render mounted-device guidance under the configured prompt-doc policy.
+	 * Built-ins mode keeps first-party schemas inline and lists dynamic devices
+	 * unless their names match the explicit allowlist.
 	 */
-	docsAll(mode: XdevDocsMode = "full"): string {
-		if (mode === "catalog") return this.listing();
+	docsAll(mode: XdevDocsMode = "inline", inlinePatterns: readonly string[] = []): string {
 		const sections: string[] = [];
 		const overflow: Tool[] = [];
+		const inlineGlobs = compileInlineGlobs(inlinePatterns);
 		let used = 0;
 		for (const tool of this.list()) {
+			if (!this.#shouldInline(tool, mode, inlineGlobs)) {
+				overflow.push(tool);
+				continue;
+			}
 			const descriptionCap = this.#dynamic.has(tool.name) ? XdevRegistry.EXTERNAL_DESCRIPTION_CAP : undefined;
 			const docs = renderDocs(tool, "##", descriptionCap);
 			if (docs.length > XdevRegistry.DOCS_PER_DEVICE_CAP || used + docs.length > XdevRegistry.DOCS_TOTAL_BUDGET) {
@@ -286,13 +328,42 @@ export class XdevRegistry {
 			sections.push(
 				[
 					"## Additional devices (docs on demand)",
-					...overflow.map(tool => `- ${XD_URL_PREFIX}${tool.name} — ${toolSummary(tool)}`),
+					...overflow.map(tool => {
+						const maxBytes = this.#dynamic.has(tool.name) ? XdevRegistry.EXTERNAL_DESCRIPTION_CAP : undefined;
+						return `- ${XD_URL_PREFIX}${tool.name} — ${promptCatalogSummary(tool, maxBytes)}`;
+					}),
 					"",
 					`Read ${XD_URL_PREFIX}<tool> for full docs + JSON schema before first use.`,
 				].join("\n"),
 			);
 		}
 		return sections.join("\n\n");
+	}
+
+	/** Docs for newly mounted devices under the same prompt-doc policy. */
+	docsFor(names: Iterable<string>, mode: XdevDocsMode, inlinePatterns: readonly string[] = []): string {
+		const sections: string[] = [];
+		const inlineGlobs = compileInlineGlobs(inlinePatterns);
+		let used = 0;
+		for (const name of names) {
+			const tool = this.get(name);
+			if (!tool || !this.#shouldInline(tool, mode, inlineGlobs)) continue;
+			const descriptionCap = this.#dynamic.has(tool.name) ? XdevRegistry.EXTERNAL_DESCRIPTION_CAP : undefined;
+			const docs = renderDocs(tool, "##", descriptionCap);
+			if (docs.length > XdevRegistry.DOCS_PER_DEVICE_CAP || used + docs.length > XdevRegistry.DOCS_TOTAL_BUDGET) {
+				continue;
+			}
+			used += docs.length;
+			sections.push(docs);
+		}
+		return sections.join("\n\n");
+	}
+
+	#shouldInline(tool: Tool, mode: XdevDocsMode, inlineGlobs: readonly Bun.Glob[]): boolean {
+		return (
+			mode !== "catalog" &&
+			(mode === "inline" || this.#builtins.has(tool.name) || inlineGlobs.some(glob => glob.match(tool.name)))
+		);
 	}
 
 	#resolve(name: string): Tool {
@@ -320,28 +391,59 @@ export class XdevRegistry {
 		onUpdate?: AgentToolUpdateCallback,
 		context?: AgentToolContext,
 	): Promise<{ result: AgentToolResult<unknown>; xdev: XdevDispatch }> {
-		const inst = this.#resolve(name);
+		let xdev: XdevDispatch = { tool: name, mode: "execute" };
+		try {
+			const inst = this.#resolve(name);
 
-		if (HELP_CONTENT_RE.test(content)) {
+			if (HELP_CONTENT_RE.test(content)) {
+				return {
+					result: { content: [{ type: "text", text: renderDocs(inst) }] },
+					xdev: { tool: name, mode: "help" },
+				};
+			}
+
+			const validated = parseDeviceArgs(inst as AiTool, content, toolCallId, () => renderDocs(inst));
+			let tier: ToolTier | undefined;
+			try {
+				tier = resolveToolTier(inst, validated);
+			} catch {
+				tier = undefined;
+			}
+			xdev = { ...xdev, args: validated, tier };
+			const innerOnUpdate: AgentToolUpdateCallback | undefined = onUpdate
+				? partial =>
+						onUpdate({
+							content: partial.content,
+							details: { xdev: { ...xdev, inner: partial.details } },
+							isError: partial.isError,
+						})
+				: undefined;
+			const executionContext = context
+				? {
+						...context,
+						xdevTierResolved: (effectiveTier: ToolTier) => {
+							xdev = { ...xdev, tier: effectiveTier };
+						},
+					}
+				: undefined;
+			const result = await inst.execute(toolCallId, validated as never, signal, innerOnUpdate, executionContext);
+			return { result, xdev: { ...xdev, inner: result.details } };
+		} catch (error) {
+			if (
+				error instanceof ToolAbortError ||
+				signal?.aborted ||
+				(error instanceof Error && error.name === "AbortError")
+			) {
+				throw error;
+			}
 			return {
-				result: { content: [{ type: "text", text: renderDocs(inst) }] },
-				xdev: { tool: name, mode: "help" },
+				result: {
+					content: [{ type: "text", text: renderError(error) }],
+					isError: true,
+				},
+				xdev,
 			};
 		}
-
-		const validated = parseDeviceArgs(inst as AiTool, content, toolCallId, () => renderDocs(inst));
-
-		const xdevBase: XdevDispatch = { tool: name, mode: "execute", args: validated };
-		const innerOnUpdate: AgentToolUpdateCallback | undefined = onUpdate
-			? partial =>
-					onUpdate({
-						content: partial.content,
-						details: { xdev: { ...xdevBase, inner: partial.details } },
-						isError: partial.isError,
-					})
-			: undefined;
-		const result = await inst.execute(toolCallId, validated as never, signal, innerOnUpdate, context);
-		return { result, xdev: { ...xdevBase, inner: result.details } };
 	}
 }
 

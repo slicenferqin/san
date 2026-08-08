@@ -1,6 +1,7 @@
 import { type ResolvedThinkingLevel, ThinkingLevel } from "@san/agent";
 import { Effort, type Model, THINKING_EFFORTS } from "@san/ai";
 import { clampThinkingLevelForModel, getSupportedEfforts } from "@san/catalog/model-thinking";
+import { modelsAreEqual } from "@san/catalog/models";
 
 /**
  * Metadata used to render thinking selector values in the coding-agent UI.
@@ -147,6 +148,26 @@ export type ConfiguredThinkingLevel = ThinkingLevel | typeof AUTO_THINKING;
 /** Maps the session-level `auto` sentinel to `undefined`; concrete levels pass through. */
 export function concreteThinkingLevel(level: ConfiguredThinkingLevel | undefined): ThinkingLevel | undefined {
 	return level === AUTO_THINKING ? undefined : level;
+}
+
+/**
+ * Whether a prewalk handoff would leave both model and effective thinking
+ * configuration unchanged. Effort-only changes on the same model remain real
+ * handoffs; unavailable effort tiers compare after model clamping.
+ */
+export function prewalkWouldBeNoop(
+	current: Model | undefined,
+	currentLevel: ConfiguredThinkingLevel | undefined,
+	target: Model,
+	targetLevel: ConfiguredThinkingLevel | undefined,
+): boolean {
+	if (!modelsAreEqual(current, target)) return false;
+	if (targetLevel === undefined) return true;
+	if ((targetLevel === AUTO_THINKING) !== (currentLevel === AUTO_THINKING)) return false;
+	return (
+		resolveThinkingLevelForModel(target, concreteThinkingLevel(targetLevel)) ===
+		resolveThinkingLevelForModel(target, concreteThinkingLevel(currentLevel))
+	);
 }
 
 /** Metadata used to render the `auto` selector value alongside concrete levels. */

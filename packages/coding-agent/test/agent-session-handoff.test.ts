@@ -2326,4 +2326,16 @@ describe("AgentSession handoff", () => {
 		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
 		expect(generateHandoffSpy.mock.calls[0]?.[2]?.streamOptions?.signal?.aborted).toBe(true);
 	});
+
+	it("surfaces a provider AbortError when the handoff signal was not aborted", async () => {
+		const providerError = new Error("Deepseek stream stalled");
+		providerError.name = "AbortError";
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockRejectedValue(providerError);
+
+		await expect(session.handoff()).rejects.toThrow("Deepseek stream stalled");
+		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
+		expect(session.isGeneratingHandoff).toBe(false);
+	});
 });

@@ -51,6 +51,18 @@ describe("selector setting side effects", () => {
 		// top-border provider rebuilds during paint (#4145).
 		expect(requestRender).toHaveBeenCalledTimes(1);
 	});
+	it("refreshes the base prompt when xd:// prompt-doc policy changes", () => {
+		const refreshBaseSystemPrompt = vi.fn(async () => {});
+		const controller = new SelectorController({
+			session: { refreshBaseSystemPrompt },
+			showError: vi.fn(),
+		} as unknown as InteractiveModeContext);
+
+		controller.handleSettingChange("tools.xdevDocs", "catalog");
+		controller.handleSettingChange("tools.xdevInlineDevices", ["mcp__context_mode_*"]);
+
+		expect(refreshBaseSystemPrompt).toHaveBeenCalledTimes(2);
+	});
 
 	it("invalidates the UI and requests a repaint when tui.tight changes", () => {
 		const invalidate = vi.fn();

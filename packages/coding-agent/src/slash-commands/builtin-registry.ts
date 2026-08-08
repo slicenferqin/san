@@ -73,6 +73,7 @@ import {
 	getSessionSubagentModelOverride,
 	resolveSessionSubagentModelSelector,
 } from "../session/subagent-model-override";
+import { refreshAgentDiscovery } from "../task";
 import { CLI_THINKING_LEVELS, getConfiguredThinkingLevelMetadata, parseConfiguredThinkingLevel } from "../thinking";
 import { expandTilde, resolveToCwd } from "../tools/path-utils";
 import { urlHyperlinkAlways } from "../tui";
@@ -1030,10 +1031,11 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			if (!runtime.session.modelRegistry.hasConfiguredAuth(resolved.model)) {
 				return usage(`No API key for ${resolved.model.provider}/${resolved.model.id}`, runtime);
 			}
-			runtime.session.armPrewalk(resolved.model, resolved.thinkingLevel);
-			await runtime.output(
-				`Prewalk on: switching to ${resolved.model.provider}/${resolved.model.id} at the next edit/write (todo-gated).`,
-			);
+			if (runtime.session.armPrewalk(resolved.model, resolved.thinkingLevel)) {
+				await runtime.output(
+					`Prewalk on: switching to ${resolved.model.provider}/${resolved.model.id} at the next edit/write (todo-gated).`,
+				);
+			}
 			return commandConsumed();
 		},
 	},
@@ -3100,6 +3102,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			// listClaudePluginRoots re-reads from disk on next access.
 			const projectPath = await resolveActiveProjectRegistryPath(runtime.ctx.sessionManager.getCwd());
 			clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
+			await refreshAgentDiscovery(runtime.ctx.sessionManager.getCwd());
 			await runtime.ctx.refreshSkillState();
 			await runtime.ctx.refreshSlashCommandState();
 			resetCapabilities();
@@ -3464,6 +3467,7 @@ export async function executeBuiltinSlashCommand(
 			reloadPlugins: async () => {
 				const projectPath = await resolveActiveProjectRegistryPath(ctx.sessionManager.getCwd());
 				clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
+				await refreshAgentDiscovery(ctx.sessionManager.getCwd());
 				await ctx.refreshSkillState();
 				await ctx.refreshSlashCommandState();
 				resetCapabilities();

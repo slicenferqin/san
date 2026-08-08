@@ -2,13 +2,15 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AgentToolResult } from "@san/agent";
 import { Settings } from "@san/coding-agent/config/settings";
 import * as themeModule from "@san/coding-agent/modes/theme/theme";
 import { ToolChoiceQueue } from "@san/coding-agent/session/tool-choice-queue";
-import { createTools, type ToolSession } from "@san/coding-agent/tools";
+import { createTools, type Tool, type ToolSession } from "@san/coding-agent/tools";
 import { writeToolRenderer } from "@san/coding-agent/tools/write";
 import { XdevRegistry } from "@san/coding-agent/tools/xdev";
 import { removeWithRetries } from "@san/utils";
+import { type } from "arktype";
 
 // xdev mounting is default-on: discoverable tools like ast_edit unmount into
 // xd://, and a plain `write xd://ast_edit` dispatches them. These guard the
@@ -186,17 +188,18 @@ describe("read and write route xd:// device URLs", () => {
 
 			const docs = registry.docsAll("catalog");
 			for (const tool of registry.list()) expect(docs).toContain(`xd://${tool.name}`);
-			expect(docs).toContain("Read xd://<tool> for docs + JSON schema");
+			expect(docs).toContain("Read xd://<tool> for full docs + JSON schema before first use.");
 			expect(docs).not.toContain("## Schema");
 		} finally {
 			await removeWithRetries(tempDir);
 		}
 	});
 
-	it("docsAll truncates external (dynamic-mount) descriptions to the cap; built-ins and read xd:// stay full", async () => {
+	it("supports inline, builtins, catalog, and allowlisted dynamic-device docs", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-xdev-external-"));
 		try {
 			const session = xdevSession(tempDir);
+			expect(session.settings.get("tools.xdevDocs")).toBe("builtins");
 			await createTools(session);
 			const registry = session.xdevRegistry;
 			if (!registry) throw new Error("expected xdev registry");
@@ -208,16 +211,137 @@ describe("read and write route xd:// device URLs", () => {
 			Object.defineProperty(external, "description", { value: longDescription });
 			registry.reconcile([external]);
 
-			const docs = registry.docsAll();
-			// External device: schema section present, description cut at the cap.
-			expect(docs).toContain("## mcp_external_tool");
-			expect(docs).toContain("LEDE ");
-			expect(docs).not.toContain("TAIL");
-			expect(docs).toContain("… (full docs: read xd://mcp_external_tool)");
-			// Built-in devices keep their full curated description.
-			expect(docs).toContain(mounted[0]!.description ?? "");
-			// On-demand docs return the untruncated text.
+			const inlineDocs = registry.docsAll("inline");
+			expect(inlineDocs).toContain("## mcp_external_tool");
+			expect(inlineDocs).toContain("LEDE ");
+			expect(inlineDocs).not.toContain("TAIL");
+			expect(inlineDocs).toContain("… (full docs: read xd://mcp_external_tool)");
+
+			const builtinsDocs = registry.docsAll("builtins");
+			expect(builtinsDocs).toContain(`## ${mounted[0]!.name}`);
+			expect(builtinsDocs).not.toContain("## mcp_external_tool");
+			expect(builtinsDocs).toContain("- xd://mcp_external_tool —");
+
+			const catalogDocs = registry.docsAll("catalog");
+			expect(catalogDocs).not.toContain(`## ${mounted[0]!.name}`);
+			expect(catalogDocs).toContain("- xd://mcp_external_tool —");
 			expect(registry.docs("mcp_external_tool")).toContain("TAIL");
+
+			const contextMode = Object.create(mounted[0]!) as (typeof mounted)[number];
+			Object.defineProperty(contextMode, "name", { value: "mcp__context_mode_ctx_execute" });
+			const unrelatedMcp = Object.create(mounted[0]!) as (typeof mounted)[number];
+			Object.defineProperty(unrelatedMcp, "name", { value: "mcp__other_server_execute" });
+			registry.reconcile([contextMode, unrelatedMcp]);
+
+			const allowlistedDocs = registry.docsAll("builtins", ["mcp__context_mode_*"]);
+			expect(allowlistedDocs).toContain("## mcp__context_mode_ctx_execute");
+			expect(allowlistedDocs).not.toContain("## mcp__other_server_execute");
+			expect(allowlistedDocs).toContain("- xd://mcp__other_server_execute —");
+
+			const catalogWithAllowlistDocs = registry.docsAll("catalog", ["mcp__context_mode_*"]);
+			expect(catalogWithAllowlistDocs).not.toContain("## mcp__context_mode_ctx_execute");
+
+			const scalarAllowlistDocs = registry.docsAll("builtins", "mcp__context_mode_*" as never);
+			expect(scalarAllowlistDocs).toContain("- xd://mcp__context_mode_ctx_execute —");
+			const nonStringAllowlistDocs = registry.docsAll("builtins", [123] as never);
+			expect(nonStringAllowlistDocs).toContain("- xd://mcp__context_mode_ctx_execute —");
+		} finally {
+			await removeWithRetries(tempDir);
+		}
+	});
+
+	it("bounds dynamic summaries in UTF-8 bytes and strips structural controls", () => {
+		const multiByteTail = "あ".repeat(XdevRegistry.EXTERNAL_DESCRIPTION_CAP);
+		const builtInDevice: Tool = {
+			name: "weather",
+			label: "Weather",
+			description: "Weather for a place.",
+			summary: `Gets the weather ${multiByteTail}`,
+			parameters: type({ query: "string" }),
+			async execute() {
+				return { content: [{ type: "text", text: "" }] };
+			},
+		};
+		const dynamicDevice: Tool = {
+			...builtInDevice,
+			name: "mcp__weather__forecast",
+			label: "Forecast",
+			summary: `Napoved\u0007\u2028vremena ${multiByteTail}`,
+		};
+		const registry = new XdevRegistry([builtInDevice]);
+		registry.reconcile([dynamicDevice]);
+		const entries = new Map(registry.entries().map(entry => [entry.name, entry]));
+
+		const dynamic = entries.get(dynamicDevice.name);
+		if (!dynamic) throw new Error("expected dynamic device entry");
+		expect(dynamic.dynamic).toBe(true);
+		expect(dynamic.summary.startsWith("Napoved vremena ")).toBe(true);
+		expect(dynamic.summary.endsWith("…")).toBe(true);
+		const summaryBytes = Buffer.byteLength(dynamic.summary, "utf-8");
+		expect(summaryBytes).toBeLessThanOrEqual(XdevRegistry.EXTERNAL_DESCRIPTION_CAP);
+		expect(summaryBytes).toBeGreaterThan(XdevRegistry.EXTERNAL_DESCRIPTION_CAP - 6);
+		expect(dynamic.summary).not.toContain("�");
+
+		const builtIn = entries.get(builtInDevice.name);
+		if (!builtIn) throw new Error("expected built-in device entry");
+		expect(builtIn.dynamic).toBe(false);
+		expect(builtIn.summary).toBe(`Gets the weather ${multiByteTail}`);
+	});
+
+	it("forwards mounted-device progress through the xd:// envelope", async () => {
+		const updates: AgentToolResult<unknown>[] = [];
+		const streamingDevice: Tool = {
+			name: "streaming_device",
+			label: "Streaming device",
+			description: "Streams a preview before completion",
+			loadMode: "discoverable",
+			parameters: type({ value: "string" }),
+			strict: true,
+			async execute(_toolCallId, args, _signal, onUpdate) {
+				onUpdate?.({
+					content: [{ type: "text", text: `preview:${args.value}` }],
+					details: { phase: "preview" },
+				});
+				return {
+					content: [{ type: "text", text: `done:${args.value}` }],
+					details: { phase: "done" },
+				};
+			},
+		};
+		const registry = new XdevRegistry([]);
+		registry.reconcile([streamingDevice]);
+
+		const dispatch = await registry.dispatch(
+			streamingDevice.name,
+			JSON.stringify({ value: "payload" }),
+			"streaming-call",
+			undefined,
+			update => updates.push(update),
+		);
+
+		expect(updates).toHaveLength(1);
+		expect(updates[0]?.content).toEqual([{ type: "text", text: "preview:payload" }]);
+		expect(updates[0]?.details).toMatchObject({
+			xdev: {
+				tool: streamingDevice.name,
+				mode: "execute",
+				args: { value: "payload" },
+				inner: { phase: "preview" },
+			},
+		});
+		expect(dispatch.result.content).toEqual([{ type: "text", text: "done:payload" }]);
+		expect(dispatch.xdev.inner).toEqual({ phase: "done" });
+	});
+
+	it("keeps discoverable tools top-level when write was not granted", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-xdev-grant-"));
+		try {
+			const session = xdevSession(tempDir, { strictToolNames: true });
+			const tools = await createTools(session, ["read", "ast_edit"]);
+
+			expect(tools.map(tool => tool.name)).toContain("ast_edit");
+			expect(tools.map(tool => tool.name)).not.toContain("write");
+			expect(session.xdevRegistry).toBeUndefined();
 		} finally {
 			await removeWithRetries(tempDir);
 		}

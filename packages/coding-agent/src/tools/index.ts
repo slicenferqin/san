@@ -597,7 +597,10 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	// Always create the xd:// registry when enabled so SDK assembly can mount
 	// discoverable custom/MCP tools later. Explicitly requested built-ins keep
 	// their top-level presentation; default tool sets mount discoverable built-ins.
-	const xdevEnabled = session.settings.get("tools.xdev");
+	const xdevEnabled =
+		session.strictToolNames !== true &&
+		session.settings.get("tools.xdev") &&
+		tools.some(tool => tool.name === "write");
 	const mountBuiltinTools = requestedTools === undefined;
 	if (xdevEnabled) {
 		const mounted: Tool[] = [];
@@ -615,12 +618,14 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			session.isToolActive = name => finalActiveNames.has(name);
 		}
 	}
-	// The xd:// transport rides read/write: `read xd://` lists+documents devices,
-	// `write xd://<tool>` executes them. Staged previews from deferrable tools
-	// (e.g. ast_edit) also resolve through a `write` to xd://resolve/reject. Retain
-	// both whenever any device is mounted or a deferrable tool can stage one.
+	// Staged previews from deferrable tools resolve through xd:// and need write.
+	// Mounting itself never grants write: sessions without it expose tools top-level.
 	const xdevMounted = (session.xdevRegistry?.size ?? 0) > 0;
-	if ((tools.some(tool => tool.deferrable === true) || xdevMounted) && !tools.some(tool => tool.name === "write")) {
+	if (
+		session.strictToolNames !== true &&
+		tools.some(tool => tool.deferrable === true) &&
+		!tools.some(tool => tool.name === "write")
+	) {
 		const writeTool = await logger.time("createTools:write", BUILTIN_TOOLS.write, session);
 		if (writeTool) {
 			tools.push(wrapToolWithMetaNotice(writeTool));

@@ -160,7 +160,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
-	it("allows explicitly requested defaultInactive extension tools into the initial active set", async () => {
+	it("keeps ambient discoverable tools top-level when write was not explicitly granted", async () => {
 		const tempDir = makeTempDir();
 
 		const { session } = await createAgentSession({
@@ -171,12 +171,13 @@ describe("createAgentSession defaultInactive tool activation", () => {
 
 		try {
 			expect(session.getActiveToolNames()).toEqual(
-				expect.arrayContaining(["read", "default_inactive_tool", "write"]),
+				expect.arrayContaining(["read", "default_inactive_tool", "default_active_tool"]),
 			);
-			expect(session.getActiveToolNames()).not.toContain("default_active_tool");
-			expect(session.getXdevToolEntries().map(entry => entry.name)).toContain("default_active_tool");
+			expect(session.getActiveToolNames()).not.toContain("write");
+			expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain("default_active_tool");
 			expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain("default_inactive_tool");
 			expect(session.systemPrompt.join("\n")).toContain("default_inactive_tool");
+			expect(session.systemPrompt.join("\n")).toContain("default_active_tool");
 		} finally {
 			await session.dispose();
 		}

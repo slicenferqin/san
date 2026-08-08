@@ -503,16 +503,11 @@ export function composeSpawnAdvisory(args: {
 class TaskJobError extends Error {}
 
 /**
- * Process-level memo for create-time agent discovery, keyed by resolved cwd.
- *
- * `TaskTool.create` runs for every (sub)agent session in this process and the
- * walk-up + plugin-registry scan in `discoverAgents` is identical for a given
- * cwd, so repeat creations reuse the first scan. Execution-time discovery
- * (`#runSpawn`) intentionally stays fresh. The memo also tracks the live
- * `discoverAgents` binding: test spies swap that binding, which invalidates
- * the memo automatically.
+ * 按 cwd 缓存创建时发现结果，并发布显式重载后的 agent 快照。
+ * 已存在的 task 工具读取发布快照，后续创建则复用同一轮扫描。
  */
 const discoveryMemo = new Map<string, Promise<DiscoveryResult>>();
+const discoverySnapshots = new Map<string, AgentDefinition[]>();
 let discoveryMemoFn: typeof discoverAgents | undefined;
 
 function discoverAgentsForCreate(cwd: string): Promise<DiscoveryResult> {
@@ -520,6 +515,7 @@ function discoverAgentsForCreate(cwd: string): Promise<DiscoveryResult> {
 	if (discoveryMemoFn !== fn) {
 		discoveryMemoFn = fn;
 		discoveryMemo.clear();
+		discoverySnapshots.clear();
 	}
 	const key = path.resolve(cwd);
 	let pending = discoveryMemo.get(key);
@@ -531,6 +527,15 @@ function discoverAgentsForCreate(cwd: string): Promise<DiscoveryResult> {
 		});
 	}
 	return pending;
+}
+
+/** 重新扫描一个 cwd，并向现有和后续 task 工具发布定义。 */
+export async function refreshAgentDiscovery(cwd: string): Promise<void> {
+	const key = path.resolve(cwd);
+	discoveryMemo.delete(key);
+	const pending = discoverAgentsForCreate(cwd);
+	const { agents } = await pending;
+	if (discoveryMemo.get(key) === pending) discoverySnapshots.set(key, agents);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -615,7 +620,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const disabledAgents = this.session.settings.get("task.disabledAgents") as string[];
 		const isolationMode = this.session.settings.get("task.isolation.mode");
 		return renderDescription(
-			this.#discoveredAgents,
+			discoverySnapshots.get(path.resolve(this.session.cwd)) ?? this.#discoveredAgents,
 			isolationMode !== "none",
 			disabledAgents,
 			this.#isBatchEnabled(),

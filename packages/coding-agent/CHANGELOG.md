@@ -92,6 +92,9 @@
 
 ### Fixed
 
+- Fixed `xd://` parity with upstream: enabled-tool activation and SDK all-tool mode now honor mounted devices; dynamic summaries are byte-bounded, sanitized, and marked untrusted; mount notices survive resume and transcript transitions without replay; and device failures keep structured error envelopes.
+- Fixed prewalk's one-shot lifecycle: transient plan nudges no longer persist, same-model or conflicting arm requests no longer report false activation, and each re-arm requires a fresh todo gate before handoff.
+- Fixed post-fork runtime regressions: turn-scoped system-prompt overrides now survive concurrent base rebuilds, Bash safely extracts leading quoted `cd` targets, failed or replaced extension providers roll back registrations and credentials, refreshed task-agent discovery reaches live tools, cooldown fallback reverts re-check smaller context windows, and provider `AbortError`s no longer masquerade as cancelled handoffs.
 - Fixed custom Codex providers to preserve `useResponsesLite` metadata and route standard `/v1` base URLs to `/v1/responses`.
 - Fixed Context Steady recovery stalling when agent-authored continuation messages were treated as user turn boundaries or an oversized tail of tool results left no valid cut point; maintenance audits, probes, extension events, and RPC v2 now also expose the failed recovery stage and reason.
 - Fixed queued no-op auto-compaction reporting no continuation after scheduling a queue drain, preventing session-stop and digest work from racing the pending turn.
