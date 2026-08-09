@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>San 原生代码理解、长回答文档化与证据工作流架构提案</title>
+	<style>
+		:root {
+			color-scheme: dark;
+			--bg: #07111d;
+			--panel: #101d2e;
+			--panel-2: #17273b;
+			--line: #2a405e;
+			--text: #eaf1fa;
+			--muted: #a9b9cd;
+			--blue: #83c3ff;
+			--cyan: #73dbe8;
+			--green: #72dcb0;
+			--amber: #f2cb73;
+			--red: #ff9c9c;
+			--purple: #c9b2ff;
+			--max: 1180px;
+		}
+		* { box-sizing: border-box; }
+		html { scroll-behavior: smooth; }
+		body {
+			margin: 0;
+			font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			background:
+				radial-gradient(circle at 8% 0%, rgba(67, 143, 232, .20), transparent 34rem),
+				radial-gradient(circle at 96% 5%, rgba(114, 220, 176, .10), transparent 30rem),
+				var(--bg);
+			color: var(--text);
+			line-height: 1.68;
+		}
+		main { width: min(var(--max), calc(100% - 32px)); margin: 0 auto; padding: 44px 0 78px; }
+		a { color: var(--blue); text-decoration: none; overflow-wrap: anywhere; }
+		a:hover { text-decoration: underline; }
+		h1, h2, h3 { line-height: 1.25; letter-spacing: -.02em; }
+		h1 { max-width: 1080px; margin: 9px 0 17px; font-size: clamp(2rem, 5vw, 3.35rem); }
+		h2 { margin: 50px 0 17px; font-size: clamp(1.4rem, 3vw, 2rem); }
+		h3 { margin: 21px 0 8px; font-size: 1.13rem; }
+		p { margin: 8px 0 14px; }
+		ul, ol { padding-left: 1.35rem; }
+		li + li { margin-top: 6px; }
+		code { font: .91em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #dcecff; background: rgba(131, 195, 255, .09); border: 1px solid rgba(131, 195, 255, .15); padding: .08rem .32rem; border-radius: 5px; }
+		pre { margin: 14px 0; padding: 17px; overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: #060e18; color: #d8e7f8; font: .87rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+		pre code { padding: 0; border: 0; background: transparent; color: inherit; }
+		.eyebrow { color: var(--green); font-size: .79rem; font-weight: 760; letter-spacing: .085em; text-transform: uppercase; }
+		.lead { max-width: 1080px; color: #cedaeb; font-size: clamp(1.03rem, 2vw, 1.22rem); }
+		.meta { display: flex; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: .9rem; }
+		.tag { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: rgba(16, 29, 46, .78); }
+		.callout { margin: 25px 0; padding: 19px 21px; border: 1px solid rgba(114, 220, 176, .38); border-left: 5px solid var(--green); border-radius: 12px; background: linear-gradient(135deg, rgba(114, 220, 176, .11), rgba(16, 29, 46, .88)); }
+		.callout.warn { border-color: rgba(242, 203, 115, .38); border-left-color: var(--amber); background: linear-gradient(135deg, rgba(242, 203, 115, .10), rgba(16, 29, 46, .88)); }
+		.callout.risk { border-color: rgba(255, 156, 156, .38); border-left-color: var(--red); background: linear-gradient(135deg, rgba(255, 156, 156, .09), rgba(16, 29, 46, .88)); }
+		.grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 15px; }
+		.card { grid-column: span 6; padding: 18px; border: 1px solid var(--line); border-radius: 13px; background: rgba(16, 29, 46, .92); }
+		.card.third { grid-column: span 4; }
+		.card.full { grid-column: 1 / -1; }
+		.card h3 { margin-top: 0; }
+		.card p:last-child, .card ul:last-child, .card ol:last-child { margin-bottom: 0; }
+		.kicker { color: var(--muted); font-size: .81rem; letter-spacing: .065em; text-transform: uppercase; }
+		.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 13px; }
+		table { width: 100%; min-width: 850px; border-collapse: collapse; background: rgba(16, 29, 46, .92); }
+		th, td { padding: 12px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+		th { color: #d8e3f1; background: var(--panel-2); font-size: .81rem; letter-spacing: .04em; text-transform: uppercase; }
+		tr:last-child td { border-bottom: 0; }
+		.flow { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 9px; align-items: stretch; margin: 21px 0; }
+		.node { padding: 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); }
+		.node strong { display: block; margin-bottom: 5px; color: #fff; }
+		.node.active { border-color: rgba(114, 220, 176, .55); }
+		.node.gate { border-color: rgba(242, 203, 115, .55); }
+		.arch { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 13px; margin: 20px 0; }
+		.layer { padding: 17px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+		.layer strong { display: block; margin-bottom: 8px; }
+		.roadmap { display: grid; grid-template-columns: repeat(3, 1fr); gap: 11px; }
+		.phase { min-height: 205px; padding: 15px; border: 1px solid var(--line); border-top: 4px solid var(--blue); border-radius: 10px; background: var(--panel); }
+		.phase:nth-child(2) { border-top-color: var(--green); }
+		.phase:nth-child(3) { border-top-color: var(--cyan); }
+		.phase:nth-child(4) { border-top-color: var(--purple); }
+		.phase:nth-child(5) { border-top-color: var(--amber); }
+		.phase:nth-child(6) { border-top-color: var(--red); }
+		.phase strong { display: block; margin-bottom: 6px; }
+		.good { color: var(--green); }
+		.warn-text { color: var(--amber); }
+		.risk-text { color: var(--red); }
+		.info-text { color: var(--cyan); }
+		.small { color: var(--muted); font-size: .89rem; }
+		.sources li { overflow-wrap: anywhere; }
+		footer { margin-top: 54px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: .87rem; }
+		@media (max-width: 980px) {
+			.card, .card.third { grid-column: 1 / -1; }
+			.flow { grid-template-columns: 1fr 1fr; }
+			.arch { grid-template-columns: 1fr; }
+			.roadmap { grid-template-columns: 1fr 1fr; }
+		}
+		@media (max-width: 600px) {
+			main { width: min(100% - 22px, var(--max)); padding-top: 28px; }
+			.flow, .roadmap { grid-template-columns: 1fr; }
+		}
+	</style>
+</head>
+<body>
+<main>
+	<header>
+		<div class="eyebrow">Architecture proposal · 2026-08-08</div>
+		<h1>San 原生代码理解、长回答文档化与证据驱动工作流</h1>
+		<p class="lead">目标不是继续给模型叠提示词，而是把“仓库理解、上下文驻留、证据充分性、审批与执行”变成宿主可观察、可约束、可恢复的运行时能力。提案采用适配层优先：先把 CodeGraph 接成 San 的一等能力并实测 ROI，不立即重写其多语言索引；同时用响应文档化控制下一轮上下文，再将现有 Plan Mode、Evidence Ledger 与 San Loop 串成一个有硬预算的状态机。</p>
+		<div class="meta">
+			<span class="tag">状态：方案评审中，源码实施未授权</span>
+			<span class="tag">不含源码实现</span>
+			<span class="tag">推荐：适配优先，数据决定自研</span>
+			<span class="tag">默认：自适应工作流</span>
+		</div>
+	</header>
+
+	<div class="callout">
+		<strong>建议批准的方向：</strong>建设一个统一的 <code>San Evidence Runtime</code>。入口用内置 <code>explore</code> 收敛 CodeGraph、LSP、AST 与文本检索；出口用 <code>Response Document Projection</code> 把长终态回答外置为可读 artifact；中间用宿主状态机执行“定向工作区取证 → 必要时外部检索 → 证据门 → 方案审批 → 有界执行 → 验证”。第一阶段不 fork CodeGraph，不默认启动无限执行循环。
+	</div>
+
+	<section>
+		<h2>一、先纠正三个容易走偏的点</h2>
+		<div class="grid">
+			<article class="card third">
+				<div class="kicker">Code intelligence</div>
+				<h3>“内化”不等于立即重写索引器</h3>
+				<p>CodeGraph 1.5.0 已提供 MIT 授权、Rust + Tree-sitter、SQLite/FTS5、增量 watcher、SDK 和 MCP。San 当前缺的是一等工具契约、快照锚点、上下文预算和降级路径，不是先复制一套三十种语言规则。</p>
+			</article>
+			<article class="card third">
+				<div class="kicker">Long responses</div>
+				<h3>流式并不妨碍最终外置</h3>
+				<p>流中确实不知道最终长度，但阈值是单调的；更关键的是 <code>message_end</code> 已拿到完整终态。当前轮可继续流给用户，下一轮的 provider context 则只注入摘要信封和 <code>artifact://</code> 引用。</p>
+			</article>
+			<article class="card third">
+				<div class="kicker">Metacognition</div>
+				<h3>不要要求模型判断“我知不知道”</h3>
+				<p>模型自报信心仍是模型输出。宿主应检查的是：请求需要哪些证据、当前 ledger 有哪些直接证据、还有哪些缺口、哪些门尚未通过。把认识论问题改造成可验证的状态问题。</p>
+			</article>
+		</div>
+		<div class="callout warn">
+			<strong>不建议机械执行固定流水线：</strong>纯写作请求无需扫描仓库；稳定的本地问题无需联网；单文件低风险修复不值得召集多个代理；用户已明确说“直接改”时也不应再次索要同一层批准。标准化应是<strong>宿主规则驱动的自适应状态机</strong>，不是每次都走最重路径。
+		</div>
+	</section>
+
+	<section>
+		<h2>二、当前 San 基线：已有零件，但尚未闭环</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>能力</th><th>当前已确认</th><th>缺口</th><th>结论</th></tr></thead>
+				<tbody>
+					<tr>
+						<td><strong>代码理解</strong></td>
+						<td><code>GrepTool</code>、<code>AstGrepTool</code>、<code>LspTool</code>、<code>ReadTool</code> 已有；本会话已有外部 <code>codegraph_explore</code> MCP。</td>
+						<td>没有 San 自有的语义图 facade、索引生命周期、统一排序与跨调用去重；MCP 返回的普通行号也没有 San <code>edit</code> 所需的 <code>[path#TAG]</code> 快照锚点。</td>
+						<td class="warn-text">先做内置 facade 和适配器。</td>
+					</tr>
+					<tr>
+						<td><strong>工具输出外置</strong></td>
+						<td><code>ArtifactManager</code> 已由父子代理共享；<code>wrapToolWithMetaNotice</code> 对超过默认 50 KB 的工具结果保存完整 artifact，并保留 head/tail。</td>
+						<td>只覆盖工具结果，不覆盖 assistant 终态回答。</td>
+						<td class="good">直接复用存储与 URI 体系。</td>
+					</tr>
+						<tr>
+						<td><strong>终态识别</strong></td>
+						<td><code>message_end</code> 拥有完整 <code>AssistantMessage</code>；agent core 还有 finalized-message 变换钩子。</td>
+						<td>当前 hook 只有单一 message 表示；直接改写会让 UI、持久化与 provider context 一起“缩水”，可能导致已流式展示的内容在收尾时跳变。</td>
+						<td class="warn-text">需要 display/context 投影边界。</td>
+					</tr>
+					<tr>
+						<td><strong>证据</strong></td>
+						<td>RPC v2 已有 append-only <code>EvidenceLedger</code>；San Loop 有 worker receipts、checks、Supervisor；Context Steady 记录 mutation/verification evidence。</td>
+						<td>三套证据语义分散，TUI 主会话没有统一的“请求需求 → 证据覆盖 → 缺口”门。</td>
+						<td class="warn-text">提升为共享核心，而非再建第四套。</td>
+					</tr>
+					<tr>
+						<td><strong>计划与批准</strong></td>
+						<td>Plan Mode 已用 <code>local://&lt;slug&gt;-plan.md</code> + <code>xd://propose</code> 完成方案提交和批准。</td>
+						<td>是否进入 Plan Mode 主要由用户/启动模式决定，尚未由请求风险和证据门自动路由。</td>
+						<td class="good">复用现有批准路径。</td>
+					</tr>
+					<tr>
+						<td><strong>有界执行</strong></td>
+						<td>San Loop 已支持 Commander、Worker、Oracle、Supervisor、maxWorkers、maxRetries、turn/token/cost/time/provider-request budgets。</td>
+						<td><code>san.executionLoop.enabled</code> 默认关闭；更重要的是 token/cost/time/provider-request 四个硬预算默认均为 <code>0</code>（无上限）。</td>
+						<td class="risk-text">不补非零硬上限，禁止自动启用。</td>
+					</tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section>
+		<h2>三、目标架构：一个 Evidence Runtime，三个能力面</h2>
+		<div class="arch">
+			<div class="layer">
+				<strong class="info-text">入口：Code Intelligence</strong>
+				<code>explore(query)</code><br>
+				CodeGraph / LSP / AST / grep provider<br>
+				统一相关性、快照锚点、staleness、输出预算
+			</div>
+			<div class="layer">
+				<strong class="good">核心：Evidence + Authorization</strong>
+				Request Envelope + Workspace Delta<br>
+				Evidence Checklist + Ledger<br>
+				Adaptive Approval + Execution Contract<br>
+				Bounded San Loop
+			</div>
+			<div class="layer">
+				<strong class="warn-text">出口：Response Documents</strong>
+				完整流式展示<br>
+				终态保存 Markdown artifact<br>
+				下一轮只保留摘要信封<br>
+				按需 <code>read artifact://id</code> 恢复细节
+			</div>
+		</div>
+		<pre><code>User request / objective revision
+  → RequestEnvelope（宿主风险与权限下限）
+  → Workspace delta（仅 workspace 请求）
+  → EvidenceChecklist（逐条五态，不使用 confidence）
+  → Evidence acquisition（explore；必要时 primary-source web）
+  → Risk-tiered gates
+      ├─ answer → answer or disclose unavailable/conflict
+      └─ mutation → direct authorization or formal proposal
+                         → approved ExecutionContract
+                         → inline execution 或 bounded San Loop
+                         → mutation + verification evidence</code></pre>
+	</section>
+
+	<section>
+		<h2>四、能力 A：把 CodeGraph 变成 San 的一等代码理解层</h2>
+		<div class="callout">
+			<strong>推荐策略：</strong>先建立 provider-neutral 的内置 <code>explore</code> 工具，以 CodeGraph 作为首个高质量 provider；没有索引或 provider 不可用时，自动退回 LSP + AST + grep 的组合检索。这样用户不需要记 MCP 名，San 也不被一个外部实现锁死。
+		</div>
+
+		<h3>4.1 工具契约</h3>
+		<pre><code>explore({
+  query: string,          // 问题、符号、文件名或端点流
+  path?: string,          // 默认当前仓库；跨项目时显式提供
+  maxFiles?: number       // 仅作上限，不承诺填满
+})
+
+result = {
+  sourceWindows,          // 当前源码窗口
+  relationships,         // calls/imports/implements/dynamic dispatch
+  blastRadius,            // 变更影响面
+  freshness,              // fresh | pending-files | stale-index | unavailable
+  evidenceRefs,
+  provider                // codegraph | lsp-ast | text-fallback
+}</code></pre>
+		<p>对模型只暴露一个强工具，避免让模型在 callers/callees/search/impact 菜单里反复选错。官方 CodeGraph MCP 文档同样默认只列出 <code>codegraph_explore</code>，其余七个窄工具保持隐藏。</p>
+
+		<h3>4.2 San 必须补的适配，不可原样透传 MCP 文本</h3>
+		<div class="grid">
+			<article class="card">
+				<h3>快照锚点</h3>
+				<p>每个返回源码窗口都进入 <code>FileSnapshotStore</code>，输出使用 <code>[path#TAG]</code> + 行号。否则模型看到源码后仍必须再 <code>read</code> 一次才能使用 San 的 hashline <code>edit</code>，直接抵消“零二次读取”的收益。</p>
+			</article>
+			<article class="card">
+				<h3>新鲜度</h3>
+				<p>watcher 尚未同步的文件必须列入明确 banner；涉及这些文件的源码窗口改由直接读取当前磁盘，并让图结果只承担关系提示。绝不静默相信过期图。</p>
+			</article>
+			<article class="card">
+				<h3>跨调用去重</h3>
+				<p>按文件指纹和行范围记录本会话已发出的窗口；重复查询只返回 back-reference 与新范围。CodeGraph 已有 explore-session dedup，San 还应在 provider 外层保持统一语义。</p>
+			</article>
+			<article class="card">
+				<h3>自适应输出预算</h3>
+				<p>单次硬上限控制在约 12–24K 字符，按仓库规模调整文件数和单文件窗口；大仓库通过更多有目的的调用扩展覆盖，不通过一次倾倒更多源码。</p>
+			</article>
+		</div>
+
+		<h3>4.3 索引生命周期</h3>
+		<ol>
+			<li><strong>V1：</strong>复用当前安装的 CodeGraph MCP/CLI，San 自己负责工具 facade、快照、预算、metrics 与 fallback；缺少 <code>.codegraph</code> 时不报红，走现有工具。</li>
+			<li><strong>V2：</strong>增加 <code>san index init/status/rebuild</code> 与托管 watcher。索引缓存默认放在 San 全局缓存目录，以 repo/worktree fingerprint 隔离，不向用户仓库偷偷写生成数据库。</li>
+			<li><strong>V3（数据门）：</strong>只有在依赖体积、Bun/compiled-binary 兼容、供应链或性能数据证明外部实现成为瓶颈时，才把解析/图查询迁入 <code>pi-natives</code> Rust kernel。不是本轮默认范围。</li>
+		</ol>
+
+		<div class="callout risk">
+			<strong>供应链边界：</strong>不得在首次仓库查询时静默下载第三方二进制。V1 使用已安装 provider；未来托管安装必须显式授权、固定版本、校验 provenance/签名并保留禁用开关。CodeGraph 当前 npm 包为 1.5.0，MIT，发布元数据包含 npm provenance；这些是可集成条件，不是免审理由。
+		</div>
+
+		<h3>4.4 必须测的 ROI</h3>
+		<p>CodeGraph 官方 README 报告其自有基准平均减少 88% 工具调用、62% processed tokens、44% 成本，但同时明确承认多轮会话的 residual retrieval context 平均高约 80%。前者和后者都只是作者基准，San 必须用自身模型、工具协议、Context Steady 与 hashline edit 重测。</p>
+	</section>
+
+	<section>
+		<h2>五、能力 B：长回答转响应文档，而不是塞进下一轮</h2>
+		<h3>5.1 流式长度未知的解法</h3>
+		<div class="flow">
+			<div class="node"><strong>开始流</strong>正常显示，不预判长度</div>
+			<div class="node"><strong>累计</strong>只维护可见文本 bytes/tokens</div>
+			<div class="node active"><strong>越过阈值</strong>标记 willExternalize</div>
+			<div class="node"><strong>message_end</strong>取得完整终态</div>
+			<div class="node"><strong>保存</strong>原文写入 Markdown artifact</div>
+			<div class="node gate"><strong>投影</strong>生成有界上下文信封</div>
+			<div class="node"><strong>下一轮</strong>只发送信封；细节按需读取</div>
+		</div>
+		<p>不知道最终长度不是阻塞条件：达到阈值之后，最终一定不会变短。真正需要等终态确认的是“它是否为纯文本终止回答、是否含工具调用、是否成功结束”。</p>
+
+		<h3>5.2 V1 数据模型</h3>
+		<pre><code>ResponseDocumentRecord {
+  messageEntryId
+  artifactId
+  mediaType: "text/markdown"
+  originalBytes
+  originalVisibleTokens
+  contentHash
+  synopsis                 // 确定性生成，不调用第二个 LLM
+  headingOutline
+  createdAt
+}
+
+Context envelope:
+  [Previous response externalized: artifact://17]
+  Conclusion/lead: &lt;bounded synopsis&gt;
+  Sections: &lt;heading outline&gt;
+  Read artifact://17 when exact details are needed.</code></pre>
+		<ul>
+			<li><strong>完整性：</strong>artifact 必须与最终可见 Markdown 字节一致；保存失败时不丢原回答，也不假装存在链接。</li>
+			<li><strong>摘要：</strong>首版不追加一次 LLM 总结调用。使用“首段/结论优先 + 标题目录 + 段落边界截断”的确定性 synopsis；现有回答风格本就要求结论先行。</li>
+			<li><strong>豁免：</strong>含 tool call 的 assistant message、错误/中止消息、短回答不外置。代码执行协议所需的 tool-call turn 必须保持原样。</li>
+			<li><strong>展示：</strong>当前轮仍完整流给用户，结束时追加“已保存为文档”的卡片；下一次会话回放可以默认显示 synopsis 卡并支持展开 artifact。不要试图从终端原生 scrollback 撤回已画出的行。</li>
+		</ul>
+
+		<h3>5.3 为什么不直接改写 final message</h3>
+		<p>agent core 的 finalized-message hook 在进入 context、UI 和工具调度前修改同一对象。它适合宏展开，却不适合同时满足“本轮给用户看全文”和“下一轮模型只看摘要”。V1 应保留完整 transcript，增加 provider-bound <strong>Context Projection</strong>：上下文构建时将已登记的长回答替换为信封。若未来 session 文件体积也成为问题，再引入 display/context 双表示，不能一开始扩大核心消息语义。</p>
+
+		<h3>5.4 Provider cache 与 Responses 链</h3>
+		<p>历史 assistant 消息被信封替换后，<code>AppendOnlyContextManager</code> 会从首个差异处截断并重放；OpenAI Responses 的 <code>previous_response_id</code> 前缀检查也会断链，下一次改为完整但已压缩的本地上下文。代价是边界处一次 cache/chain 失效，收益是之后每轮都不再携带长回答。因此阈值不能过低，并需对 message-array、OpenAI stateful Responses、Codex websocket 三条路径分别做真实请求形状测试。</p>
+
+		<h3>5.5 初始参数与上线方式</h3>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>参数</th><th>Dogfood 初值</th><th>说明</th></tr></thead>
+				<tbody>
+					<tr><td>可见文本阈值</td><td>16 KB 或约 3K tokens，先到者</td><td>低于工具输出默认 50 KB，因为 assistant 文本会在后续每轮重复驻留；最终值由基准确定。</td></tr>
+					<tr><td>synopsis 上限</td><td>约 800 tokens / 4 KB</td><td>保留结论、关键约束、标题目录与 artifact 引用。</td></tr>
+					<tr><td>模式</td><td><code>off | auto | always</code></td><td>先 <code>auto</code> dogfood，指标达标后再讨论默认开启。</td></tr>
+					<tr><td>格式</td><td>Markdown</td><td>原样、便宜、可读、可由现有 <code>read artifact://</code> 恢复；不在后台额外生成 HTML。</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section>
+		<h2>六、能力 C：Evidence &amp; Authorization Runtime</h2>
+		<div class="callout">
+			<strong>重新定义问题：</strong>目标不是让 LLM 获得“元认知”，也不是让它输出一个 confidence 分数；目标是由宿主记录它必须证明什么、当前证据处于什么状态、是否获得行动授权，以及完成声明能否被可观察事实支持。
+		</div>
+
+		<h3>6.1 不再使用一个包办全部的 TurnContract</h3>
+		<pre><code>RequestEnvelope {          // 宿主观察到的事实；模型不能降低风险或权限要求
+  objectiveId
+  intent                  // answer | investigate | mutate | operate
+  scope                   // none | workspace | external | mixed
+  freshness               // stable | current
+  riskSignals[]
+  authorizationCeiling    // read | write | exec
+  workspaceRevision?
+}
+
+EvidenceChecklist {       // 按声明或验收条款追踪，不计算虚假的“充分度分数”
+  requirements: Array&lt;{
+    clauseRef
+    evidenceKinds[]
+    enforcement           // advisory | disclose | blocking
+    status                // missing | satisfied | stale | conflicting | unavailable
+    evidenceRefs[]
+  }&gt;
+}
+
+ExecutionContract {       // 只有批准后才存在
+  objectiveRevision
+  acceptanceClauses[]
+  constraints[]
+  approvedScope
+  workSlices[]
+  sharedBudget
+}</code></pre>
+		<p>模型可以提出额外 evidence requirement，但不能删除宿主根据请求类型、工具类别和风险规则生成的要求。授权状态与证据状态互相独立：证据充分不等于允许执行，用户批准也不等于事实已经核实。</p>
+
+		<h3>6.2 Workspace Orientation：按需、增量、宿主生成</h3>
+		<p>只有 <code>workspace</code> 或 <code>mixed</code> 请求才注入定位信息。宿主维护 workspace fingerprint，首轮发送 repo/worktree 身份、脏文件路径摘要、Context 来源、索引 provider 与 freshness；后续只发送自上一 revision 的变化。它不扫描全仓、不注入 diff 全文，也不依赖模型先意识到“我应该看看 cwd”。</p>
+		<div class="grid">
+			<article class="card third">
+				<h3>稳定字段</h3>
+				<p>repo root、worktree identity、配置来源、工具能力；进入稳定前缀，未变化时不重复。</p>
+			</article>
+			<article class="card third">
+				<h3>变化字段</h3>
+				<p>dirty paths、HEAD/worktree revision、索引 pending files；由 watcher/fingerprint 驱动增量。</p>
+			</article>
+			<article class="card third">
+				<h3>代码取证</h3>
+				<p>定位胶囊只说明“站在哪里”；具体行为仍通过 Explore、LSP、Read 或运行结果证明。</p>
+			</article>
+		</div>
+
+		<h3>6.3 Evidence Checklist：状态格，而不是 confidence</h3>
+		<p>每条 requirement 只允许五种状态：<code>missing</code>、<code>satisfied</code>、<code>stale</code>、<code>conflicting</code>、<code>unavailable</code>。Gate 根据 requirement 的 enforcement 决定行为；不存在一个由模型自评的全局“信息充分度”。</p>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>场景</th><th>宿主生成的最低要求</th><th>执行方式</th></tr></thead>
+				<tbody>
+					<tr><td>普通解释或稳定知识</td><td>有可用本地证据时引用；未知点标为 unavailable</td><td><strong>不硬阻断</strong>，明确披露边界后可回答</td></tr>
+					<tr><td>仓库当前行为</td><td>当前源码、符号关系或运行结果</td><td>关键结论缺证据时先取证；无法取得则披露，不伪装确定</td></tr>
+					<tr><td>外部 current/latest 事实</td><td>官方主源；关键争议必要时第二来源</td><td><strong>声明前硬门</strong>；检索失败只能报告未知</td></tr>
+					<tr><td>开始写入或执行</td><td>authorization ceiling 覆盖所需 tier</td><td><strong>动作前硬门</strong>，与事实证据分开检查</td></tr>
+					<tr><td>宣称变更完成</td><td>mutation receipt + 与 acceptance clause 对应的验证证据</td><td><strong>完成前硬门</strong>；“代码看起来正确”不算证据</td></tr>
+					<tr><td>生产、破坏性或不可逆操作</td><td>显式 operation approval、目标环境、影响范围、回滚条件</td><td><strong>始终阻断</strong>直到逐项满足</td></tr>
+				</tbody>
+			</table>
+		</div>
+
+		<h3>6.4 网络检索不是一次额外的“我该不该搜”模型调用</h3>
+		<p>ResearchDecision 由请求信号和未满足 requirement 决定：出现 current/latest、具体外部项目/API/模型、兼容性或用户要求核实时，加入 primary-source requirement；答案完全由当前仓库、配置、测试或日志决定时不联网。单点事实走官方文档/源码，开放式多源问题才进入 deep research。私有源码不得被拼入外部查询。</p>
+
+		<h3>6.5 Adaptive 授权矩阵</h3>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>用户意图 / 风险</th><th>默认权限</th><th>是否再次批准</th></tr></thead>
+				<tbody>
+					<tr><td>询问、调查、审查、要求“只出方案”</td><td>read</td><td>写入和 exec 被宿主拒绝；方案文档/artifact 例外</td></tr>
+					<tr><td>明确要求低风险、局部、可逆修改</td><td>write/必要的本地验证 exec</td><td>用户原请求视为授权，不重复询问</td></tr>
+					<tr><td>架构、多包、公共 API、迁移、安全边界、范围不清</td><td>read</td><td>先提交正式 plan，批准后生成 ExecutionContract</td></tr>
+					<tr><td>生产、部署、删除数据、不可逆操作</td><td>read</td><td>即使已有 plan，仍需要 operation-level 显式批准</td></tr>
+				</tbody>
+			</table>
+		</div>
+		<p>严格 <code>plan-first</code> 保留为显式模式；默认采用上述 Adaptive。风险等级由宿主硬信号提供下限，模型只能上调，不能把高风险降为低风险。</p>
+
+		<h3>6.6 高风险方案的单次只读 Challenger</h3>
+		<p>宿主规则只能覆盖已知类别，不能证明已经发现所有 task-specific unknown unknowns。对架构、跨包、公共 API、迁移、安全、生产和不可逆方案，在提交用户批准前运行一次只读 Challenger；普通计划不触发。</p>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>约束</th><th>规则</th></tr></thead>
+				<tbody>
+					<tr><td>输入</td><td>RequestEnvelope、当前 EvidenceChecklist、统一 proposal artifact；不自动注入整个会话</td></tr>
+					<tr><td>允许输出</td><td>遗漏的验收条款、风险、冲突或 evidence requirement，以及对应理由</td></tr>
+					<tr><td>禁止行为</td><td>不得改用户目标、另写竞争方案、调用写入工具、启动子代理或批准自身意见</td></tr>
+					<tr><td>收敛</td><td>固定一次调用；主代理逐条接受并修订，或以已有证据驳回；不得 Challenger 与 Planner 互相循环</td></tr>
+				</tbody>
+			</table>
+		</div>
+
+		<h3>6.7 生命周期：按逻辑目标持久化，不按每轮重建</h3>
+		<pre><code>User request / objective revision
+  → Host builds RequestEnvelope
+  → Inject workspace delta when scope requires it
+  → Build mandatory EvidenceChecklist slots
+  → Agent acquires evidence; tool receipts append automatically
+  → Gate evaluates each slot
+      ├─ answer path: answer or disclose unavailable/conflict
+      └─ mutation path: direct authorization or unified proposal artifact
+  → High risk? one read-only Challenger pass; main resolves findings
+  → User approval creates immutable ExecutionContract
+  → Main chooses inline vs bounded team from real slice independence
+  → Mutation receipts + verification evidence
+  → Completion gate / optional Supervisor</code></pre>
+		<p><strong>研究与方案默认合一：</strong>变更任务只生成一个 proposal artifact，依次包含结论与设计、证据与来源、未知/冲突、验收条款、执行 DAG 和预算。用户批准该 artifact 的 revision；不把长研究先完整发进聊天，再复制一遍到计划。只有“先研究方向、暂不讨论实现”的独立调查任务才拆成 research brief。</p>
+		<p><strong>证据默认异常时显示：</strong>ledger 始终记录，但正常推进不在 TUI 刷完整 checklist；只有 requirement 进入 missing-blocking、stale、conflicting、unavailable，或用户执行 <code>/evidence</code> 时，展示原因、受影响 clause 和下一步。模型上下文也只接收未满足状态、最近变化和 IDs。</p>
+		<p>follow-up 默认继承同一 objective。用户修改某条约束时，只提升对应 clause revision，并使依赖它的批准或 stale evidence 失效；不把 A/B 已确认内容和整个会话一起清空。完整 ledger 留在 session storage，避免工作流本身成为新的上下文膨胀源。</p>
+
+		<h3>6.8 子代理属于执行策略，不属于“信息充分”的证明</h3>
+		<ul>
+			<li>高风险方案的 Challenger 是批准前唯一允许的只读审查角色；固定一次，不进入执行 DAG。</li>
+			<li>批准前不启动写入型子代理；只读 research scout 也仅在检索范围确实可并行时使用。</li>
+			<li>单一切片由主代理或 solo 执行；两个以上真实独立切片才创建 team DAG。</li>
+			<li>Worker 只接受已批准的 objective/constraints/acceptance clauses，不重做顶层需求解释。</li>
+			<li>Supervisor 对照同一 EvidenceChecklist 和 ExecutionContract，只能根据 receipts 通过，不能根据 worker 自报完成。</li>
+		</ul>
+
+		<div class="callout risk">
+			<strong>环路安全仍是自动编排前置：</strong>运行时必须拒绝共享 token/request/time/retry 全部无上限的自动执行；同时要求进度指纹、重复失败熔断和操作员取消。dogfood 初值保持 team 共享 1M tokens、24 provider requests、20 分钟、2 次 retry、3 workers，后续按实际账单和任务完成率收紧。
+		</div>
+	</section>
+
+	<section>
+		<h2>七、统一核心对象，避免再造平行系统</h2>
+		<div class="grid">
+			<article class="card third">
+				<h3><code>EvidenceLedger</code></h3>
+				<p>从 RPC v2 专用位置抽出为核心 append-only ledger；记录 deterministic tool、workspace source、external primary source、mutation、verification 和 Supervisor verdict。</p>
+			</article>
+			<article class="card third">
+				<h3><code>RequestEnvelope</code></h3>
+				<p>保存宿主观察到的 intent、scope、freshness、风险下限、权限上限与 workspace revision；模型不能降低这些约束。</p>
+			</article>
+			<article class="card third">
+				<h3><code>EvidenceChecklist</code></h3>
+				<p>将声明和验收条款映射为 typed evidence slots；状态逐项演进，不生成全局 confidence 或“充分度”分数。</p>
+			</article>
+			<article class="card third">
+				<h3><code>ExecutionContract</code></h3>
+				<p>批准后固化目标 revision、验收条款、边界、工作切片与共享预算；授权变化和证据变化分别管理。</p>
+			</article>
+			<article class="card third">
+				<h3><code>CodeIntelligenceProvider</code></h3>
+				<p>统一 CodeGraph、LSP/AST 和文本 fallback；Explore 结果可以直接成为带 freshness 的 evidence refs。</p>
+			</article>
+			<article class="card third">
+				<h3><code>ResponseDocumentRecord</code></h3>
+				<p>关联 message entry、artifact、hash、synopsis 与 heading outline；长证据和历史报告以 ID 引用，不重复进入上下文。</p>
+			</article>
+		</div>
+		<p class="small">San Brain 的 <code>minIndependentEvidence</code> 面向长期记忆候选，语义不同；只能共享证据来源等底层类型，不能复用其 confidence 决策。Context Steady continuation 引用 objective/clause/evidence IDs，不复制完整 ledger。</p>
+	</section>
+
+	<section>
+		<h2>八、整体实施方案：先冻结契约，再分波次交给子代理</h2>
+		<div class="callout">
+			<strong>当前停点：</strong>只完成架构和实施设计，不开始运行时代码。下一次明确批准后，主代理先落地所有切片共享的最小契约；只有共享接口稳定后才并行派发子代理。子代理不负责重新解释目标，不互相改同一批文件，不自行扩大范围。
+		</div>
+
+		<h3>8.1 阶段与退出门</h3>
+		<div class="roadmap">
+			<div class="phase">
+				<strong>D0 · 方案冻结（当前）</strong>
+				<ul>
+					<li>冻结三项能力的边界与非目标</li>
+					<li>冻结共享类型和 feature flags</li>
+					<li>冻结指标、测试与回滚口径</li>
+				</ul>
+				<p class="small"><strong>退出门：</strong>用户批准本方案；此前不得改运行时代码。</p>
+			</div>
+			<div class="phase">
+				<strong>P0 · 基准与共享契约</strong>
+				<ul>
+					<li>扩展既有 ROI harness</li>
+					<li>定义 Explore、ResponseDocument、RequestEnvelope、EvidenceChecklist、ExecutionContract、EvidenceRef</li>
+					<li>只建跨切片必须共享的接口</li>
+				</ul>
+				<p class="small"><strong>退出门：</strong>基准可复跑；类型检查通过；没有行为切换。</p>
+			</div>
+			<div class="phase">
+				<strong>P1/P2 · 两条并行能力线</strong>
+				<ul>
+					<li>P1：Explore facade + CodeGraph adapter</li>
+					<li>P2：长回答 artifact + context projection</li>
+					<li>分别受 feature flag 隔离</li>
+				</ul>
+				<p class="small"><strong>退出门：</strong>各自 smoke 通过；无共享文件冲突；主代理完成集成检查。</p>
+			</div>
+			<div class="phase">
+				<strong>P3 · Evidence Runtime</strong>
+				<ul>
+					<li>抽取统一 append-only ledger</li>
+					<li>生成 RequestEnvelope 与增量 WorkspaceOrientation</li>
+					<li>实施 typed EvidenceChecklist 与按风险分级的 gates</li>
+				</ul>
+				<p class="small"><strong>退出门：</strong>现有 RPC v2 / Plan Mode 行为不回退；证据缺口可解释。</p>
+			</div>
+			<div class="phase">
+				<strong>P4 · Adaptive + 有界执行</strong>
+				<ul>
+					<li>按风险选择 direct / plan-first</li>
+					<li>批准后固化 immutable objective</li>
+					<li>按真实独立性选择 inline / team / council</li>
+				</ul>
+				<p class="small"><strong>退出门：</strong>非零共享预算、重复失败熔断、取消与 Supervisor gate 全部通过。</p>
+			</div>
+			<div class="phase">
+				<strong>P5 · 索引所有权决策</strong>
+				<ul>
+					<li>只评估，不随 P0–P4 自动开工</li>
+					<li>比较依赖体积、兼容、供应链、性能</li>
+					<li>满足数据门才迁入 pi-natives</li>
+				</ul>
+				<p class="small"><strong>退出门：</strong>单独设计评审和单独批准。</p>
+			</div>
+		</div>
+
+		<h3>8.2 共享契约：主代理先做，不能外包</h3>
+		<p>以下是所有切片的依赖，必须由主代理在 P0 一次性确定；否则两个子代理会各自发明类型、配置名和 artifact 语义，最后只能靠兼容层拼接：</p>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>契约</th><th>必须冻结的内容</th><th>禁止提前实现的内容</th></tr></thead>
+				<tbody>
+					<tr><td><code>CodeIntelligenceProvider</code></td><td>查询、结果窗口、关系、blast radius、freshness、provider 标识</td><td>不把 CodeGraph 私有文本格式变成核心类型</td></tr>
+					<tr><td><code>ResponseDocumentRecord</code></td><td>message entry、artifact ID、hash、原始大小、synopsis、outline</td><td>不引入第二个 LLM 摘要器</td></tr>
+					<tr><td><code>RequestEnvelope</code></td><td>intent、scope、freshness、风险下限、权限上限、workspace revision</td><td>不让模型降低宿主判定的风险或权限要求</td></tr>
+					<tr><td><code>EvidenceChecklist</code></td><td>clause、evidence kinds、enforcement、五态 status、evidence refs</td><td>不引入全局 confidence 或充分度分数</td></tr>
+					<tr><td><code>ExecutionContract</code></td><td>批准后的 objective revision、acceptance、constraints、work slices、budget</td><td>不把“有证据”和“有授权”混为一个状态</td></tr>
+					<tr><td><code>EvidenceRef</code></td><td>kind、source、subject hash、observedAt、freshness、clause refs、result</td><td>不复制一套与 RPC v2 不兼容的 ledger</td></tr>
+					<tr><td>Feature flags</td><td><code>codeIntelligence</code>、<code>responseDocuments</code>、<code>workflow.mode</code> 的启停和默认值</td><td>不靠临时环境变量或隐藏参数完成上线</td></tr>
+				</tbody>
+			</table>
+		</div>
+
+		<h3>8.3 子代理执行拓扑</h3>
+		<pre><code>D0 用户批准
+  │
+  ▼
+P0 Main：共享 schema / metrics / file ownership / acceptance contracts
+  │
+  ├─────────────── Wave A（可并行） ───────────────┐
+  ▼                                                ▼
+CodeIntelligenceWorker                      ResponseDocumentWorker
+Explore provider、adapter、fallback         artifact、classifier、projection
+  │                                                │
+  └──────────────── Main integration gate ─────────┘
+                           │
+                           ▼
+                 EvidenceCoreWorker（单线）
+                 ledger、envelope、checklist、orientation、gates
+                           │
+              ┌────────────┴────────────┐
+              ▼                         ▼
+      ApprovalRoutingWorker       LoopSafetyWorker
+      Adaptive/Plan Mode          budgets/fuse/cancel/Supervisor
+              └────────────┬────────────┘
+                           ▼
+                 Main end-to-end smoke
+                           ▼
+                 Supervisor read-only gate</code></pre>
+		<p><strong>为什么不是一开始就五路并行：</strong>P1/P2 只共享 P0 类型，可以并行；P3 是 P4 两个切片的共同前置，必须先完成；Approval Routing 与 Loop Safety 在 P3 后可以并行，但文件所有权必须隔离。先 spawn 一个设计代理再等待没有并行价值，禁止。</p>
+
+		<h3>8.4 子代理文件所有权与交付合同</h3>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>执行者</th><th>独占范围</th><th>不得修改</th><th>交付证据</th></tr></thead>
+				<tbody>
+					<tr><td><strong>CodeIntelligenceWorker</strong></td><td><code>src/code-intelligence/</code>、<code>src/tools/explore.ts</code> 及聚焦测试</td><td>agent context、Plan Mode、San Loop</td><td>indexed/fallback/stale 三条真实路径；hashline 结果可直接 edit</td></tr>
+					<tr><td><strong>ResponseDocumentWorker</strong></td><td><code>src/session/response-documents.ts</code>、投影器及聚焦测试</td><td>Explore、Evidence、San Loop</td><td>全文 hash 一致；下一轮信封有界；tool-call message 不变</td></tr>
+					<tr><td><strong>EvidenceCoreWorker</strong></td><td><code>src/execution-control/</code> 的 ledger/envelope/checklist/gates；迁移 RPC adapter</td><td>UI 路由、San Loop runner</td><td>旧 RPC 证据可读；每个 blocking clause 和 revision 可追溯</td></tr>
+					<tr><td><strong>ApprovalRoutingWorker</strong></td><td><code>src/workflow/</code>、Plan Mode 接线、Adaptive policy、proposal artifact 与 Challenger gate</td><td>San Loop 预算与 executor</td><td>answer/direct/plan/destructive 路由逐项通过；Challenger 仅高风险单次触发；异常 evidence 可见</td></tr>
+					<tr><td><strong>LoopSafetyWorker</strong></td><td><code>src/san-loop/</code> 的预算、进度指纹、熔断、取消</td><td>Plan Mode、Explore、响应文档</td><td>永久失败场景在共享上限内终止；取消可达</td></tr>
+				</tbody>
+			</table>
+		</div>
+		<p class="small">少量公共接线文件（<code>settings-schema.ts</code>、<code>sdk.ts</code>、tool registry）由主代理统一修改；子代理不得争抢这些文件。每个子代理跳过 formatter、全量 lint 和全量测试，只跑自己切片的最小 smoke；主代理在合并后统一运行检查。</p>
+
+		<h3>8.5 上线波次与回滚边界</h3>
+		<ol>
+			<li><strong>影子观测：</strong>P0 metrics 先进入 benchmark，不改变用户工具集合和 provider context。</li>
+			<li><strong>显式开启：</strong>P1/P2 先通过项目配置显式启用；失败分别退回现有 LSP/AST/grep 和完整消息上下文。</li>
+			<li><strong>本仓 dogfood：</strong>只在 San 仓库开启 Adaptive；比较任务完成率、检索 tokens、下一轮 prompt tokens、批准次数和中止原因。</li>
+			<li><strong>默认切换：</strong>达到第九节发布门后才讨论默认打开。回滚只切合法模式，不保留废弃 API、双写账本或兼容别名。</li>
+		</ol>
+
+		<h3>8.6 关键依赖与顺序</h3>
+		<ul>
+			<li>P0 → P1/P2：没有统一指标就无法证明 token 收益；没有共享类型就会产生两套 artifact/evidence 语义。</li>
+			<li>P1/P2 → P3：Evidence Runtime 可以引用代码图 evidence 和响应文档，但不反向依赖具体 provider。</li>
+			<li>P3 → P4：批准和 Supervisor 必须消费同一 ledger；否则“有证据”仍只是各角色口头约定。</li>
+			<li>P4 safety → 默认 Adaptive：全零预算、无重复失败熔断时，功能必须保持显式开启。</li>
+			<li>P0–P4 数据 → P5：自研索引是独立产品决策，绝不作为 adapter-first 方案的隐性尾项。</li>
+		</ul>
+	</section>
+
+	<section>
+		<h2>九、验收门：没有这些数据，不宣称“更省 token”</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>能力</th><th>必须通过的可观察契约</th><th>建议发布门</th></tr></thead>
+				<tbody>
+					<tr>
+						<td><strong>Explore</strong></td>
+						<td>一次结果能直接用于 hashline edit；文件编辑后不返回静默旧源码；无索引时无损降级；输出跨调用去重。</td>
+						<td>相对现有路径：中位 discovery tool calls 降低 ≥ 40%，processed retrieval tokens 降低 ≥ 25%；残留上下文增长 ≤ 10%。</td>
+					</tr>
+					<tr>
+						<td><strong>Response document</strong></td>
+						<td>20 KB 终态回答保存字节一致；下一轮只注入有界信封；<code>read artifact://</code> 可恢复；tool-call turn 不变。</td>
+						<td>下一轮该回答的 provider-bound 可见文本减少 ≥ 75%；无丢字、无 UI 末尾跳空、无错误链复用。</td>
+					</tr>
+					<tr>
+						<td><strong>Evidence &amp; authorization</strong></td>
+						<td>workspace 请求获得增量 orientation；current external claim 有 primary-source evidence；统一 proposal artifact 可追溯到 clause/evidence IDs；高风险方案恰好一次 Challenger。</td>
+						<td>blocking requirement 缺失时不能 pass；异常状态会展示且 <code>/evidence</code> 可查询；Challenger 不形成循环；批准 revision 与执行 contract 一致。</td>
+					</tr>
+					<tr>
+						<td><strong>Execution loop</strong></td>
+						<td>只有独立切片才并行；Supervisor 不能凭 worker 自报通过；重复失败会熔断；操作员取消可达。</td>
+						<td>全零硬预算配置拒绝自动运行；模拟永久失败在上限内终止，绝不形成跨代理语义活锁。</td>
+					</tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section>
+		<h2>十、明确不做</h2>
+		<ul>
+			<li>不立即 fork 或逐行移植 CodeGraph；先用接口隔离和 San 自己的基准决定。</li>
+			<li>不把完整仓库图、git diff 或长报告自动塞进系统提示词。</li>
+			<li>不为每个用户请求强制联网、强制 Plan Mode 或强制多代理。</li>
+			<li>不通过额外 LLM 调用为每篇长回答生成“看似漂亮但可能改义”的摘要。</li>
+			<li>不在没有非零共享预算和环路熔断时自动开启 San Loop。</li>
+			<li>不新建与现有 ArtifactManager、Plan Mode、RPC Evidence Ledger、San Loop 平行的第二套基础设施。</li>
+		</ul>
+	</section>
+
+	<section>
+		<h2>十一、实施前的最终批准门</h2>
+		<div class="grid">
+			<article class="card full">
+				<h3>本轮只评审方案，不视为源码实施授权</h3>
+				<ol>
+					<li>确认 P0–P4 的阶段边界、共享契约、子代理拓扑和文件所有权。</li>
+					<li>确认 CodeGraph 采用 adapter-first；P5 原生索引保持独立决策。</li>
+					<li>确认长回答采用“当前轮完整流 + artifact + 下一轮 context projection”。</li>
+					<li>确认工作流默认 Adaptive、Evidence Gate 按风险分级、Workspace Orientation 按需增量；严格 Plan-first 作为显式模式。</li>
+					<li>确认 Challenger 仅高风险方案单次触发、Evidence 默认异常时显示、研究与方案默认合并为一个 artifact。</li>
+					<li>确认非零共享预算与重复失败熔断是自动执行的前置硬门。</li>
+				</ol>
+				<p>上述内容确认后，再单独发出“开始 P0–P4 实施”授权；届时按第 8.3 节波次派发子代理。</p>
+			</article>
+		</div>
+	</section>
+
+	<section>
+		<h2>十二、证据与来源</h2>
+		<ul class="sources">
+			<li>CodeGraph 官方 README（架构、SDK、自有 benchmark 与 residual-context caveat）：<a href="https://github.com/colbymchenry/codegraph/blob/main/README.md">github.com/colbymchenry/codegraph/blob/main/README.md</a></li>
+			<li>CodeGraph 官方 MCP 文档（默认单一 explore 工具、未索引降级、server instructions）：<a href="https://github.com/colbymchenry/codegraph/blob/main/site/src/content/docs/reference/mcp-server.md">MCP Server reference</a></li>
+			<li>CodeGraph 当前工具源码（输出预算、session dedup、staleness 与安全上限）：<a href="https://github.com/colbymchenry/codegraph/blob/main/src/mcp/tools.ts">src/mcp/tools.ts</a></li>
+			<li>npm registry：<a href="https://registry.npmjs.org/@colbymchenry/codegraph/latest">@colbymchenry/codegraph latest</a>，本次读取为 1.5.0，MIT，含 provenance metadata。</li>
+			<li>CodeGraph MIT 许可证：<a href="https://github.com/colbymchenry/codegraph/blob/main/LICENSE">LICENSE</a></li>
+			<li>San 工具 artifact spill：<code>packages/coding-agent/src/tools/output-meta.ts:609–763</code></li>
+			<li>San session artifact：<code>packages/coding-agent/src/session/artifacts.ts:28–153</code></li>
+			<li>San assistant finalized hook：<code>packages/agent/src/types.ts:416–428</code>、<code>packages/agent/src/agent-loop.ts:1479–1495</code></li>
+			<li>San append-only rewrite：<code>packages/agent/src/append-only-context.ts:169–310</code></li>
+			<li>San Plan Mode：<code>packages/coding-agent/src/modes/interactive-mode.ts:2323–2437</code>、<code>packages/coding-agent/src/plan-mode/approved-plan.ts:110–186</code></li>
+			<li>San Evidence/RPC：<code>packages/coding-agent/src/modes/rpc-v2/evidence-generator.ts</code>、<code>dto/evidence.ts</code></li>
+			<li>San Loop policies/budgets：<code>packages/coding-agent/src/san-loop/orchestrator.ts:28–118</code>、<code>runner.ts:49–159</code>、<code>packages/coding-agent/src/config/settings-schema.ts:2901–2936</code></li>
+		</ul>
+		<p class="small">外部性能数字均标为 CodeGraph 官方自有基准，未当作 San 的已验证结果。San 本地事实来自当前工作树源码。本提案只创建架构文档，没有修改运行时代码，也没有宣称上述能力已经实现。</p>
+	</section>
+
+	<footer>
+		San architecture proposal · awaiting approval · 2026-08-08
+	</footer>
+</main>
+</body>
+</html>

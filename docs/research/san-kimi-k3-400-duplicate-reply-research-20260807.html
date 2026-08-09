@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>San 会话重复回复与 Kimi K3 400 调研</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17221c;
+      --muted: #5a6b61;
+      --paper: #f4f2e9;
+      --panel: #fffdf7;
+      --line: #cfd8d0;
+      --green: #1f6a4a;
+      --blue: #245f86;
+      --amber: #8a5b16;
+      --red: #8a3d35;
+      --code: #eef3ef;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font: 16px/1.7 ui-serif, "Iowan Old Style", "Songti SC", "STSong", serif;
+    }
+    main { width: min(1040px, calc(100% - 40px)); margin: 42px auto 80px; }
+    header, section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 8px 24px rgb(28 48 37 / 6%);
+    }
+    header { padding: 36px 40px; border-top: 6px solid var(--green); }
+    section { margin-top: 20px; padding: 26px 32px; }
+    h1, h2, h3 { line-height: 1.25; margin-top: 0; }
+    h1 { font-size: clamp(2rem, 5vw, 3.4rem); letter-spacing: -0.035em; margin-bottom: 12px; }
+    h2 { color: var(--green); font-size: 1.45rem; border-bottom: 1px solid var(--line); padding-bottom: 9px; }
+    h3 { color: var(--blue); font-size: 1.08rem; margin-top: 24px; }
+    p, li { max-width: 86ch; }
+    code, pre { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    code { background: var(--code); border-radius: 4px; padding: 0.1em 0.32em; }
+    pre { background: #17251d; color: #e9f1eb; padding: 18px 20px; border-radius: 10px; overflow: auto; line-height: 1.55; }
+    pre code { background: none; padding: 0; }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+    th, td { border: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }
+    th { background: #e8efe9; }
+    .lede { color: var(--muted); font-size: 1.12rem; max-width: 78ch; }
+    .meta { color: var(--muted); display: flex; flex-wrap: wrap; gap: 12px 26px; font-size: 0.92rem; }
+    .decision { border-left: 5px solid var(--blue); background: #edf5f9; padding: 14px 18px; border-radius: 8px; }
+    .risk { border-left: 5px solid var(--amber); background: #faf3e4; padding: 14px 18px; border-radius: 8px; }
+    .no { color: var(--red); font-weight: 650; }
+    .yes { color: var(--green); font-weight: 650; }
+    .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; align-items: stretch; }
+    .flow div { background: #edf2ee; border: 1px solid var(--line); border-radius: 8px; padding: 10px; text-align: center; }
+    .flow b { display: block; color: var(--green); }
+    @media (max-width: 760px) {
+      main { width: min(100% - 20px, 1040px); margin-top: 18px; }
+      header, section { padding: 22px 20px; }
+      .flow { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="meta"><span>方案编号：SAN-KIMI-K3-400-001</span><span>日期：2026-08-07</span><span>范围：packages/coding-agent + CPA（腾讯云）</span></div>
+    <h1>会话重复回复与 Kimi K3 400</h1>
+    <p class="lede">两个独立问题：① 单条用户消息触发多条模型回复（会话 019fda1c）；② kimi-k3 经 CPA 调用时偶发 400。本文档给出根因、证据链与修复方案。</p>
+  </header>
+
+  <section>
+    <h2>1. 问题与结论</h2>
+    <div class="decision"><strong>结论 1（重复回复）：</strong>xd:// 设备挂载通知触发额外模型轮次，属设计行为。会话启动时 codegraph / node_repl / chrome_devtools 先后挂载，每条挂载通知 steer 一条 custom message，空闲 agent 消费后自动 continue，产生 3 个模型请求（2 成功 + 1 报错）。</div>
+    <div class="decision"><strong>结论 2（kimi-k3 400）：</strong>CPA 把 Responses API 翻译成 chat.completions 时，assistant 消息 content 保持数组格式，kuaileshifu 的 kimi-k3 通道对该格式间歇性拒绝。协议链上 kuaileshifu 不支持 Responses 端点，无法直传；修复需在 CPA 翻译层把纯文本 content 数组压平成字符串。</div>
+    <div class="risk"><strong>已知但暂不处理：</strong>kimi-k3 的 thinking levels 配置（low/medium/high/xhigh/max）与上游（仅 low/high/max）不符，选 medium/xhigh 会确定性 400。用户只用 max，暂不改。</div>
+    <h3>目标</h3>
+    <ul>
+      <li>消除 kimi-k3 经 CPA 调用的间歇性 400，兼容所有走 CPA 的 provider。</li>
+      <li>不改动 kuaileshifu 服务端，不改动 CPA thinking levels 配置。</li>
+      <li>文档化重复回复机制，评估是否需要在 san 侧抑制。</li>
+    </ul>
+    <h3>非目标</h3>
+    <ul>
+      <li>不修改 kuaileshifu 侧的任何东西（对方不支持 /v1/responses，已实测）。</li>
+      <li>不改 kimi-k3 思考档位（用户只使用 max）。</li>
+      <li>不改变 Responses → chat.completions 的协议链路，只改 content 的编码形式。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>2. 问题一：单条消息为什么回复多次</h2>
+    <h3>2.1 现象</h3>
+    <p>会话 <code>~/.san/agent/sessions/-development-self-projects-xiaosongguo/2026-08-07T02-44-56-235Z_019fda1c-012b-7000-8517-2a02f19b7855.jsonl</code>，用户 02:45:16 发一条"你好"，02:45:33 和 02:45:40 各收到一条回复，02:45:43 再报一次 400 错误。日志（journal + context-probe）显示实际发出 <strong>3 个模型请求</strong>。</p>
+    <h3>2.2 触发链</h3>
+    <table>
+      <thead><tr><th>时间</th><th>事件</th><th>模型请求</th></tr></thead>
+      <tbody>
+        <tr><td>02:45:16</td><td>user "你好"</td><td>—</td></tr>
+        <tr><td>—</td><td>codegraph 设备挂载 → steer <code>xdev-mount-notice</code></td><td>请求 1（含 codegraph notice）</td></tr>
+        <tr><td>02:45:33</td><td>回复 1 "你好。有什么需要做的，直接说。"</td><td>stop</td></tr>
+        <tr><td>—</td><td>node_repl 设备挂载 → steer <code>xdev-mount-notice</code></td><td>请求 2（含 node_repl notice）</td></tr>
+        <tr><td>02:45:40</td><td>回复 2 "你好。有什么需要处理的？"</td><td>stop</td></tr>
+        <tr><td>—</td><td>chrome_devtools 设备挂载 → steer <code>xdev-mount-notice</code></td><td>请求 3（含 chrome notice）</td></tr>
+        <tr><td>02:45:43</td><td>报错 400</td><td>error</td></tr>
+      </tbody>
+    </table>
+    <h3>2.3 机制（代码路径）</h3>
+    <p><code>packages/coding-agent/src/session/agent-session.ts</code> 中，每次 xd:// 设备挂载触发 <code>#notifyXdevMountDelta()</code> → <code>agent.steer({ role: "custom", customType: "xdev-mount-notice", ... })</code>。steered custom message 进入 steering 队列，经 <code>convertToLlm</code> 转成 user turn；队列非空时 <code>#canAutoContinueForFollowUp()</code> 返回 true，空闲 agent 自动 <code>continue()</code> 发起新模型请求。挂载通知本身 <code>display:false</code>，UI 不可见，但 agent 仍会消费并触发新轮次。</p>
+    <h3>2.4 评估</h3>
+    <p>属设计行为而非去重缺失。会话启动期多个 xd:// 设备异步挂载是常见场景，每条挂载通知都会唤醒 agent。若要在 san 侧抑制，可在挂载通知密集到达（启动窗口）时合并/延迟 steer，或让 <code>xdev-mount-notice</code> 不触发 auto-continue。当前不作为修复项，仅文档化。</p>
+  </section>
+
+  <section>
+    <h2>3. 问题二：kimi-k3 400</h2>
+    <h3>3.1 现象</h3>
+    <p>本会话第三个请求（即问题一的请求 3）报 <code>400 Assistant messages must contain text, reasoning content, or tool_calls.</code>。会话 400 请求体在 <code>~/.san/logs/http-400-requests/1786070742974-2vi5gwkxv1b8h.json</code>。</p>
+    <h3>3.2 协议链</h3>
+    <div class="flow">
+      <div><b>san</b><br/>Responses<br/>/v1/responses</div>
+      <div><b>CPA</b><br/>翻译<br/>content 数组</div>
+      <div><b>kuaileshifu</b><br/>chat.completions<br/>/v1/chat/completions</div>
+    </div>
+    <ul>
+      <li>san → CPA：OpenAI <strong>Responses 协议</strong>（<code>openai-responses-server.ts</code>），assistant 消息 content 天然为 parts 数组（<code>[{type:"output_text",text:...}]</code>）。</li>
+      <li>CPA → kuaileshifu：<strong>chat.completions</strong>（错误日志 upstream URL 证实）。</li>
+    </ul>
+    <h3>3.3 根因</h3>
+    <p>CPA 翻译器 <code>CLIProxyAPI-cpa-build/internal/translator/openai/openai/responses/openai_openai-responses_request.go</code>（函数 <code>ConvertOpenAIResponsesRequestToOpenAIChatCompletions</code>，158–186 行）把 Responses 的 content parts <strong>原样复制</strong>为 <code>"content":[{"type":"text","text":"..."}]</code> 数组。kuaileshifu 的 kimi-k3 通道对 assistant content 数组格式<b>间歇性</b>拒绝；纯字符串 content 则 100% 通过。</p>
+    <h3>3.4 证据</h3>
+    <table>
+      <thead><tr><th>测试</th><th>结果</th></tr></thead>
+      <tbody>
+        <tr><td>同一失败 body 反复重放</td><td>时 200 时 400（多通道负载均衡不一致）</td></tr>
+        <tr><td>assistant content 数组 + reasoning_content</td><td>高概率 400（约 50–80%）</td></tr>
+        <tr><td>assistant content 纯字符串 + reasoning_content</td><td><span class="yes">100% 200</span></td></tr>
+        <tr><td>同数组格式换 deepseek-v4-flash / grok-4.5</td><td><span class="yes">100% 200</span>（kimi-k3 特有）</td></tr>
+        <tr><td><code>reasoning_effort: medium / xhigh</code></td><td><span class="no">确定性 400</span> "reasoning_effort must be low, high, or max"</td></tr>
+        <tr><td><code>reasoning_effort: low / high / max</code></td><td><span class="yes">200</span></td></tr>
+        <tr><td>kuaileshifu <code>/v1/responses</code> 端点（含最简请求）</td><td><span class="no">500 not implemented</span>（不支持 Responses）</td></tr>
+      </tbody>
+    </table>
+    <p>官方 Kimi 文档确认 K3 的 <code>reasoning_effort</code> 仅支持 low/high/max（默认 max）：<a href="https://platform.kimi.ai/docs/guide/kimi-k3-quickstart.md">kimi-k3-quickstart</a>。</p>
+    <h3>3.5 为什么不能走 Responses 直传</h3>
+    <p>实测对 <code>https://newapi.kuaileshifu.com/v1/responses</code> 发任何请求（含 <code>{"model":"kimi-k3","input":"hi"}</code>）均返回 <code>500 convert_request_failed: not implemented</code>——new-api 在请求转换阶段直接拒绝，未实现 Responses 通道类型，与模型无关。因此协议链路只能保持 san→CPA(Responses)→chat.completions。</p>
+  </section>
+
+  <section>
+    <h2>4. 修复方案</h2>
+    <div class="decision"><strong>方案：</strong>在 CPA 翻译层把<strong>纯文本</strong> content 数组压平成字符串；含图片时保留数组。改动约 10 行，位于 <code>openai_openai-responses_request.go</code> 的 message content 翻译分支。</div>
+    <pre><code>// 现状（158–186 行）：
+//   content 为数组时，逐 part 转成 {"type":"text","text":...} 后 SetRawArrayItems 保留数组
+// 改为：
+//   收集 text parts；若全部是文本（无图片 part），
+//   则 message = sjson.SetBytes(message, "content", 拼接后的字符串)
+//   否则保留原数组逻辑（图片必须数组形式）</code></pre>
+    <h3>影响面</h3>
+    <ul>
+      <li>只影响 assistant/非 assistant 消息中纯文本 content 的编码形式（数组 → 字符串）。</li>
+      <li>字符串是 chat.completions 最通用的 content 形式，deepseek / grok / kimi 全部兼容（实测字符串对 kimi 100% 通过）。</li>
+      <li>含图片消息保持数组，不受影响。</li>
+      <li>reasoning_content 独立字段，不参与压平，行为不变。</li>
+    </ul>
+    <h3>实施步骤</h3>
+    <ol>
+      <li>改 <code>CLIProxyAPI-cpa-build/internal/translator/openai/openai/responses/openai_openai-responses_request.go</code> 的 content 翻译分支。</li>
+      <li>在 <code>test/thinking_conversion_test.go</code> 同级补单测：纯文本数组 → 字符串；含图片数组 → 保留数组。</li>
+      <li>重建 Docker 镜像 <code>local/cli-proxy-api:cpa-model-events</code> 并部署（腾讯云 <code>/root/apps/cpa-stack</code>，<code>docker compose up -d</code>）。</li>
+      <li>回归验证：kimi-k3 会话连续多轮无 400；deepseek / grok 正常。</li>
+    </ol>
+    <div class="risk"><strong>风险：</strong>改动影响所有走 CPA 的 provider，需在部署后做多 provider 冒烟；若 kuaileshifu 某些通道仍拒绝字符串（已实测不会），可回退。</div>
+  </section>
+
+  <section>
+    <h2>5. 参考</h2>
+    <ul>
+      <li>会话日志：<code>~/.san/agent/sessions/-development-self-projects-xiaosongguo/2026-08-07T02-44-56-235Z_019fda1c-*.jsonl</code>（journal + context-probe）</li>
+      <li>400 请求体：<code>~/.san/logs/http-400-requests/1786070742974-2vi5gwkxv1b8h.json</code></li>
+      <li>CPA 错误日志（腾讯云）：<code>/root/apps/cpa-stack/cliproxyapi/logs/error-v1-responses-2026-08-07T104542-09924c55.log</code></li>
+      <li>CPA 源码：<code>/root/apps/cpa-stack/CLIProxyAPI-cpa-build/internal/translator/openai/openai/responses/openai_openai-responses_request.go</code></li>
+      <li>san 侧 steer 机制：<code>packages/coding-agent/src/session/agent-session.ts</code>（<code>#notifyXdevMountDelta</code> / <code>#canAutoContinueForFollowUp</code>）</li>
+      <li>官方文档：<a href="https://platform.kimi.ai/docs/guide/kimi-k3-quickstart.md">Kimi K3 Quickstart</a>（reasoning_effort 仅 low/high/max）</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

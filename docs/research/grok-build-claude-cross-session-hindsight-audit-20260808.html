@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Grok Build 1.0、Claude 跨会话消息与 San 记忆后端核查</title>
+	<style>
+		:root {
+			color-scheme: dark;
+			--bg: #08111d;
+			--panel: #111d2d;
+			--panel-2: #17263a;
+			--line: #2a3d58;
+			--text: #e9eff8;
+			--muted: #a8b7cb;
+			--blue: #80bdff;
+			--cyan: #72d8e8;
+			--green: #6cdbab;
+			--amber: #f0c76f;
+			--red: #ff9999;
+			--purple: #c8adff;
+			--max: 1180px;
+		}
+		* { box-sizing: border-box; }
+		html { scroll-behavior: smooth; }
+		body {
+			margin: 0;
+			font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			background:
+				radial-gradient(circle at 10% 0%, rgba(61, 132, 220, .20), transparent 34rem),
+				radial-gradient(circle at 96% 6%, rgba(104, 214, 174, .10), transparent 28rem),
+				var(--bg);
+			color: var(--text);
+			line-height: 1.68;
+		}
+		main { width: min(var(--max), calc(100% - 32px)); margin: 0 auto; padding: 44px 0 78px; }
+		a { color: var(--blue); text-decoration: none; }
+		a:hover { text-decoration: underline; }
+		h1, h2, h3 { line-height: 1.25; letter-spacing: -.02em; }
+		h1 { max-width: 1050px; margin: 9px 0 17px; font-size: clamp(2rem, 5vw, 3.45rem); }
+		h2 { margin: 50px 0 17px; font-size: clamp(1.4rem, 3vw, 2rem); }
+		h3 { margin: 20px 0 8px; font-size: 1.13rem; }
+		p { margin: 8px 0 14px; }
+		ul, ol { padding-left: 1.35rem; }
+		li + li { margin-top: 6px; }
+		code { font: .91em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #d9eaff; background: rgba(128, 189, 255, .09); border: 1px solid rgba(128, 189, 255, .15); padding: .08rem .32rem; border-radius: 5px; }
+		pre { margin: 14px 0; padding: 17px; overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: #070e17; color: #d5e4f7; font: .87rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+		pre code { padding: 0; border: 0; background: transparent; color: inherit; }
+		.eyebrow { color: var(--green); font-size: .79rem; font-weight: 760; letter-spacing: .085em; text-transform: uppercase; }
+		.lead { max-width: 1060px; color: #ccd8e8; font-size: clamp(1.03rem, 2vw, 1.22rem); }
+		.meta { display: flex; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: .9rem; }
+		.tag { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: rgba(17, 29, 45, .78); }
+		.callout { margin: 25px 0; padding: 19px 21px; border: 1px solid rgba(108, 219, 171, .38); border-left: 5px solid var(--green); border-radius: 12px; background: linear-gradient(135deg, rgba(108, 219, 171, .11), rgba(17, 29, 45, .88)); }
+		.callout.warn { border-color: rgba(240, 199, 111, .38); border-left-color: var(--amber); background: linear-gradient(135deg, rgba(240, 199, 111, .10), rgba(17, 29, 45, .88)); }
+		.callout.risk { border-color: rgba(255, 153, 153, .38); border-left-color: var(--red); background: linear-gradient(135deg, rgba(255, 153, 153, .09), rgba(17, 29, 45, .88)); }
+		.grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 15px; }
+		.card { grid-column: span 6; padding: 18px; border: 1px solid var(--line); border-radius: 13px; background: rgba(17, 29, 45, .92); }
+		.card.third { grid-column: span 4; }
+		.card h3 { margin-top: 0; }
+		.card p:last-child, .card ul:last-child { margin-bottom: 0; }
+		.kicker { color: var(--muted); font-size: .81rem; letter-spacing: .065em; text-transform: uppercase; }
+		.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 13px; }
+		table { width: 100%; min-width: 820px; border-collapse: collapse; background: rgba(17, 29, 45, .92); }
+		th, td { padding: 12px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+		th { color: #d5e0ef; background: var(--panel-2); font-size: .81rem; letter-spacing: .04em; text-transform: uppercase; }
+		tr:last-child td { border-bottom: 0; }
+		.flow { display: grid; grid-template-columns: 1fr auto 1.2fr auto 1.2fr auto 1fr; gap: 10px; align-items: stretch; margin: 21px 0; }
+		.node { padding: 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); }
+		.node strong { display: block; margin-bottom: 5px; color: #fff; }
+		.arrow { align-self: center; color: var(--blue); font-size: 1.3rem; }
+		.roadmap { display: grid; grid-template-columns: repeat(4, 1fr); gap: 11px; }
+		.phase { min-height: 175px; padding: 15px; border: 1px solid var(--line); border-top: 4px solid var(--blue); border-radius: 10px; background: var(--panel); }
+		.phase:nth-child(2) { border-top-color: var(--green); }
+		.phase:nth-child(3) { border-top-color: var(--cyan); }
+		.phase:nth-child(4) { border-top-color: var(--purple); }
+		.phase strong { display: block; margin-bottom: 6px; }
+		.good { color: var(--green); }
+		.warn-text { color: var(--amber); }
+		.risk-text { color: var(--red); }
+		.info-text { color: var(--cyan); }
+		.small { color: var(--muted); font-size: .89rem; }
+		.sources li { overflow-wrap: anywhere; }
+		footer { margin-top: 54px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: .87rem; }
+		@media (max-width: 940px) {
+			.card, .card.third { grid-column: 1 / -1; }
+			.flow { grid-template-columns: 1fr; }
+			.arrow { justify-self: center; transform: rotate(90deg); }
+			.roadmap { grid-template-columns: 1fr 1fr; }
+		}
+		@media (max-width: 580px) {
+			main { width: min(100% - 22px, var(--max)); padding-top: 28px; }
+			.roadmap { grid-template-columns: 1fr; }
+		}
+	</style>
+</head>
+<body>
+<main>
+	<header>
+		<div class="eyebrow">Source verification · 2026-08-08</div>
+		<h1>Grok Build 1.0、Claude 跨会话消息与 San 记忆后端核查</h1>
+		<p class="lead">对 2026-08-07 的 Grok Build → San 报告逐项复核，并将 Claude Code 2.1.224 的跨会话消息机制映射到 San 现有 <code>hub + IrcBus + AgentRegistry</code> 架构；最后确认当前机器实际启用的长期记忆后端。</p>
+		<div class="meta">
+			<span class="tag">Grok Build：1.0.0 已确认</span>
+			<span class="tag">Claude：官方文档与 changelog</span>
+			<span class="tag">San：当前工作树源码</span>
+			<span class="tag">记忆：Mnemopi 生效</span>
+		</div>
+	</header>
+
+	<div class="callout">
+		<strong>结论：</strong>原报告抓对了两个真正缺口——AST 级 Bash 权限分类与 OS 级进程沙箱；但对 San 的 worktree/快照和 ACP 现状有重大误判，对 Grok 的重定向与沙箱失败语义也过度概括。San 值得做本机跨会话消息，不过应扩展现有 <code>hub</code>，不新增一套平行工具；第一版只做同机 Unix socket，并先完成权限边界、去重和环路熔断。
+	</div>
+
+	<section>
+		<h2>一、Grok Build 1.0 发布状态</h2>
+		<div class="grid">
+			<article class="card third">
+				<div class="kicker">Confirmed</div>
+				<h3>产品版本确为 1.0.0</h3>
+				<p>xAI Build 官方 changelog 列出 <strong>1.0.0，2026-08-07</strong>；公开源码中 <code>xai-grok-shell/Cargo.toml</code> 同样为 <code>version = "1.0.0"</code>。</p>
+			</article>
+			<article class="card third">
+				<div class="kicker">Caveat</div>
+				<h3>不是 GitHub Release</h3>
+				<p>公开仓库的 Releases 与 Tags API 均为空。准确说法是“xAI Build 产品与主 crate 发布 1.0”，不是“GitHub 仓库打了 v1.0 tag/release”。</p>
+			</article>
+			<article class="card third">
+				<div class="kicker">Method</div>
+				<h3>主源优先</h3>
+				<p>核查使用 xAI changelog、xai-org/grok-build 当前 main 源码、Anthropic 官方文档与当前 San 源码；不以二手新闻或仓库名称推断行为。</p>
+			</article>
+		</div>
+	</section>
+
+	<section>
+		<h2>二、昨日 Grok → San 报告逐项复核</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>报告项</th><th>核查结果</th><th>需要修正</th><th>对 San 的判断</th></tr></thead>
+				<tbody>
+					<tr>
+						<td><strong>Tree-sitter Bash 权限门</strong></td>
+						<td class="warn-text">方向正确，细节部分失真</td>
+						<td>当前 Grok main 已允许 <code>redirected_statement</code>、<code>file_redirect</code>、heredoc 与 <code>&gt;</code>/<code>&gt;&gt;</code>/<code>2&gt;&amp;1</code>；“出现重定向就 fail-closed”已不成立。替换、控制流、未知 AST 节点仍会走保守路径。</td>
+						<td>San 的权限路径仍主要依赖 tier/审批与可选正则 interceptor，缺 AST 级命令分段和未知结构 fail-closed；但仓库已经依赖 <code>tree-sitter-bash</code>（<code>crates/pi-ast</code>），不应再引入 <code>web-tree-sitter</code> WASM。</td>
+					</tr>
+					<tr>
+						<td><strong>OS 级 sandbox</strong></td>
+						<td class="good">缺口成立</td>
+						<td>Grok 是对 agent 进程生命周期施加 Landlock/Seatbelt，不是简单给每次 Bash 套一层 bwrap。Linux 只有非空 read-deny 等场景必须使用 bubblewrap。沙箱默认关闭；内置 profile 应用失败会警告后继续，显式 custom profile 才 fail-closed。</td>
+						<td>San 的 <code>pi-iso</code> 是代码树隔离，不是进程能力沙箱；Bash、文件工具、LSP 与子进程仍缺统一的 OS 边界。这是报告中最可靠的真实差距。</td>
+					</tr>
+					<tr>
+						<td><strong>Worktree + Btrfs 快照</strong></td>
+						<td class="risk-text">San 现状判断错误</td>
+						<td>Grok 的 <code>Linked</code> 不是“硬链目录”：它是 <code>git worktree add --no-checkout</code> + 并行 CoW 文件复制 + index finalization；<code>Standalone</code> 是独立 <code>.git</code> 的 CoW 副本。</td>
+						<td>San 已有并已接线的原生 PAL：APFS clonefile、Btrfs、ZFS、Linux reflink、overlayfs、ProjFS、Windows block clone、rcopy/worktree 回退，并支持 diff/merge。能力默认 <code>task.isolation.mode = none</code>，但不能再列为“San 尚未具备”。</td>
+					</tr>
+					<tr>
+						<td><strong>Prefire 两段压缩</strong></td>
+						<td class="good">事实成立</td>
+						<td>默认提前量确为 10%；pass-1 约覆盖 95% 前缀；前缀变化会使缓存失效。但 <code>two_pass_compaction</code> 默认是 <code>false</code>，它是可选延迟优化，不是 Grok 默认路径。</td>
+						<td>San 已有 Context Steady <code>prefixFingerprint</code> 与变更观测，但未发现后台预跑摘要。可借鉴 single-flight、指纹失效和取消语义；在近期 runaway 问题背景下，必须先有硬预算和陈旧结果丢弃，不能无界预跑。</td>
+					</tr>
+					<tr>
+						<td><strong>Leader + ACP</strong></td>
+						<td class="risk-text">San 现状判断错误</td>
+						<td>Grok 的共享 leader、Unix socket 与多客户端 session registry 确实值得研究。</td>
+						<td>San 不只是 <code>tools/acp-bridge.ts</code>：已有完整 <code>san acp</code> stdio server、<code>AcpAgent</code>、多 managed sessions 与 ACP client bridge。真正缺口是“多个独立 San 进程/客户端共享同一活动 session”，不是 ACP 本身。</td>
+					</tr>
+				</tbody>
+			</table>
+		</div>
+
+		<div class="callout warn">
+			<strong>对原报告的总体评价：</strong>执行安全方向正确；San 源码盘点不完整。原路线中的“快照回滚阶段”应删除，“引入 web-tree-sitter”应改为复用原生 <code>pi-ast</code>，“ACP bridge”应改写为“已有原生 ACP server，是否再做共享 leader 是另一项产品决策”。
+		</div>
+	</section>
+
+	<section>
+		<h2>三、Grok harness 值得借鉴什么</h2>
+		<div class="grid">
+			<article class="card">
+				<div class="kicker">P0 · Shell policy</div>
+				<h3>复用 pi-ast，补 AST 级审批分类</h3>
+				<ul>
+					<li>解析完整 Bash AST，再将简单命令链拆成可独立判定的 segments。</li>
+					<li>已知危险结构走 <code>Reject</code>；无法可靠解释的扩展、替换、<code>eval</code>、<code>bash -c</code> 走 <code>AskFailClosed</code>，不静默放行。</li>
+					<li>重定向不应一律拒绝：应把目标路径、方向和 append/truncate 语义送入现有 write/exec tier。</li>
+					<li>这一层与 San 现有 approval 正交：parser 提供事实，approval 决定策略。</li>
+				</ul>
+			</article>
+			<article class="card">
+				<div class="kicker">P0 · Process boundary</div>
+				<h3>借鉴进程级 sandbox，而非 Bash wrapper</h3>
+				<ul>
+					<li>让 San 本身在受限进程中重执行，确保 read/write/bash/grep/LSP/子代理继承同一边界。</li>
+					<li>profile 至少区分 workspace、read-only、strict，并独立描述文件读、文件写、网络、Unix socket、环境变量继承。</li>
+					<li>用户显式要求的 profile 应 fail-closed；不要照搬 Grok 内置 profile 的“应用失败后继续无沙箱”。</li>
+					<li><code>pi-iso</code> 继续负责代码副本和合并；sandbox 负责“副本之外不能做什么”。两者不可合并成一个概念。</li>
+				</ul>
+			</article>
+			<article class="card">
+				<div class="kicker">P2 · Latency</div>
+				<h3>Prefire 只做受控实验</h3>
+				<p>保留 Grok 的好部分：single-flight、前缀指纹、分支/回退立即失效、真正压缩时只消费匹配当前 generation 的结果。额外要求共享 token 预算、任务取消、最大墙钟时间和失败不重试。否则它会把“压缩卡顿”换成“后台重复烧 token”。</p>
+			</article>
+			<article class="card">
+				<div class="kicker">Do not transplant</div>
+				<h3>不重做 worktree，不先做 leader</h3>
+				<p>San 的任务隔离后端已比报告描述的 Grok 路径更广。共享 leader 会侵入 TUI、RPC v2、ACP 与 session ownership；眼下更小、更直接的收益是本机跨会话消息，而不是把 TUI 改造成 ACP client。</p>
+			</article>
+		</div>
+	</section>
+
+	<section>
+		<h2>四、Claude Code 2.1.224 跨会话消息如何工作</h2>
+		<p>它不是把两个上下文拼起来，也不是共享完整 transcript。发送方只传一段纯文本和 reply address；接收方把它作为“来自另一个 agent session”的低权限消息处理。</p>
+
+		<div class="flow" role="img" aria-label="Claude cross-session message flow">
+			<div class="node"><strong>ListAgents</strong>读取活动 session 的注册文件，按 name/短 ref 展示</div>
+			<div class="arrow">→</div>
+			<div class="node"><strong>SendMessage</strong>同机连接目标 session 的 Unix domain socket；跨机走 Remote Control</div>
+			<div class="arrow">→</div>
+			<div class="node"><strong>Inbound gate</strong><code>accept / hold / refuse</code>，结合双方 permission mode 判断</div>
+			<div class="arrow">→</div>
+			<div class="node"><strong>Delivery</strong>忙时在 tool 边界注入；空闲时启动新 turn；回执返回发送方</div>
+		</div>
+
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>机制</th><th>2.1.224 行为</th><th>安全含义</th></tr></thead>
+				<tbody>
+					<tr><td>发现</td><td><code>ListAgents</code> / <code>/list-agents</code> / <code>/peers</code>；每个活动 session 写注册文件并绑定 inbox socket。</td><td>只有能看到同一注册文件并访问 socket 的同机 session 可互达；容器文件系统天然隔离。</td></tr>
+					<tr><td>消息内容</td><td>纯文本、sender name、reply address；不传历史、文件或权限状态。</td><td>不会隐式泄漏整个上下文，也不能伪装成用户。</td></tr>
+					<tr><td>调度</td><td>接收方忙时在 tool calls 之间读取，不中断正在执行的工具；空闲时自动启动 turn。</td><td>避免半途打断非幂等工具。</td></tr>
+					<tr><td>入站控制</td><td><code>crossSessionInbound = accept | hold | refuse</code>；默认根据发送/接收 session 是否 bypass permission prompts 决策，held 对话默认五分钟过期。</td><td>高权限/无人值守 session 不会默认接收普通 session 的指令。</td></tr>
+					<tr><td>权限</td><td>peer message 不能批准权限、不能修改配置、不能执行 slash command；接收方自己的审批规则照常生效。</td><td>消息是信息，不是授权。</td></tr>
+					<tr><td>环路保护</td><td>按 sender 限流、短窗口相同消息去重、待读队列最多 50；held 队列最多 100。</td><td>两个 agent 互相回复不会无限增长。</td></tr>
+					<tr><td>跨机器</td><td>2.1.224 通过 Anthropic Remote Control 支持跨机回复；不能主动发起。</td><td>同机消息不经过 Anthropic；跨机需要云端 relay 与 Remote Control 身份。</td></tr>
+				</tbody>
+			</table>
+		</div>
+
+		<div class="callout warn">
+			<strong>版本差异：</strong>当前 changelog 顶部已到 2.1.226。2.1.225 又增加了“按 name 主动发起到其他机器 Remote Control session”；官方跨会话文档页面仍写“跨机只能 reply”，存在文档更新滞后。讨论 2.1.224 时应以 reply-only 为准，不能把 2.1.225 行为倒灌回首发版本。
+		</div>
+	</section>
+
+	<section>
+		<h2>五、San 是否应做：应做，但只做薄 transport 层</h2>
+		<p>San 已有大部分会话内语义。<code>IrcBus</code> 与 <code>AgentRegistry</code> 都是 process-global in-memory 单例；<code>hub</code> 已支持 <code>list/send/wait/inbox</code>、replyTo、回执、busy 时 non-interrupting aside、idle wake、parked revive。缺的是“跨进程发现与传输”，不是一套新的消息模型。</p>
+
+		<div class="grid">
+			<article class="card third"><div class="kicker">Already here</div><h3>可直接复用</h3><p><code>hub</code> 工具契约、Snowflake message id、replyTo、delivery receipt、AgentSession 的 busy/idle 注入、agent attribution、TUI incoming card。</p></article>
+			<article class="card third"><div class="kicker">Missing</div><h3>必须新增</h3><p>跨进程 presence、同机 socket、session 名称冲突消解、入站 hold/refuse、过期与 stale cleanup、限流/去重/环路熔断。</p></article>
+			<article class="card third"><div class="kicker">Do not reuse blindly</div><h3>权限边界需硬化</h3><p>当前“父代理给忙碌子代理”的特殊路径会产生 <code>role: user</code>、但 attribution 为 agent 的 steer。独立 session 消息绝不能走该父子特权路径，只能作为 <code>role: custom</code>、<code>attribution: agent</code> 注入。</p></article>
+		</div>
+
+		<h3>建议的本机 v1</h3>
+		<pre><code>~/.san/agent/runtime/peers/
+  &lt;session-id&gt;.json       # pid、sessionId、name、cwd、socket、permissionClass、heartbeat
+  sockets/&lt;short-id&gt;.sock # 0700 目录；socket 仅当前 OS 用户可访问
+
+PeerEnvelope {
+  protocolVersion
+  messageId
+  fromSessionId
+  fromName
+  toSessionId
+  body                 // 纯文本，大小受限
+  replyTo?
+  sentAt
+  senderPermissionClass
+}</code></pre>
+		<ul>
+			<li><strong>工具面不扩张：</strong>继续用 <code>hub op:list/send/inbox/wait</code>。跨进程目标显示为稳定 session ref；<code>to:"all"</code> 第一版仍只广播当前进程，避免跨 session stampede。</li>
+			<li><strong>活动 session 才可达：</strong>每个 CLI 自己监听 socket，无常驻 daemon；进程退出即下线。stale presence 由 PID/heartbeat/socket 三重检查清理，不做“离线后自动执行旧消息”。</li>
+			<li><strong>默认同机：</strong>macOS/Linux 先行。目录和 socket 权限建立 same-user 边界；协议仍校验目标 session、版本、消息 id 与长度。</li>
+			<li><strong>接收策略：</strong>新增 <code>crossSession.inbound = accept | hold | refuse | auto</code>。<code>auto</code> 采用 Claude 的 permission-class 规则；headless session 对 held 消息不自动放行。</li>
+			<li><strong>权威语义：</strong>peer message 永远不是 user consent，不能回答 <code>ask</code>、改变 config/permission、触发 slash command、覆写 continuation authority。</li>
+			<li><strong>环路安全：</strong>每 sender token bucket；短窗口 body hash 去重；最大消息 hop/对话往返；每 session 待读队列上限；重复或超限给明确 receipt，不静默重试。</li>
+		</ul>
+
+		<div class="callout risk">
+			<strong>发布门槛：</strong>在 San 最近出现过跨 Agent 语义活锁和超大 token 消耗的前提下，环路限流、重复抑制和 peer message 的低权威属性不是后续增强，而是 v1 前置条件。没有这三项，不应开放 agent 自主跨 session 发送。
+		</div>
+
+		<h3>验收场景</h3>
+		<ol>
+			<li>启动两个真实 San CLI 进程：A 能列出 B，按 session ref 发送；B 空闲时启动新 turn，忙时只在工具边界读取。</li>
+			<li>B 处于 bypass/headless 模式时，普通 A 的消息进入 held，不会直接执行；审批过期后 A 收到明确结果。</li>
+			<li>消息中的 <code>/compact</code> 只作为文本；消息不能批准 B 正在等待的文件写或 Bash 权限。</li>
+			<li>同 body 循环互发被去重/限流；队列满后行为确定，不触发模型无限续跑。</li>
+			<li>崩溃进程的 presence 会清理；同名 session 用短 ref 消歧，不会错投。</li>
+			<li>源码运行、npm bundle、编译二进制均通过双进程 smoke；无 native Windows 支持时明确显示 unavailable。</li>
+		</ol>
+
+		<h3>跨机器放在后续</h3>
+		<p>San 已有 Remote Control / collab relay 方向，可在本机协议稳定后复用设备身份、E2EE relay 和 session presence。不要让第一版同时承担本机 IPC、跨机身份、离线队列与多端 UI；这会把一个薄 transport 变成新的控制平面。</p>
+	</section>
+
+	<section>
+		<h2>六、Hindsight 当前是否在用</h2>
+		<div class="callout">
+			<strong>没有启用 Hindsight。当前实际后端是 Mnemopi。</strong>
+		</div>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>证据</th><th>当前值</th><th>含义</th></tr></thead>
+				<tbody>
+					<tr><td><code>~/.san/agent/config.yml</code></td><td><code>memory.backend: mnemopi</code></td><td>内存后端互斥选择器只实例化 Mnemopi。</td></tr>
+					<tr><td>Mnemopi 配置</td><td><code>scoping: per-project</code>、<code>embeddingVariant: multilingual</code>、<code>llmMode: smol</code></td><td>当前长期记忆是本地 SQLite/embedding 路径，按项目隔离。</td></tr>
+					<tr><td>自动行为</td><td><code>autoRecall: true</code>、<code>autoRetain: false</code></td><td>会自动召回；不会把每次会话自动写入。显式 <code>retain</code> 仍可写。</td></tr>
+					<tr><td>San 源码</td><td><code>memory.backend === "hindsight"</code> 才加载 <code>hindsightBackend</code></td><td>Hindsight 已完整集成、带 tests/config/client/bank/mental models，但当前处于 dormant 状态。</td></tr>
+					<tr><td>Hindsight 本机配置</td><td>未发现 <code>hindsight.*</code> 配置或对应环境变量</td><td>即使改 selector，也需要确认本地/远端 Hindsight 服务和 bank 配置。</td></tr>
+				</tbody>
+			</table>
+		</div>
+		<p>Hindsight 官方模型是 Memory Banks + <code>retain / recall / reflect</code>，结合 semantic、keyword、graph、temporal 检索。San 的 adapter 已覆盖这些接口，但不能与 Mnemopi 同时成为 active backend。是否迁移应另做质量、延迟、隐私和运维对比；当前问题的答案只是：<strong>支持，但没在用</strong>。</p>
+	</section>
+
+	<section>
+		<h2>七、修订后的路线</h2>
+		<div class="roadmap">
+			<div class="phase"><strong>P0-A · AST shell policy</strong>复用 <code>pi-ast/tree-sitter-bash</code>；输出命令 segments、重定向事实与 fail-closed 原因，接入现有 approval。</div>
+			<div class="phase"><strong>P0-B · Process sandbox</strong>建立进程生命周期级 profile；与 <code>pi-iso</code> 代码树隔离叠加，显式 profile 应用失败即停止。</div>
+			<div class="phase"><strong>P1 · Local peer messaging</strong>扩展 <code>hub</code>：presence + UDS + inbound gate + authority guard + loop fuse；先同机，不做离线 daemon。</div>
+			<div class="phase"><strong>P2 · Prefire experiment</strong>在硬预算、single-flight、generation 校验和取消齐备后，再以 opt-in 实验验证首 token 延迟与额外 token 成本。</div>
+		</div>
+		<p class="small">不再安排“新增 worktree 快照”或“重做 ACP”阶段：前者已有更完整实现，后者不是当前缺口。</p>
+	</section>
+
+	<section>
+		<h2>八、来源</h2>
+		<ol class="sources">
+			<li><a href="https://clawplay.club/reports/grokbuild-to-san-2026-08-07.html">原始报告：grok-build Harness 可移植到 San 的设计</a></li>
+			<li><a href="https://x.ai/build/changelog">xAI Build 官方 changelog</a></li>
+			<li><a href="https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-shell/Cargo.toml">xai-grok-shell Cargo.toml</a></li>
+			<li><a href="https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-workspace/src/permission/bash_command_splitting.rs">Grok Bash AST splitting</a>；<a href="https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-workspace/src/permission/policy.rs">permission policy</a></li>
+			<li><a href="https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/18-sandbox.md">Grok sandbox 官方文档</a></li>
+			<li><a href="https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-fast-worktree/src/api.rs">xai-fast-worktree API</a>；<a href="https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/17-sessions.md">session/worktree 文档</a></li>
+			<li><a href="https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-shell/src/session/compaction.rs">Grok prefire compaction</a>；<a href="https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/05-configuration.md">配置默认值</a></li>
+			<li><a href="https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md">Claude Code 官方 changelog</a>；<a href="https://code.claude.com/docs/en/cross-session-messaging">跨会话消息官方文档</a></li>
+			<li><a href="https://github.com/vectorize-io/hindsight">Hindsight 官方仓库</a>；<a href="https://hindsight.vectorize.io/developer/api/main-methods">retain / recall / reflect 文档</a></li>
+			<li>San 本地源码：<code>packages/coding-agent/src/irc/bus.ts</code>、<code>tools/hub/messaging.ts</code>、<code>registry/agent-registry.ts</code>、<code>session/agent-session.ts</code>、<code>memory-backend/resolve.ts</code>、<code>config/settings-schema.ts</code>、<code>crates/pi-iso</code>、<code>crates/pi-ast</code>。</li>
+		</ol>
+		<div class="callout warn">
+			<strong>工具备注：</strong>本次按约调用了新 <code>research</code> MCP，两次均在客户端约 30 秒处超时，而该工具声明单次通常需要 1–3 分钟。核查因此改用官方文档、GitHub 当前源码、web search 与本地 codegraph/read。需要把 MCP 调用超时提高到至少覆盖其声明时长，或让工具返回异步 job handle。
+		</div>
+	</section>
+
+	<footer>核查日期：2026-08-08。外部项目行为以文中链接的当前主源为准；San 现状以当前工作树和 <code>~/.san/agent/config.yml</code> 为准。</footer>
+</main>
+</body>
+</html>
