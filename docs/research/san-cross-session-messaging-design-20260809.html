@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>San 跨会话消息设计</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#121a2e;--panel2:#17223a;--text:#e8edf7;--muted:#9ca9c3;--line:#293856;--blue:#76a9ff;--cyan:#5eead4;--amber:#fbbf24;--red:#fb7185;--green:#86efac}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 80% 0,#18284b 0,transparent 35%),var(--bg);color:var(--text);font:15px/1.65 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1120px;margin:auto;padding:54px 28px 80px}header{border-bottom:1px solid var(--line);padding-bottom:30px;margin-bottom:34px}.eyebrow{color:var(--cyan);font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}h1{font-size:42px;line-height:1.08;margin:10px 0 14px;letter-spacing:-.025em}h2{font-size:24px;margin:38px 0 14px}h3{font-size:17px;margin:0 0 8px;color:var(--blue)}p{margin:8px 0;color:var(--muted}.lead{font-size:19px;max-width:850px;color:#c9d5ec}.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px}.card{grid-column:span 4;background:linear-gradient(145deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:14px;padding:18px}.wide{grid-column:span 6}.full{grid-column:1/-1}.pill{display:inline-block;border:1px solid var(--line);border-radius:99px;padding:3px 9px;color:var(--muted);font-size:12px;margin:3px 4px 3px 0}.good{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}code{font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#c7d7ff;background:#0b1223;padding:2px 5px;border-radius:5px}pre{overflow:auto;background:#09101f;border:1px solid var(--line);border-radius:12px;padding:16px;color:#d8e4ff}.flow{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:10px;align-items:center}.node{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:16px;text-align:center}.arrow{color:var(--cyan);font-size:24px}table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}th,td{text-align:left;vertical-align:top;padding:11px 13px;border-bottom:1px solid var(--line)}th{color:var(--blue);font-size:12px;text-transform:uppercase;letter-spacing:.08em}tr:last-child td{border-bottom:0}ul{margin:8px 0;padding-left:20px;color:var(--muted)}li{margin:5px 0}.decision{border-left:3px solid var(--cyan);padding-left:14px}.scope{font-weight:700;color:var(--text)}footer{margin-top:48px;border-top:1px solid var(--line);padding-top:18px;color:var(--muted);font-size:13px}@media(max-width:760px){h1{font-size:32px}.card,.wide{grid-column:1/-1}.flow{grid-template-columns:1fr}.arrow{transform:rotate(90deg);justify-self:center}}
+</style>
+</head>
+<body><main>
+<header><div class="eyebrow">Architecture Decision · 2026-08-09</div><h1>San 原生跨会话消息</h1><p class="lead">让同一操作系统用户下、不同仓库或 worktree 中运行的独立 San 顶层会话互相发现、寻址和收发消息；沿用现有 <code>hub</code>/<code>IrcBus</code> 语义，不依赖 Claude Code。</p><div><span class="pill">same machine</span><span class="pill">same user</span><span class="pill">live sessions only</span><span class="pill">San-native</span></div></header>
+
+<section><h2>结论</h2><div class="grid">
+<div class="card"><h3>发现平面</h3><p>新增用户级 peer broker，固定于 San 全局运行目录。项目级 daemon broker 无法跨仓库发现，因此不复用其寻址域。</p></div>
+<div class="card"><h3>消息平面</h3><p>NDJSON over Unix domain socket / Windows named pipe。broker 绑定连接身份、路由消息并等待接收端投递回执。</p></div>
+<div class="card"><h3>代理体验</h3><p><code>hub list/send/wait/inbox</code> 同时覆盖本进程代理和远端 San 会话；远端地址为 <code>san:&lt;12 hex&gt;</code>。</p></div>
+</div></section>
+
+<section><h2>架构</h2><div class="flow"><div class="node"><b>San Runtime A</b><br><code>CrossSessionClient</code><br><small>cwd / branch / status</small></div><div class="arrow">↔</div><div class="node"><b>User-global Broker</b><br><code>~/.san/run/peers</code><br><small>registry + routing + ack</small></div><div class="arrow">↔</div><div class="node"><b>San Runtime B</b><br><code>CrossSessionClient</code><br><small>IrcBus ingress</small></div></div>
+<div class="grid" style="margin-top:14px"><div class="card wide"><h3>进站路径</h3><pre>socket message
+  → broker validates + binds sender
+  → recipient client.deliver(message)
+  → IrcBus.deliverExternal(...)
+  → waiter | idle wake | busy aside | inbox
+  → delivery ack</pre></div><div class="card wide"><h3>出站路径</h3><pre>hub send to san:…
+  → CrossSessionClient.send(...)
+  → broker exact-target route
+  → recipient delivery outcome
+  → injected | woken | failed
+
+AgentSession auto-reply
+  → IrcBus external sender fallback</pre></div></div></section>
+
+<section><h2>关键协议</h2><table><thead><tr><th>领域</th><th>决策</th><th>原因 / 不变量</th></tr></thead><tbody>
+<tr><td>地址</td><td><code>san:&lt;12 lowercase hex&gt;</code></td><td>每个运行时唯一；<code>sessionId</code> 仅作元数据，同一 transcript 被打开两次也不冲突。</td></tr>
+<tr><td>注册范围</td><td>根 <code>main</code> 会话</td><td>本进程 subagent 继续由 AgentRegistry/IrcBus 管理；不制造第二套子代理拓扑。</td></tr>
+<tr><td>可见范围</td><td>同机、同 OS 用户、跨 cwd</td><td>不引入远端 relay、账号授权或网络暴露。</td></tr>
+<tr><td>送达语义</td><td>在线、单次、带接收端回执</td><td>无持久离线邮箱；断连后精确发送失败，不假装已排队。</td></tr>
+<tr><td>身份</td><td>broker 以已认证 socket 为准</td><td>忽略客户端自报 sender，禁止伪造来源。</td></tr>
+<tr><td>回复</td><td><code>replyTo</code> 保留；from 为远端地址</td><td>现有 from-filtered <code>wait</code> 和 <code>await:true</code> 无需新语义。</td></tr>
+<tr><td>故障</td><td>下一次请求重连并重新注册</td><td>broker 重启不要求 San 会话重启；本地 hub 始终可用。</td></tr>
+<tr><td>生命周期</td><td>最后连接关闭后延迟退出</td><td>无常驻 daemon 成本；防止快速重连造成反复拉起。</td></tr>
+</tbody></table></section>
+
+<section><h2>信任与安全边界</h2><div class="grid">
+<div class="card wide"><h3 class="good">必须成立</h3><ul><li>运行目录 0700；token 与 socket 0600。</li><li>认证后才注册；一条连接只能代表一个 peer。</li><li>请求、帧和消息体有固定字节上限。</li><li>畸形或超限输入 fail closed。</li><li>socket 关闭立即移除 peer，并失败所有关联 pending ack。</li></ul></div>
+<div class="card wide"><h3 class="warn">内容不可信</h3><ul><li>跨会话文本始终标记为代理提供的协调输入。</li><li>绝不提升为 user/system 指令。</li><li>只暴露会话元数据，不分享 transcript、密钥或工作区文件。</li><li>地址只能来自 <code>hub list</code>；模型不得猜测。</li></ul></div>
+</div></section>
+
+<section><h2>Hub 兼容策略</h2><div class="grid">
+<div class="card"><h3>list</h3><p>合并本地 registry 与 broker roster。远端条目携带 scope、sessionId、cwd、branch、status 和 activity。</p></div>
+<div class="card"><h3>send</h3><p>本地 ID 走 IrcBus；<code>san:*</code> 走 transport；<code>all</code> 对两个集合去重并 fan-out。</p></div>
+<div class="card"><h3>wait / inbox</h3><p>远端 ingress 进入同一 IrcBus mailbox/waiter，保留消息 ID、时间戳和 replyTo。</p></div>
+<div class="card full decision"><h3>自动回复</h3><p>AgentSession 的中途 auto-reply 仍调用 IrcBus。若目标为 <code>san:*</code> 且本地 registry 无该 ID，IrcBus 使用当前 CrossSessionClient 作为外部 sender。注册 disposer 采用所有权检查，旧会话释放不会清除新会话路由。</p></div>
+</div></section>
+
+<section><h2>启用与降级</h2><p><code>crossSession.enabled</code> 默认开启，但默认 SDK/headless 根会话不应隐式启动全局 broker。交互式顶层 San 自动注册；headless SDK 只有显式配置该设置时注册。transport 初始化失败仅记录 warning，进程内 hub 保持原行为。</p></section>
+
+<section><h2>验证门槛</h2><table><thead><tr><th>层次</th><th>证明</th></tr></thead><tbody>
+<tr><td>Transport contract</td><td>两个独立 client、不同 cwd：互相发现；直发恰好一次；准确 injected/woken；回复关联；断连剔除；后续发送失败；broker loss 后重连。</td></tr>
+<tr><td>IrcBus contract</td><td>远端消息满足 from-filtered waiter；本地目标优先；外部 sender 回退；sender disposer 所有权安全；本地 IRC 回归不变。</td></tr>
+<tr><td>Hub integration</td><td>混合 roster、远端精确发送、广播 fan-out、<code>await:true</code>、无远端时的 wait liveness。</td></tr>
+<tr><td>Worker-host smoke</td><td><code>san --smoke-test</code> 从 CLI host 拉起 peer broker worker，适用于 source、bundle 与 compiled binary。</td></tr>
+<tr><td>Real process smoke</td><td>两个独立 Bun 进程连接同一隔离 runtime，跨不同 cwd 往返消息并在一端退出后观察 roster eviction。</td></tr>
+</tbody></table></section>
+
+<section><h2>明确不做</h2><div class="grid"><div class="card"><h3 class="bad">无远端网络</h3><p>不监听 TCP，不跨机器，不承担身份账号体系。</p></div><div class="card"><h3 class="bad">无离线邮箱</h3><p>broker 不持久化消息，不恢复已关闭会话。</p></div><div class="card"><h3 class="bad">无 transcript 共享</h3><p>仅传协调消息和最小运行元数据。</p></div></div></section>
+<footer>实现目标：<code>packages/coding-agent/src/peer/</code>、IrcBus / Hub / SDK 接入、配置与提示词、聚焦契约测试和双进程冒烟。设计基于 San 现有 launch broker 与 process-global IRC 语义。</footer>
+</main></body></html>

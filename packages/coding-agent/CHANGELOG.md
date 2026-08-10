@@ -10,6 +10,11 @@
 
 ### Added
 
+- Added same-machine discovery and hub messaging between independent San roots: same-user sessions register with a local broker and exchange messages via exact broker-issued `san:*` ids, with online delivery acknowledgements and reconnect and cleanup on disconnect, while existing in-process hub behavior is unchanged.
+- Added proactive cross-session handoff: root sessions can generate a current-session handoff document and push it through the existing peer transport to an exact live `san:*` target, which receives it as non-authoritative continuation context without switching the source session; Hub remains the discovery, messaging, and remote-control base.
+- Added default-off Response Documents with exact Markdown artifacts, deterministic bounded synopses, branch-persisted recovery, and provider-only context projection that preserves the full transcript while breaking stale native replay chains.
+- Added default-off `explore` code intelligence with an installed CodeGraph MCP adapter, current-disk LSP/AST/text fallback, freshness banners, editable hashline snapshots, cross-call range deduplication, and adaptive hard output budgets.
+- Added `san setup codegraph --check [--json]` to report CLI/index readiness, pending or stale graph state, local fallback availability, Explore enablement, and exact install/init/sync/rebuild guidance.
 - Added opt-in logical model routing groups with deterministic provider-route selection, session affinity, typed failover policies, cooldown recovery, persisted route leases, and TUI/RPC route projections.
 - Added source-backed San Brain automatic decisions for durable candidates: explicit user directives auto-activate, repeated high-confidence evidence auto-resolves, sensitive or invalid candidates are discarded, high-impact conflicts enter review, and `/brain status` reports automation and user-revocation rates.
 - Added `/subagent [model|status|clear]` session-local model routing for task-role subagents, persisted across resume and honored by Task, SDK, and ACP launches without overriding explicitly bound expert agents.

@@ -1,5 +1,5 @@
 /**
- * Run onboarding setup or install dependencies for optional features.
+ * Run onboarding setup or check dependencies for optional features.
  */
 import { Args, Command, Flags, renderCommandHelp } from "@san/utils/cli";
 import { parseArgs } from "../cli/args";
@@ -7,7 +7,7 @@ import { runSetupCommand, type SetupCommandArgs, type SetupComponent } from "../
 import { runRootCommand } from "../main";
 import { initTheme } from "../modes/theme/theme";
 
-const COMPONENTS: SetupComponent[] = ["python"];
+const COMPONENTS: SetupComponent[] = ["python", "codegraph"];
 
 export interface OnboardingSetupDependencies {
 	runRoot?: typeof runRootCommand;
@@ -29,18 +29,18 @@ export async function runOnboardingSetup(deps: OnboardingSetupDependencies = {})
 }
 
 export default class Setup extends Command {
-	static description = "Run onboarding setup or install dependencies for optional features";
+	static description = "Run onboarding setup or check optional dependencies";
 
 	static args = {
 		component: Args.string({
-			description: "Optional component to install",
+			description: "Optional component to check",
 			required: false,
 			options: COMPONENTS,
 		}),
 	};
 
 	static flags = {
-		check: Flags.boolean({ char: "c", description: "Check if dependencies are installed" }),
+		check: Flags.boolean({ char: "c", description: "Check optional dependency readiness" }),
 		json: Flags.boolean({ description: "Output status as JSON" }),
 	};
 

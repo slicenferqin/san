@@ -79,6 +79,10 @@ export class AgentRegistry {
 
 	readonly #refs = new Map<string, AgentRef>();
 	readonly #listeners = new Set<RegistryListener>();
+	// Activity notifications ride their own listener set: setActivity runs on
+	// every tool-call heartbeat, so the main onChange dispatch rate must not
+	// grow with it (see setActivity). Only change-only gist updates emit.
+	readonly #activityListeners = new Set<(ref: AgentRef) => void>();
 
 	register(input: RegisterInput): AgentRef {
 		const now = Date.now();
@@ -111,14 +115,17 @@ export class AgentRegistry {
 
 	/**
 	 * Record a short activity gist for the work-aware roster. Display-only and
-	 * read on demand (`irc list`, peer roster), so it emits no event — keeping
-	 * the per-tool-call update rate off the registry listener path (same as
-	 * `attachSession`, which also bumps `lastActivity` without emitting). Only a
-	 * `running` agent has current work: a heartbeat for any other status is
-	 * dropped, so a late progress flush can't resurrect activity on a ref that
-	 * `setStatus` just cleared. Every running heartbeat refreshes `lastActivity`
-	 * — even when the gist text is unchanged — so the roster's "active … ago" and
-	 * recency sort track real work, not just the last status change.
+	 * read on demand (`irc list`, peer roster), so it emits no event on the
+	 * main `onChange` listener path — keeping the per-tool-call update rate off
+	 * the registry listener path (same as `attachSession`, which also bumps
+	 * `lastActivity` without emitting). A *changed* gist notifies `onActivity`
+	 * subscribers instead (bounded: once per distinct gist, never per
+	 * heartbeat). Only a `running` agent has current work: a heartbeat for any
+	 * other status is dropped, so a late progress flush can't resurrect
+	 * activity on a ref that `setStatus` just cleared. Every running heartbeat
+	 * refreshes `lastActivity` — even when the gist text is unchanged — so the
+	 * roster's "active … ago" and recency sort track real work, not just the
+	 * last status change.
 	 * The gist is normalized to one bounded line (`oneLineLabel`) so model-derived
 	 * intent text can neither break the roster nor smuggle terminal escapes —
 	 * every caller is safe without sanitizing at its own call site.
@@ -131,6 +138,7 @@ export class AgentRegistry {
 		ref.lastActivity = Date.now();
 		if (ref.activity === gist) return;
 		ref.activity = gist;
+		this.#emitActivity(ref);
 	}
 
 	attachSession(id: string, session: AgentSession, sessionFile?: string | null): void {
@@ -176,6 +184,27 @@ export class AgentRegistry {
 	onChange(listener: RegistryListener): () => void {
 		this.#listeners.add(listener);
 		return () => this.#listeners.delete(listener);
+	}
+
+	/**
+	 * Subscribe to activity gist *changes* (one notification per distinct gist,
+	 * never per heartbeat). Prefer this over onChange for display-throttled
+	 * consumers that must follow live work without amplifying the main
+	 * listener dispatch rate.
+	 */
+	onActivity(listener: (ref: AgentRef) => void): () => void {
+		this.#activityListeners.add(listener);
+		return () => this.#activityListeners.delete(listener);
+	}
+
+	#emitActivity(ref: AgentRef): void {
+		for (const listener of this.#activityListeners) {
+			try {
+				listener(ref);
+			} catch {
+				// listeners must not break the dispatch loop
+			}
+		}
 	}
 
 	#emit(event: RegistryEvent): void {

@@ -18,6 +18,7 @@ import { bashToolRenderer } from "./bash";
 import { browserToolRenderer } from "./browser/render";
 import { debugToolRenderer } from "./debug";
 import { evalToolRenderer } from "./eval-render";
+import { exploreToolRenderer } from "./explore";
 import { githubToolRenderer } from "./gh-renderer";
 import { globToolRenderer } from "./glob";
 import { grepToolRenderer } from "./grep";
@@ -84,6 +85,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	browser: browserToolRenderer as ToolRenderer,
 	debug: debugToolRenderer as ToolRenderer,
 	eval: evalToolRenderer as ToolRenderer,
+	explore: exploreToolRenderer as ToolRenderer,
 	edit: editToolRenderer as ToolRenderer,
 	apply_patch: editToolRenderer as ToolRenderer,
 	glob: globToolRenderer as ToolRenderer,

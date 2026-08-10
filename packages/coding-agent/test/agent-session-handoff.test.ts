@@ -176,6 +176,83 @@ describe("AgentSession handoff", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("builds a push handoff from journal context without replaying its own dangling tool call", async () => {
+		const activeHandoffTurn: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{ type: "text", text: "Starting the requested cross-session handoff." },
+				{
+					type: "toolCall",
+					id: "call_session_handoff",
+					name: "session_handoff",
+					arguments: { to: "san:111111111111" },
+				},
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "toolUse",
+			usage: {
+				input: 16,
+				output: 8,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 24,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+		sessionManager.appendMessage(activeHandoffTurn);
+		session.agent.appendMessage(activeHandoffTurn);
+		const sourceSessionId = session.sessionId;
+		const sourceSessionFile = session.sessionFile;
+		const handoffText = "## Goal\nContinue in the target session";
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockImplementation(async context => {
+				expect(
+					context.messages.some(
+						message =>
+							message.role === "user" &&
+							Array.isArray(message.content) &&
+							message.content.some(block => block.type === "text" && block.text === "seed"),
+					),
+				).toBe(true);
+				expect(
+					context.messages.some(
+						message =>
+							message.role === "assistant" &&
+							message.content.some(
+								block =>
+									block.type === "text" && block.text === "Starting the requested cross-session handoff.",
+							),
+					),
+				).toBe(true);
+				expect(
+					context.messages.some(
+						message =>
+							message.role === "assistant" &&
+							message.content.some(block => block.type === "toolCall" && block.name === "session_handoff"),
+					),
+				).toBe(false);
+				expect(
+					context.messages.some(
+						message =>
+							message.role === "toolResult" &&
+							message.content.some(block => block.type === "text" && block.text === "No result provided"),
+					),
+				).toBe(false);
+				return handoffText;
+			});
+
+		const result = await session.generateHandoffDocument("emphasize the remaining work");
+
+		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
+		expect(result).toBe(handoffText);
+		expect(session.sessionId).toBe(sourceSessionId);
+		expect(session.sessionFile).toBe(sourceSessionFile);
+	});
+
 	it("does not run auto-compaction after handoff turn completes", async () => {
 		const handoffText = "## Goal\nContinue from here";
 		const generateHandoffSpy = vi

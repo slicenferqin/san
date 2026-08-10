@@ -22,6 +22,7 @@ import type { LocalProtocolOptions } from "../internal-urls";
 import { LspTool } from "../lsp";
 import type { MCPManager } from "../mcp";
 import type { MnemopiSessionState } from "../mnemopi/state";
+import type { CrossSessionClient } from "../peer";
 import type { PlanModeState } from "../plan-mode/state";
 import type { AgentRegistry } from "../registry/agent-registry";
 import type { ArtifactManager } from "../session/artifacts";
@@ -45,6 +46,7 @@ import { type CheckpointState, CheckpointTool, type CompletedRewindState, Rewind
 import { DebugTool } from "./debug";
 import { EvalTool } from "./eval";
 import { resolveEvalBackends } from "./eval-backends";
+import { ExploreTool } from "./explore";
 import { GithubTool } from "./gh";
 import { GlobTool } from "./glob";
 import { GrepTool } from "./grep";
@@ -59,11 +61,13 @@ import { MemoryRetainTool } from "./memory-retain";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { ReadTool } from "./read";
 import type { PlanProposalHandler } from "./resolve";
+import { SessionHandoffTool } from "./session-handoff";
 import { type TodoPhase, TodoTool } from "./todo";
 import { WriteTool } from "./write";
 import { isMountableUnderXdev, XdevRegistry } from "./xdev";
 import { YieldTool } from "./yield";
 
+export * from "../code-intelligence";
 export * from "../edit";
 export * from "../goals";
 export * from "../lsp";
@@ -80,6 +84,7 @@ export * from "./debug";
 export * from "./essential-tools";
 export * from "./eval";
 export * from "./eval-backends";
+export * from "./explore";
 export * from "./gh";
 export * from "./glob";
 export * from "./grep";
@@ -96,6 +101,7 @@ export * from "./read";
 export * from "./report-tool-issue";
 export * from "./resolve";
 export * from "./review";
+export * from "./session-handoff";
 export * from "./todo";
 export * from "./vibe";
 export * from "./write";
@@ -236,6 +242,17 @@ export interface ToolSession {
 	xdevRegistry?: XdevRegistry;
 	/** Agent registry for IRC routing across live sessions. */
 	agentRegistry?: AgentRegistry;
+	/** Cross-session (same-machine) transport client for hub list/send routing.
+	 *  Present only on root main sessions registered with the peer broker;
+	 *  local subagents and headless roots leave it undefined. */
+	crossSessionClient?: CrossSessionClient;
+	/**
+	 * Generate a handoff summary of the current conversation WITHOUT switching
+	 * sessions. Implemented by the root session (backed by
+	 * `AgentSession.generateHandoffDocument`); undefined in subagents and
+	 * unregistered roots. Consumed by the `session_handoff` tool.
+	 */
+	generateSessionHandoff?: (focus?: string, signal?: AbortSignal) => Promise<string | undefined>;
 	/** Get artifacts directory for artifact:// URLs */
 	getArtifactsDir?: () => string | null;
 	/** Get the ArtifactManager backing this session (shared across parent + subagents). */
@@ -390,6 +407,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	github: GithubTool.createIf,
 	glob: s => new GlobTool(s, { rootPathAlias: true }),
 	grep: s => new GrepTool(s),
+	explore: s => new ExploreTool(s),
 	lsp: LspTool.createIf,
 	inspect_image: s => new InspectImageTool(s),
 	browser: s => new BrowserTool(s),
@@ -397,6 +415,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	rewind: RewindTool.createIf,
 	task: s => TaskTool.create(s),
 	hub: s => new HubTool(s),
+	session_handoff: SessionHandoffTool.createIf,
 	todo: s => new TodoTool(s),
 	web_search: s => new WebSearchTool(s),
 	write: s => new WriteTool(s),
@@ -539,6 +558,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			return (!includeYield || session.prewalkArmed === true) && session.settings.get("todo.enabled");
 		if (name === "glob") return session.settings.get("glob.enabled");
 		if (name === "grep") return session.settings.get("grep.enabled");
+		if (name === "explore") return session.settings.get("san.codeIntelligence.enabled");
 		if (name === "github") return session.settings.get("github.enabled");
 		if (name === "ast_grep") return session.settings.get("astGrep.enabled");
 		if (name === "ast_edit") return session.settings.get("astEdit.enabled");

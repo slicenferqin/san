@@ -21,6 +21,7 @@ import { declareWorkerHostEntry, installWorkerInbox } from "@san/utils/worker-ho
 import { installProfileAlias, resolveProfileAliasCommandFromProcess } from "./cli/profile-alias";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
 import { DAEMON_BROKER_WORKER_ARG } from "./launch/protocol";
+import { PEERS_BROKER_WORKER_ARG } from "./peer/protocol";
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(
@@ -72,6 +73,7 @@ async function runSmokeTest(): Promise<void> {
 	const { smokeTestJsEvalWorker } = await import("./eval/js/context-manager");
 	// Smoke dependencies stay lazy so normal CLI startup does not load worker clients.
 	const { smokeTestDaemonBroker } = await import("./launch/client");
+	const { smokeTestCrossSessionBroker } = await import("./peer/client");
 	await smokeTestSyncWorker();
 
 	if (process.env.SAN_BUILD_PROFILE !== "core") {
@@ -92,9 +94,9 @@ async function runSmokeTest(): Promise<void> {
 	await smokeTestJsEvalWorker();
 	await smokeTestMnemopiEmbedWorker();
 	await smokeTestDaemonBroker();
+	await smokeTestCrossSessionBroker();
 	process.stdout.write("smoke-test: ok\n");
 }
-
 const TINY_WORKER_ARG = "__omp_worker_tiny_inference";
 const STATS_SYNC_WORKER_ARG = "__omp_worker_stats_sync";
 const TAB_WORKER_ARG = "__omp_worker_tab";
@@ -163,6 +165,11 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 		// Worker selectors must dispatch before the normal command graph loads.
 		const { startDaemonBrokerFromEnvironment } = await import("./launch/broker");
 		await startDaemonBrokerFromEnvironment();
+		return true;
+	}
+	if (arg === PEERS_BROKER_WORKER_ARG) {
+		const { startPeersBrokerFromEnvironment } = await import("./peer/broker");
+		await startPeersBrokerFromEnvironment();
 		return true;
 	}
 	return false;

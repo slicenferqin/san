@@ -29,6 +29,7 @@ import { type } from "arktype";
 import type { RenderResultOptions } from "../../extensibility/custom-tools/types";
 import { IrcBus } from "../../irc/bus";
 import type { Theme } from "../../modes/theme/theme";
+import type { CrossSessionClient } from "../../peer";
 import hubDescription from "../../prompts/tools/hub.md" with { type: "text" };
 import type { AgentRegistry } from "../../registry/agent-registry";
 import type { ToolSession } from "..";
@@ -121,6 +122,7 @@ interface MessagingDeps {
 	registry: AgentRegistry;
 	senderId: string;
 	settings: ToolSession["settings"];
+	crossSessionClient?: CrossSessionClient;
 }
 
 const PROGRESS_INTERVAL_MS = 500;
@@ -231,13 +233,16 @@ export class HubTool implements AgentTool<typeof hubSchema, HubDetails> {
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(hubDescription);
 	}
-
-	/** Messaging deps when this session can address peers; null otherwise. */
 	#messaging(): MessagingDeps | null {
 		const registry = this.session.agentRegistry;
 		const senderId = this.session.getAgentId?.() ?? null;
 		if (!registry || !senderId) return null;
-		return { registry, senderId, settings: this.session.settings };
+		return {
+			registry,
+			senderId,
+			settings: this.session.settings,
+			crossSessionClient: this.session.crossSessionClient,
+		};
 	}
 
 	async execute(
@@ -251,7 +256,7 @@ export class HubTool implements AgentTool<typeof hubSchema, HubDetails> {
 			case "list": {
 				const messaging = this.#messaging();
 				if (!messaging) return hubErrorResult("Peer messaging is unavailable in this session.", { op: "list" });
-				return executeList(messaging.registry, messaging.senderId);
+				return executeList(messaging.registry, messaging.senderId, messaging.crossSessionClient);
 			}
 			case "send": {
 				const toPeer = params.to?.trim();
@@ -371,11 +376,21 @@ export class HubTool implements AgentTool<typeof hubSchema, HubDetails> {
 			if (!from) {
 				// A bare wait can only be satisfied by a running peer eventually
 				// sending something; with none, return the snapshot immediately
-				// instead of blocking a full message-timeout window.
+				// instead of blocking a full message-timeout window. Connected
+				// cross-session peers count too — a remote runtime may message
+				// us at any time.
 				const hasRunningPeer = messaging.registry
 					.listVisibleTo(messaging.senderId)
 					.some(ref => ref.status === "running");
-				if (!hasRunningPeer) return nothingToWaitForResult(this.session);
+				let hasRemotePeer = false;
+				if (messaging.crossSessionClient) {
+					try {
+						hasRemotePeer = (await messaging.crossSessionClient.list()).length > 0;
+					} catch {
+						hasRemotePeer = false;
+					}
+				}
+				if (!hasRunningPeer && !hasRemotePeer) return nothingToWaitForResult(this.session);
 			}
 			return executeMessageWait(messaging, { from, timeoutMs: params.timeoutMs }, signal);
 		}

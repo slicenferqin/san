@@ -194,6 +194,7 @@ import { type SanBrainActiveStateRecord, SanBrainStore } from "../brain/store";
 import type { SanBrainActivation, SanBrainScope } from "../brain/types";
 import { reset as resetCapabilities } from "../capability";
 import type { Rule } from "../capability/rule";
+import { filterPresentedCodeGraphTools } from "../code-intelligence";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { ModelRegistry } from "../config/model-registry";
 import {
@@ -376,6 +377,7 @@ import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with {
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import parentIrcSteerTemplate from "../prompts/steering/parent-irc.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
+import crossSessionHandoffTemplate from "../prompts/system/cross-session-handoff.md" with { type: "text" };
 import eagerTaskPrompt from "../prompts/system/eager-task.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import emptyStopRetryTemplate from "../prompts/system/empty-stop-retry.md" with { type: "text" };
@@ -509,6 +511,7 @@ import {
 	type ModelRouteLeaseState,
 	type ModelRouteSelection,
 } from "./model-route-lease";
+import { ResponseDocumentRuntime } from "./response-documents";
 import type { BuildSessionContextOptions, SessionContext } from "./session-context";
 import {
 	getLatestCompactionEntry,
@@ -2150,6 +2153,7 @@ export class AgentSession {
 	#cancelExitRecorder?: () => void;
 	#exitRecorded = false;
 	#sessionWritesEnabled: boolean;
+	readonly #responseDocuments: ResponseDocumentRuntime;
 	#unsubscribeAppendOnly?: () => void;
 	#unsubscribeModelRoles?: () => void;
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
@@ -2987,6 +2991,7 @@ export class AgentSession {
 			destination: { kind: "current", manager: this.sessionManager },
 		};
 		this.settings = config.settings;
+		this.#responseDocuments = new ResponseDocumentRuntime(this.sessionManager, this.settings);
 		this.#sessionWritesEnabled = config.sessionAccess !== "read_only";
 		this.#autoApprove = config.autoApprove === true;
 		// Power assertions are taken per turn (see #beginInFlight); nothing acquired here.
@@ -4900,7 +4905,6 @@ export class AgentSession {
 				displayEvent = { ...event, message: { ...message, content: deobfuscatedContent } };
 			}
 		}
-
 		if (event.type === "turn_start") {
 			const usage = this.getSessionStats().tokens;
 			this.#goalRuntime.onTurnStart(`turn-${++this.#goalTurnCounter}`, {
@@ -4920,6 +4924,13 @@ export class AgentSession {
 		} catch (error) {
 			messageEndPersistence?.release();
 			throw error;
+		}
+		if (event.type === "message_end" && event.message.role === "assistant") {
+			const visibleMessage =
+				displayEvent.type === "message_end" && displayEvent.message.role === "assistant"
+					? displayEvent.message
+					: event.message;
+			this.#responseDocuments.rememberVisibleAssistant(event.message, visibleMessage);
 		}
 
 		if (event.type === "turn_start") {
@@ -5476,6 +5487,16 @@ export class AgentSession {
 			// Capture the leaf immediately after session_stop settles and before
 			// agent_end hooks can append entries, keeping the digest endpoint stable.
 			const settledLeafId = this.sessionManager.getLeafId();
+			if (sessionStopResult.chainEnded && this.#sessionWritesEnabled) {
+				const responseDocument = await this.#responseDocuments.externalizeAssistant(msg);
+				if (responseDocument) {
+					this.emitNotice(
+						"info",
+						`Response saved as artifact://${responseDocument.artifactId}; later model turns receive a bounded synopsis.`,
+						"response-document",
+					);
+				}
+			}
 			await emitAgentEndNotification(sessionStopResult.continuationScheduled ? { willContinue: true } : undefined);
 			if (sessionStopResult.continuationScheduled) {
 				// Continuation is queued and will run as a hidden next turn.
@@ -8572,6 +8593,10 @@ export class AgentSession {
 	 * effect without restarting the session.
 	 */
 	async refreshMCPTools(mcpTools: CustomTool[]): Promise<void> {
+		const presentedMcpTools = filterPresentedCodeGraphTools(
+			mcpTools,
+			this.settings.get("san.codeIntelligence.enabled"),
+		);
 		const existingNames = Array.from(this.#toolRegistry.keys());
 		const previousMcpTools = new Map(
 			existingNames.flatMap(name => {
@@ -8598,7 +8623,7 @@ export class AgentSession {
 			localProtocolOptions: this.#localProtocolOptions(),
 		});
 
-		for (const customTool of mcpTools) {
+		for (const customTool of presentedMcpTools) {
 			const wrapped = wrapToolWithMetaNotice(CustomToolAdapter.wrap(customTool, getCustomToolContext) as AgentTool);
 			const finalTool = (
 				this.#extensionRunner ? new ExtensionToolWrapper(wrapped, this.#extensionRunner) : wrapped
@@ -8608,7 +8633,9 @@ export class AgentSession {
 
 		// Every connected MCP tool is selected; centralized repartitioning owns
 		// presentation pins and write-transport activation/removal.
-		const nextActive = [...new Set([...this.#getActiveNonMCPToolNames(), ...mcpTools.map(tool => tool.name)])];
+		const nextActive = [
+			...new Set([...this.#getActiveNonMCPToolNames(), ...presentedMcpTools.map(tool => tool.name)]),
+		];
 		try {
 			await this.#applyActiveToolsByName(nextActive);
 		} catch (error) {
@@ -8816,16 +8843,25 @@ export class AgentSession {
 
 	async #transformContextForProvider(messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> {
 		const transformedMessages = await this.#transformContext(messages, signal);
-		if (!this.#contextSteadyIsActive(this.#estimateFullProviderInputTokens(transformedMessages))) {
-			return transformedMessages;
+		const responseProjectedMessages = this.#responseDocuments.project(transformedMessages);
+		if (!this.#contextSteadyIsActive(this.#estimateFullProviderInputTokens(responseProjectedMessages))) {
+			return responseProjectedMessages;
 		}
-		if (!this.#contextSteadyPlanEnabled()) return transformedMessages;
+		if (!this.#contextSteadyPlanEnabled()) return responseProjectedMessages;
 		// Re-gate every provider call (including tool-loop steps) against live tail growth.
-		const plan = await this.#refreshContextSteadyPlanForProviderCall(transformedMessages);
+		const plan = await this.#refreshContextSteadyPlanForProviderCall(responseProjectedMessages);
 		if (plan) {
-			return materializeContextPlanMessages(transformedMessages, this.sessionManager.getBranch(), plan);
+			// Materialize against the original transcript so Context Plan coverage
+			// can still match branch message identity/content, then project any
+			// surviving response documents at the final provider boundary.
+			const plannedMessages = materializeContextPlanMessages(
+				transformedMessages,
+				this.sessionManager.getBranch(),
+				plan,
+			);
+			return this.#responseDocuments.project(plannedMessages);
 		}
-		return transformedMessages;
+		return responseProjectedMessages;
 	}
 
 	/** Apply session-level stream hooks to a direct side request. */
@@ -13906,31 +13942,32 @@ export class AgentSession {
 	}
 
 	/**
-	 * Generate a handoff document with a oneshot LLM call, then start a new session with it.
+	 * Generate a handoff document from the current conversation without switching sessions.
 	 *
-	 * @param customInstructions Optional focus for the handoff document
-	 * @param options Handoff execution options
-	 * @returns The handoff document text, or undefined if cancelled/failed
+	 * Used both by the local `/handoff` flow and by cross-session handoff delivery.
+	 * The source session remains active and unchanged.
 	 */
-	async handoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined> {
+	async generateHandoffDocument(customInstructions?: string, sourceSignal?: AbortSignal): Promise<string | undefined> {
+		// `session_handoff` invokes this method from inside its own tool call. Wait
+		// for the fire-and-forget message_end listener, then rebuild from the
+		// journal: the normal provider-context builder strips that still-dangling
+		// `session_handoff` tool_use while preserving any text in the turn. Using
+		// live agent state here would make the side request synthesize a misleading
+		// "No result provided" failure for the very handoff being generated.
+		await this.#waitForMessageEndPersistence();
 		const entries = this.sessionManager.getBranch();
-		const continuationState = buildActiveContinuationState({
-			entries,
-			sessionId: this.sessionId,
-			promptGeneration: this.#promptGeneration,
-		});
 		const messageCount = entries.filter(e => e.type === "message").length;
-
 		if (messageCount < 2) {
 			throw new Error("Nothing to hand off (no messages yet)");
 		}
+		if (this.#handoffAbortController) {
+			throw new Error("Handoff generation is already in progress");
+		}
 
 		this.#skipPostTurnMaintenanceAssistantTimestamp = undefined;
-
 		this.#handoffAbortController = new AbortController();
 		const handoffAbortController = this.#handoffAbortController;
 		const handoffSignal = handoffAbortController.signal;
-		const sourceSignal = options?.signal;
 		const onSourceAbort = () => {
 			if (!handoffSignal.aborted) {
 				handoffAbortController.abort();
@@ -13973,7 +14010,7 @@ export class AgentSession {
 			const handoffPromptCacheKey = this.agent.promptCacheKey ?? this.agent.sessionId;
 			const handoffPromptText = renderHandoffPrompt(this.#obfuscateTextForProvider(customInstructions));
 			const handoffSnapshot: AgentMessage[] = [
-				...this.agent.state.messages,
+				...this.buildDisplaySessionContext().messages,
 				{
 					role: "user",
 					content: [{ type: "text", text: handoffPromptText }],
@@ -13983,7 +14020,7 @@ export class AgentSession {
 			];
 			const handoffLlmMessages = await this.convertMessagesToLlm(handoffSnapshot, handoffSignal);
 			// Base system prompt, not a per-turn `before_agent_start` hook override —
-			// the handoff seeds a fresh session and must not carry prompt-specific
+			// the handoff seeds another session and must not carry prompt-specific
 			// hook state. Matches the prompt the old handoff path sent.
 			const handoffContext = await this.agent.buildSideRequestContext(handoffLlmMessages, this.#baseSystemPrompt);
 			const handoffStreamOptions = this.prepareSimpleStreamOptions(
@@ -14021,109 +14058,7 @@ export class AgentSession {
 			if (handoffSignal.aborted) {
 				throw new Error("Handoff cancelled");
 			}
-			if (!handoffText) {
-				return undefined;
-			}
-
-			// Start a new session
-			const previousSessionFile = this.sessionFile;
-			if (this.#extensionRunner?.hasHandlers("session_before_switch")) {
-				const result = (await this.#extensionRunner.emit({
-					type: "session_before_switch",
-					reason: "handoff",
-				})) as SessionBeforeSwitchResult | undefined;
-
-				if (result?.cancel) {
-					options?.onSwitchCancelled?.();
-					return undefined;
-				}
-			}
-			await this.#flushPendingBashMessages();
-			await this.sessionManager.flush();
-			const bashTransition = this.#beginBashSessionTransition();
-			this.#cancelOwnAsyncJobs();
-			let sessionTransitioned = false;
-			try {
-				await this.sessionManager.newSession(
-					previousSessionFile ? { parentSession: previousSessionFile } : undefined,
-				);
-				this.#markBashSessionTransition(bashTransition);
-				sessionTransitioned = true;
-			} finally {
-				this.#finishBashSessionTransition(bashTransition, sessionTransitioned);
-			}
-
-			this.#clearCheckpointRuntimeState();
-			// agent.reset() clears the core steering/follow-up queues. Preserve any queued
-			// steers/follow-ups (RPC/SDK steer()/followUp() issued during the handoff, or a
-			// pre-loader TUI steer) so they survive into the post-handoff session instead of
-			// being silently dropped. Capture is synchronous immediately before reset and
-			// restore is synchronous immediately after — no await gap — so a steer arriving
-			// later (during ensureOnDisk/Bun.write below) appends to the restored queue
-			// rather than being clobbered.
-			const preservedSteering = this.agent.peekSteeringQueue().slice();
-			const preservedFollowUp = this.agent.peekFollowUpQueue().slice();
-			this.agent.reset();
-			this.#resetAnnouncedMounts();
-			this.agent.replaceQueues(preservedSteering, preservedFollowUp);
-			this.#freshProviderSessionId = undefined;
-			this.#syncAgentSessionId();
-			this.#rekeyHindsightMemoryForCurrentSessionId();
-			this.#rekeyMnemopiMemoryForCurrentSessionId();
-			await this.#resetMemoryContextForNewTranscript();
-			this.#pendingNextTurnMessages = [];
-			this.#scheduledHiddenNextTurnGeneration = undefined;
-			this.#todoReminderCount = 0;
-			this.#todoReminderAwaitingProgress = false;
-			this.#mutationsSinceLastTodoTouch = 0;
-			this.#midRunNudgeCount = 0;
-
-			// Inject the handoff document as a custom message
-			const handoffContent = createHandoffContext(handoffText);
-			this.sessionManager.appendCustomMessageEntry("handoff", handoffContent, true, undefined, "agent");
-			if (continuationState) {
-				appendActiveContinuationState(
-					this.sessionManager,
-					rebaseActiveContinuationState(continuationState, {
-						sessionId: this.sessionId,
-						promptGeneration: this.#promptGeneration,
-					}),
-				);
-			}
-			await this.sessionManager.ensureOnDisk();
-			let savedPath: string | undefined;
-			if (options?.autoTriggered && this.settings.get("compaction.handoffSaveToDisk")) {
-				const artifactsDir = this.sessionManager.getArtifactsDir();
-				if (artifactsDir) {
-					const handoffFilePath = path.join(artifactsDir, createHandoffFileName());
-					try {
-						await Bun.write(handoffFilePath, `${handoffText}\n`);
-						savedPath = handoffFilePath;
-					} catch (error) {
-						logger.warn("Failed to save handoff document to disk", {
-							path: handoffFilePath,
-							error: error instanceof Error ? error.message : String(error),
-						});
-					}
-				} else {
-					logger.debug("Skipping handoff document save because session is not persisted");
-				}
-			}
-
-			// Rebuild agent messages from session
-			const sessionContext = this.buildDisplaySessionContext();
-			this.agent.replaceMessages(sessionContext.messages);
-			this.#resetAllAdvisorRuntimes();
-			this.#syncTodoPhasesFromBranch();
-			if (this.#extensionRunner) {
-				await this.#extensionRunner.emit({
-					type: "session_switch",
-					reason: "handoff",
-					previousSessionFile,
-				});
-			}
-
-			return { document: handoffText, savedPath };
+			return handoffText || undefined;
 		} catch (error) {
 			if (handoffSignal.aborted) {
 				throw new Error("Handoff cancelled");
@@ -14133,6 +14068,124 @@ export class AgentSession {
 			sourceSignal?.removeEventListener("abort", onSourceAbort);
 			this.#handoffAbortController = undefined;
 		}
+	}
+
+	/**
+	 * Generate a handoff document with a oneshot LLM call, then start a new session with it.
+	 *
+	 * @param customInstructions Optional focus for the handoff document
+	 * @param options Handoff execution options
+	 * @returns The handoff document text, or undefined if cancelled/failed
+	 */
+	async handoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined> {
+		const entries = this.sessionManager.getBranch();
+		const continuationState = buildActiveContinuationState({
+			entries,
+			sessionId: this.sessionId,
+			promptGeneration: this.#promptGeneration,
+		});
+		const handoffText = await this.generateHandoffDocument(customInstructions, options?.signal);
+		if (!handoffText) {
+			return undefined;
+		}
+
+		// Start a new session
+		const previousSessionFile = this.sessionFile;
+		if (this.#extensionRunner?.hasHandlers("session_before_switch")) {
+			const result = (await this.#extensionRunner.emit({
+				type: "session_before_switch",
+				reason: "handoff",
+			})) as SessionBeforeSwitchResult | undefined;
+
+			if (result?.cancel) {
+				options?.onSwitchCancelled?.();
+				return undefined;
+			}
+		}
+		await this.#flushPendingBashMessages();
+		await this.sessionManager.flush();
+		const bashTransition = this.#beginBashSessionTransition();
+		this.#cancelOwnAsyncJobs();
+		let sessionTransitioned = false;
+		try {
+			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
+			this.#markBashSessionTransition(bashTransition);
+			sessionTransitioned = true;
+		} finally {
+			this.#finishBashSessionTransition(bashTransition, sessionTransitioned);
+		}
+
+		this.#clearCheckpointRuntimeState();
+		// agent.reset() clears the core steering/follow-up queues. Preserve any queued
+		// steers/follow-ups (RPC/SDK steer()/followUp() issued during the handoff, or a
+		// pre-loader TUI steer) so they survive into the post-handoff session instead of
+		// being silently dropped. Capture is synchronous immediately before reset and
+		// restore is synchronous immediately after — no await gap — so a steer arriving
+		// later (during ensureOnDisk/Bun.write below) appends to the restored queue
+		// rather than being clobbered.
+		const preservedSteering = this.agent.peekSteeringQueue().slice();
+		const preservedFollowUp = this.agent.peekFollowUpQueue().slice();
+		this.agent.reset();
+		this.#resetAnnouncedMounts();
+		this.agent.replaceQueues(preservedSteering, preservedFollowUp);
+		this.#freshProviderSessionId = undefined;
+		this.#syncAgentSessionId();
+		this.#rekeyHindsightMemoryForCurrentSessionId();
+		this.#rekeyMnemopiMemoryForCurrentSessionId();
+		await this.#resetMemoryContextForNewTranscript();
+		this.#pendingNextTurnMessages = [];
+		this.#scheduledHiddenNextTurnGeneration = undefined;
+		this.#todoReminderCount = 0;
+		this.#todoReminderAwaitingProgress = false;
+		this.#mutationsSinceLastTodoTouch = 0;
+		this.#midRunNudgeCount = 0;
+
+		// Inject the handoff document as a custom message
+		const handoffContent = createHandoffContext(handoffText);
+		this.sessionManager.appendCustomMessageEntry("handoff", handoffContent, true, undefined, "agent");
+		if (continuationState) {
+			appendActiveContinuationState(
+				this.sessionManager,
+				rebaseActiveContinuationState(continuationState, {
+					sessionId: this.sessionId,
+					promptGeneration: this.#promptGeneration,
+				}),
+			);
+		}
+		await this.sessionManager.ensureOnDisk();
+		let savedPath: string | undefined;
+		if (options?.autoTriggered && this.settings.get("compaction.handoffSaveToDisk")) {
+			const artifactsDir = this.sessionManager.getArtifactsDir();
+			if (artifactsDir) {
+				const handoffFilePath = path.join(artifactsDir, createHandoffFileName());
+				try {
+					await Bun.write(handoffFilePath, `${handoffText}\n`);
+					savedPath = handoffFilePath;
+				} catch (error) {
+					logger.warn("Failed to save handoff document to disk", {
+						path: handoffFilePath,
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
+			} else {
+				logger.debug("Skipping handoff document save because session is not persisted");
+			}
+		}
+
+		// Rebuild agent messages from session
+		const sessionContext = this.buildDisplaySessionContext();
+		this.agent.replaceMessages(sessionContext.messages);
+		this.#resetAllAdvisorRuntimes();
+		this.#syncTodoPhasesFromBranch();
+		if (this.#extensionRunner) {
+			await this.#extensionRunner.emit({
+				type: "session_switch",
+				reason: "handoff",
+				previousSessionFile,
+			});
+		}
+
+		return { document: handoffText, savedPath };
 	}
 
 	/**
@@ -19970,6 +20023,44 @@ export class AgentSession {
 		return messages;
 	}
 
+	/** Deliver a proactive cross-session handoff as continuation context, not chat. */
+	#deliverCrossSessionHandoff(msg: IrcMessage): "injected" | "woken" {
+		const record: CustomMessage = {
+			role: "custom",
+			customType: "cross-session-handoff",
+			content: prompt.render(crossSessionHandoffTemplate, {
+				from: msg.from,
+				document: msg.body,
+			}),
+			display: true,
+			details: { id: msg.id, from: msg.from, document: msg.body, kind: "handoff" },
+			attribution: "agent",
+			timestamp: msg.ts,
+		};
+		void this.#emitSessionEvent({ type: "irc_message", message: record });
+		if (this.isStreaming) {
+			// A handoff is continuation context, not an interrupt or a reply. Fold it
+			// into the current run at the next aside boundary without aborting tools.
+			this.#pendingIrcAsides.push(record);
+			return "injected";
+		}
+		if (this.#planModeState?.enabled) {
+			// Preserve plan-mode convergence: record the handoff, but leave the next
+			// autonomous step to the user's existing plan-mode decision flow.
+			this.agent.appendMessage(record);
+			this.sessionManager.appendCustomMessageEntry(
+				record.customType,
+				record.content,
+				record.display,
+				record.details,
+				record.attribution ?? "agent",
+			);
+			return "injected";
+		}
+		this.#wakeForIrc([record]);
+		return "woken";
+	}
+
 	/**
 	 * Deliver an IRC message into this session (recipient side; called by the
 	 * IrcBus). Emits the `irc_message` session event for UI cards and injects
@@ -19981,6 +20072,7 @@ export class AgentSession {
 	 * - idle in plan mode → appended into context without waking an autonomous
 	 *   turn (convergence stays user-driven) → "injected";
 	 * - idle → starts a real turn with the message so the recipient wakes
+
 	 *   → "woken".
 	 *
 	 * Never blocks on the recipient's turn: the wake turn is fire-and-forget.
@@ -19996,6 +20088,9 @@ export class AgentSession {
 	async deliverIrcMessage(msg: IrcMessage, opts?: { expectsReply?: boolean }): Promise<"injected" | "woken"> {
 		if (this.#isDisposed) {
 			throw new Error("Recipient session is disposed.");
+		}
+		if (msg.kind === "handoff") {
+			return this.#deliverCrossSessionHandoff(msg);
 		}
 		// Auto-reply eligibility: the sender is blocked on an answer and this
 		// session cannot produce a real reply turn in time — either mid-turn with

@@ -38,6 +38,14 @@ export interface HubPeerInfo {
 	unread: number;
 	lastActivity: number;
 	activity?: string;
+	/** Peer origin: local subagents omit it; cross-session peers carry "remote". */
+	scope?: "local" | "remote";
+	/** Remote-only: the remote runtime's session id. */
+	sessionId?: string;
+	/** Remote-only: the remote runtime's working directory. */
+	cwd?: string;
+	/** Remote-only: the remote runtime's git branch (when resolvable). */
+	branch?: string;
 }
 
 /** Background-job row surfaced by `wait`/`cancel`/`jobs` results. */

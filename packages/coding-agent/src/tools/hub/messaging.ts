@@ -16,8 +16,9 @@ import type { Settings } from "../../config/settings";
 import type { RenderResultOptions } from "../../extensibility/custom-tools/types";
 import { IrcBus, type IrcDeliveryReceipt, type IrcMessage } from "../../irc/bus";
 import type { Theme } from "../../modes/theme/theme";
+import type { CrossSessionClient, CrossSessionDeliveryReceipt, CrossSessionPeer } from "../../peer";
 import { type AgentRegistry, MAIN_AGENT_ID } from "../../registry/agent-registry";
-import { canSpawnAtDepth } from "../../task/types";
+import { canSpawnAtDepth, oneLineLabel } from "../../task/types";
 import { Ellipsis, renderStatusLine, renderTreeList, truncateToWidth } from "../../tui";
 import {
 	createCachedComponent,
@@ -28,7 +29,7 @@ import {
 	replaceTabs,
 	type ToolUIColor,
 } from "../render-utils";
-import { type CoordinationDetails, type HubRenderArgs, hubErrorResult } from "./types";
+import { type CoordinationDetails, type HubPeerInfo, type HubRenderArgs, hubErrorResult } from "./types";
 
 export const DEFAULT_IRC_TIMEOUT_MS = 120_000;
 
@@ -81,9 +82,13 @@ export function messageResult(senderId: string, waited: IrcMessage): AgentToolRe
 	};
 }
 
-export function executeList(registry: AgentRegistry, senderId: string): AgentToolResult<CoordinationDetails> {
+export async function executeList(
+	registry: AgentRegistry,
+	senderId: string,
+	crossSessionClient?: CrossSessionClient,
+): Promise<AgentToolResult<CoordinationDetails>> {
 	const bus = IrcBus.global();
-	const peers = registry
+	const peers: HubPeerInfo[] = registry
 		.list()
 		.filter(ref => ref.id !== senderId && ref.status !== "aborted" && ref.kind !== "advisor")
 		.map(ref => ({
@@ -96,6 +101,46 @@ export function executeList(registry: AgentRegistry, senderId: string): AgentToo
 			lastActivity: ref.lastActivity,
 			activity: ref.activity,
 		}));
+	const localIds = new Set([senderId, ...peers.map(peer => peer.id)]);
+	if (crossSessionClient) {
+		// Cross-session peers: independent San runtimes on this machine, listed
+		// by the transport. Their ids come from the broker's registry — never
+		// invented locally — and their text is untrusted agent-provided
+		// coordination input (see the hub prompt).
+		let remote: CrossSessionPeer[] = [];
+		try {
+			remote = await crossSessionClient.list();
+		} catch {
+			// Transport hiccup: degrade to the local roster only.
+			remote = [];
+		}
+		for (const peer of remote) {
+			if (localIds.has(peer.id)) continue;
+			// Remote metadata is broker-shaped but same-user-arbitrary: every
+			// display field must be normalized to one bounded line (Cc/Cf and
+			// whitespace collapsed, caps applied) before it can reach the plain
+			// roster text or HubPeerInfo details — same treatment the registry
+			// applies to local activity gists. Ordinary content is preserved.
+			const displayName = oneLineLabel(peer.displayName);
+			const activity = peer.activity === undefined ? undefined : oneLineLabel(peer.activity);
+			const branch = peer.branch === undefined ? undefined : oneLineLabel(peer.branch);
+			// cwd gets a roomier cap: real paths can exceed the 80-char label
+			// cap without being hostile.
+			peers.push({
+				id: peer.id,
+				displayName,
+				kind: "remote",
+				status: peer.status,
+				unread: 0,
+				lastActivity: peer.lastActivity,
+				activity,
+				scope: "remote",
+				sessionId: oneLineLabel(peer.sessionId),
+				cwd: oneLineLabel(peer.cwd, 1024),
+				branch,
+			});
+		}
+	}
 	const lines: string[] = [];
 	if (peers.length === 0) {
 		lines.push("No other agents.");
@@ -106,6 +151,9 @@ export function executeList(registry: AgentRegistry, senderId: string): AgentToo
 				peer.activity || undefined,
 				peer.unread > 0 ? `unread ${peer.unread}` : undefined,
 				peer.parentId ? `parent ${peer.parentId}` : undefined,
+				peer.scope === "remote" && peer.sessionId ? `remote session ${peer.sessionId}` : undefined,
+				peer.cwd ? `cwd ${peer.cwd}` : undefined,
+				peer.branch ? `branch ${peer.branch}` : undefined,
 				`active ${formatDuration(Date.now() - peer.lastActivity)} ago`,
 			].filter(Boolean);
 			lines.push(`- ${peer.id} [${peer.displayName} · ${peer.kind} · ${peer.status}] — ${extras.join(", ")}`);
@@ -129,12 +177,24 @@ export interface HubSendParams {
 	timeoutMs?: number;
 }
 
+/** Transport receipts share the bus's outcome vocabulary minus "revived". */
+function externalReceipt(receipt: CrossSessionDeliveryReceipt): IrcDeliveryReceipt {
+	return receipt.outcome === "failed"
+		? { to: receipt.to, outcome: "failed", error: receipt.error }
+		: { to: receipt.to, outcome: receipt.outcome };
+}
+
 export async function executeSend(
-	deps: { registry: AgentRegistry; senderId: string; settings: Settings },
+	deps: {
+		registry: AgentRegistry;
+		senderId: string;
+		settings: Settings;
+		crossSessionClient?: CrossSessionClient;
+	},
 	params: HubSendParams,
 	signal?: AbortSignal,
 ): Promise<AgentToolResult<CoordinationDetails>> {
-	const { registry, senderId, settings } = deps;
+	const { registry, senderId, settings, crossSessionClient } = deps;
 	const to = params.to?.trim();
 	const message = params.message?.trim();
 	if (!to) {
@@ -147,6 +207,20 @@ export async function executeSend(
 		return hubErrorResult("Cannot send a message to yourself.", { op: "send", from: senderId, to });
 	}
 	const isBroadcast = to === "all";
+	// Local registry refs win over the transport: agent ids are unrestricted,
+	// so a same-process peer may legitimately be named `san:*`. The transport
+	// can only reach other runtimes — it must never shadow a local ref.
+	const hasLocalTarget = !isBroadcast && registry.get(to) !== undefined;
+	// Exact `san:*` recipients are other runtimes: route through the transport
+	// (unless a local ref with that id exists).
+	const isRemoteTarget = !isBroadcast && !hasLocalTarget && to.startsWith("san:");
+	if (isRemoteTarget && !crossSessionClient) {
+		return hubErrorResult("Cross-session messaging is unavailable in this session.", {
+			op: "send",
+			from: senderId,
+			to,
+		});
+	}
 	if (isBroadcast && params.await) {
 		return hubErrorResult('`await` is invalid with to:"all" — broadcasts have no single replier.', {
 			op: "send",
@@ -185,18 +259,35 @@ export async function executeSend(
 			removeAwaitAbortListener = () => signal.removeEventListener("abort", onAbort);
 		}
 	}
-
 	try {
 		// Broadcasts fan out to live peers only (running | idle); reviving every
-		// parked agent on a broadcast would be a stampede. Direct sends go
-		// through the bus unfiltered so parked recipients are revived.
-		const targets = isBroadcast ? registry.listVisibleTo(senderId).map(ref => ref.id) : [to];
+		// parked agent on a broadcast would be a stampede. Direct sends go through
+		// the bus unfiltered. Remote legs use the transport. Local refs win on id
+		// collisions, including broadcasts: one logical id receives at most one leg.
+		const localTargets = isBroadcast
+			? registry.listVisibleTo(senderId).map(ref => ref.id)
+			: isRemoteTarget
+				? []
+				: [to];
+		const localTargetIds = new Set([senderId, ...localTargets]);
+		let remoteTargets: string[] = [];
+		if (crossSessionClient && (isBroadcast || isRemoteTarget)) {
+			try {
+				remoteTargets = isBroadcast
+					? (await crossSessionClient.list()).map(peer => peer.id).filter(id => !localTargetIds.has(id))
+					: [to];
+			} catch {
+				// Transport hiccup: the remote legs report failed below.
+				remoteTargets = [];
+			}
+		}
+		const targets = isBroadcast ? [...localTargets, ...remoteTargets] : [to];
 		// A broadcast that also reaches the main agent delivers the body to it
 		// directly (its own incoming card); relaying the sibling legs to the
 		// main UI would then show the same body once per other recipient.
-		const suppressRelay = isBroadcast && targets.includes(MAIN_AGENT_ID);
-		const receipts = await Promise.all(
-			targets.map(target =>
+		const suppressRelay = isBroadcast && localTargets.includes(MAIN_AGENT_ID);
+		const receipts = await Promise.all([
+			...localTargets.map(target =>
 				bus.send(
 					{ from: senderId, to: target, body: message, replyTo: params.replyTo },
 					// Awaited sends mark the sender as blocked on an answer so a
@@ -205,7 +296,26 @@ export async function executeSend(
 					{ expectsReply: params.await || undefined, suppressRelay: suppressRelay || undefined },
 				),
 			),
-		);
+			...(crossSessionClient
+				? remoteTargets.map(async target => {
+						try {
+							const receipt = await crossSessionClient.send({
+								to: target,
+								body: message,
+								replyTo: params.replyTo,
+								expectsReply: params.await || undefined,
+							});
+							return externalReceipt(receipt);
+						} catch (error) {
+							return {
+								to: target,
+								outcome: "failed" as const,
+								error: error instanceof Error ? error.message : String(error),
+							};
+						}
+					})
+				: []),
+		]);
 
 		const lines: string[] = [];
 		const delivered = receipts.filter(receipt => receipt.outcome !== "failed");
@@ -279,7 +389,7 @@ export async function executeSend(
 
 /** Pure message wait: no jobs in play, block on the bus with peer liveness. */
 export async function executeMessageWait(
-	deps: { registry: AgentRegistry; senderId: string; settings: Settings },
+	deps: { registry: AgentRegistry; senderId: string; settings: Settings; crossSessionClient?: CrossSessionClient },
 	params: { from?: string; timeoutMs?: number },
 	signal?: AbortSignal,
 ): Promise<AgentToolResult<CoordinationDetails>> {
@@ -287,9 +397,20 @@ export async function executeMessageWait(
 	const from = params.from?.trim() || undefined;
 	const timeoutMs = resolveMessageTimeoutMs(settings, params.timeoutMs);
 	try {
-		const waited = await IrcBus.global().wait(senderId, { from }, timeoutMs, signal, {
-			liveness: { registry, senderId },
-		});
+		// Liveness aborts a wait when the filtered sender (or every running
+		// local peer) goes away. A `san:*` sender has no local registry ref, and
+		// a bare wait may be satisfied by any connected remote runtime — neither
+		// case may be liveness-killed; remote liveness is the transport's job.
+		const remoteCouldSatisfy =
+			(from === undefined && deps.crossSessionClient !== undefined) || from?.startsWith("san:") === true;
+		const liveness = remoteCouldSatisfy ? undefined : { registry, senderId };
+		const waited = await IrcBus.global().wait(
+			senderId,
+			{ from },
+			timeoutMs,
+			signal,
+			liveness ? { liveness } : undefined,
+		);
 		if (!waited) {
 			const filterNote = from ? ` from ${from}` : "";
 			return {

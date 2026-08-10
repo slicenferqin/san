@@ -392,6 +392,7 @@ ${chalk.bold("Available Tools (default-enabled unless noted):")}
   grep          - Search file contents
   glob          - Find files by glob pattern
   lsp           - Language server protocol (code intelligence)
+  explore       - Provider-neutral code exploration (opt-in; check with: ${APP_NAME} setup codegraph)
   python        - Execute Python code (requires: ${APP_NAME} setup python)
   notebook      - Edit Jupyter notebooks
   inspect_image - Analyze images with a vision model

@@ -3,12 +3,15 @@
  *
  * Handles `san setup` for onboarding and `san setup <component>` for optional dependencies.
  */
+
 import * as path from "node:path";
 import { $which, APP_NAME, getPythonEnvDir } from "@san/utils";
 import { $ } from "bun";
 import chalk from "chalk";
+import { checkCodeGraphSetup, isCodeGraphLocallyUsable } from "../code-intelligence/codegraph-installation";
+import { Settings } from "../config/settings";
 
-export type SetupComponent = "python";
+export type SetupComponent = "python" | "codegraph";
 
 export interface SetupCommandArgs {
 	component: SetupComponent;
@@ -18,7 +21,7 @@ export interface SetupCommandArgs {
 	};
 }
 
-const VALID_COMPONENTS: SetupComponent[] = ["python"];
+const VALID_COMPONENTS: SetupComponent[] = ["python", "codegraph"];
 
 const MANAGED_PYTHON_ENV = getPythonEnvDir();
 
@@ -113,7 +116,71 @@ export async function runSetupCommand(cmd: SetupCommandArgs): Promise<void> {
 		case "python":
 			await handlePythonSetup(cmd.flags);
 			break;
+		case "codegraph":
+			await handleCodeGraphSetup(cmd.flags);
+			break;
 	}
+}
+async function handleCodeGraphSetup(flags: { json?: boolean; check?: boolean }): Promise<void> {
+	const [check, effectiveSettings] = await Promise.all([
+		checkCodeGraphSetup(process.cwd()),
+		Settings.loadReadOnly({ cwd: process.cwd() }),
+	]);
+	const usable = isCodeGraphLocallyUsable(check);
+	const exploreEnabled = effectiveSettings.get("san.codeIntelligence.enabled");
+	if (flags.json) {
+		process.stdout.write(`${JSON.stringify({ ...check, exploreEnabled }, null, 2)}\n`);
+		if (!usable) process.exitCode = 1;
+		return;
+	}
+
+	if (check.state === "missing") {
+		process.stdout.write("CodeGraph: not installed\n");
+		process.stdout.write("Local Explore backend: LSP/AST/text fallback\n");
+		process.stdout.write("Optional install: npm i -g @colbymchenry/codegraph\n");
+		process.stdout.write("Then initialize this project: codegraph init .\n");
+	} else if (check.state === "unindexed") {
+		process.stdout.write(`CodeGraph: ${check.version ?? "installed"}\n`);
+		process.stdout.write("Index: not initialized for this project\n");
+		process.stdout.write("Local Explore backend: LSP/AST/text fallback\n");
+		process.stdout.write("Initialize: codegraph init .\n");
+	} else if (check.state === "ready") {
+		const root = check.indexRoot ? path.relative(process.cwd(), check.indexRoot) || "." : ".";
+		const indexPath = root === "." ? ".codegraph" : path.join(root, ".codegraph");
+		process.stdout.write(`CodeGraph: ${check.version ?? "installed"}\n`);
+		process.stdout.write(`Index: ready at ${indexPath}\n`);
+		process.stdout.write("Local backend: CodeGraph\n");
+	} else if (check.state === "pending") {
+		const pending = check.pendingChanges ?? { added: 0, modified: 0, removed: 0 };
+		process.stdout.write(`CodeGraph: ${check.version ?? "installed"}\n`);
+		process.stdout.write(
+			`Index: pending (${pending.added} added, ${pending.modified} modified, ${pending.removed} removed)\n`,
+		);
+		process.stdout.write(
+			"Local Explore backend: CodeGraph; current source is re-read and graph relationships are advisory\n",
+		);
+		process.stdout.write("Refresh: codegraph sync .\n");
+	} else if (check.state === "stale") {
+		process.stdout.write(`CodeGraph: ${check.version ?? "installed"}\n`);
+		process.stdout.write("Index: stale (worktree mismatch)\n");
+		process.stdout.write(
+			"Local Explore backend: CodeGraph; current source is re-read and graph relationships are advisory\n",
+		);
+		process.stdout.write("Rebuild: codegraph index --force .\n");
+	} else {
+		process.stderr.write(`CodeGraph status check failed: ${check.error ?? "unknown error"}\n`);
+		process.stdout.write("Local Explore backend: LSP/AST/text fallback\n");
+		process.stdout.write("Diagnose: codegraph status --json .\n");
+	}
+
+	if (exploreEnabled) {
+		process.stdout.write("Explore tool: enabled\n");
+	} else {
+		process.stdout.write("Explore tool: disabled\n");
+		process.stdout.write(`Enable: ${APP_NAME} config set san.codeIntelligence.enabled true\n`);
+	}
+
+	if (!usable) process.exitCode = 1;
 }
 
 async function handlePythonSetup(flags: { json?: boolean; check?: boolean }): Promise<void> {
@@ -149,22 +216,24 @@ async function handlePythonSetup(flags: { json?: boolean; check?: boolean }): Pr
  * Print setup command help.
  */
 export function printSetupHelp(): void {
-	console.log(`${chalk.bold(`${APP_NAME} setup`)} - Run onboarding or install dependencies for optional features
+	console.log(`${chalk.bold(`${APP_NAME} setup`)} - Run onboarding or check optional dependencies
 
 ${chalk.bold("Usage:")}
   ${APP_NAME} setup                     Run the onboarding wizard
   ${APP_NAME} setup <component> [options]
 
 ${chalk.bold("Components:")}
-  python    Verify a Python 3 interpreter is reachable for code execution
+  python       Verify a Python 3 interpreter is reachable for code execution
+  codegraph    Verify the optional CodeGraph CLI and current project index
 
 ${chalk.bold("Options:")}
   -c, --check   Check if dependencies are installed without installing
   --json        Output status as JSON
 
 ${chalk.bold("Examples:")}
-  ${APP_NAME} setup                  Run the onboarding wizard
-  ${APP_NAME} setup python           Check Python execution dependencies
-  ${APP_NAME} setup python --check   Check if Python execution is available
+  ${APP_NAME} setup                       Run the onboarding wizard
+  ${APP_NAME} setup python --check        Check if Python execution is available
+  ${APP_NAME} setup codegraph --check     Check the local CodeGraph/index backend
+  ${APP_NAME} setup codegraph --check --json
 `);
 }

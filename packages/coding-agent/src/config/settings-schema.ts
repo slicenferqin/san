@@ -2826,6 +2826,51 @@ export const SETTINGS_SCHEMA = {
 	"san.contextSteady.recall.maxTokens": { type: "number", default: 1000 },
 	"san.contextSteady.recall.maxQueryChars": { type: "number", default: 2000 },
 
+	// San Response Documents
+	"san.responseDocuments.mode": {
+		type: "enum",
+		values: ["off", "auto", "always"] as const,
+		default: "off",
+		ui: {
+			tab: "context",
+			group: "Experimental",
+			label: "Response Documents",
+			description:
+				"Keep long final answers in the transcript and an artifact, while sending only a bounded synopsis to later model turns.",
+			options: [
+				{ value: "off", label: "Off", description: "Keep every assistant response inline in later context." },
+				{
+					value: "auto",
+					label: "Automatic",
+					description: "Externalize successful text responses after either configured size threshold is reached.",
+				},
+				{
+					value: "always",
+					label: "Always",
+					description: "Externalize every successful text-only terminal response, regardless of size.",
+				},
+			],
+		},
+	},
+	"san.responseDocuments.minBytes": { type: "number", default: 16384 },
+	"san.responseDocuments.minTokens": { type: "number", default: 3000 },
+	"san.responseDocuments.synopsisMaxBytes": { type: "number", default: 4096 },
+
+	// San Code Intelligence
+	"san.codeIntelligence.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Explore (Experimental)",
+			description:
+				"Expose one provider-neutral code exploration tool backed by an existing CodeGraph index or current-disk LSP/AST/text fallback.",
+		},
+	},
+	/** 0 selects the adaptive 12K / 18K / 24K character tiers. */
+	"san.codeIntelligence.maxOutputChars": { type: "number", default: 0 },
+
 	// San v0.3 Brain
 	"san.brain.enabled": {
 		type: "boolean",
@@ -4093,6 +4138,18 @@ export const SETTINGS_SCHEMA = {
 				{ value: "120000", label: "2 minutes" },
 				{ value: "300000", label: "5 minutes" },
 			],
+		},
+	},
+
+	"crossSession.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Execution",
+			label: "Cross-Session Transport",
+			description:
+				"Register this runtime with the same-machine peer broker so independent San processes can discover each other, exchange messages, and receive proactive session handoffs. Interactive main sessions register by default; headless/ACP callers must set this explicitly.",
 		},
 	},
 

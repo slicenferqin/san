@@ -34,6 +34,7 @@ import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/con
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
 import { bucketRules } from "./capability/rule-buckets";
+import { filterCodeGraphServerInstructions, filterPresentedCodeGraphTools } from "./code-intelligence";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
 import { isAuthenticated, kNoAuth, ModelRegistry } from "./config/model-registry";
@@ -94,6 +95,7 @@ import {
 import { type FileSlashCommand, loadSlashCommands as loadSlashCommandsInternal } from "./extensibility/slash-commands";
 import type { HindsightSessionState } from "./hindsight/state";
 import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls";
+import { IrcBus } from "./irc/bus";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
 import {
 	discoverAndLoadMCPTools,
@@ -106,6 +108,7 @@ import {
 import { MCP_CONNECTION_STATUS_EVENT_CHANNEL, type McpConnectionStatusEvent } from "./mcp/startup-events";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
 import type { MnemopiSessionState } from "./mnemopi/state";
+import { type CrossSessionClient, createCrossSessionClient } from "./peer";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
@@ -200,6 +203,7 @@ import { isAutoQaEnabled } from "./tools/report-tool-issue";
 import { queueResolveHandler } from "./tools/resolve";
 import { resolveActiveRepoContext } from "./utils/active-repo-context";
 import { EventBus } from "./utils/event-bus";
+import { type GitHeadState, head as gitHead } from "./utils/git";
 import { buildNamedToolChoice } from "./utils/tool-choice";
 import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
@@ -1847,6 +1851,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getSessionId: () => sessionManager.getSessionId?.() ?? null,
 			getHindsightSessionState: () => session?.getHindsightSessionState(),
 			getMnemopiSessionState: () => session?.getMnemopiSessionState(),
+			generateSessionHandoff: (focus, signal) => session.generateHandoffDocument(focus, signal),
 			getAgentId: () => resolvedAgentId,
 			getToolByName: name => session?.getToolByName(name),
 			agentRegistry,
@@ -2031,7 +2036,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 				if (mcpResult.tools.length > 0) {
 					// MCP tools are LoadedCustomTool, extract the tool property
-					customTools.push(...mcpResult.tools.map(loaded => loaded.tool));
+					customTools.push(
+						...filterPresentedCodeGraphTools(
+							mcpResult.tools.map(loaded => loaded.tool),
+							settings.get("san.codeIntelligence.enabled"),
+						),
+					);
 				}
 			}
 		}
@@ -2699,7 +2709,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// the rebuild that `refreshMCPTools` triggers post-discovery then picks up
 			// the now-connected servers' instructions, so they join the prompt for the
 			// rest of the session.
-			const serverInstructions = mcpManager?.getServerInstructions();
+			const serverInstructions = filterCodeGraphServerInstructions(
+				mcpManager?.getServerInstructions(),
+				mcpManager?.getTools() ?? [],
+				settings.get("san.codeIntelligence.enabled"),
+			);
 			// Drive guidance off the auto-learn BUILTINS that createTools actually built
 			// (provenance, not just an active name): `builtInToolNames` excludes a
 			// custom/extension tool that merely shares the name, and reflects the
@@ -3296,7 +3310,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			ensureWriteRegistered,
 			getMcpServerInstructions: mcpManager
 				? () => {
-						const raw = mcpManager.getServerInstructions();
+						const raw = filterCodeGraphServerInstructions(
+							mcpManager.getServerInstructions(),
+							mcpManager.getTools(),
+							settings.get("san.codeIntelligence.enabled"),
+						);
 						if (!raw || raw.size === 0) return raw;
 						const out = new Map<string, string>();
 						for (const [name, text] of raw) {
@@ -3339,6 +3357,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// messages here. Refresh sessionFile in case it was unavailable at pre-register
 		// time. The dispose wrapper below unregisters on teardown (unless parked).
 		agentRegistry.attachSession(resolvedAgentId, session, sessionManager.getSessionFile() ?? null);
+		// Cross-session client (created right after the dispose wrapper below):
+		// closed by that wrapper, so it is declared here, before it.
+		let crossSessionClient: CrossSessionClient | undefined;
+		let unregisterExternalSender: (() => void) | undefined;
+		let unsubscribePeerMetadata: (() => void) | undefined;
+		let unsubscribePeerActivity: (() => void) | undefined;
 		{
 			const originalDispose = session.dispose.bind(session);
 			session.dispose = async () => {
@@ -3347,6 +3371,29 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					// begins — the lifecycle await below opens an async gap before
 					// AgentSession.dispose() would otherwise set its guards.
 					session.beginDispose();
+					if (crossSessionClient) {
+						// Stop inbound traffic first: unregister the bus outbound
+						// fallback (only if this client is still the installed one —
+						// a newer root's route must survive), then drop the
+						// transport connection.
+						unregisterExternalSender?.();
+						unregisterExternalSender = undefined;
+						// Stop metadata refresh pushes before dropping the socket.
+						unsubscribePeerMetadata?.();
+						unsubscribePeerMetadata = undefined;
+						unsubscribePeerActivity?.();
+						unsubscribePeerActivity = undefined;
+						try {
+							await crossSessionClient.close();
+						} catch (error) {
+							// A failed transport close must never strand core
+							// session teardown — log and continue disposing.
+							logger.warn("Cross-session client close failed during dispose", {
+								error: error instanceof Error ? error.message : String(error),
+							});
+						}
+						crossSessionClient = undefined;
+					}
 					if (agentKind === "main") {
 						// Top-level teardown owns the global agent lifecycle: park timers,
 						// adopted subagent sessions, revivers. Tear it down while shared
@@ -3360,6 +3407,90 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					unsubscribeCredentialDisabled?.();
 				}
 			};
+		}
+
+		// Same-machine cross-session hub: only a root main session registers with
+		// the peer broker. Interactive TUI sessions opt in by default; headless
+		// SDK/ACP roots stay local-only unless they explicitly configure
+		// `crossSession.enabled` — the default `true` must never spawn a broker
+		// for every test/script root. Registration happens after the live session
+		// is attached so the broker metadata can describe a real session.
+		if (
+			agentKind === "main" &&
+			settings.get("crossSession.enabled") &&
+			(options.hasUI === true || settings.isConfigured("crossSession.enabled"))
+		) {
+			try {
+				crossSessionClient = await createCrossSessionClient({
+					metadata: () => {
+						let headState: GitHeadState | null = null;
+						try {
+							headState = gitHead.resolveSync(sessionManager.getCwd());
+						} catch {
+							headState = null;
+						}
+						// The registering ref is *this* root (resolvedAgentId) — a
+						// custom agentId is still kind "main" and must advertise its
+						// own status, not the default Main ref's.
+						const mainRef = agentRegistry.get(resolvedAgentId);
+						return {
+							sessionId: sessionManager.getSessionId() ?? "unknown",
+							displayName: sessionManager.getSessionName() ?? resolvedAgentDisplayName,
+							cwd: sessionManager.getCwd(),
+							branch: headState?.kind === "ref" ? (headState.branchName ?? undefined) : undefined,
+							status: mainRef?.status === "running" ? ("running" as const) : ("idle" as const),
+							activity: mainRef?.activity,
+						};
+					},
+					deliver: (message, options) =>
+						IrcBus.global().deliverExternal(
+							{
+								id: message.id,
+								from: message.from,
+								to: resolvedAgentId,
+								body: message.body,
+								ts: message.ts,
+								...(message.kind ? { kind: message.kind } : {}),
+								replyTo: message.replyTo,
+							},
+							{ expectsReply: options.expectsReply },
+						),
+				});
+				// Auto-reply legs (`bus.send` to a san:* id from a busy/plan-mode
+				// recipient) route through the transport so remote `await:true`
+				// still resolves. The captured disposer is ownership-safe: a
+				// newer root's install is never cleared by this session's dispose.
+				unregisterExternalSender = IrcBus.global().setExternalSender(crossSessionClient);
+				// Keep the broker's peer record fresh: best-effort refresh when
+				// THIS root's status changes (the transport only calls
+				// metadata() at registration/refresh). Subscription is
+				// ownership-safe — cleared before the client closes above.
+				const refreshPeerRecord = (): void => {
+					void crossSessionClient?.refresh().catch(() => {
+						// Best effort: a stale peer row is preferable to noisy
+						// retries; the next status or activity change refreshes again.
+					});
+				};
+				unsubscribePeerMetadata = agentRegistry.onChange(event => {
+					if (event.ref.id !== resolvedAgentId) return;
+					refreshPeerRecord();
+				});
+				// Activity gists emit on their own (change-only) listener path so
+				// live work reaches the broker too — status flips to running
+				// before the first activity gist lands, and that later update
+				// would otherwise never refresh the peer record.
+				unsubscribePeerActivity = agentRegistry.onActivity(ref => {
+					if (ref.id !== resolvedAgentId) return;
+					refreshPeerRecord();
+				});
+				toolSession.crossSessionClient = crossSessionClient;
+			} catch (error) {
+				// Transport startup failure must never take down the local hub:
+				// log and continue with local-only messaging.
+				logger.warn("Cross-session peer discovery unavailable; local hub stays active", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
 		}
 
 		if (model?.api === "openai-codex-responses") {

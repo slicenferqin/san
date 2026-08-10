@@ -27,6 +27,8 @@ export interface IrcMessage {
 	/** Recipient agent id (resolved; "all" is expanded by the tool, not stored). */
 	to: string;
 	body: string;
+	/** High-level cross-session payload; absent for ordinary peer messages. */
+	kind?: "handoff";
 	ts: number;
 	/** Message id being answered. */
 	replyTo?: string;
@@ -36,6 +38,30 @@ export interface IrcDeliveryReceipt {
 	to: string;
 	outcome: "injected" | "woken" | "revived" | "failed";
 	error?: string;
+}
+/** Delivery receipt shape reported by the external cross-session sender. */
+export interface ExternalDeliveryReceipt {
+	to: string;
+	outcome: "injected" | "woken" | "failed";
+	error?: string;
+}
+
+/**
+ * Outbound escape hatch for cross-session targets: `IrcBus.send` falls
+ * back to this sender when the recipient id (`san:*`) has no local
+ * registry ref — e.g. the AgentSession auto-reply path answering a
+ * remote session. The sender stamps the authoritative `from` address,
+ * so the local `from` in the bus message is never sent as-is.
+ */
+export interface ExternalSender {
+	id: string;
+	send(input: {
+		to: string;
+		body: string;
+		kind?: "handoff";
+		replyTo?: string;
+		expectsReply?: boolean;
+	}): Promise<ExternalDeliveryReceipt>;
 }
 
 interface IrcWaiter {
@@ -66,6 +92,7 @@ export class IrcBus {
 	readonly #lifecycle: () => AgentLifecycleManager;
 	readonly #mailboxes = new Map<string, IrcMessage[]>();
 	readonly #waiters = new Map<string, IrcWaiter[]>();
+	#externalSender: ExternalSender | undefined;
 
 	constructor(registry: AgentRegistry = AgentRegistry.global(), lifecycle?: AgentLifecycleManager) {
 		this.#registry = registry;
@@ -105,6 +132,26 @@ export class IrcBus {
 		const message: IrcMessage = { ...msg, id: Snowflake.next(), ts: Date.now() };
 		const ref = this.#registry.get(message.to);
 		if (!ref) {
+			// Cross-session targets (`san:*`) have no local registry ref: route
+			// through the registered external sender (if any) so the auto-reply
+			// and any other bus outbound to a remote session still delivers. The
+			// transport stamps the authoritative `from` address — the local
+			// `message.from` is never sent as-is.
+			const external = this.#externalSender;
+			if (external && message.to.startsWith("san:")) {
+				const receipt = await external.send({
+					to: message.to,
+					body: message.body,
+					...(message.kind ? { kind: message.kind } : {}),
+					replyTo: message.replyTo,
+					expectsReply: opts?.expectsReply,
+				});
+				return {
+					to: message.to,
+					outcome: receipt.outcome,
+					...(receipt.error ? { error: receipt.error } : {}),
+				};
+			}
 			return {
 				to: message.to,
 				outcome: "failed",
@@ -163,7 +210,7 @@ export class IrcBus {
 		// A pending `wait` from the recipient consumes the message directly —
 		// it is returned from their irc tool call and never hits the inbox or
 		// the session injection path.
-		const waiter = this.#takeMatchingWaiter(message.to, message.from);
+		const waiter = message.kind === "handoff" ? undefined : this.#takeMatchingWaiter(message.to, message.from);
 		if (waiter) {
 			waiter.resolve(message);
 			if (!opts?.suppressRelay) this.#relayToMainUi(message);
@@ -180,17 +227,71 @@ export class IrcBus {
 			if (!opts?.suppressRelay) this.#relayToMainUi(message);
 			return { to: message.to, outcome: revived ? "revived" : delivery };
 		} catch (error) {
-			// Live hand-off failed (e.g. recipient disposed mid-shutdown): buffer
-			// the message so a later `wait`/`inbox` from the recipient can still
-			// pick it up. The receipt stays "failed" — the recipient has not
-			// seen it.
-			this.#enqueue(message);
+			// A handoff must enter continuation context atomically. Buffering it in
+			// the ordinary chat inbox would lose its high-level semantics.
+			if (message.kind !== "handoff") this.#enqueue(message);
 			return {
 				to: message.to,
 				outcome: "failed",
 				error: error instanceof Error ? error.message : String(error),
 			};
 		}
+	}
+
+	/**
+	 * External ingress for the cross-session transport: inject a message that
+	 * originated in another San runtime. The broker-assigned id and timestamp
+	 * are preserved (no new Snowflake), and the message flows through exactly
+	 * the same waiter/session/inbox semantics as a local `send` — so a remote
+	 * `await:true` / `wait {from: "san:*"}` parks normally and is satisfied by
+	 * the reply arriving over the transport.
+	 *
+	 * Returns the delivery outcome as seen by the transport ("injected" =
+	 * waiter or aside, "woken" = idle wake). Inbound peer text is agent
+	 * attributed: the bus never rewrites `from`, and relay/record attribution
+	 * stays "agent" — never user/system.
+	 */
+	async deliverExternal(msg: IrcMessage, opts?: { expectsReply?: boolean }): Promise<"injected" | "woken"> {
+		const waiter = msg.kind === "handoff" ? undefined : this.#takeMatchingWaiter(msg.to, msg.from);
+		if (waiter) {
+			waiter.resolve(msg);
+			this.#relayToMainUi(msg);
+			return "injected";
+		}
+
+		const session = this.#registry.get(msg.to)?.session;
+		if (!session) {
+			if (msg.kind === "handoff") {
+				throw new Error(`Recipient session "${msg.to}" is unavailable for handoff.`);
+			}
+			// Ordinary chat may be buffered for a later `wait`/`inbox`.
+			this.#enqueue(msg);
+			return "injected";
+		}
+
+		const delivery = await session.deliverIrcMessage(msg, { expectsReply: opts?.expectsReply });
+		this.#relayToMainUi(msg);
+		return delivery;
+	}
+
+	/**
+	 * Register (or clear) the external outbound sender for cross-session
+	 * targets (`san:*`). Registered by the SDK once the transport client is
+	 * live, cleared on disposal. The bus stays fully usable without one —
+	 * san:* sends then fail exactly like any other unknown agent.
+	 *
+	 * Returns a disposer that unregisters THIS sender only if it is still the
+	 * installed one: with multiple explicitly enabled SDK roots in one
+	 * process, an older session's dispose must not disconnect the newer
+	 * session's route.
+	 */
+	setExternalSender(sender: ExternalSender | undefined): () => void {
+		this.#externalSender = sender;
+		return () => {
+			if (this.#externalSender === sender) {
+				this.#externalSender = undefined;
+			}
+		};
 	}
 
 	/**
