@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OMP 上游近期迭代方向｜2026-08-11</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17211c;
+      --muted: #667269;
+      --paper: #f2f0e8;
+      --panel: #fffdf8;
+      --line: #d8ddd8;
+      --green: #176647;
+      --green-soft: #e7f1eb;
+      --blue: #245e83;
+      --blue-soft: #e9f2f7;
+      --amber: #8b5a12;
+      --amber-soft: #fbf0d8;
+      --red: #973f39;
+      --red-soft: #f9e7e4;
+      --shadow: 0 14px 34px rgb(25 45 34 / 8%);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 0%, rgb(36 94 131 / 10%), transparent 30rem),
+        radial-gradient(circle at 92% 6%, rgb(23 102 71 / 9%), transparent 34rem),
+        var(--paper);
+      font: 16px/1.65 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+    main { width: min(1160px, calc(100% - 36px)); margin: 34px auto 72px; }
+    header, section {
+      background: color-mix(in srgb, var(--panel) 96%, transparent);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+    }
+    header { padding: 38px 42px; border-top: 7px solid var(--green); }
+    section { margin-top: 20px; padding: 28px 32px; }
+    h1, h2, h3 { line-height: 1.22; margin-top: 0; }
+    h1 { margin-bottom: 12px; font-size: clamp(2rem, 5vw, 3.45rem); letter-spacing: -0.04em; }
+    h2 { padding-bottom: 10px; border-bottom: 1px solid var(--line); color: var(--green); font-size: 1.42rem; }
+    h3 { margin: 0 0 7px; color: var(--blue); font-size: 1.04rem; }
+    p { max-width: 92ch; }
+    a { color: var(--blue); text-underline-offset: 3px; }
+    code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+    code { padding: 0.08em 0.34em; border: 1px solid #dfe7e1; border-radius: 5px; background: #edf2ee; }
+    .meta { display: flex; flex-wrap: wrap; gap: 9px 24px; color: var(--muted); font-size: 0.92rem; }
+    .lede { max-width: 86ch; color: #405349; font-size: 1.12rem; }
+    .status-line { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+    .pill { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border: 1px solid currentColor; border-radius: 999px; font-size: 0.88rem; font-weight: 750; }
+    .pill::before { width: 8px; height: 8px; border-radius: 50%; background: currentColor; content: ""; }
+    .green { color: var(--green); background: var(--green-soft); }
+    .blue { color: var(--blue); background: var(--blue-soft); }
+    .amber { color: var(--amber); background: var(--amber-soft); }
+    .red { color: var(--red); background: var(--red-soft); }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; margin-top: 18px; }
+    .card { min-height: 116px; padding: 16px; border: 1px solid var(--line); border-radius: 13px; background: #fffefa; }
+    .card .value { font-size: 1.65rem; font-weight: 780; line-height: 1.2; letter-spacing: -0.03em; }
+    .card .label { margin-top: 5px; color: var(--muted); font-size: 0.9rem; }
+    .card .detail { margin-top: 8px; color: #405349; font-size: 0.84rem; }
+    .callout { padding: 15px 18px; border-left: 5px solid var(--blue); border-radius: 9px; background: var(--blue-soft); }
+    .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    .direction-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+    .direction { padding: 17px 18px; border: 1px solid var(--line); border-radius: 12px; background: #fffefa; }
+    .direction p { margin: 7px 0 0; }
+    .direction .signal { color: var(--muted); font-size: 0.88rem; }
+    .rank { display: inline-block; min-width: 2.3em; margin-right: 7px; padding: 2px 6px; border-radius: 5px; color: #fff; background: var(--green); font: 750 0.78rem/1.6 ui-monospace, monospace; text-align: center; }
+    .rank.secondary { background: var(--blue); }
+    table { width: 100%; margin-top: 14px; border-collapse: collapse; }
+    th, td { padding: 12px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 0.84rem; letter-spacing: 0.04em; text-transform: uppercase; }
+    td:first-child { width: 18%; font-weight: 700; }
+    .state { white-space: nowrap; font-weight: 750; }
+    .state.done { color: var(--green); }
+    .state.open { color: var(--amber); }
+    .priority { display: inline-block; min-width: 38px; padding: 1px 6px; border-radius: 5px; color: #fff; font: 750 0.78rem/1.7 ui-monospace, monospace; text-align: center; }
+    .p0 { background: var(--red); }
+    .p1 { background: var(--amber); }
+    .p2 { background: var(--blue); }
+    .small { color: var(--muted); font-size: 0.88rem; }
+    ul, ol { padding-left: 1.3rem; }
+    li + li { margin-top: 6px; }
+    .sources { columns: 2; column-gap: 32px; color: var(--muted); font-size: 0.88rem; }
+    .sources li { break-inside: avoid; }
+    @media (max-width: 900px) {
+      .cards, .direction-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 620px) {
+      main { width: min(100% - 18px, 1160px); margin-top: 12px; }
+      header, section { padding: 22px 19px; border-radius: 13px; }
+      .cards, .direction-grid { grid-template-columns: 1fr; }
+      .sources { columns: 1; }
+      table, thead, tbody, tr, th, td { display: block; width: 100%; }
+      thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+      tbody { display: grid; gap: 12px; }
+      tr { padding: 5px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fffefa; }
+      td, td:first-child { width: 100%; padding: 8px 0; border-bottom: 1px dashed var(--line); overflow-wrap: anywhere; }
+      td:last-child { border-bottom: 0; }
+      .state { white-space: normal; }
+    }
+    @media print {
+      body { background: #fff; }
+      main { width: 100%; margin: 0; }
+      header, section { box-shadow: none; break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="meta">
+      <span>快照日期：2026-08-11</span>
+      <span>仓库：<a href="https://github.com/can1357/oh-my-pi">can1357/oh-my-pi</a></span>
+      <span>上游主线：<code>45e12e5bb7</code></span>
+      <span>最新版本：<a href="https://github.com/can1357/oh-my-pi/releases/tag/v17.2.12">v17.2.12</a></span>
+    </div>
+    <h1>OMP 上游近期迭代方向</h1>
+    <p class="lede">上游的核心方向已经从“继续堆单点工具”转向<strong>多 Agent 控制面、长会话运行可靠性和协议化接入</strong>；底层同步推进依赖内建化、原生跨平台能力和 Provider 兼容。它近期并不是在重做 Agent 推理内核，而是在把 OMP 做成可长期运行、可观测、可嵌入其他客户端的 Agent 平台。</p>
+    <div class="status-line">
+      <span class="pill green">主线等于 v17.2.12</span>
+      <span class="pill blue">10 天发布 13 个 17.2.x 版本</span>
+      <span class="pill amber">下一阶段信号主要来自未合并 PR</span>
+      <span class="pill red">San 基线不可直接整段合并</span>
+    </div>
+    <div class="cards">
+      <div class="card"><div class="value">1,163</div><div class="label"><code>v17.2.0 → v17.2.12</code> 提交数</div><div class="detail">发布节奏极快，功能与稳定性修复交错落地。</div></div>
+      <div class="card"><div class="value">3,600</div><div class="label"><code>v17.0.2 → v17.2.12</code> 提交数</div><div class="detail">San 当前上游基线之后已形成大规模结构差异。</div></div>
+      <div class="card"><div class="value">3,155</div><div class="label">同区间变更文件</div><div class="detail"><code>+453,564 / -144,942</code>，应按能力域选择性吸收。</div></div>
+      <div class="card"><div class="value">0</div><div class="label">最新 tag 之后主线提交</div><div class="detail">确定已落地的上限就是 v17.2.12；开放 PR 只代表候选方向。</div></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>1. 方向判断</h2>
+    <div class="direction-grid">
+      <article class="direction">
+        <h3><span class="rank">主线</span>长会话与多 Agent 可靠性</h3>
+        <p>持续处理 parked subagent 内存、handoff 终态、恢复/压缩、输出排空、Provider fallback、TPS/TTFT 统计和 WSL 空转 CPU。最近版本的密度说明“持续运行不失控”是当前最高优先级。</p>
+        <p class="signal">成熟度：已落地，并在 v17.2.9—v17.2.12 连续加固。</p>
+      </article>
+      <article class="direction">
+        <h3><span class="rank">主线</span>Agent 编排成为产品界面</h3>
+        <p>Agent Hub 已升级为全屏 roster/inspector，展示聚合状态、用量、任务、模型、活动、血缘和 spawn tree；<code>omp cleanse</code> 已能并发分派修复。开放 PR 又继续补 goal quality gates、wayfinding、schedule、heartbeat、持久消息和 persona。</p>
+        <p class="signal">成熟度：控制台已落地；调度与目标治理仍在形成。</p>
+      </article>
+      <article class="direction">
+        <h3><span class="rank">主线</span>协议化、无头化与客户端平权</h3>
+        <p>已落地 Claude/Codex 会话导入、Cursor modern exec bridge、MCP 兼容修复、session share；开放中的 RPC v3 明确提出 session protocol 与 native UI parity，MCP 也在跟进 2026-07-28 协议。</p>
+        <p class="signal">成熟度：已有多条接入路径；统一会话协议尚未合并。</p>
+      </article>
+      <article class="direction">
+        <h3><span class="rank secondary">支撑</span>运行时内建化与性能工程</h3>
+        <p>用自研 <code>omptype</code> 替换 arktype/zod，内建 ACP、日志、Markdown、模板、浏览器发现等基础件；原生侧合并 shell builtins，并自建音频后端。目标是降低冷启动、包体、构建链和第三方依赖波动。</p>
+        <p class="signal">成熟度：17.2.x 已大规模落地，预计继续做收敛和修复。</p>
+      </article>
+      <article class="direction">
+        <h3><span class="rank secondary">支撑</span>桌面、浏览器与本地服务原生化</h3>
+        <p><code>computer</code> 已变成长驻 JavaScript 桌面会话，支持窗口级捕获/输入、可访问性树、剪贴板和流式截图；Browser Relay 接管本地 Chrome 标签页，LSP 可跨 OMP 实例共享。</p>
+        <p class="signal">成熟度：核心能力已落地，正在补平台与终端兼容。</p>
+      </article>
+      <article class="direction">
+        <h3><span class="rank secondary">支撑</span>Provider 与外部生态互操作</h3>
+        <p>近期集中补齐 Bedrock Mantle、ai&amp;、GMI Cloud、Cursor、Codex、Anthropic OAuth、配额与账号选择；同时支持 Agent Plugins 1.0.0。竞争点由“支持多少模型”转向“凭据、额度、发现、fallback 是否可运营”。</p>
+        <p class="signal">成熟度：高频增量，仍会长期持续。</p>
+      </article>
+      <article class="direction">
+        <h3><span class="rank secondary">支撑</span>扩展信任、安全与成本边界</h3>
+        <p>已经加入显式 trusted extension、插件验证和 OMP 原生 software-security 工作流；开放 PR 正在推进拒绝写入/删除的 broker、fail-closed prompt gates 和成本上限。</p>
+        <p class="signal">成熟度：安全扫描已落地；通用权限与预算治理仍是候选能力。</p>
+      </article>
+      <article class="direction">
+        <h3><span class="rank secondary">持续</span>TUI 可观测性与交互打磨</h3>
+        <p>重点不是重写 TUI，而是让长 transcript、流式输出、Agent 活动、终端兼容、voice/image 和恢复提示更稳定。界面正在承担控制面观测职责。</p>
+        <p class="signal">成熟度：持续迭代，服务于上述主线。</p>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 最近发布落地了什么</h2>
+    <table>
+      <thead><tr><th>版本</th><th>状态</th><th>方向性变化</th></tr></thead>
+      <tbody>
+        <tr><td><a href="https://github.com/can1357/oh-my-pi/releases/tag/v17.2.12">v17.2.12</a></td><td><span class="state done">已发布</span></td><td>集中修复 shell minimization、parked subagent 内存、handoff 终态、账号 fallback、Agent 性能统计和 WSL 空转 CPU，体现运行可靠性优先。</td></tr>
+        <tr><td><a href="https://github.com/can1357/oh-my-pi/releases/tag/v17.2.11">v17.2.11</a></td><td><span class="state done">已发布</span></td><td>Agent Plugins 1.0.0、<code>omp share</code>、子进程 <code>AGENT=1</code>，开始收敛插件与会话共享标准。</td></tr>
+        <tr><td><a href="https://github.com/can1357/oh-my-pi/releases/tag/v17.2.10">v17.2.10</a></td><td><span class="state done">已发布</span></td><td>Agent Hub 全屏控制台、显式 trusted extensions、自研 omptype 和崩溃恢复提示。</td></tr>
+        <tr><td><a href="https://github.com/can1357/oh-my-pi/releases/tag/v17.2.9">v17.2.9</a></td><td><span class="state done">已发布</span></td><td>流式 CPU、会话迁移、MCP importer、输出排空、模型覆盖和浏览器发现等兼容性修复。</td></tr>
+        <tr><td><a href="https://github.com/can1357/oh-my-pi/releases/tag/v17.2.5">v17.2.5</a></td><td><span class="state done">已发布</span></td><td>长驻 desktop/computer session、Browser Relay、跨实例共享 LSP、进程原生工具和交互式 turn tree。</td></tr>
+        <tr><td><a href="https://github.com/can1357/oh-my-pi/releases/tag/v17.2.1">v17.2.1</a></td><td><span class="state done">已发布</span></td><td>Claude/Codex 会话导入，以及含 scan plan、worker review、coverage 和 SARIF 的原生安全工作流。</td></tr>
+        <tr><td><a href="https://github.com/can1357/oh-my-pi/releases/tag/v17.1.8">v17.1.8</a></td><td><span class="state done">已发布</span></td><td><code>omp cleanse</code> 自动探测检查器、并发分派子 Agent 修复并进行验证，是编排产品化的前置信号。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>3. 尚未落地但值得观察的信号</h2>
+    <div class="callout warn"><strong>边界：</strong>以下 PR 截至 2026-08-11 仍为开放状态，只能用来判断正在试探的方向，不能当作确定 roadmap；其中 draft 或 CI 未全绿的项更不应作为同步基线。</div>
+    <table>
+      <thead><tr><th>候选方向</th><th>开放 PR</th><th>判断</th></tr></thead>
+      <tbody>
+        <tr><td>会话协议</td><td><a href="https://github.com/can1357/oh-my-pi/pull/8196">#8196 RPC v3 / native UI parity</a></td><td><span class="state open">开放</span>。上游正尝试让 RPC 客户端获得与 TUI 接近的会话能力，这会直接影响远程控制与多前端架构。</td></tr>
+        <tr><td>MCP 标准</td><td><a href="https://github.com/can1357/oh-my-pi/pull/8167">#8167 MCP 2026-07-28</a>、<a href="https://github.com/can1357/oh-my-pi/pull/8044">#8044 工具过滤</a></td><td><span class="state open">开放</span>。方向是协议跟进与 server 级能力治理。</td></tr>
+        <tr><td>Agent 身份</td><td><a href="https://github.com/can1357/oh-my-pi/pull/8108">#8108 main-session persona</a></td><td><span class="state open">开放</span>。Agent definition 可能从子 Agent 配置扩展为主会话人格入口。</td></tr>
+        <tr><td>目标治理</td><td><a href="https://github.com/can1357/oh-my-pi/pull/8062">#8062 adaptive wayfinding</a>、<a href="https://github.com/can1357/oh-my-pi/pull/8001">#8001 quality gates</a></td><td><span class="state open">开放 / 未全绿</span>。这是与 San execution-control 重叠最大的候选方向。</td></tr>
+        <tr><td>持续调度</td><td><a href="https://github.com/can1357/oh-my-pi/pull/8041">#8041 schedule</a>、<a href="https://github.com/can1357/oh-my-pi/pull/7999">#7999 heartbeat</a></td><td><span class="state open">开放</span>。OMP 正从一次性 CLI 会话向定时、周期运行延伸。</td></tr>
+        <tr><td>恢复性能</td><td><a href="https://github.com/can1357/oh-my-pi/pull/8149">#8149 journal reuse</a>、<a href="https://github.com/can1357/oh-my-pi/pull/8150">#8150 RPC frame reuse</a>、<a href="https://github.com/can1357/oh-my-pi/pull/8152">#8152 conversion cache</a></td><td><span class="state open">开放</span>。优化点集中在恢复、序列化和历史转换，进一步印证长会话/无头运行主线。</td></tr>
+        <tr><td>权限隔离</td><td><a href="https://github.com/can1357/oh-my-pi/pull/8052">#8052 broker denied writes/deletes</a></td><td><span class="state open">开放</span>。扩展系统正在从“可信路径”向细粒度操作仲裁推进。</td></tr>
+        <tr><td>开发工具</td><td><a href="https://github.com/can1357/oh-my-pi/pull/8186">#8186 Astral ty LSP</a></td><td><span class="state open">开放</span>。继续扩展内建语言服务，但优先级低于控制面与可靠性。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>4. 对 San 的直接影响</h2>
+    <table>
+      <thead><tr><th>优先级</th><th>处理建议</th><th>原因</th></tr></thead>
+      <tbody>
+        <tr><td><span class="priority p0">P0</span></td><td>选择性吸收 v17.2.9—v17.2.12 的 subagent 生命周期、内存、handoff、恢复、输出排空和 Provider fallback 修复。</td><td>这些是运行时正确性问题，与 San 产品差异无冲突，且能直接降低长任务风险。应按修复单元审阅/cherry-pick，不做整段版本合并。</td></tr>
+        <tr><td><span class="priority p1">P1</span></td><td>专项评估 Agent Plugins 1.0、trusted extensions、MCP 新协议、共享 LSP、会话导入和 Cursor bridge。</td><td>它们能减少 San 自建生态适配层，但涉及扩展信任、协议边界和当前分叉代码，应先做 contract audit。</td></tr>
+        <tr><td><span class="priority p1">P1</span></td><td>持续跟踪 RPC v3，并用 San RPC v2 / 远程控制需求做字段和生命周期对照。</td><td>这是最可能形成长期维护分叉的接口层；等上游方案稳定后再决定兼容、迁移或保留 San 扩展。</td></tr>
+        <tr><td><span class="priority p2">P2</span></td><td>把 goal gates、wayfinding、schedule、heartbeat、durable Agent Hub 消息作为竞品设计输入，不直接移植。</td><td>这些候选能力与 San 的 durable execution、watchdog、scope/ledger 和 peer messaging 高度重叠，语义冲突风险高于代码复用价值。</td></tr>
+        <tr><td><span class="priority p2">P2</span></td><td>延后整套 omptype / utils / native builtins 合流，先独立量化启动、包体、构建和冲突成本。</td><td>收益真实，但涉及面极大；在 3,600 提交、3,155 文件差异下，直接跟随会挤占 San 核心路线。</td></tr>
+      </tbody>
+    </table>
+    <p><strong>总体判断：</strong>上游正在快速补齐“Agent 平台”的横向能力，San 应优先借用其运行时修复和生态兼容，不应与上游同时维护通用底座；San 的差异化仍应放在宿主持有的 durable execution contract、可验证证据、恢复状态机和工作流语义上。</p>
+  </section>
+
+  <section>
+    <h2>5. 证据与口径</h2>
+    <ul>
+      <li>2026-08-11 通过代理 <code>127.0.0.1:7897</code> 执行 <code>git fetch upstream main --tags</code>；<code>upstream/main</code> 为 <code>45e12e5bb758198a920c6070e7e64cb33b21beac</code>，与 <code>v17.2.12</code> 相同。</li>
+      <li>发布内容以各包 <code>CHANGELOG.md</code> 的 17.1.4—17.2.12 段落和 GitHub Releases 为准；提交/文件规模由本地 Git 对 tag 计算。</li>
+      <li>开放 PR 状态、draft 和 CI 信号于 2026-08-11 从 GitHub 查询。标题只能证明有人在推进该方案，不代表维护者已经承诺合并。</li>
+    </ul>
+    <ul class="sources">
+      <li><a href="https://github.com/can1357/oh-my-pi/releases">OMP Releases</a></li>
+      <li><a href="https://github.com/can1357/oh-my-pi/compare/v17.2.0...v17.2.12">v17.2.0 → v17.2.12</a></li>
+      <li><a href="https://github.com/can1357/oh-my-pi/pulls?q=is%3Apr+is%3Aopen+sort%3Aupdated-desc">当前开放 PR</a></li>
+      <li><a href="https://github.com/can1357/oh-my-pi/tree/main/packages/coding-agent">coding-agent 主线</a></li>
+      <li><a href="https://github.com/can1357/oh-my-pi/tree/main/packages/ai">AI Provider 层</a></li>
+      <li><a href="https://github.com/can1357/oh-my-pi/tree/main/packages/natives">Native 能力层</a></li>
+    </ul>
+    <p class="small">“主线 / 支撑 / 持续”是基于发布频率、跨版本连续性、改动覆盖面和开放 PR 聚类做出的分析标签，不是上游官方 roadmap 用语。</p>
+  </section>
+</main>
+</body>
+</html>

@@ -341,7 +341,7 @@ describe("AgentSession retry fallback", () => {
 				requestedModels.push(`${model.provider}/${model.id}`);
 				if (model.provider === primaryModel.provider && model.id === primaryModel.id && primaryAttempts++ === 0) {
 					mock.push({
-						content: ["Classifier declined this turn."],
+						content: [{ type: "thinking", thinking: "Classifier evaluation before refusal." }],
 						stopReason: "error",
 						stopDetails: refusalDetails,
 						errorMessage: "Refusal (test): Classifier declined this turn.",
@@ -1287,7 +1287,7 @@ describe("AgentSession retry fallback", () => {
 				if (model.provider === primaryModel.provider && model.id === primaryModel.id) {
 					primaryAttempts += 1;
 					mock.push({
-						content: ["Classifier declined this turn."],
+						content: [{ type: "thinking", thinking: "Classifier evaluation before refusal." }],
 						stopReason: "error",
 						stopDetails: refusalDetails,
 						errorMessage: "Refusal (cyber): Classifier declined this turn.",
@@ -1620,6 +1620,62 @@ describe("AgentSession retry fallback", () => {
 		const lastAssistant = getLastAssistantMessage(session);
 		expect(lastAssistant.stopReason).toBe("stop");
 		expect(lastAssistant.content).toContainEqual({ type: "text", text: "Recovered after Google quota retry" });
+	});
+
+	it("uses the concurrency backoff without rotating credentials", async () => {
+		const model = getBundledModel("google", "gemini-1.5-flash");
+		if (!model) throw new Error("Expected bundled Google test model to exist");
+
+		const errorMessage = "Online prediction concurrent requests quota exceeded";
+		const requestedModels: string[] = [];
+		const mock = createMockModel({
+			responses: [{ throw: errorMessage }, { content: ["Recovered after concurrency backoff"] }],
+		});
+		const agent = new Agent({
+			getApiKey: requestedModel => `${requestedModel.provider}-test-key`,
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => {
+				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+				return mock.stream(requestedModel, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 1,
+			"retry.modelFallback": false,
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		const waitSpy = vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
+
+		await session.prompt("Retry a transient concurrency cap");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([`${model.provider}/${model.id}`, `${model.provider}/${model.id}`]);
+		expect(retryStartEvents).toHaveLength(1);
+		expect(retryStartEvents[0]).toMatchObject({
+			attempt: 1,
+			maxAttempts: 1,
+			delayMs: 5_000,
+			errorMessage,
+		});
+		expect(waitSpy).toHaveBeenCalledWith(5_000, { signal: expect.any(AbortSignal) });
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({ success: true, attempt: 1 });
 	});
 
 	it("keeps retry on the primary model when retry model fallback is disabled", async () => {
@@ -2762,10 +2818,7 @@ describe("AgentSession retry fallback", () => {
 		const mock = createMockModel({
 			responses: [
 				{
-					content: [
-						{ type: "thinking", thinking: "Thinking before malformed function call..." },
-						{ type: "text", text: "Text before malformed function call..." },
-					],
+					content: [{ type: "thinking", thinking: "Thinking before malformed function call..." }],
 					stopReason: "error",
 					errorMessage: malformedError,
 				},
@@ -2819,7 +2872,7 @@ describe("AgentSession retry fallback", () => {
 		expect(contentBlock.text).toBe("Recovered after Gemini malformed function call");
 	});
 
-	it("auto-retries provider finish_reason errors after partial text", async () => {
+	it("auto-retries provider finish_reason errors after whitespace-only text", async () => {
 		const model = getBundledModel("openai", "gpt-4o-mini");
 		if (!model) {
 			throw new Error("Expected bundled OpenAI test model to exist");
@@ -2828,7 +2881,7 @@ describe("AgentSession retry fallback", () => {
 		const errorMessage = "Provider returned error finish_reason";
 		const mock = createMockModel({
 			responses: [
-				{ content: ["partial output before gateway error"], stopReason: "error", errorMessage },
+				{ content: ["   "], stopReason: "error", errorMessage },
 				{ content: ["Recovered after provider finish_reason error"] },
 			],
 		});

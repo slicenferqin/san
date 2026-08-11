@@ -762,7 +762,8 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 		const retryableError = {
 			role: "assistant" as const,
-			content: [{ type: "text" as const, text: "Transient provider failure." }],
+			// 纯 thinking partial 可安全重放；可见文本默认视为已提交，不能重放。
+			content: [{ type: "thinking" as const, thinking: "Transient provider failure." }],
 			api: "anthropic-messages" as const,
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",

@@ -21,7 +21,7 @@ import { createAuthRetryKeyState, isApiKeyResolver, resolveNextAuthRetryKey } fr
 import * as AIError from "./error";
 import { ProviderHttpError } from "./error";
 import { isInvalidatedOAuthTokenError } from "./error/auth-classify";
-import { isUsageLimitOutcome } from "./error/rate-limit";
+import { isConcurrencyCapExclusion, isUsageLimitOutcome } from "./error/rate-limit";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
 import type { CursorOptions } from "./providers/cursor";
@@ -968,20 +968,12 @@ function extractStatusFromAssistantError(message: AssistantMessage): number | un
 }
 
 function isRetryableUpstreamError(error: unknown, status: number | undefined, message: string | undefined): boolean {
-	// 401 means the credential is bad. Usage-limit phrasing (Codex's
-	// "You have hit your ChatGPT usage limit", Anthropic's "usage_limit_reached",
-	// Google's "resource_exhausted", OpenAI's "insufficient_quota") and 429s
-	// without transient rate-limit wording mean this account is parked but a
-	// sibling credential can usually pick the request up. Both are rotatable
-	// via `onAuthError` — the auth-gateway maps the former to
-	// `invalidateCredentialMatching` and the latter to
-	// `markUsageLimitReached`. Transient 429s ("Too many requests",
-	// per-minute caps) classify as RATE_LIMIT_EXCEEDED in
-	// `parseRateLimitReason` and stay in the provider's own backoff layer
-	// instead of burning siblings.
+	// 401、普通 403、账号策略拒绝和账号额度耗尽可由兄弟凭证接手；
+	// 并发上限、分钟限速等瞬时错误留在 Provider 退避层，避免消耗健康凭证。
+	if (AIError.isAccountPolicyError(error)) return true;
 	if (AIError.isUsageLimit(error)) return true;
 	if (isInvalidatedOAuthTokenError(error)) return true;
-	if (status === 401) return true;
+	if (status === 401 || (status === 403 && !isConcurrencyCapExclusion(status, message))) return true;
 	return isUsageLimitOutcome(status, message);
 }
 

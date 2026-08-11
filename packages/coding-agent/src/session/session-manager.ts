@@ -422,6 +422,8 @@ export class SessionManager {
 
 	/** The single open append writer; the manager only ever writes one file at a time. */
 	#writer: SessionStorageWriter | undefined;
+	/** 终态释放后置位；后续 append、标题更新和 rewrite 都必须成为 no-op。 */
+	#released = false;
 	/** Serializes async disk work (flush/close/atomic rewrite). Appends are synchronous and bypass it. */
 	#diskTail: Promise<void> = Promise.resolve();
 	#diskFailure: Error | undefined;
@@ -594,6 +596,7 @@ export class SessionManager {
 	 * bytes in the kernel page cache, so the file is software-crash durable.
 	 */
 	#rewriteSynchronously(): void {
+		if (this.#released) return;
 		if (!this.#persist || !this.#sessionFile || !this.#shouldHaveSessionFile()) return;
 
 		try {
@@ -622,6 +625,7 @@ export class SessionManager {
 	 */
 	async #rewriteAtomically(): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
+		if (this.#released) return;
 
 		const startEpoch = this.#diskEpoch;
 		await this.#scheduleDiskWork(
@@ -646,6 +650,7 @@ export class SessionManager {
 	 * their post-publish state updates.
 	 */
 	async #runFencedAtomicRewrite(epoch: number): Promise<boolean> {
+		if (this.#released) return false;
 		this.#atomicRewriteFenceEpoch = epoch;
 		try {
 			do {
@@ -655,7 +660,7 @@ export class SessionManager {
 				if (!sessionFile) return false;
 				if (this.#diskEpoch !== epoch) return false;
 				await this.#storage.writeTextAtomic(sessionFile, this.#fileBody(), {
-					commitGuard: () => this.#diskEpoch === epoch,
+					commitGuard: () => !this.#released && this.#diskEpoch === epoch,
 				});
 				if (this.#diskEpoch !== epoch) return false;
 			} while (this.#atomicRewriteDirty);
@@ -672,7 +677,7 @@ export class SessionManager {
 	}
 
 	#appendToSessionFile(entry: SessionEntry): void {
-		if (!this.#persist || !this.#sessionFile) return;
+		if (this.#released || !this.#persist || !this.#sessionFile) return;
 		if (this.#diskFailure) throw this.#diskFailure;
 
 		// Lazy gate: a brand-new session is not written until it has an assistant
@@ -740,6 +745,7 @@ export class SessionManager {
 		const line = this.#lineFor(entry);
 		await this.#scheduleDiskWork(
 			async () => {
+				if (this.#released) return;
 				const sessionFile = this.#sessionFile;
 				if (!sessionFile) return;
 				try {
@@ -837,6 +843,10 @@ export class SessionManager {
 	}
 
 	#recordEntry(entry: SessionEntry): void {
+		if (this.#released) {
+			logger.warn("Dropped session entry appended after terminal release", { type: entry.type });
+			return;
+		}
 		this.#entries.push(entry);
 		this.#index.insert(entry);
 		this.#appendToSessionFile(entry);
@@ -1303,6 +1313,28 @@ export class SessionManager {
 		if (this.#diskFailure) throw this.#diskFailure;
 	}
 
+	/**
+	 * 在最终 close 前升起终态写屏障。seal 之后，旧 manager 不得再追加、改标题
+	 * 或重写同一 transcript；同时推进 disk epoch，让尚未执行及正在 fenced publish
+	 * 的旧工作在提交边界失效。幂等且不可逆。
+	 */
+	seal(): void {
+		if (this.#released) return;
+		this.#released = true;
+		this.#diskEpoch++;
+	}
+
+	/**
+	 * 释放终态会话的内存 journal。读取和复活会通过新 manager 从磁盘重新打开；
+	 * 当前 manager 保持 sealed，避免迟到事件清空或覆盖已经复活的 transcript。
+	 */
+	releaseRetainedEntries(): void {
+		this.seal();
+		this.#entries = [];
+		this.#index.clear();
+		this.#closeWriterEventually();
+	}
+
 	getCwd(): string {
 		return this.#cwd;
 	}
@@ -1454,6 +1486,7 @@ export class SessionManager {
 	 *   Auto titles are ignored once the user has set a name.
 	 */
 	async setSessionName(name: string, source: SessionTitleSource = "auto", trigger?: string): Promise<boolean> {
+		if (this.#released) return false;
 		if (this.#titleSource === "user" && source === "auto") return false;
 
 		const title = SessionManager.#cleanTitle(name);

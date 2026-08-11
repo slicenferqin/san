@@ -45,7 +45,7 @@ describe("isApiKeyResolver / resolveApiKeyOnce", () => {
 });
 
 describe("isAuthRetryableError", () => {
-	it("treats 401 and usage-limit phrasing as retryable, everything else as not", () => {
+	it("treats 401/403 and usage-limit phrasing as retryable, everything else as not", () => {
 		expect(isAuthRetryableError(authError(401))).toBe(true);
 		expect(isAuthRetryableError(usageLimitError())).toBe(true);
 		expect(
@@ -83,7 +83,28 @@ describe("isAuthRetryableError", () => {
 				),
 			),
 		).toBe(true);
-		expect(isAuthRetryableError(authError(403))).toBe(false);
+		expect(isAuthRetryableError(authError(403))).toBe(true);
+		expect(isAuthRetryableError("Error: 403 forbidden")).toBe(true);
+		expect(
+			isAuthRetryableError(
+				Object.assign(new Error("Online prediction concurrent requests quota exceeded"), { status: 403 }),
+			),
+		).toBe(false);
+		for (const message of [
+			"Your plan has a rate limit of 60 requests per minute",
+			"每分钟请求数已达上限，请稍后重试",
+			"并发请求数已达上限，请稍后重试",
+			"API 使用频率已达上限",
+		]) {
+			expect(isAuthRetryableError(Object.assign(new Error(message), { status: 429 }))).toBe(false);
+		}
+		expect(
+			isAuthRetryableError(
+				Object.assign(new Error("You've exceeded your subscription rate limits. Upgrade, or try again later."), {
+					status: 429,
+				}),
+			),
+		).toBe(true);
 		expect(isAuthRetryableError(authError(500))).toBe(false);
 		expect(isAuthRetryableError(new Error("network blip"))).toBe(false);
 		expect(isAuthRetryableError(undefined)).toBe(false);
@@ -246,6 +267,50 @@ describe("withAuth", () => {
 		expect(result).toBe("success");
 		expect(keys).toEqual(pool);
 		expect(contexts.map(ctx => ctx.lastChance)).toEqual([false, true, true, true]);
+	});
+
+	it("rotates directly through every distinct sibling after consecutive 403s", async () => {
+		const keys: string[] = [];
+		const contexts: ApiKeyResolveContext[] = [];
+		const pool = ["k0", "k1", "k2", "k3"];
+		let nextSibling = 0;
+		const result = await withAuth(
+			ctx => {
+				contexts.push(ctx);
+				return ctx.error === undefined ? pool[0] : pool[++nextSibling];
+			},
+			async key => {
+				keys.push(key);
+				if (key === "k3") return "success";
+				throw authError(403);
+			},
+		);
+
+		expect(result).toBe("success");
+		expect(keys).toEqual(pool);
+		expect(contexts.map(ctx => ctx.lastChance)).toEqual([false, true, true, true]);
+	});
+
+	it("leaves a 403 concurrency cap to the transient retry layer", async () => {
+		const keys: string[] = [];
+		const contexts: ApiKeyResolveContext[] = [];
+		const concurrencyCap = Object.assign(new Error("concurrent requests limit reached"), { status: 403 });
+
+		await expect(
+			withAuth(
+				ctx => {
+					contexts.push(ctx);
+					return ctx.error === undefined ? "k0" : "k1";
+				},
+				async key => {
+					keys.push(key);
+					throw concurrencyCap;
+				},
+			),
+		).rejects.toBe(concurrencyCap);
+
+		expect(keys).toEqual(["k0"]);
+		expect(contexts.map(ctx => ctx.lastChance)).toEqual([false]);
 	});
 
 	it("stops usage-limit rotation before retrying an already-attempted credential", async () => {

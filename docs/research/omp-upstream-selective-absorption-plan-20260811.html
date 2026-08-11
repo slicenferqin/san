@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OMP 上游选择性吸收实施计划｜2026-08-11</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17211c;
+      --muted: #667269;
+      --paper: #f2f0e8;
+      --panel: #fffdf8;
+      --line: #d8ddd8;
+      --green: #176647;
+      --green-soft: #e7f1eb;
+      --blue: #245e83;
+      --blue-soft: #e9f2f7;
+      --amber: #8b5a12;
+      --amber-soft: #fbf0d8;
+      --red: #973f39;
+      --shadow: 0 14px 34px rgb(25 45 34 / 8%);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 0%, rgb(36 94 131 / 10%), transparent 30rem),
+        radial-gradient(circle at 92% 6%, rgb(23 102 71 / 9%), transparent 34rem),
+        var(--paper);
+      font: 16px/1.65 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    main { width: min(1160px, calc(100% - 36px)); margin: 34px auto 72px; }
+    header, section { border: 1px solid var(--line); border-radius: 18px; background: var(--panel); box-shadow: var(--shadow); }
+    header { padding: 38px 42px; border-top: 7px solid var(--green); }
+    section { margin-top: 20px; padding: 28px 32px; }
+    h1, h2, h3 { margin-top: 0; line-height: 1.22; }
+    h1 { margin-bottom: 12px; font-size: clamp(2rem, 5vw, 3.35rem); letter-spacing: -0.04em; }
+    h2 { padding-bottom: 10px; border-bottom: 1px solid var(--line); color: var(--green); font-size: 1.42rem; }
+    h3 { margin-bottom: 7px; color: var(--blue); font-size: 1.04rem; }
+    p { max-width: 92ch; }
+    a { color: var(--blue); text-underline-offset: 3px; }
+    code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+    code { padding: 0.08em 0.34em; border: 1px solid #dfe7e1; border-radius: 5px; background: #edf2ee; }
+    .meta { display: flex; flex-wrap: wrap; gap: 9px 24px; color: var(--muted); font-size: 0.92rem; }
+    .lede { max-width: 86ch; color: #405349; font-size: 1.12rem; }
+    .callout { padding: 15px 18px; border-left: 5px solid var(--blue); border-radius: 9px; background: var(--blue-soft); }
+    .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px; margin-top: 18px; }
+    .flow > div { position: relative; padding: 12px 10px; border: 1px solid var(--line); border-radius: 10px; background: #f8faf8; text-align: center; font-size: 0.88rem; }
+    .flow > div:not(:last-child)::after { position: absolute; top: 50%; right: -10px; z-index: 2; color: var(--green); font-weight: 800; content: "→"; transform: translate(50%, -50%); }
+    .flow strong { display: block; color: var(--green); }
+    table { width: 100%; margin-top: 14px; border-collapse: collapse; }
+    th, td { padding: 12px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 0.84rem; letter-spacing: 0.04em; text-transform: uppercase; }
+    td:first-child { width: 15%; font-weight: 750; }
+    .owner { display: inline-block; padding: 2px 7px; border-radius: 5px; color: #fff; background: var(--green); font: 750 0.78rem/1.6 ui-monospace, monospace; }
+    .owner.blue { background: var(--blue); }
+    .owner.amber { background: var(--amber); }
+    .owner.red { background: var(--red); }
+    .small { color: var(--muted); font-size: 0.88rem; }
+    ul, ol { padding-left: 1.3rem; }
+    li + li { margin-top: 6px; }
+    @media (max-width: 800px) {
+      .flow { grid-template-columns: 1fr; }
+      .flow > div::after { display: none; }
+    }
+    @media (max-width: 620px) {
+      main { width: min(100% - 18px, 1160px); margin-top: 12px; }
+      header, section { padding: 22px 19px; border-radius: 13px; }
+      table, thead, tbody, tr, th, td { display: block; width: 100%; }
+      thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+      tbody { display: grid; gap: 12px; }
+      tr { padding: 5px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fffefa; }
+      td, td:first-child { width: 100%; padding: 8px 0; border-bottom: 1px dashed var(--line); overflow-wrap: anywhere; }
+      td:last-child { border-bottom: 0; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="meta">
+      <span>计划日期：2026-08-11</span>
+      <span>工作分支：<code>feat/upstream-v17.2-selective-absorption</code></span>
+      <span>基线：<code>origin/main@e747f95115</code></span>
+      <span>上游目标：<code>v17.2.9—v17.2.12</code></span>
+    </div>
+    <h1>OMP 上游选择性吸收实施计划</h1>
+    <p class="lede">首批只吸收<strong>可独立验证、直接改善正确性或性能、且不改变 San 产品语义</strong>的上游修复。拒绝整段 merge，也不把 Agent Hub、goal、schedule、omptype 等高冲突能力夹带进来。每个并行工作流拥有互斥的生产文件和测试文件，由主代理独占 changelog、跨域集成与最终验收。</p>
+  </header>
+
+  <section>
+    <h2>1. 实施原则</h2>
+    <div class="flow">
+      <div><strong>追溯</strong>锁定上游提交<br />理解完整修复链</div>
+      <div><strong>适配</strong>按 San 当前结构<br />重放行为而非盲 cherry-pick</div>
+      <div><strong>守约</strong>新增合同级回归测试<br />不测实现文本</div>
+      <div><strong>集成</strong>主代理审查交叉影响<br />统一 changelog</div>
+      <div><strong>验收</strong>聚焦测试 → check<br />→ 包级测试</div>
+    </div>
+    <ul>
+      <li>上游提交是设计证据，不是机械补丁；San 已有能力优先保留，只补缺失语义。</li>
+      <li>没有可复现合同、依赖大规模前置重构或与 San execution-control 冲突的候选，进入后续观察清单。</li>
+      <li>子代理不得修改未分配文件；发现跨域依赖时只报告，由主代理改动或重新分派。</li>
+      <li>所有新增测试必须保护外部可观察行为；禁止 source-grep、<code>mock.module()</code> 和全局污染。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>2. 首批范围与文件所有权</h2>
+    <table>
+      <thead><tr><th>工作流</th><th>上游证据</th><th>独占文件域</th><th>验收合同</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="owner">A</span><br />会话释放与 handoff</td>
+          <td><code>ed6300b</code> → <code>d85dde5</code> 的 dispose/seal 修复链；<code>1e6638d</code>、<code>92e574c</code>、<code>7914e7c</code> 的 handoff 错误语义。</td>
+          <td><code>session/agent-session*</code>、<code>session-manager</code>、<code>indexed-session-storage</code>、<code>session-handoff</code>、<code>debug/raw-sse-buffer</code>、<code>command-controller</code> 及对应测试。</td>
+          <td>dispose 后不保留重 transcript/SSE；在途事件和写盘有界排空；terminal seal 后不能复活；空生成、超时、harness abort 保留正确终态。</td>
+        </tr>
+        <tr>
+          <td><span class="owner blue">B</span><br />流式与终端性能</td>
+          <td><code>fed51f1</code>、<code>84813ad</code>、<code>50ee839</code>；<code>03d90bd</code>；<code>a6aa462</code>。</td>
+          <td><code>event-controller</code>、<code>print-mode</code>、<code>title-generator</code>、<code>packages/tui/components/loader</code> 及新增/相关测试。</td>
+          <td>高 TPS 流式更新按窗口合并且尾事件不越序；JSON/text 最终记录完整排空；WSL/ConPTY 等待不持续动画写 title。</td>
+        </tr>
+        <tr>
+          <td><span class="owner amber">C</span><br />账号重试与子 Agent 指标</td>
+          <td><code>7ca140f</code> 的 policy-rejected sibling rotation；<code>506f57f</code> 的 task model performance。</td>
+          <td><code>packages/ai</code> 的 auth retry/storage/classification/stream；coding-agent 的 advisor、turn-recovery、task executor、settings 及对应测试。</td>
+          <td>Trusted Access/policy rejection 先尝试同 Provider 兄弟账号再跨 Provider；task 子 Agent assistant turn 进入每模型 TPS/TTFT 聚合且不重复记账。</td>
+        </tr>
+        <tr>
+          <td><span class="owner red">主代理</span><br />集成与验收</td>
+          <td>全部候选的 upstream diff、San 现有 execution-control 与 release contract。</td>
+          <td><code>CHANGELOG.md</code>、研究文档、跨域冲突修复；必要时调整任务所有权后再授权。</td>
+          <td>逐项审查行为等价性；无无关改动；聚焦测试、<code>bun check</code> 和受影响包测试全部通过。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>3. 明确不纳入首批</h2>
+    <table>
+      <thead><tr><th>候选</th><th>暂缓原因</th><th>后续门槛</th></tr></thead>
+      <tbody>
+        <tr><td>Agent Plugins 1.0 / trusted extensions</td><td>涉及发现、信任和扩展兼容的完整链路，不应与运行时修复混合。</td><td>独立做 extension contract 与安全边界审计。</td></tr>
+        <tr><td>Agent Hub / goal / schedule / heartbeat</td><td>与 San durable execution、peer messaging 和 RPC 控制面直接重叠。</td><td>先产出语义对照，再决定兼容或吸收。</td></tr>
+        <tr><td>omptype 与基础依赖内建化</td><td>跨包、跨构建链，迁移面远大于本轮正确性收益。</td><td>先量化启动、包体、类型兼容和维护成本。</td></tr>
+        <tr><td>shell minimizer / native builtins</td><td>依赖上游 shell 大规模重构，直接补丁风险高。</td><td>单独审计当前 San shell 实现是否存在同一可复现缺陷。</td></tr>
+        <tr><td>开放 PR</td><td>尚未形成发布合同，部分仍为 draft 或 CI 未全绿。</td><td>只跟踪，合并发布后进入下一轮候选。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>4. 验收与退出条件</h2>
+    <ol>
+      <li>每个工作流提交候选清单：已吸收、San 已具备、因依赖/冲突暂缓，并附上游 commit。</li>
+      <li>主代理审查每个生产改动与测试，核对是否保护同一个用户可见合同，而非照搬上游内部结构。</li>
+      <li>先运行新增与邻近测试，再运行 <code>bun check</code>；最后运行受影响包级测试。任何失败必须修复或明确从范围移除。</li>
+      <li>由主代理统一写入各受影响包 <code>CHANGELOG.md</code> 的 <code>[Unreleased]</code>，避免并行冲突。</li>
+      <li>最终报告记录上游来源、实际差异、测试结果、未吸收项和下一轮候选；未经用户要求不 commit、不 push、不创建 PR。</li>
+    </ol>
+    <div class="callout warn"><strong>停止条件：</strong>若某候选需要引入上游大规模重构、破坏 San 现有持久执行合同，或无法用聚焦测试证明收益，则从本批剔除，不用兼容层或静默降级强行落地。</div>
+    <p class="small">本计划冻结的是第一批执行范围，不代表一次性同步全部上游能力；后续以相同门禁滚动吸收。</p>
+  </section>
+</main>
+</body>
+</html>

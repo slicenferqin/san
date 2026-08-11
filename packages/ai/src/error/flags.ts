@@ -7,7 +7,13 @@ import {
 	ProviderHttpError,
 	STREAM_ENVELOPE_ERROR_PREFIX,
 } from "./classes";
-import { isOpaqueStatusBody, isUsageLimitStatus, matchesUsageLimitText, parseRateLimitReason } from "./rate-limit";
+import {
+	isAccountScopedCapText,
+	isOpaqueStatusBody,
+	isUsageLimitStatus,
+	matchesUsageLimitText,
+	parseRateLimitReason,
+} from "./rate-limit";
 
 export const Flag = {
 	Class: 0x1000,
@@ -19,6 +25,8 @@ export const Flag = {
 	MalformedFunctionCall: 0x0020_0000,
 	ProviderFinishError: 0x0040_0000,
 	ContentBlocked: 0x0000_8000,
+	/** 账号级策略拒绝；换用同 Provider 的其他凭证后可能成功。 */
+	AccountPolicy: 0x0000_4000,
 	ContextOverflow: 0x0080_0000,
 	AuthFailed: 0x0100_0000,
 	SilentAbort: 0x0200_0000,
@@ -43,6 +51,7 @@ const KIND_MASK =
 	Flag.MalformedFunctionCall |
 	Flag.ProviderFinishError |
 	Flag.ContentBlocked |
+	Flag.AccountPolicy |
 	Flag.ContextOverflow |
 	Flag.AuthFailed |
 	Flag.SilentAbort |
@@ -96,6 +105,7 @@ const AUTH_FAILURE_PATTERN =
 const MALFORMED_FUNCTION_CALL_PATTERN = /\bmalformed.?function.?call\b/i;
 const PROVIDER_FINISH_ERROR_PATTERN = /\bProvider (?:returned error finish_reason|finish_reason:\s*error)\b/i;
 const CONTENT_FILTER_PATTERN = /\b(?:incomplete:\s*)?content_filter\b/i;
+const ACCOUNT_POLICY_PATTERN = /\bcyber_policy\b|trusted access for cyber/i;
 const STALE_RESPONSE_ITEM_PATTERNS = [/\bItem with id ['"][^'"]+['"] not found\.?/i, /previous[ _]?response/i] as const;
 const STALE_RESPONSE_ITEM_DETAIL_PATTERN = /not[ _]?found|invalid|expired|stale|zero[ _-]?data[ _-]?retention/i;
 /**
@@ -178,6 +188,7 @@ const ERROR_KIND_LABELS: readonly [Flag, string][] = [
 	[Flag.MalformedFunctionCall, "malformed-function-call"],
 	[Flag.ProviderFinishError, "provider-finish-error"],
 	[Flag.ContentBlocked, "content-blocked"],
+	[Flag.AccountPolicy, "account-policy"],
 	[Flag.ContextOverflow, "context-overflow"],
 	[Flag.AuthFailed, "auth-failed"],
 	[Flag.OAuthExpiry, "oauth-expiry"],
@@ -314,6 +325,7 @@ function classifyText(errorMessage: string | undefined, errorStatus: number | un
 		if (isMalformedFunctionCallText(errorMessage)) kinds |= Flag.MalformedFunctionCall;
 		if (isProviderFinishErrorText(errorMessage)) kinds |= Flag.ProviderFinishError;
 		if (isContentBlockedText(errorMessage)) kinds |= Flag.ContentBlocked;
+		if (ACCOUNT_POLICY_PATTERN.test(errorMessage)) kinds |= Flag.AccountPolicy | Flag.ContentBlocked;
 		if (isAuthFailureText(errorMessage)) kinds |= Flag.AuthFailed;
 		if (isOAuthExpiry(errorMessage)) kinds |= Flag.OAuthExpiry;
 
@@ -322,15 +334,23 @@ function classifyText(errorMessage: string | undefined, errorStatus: number | un
 		const isOpaque = isOpaqueStatusBody(cleanMessage);
 
 		const isLimitStatus = isUsageLimitStatus(statusClean);
+		const reason = parseRateLimitReason(cleanMessage);
+		// 非 402 的并发上限属于瞬时退避，不能因 quota 字样误标为账号额度耗尽。
+		const isBillingCapStatus = statusClean === 402;
+		const concurrencyExcluded = reason === "CONCURRENT_LIMIT" && !isBillingCapStatus;
 		if (
-			matchesUsageLimitText(cleanMessage) ||
-			(isLimitStatus && (isOpaque || parseRateLimitReason(cleanMessage) === "QUOTA_EXHAUSTED"))
+			!concurrencyExcluded &&
+			(matchesUsageLimitText(cleanMessage) ||
+				((statusClean === 403 || statusClean === undefined) && isAccountScopedCapText(cleanMessage)) ||
+				(isLimitStatus &&
+					(isOpaque || reason === "QUOTA_EXHAUSTED" || (isBillingCapStatus && reason === "CONCURRENT_LIMIT"))))
 		) {
 			kinds |= Flag.UsageLimit;
 		}
 
 		if (isTimeoutText(errorMessage)) kinds |= Flag.Transient | Flag.Timeout;
 		else if (isTransientErrorText(errorMessage)) kinds |= Flag.Transient;
+		if (reason === "CONCURRENT_LIMIT") kinds |= Flag.Transient;
 		if ((api === "openai-responses" || api === "openai-codex-responses") && isStaleResponsesText(errorMessage)) {
 			kinds |= Flag.StaleResponsesItem;
 		}
@@ -357,6 +377,9 @@ export function classify(error: unknown, api?: Api): number {
 
 			if ("errorId" in link && typeof (link as { errorId: unknown }).errorId === "number") {
 				kinds |= (link as { errorId: number }).errorId & KIND_MASK;
+			}
+			if ("code" in link && typeof link.code === "string" && ACCOUNT_POLICY_PATTERN.test(link.code)) {
+				kinds |= Flag.AccountPolicy | Flag.ContentBlocked;
 			}
 		}
 
@@ -388,7 +411,10 @@ export function classify(error: unknown, api?: Api): number {
 			if (code === "overloaded_error" || code === "rate_limit_error") {
 				linkKinds |= Flag.Transient;
 			}
-			if (codeStatus === 401 || codeStatus === 403) {
+			if (
+				(codeStatus === 401 || codeStatus === 403) &&
+				!(codeStatus === 403 && parseRateLimitReason(link.message) === "CONCURRENT_LIMIT")
+			) {
 				linkKinds |= Flag.AuthFailed;
 			} else if (codeStatus === 429) {
 				if ((linkKinds & Flag.UsageLimit) === 0) {
@@ -430,6 +456,11 @@ export function classify(error: unknown, api?: Api): number {
  */
 export function isUsageLimit(error: unknown, api?: Api): boolean {
 	return is(classify(error, api), Flag.UsageLimit);
+}
+
+/** 上游拒绝是否仅作用于当前账号，并值得尝试同 Provider 的兄弟凭证。 */
+export function isAccountPolicyError(error: unknown, api?: Api): boolean {
+	return is(classify(error, api), Flag.AccountPolicy);
 }
 
 /**

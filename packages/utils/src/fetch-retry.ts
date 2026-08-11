@@ -10,6 +10,8 @@ const RETRY_DELAY_FIELD_PATTERN = /"retryDelay":\s*"([0-9.]+)(ms|s)"/i;
 // "try again in 5 min" / "try again in ~158 min." / "try again in 2h" /
 // "try again in 90 minutes" / "try again in 1 hour"
 const TRY_AGAIN_PATTERN = /try again in\s+~?\s*([0-9.]+)\s*(ms|sec|s|minutes?|mins?|m|hours?|hrs?|h)\b/i;
+// 支持 "Your limit will reset in 13 minutes"、"reset in 13 minutes"、"will reset in 2h"。
+const WILL_RESET_IN_PATTERN = /(?:will\s+)?reset in\s+~?\s*([0-9.]+)\s*(ms|sec|s|minutes?|mins?|m|hours?|hrs?|h)\b/i;
 
 /**
  * Server-suggested retry delay extraction. Merges the patterns historically used
@@ -27,6 +29,7 @@ const TRY_AGAIN_PATTERN = /try again in\s+~?\s*([0-9.]+)\s*(ms|sec|s|minutes?|mi
  *  - `Please retry in 250ms` / `Please retry in 12s`
  *  - `"retryDelay": "34.074824224s"` (JSON error detail field)
  *  - `try again in 250ms` / `try again in 12s` / `try again in 5 min` / `try again in ~158 min`
+ *  - `Your limit will reset in 13 minutes` / `will reset in 2h`
  *
  * Returns `undefined` if no signal is found.
  */
@@ -83,7 +86,8 @@ export function extractRetryHint(source: Response | Headers | null | undefined, 
 			if (totalMs > 0) return totalMs;
 		}
 	}
-	for (const pattern of [PLEASE_RETRY_PATTERN, RETRY_DELAY_FIELD_PATTERN, TRY_AGAIN_PATTERN]) {
+	// 账号重置窗口优先于短时重试提示；同一响应同时包含两者时，必须按完整重置窗口封禁凭证。
+	for (const pattern of [WILL_RESET_IN_PATTERN, PLEASE_RETRY_PATTERN, RETRY_DELAY_FIELD_PATTERN, TRY_AGAIN_PATTERN]) {
 		const match = pattern.exec(body);
 		if (match?.[1]) {
 			const value = Number.parseFloat(match[1]);

@@ -12,8 +12,15 @@
 - Added `AuthStorage.upsertLoginApiKey()` so interactive API-key entry can persist a distinct login-sourced key without replace-all wiping OAuth or sibling API-key accounts for the same provider, including through a remote auth broker.
 - Added OAuth provider unregistration so extension providers can replace or roll back login registrations without leaving stale global state.
 
+### Changed
+
+- Improved Cursor and Devin streaming throughput by avoiding redundant buffer copies when no partial protocol frame is pending.
+
 ### Fixed
 
+- Fixed concurrent-request caps and per-minute plan limits being treated as credential exhaustion; they now stay in the transient backoff lane, while account-scoped 403/statusless caps rotate credentials and honor provider reset windows.
+- Fixed Simplified Chinese quota exhaustion and throttling text classification so true account exhaustion rotates to a sibling credential without rotating on minute, frequency, rate, or concurrency caps.
+- Fixed account-scoped provider policy denials rotating through eligible sibling credentials without refreshing, invalidating, or usage-blocking the denied account; replay-safe streams can exhaust the sibling set before model fallback.
 - Fixed authentication failures taking ordinary same-route retries before a verified route or model switch, while keeping abort and backpressure failures out of stall recovery.
 - Fixed resumed OpenAI Responses sessions failing with HTTP 400 when replaying a reasoning item whose encrypted content was an empty string.
 ## [17.0.2] - 2026-07-17

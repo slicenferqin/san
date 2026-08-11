@@ -63,6 +63,33 @@ describe("AgentSession handoff", () => {
 		await session.waitForIdle();
 	}
 
+	function createSeededSessionManager(): SessionManager {
+		const manager = SessionManager.create(tempDir.path(), tempDir.path());
+		manager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "seed" }],
+			timestamp: Date.now() - 2,
+		});
+		manager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "seed response" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 16,
+				output: 8,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 24,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now() - 1,
+		});
+		return manager;
+	}
+
 	function createTextOnlyCompactionSession() {
 		const localTempDir = TempDir.createSync("@pi-text-only-compaction-");
 		const localSessionManager = SessionManager.inMemory(localTempDir.path());
@@ -307,6 +334,8 @@ describe("AgentSession handoff", () => {
 	});
 
 	it("emits handoff lifecycle hooks on the outgoing and replacement sessions", async () => {
+		await session.dispose();
+		sessionManager = createSeededSessionManager();
 		const extensionsResult = await loadExtensions([], tempDir.path());
 		const extensionRunner = new ExtensionRunner(
 			extensionsResult.extensions,
@@ -341,7 +370,6 @@ describe("AgentSession handoff", () => {
 			return emit(event);
 		});
 
-		await session.dispose();
 		session = new AgentSession({
 			agent: new Agent({
 				initialState: {
@@ -421,6 +449,7 @@ describe("AgentSession handoff", () => {
 			return stream;
 		};
 		await session.dispose();
+		sessionManager = createSeededSessionManager();
 		session = new AgentSession({
 			agent: new Agent({
 				initialState: {
@@ -2127,12 +2156,15 @@ describe("AgentSession handoff", () => {
 		session.settings.set("compaction.strategy", "handoff");
 		session.settings.set("compaction.thresholdPercent", 1);
 		session.settings.set("contextPromotion.enabled", false);
+		const settings = session.settings;
 
 		const model = session.model;
 		if (!model) {
 			throw new Error("Expected model to be set");
 		}
 
+		await session.dispose();
+		sessionManager = createSeededSessionManager();
 		const extensionsResult = await loadExtensions([], tempDir.path());
 		const extensionRunner = new ExtensionRunner(
 			extensionsResult.extensions,
@@ -2146,7 +2178,6 @@ describe("AgentSession handoff", () => {
 			cancel: true,
 		})) as ExtensionRunner["emit"]);
 
-		await session.dispose();
 		session = new AgentSession({
 			agent: new Agent({
 				initialState: {
@@ -2157,7 +2188,7 @@ describe("AgentSession handoff", () => {
 				},
 			}),
 			sessionManager,
-			settings: session.settings,
+			settings,
 			modelRegistry,
 			extensionRunner,
 			obfuscator,
@@ -2402,6 +2433,37 @@ describe("AgentSession handoff", () => {
 		await expect(handoffPromise).rejects.toThrow("Handoff cancelled");
 		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
 		expect(generateHandoffSpy.mock.calls[0]?.[2]?.streamOptions?.signal?.aborted).toBe(true);
+	});
+
+	it("preserves the harness reason when aborting an in-flight handoff", async () => {
+		const started = Promise.withResolvers<void>();
+		const cancelled = Promise.withResolvers<string>();
+		vi.spyOn(compactionModule, "generateHandoffFromContext").mockImplementation((_context, _model, options) => {
+			started.resolve();
+			options.streamOptions.signal?.addEventListener("abort", () => cancelled.reject(new Error("request aborted")), {
+				once: true,
+			});
+			return cancelled.promise;
+		});
+
+		const handoff = session.handoff();
+		await started.promise;
+		await session.abort({ reason: "Harness stopped the session" });
+
+		await expect(handoff).rejects.toThrow("Harness stopped the session");
+	});
+
+	it("surfaces empty handoff generation as a failure", async () => {
+		vi.spyOn(compactionModule, "generateHandoffFromContext").mockResolvedValue("  \n  ");
+
+		await expect(session.handoff()).rejects.toThrow("Handoff generation produced no content");
+		expect(session.isGeneratingHandoff).toBe(false);
+	});
+
+	it("lets auto-handoff fall back when generation is empty", async () => {
+		vi.spyOn(compactionModule, "generateHandoffFromContext").mockResolvedValue("");
+
+		await expect(session.handoff(undefined, { autoTriggered: true })).resolves.toBeUndefined();
 	});
 
 	it("surfaces a provider AbortError when the handoff signal was not aborted", async () => {

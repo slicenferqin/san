@@ -4,7 +4,7 @@ import { scheduler } from "node:timers/promises";
 import { Agent } from "@san/agent";
 import type { ApiKeyResolveContext, AssistantMessage, ToolCall } from "@san/ai";
 import { unregisterCustomApis } from "@san/ai/api-registry";
-import { createMockModel, registerMockApi } from "@san/ai/providers/mock";
+import { createMockModel, type MockResponse, registerMockApi } from "@san/ai/providers/mock";
 import * as aiStream from "@san/ai/stream";
 import { AssistantMessageEventStream } from "@san/ai/utils/event-stream";
 import { getBundledModel } from "@san/catalog/models";
@@ -20,6 +20,21 @@ type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
 type AutoRetryStartEvent = Extract<AgentSessionEvent, { type: "auto_retry_start" }>;
 
 const RETRY_CAP_MOCK_API_SOURCE = "agent-session-retry-cap-test";
+const CYBER_POLICY_ERROR =
+	"Codex error event: This content was flagged for possible cybersecurity risk. Join Trusted Access for Cyber. (code=cyber_policy)";
+const CYBER_POLICY_FAILURE: MockResponse = {
+	content: [{ type: "thinking", thinking: "Checking whether this security request is allowed." }],
+	stopReason: "error",
+	errorMessage: CYBER_POLICY_ERROR,
+};
+const CYBER_POLICY_BUFFERED_FAILURE: MockResponse = {
+	content: [
+		{ type: "thinking", thinking: "Checking whether this security request is allowed." },
+		{ type: "text", text: "Buffered policy response" },
+	],
+	stopReason: "error",
+	errorMessage: CYBER_POLICY_ERROR,
+};
 
 function lastAssistant(session: AgentSession): AssistantMessage {
 	const message = session.agent.state.messages.at(-1);
@@ -455,6 +470,276 @@ describe("AgentSession retry delay cap", () => {
 		expect(last.content).toContainEqual({ type: "text", text: "recovered after sibling account" });
 	});
 
+	it("exhausts every Codex account before the configured model fallback on cyber-policy denials", async () => {
+		const primaryModel = getBundledModel("openai-codex", "gpt-5.6-sol");
+		const fallbackModel = getBundledModel("openai", "gpt-5.5");
+		if (!primaryModel || !fallbackModel) {
+			throw new Error("Expected bundled primary and fallback test models to exist");
+		}
+		const providerSessionId = "cyber-policy-account-exhaustion";
+
+		registerMockApi(RETRY_CAP_MOCK_API_SOURCE);
+		authStorage.setRuntimeApiKey("openai", "openai-fallback-key");
+		await authStorage.set("openai-codex", [
+			{ type: "api_key", key: "codex-key-A" },
+			{ type: "api_key", key: "codex-key-B" },
+			{ type: "api_key", key: "codex-key-C" },
+		]);
+
+		const requestedKeys: string[] = [];
+		const primaryMock = createMockModel({
+			id: primaryModel.id,
+			provider: primaryModel.provider,
+			handler: (_context, options) => {
+				const apiKey = typeof options?.apiKey === "string" ? options.apiKey : undefined;
+				if (!apiKey) throw new Error("Expected streamSimple to pass a resolved string API key");
+				requestedKeys.push(apiKey);
+				return CYBER_POLICY_BUFFERED_FAILURE;
+			},
+		});
+		const fallbackMock = createMockModel({
+			id: fallbackModel.id,
+			provider: fallbackModel.provider,
+			responses: [{ content: ["recovered on configured fallback"] }],
+		});
+		const requestedModels: string[] = [];
+		const agent = new Agent({
+			getApiKey: model => modelRegistry.resolver(model, providerSessionId),
+			sessionId: providerSessionId,
+			initialState: {
+				model: primaryModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => {
+				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+				return requestedModel.provider === primaryModel.provider
+					? aiStream.streamSimple(primaryMock.model, context, options)
+					: fallbackMock.stream(requestedModel, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.maxRetries": 0,
+			"retry.modelFallback": true,
+			"retry.fallbackChains": {
+				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
+			},
+		});
+		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+			providerSessionId,
+		});
+
+		const fallbackEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+		const retryStartEvents: AutoRetryStartEvent[] = [];
+		session.subscribe(event => {
+			if (event.type === "retry_fallback_applied") fallbackEvents.push(event);
+			if (event.type === "auto_retry_start") retryStartEvents.push(event);
+		});
+
+		session.setTextOutputCommitted(false);
+		await session.prompt("Continue authorized security work");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${fallbackModel.provider}/${fallbackModel.id}`,
+		]);
+		expect(requestedKeys).toHaveLength(3);
+		expect([...requestedKeys].sort()).toEqual(["codex-key-A", "codex-key-B", "codex-key-C"]);
+		// 同 Provider 凭证轮换保持累计 attempt；跨模型 fallback 才获得新预算。
+		expect(retryStartEvents.map(event => event.attempt)).toEqual([1, 2, 1]);
+		expect(fallbackEvents).toHaveLength(1);
+		expect(session.model).toMatchObject({ provider: fallbackModel.provider, id: fallbackModel.id });
+		expect(lastAssistant(session).content).toContainEqual({ type: "text", text: "recovered on configured fallback" });
+	});
+
+	it("does not replay a cyber-policy denial after a completed tool call", async () => {
+		const primaryModel = getBundledModel("openai-codex", "gpt-5.6-sol");
+		const fallbackModel = getBundledModel("openai", "gpt-5.5");
+		if (!primaryModel || !fallbackModel) {
+			throw new Error("Expected bundled primary and fallback test models to exist");
+		}
+		const providerSessionId = "cyber-policy-tool-call";
+
+		registerMockApi(RETRY_CAP_MOCK_API_SOURCE);
+		authStorage.setRuntimeApiKey("openai", "openai-fallback-key");
+		await authStorage.set("openai-codex", [
+			{ type: "api_key", key: "codex-tool-key-A" },
+			{ type: "api_key", key: "codex-tool-key-B" },
+		]);
+
+		const requestedKeys: string[] = [];
+		const policyMock = createMockModel({
+			id: primaryModel.id,
+			provider: primaryModel.provider,
+			handler: (_context, options) => {
+				const apiKey = typeof options?.apiKey === "string" ? options.apiKey : undefined;
+				if (!apiKey) throw new Error("Expected streamSimple to pass a resolved string API key");
+				requestedKeys.push(apiKey);
+				return {
+					content: [{ type: "toolCall", id: "tc-policy", name: "read", arguments: { path: "README.md" } }],
+					stopReason: "error",
+					errorMessage: CYBER_POLICY_ERROR,
+				};
+			},
+		});
+		const requestedModels: string[] = [];
+		const agent = new Agent({
+			getApiKey: model => modelRegistry.resolver(model, providerSessionId),
+			sessionId: providerSessionId,
+			initialState: {
+				model: primaryModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => {
+				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+				return aiStream.streamSimple(policyMock.model, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.maxRetries": 0,
+			"retry.modelFallback": true,
+			"retry.fallbackChains": {
+				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
+			},
+		});
+		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+			providerSessionId,
+		});
+
+		const fallbackEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+		session.subscribe(event => {
+			if (event.type === "retry_fallback_applied") fallbackEvents.push(event);
+		});
+
+		await session.prompt("Do not repeat completed work");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([`${primaryModel.provider}/${primaryModel.id}`]);
+		expect(requestedKeys).toHaveLength(1);
+		expect(fallbackEvents).toEqual([]);
+		expect(session.model).toMatchObject({ provider: primaryModel.provider, id: primaryModel.id });
+		const lastError = [...session.agent.state.messages]
+			.reverse()
+			.find((message): message is AssistantMessage => message.role === "assistant");
+		expect(lastError?.stopReason).toBe("error");
+		expect(lastError?.errorMessage).toBe(CYBER_POLICY_ERROR);
+	});
+
+	it("tries sibling Codex accounts before advisor model fallback on cyber-policy denials", async () => {
+		const mainModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const advisorModel = getBundledModel("openai-codex", "gpt-5.6-sol");
+		const fallbackModel = getBundledModel("openai", "gpt-5.5");
+		if (!mainModel || !advisorModel || !fallbackModel) {
+			throw new Error("Expected bundled main, advisor, and fallback test models to exist");
+		}
+
+		registerMockApi(RETRY_CAP_MOCK_API_SOURCE);
+		authStorage.setRuntimeApiKey("openai", "openai-fallback-key");
+		await authStorage.set("openai-codex", [
+			{ type: "api_key", key: "advisor-codex-key-A" },
+			{ type: "api_key", key: "advisor-codex-key-B" },
+			{ type: "api_key", key: "advisor-codex-key-C" },
+		]);
+
+		const mainMock = createMockModel({ responses: [{ content: ["Primary complete"] }] });
+		const requestedAdvisorKeys: string[] = [];
+		const advisorRecovered = Promise.withResolvers<void>();
+		const advisorMock = createMockModel({
+			id: advisorModel.id,
+			provider: advisorModel.provider,
+			handler: (_context, options) => {
+				const apiKey = typeof options?.apiKey === "string" ? options.apiKey : undefined;
+				if (!apiKey) throw new Error("Expected advisor streamSimple to pass a resolved string API key");
+				requestedAdvisorKeys.push(apiKey);
+				if (new Set(requestedAdvisorKeys).size < 3) return CYBER_POLICY_FAILURE;
+				advisorRecovered.resolve();
+				return { content: ["Advisor recovered on cyber-approved account"], stopReason: "stop" };
+			},
+		});
+		const requestedAdvisorModels: string[] = [];
+		const advisorSelector = `${advisorModel.provider}/${advisorModel.id}`;
+		const fallbackSelector = `${fallbackModel.provider}/${fallbackModel.id}`;
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: {
+				model: mainModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: mainMock.stream,
+		});
+
+		const settings = Settings.isolated({
+			"advisor.syncBacklog": "1",
+			"compaction.enabled": false,
+			"retry.maxRetries": 0,
+			"retry.modelFallback": true,
+			"retry.fallbackChains": {
+				[advisorSelector]: [fallbackSelector],
+			},
+		});
+		settings.setModelRole("default", `${mainModel.provider}/${mainModel.id}`);
+		settings.setModelRole("advisor", advisorSelector);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+			advisorTools: [],
+			advisorConfigs: [{ name: "cyber-policy", model: advisorSelector }],
+			advisorStreamFn: (requestedModel, context, options) => {
+				requestedAdvisorModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+				return aiStream.streamSimple(advisorMock.model, context, options);
+			},
+		});
+
+		const fallbackEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+		session.subscribe(event => {
+			if (event.type === "retry_fallback_applied") fallbackEvents.push(event);
+		});
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("Complete one primary turn");
+		await advisorRecovered.promise;
+		await session.waitForIdle();
+
+		expect(requestedAdvisorModels).toEqual([advisorSelector, advisorSelector, advisorSelector]);
+		expect([...requestedAdvisorKeys].sort()).toEqual([
+			"advisor-codex-key-A",
+			"advisor-codex-key-B",
+			"advisor-codex-key-C",
+		]);
+		expect(fallbackEvents).toEqual([]);
+		expect(session.getAdvisorAgent()?.state.model).toMatchObject({
+			provider: advisorModel.provider,
+			id: advisorModel.id,
+		});
+	});
+
 	it("waits for the earliest sibling unblock instead of failing the delay cap", async () => {
 		// Regression: with every sibling credential momentarily blocked (e.g. a
 		// short post-401 or usage-probe block), a usage-limit 429 with a
@@ -702,7 +987,7 @@ describe("AgentSession retry delay cap", () => {
 		expect(lastError?.errorMessage).toBe("The operation timed out.");
 	});
 
-	it("retries a transient socket close after partial text and thinking", async () => {
+	it("retries transient partial text only while the text output remains buffered", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) {
 			throw new Error("Expected bundled Anthropic test model to exist");
@@ -739,16 +1024,10 @@ describe("AgentSession retry delay cap", () => {
 						timestamp: Date.now(),
 					};
 
-					if (streamCalls === 1) {
+					if (streamCalls <= 2) {
 						const thinking = { type: "thinking" as const, thinking: "partial thought" };
 						const text = { type: "text" as const, text: "partial text" };
-						const toolCall: ToolCall = {
-							type: "toolCall",
-							id: "tc-incomplete",
-							name: "bash",
-							arguments: { command: "bun probe-archive3.ts" },
-						};
-						partial.content.push(thinking, text, toolCall);
+						partial.content.push(thinking, text);
 						stream.push({ type: "start", partial });
 						stream.push({ type: "thinking_start", contentIndex: 0, partial });
 						stream.push({ type: "thinking_delta", contentIndex: 0, delta: thinking.thinking, partial });
@@ -756,13 +1035,6 @@ describe("AgentSession retry delay cap", () => {
 						stream.push({ type: "text_start", contentIndex: 1, partial });
 						stream.push({ type: "text_delta", contentIndex: 1, delta: text.text, partial });
 						stream.push({ type: "text_end", contentIndex: 1, content: text.text, partial });
-						stream.push({ type: "toolcall_start", contentIndex: 2, partial });
-						stream.push({
-							type: "toolcall_delta",
-							contentIndex: 2,
-							delta: JSON.stringify(toolCall.arguments),
-							partial,
-						});
 						stream.push({
 							type: "error",
 							reason: "error",
@@ -819,10 +1091,19 @@ describe("AgentSession retry delay cap", () => {
 			if (event.type === "auto_retry_end") retryEndEvents.push(event);
 		});
 
-		await session.prompt("Trigger partial socket close");
+		await session.prompt("Committed partial output must stay terminal");
 		await session.waitForIdle();
 
-		expect(streamCalls).toBe(2);
+		expect(streamCalls).toBe(1);
+		expect(retryStartEvents).toHaveLength(0);
+		expect(retryEndEvents).toHaveLength(0);
+		expect(lastAssistant(session).stopReason).toBe("error");
+
+		session.setTextOutputCommitted(false);
+		await session.prompt("Buffered partial output may be replayed");
+		await session.waitForIdle();
+
+		expect(streamCalls).toBe(3);
 		expect(retryStartEvents).toHaveLength(1);
 		expect(retryEndEvents).toHaveLength(1);
 		expect(retryEndEvents[0]).toMatchObject({ success: true });

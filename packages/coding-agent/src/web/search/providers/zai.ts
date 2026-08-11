@@ -322,11 +322,20 @@ function parseSearchPayload(rawResult: unknown): {
 			for (const part of content) {
 				const text = isRecord(part) ? asString(part.text) : null;
 				if (!text) continue;
-				textParts.push(text);
 				try {
-					candidates.push(JSON.parse(text));
+					let parsed: unknown = JSON.parse(text);
+					if (typeof parsed === "string") {
+						try {
+							parsed = JSON.parse(parsed);
+						} catch {
+							// 解码后的字符串是回答文本，而不是第二层 JSON 载荷。
+						}
+					}
+					candidates.push(parsed);
+					if (getSearchResults(parsed).length === 0) textParts.push(text);
 				} catch {
-					// Not JSON payload; keep as fallback answer text.
+					// 非 JSON 内容原样保留为回答文本。
+					textParts.push(text);
 				}
 			}
 		}

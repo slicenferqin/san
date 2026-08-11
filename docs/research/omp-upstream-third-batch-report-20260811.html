@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OMP 上游第三批功能与性能修复验收报告｜2026-08-11</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17211c;
+      --muted: #657168;
+      --paper: #f1efe7;
+      --panel: #fffdf8;
+      --line: #d7ddd7;
+      --green: #176647;
+      --green-soft: #e7f2eb;
+      --blue: #245e83;
+      --blue-soft: #e9f2f7;
+      --amber: #89590f;
+      --amber-soft: #fbf0d8;
+      --shadow: 0 14px 34px rgb(25 45 34 / 8%);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 7% 0%, rgb(36 94 131 / 11%), transparent 31rem),
+        radial-gradient(circle at 94% 7%, rgb(23 102 71 / 10%), transparent 35rem),
+        var(--paper);
+      font: 16px/1.65 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    main { width: min(1180px, calc(100% - 36px)); margin: 34px auto 72px; }
+    header, section { border: 1px solid var(--line); border-radius: 18px; background: var(--panel); box-shadow: var(--shadow); }
+    header { padding: 38px 42px; border-top: 7px solid var(--green); }
+    section { margin-top: 20px; padding: 28px 32px; }
+    h1, h2, h3 { margin-top: 0; line-height: 1.22; }
+    h1 { margin-bottom: 12px; font-size: clamp(2rem, 5vw, 3.2rem); letter-spacing: -0.04em; }
+    h2 { padding-bottom: 10px; border-bottom: 1px solid var(--line); color: var(--green); font-size: 1.42rem; }
+    p { max-width: 94ch; }
+    a { color: var(--blue); text-underline-offset: 3px; }
+    code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+    code { padding: 0.08em 0.34em; border: 1px solid #dfe7e1; border-radius: 5px; background: #edf2ee; overflow-wrap: anywhere; }
+    .meta { display: flex; flex-wrap: wrap; gap: 9px 24px; color: var(--muted); font-size: 0.92rem; }
+    .lede { max-width: 88ch; color: #405349; font-size: 1.12rem; }
+    .status { display: inline-block; margin-bottom: 13px; padding: 4px 10px; border-radius: 999px; color: #fff; background: var(--green); font-size: 0.82rem; font-weight: 800; }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 20px; }
+    .card { padding: 15px 16px; border: 1px solid var(--line); border-radius: 12px; background: #f8faf8; }
+    .card strong { display: block; color: var(--green); font-size: 1.42rem; line-height: 1.12; }
+    .card span { color: var(--muted); font-size: 0.87rem; }
+    .callout { padding: 15px 18px; border-left: 5px solid var(--blue); border-radius: 9px; background: var(--blue-soft); }
+    .callout.good { border-left-color: var(--green); background: var(--green-soft); }
+    .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    table { width: 100%; margin-top: 14px; border-collapse: collapse; }
+    th, td { padding: 12px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 0.84rem; letter-spacing: 0.04em; text-transform: uppercase; }
+    td:first-child { width: 17%; font-weight: 750; }
+    .tag { display: inline-block; padding: 2px 7px; border-radius: 5px; color: #fff; background: var(--green); font: 750 0.78rem/1.6 ui-monospace, monospace; }
+    .tag.blue { background: var(--blue); }
+    .tag.amber { background: var(--amber); }
+    .small { color: var(--muted); font-size: 0.88rem; }
+    ul { padding-left: 1.3rem; }
+    li + li { margin-top: 6px; }
+    @media (max-width: 850px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 620px) {
+      main { width: min(100% - 18px, 1180px); margin-top: 12px; }
+      header, section { padding: 22px 19px; border-radius: 13px; }
+      .cards { grid-template-columns: 1fr; }
+      table, thead, tbody, tr, th, td { display: block; width: 100%; }
+      thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+      tbody { display: grid; gap: 12px; }
+      tr { padding: 5px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fffefa; }
+      td, td:first-child { width: 100%; padding: 8px 0; border-bottom: 1px dashed var(--line); overflow-wrap: anywhere; }
+      td:last-child { border-bottom: 0; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="status">第三批实现与全量验收完成</span>
+    <div class="meta">
+      <span>报告日期：2026-08-11</span>
+      <span>分支：<code>feat/upstream-v17.2-selective-absorption</code></span>
+      <span>基线：<code>origin/main@e747f9511529</code></span>
+      <span>上游：<code>v17.2.12@45e12e5bb758</code></span>
+    </div>
+    <h1>OMP 上游第三批功能与性能修复验收报告</h1>
+    <p class="lede">本批吸收三条已发布合同链：Linux Chromium 候选校验、AI 额度/限流/并发分类，以及扩展模块并行导入。主审补齐了跨 AI、Utils 与 coding-agent 的重置窗口、并发退避和 Copilot 凭证保留，所有改动与前两批一并保留在工作区，未 commit、未 push、未创建 PR。</p>
+    <div class="cards">
+      <div class="card"><strong>3 条</strong><span>互斥实现工作流</span></div>
+      <div class="card"><strong>13 个</strong><span>已发布上游提交</span></div>
+      <div class="card"><strong>186 / 0</strong><span>组合聚焦通过 / 失败</span></div>
+      <div class="card"><strong>135 / 0</strong><span>coding-agent 分块通过 / 失败</span></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>1. 交付结论</h2>
+    <div class="callout good"><strong>结论：</strong>第三批 22 个实现、测试与 changelog 文件已完成 San 结构适配；仓库检查和四个相关包的全量回归均通过。未吸收开放 PR，也未把 Agent Hub、native fuzzy-find 或 RPC v3 混入本批。</div>
+    <ul>
+      <li>系统 Chromium 候选必须是普通可执行文件，并通过有界 <code>--version</code> 探针确认 Chromium、Chrome 或 Edge 身份；显式 <code>PUPPETEER_EXECUTABLE_PATH</code> 仍保持最高优先级。</li>
+      <li>浏览器探针 3 秒触发终止、3.5 秒封顶输出读取，并在读取 stdout 尾部后再检查退出状态，既不会无限挂起，也不会竞速误拒绝正常浏览器。</li>
+      <li>真正的订阅、账号和简中额度耗尽会轮换兄弟凭证；计划分钟限额、并发、速率和频率上限保持瞬时退避，不消耗健康账号。</li>
+      <li>账号级 403 与无状态码 Connect 尾帧可直接轮换；非计费并发 403 不进入 auth rotation，HTTP 402 的计费语义仍优先。</li>
+      <li>“Your limit will reset in …” 重置窗口优先于短时 retry hint，并透传到凭证封禁时长；coding-agent 对并发上限至少退避 5 秒，且不删除仍有效的 Copilot 凭证。</li>
+      <li>扩展 module import 并行执行，factory/bind 严格按输入顺序串行；单个导入或 factory 失败不阻断批次，provider 注册回滚合同不变。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>2. 上游追溯与 San 适配</h2>
+    <table>
+      <thead><tr><th>主题</th><th>上游提交</th><th>San 落地合同</th><th>边界</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="tag blue">Browser</span></td>
+          <td><a href="https://github.com/can1357/oh-my-pi/commit/ecb22957cf0b00554041e13ec338d2826a6967e5"><code>ecb22957cf</code></a>、<a href="https://github.com/can1357/oh-my-pi/commit/e1a7c17c2be785f5591b6da403ff042387de35c4"><code>e1a7c17c2b</code></a>、<a href="https://github.com/can1357/oh-my-pi/commit/30bbfd69e7b1ffbaeafab680590c522d806877f8"><code>30bbfd69e7</code></a></td>
+          <td>文件/X_OK 校验、Chromium-family 版本识别、有界终止与 stdout/exit 正确时序。</td>
+          <td>不引入完整 browser discovery 重构；显式路径不强制探针，保持用户覆盖语义。</td>
+        </tr>
+        <tr>
+          <td><span class="tag">Rate limit</span></td>
+          <td><code>216f863063</code>、<code>9d51aabce9</code>、<code>7262d9762e</code>、<code>5726fac646</code>、<code>e322f28fcc</code>、<code>a6eafcbf6b</code>、<code>e8e3fbc4c8</code>、<code>3d12722dba</code>、<code>f087a9050d</code></td>
+          <td>最终分类器、auth/stream 门控、账号重置窗口、5 秒并发退避、Copilot 凭证保留，以及中英文正反合同。</td>
+          <td>按 San 尚未拆分的 <code>AgentSession</code> 适配；没有重复已存在的显式 retry-after precedence 修复。</td>
+        </tr>
+        <tr>
+          <td><span class="tag amber">Extensions</span></td>
+          <td><a href="https://github.com/can1357/oh-my-pi/commit/d2126b94f41ae78131cb68889be71a98fee2a9a5"><code>d2126b94f4</code></a>（#7615）</td>
+          <td><code>Promise.all</code> 并行完成模块导入/顶层求值，再按原始 path 顺序串行执行 factory。</td>
+          <td>保留 San <code>runExtensionFactory()</code> 的 provider-registration checkpoint/rollback，不改变覆盖顺序。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>3. 分工与主审补全</h2>
+    <table>
+      <thead><tr><th>所有者</th><th>独占文件域</th><th>验收重点</th></tr></thead>
+      <tbody>
+        <tr><td>G · Browser</td><td><code>tools/browser/launch.ts</code> 与 browser launch 测试。</td><td>保留第二批显式路径优先级；验证无效、无权限与挂起 wrapper。</td></tr>
+        <tr><td>H · AI 分类</td><td>AI rate-limit/auth/stream/AuthStorage 六个源码文件与四个现有测试文件。</td><td>逐项核对 v17.2 最终分类，不回退首批 AccountPolicy 轮换。</td></tr>
+        <tr><td>I · Extensions</td><td>extension loader 与新增并发合同测试。</td><td>证明 import 并发、factory 串行、失败隔离和 provider 回滚。</td></tr>
+        <tr><td>主代理</td><td>Utils retry-hint、AgentSession/Copilot 集成、相邻测试、三个 changelog、报告与全量验收。</td><td>发现初始文件域未覆盖上游的 reset-window parser 和 coding-agent 恢复分支后补齐，避免只完成 AI 层分类而主会话行为仍落后。</td></tr>
+      </tbody>
+    </table>
+    <p class="small">三名子代理之间没有竞争同一文件；主代理只在各自释放文件后审查和补跨包集成。</p>
+  </section>
+
+  <section>
+    <h2>4. 验收证据</h2>
+    <table>
+      <thead><tr><th>层级</th><th>范围</th><th>结果</th></tr></thead>
+      <tbody>
+        <tr><td>组合聚焦</td><td>Utils reset hint、AI rate-limit/auth/stream/AuthStorage、Browser、Extension loader/rollback、Copilot credential 与 AgentSession retry fallback，共 12 个文件。</td><td><strong>186 pass，0 fail</strong>，789 assertions。</td></tr>
+        <tr><td>AI 包级</td><td><code>bun test --parallel</code></td><td><strong>2991 pass，337 skip，0 fail</strong>，291 个文件。</td></tr>
+        <tr><td>Utils 包级</td><td><code>bun test --parallel</code></td><td><strong>474 pass，0 fail</strong>，43 个文件。</td></tr>
+        <tr><td>TUI 包级</td><td><code>bun test --parallel test/*.test.ts</code></td><td><strong>1306 pass，0 fail</strong>，81 个文件。</td></tr>
+        <tr><td>coding-agent 全量</td><td><code>bun ../../scripts/ci-test-ts.ts coding-agent-heavy --only-failures</code></td><td><strong>135 chunks passed，0 failed</strong>，106.4s。</td></tr>
+        <tr><td>仓库检查</td><td><code>bun check</code></td><td>Biome 检查 3733 个文件；全部 workspace TypeScript 检查通过；无 Rust 影响，按仓库规则跳过 Rust。</td></tr>
+        <tr><td>补丁卫生</td><td><code>git diff --check</code>；HTML 使用 parse5 解析。</td><td><strong>通过</strong>。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>5. 边界与当前状态</h2>
+    <div class="callout warn"><strong>范围控制：</strong>本批只吸收已进入 v17.2.12 的稳定提交。仍开放的 MCP timeout/close、shutdown、Gemini review 等 PR 保持观察；Agent Hub 性能链与 native fuzzy-find top-K 留在独立性能批次。</div>
+    <ul>
+      <li>没有引入 RPC v3、operation/job/session authority 协议迁移。</li>
+      <li>没有声称未经 benchmark 测量的扩展启动百分比收益；性能结论只陈述串行 I/O/顶层求值路径已消除。</li>
+      <li>首批、第二批与第三批仍共同位于未提交工作区；未 commit、未 push、未创建 PR。</li>
+      <li><code>docs/research/avernet-san-absorption-assessment-20260810.html</code> 是既有无关文件，本批未修改。</li>
+    </ul>
+    <p class="small">关联文档：<a href="./omp-upstream-second-batch-report-20260811.html">第二批验收报告</a>、<a href="./omp-upstream-selective-absorption-report-20260811.html">首批验收报告</a>、<a href="./omp-upstream-next-wave-recommendations-20260811.html">后续推荐依据</a>、<a href="./omp-upstream-selective-absorption-plan-20260811.html">总体实施计划</a>。</p>
+  </section>
+</main>
+</body>
+</html>

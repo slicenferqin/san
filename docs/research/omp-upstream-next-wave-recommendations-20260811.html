@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OMP 上游下一批吸收建议｜2026-08-11</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17211c;
+      --muted: #657168;
+      --paper: #f1efe7;
+      --panel: #fffdf8;
+      --line: #d7ddd7;
+      --green: #176647;
+      --green-soft: #e7f2eb;
+      --blue: #245e83;
+      --blue-soft: #e9f2f7;
+      --amber: #89590f;
+      --amber-soft: #fbf0d8;
+      --red: #963e38;
+      --shadow: 0 14px 34px rgb(25 45 34 / 8%);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 7% 0%, rgb(36 94 131 / 11%), transparent 31rem),
+        radial-gradient(circle at 94% 7%, rgb(23 102 71 / 10%), transparent 35rem),
+        var(--paper);
+      font: 16px/1.65 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    main { width: min(1180px, calc(100% - 36px)); margin: 34px auto 72px; }
+    header, section { border: 1px solid var(--line); border-radius: 18px; background: var(--panel); box-shadow: var(--shadow); }
+    header { padding: 38px 42px; border-top: 7px solid var(--green); }
+    section { margin-top: 20px; padding: 28px 32px; }
+    h1, h2, h3 { margin-top: 0; line-height: 1.22; }
+    h1 { margin-bottom: 12px; font-size: clamp(2rem, 5vw, 3.35rem); letter-spacing: -0.04em; }
+    h2 { padding-bottom: 10px; border-bottom: 1px solid var(--line); color: var(--green); font-size: 1.42rem; }
+    h3 { margin-bottom: 7px; color: var(--blue); font-size: 1.04rem; }
+    p { max-width: 94ch; }
+    a { color: var(--blue); text-underline-offset: 3px; }
+    code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+    code { padding: 0.08em 0.34em; border: 1px solid #dfe7e1; border-radius: 5px; background: #edf2ee; overflow-wrap: anywhere; }
+    .meta { display: flex; flex-wrap: wrap; gap: 9px 24px; color: var(--muted); font-size: 0.92rem; }
+    .lede { max-width: 88ch; color: #405349; font-size: 1.12rem; }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 20px; }
+    .card { padding: 15px 16px; border: 1px solid var(--line); border-radius: 12px; background: #f8faf8; }
+    .card strong { display: block; color: var(--green); font-size: 1.32rem; line-height: 1.15; }
+    .card span { color: var(--muted); font-size: 0.87rem; }
+    .callout { padding: 15px 18px; border-left: 5px solid var(--blue); border-radius: 9px; background: var(--blue-soft); }
+    .callout.good { border-left-color: var(--green); background: var(--green-soft); }
+    .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    table { width: 100%; margin-top: 14px; border-collapse: collapse; }
+    th, td { padding: 12px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 0.84rem; letter-spacing: 0.04em; text-transform: uppercase; }
+    td:first-child { width: 13%; font-weight: 750; }
+    .tag { display: inline-block; padding: 2px 7px; border-radius: 5px; color: #fff; background: var(--green); font: 750 0.78rem/1.6 ui-monospace, monospace; }
+    .tag.blue { background: var(--blue); }
+    .tag.amber { background: var(--amber); }
+    .tag.red { background: var(--red); }
+    .small { color: var(--muted); font-size: 0.88rem; }
+    ul, ol { padding-left: 1.3rem; }
+    li + li { margin-top: 6px; }
+    @media (max-width: 850px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 620px) {
+      main { width: min(100% - 18px, 1180px); margin-top: 12px; }
+      header, section { padding: 22px 19px; border-radius: 13px; }
+      .cards { grid-template-columns: 1fr; }
+      table, thead, tbody, tr, th, td { display: block; width: 100%; }
+      thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+      tbody { display: grid; gap: 12px; }
+      tr { padding: 5px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fffefa; }
+      td, td:first-child { width: 100%; padding: 8px 0; border-bottom: 1px dashed var(--line); overflow-wrap: anywhere; }
+      td:last-child { border-bottom: 0; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="meta">
+      <span>审计日期：2026-08-11</span>
+      <span>本地分支：<code>feat/upstream-v17.2-selective-absorption</code></span>
+      <span>上游主线：<code>45e12e5bb758</code></span>
+      <span>最新版本：<code>v17.2.12</code></span>
+    </div>
+    <h1>OMP 上游下一批吸收建议</h1>
+    <p class="lede">上游主线与上一轮审计相比没有新增提交，仍等于 v17.2.12。下一批不应立刻追逐大型开放 PR；优先补齐四个已经发布、San 本地确认仍缺失的独立合同，再把 shutdown、MCP 生命周期和长会话恢复性能列入“合并即复核”队列。</p>
+    <div class="cards">
+      <div class="card"><strong>4 项</strong><span>已发布，可进入第二批实现</span></div>
+      <div class="card"><strong>3 个文件域</strong><span>可保持互斥所有权</span></div>
+      <div class="card"><strong>6 组</strong><span>开放 PR 合并即复核</span></div>
+      <div class="card"><strong>0</strong><span>本次推荐阶段代码改动</span></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>1. 推荐结论</h2>
+    <div class="callout good"><strong>第二批建议：</strong>先做 print-mode 重放边界、Z.AI 双层 JSON、显式 Chromium 路径优先级、子进程 <code>AGENT=1</code>。四项均已进入正式版本，缺陷在 San 当前代码中可直接定位，且不依赖 Agent Plugins、RPC v3、MCP 2026 协议或 omptype 重构。</div>
+    <ol>
+      <li><strong>P0 正确性：</strong>区分“已向用户提交的文本”和“print text 模式尚未输出的缓冲文本”，避免交互模式重复输出，同时保留 headless 模式安全重试。</li>
+      <li><strong>P0 Provider：</strong>修复 Z.AI MCP 返回双层 JSON 时丢失 sources、把结构化 JSON 泄漏到 answer 的问题。</li>
+      <li><strong>P1 运行环境：</strong>明确配置的 <code>PUPPETEER_EXECUTABLE_PATH</code> 必须高于系统浏览器自动发现。</li>
+      <li><strong>P1 生态信号：</strong>所有 coding-agent 子进程带 <code>AGENT=1</code>，让下游 CLI 可靠识别自动化执行环境。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>2. 可立即吸收的已发布修复</h2>
+    <table>
+      <thead><tr><th>优先级</th><th>上游证据</th><th>San 当前缺口</th><th>建议边界与验收</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="tag">P0</span><br />重放安全</td>
+          <td><a href="https://github.com/can1357/oh-my-pi/commit/929ab1a20f64307f8e073436b38a49cdd7b99c9e"><code>929ab1a20f</code></a>；测试跟进 <code>fe6e9c28ab</code></td>
+          <td>San 的普通 transient retry 把 text/thinking partial 一律视为可重放；但交互 TUI 的文本已显示，重放可能重复。另一方面，text print mode 只在回合终态输出，缓冲 partial 本来可以安全重试。</td>
+          <td>在 AgentSession 增加输出是否已提交的 turn 状态，默认 <code>true</code>；只有 text print prompt 期间置 <code>false</code>，最终输出前恢复。tool call、image、server tool 永远保持 replay-unsafe。测试同时覆盖 TUI/JSON 与 text print。</td>
+        </tr>
+        <tr>
+          <td><span class="tag">P0</span><br />Z.AI</td>
+          <td><a href="https://github.com/can1357/oh-my-pi/commit/a709a6604f6cfce0fe2442ea967fc0c17de24154"><code>a709a6604f</code></a></td>
+          <td><code>parseSearchPayload()</code> 当前只执行一次 <code>JSON.parse</code>，并先把结构化 text 放入 answer fallback；双层编码数组无法被 <code>getSearchResults()</code> 识别。</td>
+          <td>仅改 Z.AI provider 和合同测试：第二层仅在第一次结果为 string 时尝试解析；结构化 payload 不进入 answer，普通 prose 原样保留。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">P1</span><br />Browser</td>
+          <td><a href="https://github.com/can1357/oh-my-pi/commit/62cb7a0e629308c1061eb2c3cd9dab37a5e87086"><code>62cb7a0e62</code></a></td>
+          <td><code>ensureChromiumExecutable()</code> 当前先返回系统 Chromium，导致用户显式设置的 <code>PUPPETEER_EXECUTABLE_PATH</code> 被忽略。</td>
+          <td>只调整解析优先级并用子进程/隔离环境验证；不顺带迁移浏览器发现重构。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">P1</span><br />Child env</td>
+          <td><a href="https://github.com/can1357/oh-my-pi/commit/2fe1d1991a5afc4bb9af8d268dbdcf96209cc830"><code>2fe1d1991a</code></a></td>
+          <td><code>NON_INTERACTIVE_ENV</code> 已包含 CI、pager、credential prompt 等无人值守变量，但没有标准的 <code>AGENT=1</code>。</td>
+          <td>只在统一非交互环境入口增加变量，以实际 bash 子进程输出断言；不在各 spawn 点重复注入。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>3. 建议的文件所有权</h2>
+    <table>
+      <thead><tr><th>工作流</th><th>独占文件</th><th>并行关系</th></tr></thead>
+      <tbody>
+        <tr><td>D · recovery</td><td><code>session/agent-session.ts</code>、<code>modes/print-mode.ts</code> 与对应 retry/print 测试。</td><td>两个文件已有第一批未提交改动，必须单独顺序集成，由主代理重点审查。</td></tr>
+        <tr><td>E · Z.AI</td><td><code>web/search/providers/zai.ts</code> 与 <code>test/web/search/zai.test.ts</code>。</td><td>与 D/F 完全独立，可并行。</td></tr>
+        <tr><td>F · process/browser</td><td><code>exec/non-interactive-env.ts</code>、browser launch 与各自测试。</td><td>F 内两个修复文件不重叠；可由一个所有者完成，避免测试 fixture 交叉。</td></tr>
+        <tr><td>主代理</td><td>changelog、组合测试、全量验收和报告。</td><td>统一处理第一批工作区叠加，不让子代理修改 changelog。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>4. 合并即复核的开放 PR</h2>
+    <table>
+      <thead><tr><th>等级</th><th>候选</th><th>当前判断</th><th>为何现在不吸收</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="tag">P0</span></td>
+          <td><a href="https://github.com/can1357/oh-my-pi/pull/8218">#8218 park subagents on shutdown</a></td>
+          <td>Clean、全套 CI 通过。本地确认 <code>AsyncJobManager.dispose()</code> 仍使用普通 abort，可能把进程 shutdown 误记成显式 kill tombstone。</td>
+          <td>直接叠加第一批 dispose/task executor 改动，且 PR 当天连续追加了 ownership 与 budget-race 修复；等最终合并提交稳定后按完整修复链吸收。</td>
+        </tr>
+        <tr>
+          <td><span class="tag">P0</span></td>
+          <td><a href="https://github.com/can1357/oh-my-pi/pull/8083">#8083</a>、<a href="https://github.com/can1357/oh-my-pi/pull/8124">#8124</a>、<a href="https://github.com/can1357/oh-my-pi/pull/8151">#8151</a> MCP lifecycle</td>
+          <td>三项均 Clean、CI 通过；San 当前分别缺少 body-read timeout 映射、初始 stale connection identity fence、close 时 active HTTP lifecycle abort。</td>
+          <td>它们构成同一生命周期链，应在合并后一起审查顺序和交互，避免分别补丁后留下关闭竞态。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">P1</span></td>
+          <td><a href="https://github.com/can1357/oh-my-pi/pull/8149">#8149 parsed journal reuse</a></td>
+          <td>Clean、CI 通过；San 的 <code>SessionManager.open()</code> 当前先 load，再由 <code>setSessionFile()</code> 对同一 journal 再 load，缺口确认存在。</td>
+          <td>性能收益明确且改动很小，但不是正确性缺陷；遵守“开放 PR 不提前固化”门禁。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">P1</span></td>
+          <td><a href="https://github.com/can1357/oh-my-pi/pull/8185">#8185 wire-name alias</a></td>
+          <td>Clean、CI 通过；San 的 <code>hasBuiltInTool()</code> 当前只检查内部名，apply-patch wire alias 可能丢失内建 diff renderer。</td>
+          <td>等待合并后按 San 尚未拆分的 AgentSession 结构适配，不能照搬上游 <code>session-tools.ts</code>。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">P1</span></td>
+          <td><a href="https://github.com/can1357/oh-my-pi/pull/8215">#8215 missing usage on resume</a></td>
+          <td>缺陷在 San 的 transcript builder/cache marker 访问路径中同样可见。</td>
+          <td>PR 描述仍是空模板，分支混入 OSC 133 提交；等待维护者整理或合并后只取 missing-usage 合同。</td>
+        </tr>
+        <tr>
+          <td><span class="tag amber">观察</span></td>
+          <td><a href="https://github.com/can1357/oh-my-pi/pull/8135">#8135 large transcript rebuild</a>、<a href="https://github.com/can1357/oh-my-pi/pull/8226">#8226 silent Gemini advisor</a></td>
+          <td>#8135 Clean 但跨 15 文件；#8226 尚为 Unstable，CI 仍在变化。</td>
+          <td>前者与刚修改的 event/command controller 高冲突，后者依赖上游拆分后的 session-advisors；只跟踪设计和最终合同。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>5. 暂不推荐</h2>
+    <ul>
+      <li><a href="https://github.com/can1357/oh-my-pi/pull/8152">#8152 weak conversion cache</a>：San 当前 <code>convertToLlm()</code> 没有上游新增的 module-level conversion cache，不存在同一强引用缺陷；不能只因标题与内存相关就移植。</li>
+      <li><a href="https://github.com/can1357/oh-my-pi/pull/8040">#8040 long tool-args O(N²)</a>：性能方向正确，但当前 Unstable 且没有 CI checks，涉及 utils parser 与 write renderer 新状态；等待收敛。</li>
+      <li><a href="https://github.com/can1357/oh-my-pi/pull/8167">#8167 MCP 2026-07-28</a>：30 文件、约 2.5k 行新增，是协议迁移项目，不应与 lifecycle 小修复混批。</li>
+      <li><a href="https://github.com/can1357/oh-my-pi/pull/8199">#8199 prompt tool gating</a>：方向合理，但跨 system/project/plan/orchestrate prompts，与 San execution-control 和工具清单语义重叠，需单独 prompt contract audit。</li>
+      <li>RPC v3、Agent Hub、goal/wayfinding/schedule、Agent Plugins 与 omptype：继续作为架构输入，维持上一轮的专项审计门槛。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>6. 验证来源与边界</h2>
+    <ul>
+      <li>通过代理 <code>127.0.0.1:7897</code> 更新 <code>upstream/main</code> 与 tags；主线仍为 <code>45e12e5bb758</code>，精确对应 <code>v17.2.12</code>。</li>
+      <li>开放 PR 状态、变更文件、提交链和 CI 结果来自 GitHub CLI 对官方仓库的只读查询；本地另外 fetch 了候选 PR head 进行 diff 审计。</li>
+      <li>“San 当前缺口”均由本地生产代码核对，不以 PR 标题推断；未运行或修改候选实现。</li>
+      <li>本次只新增本研究文档，没有修改生产代码、测试、changelog，也没有 commit、push 或 GitHub 写操作。</li>
+    </ul>
+    <p class="small">关联文档：<a href="./omp-upstream-selective-absorption-report-20260811.html">第一批验收报告</a>、<a href="./omp-upstream-selective-absorption-plan-20260811.html">第一批实施计划</a>。</p>
+  </section>
+</main>
+</body>
+</html>

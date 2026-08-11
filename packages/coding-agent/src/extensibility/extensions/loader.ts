@@ -310,12 +310,11 @@ async function runExtensionFactory(
 	}
 }
 
-async function loadExtension(
-	extensionPath: string,
-	cwd: string,
-	eventBus: EventBus,
-	runtime: IExtensionRuntime,
-): Promise<{ extension: Extension | null; error: string | null }> {
+type ImportedExtensionModule =
+	| { factory: ExtensionFactory; resolvedPath: string; error: null }
+	| { factory: null; resolvedPath: string; error: string };
+
+async function importExtensionModule(extensionPath: string, cwd: string): Promise<ImportedExtensionModule> {
 	const resolvedPath = resolvePath(extensionPath, cwd);
 	try {
 		const module = (await withHostGuard(() => loadLegacyPiModule(resolvedPath))) as LoadedExtensionModule;
@@ -323,14 +322,32 @@ async function loadExtension(
 
 		if (typeof factory !== "function") {
 			return {
-				extension: null,
+				factory: null,
+				resolvedPath,
 				error: `Extension does not export a valid factory function: ${extensionPath}`,
 			};
 		}
 
-		const extension = createExtension(extensionPath, resolvedPath);
+		return { factory, resolvedPath, error: null };
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		return { factory: null, resolvedPath, error: `Failed to load extension: ${message}` };
+	}
+}
+
+async function bindExtension(
+	extensionPath: string,
+	imported: ImportedExtensionModule,
+	cwd: string,
+	eventBus: EventBus,
+	runtime: IExtensionRuntime,
+): Promise<{ extension: Extension | null; error: string | null }> {
+	if (imported.error !== null) return { extension: null, error: imported.error };
+
+	try {
+		const extension = createExtension(extensionPath, imported.resolvedPath);
 		const api = new ConcreteExtensionAPI(PiCodingAgent, extension, runtime, cwd, eventBus);
-		await withHostGuard(() => runExtensionFactory(factory, api, runtime));
+		await withHostGuard(() => runExtensionFactory(imported.factory, api, runtime));
 
 		return { extension, error: null };
 	} catch (err) {
@@ -357,6 +374,9 @@ export async function loadExtensionFromFactory(
 
 /**
  * Load extensions from paths.
+ *
+ * 模块导入包含文件读取与顶层求值，是冷启动的主要成本，因此可并行执行；
+ * factory 绑定仍严格按原始路径顺序串行，保持注册覆盖和共享 runtime 状态确定。
  */
 export async function loadExtensions(paths: string[], cwd: string, eventBus?: EventBus): Promise<LoadExtensionsResult> {
 	const extensions: Extension[] = [];
@@ -364,8 +384,11 @@ export async function loadExtensions(paths: string[], cwd: string, eventBus?: Ev
 	const resolvedEventBus = eventBus ?? new EventBus();
 	const runtime = new ExtensionRuntime();
 
-	for (const extPath of paths) {
-		const { extension, error } = await loadExtension(extPath, cwd, resolvedEventBus, runtime);
+	const imported = await Promise.all(paths.map(extPath => importExtensionModule(extPath, cwd)));
+
+	for (let i = 0; i < paths.length; i++) {
+		const extPath = paths[i]!;
+		const { extension, error } = await bindExtension(extPath, imported[i]!, cwd, resolvedEventBus, runtime);
 
 		if (error) {
 			errors.push({ path: extPath, error });

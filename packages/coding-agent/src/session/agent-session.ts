@@ -895,9 +895,12 @@ interface SanBrainCaptureScopes {
  * so dispose still awaits the full consolidate-then-close pipeline.
  */
 export const SHUTDOWN_CONSOLIDATE_BUDGET_MS = 1_500;
+const SESSION_DISPOSE_DRAIN_TIMEOUT_MS = 5_000;
 
 export interface AgentSessionDisposeOptions {
 	mnemopiConsolidateTimeoutMs?: number;
+	/** dispose 等待 active run 与事件持久化链排空的期限；超时后仍会异步终态化。 */
+	drainTimeoutMs?: number;
 	/**
 	 * Postmortem reason that triggered this dispose (signal/fatal teardown
 	 * paths). When set, the persisted `session_exit` diagnostic records it
@@ -1726,6 +1729,17 @@ function createHandoffFileName(date = new Date()): string {
 	return `handoff-${fileTimestamp}.md`;
 }
 
+function throwIfHandoffAborted(signal: AbortSignal): void {
+	if (!signal.aborted) return;
+	const reason = signal.reason;
+	if (reason instanceof DOMException && reason.name === "AbortError") {
+		throw new Error("Handoff cancelled");
+	}
+	if (reason instanceof Error) throw reason;
+	if (typeof reason === "string" && reason.length > 0) throw new Error(reason);
+	throw new Error("Handoff aborted by session");
+}
+
 // ============================================================================
 // ACP Permission Gate
 // ============================================================================
@@ -2220,6 +2234,7 @@ export class AgentSession {
 	// Retry state
 	#retryAbortController: AbortController | undefined = undefined;
 	#retryAttempt = 0;
+	#textOutputCommitted = true;
 	#retryPromise: Promise<void> | undefined = undefined;
 	#retryResolve: (() => void) | undefined = undefined;
 	#activeRetryFallback: ActiveRetryFallbackState | undefined = undefined;
@@ -3888,46 +3903,43 @@ export class AgentSession {
 		const failedMessage = failedMessages.findLast(
 			(message): message is AssistantMessage => message.role === "assistant",
 		);
-		if (failedMessage?.stopReason !== "error") {
-			// Stream setup can reject before any assistant turn is recorded (e.g.
-			// an HTTP 429 thrown from prompt()); classify the raw error so a
-			// structural usage limit still marks the exhausted credential.
-			const message = error instanceof Error ? error.message : String(error);
-			if (!AIError.isUsageLimit(error) && !isUsageLimitOutcome(extractHttpStatusFromError(error), message)) {
-				return false;
-			}
-			const currentModel = advisor.agent.state.model;
-			const outcome = await this.#modelRegistry.authStorage.markUsageLimitReached(
-				currentModel.provider,
-				advisor.providerSessionId,
-				{
-					retryAfterMs: extractRetryHint(undefined, message),
-					baseUrl: currentModel.baseUrl,
-					modelId: currentModel.id,
-				},
-			);
-			return outcome.switched;
-		}
-		if (failedMessage.content.some(block => block.type === "toolCall")) return false;
+		const assistantFailure = failedMessage?.stopReason === "error" ? failedMessage : undefined;
+		// Advisor 不经过 text print 的最终输出缓冲，非空文本始终按已提交处理。
+		if (assistantFailure && this.#hasReplayUnsafeOutput(assistantFailure, true)) return false;
 
 		const currentModel = advisor.agent.state.model;
-		const message = failedMessage.errorMessage ?? (error instanceof Error ? error.message : String(error));
-		const errorId = AIError.classifyMessage({
-			api: currentModel.api,
-			errorId: failedMessage.errorId,
-			errorMessage: message,
-			errorStatus: failedMessage.errorStatus,
-		});
+		const message = assistantFailure?.errorMessage ?? (error instanceof Error ? error.message : String(error));
+		const errorId = assistantFailure
+			? AIError.classifyMessage({
+					api: currentModel.api,
+					errorId: assistantFailure.errorId,
+					errorMessage: message,
+					errorStatus: assistantFailure.errorStatus,
+				})
+			: AIError.classify(error, currentModel.api);
 		if (AIError.is(errorId, AIError.Flag.Abort) || AIError.is(errorId, AIError.Flag.UserInterrupt)) return false;
-		if (AIError.isContextOverflow(failedMessage, currentModel.contextWindow ?? 0)) return false;
+		if (
+			AIError.is(errorId, AIError.Flag.ContextOverflow) ||
+			(assistantFailure && AIError.isContextOverflow(assistantFailure, currentModel.contextWindow ?? 0))
+		) {
+			return false;
+		}
 
-		const currentSelector = formatRetryFallbackSelector(currentModel, advisor.thinkingLevel);
+		const accountPolicyDenial = AIError.is(errorId, AIError.Flag.AccountPolicy);
+		if (accountPolicyDenial) {
+			const switched = await this.#modelRegistry.authStorage.rotateSessionCredential(
+				currentModel.provider,
+				advisor.providerSessionId,
+				{ error: message, modelId: currentModel.id },
+			);
+			if (switched) return true;
+		}
 
 		const retryAfterMs = extractRetryHint(undefined, message);
-		if (
+		const usageLimit =
 			AIError.is(errorId, AIError.Flag.UsageLimit) ||
-			isUsageLimitOutcome(extractHttpStatusFromError(error), message)
-		) {
+			isUsageLimitOutcome(extractHttpStatusFromError(error), message);
+		if (usageLimit) {
 			const outcome = await this.#modelRegistry.authStorage.markUsageLimitReached(
 				currentModel.provider,
 				advisor.providerSessionId,
@@ -3939,6 +3951,9 @@ export class AgentSession {
 			);
 			if (outcome.switched) return true;
 		}
+		if (!assistantFailure && !accountPolicyDenial && !usageLimit) return false;
+
+		const currentSelector = formatRetryFallbackSelector(currentModel, advisor.thinkingLevel);
 
 		const retrySettings = this.settings.getGroup("retry");
 		if (!retrySettings.enabled || !retrySettings.modelFallback) return false;
@@ -4562,6 +4577,25 @@ export class AgentSession {
 
 	// Track last assistant message for auto-compaction check
 	#lastAssistantMessage: AssistantMessage | undefined = undefined;
+	/**
+	 * agent-core 以 fire-and-forget 方式调用订阅者；即使 agent.waitForIdle() 已完成，
+	 * message_end/agent_end 仍可能停在扩展 hook 或持久化 await 中。
+	 */
+	#inFlightEventHandlers = new Set<Promise<void>>();
+
+	/** 同步登记事件处理 Promise，供 dispose 在释放 transcript 前排空。 */
+	#handleAgentEvent = (event: AgentEvent): Promise<void> => {
+		const processing = this.#dispatchAgentEvent(event);
+		this.#inFlightEventHandlers.add(processing);
+		void processing.finally(() => this.#inFlightEventHandlers.delete(processing)).catch(() => {});
+		return processing;
+	};
+
+	async #drainInFlightEventHandlers(): Promise<void> {
+		while (this.#inFlightEventHandlers.size > 0) {
+			await Promise.allSettled([...this.#inFlightEventHandlers]);
+		}
+	}
 
 	/** Internal handler for agent events - shared by subscribe and reconnect.
 	 *
@@ -4577,7 +4611,7 @@ export class AgentSession {
 	 * `#postPromptTasksPromise` is set the moment `#emit` invokes this handler, so
 	 * the recovery wait always sees the in-flight handler and blocks until it — and
 	 * everything it schedules — settles. */
-	#handleAgentEvent = async (event: AgentEvent): Promise<void> => {
+	#dispatchAgentEvent = async (event: AgentEvent): Promise<void> => {
 		if (event.type !== "agent_end") {
 			return this.#processAgentEvent(event);
 		}
@@ -5202,7 +5236,9 @@ export class AgentSession {
 		// Check auto-retry and auto-compaction after agent completes
 		if (event.type === "agent_end") {
 			await this.#waitForMessageEndPersistence();
-			const settledMessages = this.agent.state.messages;
+			// dispose 的 bounded drain 可能在扩展 hook 完成前释放 agent.state；
+			// 固化本次 settle 的数组，保证 agent_end/session_stop 仍能看到完整 transcript。
+			const settledMessages = [...this.agent.state.messages];
 			const eventAssistant = this.#latestAssistantMessage(event.messages);
 			// TTSR retry work runs concurrently and clears the live flag before
 			// maintenance can emit agent_end, so preserve the state at settle entry.
@@ -5253,14 +5289,18 @@ export class AgentSession {
 			};
 			maintenanceRoute("entered");
 
-			// Invalidate GitHub Copilot credentials on auth failure so stale tokens
-			// aren't reused on the next request
-			if (
-				msg.stopReason === "error" &&
-				msg.provider === "github-copilot" &&
-				AIError.is(AIError.classifyMessage(msg), AIError.Flag.AuthFailed)
-			) {
-				await this.#modelRegistry.authStorage.remove("github-copilot");
+			// Copilot 的硬认证失败会使旧凭证失效；账号额度和并发上限只需轮换或短暂退避，
+			// 不能删除仍然有效的凭证。
+			if (msg.stopReason === "error" && msg.provider === "github-copilot") {
+				const errorId = AIError.classifyMessage(msg);
+				const concurrencyCap = parseRateLimitReason(msg.errorMessage ?? "") === "CONCURRENT_LIMIT";
+				if (
+					AIError.is(errorId, AIError.Flag.AuthFailed) &&
+					!AIError.is(errorId, AIError.Flag.UsageLimit) &&
+					!concurrencyCap
+				) {
+					await this.#modelRegistry.authStorage.remove("github-copilot");
+				}
 			}
 
 			if (this.#skipPostTurnMaintenanceAssistantTimestamp === msg.timestamp) {
@@ -7710,7 +7750,6 @@ export class AgentSession {
 		await cleanupEmptyMoveSession(this.sessionManager, this.#movedFromEmptySessionFile);
 		this.#movedFromEmptySessionFile = undefined;
 		await this.#contextProbeWrite;
-		await this.sessionManager.close();
 		// beginDispose() stopped the advisor and captured its recorder close; await
 		// it so the final advisor turn is flushed before the process may exit.
 		await this.#advisorRecorderClosed;
@@ -7771,6 +7810,49 @@ export class AgentSession {
 			this.#unsubscribeModelRoles = undefined;
 		}
 		this.#eventListeners = [];
+
+		// 停止继续捕获 provider 帧；agent.abort() 只发出中止信号，核心 run 与
+		// fire-and-forget 事件处理仍需排空后才能安全释放内存。
+		this.agent.setProviderResponseInterceptor(undefined);
+		this.agent.setRawSseEventInterceptor(undefined);
+		let drained = false;
+		try {
+			await withTimeout(
+				(async () => {
+					await this.agent.waitForIdle();
+					await this.#drainInFlightEventHandlers();
+				})(),
+				options.drainTimeoutMs ?? SESSION_DISPOSE_DRAIN_TIMEOUT_MS,
+				"Timed out waiting for the active agent run to settle during dispose",
+			);
+			drained = true;
+		} catch (error) {
+			logger.warn("Active agent run still settling at dispose deadline", { error: String(error) });
+		}
+
+		// seal 必须先于最终 close：超时事件可能在 close 等待 disk tail 时恢复，
+		// 但旧 manager 从此不能再向已被新会话打开的 transcript 排队写入。
+		this.sessionManager.seal();
+		await this.sessionManager.close();
+		this.#releaseRetainedSessionMemory();
+
+		// deadline 不会取消原事件链。链路最终结束后再清一次内存；磁盘写屏障已
+		// 升起，因此这次终态化不会与 revival 的新 manager 竞争。
+		if (!drained) {
+			void (async () => {
+				await this.agent.waitForIdle();
+				await this.#drainInFlightEventHandlers();
+				this.#releaseRetainedSessionMemory();
+			})().catch(error => logger.warn("Deferred dispose finalization failed", { error: String(error) }));
+		}
+	}
+
+	/** 释放 dispose 后不再使用的全部会话内存副本。 */
+	#releaseRetainedSessionMemory(): void {
+		this.agent.reset();
+		this.agent.setAppendOnlyContext(undefined);
+		this.rawSseDebugBuffer.clear();
+		this.sessionManager.releaseRetainedEntries();
 	}
 
 	#closeAllProviderSessions(reason: string): void {
@@ -7891,6 +7973,11 @@ export class AgentSession {
 	/** Current effective system prompt blocks (includes any per-turn extension modifications) */
 	get systemPrompt(): string[] {
 		return this.agent.state.systemPrompt;
+	}
+
+	/** 标记流式文本是否已经写入当前输出端，供重放安全判定使用。 */
+	setTextOutputCommitted(committed: boolean): void {
+		this.#textOutputCommitted = committed;
 	}
 
 	/** Current retry attempt (0 if not retrying) */
@@ -12197,6 +12284,9 @@ export class AgentSession {
 			this.abortRetry();
 			this.#promptGeneration++;
 			this.#scheduledHiddenNextTurnGeneration = undefined;
+			// 先把宿主原因写入 handoff signal，避免随后通用 compaction abort
+			// 用无原因的 AbortError 覆盖它。
+			this.abortHandoff(new Error(options?.reason ?? "Handoff aborted by session"));
 			if (options?.preserveCompaction) {
 				// Manual `/compact` installed its own #compactionAbortController before
 				// this internal abort and must keep it alive (that marker is what makes
@@ -12208,7 +12298,6 @@ export class AgentSession {
 			} else {
 				this.abortCompaction();
 			}
-			this.abortHandoff();
 			this.abortBash();
 			this.abortEval();
 			const postPromptDrain = this.#cancelPostPromptTasks();
@@ -13930,8 +14019,8 @@ export class AgentSession {
 	/**
 	 * Cancel in-progress handoff generation.
 	 */
-	abortHandoff(): void {
-		this.#handoffAbortController?.abort();
+	abortHandoff(reason?: Error): void {
+		this.#handoffAbortController?.abort(reason);
 	}
 
 	/**
@@ -13970,7 +14059,7 @@ export class AgentSession {
 		const handoffSignal = handoffAbortController.signal;
 		const onSourceAbort = () => {
 			if (!handoffSignal.aborted) {
-				handoffAbortController.abort();
+				handoffAbortController.abort(sourceSignal?.reason);
 			}
 		};
 		if (sourceSignal) {
@@ -13981,9 +14070,7 @@ export class AgentSession {
 		}
 
 		try {
-			if (handoffSignal.aborted) {
-				throw new Error("Handoff cancelled");
-			}
+			throwIfHandoffAborted(handoffSignal);
 
 			const model = this.model;
 			if (!model) {
@@ -14055,14 +14142,10 @@ export class AgentSession {
 			);
 			const handoffText = this.#deobfuscateFromProvider(rawHandoffText);
 
-			if (handoffSignal.aborted) {
-				throw new Error("Handoff cancelled");
-			}
+			throwIfHandoffAborted(handoffSignal);
 			return handoffText || undefined;
 		} catch (error) {
-			if (handoffSignal.aborted) {
-				throw new Error("Handoff cancelled");
-			}
+			throwIfHandoffAborted(handoffSignal);
 			throw error;
 		} finally {
 			sourceSignal?.removeEventListener("abort", onSourceAbort);
@@ -14085,8 +14168,15 @@ export class AgentSession {
 			promptGeneration: this.#promptGeneration,
 		});
 		const handoffText = await this.generateHandoffDocument(customInstructions, options?.signal);
-		if (!handoffText) {
-			return undefined;
+		if (!handoffText || handoffText.trim().length === 0) {
+			logger.warn("Handoff generation produced no content", {
+				sessionId: this.sessionId,
+				autoTriggered: options?.autoTriggered ?? false,
+			});
+			// 自动 handoff 是 best-effort：返回 undefined 让既有 maintenance
+			// 流程回退到 context-full；手动命令必须显式暴露真实失败。
+			if (options?.autoTriggered) return undefined;
+			throw new Error("Handoff generation produced no content");
 		}
 
 		// Start a new session
@@ -18095,33 +18185,46 @@ export class AgentSession {
 	}
 
 	/**
-	 * Check if an error is retryable (transient errors or usage limits).
-	 * Context overflow is NOT retryable (handled by compaction instead).
-	 * Usage-limit errors are retryable because the retry handler performs credential switching.
+	 * 判断错误能否安全重试：瞬态错误、用量上限，以及可轮换兄弟凭证的账号策略拒绝。
+	 * 上下文超限由 compaction 处理，已经产生外部可见输出的策略拒绝不能重放。
 	 */
 	#isRetryableError(message: AssistantMessage): boolean {
 		if (message.stopReason !== "error") return false;
 
 		const id = this.#classifyRetryMessage(message);
+		if (AIError.is(id, AIError.Flag.Abort) || AIError.is(id, AIError.Flag.UserInterrupt)) return false;
+		// 上下文超限由 compaction 处理，不能进入重试链。
+		const contextWindow = this.model?.contextWindow ?? 0;
+		if (AIError.isContextOverflow(message, contextWindow)) return false;
+		const replayUnsafe = this.#hasReplayUnsafeOutput(message);
+		if (AIError.is(id, AIError.Flag.AccountPolicy)) return !replayUnsafe;
 		// Auth failures are terminal for the current model even when a provider
 		// also stamped a transient or classifier-refusal bit. Credential rotation
 		// remains provider-internal; this path must not replay the same model.
 		if (AIError.is(id, AIError.Flag.AuthFailed) || AIError.is(id, AIError.Flag.OAuthExpiry)) return false;
-		// Context overflow is handled by compaction, not retry
-		const contextWindow = this.model?.contextWindow ?? 0;
-		if (AIError.isContextOverflow(message, contextWindow)) return false;
 
+		if (replayUnsafe) return false;
 		if (this.#isClassifierRefusal(message)) return true;
-		return AIError.retriable(id, { replayUnsafe: this.#hasReplayUnsafeToolOutput(message) });
+		return AIError.retriable(id);
 	}
 	/**
-	 * Retried turns remove the failed assistant message from active context.
-	 * Text/thinking-only partials are safe to discard and replay. Retained
-	 * tool calls are not: a completed tool call may already have emitted its
-	 * tool result after this assistant message, so replaying can duplicate work.
+	 * 重试会从 active context 移除失败消息。纯推理、空白文本和尚未写入输出端的
+	 * 缓冲文本可以丢弃重放；已提交文本、图片、工具调用以及未来新增的服务端工具
+	 * 都可能产生可见输出或副作用，必须视为不可重放。
 	 */
-	#hasReplayUnsafeToolOutput(message: AssistantMessage): boolean {
-		return message.content.some(block => block.type === "toolCall");
+	#hasReplayUnsafeOutput(message: AssistantMessage, textOutputCommitted = this.#textOutputCommitted): boolean {
+		return message.content.some(block => {
+			switch (block.type) {
+				case "thinking":
+				case "redactedThinking":
+				case "fallback":
+					return false;
+				case "text":
+					return textOutputCommitted && block.text.trim().length > 0;
+				default:
+					return true;
+			}
+		});
 	}
 
 	#isClassifierRefusal(message: AssistantMessage): boolean {
@@ -18135,9 +18238,9 @@ export class AgentSession {
 		id: number = this.#classifyRetryMessage(message),
 	): RouteFailureCategory | undefined {
 		if (message.stopReason !== "error") return undefined;
-		if (this.#isClassifierRefusal(message) || AIError.is(id, AIError.Flag.ContentBlocked)) return "refusal";
 		if (AIError.is(id, AIError.Flag.Abort) || AIError.is(id, AIError.Flag.UserInterrupt)) return "user_abort";
 		if (AIError.isContextOverflow(message, this.model?.contextWindow ?? 0)) return "context_overflow";
+		if (this.#isClassifierRefusal(message) || AIError.is(id, AIError.Flag.ContentBlocked)) return "refusal";
 		if (AIError.is(id, AIError.Flag.AuthFailed)) return "auth_failed";
 
 		const status = message.errorStatus ?? extractHttpStatusFromError({ message: message.errorMessage });
@@ -18598,7 +18701,7 @@ export class AgentSession {
 			!routing.routeFallback ||
 			!previousRoute ||
 			!this.#modelRouteLease.matchesModel(this.model) ||
-			this.#hasReplayUnsafeToolOutput(message)
+			this.#hasReplayUnsafeOutput(message)
 		) {
 			return { switched: false, deferCrossModelFallback: false };
 		}
@@ -18705,7 +18808,7 @@ export class AgentSession {
 		const model = this.#activeFireworksFastModel();
 		if (!model) return false;
 		if (message.stopReason !== "error") return false;
-		if (message.content.some(block => block.type === "toolCall")) return false;
+		if (this.#hasReplayUnsafeOutput(message)) return false;
 		// A content refusal/sensitivity stop is the model's decision, not a route
 		// failure — switching to the base model would just re-trigger it.
 		if (this.#isClassifierRefusal(message)) return false;
@@ -18721,8 +18824,10 @@ export class AgentSession {
 		const routing = this.settings.getGroup("routing");
 		if (!routing.enabled || !routing.routeFallback) return false;
 		if (!this.#modelRouteLease.active || !this.#modelRouteLease.matchesModel(this.model)) return false;
-		if (this.#hasReplayUnsafeToolOutput(message)) return false;
-		return this.#classifyModelRouteFailure(message) !== undefined;
+		if (this.#hasReplayUnsafeOutput(message)) return false;
+		const id = this.#classifyRetryMessage(message);
+		if (AIError.is(id, AIError.Flag.AccountPolicy)) return false;
+		return this.#classifyModelRouteFailure(message, id) !== undefined;
 	}
 
 	/**
@@ -18744,9 +18849,10 @@ export class AgentSession {
 		if (!retrySettings.enabled || !retrySettings.modelFallback) return false;
 		if (this.#isClassifierRefusal(message)) return false;
 		const id = this.#classifyRetryMessage(message);
+		if (AIError.is(id, AIError.Flag.AccountPolicy)) return false;
 		if (AIError.is(id, AIError.Flag.Abort) || AIError.is(id, AIError.Flag.UserInterrupt)) return false;
 		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;
-		if (this.#hasReplayUnsafeToolOutput(message)) return false;
+		if (this.#hasReplayUnsafeOutput(message)) return false;
 		const currentSelector = formatRetryFallbackSelector(model, this.thinkingLevel);
 		const role = this.#activeRetryFallback?.role ?? this.#resolveRetryFallbackRole(currentSelector);
 		if (!role) return false;
@@ -19121,8 +19227,6 @@ export class AgentSession {
 		// not a retry loop, so it runs even when the user disabled retries: it switches
 		// the model once and lets the base turn proceed.
 		if (!retrySettings.enabled && !options?.fireworksFastFallback) return false;
-		const classifierRefusal = this.#isClassifierRefusal(message);
-
 		const generation = this.#promptGeneration;
 		this.#retryAttempt++;
 
@@ -19144,6 +19248,8 @@ export class AgentSession {
 
 		const errorMessage = message.errorMessage || "Unknown error";
 		const id = this.#classifyRetryMessage(message);
+		const accountPolicyDenial = AIError.is(id, AIError.Flag.AccountPolicy);
+		const classifierRefusal = !accountPolicyDenial && this.#isClassifierRefusal(message);
 		const rateLimitReason = parseRateLimitReason(errorMessage);
 		const staleOpenAIResponsesReplayError = AIError.is(id, AIError.Flag.StaleResponsesItem);
 		const parsedRetryAfterMs = this.#parseRetryAfterMsFromError(errorMessage);
@@ -19154,7 +19260,7 @@ export class AgentSession {
 			!staleOpenAIResponsesReplayError &&
 			!AIError.is(id, AIError.Flag.UsageLimit) &&
 			parsedRetryAfterMs === undefined &&
-			rateLimitReason === "RATE_LIMIT_EXCEEDED"
+			(rateLimitReason === "RATE_LIMIT_EXCEEDED" || rateLimitReason === "CONCURRENT_LIMIT")
 		) {
 			const reasonBackoffMs = calculateRateLimitBackoffMs(rateLimitReason);
 			if (reasonBackoffMs > delayMs) delayMs = reasonBackoffMs;
@@ -19221,6 +19327,14 @@ export class AgentSession {
 
 		const allowModelFallback = options?.allowModelFallback !== false;
 		const currentSelector = this.model ? formatRetryFallbackSelector(this.model, this.thinkingLevel) : undefined;
+		if (accountPolicyDenial && this.model) {
+			switchedCredential = await this.#modelRegistry.authStorage.rotateSessionCredential(
+				this.model.provider,
+				this.sessionId,
+				{ error: errorMessage, modelId: this.model.id },
+			);
+			if (switchedCredential) delayMs = 0;
+		}
 		if (!staleOpenAIResponsesReplayError && !switchedCredential && currentSelector) {
 			if (allowModelFallback) {
 				const routeFallback = await this.#tryModelRouteFallback(
@@ -19272,7 +19386,7 @@ export class AgentSession {
 			}
 		}
 		if (retryBudgetExhausted) {
-			if (!switchedRoute && !switchedModel) {
+			if (!switchedCredential && !switchedRoute && !switchedModel) {
 				await this.#persistRetryLifecycleErrorMessage(message);
 				// Max retries exceeded and no fallback model to switch to: emit
 				// final failure and reset.
@@ -19287,14 +19401,14 @@ export class AgentSession {
 				this.#resolveRetry(); // Resolve so waitForRetry() completes
 				return false;
 			}
-			// The fallback model gets a fresh retry budget — leaving the spent
-			// counter in place would exhaust it again on its first error.
-			this.#retryAttempt = 1;
+			// route/model fallback 获得新的预算；仅凭证轮换继续累计 attempt，
+			// 从而先穷尽不同账号，再进入跨模型恢复。
+			if (switchedRoute || switchedModel) this.#retryAttempt = 1;
 		}
 		if (switchedRoute) {
 			this.#retryAttempt = 1;
 		}
-		if (classifierRefusal && !switchedModel) {
+		if ((classifierRefusal || accountPolicyDenial) && !switchedCredential && !switchedRoute && !switchedModel) {
 			this.#retryAttempt = 0;
 			this.#resolveRetry();
 			return false;
