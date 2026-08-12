@@ -10,6 +10,13 @@ function identityConverter(messages: AgentMessage[]): Message[] {
 	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
 }
 
+async function waitForCondition(check: () => boolean, timeoutMs = 5000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!check() && Date.now() < deadline) {
+		await Bun.sleep(5);
+	}
+}
+
 function makeEchoTool(executed: string[]): AgentTool {
 	const toolSchema = type({ msg: "string" });
 	const echoTool: AgentTool<typeof toolSchema, { msg: string }> = {
@@ -66,6 +73,11 @@ describe("agentPauseGate", () => {
 		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
 
 		const result = agentLoop([createUserMessage("run echo")], context, config, undefined, mock.stream).result();
+		// The first provider call must land before the park can be observed; a
+		// fixed sleep flakes on loaded CI runners where the call lags behind it.
+		await waitForCondition(() => mock.calls.length >= 1);
+		// Then hold an observation window: a broken gate would start the tool or
+		// issue the follow-up model call here.
 		await Bun.sleep(20);
 		expect(executed).toEqual([]); // tool parked, not started
 		expect(mock.calls.length).toBe(1); // and no follow-up model call either

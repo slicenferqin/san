@@ -1570,41 +1570,16 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		await expect(session.prompt(`${marker} ${"x".repeat(40_000)}`)).rejects.toThrow(/hard pressure/i);
 		expect(JSON.stringify(session.messages)).toContain(marker);
 
-		// Rebuild session settings with a large window so the follow-up can send.
-		// Settings.isolated values may be frozen; dispose and recreate with shared manager.
-		await session.dispose();
-		const mock2 = createMockModel({ responses: [{ content: ["recovered follow-up"] }] });
-		const agent2 = new Agent({
-			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: ["Test"], tools: [] },
-			streamFn: mock2.stream,
-			convertToLlm,
-		});
-		// Seed agent messages from journal so recovery is same-process equivalent to reload.
-		const recoveredSettings = Settings.isolated({
-			...BASE_SETTINGS,
-			"san.contextSteady.qualityWindowTokens": 240_000,
-			"san.contextSteady.burstWindowTokens": 320_000,
-			"san.contextSteady.contextPlan.maxTokens": 3_000,
-		});
-		session = new AgentSession({
-			agent: agent2,
-			sessionManager,
-			settings: recoveredSettings,
-			modelRegistry,
-		});
-		// Sync agent state from branch journal (same-session recovery path after hard pressure).
-		const branchMessages = sessionManager
-			.getBranch()
-			.filter(entry => entry.type === "message")
-			.map(entry => (entry as { message: (typeof session.messages)[number] }).message);
-		agent2.replaceMessages(branchMessages);
+		// 放宽当前会话的运行时窗口，让下一次 provider call 能继续发送。
+		settings.override("san.contextSteady.qualityWindowTokens", 240_000);
+		settings.override("san.contextSteady.burstWindowTokens", 320_000);
+		settings.override("san.contextSteady.contextPlan.maxTokens", 3_000);
 
 		await session.prompt("continue the refused task briefly");
 		await session.waitForIdle();
 
-		expect(mock2.calls.length).toBeGreaterThan(0);
-		const payload = JSON.stringify(mock2.calls.at(-1)!.context.messages);
+		expect(mock.calls.length).toBeGreaterThan(0);
+		const payload = JSON.stringify(mock.calls.at(-1)!.context.messages);
 		expect(payload).toContain(marker);
 		expect(payload).toContain("continue the refused task briefly");
 	});

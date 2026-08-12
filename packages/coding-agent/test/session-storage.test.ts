@@ -310,4 +310,30 @@ describe("IndexedSessionStorage.writeTextAtomic commitGuard", () => {
 
 		expect(backend.writeFullCalls.map(call => call.content)).toEqual(["seed"]);
 	});
+
+	it("drain waits for an atomic publish already in flight when terminal seal lands", async () => {
+		const backend = new PausableWriteFullBackend();
+		const storage = new IndexedSessionStorage(backend);
+		await storage.initialize();
+
+		let sealed = false;
+		const write = storage.writeTextAtomic("/sessions/s.jsonl", "pre-seal body", {
+			commitGuard: () => !sealed,
+		});
+		await backend.firstWriteStarted.promise;
+		sealed = true;
+
+		let drained = false;
+		const drain = storage.drain().then(() => {
+			drained = true;
+		});
+		for (let index = 0; index < 10; index++) await Promise.resolve();
+		expect(drained).toBe(false);
+
+		backend.firstWriteRelease.resolve();
+		await drain;
+		await write;
+		expect(drained).toBe(true);
+		expect(backend.writeFullCalls.map(call => call.content)).toEqual(["pre-seal body"]);
+	});
 });

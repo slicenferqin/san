@@ -1,8 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { ProviderHttpError } from "@san/ai/error";
-import { isUsageLimit } from "@san/ai/error/flags";
+import { classify, Flag, is, isUsageLimit, retriable } from "@san/ai/error/flags";
 import {
 	calculateRateLimitBackoffMs,
+	isConcurrencyCapExclusion,
+	isOpaqueStatusBody,
 	isUsageLimitOutcome,
 	isUsageLimitStatus,
 	parseRateLimitReason,
@@ -27,12 +29,54 @@ describe("parseRateLimitReason", () => {
 		expect(parseRateLimitReason("resource exhausted")).toBe("MODEL_CAPACITY_EXHAUSTED");
 	});
 
+	it("classifies bare Connect resource_exhausted while preserving explicit quota details", () => {
+		expect(parseRateLimitReason("Connect error resource_exhausted: Error")).toBe("MODEL_CAPACITY_EXHAUSTED");
+		expect(parseRateLimitReason("Connect error resource_exhausted: resource exhausted")).toBe(
+			"MODEL_CAPACITY_EXHAUSTED",
+		);
+		expect(parseRateLimitReason("Connect error resource_exhausted: Quota exceeded for this account")).toBe(
+			"QUOTA_EXHAUSTED",
+		);
+	});
+
 	it("classifies Too many requests as RATE_LIMIT_EXCEEDED", () => {
 		expect(parseRateLimitReason("Cloud Code Assist API error (429): Too many requests")).toBe("RATE_LIMIT_EXCEEDED");
 	});
 
 	it("classifies per minute errors as RATE_LIMIT_EXCEEDED", () => {
 		expect(parseRateLimitReason("Requests per minute limit reached")).toBe("RATE_LIMIT_EXCEEDED");
+	});
+
+	it("classifies concurrent request caps separately from account quota", () => {
+		for (const message of [
+			"Number of concurrent requests exceeded",
+			"Maximum concurrent invocation limit reached",
+			"concurrent_requests_limit_reached",
+			"concurrency_quota_exceeded",
+			"Too many concurrent requests",
+		]) {
+			expect(parseRateLimitReason(message)).toBe("CONCURRENT_LIMIT");
+		}
+		expect(parseRateLimitReason("Concurrent invocation is not supported")).not.toBe("CONCURRENT_LIMIT");
+	});
+
+	it("classifies Simplified Chinese quota exhaustion without capturing transient caps", () => {
+		for (const message of [
+			"已达到 5 小时的使用上限",
+			"您的限额将在 2026-08-06 20:06:00 重置",
+			"额度已用完，请充值",
+			"配额已用尽",
+			"账户余额不足",
+		]) {
+			expect(parseRateLimitReason(message)).toBe("QUOTA_EXHAUSTED");
+		}
+		for (const message of [
+			"每分钟请求数已达上限，请稍后重试",
+			"并发请求数已达上限，请稍后重试",
+			"API 使用频率已达上限",
+		]) {
+			expect(parseRateLimitReason(message)).not.toBe("QUOTA_EXHAUSTED");
+		}
 	});
 
 	it("classifies overloaded 529 as MODEL_CAPACITY_EXHAUSTED", () => {
@@ -153,6 +197,18 @@ describe("isUsageLimit", () => {
 		expect(isUsageLimit("额度耗尽")).toBe(true);
 	});
 
+	it("keeps Simplified Chinese minute, concurrency and frequency caps out of usage rotation", () => {
+		for (const message of [
+			"429 已达到速率限制",
+			"请求过于频繁，请稍后重试",
+			"并发请求达到上限",
+			"每分钟使用次数已达上限",
+			"API 使用频率已达上限",
+		]) {
+			expect(isUsageLimit(message)).toBe(false);
+		}
+	});
+
 	it("detects xAI Grok SuperGrok credit exhaustion as a credential-rotatable usage limit", () => {
 		// xAI returns HTTP 403 with (type=personal-team-blocked:spending-limit), not a
 		// 429 usage_limit_reached. Without this match, multi-account xai-oauth pools
@@ -209,6 +265,18 @@ describe("isUsageLimitOutcome", () => {
 		expect(isUsageLimitOutcome(429, "Please retry in 5s")).toBe(false);
 	});
 
+	it("rotates on subscription caps but keeps plan per-minute limits transient", () => {
+		const subscriptionCap = "429 You've exceeded your subscription rate limits. Upgrade, or try again later.";
+		expect(parseRateLimitReason(subscriptionCap)).toBe("QUOTA_EXHAUSTED");
+		expect(isUsageLimitOutcome(429, subscriptionCap)).toBe(true);
+		expect(isUsageLimit(Object.assign(new Error(subscriptionCap), { status: 429 }))).toBe(true);
+
+		const planPerMinuteLimit = "429 Your plan has a rate limit of 60 requests per minute";
+		expect(parseRateLimitReason(planPerMinuteLimit)).toBe("RATE_LIMIT_EXCEEDED");
+		expect(isUsageLimitOutcome(429, planPerMinuteLimit)).toBe(false);
+		expect(isUsageLimit(Object.assign(new Error(planPerMinuteLimit), { status: 429 }))).toBe(false);
+	});
+
 	it("still rotates on 429 with explicit account rate-limit framing", () => {
 		expect(
 			isUsageLimitOutcome(
@@ -224,6 +292,44 @@ describe("isUsageLimitOutcome", () => {
 		expect(
 			isUsageLimitOutcome(403, "403 订阅额度不足或未配置订阅: subscription quota insufficient, need=14447"),
 		).toBe(true);
+	});
+
+	it("rotates on Simplified Chinese quota exhaustion and not recognized throttles", () => {
+		expect(isUsageLimitOutcome(429, "已达到 5 小时的使用上限")).toBe(true);
+		expect(isUsageLimitOutcome(429, "额度已用完，请充值")).toBe(true);
+		expect(isUsageLimitOutcome(429, "已达到速率限制")).toBe(false);
+		expect(isUsageLimitOutcome(429, "请求过于频繁，请稍后重试")).toBe(false);
+		expect(isUsageLimitOutcome(429, "API 使用频率已达上限")).toBe(false);
+		expect(isOpaqueStatusBody("429 已达到 5 小时的使用上限")).toBe(false);
+		expect(isOpaqueStatusBody("请求过于频繁，请稍后重试")).toBe(false);
+	});
+
+	it("rotates only account-scoped cap 403s and statusless trailers", () => {
+		const accountCap =
+			"Devin stream error permission_denied: Reached overall message rate limit. Please try again later. Your limit will reset in 13 minutes.";
+		expect(isUsageLimitOutcome(403, accountCap)).toBe(true);
+		expect(isUsageLimitOutcome(undefined, accountCap)).toBe(true);
+		expect(isUsageLimit(accountCap)).toBe(true);
+		expect(isUsageLimitOutcome(403, "Forbidden")).toBe(false);
+		expect(isUsageLimitOutcome(undefined, "Rate limit will reset in 30 seconds")).toBe(false);
+	});
+
+	it("keeps non-billing concurrency caps transient and outside credential rotation", () => {
+		const message = "Online prediction concurrent requests quota exceeded";
+		expect(isConcurrencyCapExclusion(403, message)).toBe(true);
+		expect(isConcurrencyCapExclusion(undefined, message)).toBe(true);
+		expect(isConcurrencyCapExclusion(402, message)).toBe(false);
+		expect(isUsageLimitOutcome(429, message)).toBe(false);
+		expect(isUsageLimitOutcome(402, message)).toBe(true);
+
+		const statuslessId = classify(message);
+		expect(is(statuslessId, Flag.Transient)).toBe(true);
+		expect(retriable(statuslessId)).toBe(true);
+
+		const forbiddenId = classify(new ProviderHttpError(message, 403));
+		expect(is(forbiddenId, Flag.AuthFailed)).toBe(false);
+		expect(is(forbiddenId, Flag.UsageLimit)).toBe(false);
+		expect(is(forbiddenId, Flag.Transient)).toBe(true);
 	});
 
 	it("rotates on xAI Grok 403 credit/spending-limit exhaustion regardless of status", () => {
@@ -262,5 +368,9 @@ describe("calculateRateLimitBackoffMs", () => {
 			expect(ms).toBeGreaterThanOrEqual(45_000);
 			expect(ms).toBeLessThanOrEqual(75_000);
 		}
+	});
+
+	it("returns a short backoff for CONCURRENT_LIMIT", () => {
+		expect(calculateRateLimitBackoffMs("CONCURRENT_LIMIT")).toBe(5_000);
 	});
 });

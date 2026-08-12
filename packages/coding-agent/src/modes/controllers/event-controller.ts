@@ -116,6 +116,15 @@ export class EventController {
 	#prevHideThinking = false;
 	#handlers: AgentSessionEventHandlers;
 	#terminalProgressActive = false;
+	// message_update 携带累计消息快照；高 TPS 下同一渲染窗口只需处理最新一份，
+	// 避免对中间快照重复拆分时间线和重建工具预览。
+	#pendingMessageUpdate: Extract<AgentSessionEvent, { type: "message_update" }> | undefined = undefined;
+	#messageUpdateTimer: NodeJS.Timeout | undefined = undefined;
+	// AgentSession 不等待异步 listener。这里串行化非 update 事件与定时 flush，
+	// 防止 message_end / agent_end 越过仍在执行的累计快照更新。
+	#dispatchTail: Promise<void> = Promise.resolve();
+	#dispatchInFlight = false;
+	static readonly #MESSAGE_UPDATE_COALESCE_MS = 33;
 
 	constructor(private ctx: InteractiveModeContext) {
 		this.#streamingReveal = new StreamingRevealController({
@@ -182,6 +191,11 @@ export class EventController {
 	}
 
 	dispose(): void {
+		if (this.#messageUpdateTimer) {
+			clearTimeout(this.#messageUpdateTimer);
+			this.#messageUpdateTimer = undefined;
+		}
+		this.#pendingMessageUpdate = undefined;
 		this.#streamingReveal.stop();
 		this.#toolArgsReveal.stop();
 		this.#cancelIdleCompaction();
@@ -290,8 +304,79 @@ export class EventController {
 
 	subscribeToAgent(): void {
 		this.ctx.unsubscribe = this.ctx.session.subscribe(async (event: AgentSessionEvent) => {
-			await this.handleEvent(event);
+			if (event.type === "message_update") {
+				this.#enqueueMessageUpdate(event);
+				return;
+			}
+			await this.#runSerialized(async () => {
+				await this.#flushPendingMessageUpdate();
+				await this.handleEvent(event);
+			});
 		});
+	}
+
+	/**
+	 * 将一次 dispatch 接到当前队尾。空闲时立即启动，保留非 update 事件触发的
+	 * 同步 flush；繁忙时每个调用拥有独立链路，多个尾事件不会并发恢复。
+	 */
+	async #runSerialized(run: () => Promise<void>): Promise<void> {
+		if (this.#dispatchInFlight) {
+			const link = this.#dispatchTail.then(
+				() => run(),
+				() => run(),
+			);
+			this.#dispatchTail = link;
+			void link.then(
+				() => {
+					if (this.#dispatchTail === link) this.#dispatchInFlight = false;
+				},
+				() => {
+					if (this.#dispatchTail === link) this.#dispatchInFlight = false;
+				},
+			);
+			await link;
+			return;
+		}
+
+		this.#dispatchInFlight = true;
+		const link = run();
+		this.#dispatchTail = link;
+		void link.then(
+			() => {
+				if (this.#dispatchTail === link) this.#dispatchInFlight = false;
+			},
+			() => {
+				if (this.#dispatchTail === link) this.#dispatchInFlight = false;
+			},
+		);
+		await link;
+	}
+
+	#enqueueMessageUpdate(event: Extract<AgentSessionEvent, { type: "message_update" }>): void {
+		this.#pendingMessageUpdate = event;
+		if (this.#messageUpdateTimer) return;
+		this.#messageUpdateTimer = setTimeout(() => {
+			this.#messageUpdateTimer = undefined;
+			void this.#runSerialized(async () => {
+				await this.#flushPendingMessageUpdate();
+			}).catch(err => {
+				logger.warn("Message update flush rejected", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			});
+		}, EventController.#MESSAGE_UPDATE_COALESCE_MS);
+	}
+
+	/** 处理并清空最新累计快照；没有待处理更新时为空操作。 */
+	async #flushPendingMessageUpdate(): Promise<void> {
+		if (this.#messageUpdateTimer) {
+			clearTimeout(this.#messageUpdateTimer);
+			this.#messageUpdateTimer = undefined;
+		}
+		const event = this.#pendingMessageUpdate;
+		if (!event) return;
+		this.#pendingMessageUpdate = undefined;
+		await this.handleEvent(event);
 	}
 	/**
 	 * Clear every transcript-anchored/turn-scoped piece of state. Used by the
@@ -300,6 +385,11 @@ export class EventController {
 	 * session's transcript and must not bleed into the new one.
 	 */
 	resetTranscriptAnchors(): void {
+		if (this.#messageUpdateTimer) {
+			clearTimeout(this.#messageUpdateTimer);
+			this.#messageUpdateTimer = undefined;
+		}
+		this.#pendingMessageUpdate = undefined;
 		this.#resetReadGroup();
 		this.#lastVisibleBlockCount = 0;
 		this.#renderedCustomMessages.clear();

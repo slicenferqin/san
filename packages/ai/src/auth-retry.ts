@@ -1,8 +1,9 @@
+import { extractHttpStatusFromError } from "@san/utils";
 import type { OAuthAccess } from "./auth-storage";
 import * as AIError from "./error";
 import { isAuthRetryableError, isInvalidatedOAuthTokenError } from "./error/auth-classify";
-import { isUsageLimit } from "./error/flags";
-import { isUsageLimitOutcome } from "./error/rate-limit";
+import { isAccountPolicyError, isUsageLimit } from "./error/flags";
+import { isConcurrencyCapExclusion, isUsageLimitOutcome } from "./error/rate-limit";
 
 /**
  * Context passed to an {@link ApiKeyResolver} on each resolution attempt.
@@ -17,8 +18,8 @@ import { isUsageLimitOutcome } from "./error/rate-limit";
  * - `error !== undefined && lastChance` → **step (c): switch account**
  *   (invalidate/usage-limit the current credential and rotate to a sibling).
  *
- * Current drivers preserve that bounded a/b/c sequence for ordinary 401/auth
- * failures. Usage/account-limit failures skip refresh and may repeat step (c)
+ * Current drivers preserve that bounded a/b/c sequence for ordinary 401
+ * failures. 403, usage/account-limit failures skip refresh and may repeat step (c)
  * until the resolver returns `undefined`, cycles, or hits
  * {@link AUTH_RETRY_MAX_ATTEMPTS}.
  */
@@ -82,17 +83,23 @@ export { isAuthRetryableError };
 /**
  * Legacy bounded a/b/c retry sequence retained for public compatibility:
  * `false` → refresh-same, `true` → rotate/switch. Current drivers consume it
- * once for ordinary 401/auth failures; usage/account-limit failures may repeat
- * sibling rotation until a termination guard fires.
+ * once for ordinary 401 failures; 403 and usage/account-limit failures may
+ * repeat sibling rotation until a termination guard fires.
  */
 export const AUTH_RETRY_STEPS: readonly boolean[] = [false, true];
 
 export const AUTH_RETRY_MAX_ATTEMPTS = 64;
 
 function isDirectCredentialRotationError(error: unknown): boolean {
+	if (isAccountPolicyError(error)) return true;
 	if (isUsageLimit(error) || isInvalidatedOAuthTokenError(error)) return true;
 	const status = AIError.status(error);
 	const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
+	// 普通 403 表示凭证有效但权限不足，应直接尝试兄弟账号；并发上限例外。
+	const isForbidden =
+		status === 403 ||
+		(status === undefined && message !== undefined && extractHttpStatusFromError({ message }) === 403);
+	if (isForbidden && !isConcurrencyCapExclusion(status, message)) return true;
 	return isUsageLimitOutcome(status, message);
 }
 
@@ -199,8 +206,8 @@ async function runOAuthAttempt<T>(
  * - A resolver → initial `attempt`, then resolver-driven retries until the
  *   applicable policy is exhausted, the resolver declines or cycles, or the
  *   operation reaches {@link AUTH_RETRY_MAX_ATTEMPTS}. Ordinary 401/auth
- *   failures retain one refresh-same plus one sibling switch; usage/account
- *   limits rotate directly through distinct siblings.
+ *   failures retain one refresh-same plus one sibling switch; 403 and
+ *   usage/account limits rotate directly through distinct siblings.
  *
  * Used by non-streaming consumers (image generation, web search, completion
  * helpers). The streaming driver in `stream.ts` implements the same policy with
@@ -289,7 +296,7 @@ export interface WithOAuthAccessOptions {
  * - initial → `getOAuthAccess` (or `opts.seed`).
  * - 401/auth failure → one `getOAuthAccess` with `forceRefresh: true` for the
  *   current account, then sibling rotation.
- * - usage-limit failure → `rotateSessionCredential` directly, without a
+ * - 403/usage-limit failure → `rotateSessionCredential` directly, without a
  *   force-refresh detour.
  *
  * A refresh-same step may retry a new bearer for the same credential identity;

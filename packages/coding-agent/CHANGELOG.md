@@ -37,11 +37,13 @@
 - Added a `build:core` binary profile for daily coding paths that omits embedded PDF conversion, harness documentation, and stats dashboard assets while preserving MCP, plugin, Skills, and legacy Pi extension compatibility; the full release-compatible build remains unchanged.
 - Changed the core binary to reject HTML session export with an explicit full-binary guidance while retaining the export path in full builds.
 - Added optional Bun metafile output to binary and npm bundle build scripts for reproducible bundle-size analysis.
+- Added `AGENT=1` to non-interactive child processes so downstream tools can detect agent-driven execution ([#7847](https://github.com/can1357/oh-my-pi/issues/7847)).
 
 - Added host-owned runaway recovery for San execution with append-only scope state, typed acceptance evidence, provider circuit health, deterministic watchdog scheduling, semantic task contracts, and CAS-bound supervisor decisions.
 
 ### Changed
 
+- Reduced extension startup latency by importing extension modules concurrently while preserving deterministic factory binding order and per-extension rollback ([#7615](https://github.com/can1357/oh-my-pi/issues/7615)).
 - Changed task orchestration to deduplicate repeated work strategies, expose status and heartbeat cursors through Task and Hub, isolate root registries while sharing them with child sessions, preserve in-flight work during scheduler grace windows, and require explicit acknowledgement for mutating Todo operations.
 - Changed enabled San Brain sessions to default to `activation`; `review-only` remains a capture-only mode and never runs automatic decisions.
 - Changed San Context Steady to remain native-equivalent below a configurable activation threshold (240K input tokens by default), then latch activation for the session and restore it after resume.
@@ -98,6 +100,17 @@
 
 ### Fixed
 
+- Fixed Linux Chromium discovery accepting invalid wrappers or non-executable files and hanging indefinitely during version probes; bounded probes now validate Chromium-family output without racing trailing stdout.
+- Retried concurrent-request caps with a short backoff without deleting valid Copilot credentials or rotating through sibling accounts.
+- Fixed text print mode suppressing safe transient retries after buffered text while preventing replay once text, tool, image, or server-tool output has been committed ([#7625](https://github.com/can1357/oh-my-pi/issues/7625)).
+- Fixed Z.AI MCP search failing to decode double-encoded structured results and leaking result JSON into answer text ([#8000](https://github.com/can1357/oh-my-pi/issues/8000)).
+- Fixed `PUPPETEER_EXECUTABLE_PATH` being ignored when a system Chromium is discovered first ([#7601](https://github.com/can1357/oh-my-pi/issues/7601)).
+- Fixed disposed keep-alive subagent sessions retaining messages, append-only context, session journals, and raw SSE captures; terminal session-manager sealing now prevents late event and disk work from reviving or overwriting a reopened transcript.
+- Fixed high-token-rate streams rebuilding the interactive transcript for every cumulative `message_update`; updates are now coalesced per render window and serialized ahead of terminal events.
+- Fixed JSON and text print modes exiting before large final records finish writing to stdout.
+- Fixed Codex account-policy denials falling through to another model or provider before exhausting eligible sibling credentials, including Advisor sessions and zero-retry configurations.
+- Fixed task subagent assistant turns being omitted from the parent session's per-model TPS/TTFT aggregates.
+- Fixed manual handoff treating empty output and harness aborts as user cancellation; empty generation now fails explicitly, harness reasons are preserved, and auto-handoff keeps its compaction fallback.
 - Fixed `xd://` parity with upstream: enabled-tool activation and SDK all-tool mode now honor mounted devices without implicitly granting `write`; ambient tools remain top-level unless the read/write transport is explicitly active; dynamic summaries are byte-bounded, sanitized, and marked untrusted; mount notices survive resume and transcript transitions without replay; and device failures keep structured error envelopes.
 - Fixed prewalk's one-shot lifecycle: transient plan nudges no longer persist, same-model or conflicting arm requests no longer report false activation, and each re-arm requires a fresh todo gate before handoff.
 - Fixed post-fork runtime regressions: turn-scoped system-prompt overrides now survive concurrent base rebuilds, Bash safely extracts leading quoted `cd` targets, failed or replaced extension providers roll back registrations and credentials, refreshed task-agent discovery reaches live tools, cooldown fallback reverts re-check smaller context windows, and provider `AbortError`s no longer masquerade as cancelled handoffs.

@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Parsed account-cap reset windows such as “Your limit will reset in 13 minutes” so credential backoff honors the provider's full reset duration.
 - Fixed pinned side runtimes reusing stale dependencies after requested versions, overrides, or trusted dependencies changed.
 
 ## [17.0.2] - 2026-07-17

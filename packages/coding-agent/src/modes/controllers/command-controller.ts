@@ -11,7 +11,7 @@ import {
 	type UsageReport,
 } from "@san/ai";
 import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@san/tui";
-import { formatDuration, Snowflake, sanitizeText } from "@san/utils";
+import { formatDuration, logger, Snowflake, sanitizeText } from "@san/utils";
 import { shouldEnableAppendOnlyContext } from "../../config/append-only-context-mode";
 import { type LoadedCustomShare, loadCustomShare } from "../../export/custom-share";
 import { shareSession } from "../../export/share";
@@ -1365,6 +1365,7 @@ export class CommandController {
 			if (message === "Handoff cancelled") {
 				this.ctx.showError("Handoff cancelled");
 			} else {
+				logger.error("Handoff failed", { error: message });
 				this.ctx.showError(`Handoff failed: ${message}`);
 			}
 		} finally {

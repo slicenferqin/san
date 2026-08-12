@@ -245,7 +245,10 @@ describe("AgentSession snapcompact frame-budget sizing", () => {
 	it("applies the frame byte cap when the model context window is unknown", async () => {
 		const model = session.model;
 		if (!model) throw new Error("Expected model");
+		const sessionFile = sessionManager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected persistent session file path");
 		await session.dispose();
+		sessionManager = await SessionManager.open(sessionFile, tempDir.path());
 		const unknownWindowModel = { ...model, contextWindow: 0 };
 		session = new AgentSession({
 			agent: new Agent({

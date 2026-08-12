@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OMP 上游选择性吸收验收报告｜2026-08-11</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17211c;
+      --muted: #657168;
+      --paper: #f1efe7;
+      --panel: #fffdf8;
+      --line: #d7ddd7;
+      --green: #176647;
+      --green-soft: #e7f2eb;
+      --blue: #245e83;
+      --blue-soft: #e9f2f7;
+      --amber: #89590f;
+      --amber-soft: #fbf0d8;
+      --red: #963e38;
+      --shadow: 0 14px 34px rgb(25 45 34 / 8%);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 7% 0%, rgb(36 94 131 / 11%), transparent 31rem),
+        radial-gradient(circle at 94% 7%, rgb(23 102 71 / 10%), transparent 35rem),
+        var(--paper);
+      font: 16px/1.65 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    main { width: min(1180px, calc(100% - 36px)); margin: 34px auto 72px; }
+    header, section { border: 1px solid var(--line); border-radius: 18px; background: var(--panel); box-shadow: var(--shadow); }
+    header { padding: 38px 42px; border-top: 7px solid var(--green); }
+    section { margin-top: 20px; padding: 28px 32px; }
+    h1, h2, h3 { margin-top: 0; line-height: 1.22; }
+    h1 { margin-bottom: 12px; font-size: clamp(2rem, 5vw, 3.35rem); letter-spacing: -0.04em; }
+    h2 { padding-bottom: 10px; border-bottom: 1px solid var(--line); color: var(--green); font-size: 1.42rem; }
+    h3 { margin-bottom: 7px; color: var(--blue); font-size: 1.04rem; }
+    p { max-width: 94ch; }
+    a { color: var(--blue); text-underline-offset: 3px; }
+    code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+    code { padding: 0.08em 0.34em; border: 1px solid #dfe7e1; border-radius: 5px; background: #edf2ee; overflow-wrap: anywhere; }
+    .meta { display: flex; flex-wrap: wrap; gap: 9px 24px; color: var(--muted); font-size: 0.92rem; }
+    .lede { max-width: 88ch; color: #405349; font-size: 1.12rem; }
+    .status { display: inline-block; margin-bottom: 13px; padding: 4px 10px; border-radius: 999px; color: #fff; background: var(--green); font-size: 0.82rem; font-weight: 800; letter-spacing: 0.03em; }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 20px; }
+    .card { padding: 15px 16px; border: 1px solid var(--line); border-radius: 12px; background: #f8faf8; }
+    .card strong { display: block; color: var(--green); font-size: 1.45rem; line-height: 1.1; }
+    .card span { color: var(--muted); font-size: 0.87rem; }
+    .callout { padding: 15px 18px; border-left: 5px solid var(--blue); border-radius: 9px; background: var(--blue-soft); }
+    .callout.good { border-left-color: var(--green); background: var(--green-soft); }
+    .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    .flow { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 9px; margin-top: 18px; }
+    .flow > div { position: relative; padding: 12px 9px; border: 1px solid var(--line); border-radius: 10px; background: #f8faf8; text-align: center; font-size: 0.84rem; }
+    .flow > div:not(:last-child)::after { position: absolute; top: 50%; right: -10px; z-index: 2; color: var(--green); font-weight: 800; content: "→"; transform: translate(50%, -50%); }
+    .flow strong { display: block; color: var(--green); }
+    table { width: 100%; margin-top: 14px; border-collapse: collapse; }
+    th, td { padding: 12px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 0.84rem; letter-spacing: 0.04em; text-transform: uppercase; }
+    td:first-child { width: 17%; font-weight: 750; }
+    .tag { display: inline-block; padding: 2px 7px; border-radius: 5px; color: #fff; background: var(--green); font: 750 0.78rem/1.6 ui-monospace, monospace; }
+    .tag.blue { background: var(--blue); }
+    .tag.amber { background: var(--amber); }
+    .tag.red { background: var(--red); }
+    .small { color: var(--muted); font-size: 0.88rem; }
+    ul, ol { padding-left: 1.3rem; }
+    li + li { margin-top: 6px; }
+    @media (max-width: 900px) {
+      .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .flow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .flow > div::after { display: none; }
+    }
+    @media (max-width: 620px) {
+      main { width: min(100% - 18px, 1180px); margin-top: 12px; }
+      header, section { padding: 22px 19px; border-radius: 13px; }
+      .cards, .flow { grid-template-columns: 1fr; }
+      table, thead, tbody, tr, th, td { display: block; width: 100%; }
+      thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+      tbody { display: grid; gap: 12px; }
+      tr { padding: 5px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fffefa; }
+      td, td:first-child { width: 100%; padding: 8px 0; border-bottom: 1px dashed var(--line); overflow-wrap: anywhere; }
+      td:last-child { border-bottom: 0; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="status">首批实现与验收完成</span>
+    <div class="meta">
+      <span>报告日期：2026-08-11</span>
+      <span>分支：<code>feat/upstream-v17.2-selective-absorption</code></span>
+      <span>基线：<code>origin/main@e747f9511529</code></span>
+      <span>上游：<code>v17.2.12@45e12e5bb758</code></span>
+    </div>
+    <h1>OMP 上游选择性吸收验收报告</h1>
+    <p class="lede">本轮没有整段合并上游，而是按行为合同吸收 v17.2.9—v17.2.12 中与 San 长任务稳定性直接相关的修复：会话终态释放、handoff 错误语义、流式与 stdout 排空、慢终端退避、账号级策略拒绝轮换，以及 task 子 Agent 性能记账。实现保持在工作区供审查，未 commit、未 push、未创建 PR。</p>
+    <div class="cards">
+      <div class="card"><strong>3</strong><span>互斥文件域并行工作流</span></div>
+      <div class="card"><strong>32</strong><span>代码、测试与 changelog 变更文件</span></div>
+      <div class="card"><strong>228 / 0</strong><span>最终跨域聚焦测试通过 / 失败</span></div>
+      <div class="card"><strong>135 / 0</strong><span>coding-agent 全量分块通过 / 失败</span></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>1. 交付结论</h2>
+    <div class="callout good"><strong>结论：</strong>首批 P0 候选已完成 San 结构适配、合同测试、跨域审查和包级验证。没有引入 Agent Hub、goal/schedule、Agent Plugins、RPC v3、omptype 或 shell/native 大重构，也没有放宽 San 现有 execution-control 与 terminal session 边界。</div>
+    <ul>
+      <li>dispose 现在按“阻止新工作 → 排空所有权内异步尾部 → seal/close → 释放重内存”的顺序收敛；超时尾事件最终结束后会再执行一次内存终态化。</li>
+      <li>高 TPS 下，交互模式只在 33ms 窗口消费最新累计快照；尾事件严格排在 pending flush 之后。</li>
+      <li>Codex Trusted Access / cyber policy 拒绝先轮换同 Provider 的兄弟账号；账号耗尽后才进入 San 原有 route/model fallback。</li>
+      <li>task 子 Agent 与父会话共享性能聚合存储，assistant turn 的 TPS/TTFT 能进入父会话的模型统计。</li>
+      <li>manual handoff 的空生成明确失败，harness abort reason 原样保留；auto handoff 仍保留既有 compaction fallback。</li>
+      <li>print mode 等待最终 stdout 回调；Loader 根据真实绘制成本退避，避免慢终端持续空转。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>2. 吸收清单与上游追溯</h2>
+    <table>
+      <thead><tr><th>主题</th><th>上游提交</th><th>San 落地状态</th><th>关键适配</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="tag">已吸收</span><br />会话释放与终态</td>
+          <td><code>ed6300b35e</code>、<code>4ca6c376b4</code>、<code>a7a32f35d</code>、<code>88021b90ea</code>、<code>b2d0ade665</code>、<code>31d7655477</code>、<code>63aa8cf6f8</code>、<code>d85dde52c4</code></td>
+          <td>完整吸收修复链，而非只取最终 patch。</td>
+          <td>覆盖 Agent 消息、append-only context、session journal、raw SSE、事件处理、writer 与 indexed storage drain；sealed manager 不允许被旧异步事件复活。</td>
+        </tr>
+        <tr>
+          <td><span class="tag">已吸收</span><br />handoff 终态</td>
+          <td><code>92e574cb02</code>、<code>7914e7c451</code>；审计 <code>1e6638d8cd</code></td>
+          <td>空生成与 abort reason 已吸收；Provider <code>AbortError</code> 合同在 San 已等价存在。</td>
+          <td>沿用 San 既有 handoff/compaction 结构，没有引入上游 session-handoff 模块重构。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">已吸收</span><br />流式合并</td>
+          <td><code>fed51f1ffc</code>、<code>84813ad37a</code>、<code>50ee839c51</code>、后续竞态修复 <code>326fb24367</code></td>
+          <td>按修正后的最终语义吸收。</td>
+          <td>定时 flush rejection 使用中央 logger；串行 tail 保证多个 terminal event 也不会同时越过更新。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">已吸收</span><br />stdout 与慢终端</td>
+          <td><code>03d90bdd9f</code>、<code>a6aa462a60</code></td>
+          <td>stdout 排空完整吸收；Loader 吸收 paint-cost backpressure。</td>
+          <td>San 不存在上游 title-state spinner，因此 WSL/ConPTY title 子改动不适用，未制造新状态层。</td>
+        </tr>
+        <tr>
+          <td><span class="tag amber">已吸收</span><br />账号策略拒绝</td>
+          <td><code>7ca140f66e</code></td>
+          <td>AI 直连重试、主 AgentSession 与 Advisor 均已覆盖。</td>
+          <td>按 San 现有 credential/session 与 provider health 结构适配；policy-denied 账号只做临时账号级 block，不误标 suspect、删除凭据或记成额度耗尽。</td>
+        </tr>
+        <tr>
+          <td><span class="tag amber">已吸收</span><br />task 性能统计</td>
+          <td><code>506f57fbf2</code></td>
+          <td>task 子 Agent TPS/TTFT 汇总到父会话。</td>
+          <td><code>Settings.isolated()</code> 保持配置隔离，同时显式共享父 <code>AgentStorage</code>；没有重复记账。</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="small">追溯原则：提交哈希用于定位设计与修复链；实际实现按 San 当前模块边界重放行为，没有机械 cherry-pick。</p>
+  </section>
+
+  <section>
+    <h2>3. 关键运行时合同</h2>
+    <h3>会话 dispose / seal</h3>
+    <div class="flow">
+      <div><strong>beginDispose</strong>同步拒绝新工作</div>
+      <div><strong>abort &amp; drain</strong>停止 provider 并排空尾部</div>
+      <div><strong>seal</strong>升起不可逆写屏障</div>
+      <div><strong>close</strong>等待 writer 与 backend</div>
+      <div><strong>release</strong>清除重内存副本</div>
+      <div><strong>reopen</strong>新 manager 从磁盘恢复</div>
+    </div>
+    <p>旧 <code>SessionManager</code> 在 dispose 后是终态对象，不能继续追加或被当作新会话复用；恢复必须新建 manager 并从持久 transcript 打开。这一边界同时解决 parked/keep-alive subagent 长驻内存和旧异步写覆盖新会话的问题。</p>
+
+    <h3>AccountPolicy 重放安全</h3>
+    <p>错误分类在 Auth/ContentBlocked 之前识别 <code>cyber_policy</code> 与 Trusted Access 拒绝。仅当尚未提交文本、图片或 tool call，且不是 abort/context overflow 时才允许换账号重放；thinking-only 仍属于安全窗口。<code>maxRetries=0</code> 不会跳过兄弟账号遍历，凭证轮换累计 attempt，route/model fallback 才重置预算。</p>
+
+    <h3>流式与输出顺序</h3>
+    <p><code>message_update</code> 只合并 TUI 的累计渲染快照，不改变 AgentSession 对上游 delta 的逐事件处理。print mode 通过 stdout callback 队列等待最终 JSON/text 记录落入输出流，写入错误会显式抛出。</p>
+  </section>
+
+  <section>
+    <h2>4. 子代理分工与冲突控制</h2>
+    <table>
+      <thead><tr><th>工作流</th><th>独占文件域</th><th>交付</th><th>冲突处理</th></tr></thead>
+      <tbody>
+        <tr><td>A · session lifecycle</td><td><code>agent-session</code> 生命周期、<code>session-manager</code>、indexed storage、raw SSE、handoff controller 与测试。</td><td>dispose/seal、handoff 合同及全量回归适配。</td><td>先独占 <code>agent-session.ts</code>；完成后显式释放所有权。</td></tr>
+        <tr><td>B · stream/terminal</td><td><code>event-controller</code>、<code>print-mode</code>、TUI Loader 与各自测试。</td><td>合并窗口、严格尾序、stdout drain、慢绘制退避。</td><td>全程没有与 A/C 共享生产文件。</td></tr>
+        <tr><td>C · provider/task</td><td><code>packages/ai</code> auth/error/stream、settings/task executor 与测试。</td><td>账号策略拒绝轮换、task 指标共享。</td><td>需要主会话集成时等待 A 完成，再顺序取得 <code>agent-session.ts</code> 所有权。</td></tr>
+        <tr><td>主代理</td><td>计划、upstream diff 审查、changelog、跨域测试与验收报告。</td><td>统一审查、组合测试、全量测试与范围审计。</td><td>未让两个子代理同时写同一文件；唯一共享文件采用顺序移交。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>5. 验收证据</h2>
+    <table>
+      <thead><tr><th>层级</th><th>命令 / 范围</th><th>结果</th></tr></thead>
+      <tbody>
+        <tr><td>跨域聚焦</td><td>AI auth/stream、session lifecycle/handoff/retry、context steady、task perf、event coalesce、print drain、peer transport、TUI Loader，共 16 个文件。</td><td><strong>228 pass，0 fail</strong>。</td></tr>
+        <tr><td>coding-agent 全量</td><td><code>bun ../../scripts/ci-test-ts.ts coding-agent-heavy --only-failures</code>，默认本地并发 10。</td><td><strong>135 chunks passed，0 failed</strong>，113.0s。</td></tr>
+        <tr><td>AI 包级</td><td><code>bun test --parallel</code></td><td>完整套件退出码 0。</td></tr>
+        <tr><td>TUI 包级</td><td><code>bun test --parallel test/*.test.ts</code></td><td><strong>1306 pass，0 fail</strong>，81 个文件。</td></tr>
+        <tr><td>仓库检查</td><td><code>bun check</code></td><td>Biome 检查 3730 个文件；所有 workspace TypeScript 检查通过。没有 Rust 相关改动，仓库脚本按约定跳过 Rust。</td></tr>
+        <tr><td>补丁卫生</td><td><code>git diff --check</code>；HTML 使用 parse5 解析。</td><td>通过；无空白错误或结构解析错误。</td></tr>
+      </tbody>
+    </table>
+    <div class="callout warn"><strong>全量验收中修正的旧测试假设：</strong>三项既有测试曾在 dispose 后复用同一个已 sealed manager。测试已改为从持久 transcript 创建新 manager，或在真正的同一活跃会话内调整设置；没有为了测试放宽 terminal seal。<code>peer/transport</code> 的 broker socket readiness 在一次高负载并发运行中出现 <code>ENOENT</code>，单文件 30/30 通过，最终默认并发全量运行也通过，因此未夹带无关生产改动。</div>
+  </section>
+
+  <section>
+    <h2>6. 改动范围审计</h2>
+    <ul>
+      <li>生产改动限于 <code>packages/ai</code>、<code>packages/coding-agent</code> 与 <code>packages/tui</code> 的上述合同；三个包的 <code>[Unreleased]</code> changelog 已更新。</li>
+      <li>新增测试均从可观察行为、状态转换、持久化恢复或输出顺序断言；没有 source-grep、<code>mock.module()</code>、<code>any</code>、<code>ReturnType&lt;&gt;</code>、动态 import 或 coding-agent <code>console.*</code>。</li>
+      <li>没有新增外部依赖，没有修改生成的 <code>packages/catalog/src/models.json</code>，没有执行 destructive git 操作。</li>
+      <li>工作区中既有的 <code>docs/research/avernet-san-absorption-assessment-20260810.html</code> 与本任务无关，保持未触碰。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>7. 未吸收项与下一轮</h2>
+    <table>
+      <thead><tr><th>优先级</th><th>候选</th><th>处理建议</th></tr></thead>
+      <tbody>
+        <tr><td><span class="tag">近端</span></td><td>Z.AI MCP 双层 JSON 解码，<code>a709a6604f</code></td><td>改动隔离在 Z.AI provider 与合同测试，已完成初步审计，可作为下一批小修复。</td></tr>
+        <tr><td><span class="tag blue">P1 审计</span></td><td>Agent Plugins 1.0、trusted extensions、MCP 新协议、会话导入与 Cursor bridge</td><td>先对 discovery、信任、权限和兼容边界做 contract audit，再决定复用范围。</td></tr>
+        <tr><td><span class="tag blue">持续跟踪</span></td><td>RPC v3 / native UI parity 与恢复性能 PR</td><td>与 San RPC v2、远程控制和恢复语义逐字段对照；待上游发布合同稳定后再迁移。</td></tr>
+        <tr><td><span class="tag amber">设计输入</span></td><td>Agent Hub、goal gates、wayfinding、schedule、heartbeat</td><td>与 San durable execution、watchdog、scope/ledger、peer messaging 高度重叠，不直接移植。</td></tr>
+        <tr><td><span class="tag red">暂缓</span></td><td>omptype、shell minimizer、native builtins 大重构</td><td>迁移面远大于本轮收益；需独立量化兼容、构建、性能与维护成本。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>8. 关联文档</h2>
+    <ul>
+      <li><a href="./omp-upstream-iteration-direction-20260811.html">OMP 上游近期迭代方向调研</a></li>
+      <li><a href="./omp-upstream-selective-absorption-plan-20260811.html">OMP 上游选择性吸收实施计划</a></li>
+    </ul>
+    <p class="small">当前分支只包含未提交工作区变更，便于逐文件审查；发布、提交与 PR 不在本轮授权范围。</p>
+  </section>
+</main>
+</body>
+</html>

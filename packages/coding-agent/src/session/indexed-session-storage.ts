@@ -120,8 +120,11 @@ export class IndexedSessionStorage implements SessionStorage {
 	}
 
 	async drain(): Promise<void> {
-		while (this.#drainPending.size > 0) {
-			await Promise.allSettled(this.#drainPending);
+		// 等待全部后端操作，而不只是显式标记为 drain 的 fire-and-forget 写入。
+		// 原子发布可能已在 terminal seal 前通过 commit guard，此时仍在后端执行；
+		// close() 必须等它真正结束，才能允许新 manager 安全复用同一路径。
+		while (this.#drainPending.size > 0 || this.#pathPending.size > 0) {
+			await Promise.allSettled([...this.#drainPending, ...this.#pathPending.values()]);
 		}
 		const error = this.#firstDrainError;
 		this.#firstDrainError = undefined;

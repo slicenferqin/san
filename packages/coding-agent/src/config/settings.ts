@@ -553,11 +553,15 @@ export class Settings {
 	}
 
 	/**
-	 * Create an isolated instance for testing.
-	 * Does not affect the global singleton.
+	 * 创建不影响全局单例的隔离实例。可显式共享父级存储，使子 Agent 的
+	 * 用量与性能样本进入同一聚合，同时保留内存态配置覆盖。
 	 */
-	static isolated(overrides: Partial<Record<SettingPath, unknown>> = {}): Settings {
+	static isolated(
+		overrides: Partial<Record<SettingPath, unknown>> = {},
+		options: { storage?: AgentStorage | null } = {},
+	): Settings {
 		const instance = new Settings({ inMemory: true, overrides });
+		instance.#storage = options.storage ?? null;
 		instance.#rebuildMerged();
 		return instance;
 	}

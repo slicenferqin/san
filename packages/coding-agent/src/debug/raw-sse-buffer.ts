@@ -208,6 +208,22 @@ export class RawSseDebugBuffer {
 		return body.length > 0 ? `${dropped}${body}` : dropped;
 	}
 
+	/**
+	 * 释放全部已捕获的 SSE 帧并重置统计。会话终态释放时调用，避免已停驻
+	 * 的子 Agent 通过调试缓冲区继续持有大块 wire frame。
+	 */
+	clear(): void {
+		this.#records = [];
+		this.#recordChars = [];
+		this.#head = 0;
+		this.#totalChars = 0;
+		this.#droppedRecords = 0;
+		this.#droppedChars = 0;
+		this.#totalEvents = 0;
+		this.#lastUpdatedAt = undefined;
+		this.#emit();
+	}
+
 	#append(record: RawSseDebugRecord, chars: number): void {
 		this.#records.push(record);
 		this.#recordChars.push(chars);

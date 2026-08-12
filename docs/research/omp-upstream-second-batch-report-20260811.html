@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OMP 上游第二批功能与性能修复验收报告｜2026-08-11</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17211c;
+      --muted: #657168;
+      --paper: #f1efe7;
+      --panel: #fffdf8;
+      --line: #d7ddd7;
+      --green: #176647;
+      --green-soft: #e7f2eb;
+      --blue: #245e83;
+      --blue-soft: #e9f2f7;
+      --amber: #89590f;
+      --amber-soft: #fbf0d8;
+      --shadow: 0 14px 34px rgb(25 45 34 / 8%);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 7% 0%, rgb(36 94 131 / 11%), transparent 31rem),
+        radial-gradient(circle at 94% 7%, rgb(23 102 71 / 10%), transparent 35rem),
+        var(--paper);
+      font: 16px/1.65 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    main { width: min(1180px, calc(100% - 36px)); margin: 34px auto 72px; }
+    header, section { border: 1px solid var(--line); border-radius: 18px; background: var(--panel); box-shadow: var(--shadow); }
+    header { padding: 38px 42px; border-top: 7px solid var(--green); }
+    section { margin-top: 20px; padding: 28px 32px; }
+    h1, h2, h3 { margin-top: 0; line-height: 1.22; }
+    h1 { margin-bottom: 12px; font-size: clamp(2rem, 5vw, 3.2rem); letter-spacing: -0.04em; }
+    h2 { padding-bottom: 10px; border-bottom: 1px solid var(--line); color: var(--green); font-size: 1.42rem; }
+    h3 { margin-bottom: 7px; color: var(--blue); font-size: 1.04rem; }
+    p { max-width: 94ch; }
+    a { color: var(--blue); text-underline-offset: 3px; }
+    code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+    code { padding: 0.08em 0.34em; border: 1px solid #dfe7e1; border-radius: 5px; background: #edf2ee; overflow-wrap: anywhere; }
+    .meta { display: flex; flex-wrap: wrap; gap: 9px 24px; color: var(--muted); font-size: 0.92rem; }
+    .lede { max-width: 88ch; color: #405349; font-size: 1.12rem; }
+    .status { display: inline-block; margin-bottom: 13px; padding: 4px 10px; border-radius: 999px; color: #fff; background: var(--green); font-size: 0.82rem; font-weight: 800; }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 20px; }
+    .card { padding: 15px 16px; border: 1px solid var(--line); border-radius: 12px; background: #f8faf8; }
+    .card strong { display: block; color: var(--green); font-size: 1.42rem; line-height: 1.12; }
+    .card span { color: var(--muted); font-size: 0.87rem; }
+    .callout { padding: 15px 18px; border-left: 5px solid var(--blue); border-radius: 9px; background: var(--blue-soft); }
+    .callout.good { border-left-color: var(--green); background: var(--green-soft); }
+    .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    table { width: 100%; margin-top: 14px; border-collapse: collapse; }
+    th, td { padding: 12px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 0.84rem; letter-spacing: 0.04em; text-transform: uppercase; }
+    td:first-child { width: 16%; font-weight: 750; }
+    .tag { display: inline-block; padding: 2px 7px; border-radius: 5px; color: #fff; background: var(--green); font: 750 0.78rem/1.6 ui-monospace, monospace; }
+    .tag.blue { background: var(--blue); }
+    .tag.amber { background: var(--amber); }
+    .small { color: var(--muted); font-size: 0.88rem; }
+    ul, ol { padding-left: 1.3rem; }
+    li + li { margin-top: 6px; }
+    @media (max-width: 850px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 620px) {
+      main { width: min(100% - 18px, 1180px); margin-top: 12px; }
+      header, section { padding: 22px 19px; border-radius: 13px; }
+      .cards { grid-template-columns: 1fr; }
+      table, thead, tbody, tr, th, td { display: block; width: 100%; }
+      thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+      tbody { display: grid; gap: 12px; }
+      tr { padding: 5px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fffefa; }
+      td, td:first-child { width: 100%; padding: 8px 0; border-bottom: 1px dashed var(--line); overflow-wrap: anywhere; }
+      td:last-child { border-bottom: 0; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="status">第二批实现与全量验收完成</span>
+    <div class="meta">
+      <span>报告日期：2026-08-11</span>
+      <span>分支：<code>feat/upstream-v17.2-selective-absorption</code></span>
+      <span>基线：<code>origin/main@e747f9511529</code></span>
+      <span>上游：<code>v17.2.12@45e12e5bb758</code></span>
+    </div>
+    <h1>OMP 上游第二批功能与性能修复验收报告</h1>
+    <p class="lede">本批吸收六项已发布、低耦合合同：print text 缓冲输出的安全重放、Z.AI 双层 JSON、显式 Chromium 路径优先级、子进程 <code>AGENT=1</code>，以及 Cursor/Devin 流读取稳态免复制。实现与首批改动叠加保留在工作区，未 commit、未 push、未创建 PR。</p>
+    <div class="cards">
+      <div class="card"><strong>6 项</strong><span>功能与性能合同</span></div>
+      <div class="card"><strong>17</strong><span>第二批触及文件</span></div>
+      <div class="card"><strong>347 / 0</strong><span>跨域聚焦测试通过 / 失败</span></div>
+      <div class="card"><strong>135 / 0</strong><span>coding-agent 全量分块通过 / 失败</span></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>1. 交付结论</h2>
+    <div class="callout good"><strong>结论：</strong>第二批已完成 San 结构适配、合同测试、相邻回归修正和包级全量验收。所有生产改动均可由明确的上游发布提交追溯；没有混入 RPC v3、MCP 协议迁移、Browser 发现重构或凭证缓存重构。</div>
+    <ul>
+      <li>交互 TUI 与 JSON 输出默认视为已提交：非空 partial text 之后不再自动重放，避免用户看到重复文本。</li>
+      <li>text print 在每个 prompt 期间标记文本尚未提交，瞬态错误与账号策略拒绝可安全重放；正常结束、异常和多 prompt 路径都会恢复状态。</li>
+      <li>工具调用、图片和未知/未来 server-tool 内容始终不可重放；Advisor 不借用 print text 的缓冲语义。</li>
+      <li>Z.AI 仅在首层解析结果为字符串时尝试第二层 JSON；结构化搜索结果进入 sources，不再泄漏到 answer，普通文本仍保留。</li>
+      <li><code>PUPPETEER_EXECUTABLE_PATH</code> 现在优先于系统浏览器发现；所有共享非交互子进程携带 <code>AGENT=1</code>。</li>
+      <li>Cursor 与 Devin 在没有残留协议帧时直接持有新 chunk/view，避免每个稳态读取都执行 <code>Buffer.concat</code>；协议字节与输出行为不变。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>2. 上游追溯与 San 适配</h2>
+    <table>
+      <thead><tr><th>主题</th><th>上游提交</th><th>落地合同</th><th>范围约束</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="tag">重放安全</span></td>
+          <td><a href="https://github.com/can1357/oh-my-pi/commit/929ab1a20f64307f8e073436b38a49cdd7b99c9e"><code>929ab1a20f</code></a>；测试跟进 <code>fe6e9c28ab</code></td>
+          <td>在 San 尚未拆分的 <code>AgentSession</code> 内统一判断重放危险输出；print text 通过显式 setter 声明缓冲窗口。</td>
+          <td>没有引入上游 <code>turn-recovery.ts</code> 重构；保留首批账号轮换、dispose/seal 与 stdout 排空实现。</td>
+        </tr>
+        <tr>
+          <td><span class="tag">Z.AI</span></td>
+          <td><a href="https://github.com/can1357/oh-my-pi/commit/a709a6604f6cfce0fe2442ea967fc0c17de24154"><code>a709a6604f</code></a></td>
+          <td>双层 JSON source 提取、结构化载荷与回答文本分离、第二层无效时不吞原内容。</td>
+          <td>仅修改 Z.AI provider 与专用 MCP 合同测试。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">Browser</span></td>
+          <td><a href="https://github.com/can1357/oh-my-pi/commit/62cb7a0e629308c1061eb2c3cd9dab37a5e87086"><code>62cb7a0e62</code></a></td>
+          <td>解析顺序固定为显式环境路径 → 系统 Chromium → 缓存/下载。</td>
+          <td>用隔离子进程模拟 Windows 候选，不污染测试进程的 <code>process.platform</code> 或环境。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">Child env</span></td>
+          <td><a href="https://github.com/can1357/oh-my-pi/commit/2fe1d1991a5afc4bb9af8d268dbdcf96209cc830"><code>2fe1d1991a</code></a></td>
+          <td>统一 <code>NON_INTERACTIVE_ENV</code> 增加 <code>AGENT=1</code>，由真实 Bash 子进程读取验证。</td>
+          <td>没有在 Bash、DAP 等 spawn 点重复注入。</td>
+        </tr>
+        <tr>
+          <td><span class="tag amber">Cursor 性能</span></td>
+          <td><a href="https://github.com/can1357/oh-my-pi/commit/b459bf3ec63eee339c4604fe3fe2a64a02ae2e68"><code>b459bf3ec63</code></a></td>
+          <td>pending buffer 为空时直接引用新 Buffer，仅存在跨 chunk 残帧时拼接。</td>
+          <td>不改变帧解析、终态错误或 MCP 参数流逻辑。</td>
+        </tr>
+        <tr>
+          <td><span class="tag amber">Devin 性能</span></td>
+          <td><a href="https://github.com/can1357/oh-my-pi/commit/1d74bc73e3681aec2d2f6737c10c64f8c5827d5c"><code>1d74bc73e3</code></a> 的 stream 子项</td>
+          <td>pending 为空时基于 <code>Uint8Array</code> 底层存储创建 Buffer view。</td>
+          <td>没有吸收该提交中的 RemoteAuth credential/filter memoization，避免扩大状态缓存边界。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>3. 子代理分工与审查</h2>
+    <table>
+      <thead><tr><th>所有者</th><th>独占文件域</th><th>主代理验收</th></tr></thead>
+      <tbody>
+        <tr><td>D · recovery</td><td><code>agent-session.ts</code>、<code>print-mode.ts</code>、retry-cap 与 print working-indicator 测试。</td><td>重点复核默认 committed、text-only 缓冲、异常恢复、Advisor 与未知 block 的重放边界。</td></tr>
+        <tr><td>E · Z.AI</td><td>Z.AI provider 与单一测试文件。</td><td>复核双层解码仅对 string 生效，sources 与 answer 不交叉污染。</td></tr>
+        <tr><td>F · process/browser</td><td>统一非交互环境、browser launch、Bash/browser 测试与隔离 fixture。</td><td>复核显式路径优先级及测试全局状态隔离。</td></tr>
+        <tr><td>主代理</td><td>Cursor/Devin、changelog、相邻旧测试、组合测试与报告。</td><td>性能项只取无状态拷贝优化；首轮全量测试发现旧重放 fixture 后，仅修正测试输入，不回退生产安全边界。</td></tr>
+      </tbody>
+    </table>
+    <p class="small">三个子代理没有同时修改同一文件。与首批重叠的 <code>agent-session.ts</code> 和 <code>print-mode.ts</code> 由单一所有者顺序接管；主代理在其释放后统一审查。</p>
+  </section>
+
+  <section>
+    <h2>4. 验收证据</h2>
+    <table>
+      <thead><tr><th>层级</th><th>范围</th><th>结果</th></tr></thead>
+      <tbody>
+        <tr><td>跨域聚焦</td><td>AI auth/stream/Cursor/Devin，coding-agent lifecycle/retry/print/Z.AI/Browser/Bash，以及 TUI Loader；补跑 retry-fallback 与 active-goal compaction 邻接合同。</td><td><strong>347 pass，0 fail</strong>。</td></tr>
+        <tr><td>coding-agent 全量</td><td><code>bun ../../scripts/ci-test-ts.ts coding-agent-heavy --only-failures</code>，默认并发 10。</td><td><strong>135 chunks passed，0 failed</strong>，99.9s。</td></tr>
+        <tr><td>AI 包级</td><td><code>bun test --parallel</code></td><td><strong>2978 pass，337 skip，0 fail</strong>，291 个文件。</td></tr>
+        <tr><td>TUI 包级</td><td><code>bun test --parallel test/*.test.ts</code></td><td><strong>1306 pass，0 fail</strong>，81 个文件。</td></tr>
+        <tr><td>仓库检查</td><td><code>bun check</code></td><td>Biome 检查 3731 个文件；所有 workspace TypeScript 检查通过。没有 Rust 相关改动，仓库脚本按规则跳过 Rust。</td></tr>
+        <tr><td>补丁卫生</td><td><code>git diff --check</code>；HTML 使用 parse5 解析。</td><td>通过。</td></tr>
+      </tbody>
+    </table>
+    <div class="callout warn"><strong>全量回归处理：</strong>首次全量运行暴露两类旧测试假设：五个 retry fixture 用“已显示的非空文本”代表可安全重放，另有一个 usage 时间显示断言恰跨 24 小时边界。前者按新合同改为 thinking-only 或空白文本，并由“默认 committed 文本不重放”的新合同测试反向保护；后者单文件复跑 3/3 通过。最终完整分块套件 135/135 通过。</div>
+  </section>
+
+  <section>
+    <h2>5. 边界与当前状态</h2>
+    <ul>
+      <li>性能项没有声明未经基准测量的百分比收益；验收依据是稳态拷贝路径消除和完整协议回归。</li>
+      <li>RPC v3 仍是独立架构迁移项目，本批没有触碰 RPC/session authority、operation/job 或客户端协议。</li>
+      <li>开放 PR 候选仍保持观察，不把未合并实现固化进本分支。</li>
+      <li>首批与第二批改动均未提交；工作区中的 <code>avernet-san-absorption-assessment-20260810.html</code> 属于既有无关文件，本轮未修改。</li>
+    </ul>
+    <p class="small">关联文档：<a href="./omp-upstream-next-wave-recommendations-20260811.html">第二批推荐依据</a>、<a href="./omp-upstream-selective-absorption-report-20260811.html">首批验收报告</a>、<a href="./omp-upstream-selective-absorption-plan-20260811.html">总体实施计划</a>。</p>
+  </section>
+</main>
+</body>
+</html>

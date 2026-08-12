@@ -431,7 +431,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 
 			stream.push({ type: "start", partial: output });
 
-			let pendingBuffer = Buffer.alloc(0);
+			let pendingBuffer: Buffer = Buffer.alloc(0);
 			let currentTextBlock: (TextContent & { [kStreamingBlockIndex]: number }) | null = null;
 			let currentThinkingBlock: (ThinkingContent & { [kStreamingBlockIndex]: number }) | null = null;
 			let currentToolCall: ToolCallState | null = null;
@@ -483,7 +483,8 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 						log?.write(chunk);
 					});
 				}
-				pendingBuffer = Buffer.concat([pendingBuffer, chunk]);
+				// 稳态下每个 chunk 都会被完整消费；没有残留时直接引用新块，避免无意义复制。
+				pendingBuffer = pendingBuffer.length === 0 ? chunk : Buffer.concat([pendingBuffer, chunk]);
 
 				while (pendingBuffer.length >= 5) {
 					const flags = pendingBuffer[0];

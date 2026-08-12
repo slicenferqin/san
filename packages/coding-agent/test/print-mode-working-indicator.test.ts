@@ -29,12 +29,16 @@ interface DelayedSession {
 	session: AgentSession;
 	promptStarted: Promise<void>;
 	resolvePrompt: () => void;
+	getTextOutputCommitted: () => boolean;
+	getTextOutputCommitTransitions: () => boolean[];
 }
 
-function createDelayedSession(finalMessage: AssistantMessage): DelayedSession {
+function createDelayedSession(finalMessage: AssistantMessage, promptError?: Error): DelayedSession {
 	const messages: AssistantMessage[] = [];
 	const { promise: promptStarted, resolve: markPromptStarted } = Promise.withResolvers<void>();
 	const { promise: promptReleased, resolve: resolvePrompt } = Promise.withResolvers<void>();
+	const textOutputCommitTransitions: boolean[] = [];
+	let textOutputCommitted = true;
 
 	const session = {
 		state: { messages },
@@ -46,13 +50,24 @@ function createDelayedSession(finalMessage: AssistantMessage): DelayedSession {
 		prompt: async () => {
 			markPromptStarted();
 			await promptReleased;
+			if (promptError) throw promptError;
 			messages.push(finalMessage);
 			return true;
+		},
+		setTextOutputCommitted: (committed: boolean) => {
+			textOutputCommitted = committed;
+			textOutputCommitTransitions.push(committed);
 		},
 		dispose: async () => {},
 	} as unknown as AgentSession;
 
-	return { session, promptStarted, resolvePrompt };
+	return {
+		session,
+		promptStarted,
+		resolvePrompt,
+		getTextOutputCommitted: () => textOutputCommitted,
+		getTextOutputCommitTransitions: () => textOutputCommitTransitions,
+	};
 }
 
 describe("print mode working indicator", () => {
@@ -87,12 +102,15 @@ describe("print mode working indicator", () => {
 		try {
 			expect(stderrOutput.join("")).toContain("Working");
 			expect(stdoutOutput.join("")).toBe("");
+			expect(delayed.getTextOutputCommitted()).toBe(false);
 		} finally {
 			delayed.resolvePrompt();
 			await run;
 		}
 
 		expect(stdoutOutput.join("")).toBe("final answer\n");
+		expect(delayed.getTextOutputCommitted()).toBe(true);
+		expect(delayed.getTextOutputCommitTransitions()).toEqual([false, true]);
 	});
 
 	it("does not write the text-mode working indicator in JSON mode while the prompt is pending", async () => {
@@ -102,10 +120,12 @@ describe("print mode working indicator", () => {
 		await delayed.promptStarted;
 		try {
 			expect(stderrOutput.join("")).toBe("");
+			expect(delayed.getTextOutputCommitted()).toBe(true);
 		} finally {
 			delayed.resolvePrompt();
 			await run;
 		}
+		expect(delayed.getTextOutputCommitTransitions()).toEqual([]);
 	});
 
 	it("writes the text-mode working indicator once across successive prompts", async () => {
@@ -121,5 +141,18 @@ describe("print mode working indicator", () => {
 		await run;
 
 		expect(stderrOutput.join("")).toBe("Working...\n");
+		expect(delayed.getTextOutputCommitTransitions()).toEqual([false, false, true]);
+	});
+
+	it("restores committed text state when a text-mode prompt rejects", async () => {
+		const delayed = createDelayedSession(makeAssistantMessage("unused"), new Error("prompt failed"));
+		const run = runPrintMode(delayed.session, { mode: "text", initialMessage: "hello" });
+
+		await delayed.promptStarted;
+		delayed.resolvePrompt();
+		await expect(run).rejects.toThrow("prompt failed");
+
+		expect(delayed.getTextOutputCommitted()).toBe(true);
+		expect(delayed.getTextOutputCommitTransitions()).toEqual([false, true]);
 	});
 });

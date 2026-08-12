@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { fetchWithRetry } from "@san/utils/fetch-retry";
+import { extractRetryHint, fetchWithRetry } from "@san/utils/fetch-retry";
 
 describe("fetchWithRetry", () => {
 	it("routes requests through the `fetch` override when provided", async () => {
@@ -77,5 +77,17 @@ describe("fetchWithRetry", () => {
 		expect(response.status).toBe(429);
 		expect(await response.text()).toBe("slow down");
 		expect(attempt).toBe(1);
+	});
+});
+
+describe("extractRetryHint", () => {
+	it("parses account reset windows", () => {
+		expect(extractRetryHint(undefined, "Your limit will reset in 13 minutes")).toBe(13 * 60_000);
+		expect(extractRetryHint(undefined, "reset in 13 minutes")).toBe(13 * 60_000);
+		expect(extractRetryHint(undefined, "will reset in 2h")).toBe(2 * 60 * 60_000);
+	});
+
+	it("prefers the account reset window over a shorter retry hint", () => {
+		expect(extractRetryHint(undefined, "Please retry in 5s. Your limit will reset in 13 minutes")).toBe(13 * 60_000);
 	});
 });

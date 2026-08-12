@@ -762,17 +762,19 @@ export function createSubagentSettings(
 	snapshot["tier.openai"] = subagentTiers.openai ?? "none";
 	snapshot["tier.anthropic"] = subagentTiers.anthropic ?? "none";
 	snapshot["tier.google"] = subagentTiers.google ?? "none";
-	return Settings.isolated({
-		...snapshot,
-		"async.enabled": false,
-		"bash.autoBackground.enabled": false,
+	return Settings.isolated(
+		{
+			...snapshot,
+			"async.enabled": false,
+			"bash.autoBackground.enabled": false,
 
-		// Subagents run headless — there is no UI to confirm prompts against, so
-		// the parent task approval is the authorization boundary. Use yolo mode
-		// to preserve unattended subagent execution. User `tools.approval` policies still apply.
-		"tools.approvalMode": "yolo",
-		...overrides,
-	});
+			// 子 Agent 以无头模式运行，没有 UI 可承接确认；父任务审批就是授权边界。
+			// 使用 yolo 保持无人值守执行，用户配置的 `tools.approval` 策略仍然生效。
+			"tools.approvalMode": "yolo",
+			...overrides,
+		},
+		{ storage: baseSettings.getStorage() },
+	);
 }
 
 export type AbortReason = "signal" | "terminate" | "timeout" | "budget";

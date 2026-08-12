@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Avernet 的产品定位、公开架构、成熟度，以及适合 San 吸收与不应吸收的能力评估。" />
+  <title>Avernet 对 San 的可吸收性评估</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18221e;
+      --muted: #5e6d65;
+      --paper: #f3f0e7;
+      --panel: #fffdf7;
+      --line: #d3d8d1;
+      --green: #176145;
+      --green-soft: #e8f2ec;
+      --blue: #255f83;
+      --blue-soft: #eaf3f8;
+      --amber: #8a5b16;
+      --amber-soft: #faf0da;
+      --red: #8d3f35;
+      --red-soft: #f8e8e4;
+      --code: #edf1ed;
+      --shadow: rgb(27 47 37 / 7%);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font: 16px/1.72 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    a { color: var(--blue); text-underline-offset: 3px; }
+    code, pre { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+    code { background: var(--code); border-radius: 4px; padding: .08em .32em; font-size: .91em; }
+    pre { margin: 14px 0; padding: 18px 20px; overflow: auto; border-radius: 10px; background: #17251d; color: #e9f1eb; line-height: 1.55; }
+    pre code { padding: 0; background: transparent; color: inherit; }
+    .page { width: min(1120px, calc(100% - 38px)); margin: 0 auto; }
+    .hero {
+      color: #fff;
+      background: linear-gradient(128deg, #122b21 0%, #19533e 62%, #256b72 100%);
+      border-bottom: 7px solid #d39a3a;
+      padding: 58px 0 48px;
+    }
+    .hero-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(260px, .62fr); gap: 34px; align-items: end; }
+    .eyebrow { color: #bfe3d0; text-transform: uppercase; letter-spacing: .14em; font-size: 12px; font-weight: 800; }
+    h1, h2, h3 { line-height: 1.25; }
+    h1 { margin: 10px 0 13px; font-size: clamp(2.25rem, 6vw, 4.4rem); letter-spacing: -.045em; }
+    h2 { margin: 0 0 16px; color: var(--green); font-size: 1.6rem; }
+    h3 { margin: 23px 0 8px; color: var(--blue); font-size: 1.08rem; }
+    .lede { max-width: 72ch; margin: 0; color: #e1eee7; font-size: 1.12rem; }
+    .hero aside { padding: 18px 20px; border: 1px solid rgb(255 255 255 / 28%); border-radius: 12px; background: rgb(0 0 0 / 17%); }
+    .hero dl { margin: 0; }
+    .hero dl div { display: grid; grid-template-columns: 86px 1fr; gap: 12px; padding: 7px 0; border-bottom: 1px solid rgb(255 255 255 / 15%); }
+    .hero dl div:last-child { border-bottom: 0; }
+    .hero dt { color: #bfe3d0; }
+    .hero dd { margin: 0; font-weight: 650; }
+    .verdict { margin: 28px 0 0; padding: 24px 28px; display: grid; grid-template-columns: 280px 1fr; gap: 28px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: 0 9px 28px var(--shadow); }
+    .verdict .big { color: var(--green); font-size: 2rem; line-height: 1.22; }
+    .verdict h2 { margin-bottom: 8px; color: var(--ink); }
+    .verdict p { margin: 0; }
+    nav { margin: 18px 0 22px; display: flex; flex-wrap: wrap; gap: 8px; }
+    nav a { padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); text-decoration: none; font-size: .9rem; }
+    main { padding-bottom: 66px; }
+    section { margin-top: 20px; padding: 27px 31px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: 0 7px 20px var(--shadow); }
+    .kicker { margin: 0 0 7px; color: var(--muted); font-size: .78rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    p, li { max-width: 91ch; }
+    ul, ol { padding-left: 1.35rem; }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+    th, td { padding: 10px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #e7eee9; }
+    .table-wrap { overflow-x: auto; }
+    .grid2, .grid3 { display: grid; gap: 14px; }
+    .grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card { padding: 16px 18px; border: 1px solid var(--line); border-radius: 10px; background: #fbfaf5; }
+    .card h3 { margin-top: 0; }
+    .card p:last-child, .card ul:last-child { margin-bottom: 0; }
+    .callout { margin: 16px 0; padding: 14px 17px; border-left: 5px solid var(--blue); border-radius: 8px; background: var(--blue-soft); }
+    .callout.good { border-left-color: var(--green); background: var(--green-soft); }
+    .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    .callout.no { border-left-color: var(--red); background: var(--red-soft); }
+    .badge { display: inline-block; white-space: nowrap; padding: 2px 8px; border-radius: 999px; font-size: .79rem; font-weight: 750; }
+    .take { color: #145137; background: #dceee3; }
+    .adapt { color: #24556f; background: #dfeef6; }
+    .defer { color: #754b10; background: #f6e7c7; }
+    .reject { color: #7f332b; background: #f3ddd8; }
+    .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 15px 0; }
+    .metric { padding: 15px; border: 1px solid var(--line); border-radius: 9px; background: #f7f8f3; }
+    .metric b { display: block; color: var(--green); font-size: 1.45rem; }
+    .metric span { color: var(--muted); font-size: .88rem; }
+    .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 16px 0; }
+    .flow div { min-height: 94px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #eef3ef; text-align: center; }
+    .flow b { display: block; color: var(--green); }
+    .priority { display: grid; grid-template-columns: 72px 1fr; gap: 15px; margin: 14px 0; padding: 17px; border: 1px solid var(--line); border-radius: 10px; }
+    .priority > b { color: var(--green); font-size: 1.25rem; }
+    .priority h3 { margin-top: 0; }
+    .priority p:last-child, .priority ul:last-child { margin-bottom: 0; }
+    .small { color: var(--muted); font-size: .88rem; }
+    .sources li { margin-bottom: 7px; }
+    footer { padding: 22px 0 44px; color: var(--muted); text-align: center; font-size: .88rem; }
+    @media (max-width: 840px) {
+      .hero-grid, .verdict, .grid2, .grid3, .metric-grid { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr; }
+      .verdict { gap: 10px; }
+    }
+    @media (max-width: 620px) {
+      .page { width: min(100% - 20px, 1120px); }
+      .hero { padding: 38px 0 34px; }
+      section, .verdict { padding: 21px 19px; }
+      .priority { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<header class="hero">
+  <div class="page hero-grid">
+    <div>
+      <div class="eyebrow">External Project Research · Multi-Agent Coordination</div>
+      <h1>Avernet 对 San 的可吸收性评估</h1>
+      <p class="lede">Avernet 不是新的大模型，也不是另一个 coding agent。它是 inclusionAI 开源、仓库自述已在蚂蚁集团生产验证的“Agent 组织协作基础设施”：把异构 bot 接到一个注册、发现、群组、路由、会话和治理平面上。</p>
+    </div>
+    <aside>
+      <dl>
+        <div><dt>调研日期</dt><dd>2026-08-10</dd></div>
+        <div><dt>最新版本</dt><dd>v2026.08.04</dd></div>
+        <div><dt>许可证</dt><dd>Apache-2.0</dd></div>
+        <div><dt>San 范围</dt><dd>packages/coding-agent</dd></div>
+      </dl>
+    </aside>
+  </div>
+</header>
+
+<div class="page">
+  <div class="verdict">
+    <div class="big"><strong>最终决策：No-go。<br />不纳入 San 路线。</strong></div>
+    <div>
+      <h2>放弃集成、吸收与 connector 计划，保留调研记录。</h2>
+      <p>Avernet 没有提供 San 当前缺失且足以改变 harness 设计的 load-bearing primitive。<code>send</code> / <code>inject</code> 分离、结构化消息和协议契约都有参考价值，但属于常规工程手段，不构成引入依赖或排入路线图的理由。只有未来出现明确、独立验证的跨运行时多租户协作需求时，才从实际问题重新评估，不以 Avernet 为前提。</p>
+    </div>
+  </div>
+
+  <nav aria-label="目录">
+    <a href="#identity">它是什么</a>
+    <a href="#mechanics">核心机制</a>
+    <a href="#maturity">成熟度</a>
+    <a href="#mapping">San 对照</a>
+    <a href="#matrix">吸收矩阵</a>
+    <a href="#plan">建议路线</a>
+    <a href="#contract">P0 契约</a>
+    <a href="#sources">证据来源</a>
+  </nav>
+
+  <main>
+    <section id="identity">
+      <p class="kicker">01 · Identity</p>
+      <h2>它到底是什么</h2>
+      <div class="callout good"><strong>准确分类：</strong>Avernet 是异构 Agent 的协作平面。类比上更接近“Agent registry + coordination service + session router + workbench”，而不是模型 SDK、推理框架或 coding harness。</div>
+      <div class="grid2">
+        <article class="card">
+          <h3>它负责</h3>
+          <ul>
+            <li>Bot 身份、注册、能力描述与发现。</li>
+            <li>群组、参与者、会话、关系与可见性。</li>
+            <li><code>@mention</code>、广播和结构化路由。</li>
+            <li>向异构运行时投递任务、注入上下文、取消、查询历史。</li>
+            <li>Web 工作台、Gateway、BaaS 与 Skills 发布/迁移。</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>它不主要负责</h3>
+          <ul>
+            <li>不替代 Agent 自身的推理循环与工具调用。</li>
+            <li>不自动拥有各运行时的完整会话历史；Provider/Engine 按 <code>session_id</code> 管理状态。</li>
+            <li>不等于“多 Agent 一定更聪明”；它解决连接、路由、状态和治理。</li>
+            <li>BCS 可调用 LLM 插件做 Judge/协同决策，但这不是其主体定位。</li>
+          </ul>
+        </article>
+      </div>
+      <h3>公开组件</h3>
+      <div class="flow" aria-label="Avernet architecture">
+        <div><b>Agent Runtime</b>OpenClaw、自定义进程、既有 bot 平台</div>
+        <div><b>BCN / BCS</b>注册、发现、路由、群组、协作状态</div>
+        <div><b>Gateway</b>外部 API、鉴权、域路由</div>
+        <div><b>Backend / BaaS</b>Bot 服务、发布、运行时与容器生命周期</div>
+        <div><b>Workbench</b>人机协作、管理与可视化</div>
+      </div>
+      <p class="small">[观察] BCS 是 Rust 多 crate 微内核；Backend/BaaS 主要为 Python，另有前端与运行时集成。BCS 将 delivery adapter、service API、core/port、plugin API、plugin implementation 和 composition root 明确分层。</p>
+    </section>
+
+    <section id="mechanics">
+      <p class="kicker">02 · Mechanics</p>
+      <h2>真正值得看的五个机制</h2>
+
+      <h3>1. <code>chat.send</code> 与 <code>chat.inject</code> 是不同语义</h3>
+      <p><code>chat.send</code> 要求目标 bot 启动一次 run 并回复；<code>chat.inject</code> 只把上下文写入会话，不触发推理。这不是 API 命名细节，而是多 Agent 系统控制成本和避免“所有人都抢答”的关键边界。</p>
+      <div class="callout"><strong>对 San 最有价值：</strong>当前 <code>hub send</code> 给 idle agent 会启动真实 turn，给 parked agent 会先 revive；广播会触达所有 live peers。San 有“忙碌时 next-boundary aside”，却没有调用方可明确选择的“只观察、绝不启动 turn”操作。</div>
+
+      <h3>2. 会话上下文是结构化字段，不只是一段 prompt</h3>
+      <p>Avernet 下发 <code>session_id</code>、participants、originator、from、mentions、<code>you_are_mentioned</code>、<code>is_sender</code> 和 timeout。路由优先级为结构化 routing → 文本 <code>@mention</code> → 默认 driver 回复、其他成员观察。</p>
+      <p>San 的执行侧已有 <code>scopeId / contractId / workKey / strategyKey / taskId</code>，但内部 <code>IrcMessage</code> 目前只有 <code>id / from / to / body / ts / replyTo</code>。这形成一个明显断层：<strong>任务与账本是结构化的，Peer 消息仍是扁平文本。</strong></p>
+
+      <h3>3. 两种接入方式覆盖单进程与平台</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>方式</th><th>适用对象</th><th>传输</th><th>状态归属</th></tr></thead>
+          <tbody>
+            <tr><td>Plugin / Runtime</td><td>单个本地 Agent 进程</td><td>双向 WebSocket <code>/ws/bot</code></td><td>Agent 进程持有会话，主动连接 BCS</td></tr>
+            <tr><td>Bot Provider</td><td>托管多个 bot 的既有平台</td><td>BCS webhook 下行 + <code>/bot/events</code> 异步回调</td><td>Provider 按 <code>(provider_bot_ref, session_id)</code> 持有</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Provider 协议要求版本、时间戳、认证、业务幂等键、统一错误码和一次 final。这个边界适合作为 San 未来外部 runtime adapter 的参考，但不应把 HTTP/WebSocket 细节直接写进 AgentSession。</p>
+
+      <h3>4. API 规范、协议测试和 import 边界都是可执行约束</h3>
+      <ul>
+        <li>BCN 的 versioned OpenAPI 是权威源，当前文档列出 32 个协作操作，并提供 deterministic bundle/JSON 生成及兼容检查。</li>
+        <li>Microkernel Architecture Constitution 将规则分为 Invariant / Policy / Guideline；delivery 只能调 service API，core 不依赖 transport。</li>
+        <li>每个边界模块的 README 声明 <code>purpose / provides / consumes / internal_dependencies</code>；测试把 <code>internal_dependencies</code> 当 import 白名单。</li>
+        <li>每个 Plugin Protocol 必须有 consumer-level contract suite，并额外断言插件确实被调用，防止“测试通过但实现绕过了 adapter”。</li>
+      </ul>
+
+      <h3>5. 跨组件迁移使用窄 wire contract、版本锁定和 fail-closed</h3>
+      <p>Skills Pool 不把引擎文件路径和 symlink 细节写入跨服务 manifest，只传 engine、active layout 和精确 contract version；未知版本拒绝 Pool publication，并以 quarantine、rollout audit、rollback 证据管理迁移。这种“冻结最小稳定语义、物理布局由末端拥有”的做法比复制其 Skills 平台本身更值得借鉴。</p>
+    </section>
+
+    <section id="maturity">
+      <p class="kicker">03 · Maturity</p>
+      <h2>生产背景强，但公开项目仍处在快速演化期</h2>
+      <div class="metric-grid">
+        <div class="metric"><b>2026-07-06</b><span>GitHub 仓库创建</span></div>
+        <div class="metric"><b>v2026.08.04</b><span>截至调研日最新 tag</span></div>
+        <div class="metric"><b>429 / 43</b><span>Stars / Forks 快照</span></div>
+        <div class="metric"><b>Apache-2.0</b><span>可借鉴代码，复制须保留许可义务</span></div>
+      </div>
+      <div class="callout warn"><strong>官方声明，不是独立基准：</strong>首个 release 称 2026 年 7 月初已支持 10,000+ agents/bots；当前 README 称覆盖蚂蚁 12 个 BG，纳入统计的多 Agent 工作流完成率 90%+。公开资料没有给出任务集、对照组、失败定义或可复现实验，不能把这些数字直接当 San 架构选型证据。</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>信号</th><th>观察</th><th>判断</th></tr></thead>
+          <tbody>
+            <tr><td>发布节奏</td><td>一个月内已有 07.15、07.28、07.30、08.04 多个 CalVer release。</td><td>活跃，但接口和部署面仍在快速切换。</td></tr>
+            <tr><td>公开能力状态</td><td>Identity/Auth available；Permissions partial；Security planned；Audit/Lifecycle in progress；Context/Memory/Orchestration/Evaluation/Evolution 多数 planned。</td><td>不能按“完整企业平台”采购或深度绑定。</td></tr>
+            <tr><td>协议变化</td><td>最新 release 仍在移动 bot socket、归一化 OpenAPI 路径、整合 gateway routing。</td><td>适合松耦合 adapter，不适合编进 San core。</td></tr>
+            <tr><td>恢复边界</td><td>Provider 文档明确：final 回调后的 Judge 等进程内异步处理，在 BCS 进程退出后不会恢复。</td><td>“持久化平台”并不代表每条协作路径都 durable。</td></tr>
+            <tr><td>默认分支</td><td>仓库默认分支为 <code>dev</code>，截至调研日仍高频 push。</td><td>研究应固定 tag；实现不应追 dev 内部类型。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="mapping">
+      <p class="kicker">04 · San Mapping</p>
+      <h2>San 已有的能力比表面上多，缺口集中在“协作语义”</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>维度</th><th>Avernet</th><th>San 现状</th><th>判断</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>产品职责</td>
+              <td>组织级异构 Agent 协作基础设施。</td>
+              <td>本地 coding-agent runtime、CLI、TUI 与执行控制。</td>
+              <td>互补，不是替代关系。</td>
+            </tr>
+            <tr>
+              <td>Agent 执行</td>
+              <td>主要把执行委托给接入 runtime/provider。</td>
+              <td><code>AgentSession</code> + <code>TaskTool</code> 直接执行模型、工具、重试、预算、worktree。</td>
+              <td>San 无需吸收 BaaS 执行面。</td>
+            </tr>
+            <tr>
+              <td>发现</td>
+              <td>动态 bot registry；skills/domains/scopes；关系与可见性。</td>
+              <td><code>AgentDefinition</code> 由 bundled/user/project/extension 文件发现；live <code>AgentRegistry</code> 是进程全局、平面命名空间。</td>
+              <td>远程 federation 前无需做能力市场。</td>
+            </tr>
+            <tr>
+              <td>Peer 消息</td>
+              <td><code>send</code> 与 <code>inject</code> 分离；群组与结构化 session context。</td>
+              <td><code>hub send/wait/inbox/list</code>；idle wake、park revive、busy aside；无显式 passive observe。</td>
+              <td><strong>最明确的可补缺口。</strong></td>
+            </tr>
+            <tr>
+              <td>执行身份</td>
+              <td>run/session/provider/bot IDs，业务请求幂等。</td>
+              <td>Task Contract v1 已有 <code>scopeId/workKey/strategyKey/taskId/contractId</code> 和重复 admission。</td>
+              <td>复用 San，不另造 ID 体系。</td>
+            </tr>
+            <tr>
+              <td>持久化与监督</td>
+              <td>注册、群组、会话与协作状态；不同路径 durable 程度不一。</td>
+              <td>append-only ExecutionLedger、CAS revision、不可逆 terminal state、DurableScheduler lease、Watchdog、session journal、park/revive。</td>
+              <td>San 执行闭环更贴合自身问题。</td>
+            </tr>
+            <tr>
+              <td>外部控制协议</td>
+              <td>Bot WebSocket + Provider HTTP callback。</td>
+              <td>RPC v2 已有 initialize/version、capabilities revision、session lease、run control、idempotency、event sequence、replay。</td>
+              <td>未来 bridge 应建在 RPC v2 之上。</td>
+            </tr>
+            <tr>
+              <td>多租户治理</td>
+              <td>Identity/Auth；权限、审计和安全处于不同开放阶段。</td>
+              <td>本地 approval、tool capability、host evidence；没有组织 RBAC/好友/群权限。</td>
+              <td>不是 San core 的当前目标。</td>
+            </tr>
+            <tr>
+              <td>架构守门</td>
+              <td>模块 import whitelist、协议 contract tests、OpenAPI 权威源。</td>
+              <td>RPC v2 已有 method catalog → schema/conformance，外部 ACP schema 验证；未见同等级的 coding-agent 模块依赖白名单。</td>
+              <td>选择性吸收边界测试。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout"><strong>核心判断：</strong>Avernet 不是给 San 提供“更好的执行器”；它提醒 San 把已经成熟的执行 scope/contract 与还比较原始的 peer messaging 接起来。</div>
+    </section>
+
+    <section id="matrix">
+      <p class="kicker">05 · Absorption Matrix</p>
+      <h2>技术参考价值与最终取舍</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>候选能力</th><th>适配度</th><th>决定</th><th>理由</th></tr></thead>
+          <tbody>
+            <tr><td>Responder / Observer 分离</td><td>中</td><td><span class="badge defer">不单独推进</span></td><td>语义合理，但没有证据表明它是 San 当前的关键瓶颈；有独立需求时再设计。</td></tr>
+            <tr><td>消息关联执行 scope 与 causation</td><td>中</td><td><span class="badge defer">不单独推进</span></td><td>可复用 Task Contract / ExecutionLedger，但不因 Avernet 新增项目。</td></tr>
+            <tr><td>Adapter 行为契约套件</td><td>中</td><td><span class="badge defer">按需采用</span></td><td>San 已有 RPC schema contract；只有新增外部 runtime adapter 时才扩展。</td></tr>
+            <tr><td>模块 Context Boundary</td><td>中</td><td><span class="badge defer">按需采用</span></td><td>依赖边界测试是通用工程纪律，不需要从 Avernet 移植机制。</td></tr>
+            <tr><td>Plugin / Provider 双接入</td><td>中</td><td><span class="badge adapt">作为扩展</span></td><td>适合 San 接入外部 agent network，但不应污染 AgentSession 与核心工具。</td></tr>
+            <tr><td>动态 capability/domain registry</td><td>中低</td><td><span class="badge defer">需求后再做</span></td><td>当前静态 agent description/tools/spawns 足够；无跨运行时池时只增加元数据税。</td></tr>
+            <tr><td>Skills Pool quarantine / rollout audit</td><td>中</td><td><span class="badge adapt">借迁移思想</span></td><td>适用于未来跨运行时 skill layout；当前不值得复制服务、表和运维面。</td></tr>
+            <tr><td>好友、社交关系、组织群组</td><td>低</td><td><span class="badge reject">不吸收</span></td><td>San 的 agent 是任务执行者，不是长期社交主体。</td></tr>
+            <tr><td>Web Workbench / Canvas / BaaS / 容器平台</td><td>低</td><td><span class="badge reject">不吸收</span></td><td>重复 Desktop、Hub 和 launch 能力，显著扩大部署与安全面。</td></tr>
+            <tr><td>把 Avernet 作为 San 强依赖</td><td>低</td><td><span class="badge reject">不吸收</span></td><td>协议快速演化、职责重叠、引入中心服务；应保持 adapter 可卸载。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="plan">
+      <p class="kicker">06 · Archived Design Sketch</p>
+      <h2>归档设计草案（当前不执行）</h2>
+      <div class="callout no"><strong>状态：</strong>以下内容仅保留调研时的最小实现推演，不是 San 的 roadmap、待办或实现建议。</div>
+
+      <div class="priority">
+        <b>Draft</b>
+        <div>
+          <h3>若独立需求成立：新增 <code>hub observe</code>，不修改 <code>send</code> 语义</h3>
+          <p><code>observe</code> 只把消息写进目标 agent 的上下文，不启动 autonomous turn、不生成 auto-reply、不能 <code>await</code>。保持现有 <code>send</code> 行为不变，避免兼容性和语义漂移。</p>
+          <ul>
+            <li><code>to: "all"</code> 时被动 fan-out，不制造唤醒风暴。</li>
+            <li>host 自动附加当前 <code>scopeId</code>、发送者 task contract 和 causation；不让模型伪造宿主身份字段。</li>
+            <li>目标 busy/idle/parked 都必须满足“零新增模型请求”；允许恢复对象，但禁止因此启动 run。</li>
+            <li>大上下文继续使用 <code>local://</code> / <code>artifact://</code> handle，不把大块文本广播进每个上下文。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="priority">
+        <b>Draft</b>
+        <div>
+          <h3>给协作消息建立 v1 内部契约，并复用现有 RPC/账本原语</h3>
+          <p>不要复制 Avernet frame。基于 San 已有 Snowflake IDs、Task Contract、RPC v2 EventSequencer、IdempotencyStore 和 session journal，形成窄 <code>CoordinationObservationV1</code>。消息必须 exactly-once 进入目标上下文，重复 delivery 只返回 receipt。</p>
+        </div>
+      </div>
+
+      <div class="priority">
+        <b>Draft</b>
+        <div>
+          <h3>对 load-bearing 边界加依赖图和 adapter conformance</h3>
+          <p>优先覆盖 <code>execution-control</code>、<code>task</code>、<code>registry/irc</code>、<code>modes/rpc-v2</code>。规则存放在单一机器可读 manifest 或现有 lint 配置，不在 README 重复维护。外部 runtime adapter 的测试必须覆盖 send/observe/abort/history、错误映射、幂等冲突，并证明真实 adapter 被调用。</p>
+        </div>
+      </div>
+
+      <div class="priority">
+        <b>Deferred</b>
+        <div>
+          <h3>不做；若未来出现真实需求，再评估可卸载 connector</h3>
+          <p>单 San runtime 可走 WebSocket Plugin；托管多 San 实例时才考虑 Provider。connector 作为 extension/sidecar，映射到 RPC v2，而不是让 BCS 类型进入 AgentSession。</p>
+          <ul>
+            <li><code>bot.connect</code> → connector 身份与 version negotiation。</li>
+            <li><code>chat.send</code> → <code>run.start</code>；立即 ACK，完成后发送 sequenced final。</li>
+            <li><code>chat.inject</code> → 独立的 passive observation 能力。</li>
+            <li><code>chat.abort</code> → <code>run.abort</code>。</li>
+            <li><code>chat.history</code> → <code>session.messages.list</code>。</li>
+          </ul>
+          <p class="small">启用门槛：有明确跨运行时协作用户；上游 tagged protocol 和路径稳定；connector 的断线重连、幂等和 credential isolation 均通过 smoke。否则不进入默认发行图。</p>
+        </div>
+      </div>
+
+      <div class="callout no"><strong>明确非目标：</strong>不在 San 中建 bot marketplace、好友图、组织 RBAC、Web 群聊、中心数据库、BaaS 或 Skills Pool 控制台；不把每个 subagent 变成长驻服务；不因 Avernet 的营销数据扩大 San 产品边界。</div>
+    </section>
+
+    <section id="contract">
+      <p class="kicker">07 · Concrete Contract</p>
+      <h2>归档的最小 wire 草案与验收门（当前不执行）</h2>
+      <p>以下是设计建议，不是已实现 API。模型可见参数只保留 <code>to</code> 与 <code>message</code>；其余字段由 host 派生。</p>
+      <pre><code>// hub tool
+{ "op": "observe", "to": "AuthLoader", "message": "API contract changed; rebase assumptions." }
+
+// host-owned internal record
+{
+  "schemaVersion": 1,
+  "observationId": "obs_...",
+  "from": "Main",
+  "to": "AuthLoader",
+  "body": "API contract changed; rebase assumptions.",
+  "createdAt": "2026-08-10T...Z",
+  "scopeId": "scope_...",
+  "contractId": "contract_...",
+  "causationId": "msg_..."
+}</code></pre>
+      <div class="grid2">
+        <article class="card">
+          <h3>行为不变量</h3>
+          <ul>
+            <li>观察消息永远不触发新 assistant request。</li>
+            <li>观察消息永远不自动回复。</li>
+            <li>同一 observation ID 在同一目标上下文最多出现一次。</li>
+            <li>目标下一次真实 turn 能看到观察内容与发送者。</li>
+            <li>旧 transcript 无新字段时仍能恢复。</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>必须验证的回归</h3>
+          <ul>
+            <li>idle、busy、parked 三种状态的 provider request count 均不增加。</li>
+            <li><code>observe all</code> 不改变任何 peer 的 running/idle 状态。</li>
+            <li>重复投递返回 reused receipt，不重复写 session。</li>
+            <li>恢复/分支后 observation 只出现在正确 branch/scope。</li>
+            <li>普通 <code>send</code> 的 wake/revive/await 行为完全不变。</li>
+          </ul>
+        </article>
+      </div>
+      <div class="callout warn"><strong>风险：</strong>被动注入只是避免“立即推理”，不等于免费。下一次 turn 仍会消耗上下文 token；因此必须有长度上限、scope 过滤、去重和 handle-first 规则，不能把 Avernet 群聊广播原样搬进每个 agent history。</div>
+    </section>
+
+    <section id="decision">
+      <p class="kicker">08 · Final Decision</p>
+      <h2>最终决策：No-go</h2>
+      <ol>
+        <li><strong>不引入 Avernet 依赖，不 fork BCS，不复制组织平台。</strong></li>
+        <li><strong>不开发 Avernet connector，不创建相关 roadmap 项。</strong></li>
+        <li><strong>passive observation、结构化消息和 contract discipline 降级为普通参考。</strong>只有 San 自身问题提供独立证据时才重新设计。</li>
+        <li><strong>本报告作为已关闭的技术调研归档。</strong>未来若出现跨运行时、多租户 Agent 网络的真实需求，从需求重新评估，不默认回到 Avernet。</li>
+      </ol>
+      <p class="callout no"><strong>一句话：</strong>Avernet 有可理解的工程做法，但没有让 San 必须吸收、也没有足以改变 harness 路线的独特能力。</p>
+    </section>
+
+    <section id="sources">
+      <p class="kicker">09 · Evidence</p>
+      <h2>官方来源与本地代码证据</h2>
+      <h3>Avernet 官方资料</h3>
+      <ul class="sources">
+        <li><a href="https://github.com/inclusionAI/Avernet">inclusionAI/Avernet 仓库</a>：仓库身份、许可证、默认分支、当前源码。</li>
+        <li><a href="https://github.com/inclusionAI/Avernet/blob/dev/README.zh-CN.md">官方中文 README</a>：产品定位、公开能力状态、12 BG / 90%+ 官方声明。</li>
+        <li><a href="https://github.com/inclusionAI/Avernet/releases/tag/v2026.08.04">v2026.08.04 release</a>：截至调研日最新发布、Gateway/Skills/生命周期变化。</li>
+        <li><a href="https://github.com/inclusionAI/Avernet/releases/tag/v2026.07.15">首个开源 release</a>：10,000+ bots 官方声明、初始公开范围。</li>
+        <li><a href="https://github.com/inclusionAI/Avernet/blob/dev/docs/bot-integration.zh-CN.md">Bot WebSocket 接入</a>：connect/send/inject/abort/history、session context、routing、event sequence。</li>
+        <li><a href="https://github.com/inclusionAI/Avernet/blob/dev/docs/bot-provider-integration.zh-CN.md">Bot Provider 接入</a>：webhook/callback、token 边界、幂等、错误码与恢复限制。</li>
+        <li><a href="https://github.com/inclusionAI/Avernet/blob/dev/src/bcs/README.md">BCS 开发指南</a>：职责、Rust crate 分层、plugin 与 service 边界。</li>
+        <li><a href="https://github.com/inclusionAI/Avernet/blob/dev/src/bcs/api-contracts/README.md">BCN API Contracts</a>：OpenAPI 权威源、32 个操作、bundle/validation。</li>
+        <li><a href="https://github.com/inclusionAI/Avernet/blob/dev/docs/arch/arch.rules.md">Microkernel Architecture Constitution</a>：Invariant/Policy/Guideline 与依赖方向。</li>
+        <li><a href="https://github.com/inclusionAI/Avernet/blob/dev/docs/arch/context-boundary-format.md">Context Boundary Format</a>：模块依赖白名单。</li>
+        <li><a href="https://github.com/inclusionAI/Avernet/blob/dev/docs/arch/protocol-contract-tests.md">Protocol Contract Tests</a>：consumer ↔ protocol 契约和 plugin-hit 断言。</li>
+        <li><a href="https://github.com/inclusionAI/Avernet/blob/dev/docs/arch/service-skills-layout-wire-contract.md">Skills Layout Wire Contract</a>：窄 manifest、精确版本与 fail-closed。</li>
+      </ul>
+      <h3>San 本地证据</h3>
+      <ul class="sources">
+        <li><code>packages/coding-agent/src/irc/bus.ts</code>：IrcMessage、wake/revive/inject、process-global mailbox。</li>
+        <li><code>packages/coding-agent/src/session/agent-session.ts</code>：<code>deliverIrcMessage</code> 的 busy aside、plan-mode passive、idle wake。</li>
+        <li><code>packages/coding-agent/src/tools/hub/</code>：send/wait/inbox/list 与广播行为。</li>
+        <li><code>packages/coding-agent/src/registry/agent-registry.ts</code>：进程级 flat peer registry、running/idle/parked/aborted。</li>
+        <li><code>packages/coding-agent/src/task/types.ts</code>、<code>agents.ts</code>、<code>discovery.ts</code>：静态 agent manifest 与发现。</li>
+        <li><code>packages/coding-agent/src/execution-control/task-contract.ts</code>：Task Contract v1、稳定身份与重复 admission。</li>
+        <li><code>packages/coding-agent/src/execution-control/execution-ledger.ts</code>、<code>durable-scheduler.ts</code>：append-only ledger、CAS、lease、watchdog。</li>
+        <li><code>packages/coding-agent/src/modes/rpc-v2/</code>：协议版本、能力协商、方法目录、幂等、事件序列、session/run/subagent 控制。</li>
+      </ul>
+      <p class="small">证据标签：文中“官方声明”仅表示来源为项目方；“观察”来自公开源码、官方文档或本地 San 源码；方案与优先级是基于两者的工程判断。</p>
+    </section>
+  </main>
+
+  <footer>Avernet → San Absorption Assessment · 2026-08-10 · Research only, no runtime behavior changed.</footer>
+</div>
+</body>
+</html>

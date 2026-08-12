@@ -121,20 +121,17 @@ async function loadBrowsers(): Promise<typeof BrowsersNs> {
 }
 
 /**
- * Resolve the Chromium executable puppeteer will launch, lazily downloading it
- * on first use via @puppeteer/browsers. Skipped when a system Chromium (NixOS)
- * or PUPPETEER_EXECUTABLE_PATH is set. The browser is cached under
- * ~/.omp/puppeteer (getPuppeteerDir). Returns undefined when platform
- * detection fails (puppeteer default resolution takes over). Exported so
- * real-browser tests can probe launchability and skip on hosts missing
- * Chrome's system libraries.
+ * 解析 Puppeteer 启动的 Chromium：优先使用 PUPPETEER_EXECUTABLE_PATH，
+ * 其次探测系统浏览器，最后通过 @puppeteer/browsers 按需下载。浏览器缓存在
+ * getPuppeteerDir()；无法识别平台时返回 undefined，交由 Puppeteer 默认解析。
+ * 此函数导出供真实浏览器测试探测可启动性，并在宿主缺少 Chrome 系统库时跳过。
  */
 let chromiumExecutablePromise: Promise<string | undefined> | undefined;
 export async function ensureChromiumExecutable(): Promise<string | undefined> {
-	const sysChrome = resolveSystemChromium();
-	if (sysChrome) return sysChrome;
 	const envPath = process.env.PUPPETEER_EXECUTABLE_PATH;
 	if (envPath) return envPath;
+	const sysChrome = await resolveSystemChromium();
+	if (sysChrome) return sysChrome;
 	if (chromiumExecutablePromise) return chromiumExecutablePromise;
 
 	chromiumExecutablePromise = (async () => {
@@ -193,7 +190,33 @@ let resolvedChromium: string | null | undefined; // undefined = unchecked; null 
 function isExecutableFile(p: string): boolean {
 	try {
 		const st = fs.statSync(p);
-		return st.isFile();
+		if (!st.isFile()) return false;
+		if (process.platform === "win32") return true;
+		fs.accessSync(p, fs.constants.X_OK);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function isChromiumExecutable(p: string): Promise<boolean> {
+	if (!isExecutableFile(p)) return false;
+	try {
+		const probeTimeoutMs = 3_000;
+		const proc = Bun.spawn([p, "--version"], {
+			stdout: "pipe",
+			stderr: "ignore",
+			signal: AbortSignal.timeout(probeTimeoutMs),
+			killSignal: "SIGKILL",
+		});
+		// 不能与 proc.exited 竞速：进程退出时 stdout 尾部仍可能尚未交付。
+		const stdout = await Promise.race([
+			new Response(proc.stdout).text(),
+			Bun.sleep(probeTimeoutMs + 500).then(() => null),
+		]);
+		if (stdout === null) return false;
+		await proc.exited;
+		return proc.exitCode === 0 && /Chrom|Edg/i.test(stdout);
 	} catch {
 		return false;
 	}
@@ -259,13 +282,13 @@ function systemChromiumCandidates(): string[] {
 	return candidates;
 }
 
-function resolveSystemChromium(): string | undefined {
+async function resolveSystemChromium(): Promise<string | undefined> {
 	if (resolvedChromium !== undefined) return resolvedChromium ?? undefined;
 	const seen = new Set<string>();
 	for (const candidate of systemChromiumCandidates()) {
 		if (!candidate || seen.has(candidate)) continue;
 		seen.add(candidate);
-		if (isExecutableFile(candidate)) {
+		if (await isChromiumExecutable(candidate)) {
 			resolvedChromium = candidate;
 			logger.debug("Using system Chrome/Chromium", { path: candidate });
 			return candidate;
@@ -766,6 +789,10 @@ export async function applyStealthPatches(
 
 export function stealthIgnoreDefaultArgsForTest(executablePath: string | undefined): string[] {
 	return stealthIgnoreDefaultArgs(executablePath);
+}
+
+export async function chromiumExecutableProbeForTest(executablePath: string): Promise<boolean> {
+	return isChromiumExecutable(executablePath);
 }
 
 export function targetSupportsUserAgentOverrideForTest(target: Target): boolean {

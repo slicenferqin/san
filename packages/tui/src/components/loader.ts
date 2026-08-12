@@ -4,6 +4,7 @@ import { Text } from "./text";
 
 const RENDER_INTERVAL_MS = 1000 / 30;
 const SPINNER_ADVANCE_MS = 80;
+const RENDER_BACKPRESSURE_MULTIPLIER = 9;
 
 type ColorFn = (str: string) => string;
 
@@ -80,9 +81,14 @@ export class Loader extends Text {
 		this.#lastSpinnerTick = performance.now();
 		this.#updateDisplay();
 		const intervalMs = this.messageColorFn.animated === true ? RENDER_INTERVAL_MS : SPINNER_ADVANCE_MS;
-		this.#intervalId = setInterval(() => {
-			const now = performance.now();
-			const elapsed = now - this.#lastSpinnerTick;
+		this.#scheduleTick(intervalMs, intervalMs);
+	}
+
+	#scheduleTick(intervalMs: number, delayMs: number): void {
+		const timer = setTimeout(() => {
+			if (this.#intervalId !== timer) return;
+			const startedAt = performance.now();
+			const elapsed = startedAt - this.#lastSpinnerTick;
 			const shouldAdvanceSpinner = elapsed >= SPINNER_ADVANCE_MS;
 			if (shouldAdvanceSpinner) {
 				const steps = Math.floor(elapsed / SPINNER_ADVANCE_MS);
@@ -92,12 +98,21 @@ export class Loader extends Text {
 			if (shouldAdvanceSpinner || this.#ui?.synchronizedOutput === true) {
 				this.#updateDisplay();
 			}
-		}, intervalMs);
+
+			const frameCostMs = performance.now() - startedAt;
+			if (this.#intervalId !== timer) return;
+			const cadenceDelayMs = Math.max(0, intervalMs - frameCostMs);
+			// 按一次绘制成本的九倍休眠，把慢速 ConPTY 上的动画占用限制在约 10%。
+			// 不设置固定上限，避免单次写入很慢时重新退化为持续高占用。
+			const backpressureDelayMs = frameCostMs * RENDER_BACKPRESSURE_MULTIPLIER;
+			this.#scheduleTick(intervalMs, Math.max(cadenceDelayMs, backpressureDelayMs));
+		}, delayMs);
+		this.#intervalId = timer;
 	}
 
 	stop() {
 		if (this.#intervalId) {
-			clearInterval(this.#intervalId);
+			clearTimeout(this.#intervalId);
 			this.#intervalId = undefined;
 		}
 	}

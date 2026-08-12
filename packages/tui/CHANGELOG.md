@@ -9,6 +9,11 @@
 ### Added
 
 - Added optional masked rendering to the single-line `Input` component while preserving the submitted value.
+
+### Fixed
+
+- Fixed loader animations consuming excessive CPU on slow terminal writes by applying paint-cost-aware backpressure while preserving normal animation cadence.
+
 ## [17.0.2] - 2026-07-17
 
 ### Added

@@ -82,13 +82,47 @@ export function printableEvent(event: AgentSessionEvent): unknown {
  * Sends prompts to the agent and outputs the result.
  */
 export async function runPrintMode(session: AgentSession, options: PrintModeOptions): Promise<void> {
+	let textOutputBuffered = false;
+	const beginTextPrompt = (): void => {
+		if (options.mode !== "text" || typeof session.setTextOutputCommitted !== "function") return;
+		textOutputBuffered = true;
+		session.setTextOutputCommitted(false);
+	};
+	try {
+		await runPrintModeInternal(session, options, beginTextPrompt);
+	} finally {
+		if (textOutputBuffered) session.setTextOutputCommitted?.(true);
+	}
+}
+
+async function runPrintModeInternal(
+	session: AgentSession,
+	options: PrintModeOptions,
+	beginTextPrompt: () => void,
+): Promise<void> {
 	const { mode, messages = [], initialMessage, initialImages, printThoughts } = options;
+	// stdout.write 不会等待管道排空。将所有记录按回调完成顺序串起来，确保大体积
+	// agent_end 或最终文本在进程退出前完整写出，并保持事件原有顺序。
+	let stdoutTail: Promise<void> = Promise.resolve();
+	const writeStdoutLine = (text: string): void => {
+		stdoutTail = stdoutTail.then(async () => {
+			const { promise, resolve, reject } = Promise.withResolvers<void>();
+			process.stdout.write(text, err => {
+				if (err) {
+					reject(new Error(`Print mode stdout write failed: ${err.message}`, { cause: err }));
+					return;
+				}
+				resolve();
+			});
+			await promise;
+		});
+	};
 
 	// Emit session header for JSON mode
 	if (mode === "json") {
 		const header = session.sessionManager.getHeader();
 		if (header) {
-			process.stdout.write(`${JSON.stringify(header)}\n`);
+			writeStdoutLine(`${JSON.stringify(header)}\n`);
 		}
 	}
 	// Set up extensions for print mode (no UI, no command context)
@@ -107,7 +141,7 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 	session.subscribe(event => {
 		// In JSON mode, output all events
 		if (mode === "json") {
-			process.stdout.write(`${JSON.stringify(printableEvent(event))}\n`);
+			writeStdoutLine(`${JSON.stringify(printableEvent(event))}\n`);
 		}
 	});
 
@@ -121,12 +155,14 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 	// Send initial message with attachments
 	if (initialMessage !== undefined) {
 		writeTextWorkingIndicator();
+		beginTextPrompt();
 		await logger.time("print:prompt:initial", () => session.prompt(initialMessage, { images: initialImages }));
 	}
 
 	// Send remaining messages
 	for (const message of messages) {
 		writeTextWorkingIndicator();
+		beginTextPrompt();
 		await logger.time("print:prompt:next", () => session.prompt(message));
 	}
 
@@ -172,22 +208,16 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 			// Output text content
 			for (const content of assistantMsg.content) {
 				if (content.type === "text") {
-					process.stdout.write(`${sanitizeText(content.text)}\n`);
+					writeStdoutLine(`${sanitizeText(content.text)}\n`);
 				} else if (printThoughts && content.type === "thinking" && content.thinking.trim().length > 0) {
-					process.stdout.write(`${sanitizeText(content.thinking)}\n`);
+					writeStdoutLine(`${sanitizeText(content.thinking)}\n`);
 				}
 			}
 		}
 	}
 
-	// Ensure stdout is fully flushed before returning
-	// This prevents race conditions where the process exits before all output is written
-	await new Promise<void>((resolve, reject) => {
-		process.stdout.write("", err => {
-			if (err) reject(err);
-			else resolve();
-		});
-	});
+	// 等待已排队的最终记录自身完成，空写入不能充当前序大记录的排空屏障。
+	await stdoutTail;
 
 	await session.dispose({ mnemopiConsolidateTimeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS });
 }

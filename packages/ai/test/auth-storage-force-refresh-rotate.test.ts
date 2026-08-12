@@ -495,15 +495,35 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 		});
 
 		expect(rotated).toBe(true);
-		// Usage / account-rate-limit errors route to markUsageLimitReached, which
-		// owns the block duration (default + server usage-report reset) — the
-		// resolver never parses retry-after itself.
+		// 账号额度错误交给 markUsageLimitReached，并透传服务端声明的恢复窗口。
 		expect(usageLimitSpy).toHaveBeenCalledTimes(1);
 		expect(usageLimitSpy.mock.calls[0]?.[0]).toBe(PROVIDER);
 		expect(usageLimitSpy.mock.calls[0]?.[1]).toBe("sess");
+		expect(usageLimitSpy.mock.calls[0]?.[2]?.retryAfterMs).toBe(158 * 60_000);
 
 		const second = await authStorage.getApiKey(PROVIDER, "sess");
 		expect(second).not.toBe(first);
+	});
+
+	test("rotateSessionCredential(cyber policy) soft-blocks the denied account and rotates", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		registerProvider();
+		await authStorage.set(PROVIDER, [
+			{ type: "oauth", access: "acc-A", refresh: "ref-A", expires: farExpiry() },
+			{ type: "oauth", access: "acc-B", refresh: "ref-B", expires: farExpiry() },
+		]);
+
+		const first = await authStorage.getApiKey(PROVIDER, "cyber-policy");
+		const usageLimitSpy = vi.spyOn(authStorage, "markUsageLimitReached");
+		const rotated = await authStorage.rotateSessionCredential(PROVIDER, "cyber-policy", {
+			error: new Error(
+				"Codex error event: This content was flagged for possible cybersecurity risk. Join Trusted Access for Cyber. (code=cyber_policy)",
+			),
+		});
+
+		expect(rotated).toBe(true);
+		expect(usageLimitSpy).not.toHaveBeenCalled();
+		expect(await authStorage.getApiKey(PROVIDER, "cyber-policy")).not.toBe(first);
 	});
 
 	test("rotateSessionCredential treats structured usage codes as quota blocks despite generic messages", async () => {

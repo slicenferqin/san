@@ -204,7 +204,11 @@ export const streamDevin: StreamFunction<"devin-agent"> = (
 			for (;;) {
 				const { done, value } = await reader.read();
 				if (value && value.length > 0) {
-					pending = Buffer.concat([pending, value]);
+					// 稳态下每个 chunk 都会被完整消费；没有残留时直接创建视图，避免复制。
+					pending =
+						pending.length === 0
+							? Buffer.from(value.buffer, value.byteOffset, value.byteLength)
+							: Buffer.concat([pending, value]);
 				}
 
 				while (pending.length >= 5) {

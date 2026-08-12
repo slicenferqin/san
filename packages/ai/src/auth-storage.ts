@@ -11,7 +11,7 @@ import { Database, type Statement } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDbPath, logger } from "@san/utils";
+import { extractRetryHint, getAgentDbPath, logger } from "@san/utils";
 import type { ApiKeyResolver } from "./auth-retry";
 import * as AIError from "./error";
 import { isUsageLimitOutcome } from "./error/rate-limit";
@@ -1103,6 +1103,13 @@ type UsageCandidate<T extends AuthCredential> = {
 type OAuthCandidate = UsageCandidate<OAuthCredential>;
 type ApiKeyCandidate = UsageCandidate<ApiKeyCredential>;
 type UsageRankingResult<T extends AuthCredential> = UsageCandidate<T> & { blockedUntil: number | undefined };
+
+type CredentialBlockRouting = {
+	providerKey: string;
+	strategy: CredentialRankingStrategy | undefined;
+	rankingContext: CredentialRankingContext;
+	blockScope: string | undefined;
+};
 
 type UsageRankedCandidate<T extends AuthCredential> = UsageCandidate<T> & {
 	blocked: boolean;
@@ -3809,6 +3816,53 @@ export class AuthStorage {
 		return sessionCredential ? { ...sessionCredential, explicit: false } : undefined;
 	}
 
+	#credentialBlockRouting(
+		provider: string,
+		credentialType: AuthCredential["type"],
+		modelId: string | undefined,
+	): CredentialBlockRouting {
+		const strategy = this.#rankingStrategyResolver?.(provider);
+		const rankingContext: CredentialRankingContext = { modelId };
+		return {
+			providerKey: this.#getProviderTypeKey(provider, credentialType),
+			strategy,
+			rankingContext,
+			blockScope: strategy?.blockScope?.(rankingContext),
+		};
+	}
+
+	#blockCredentialForRotation(
+		provider: string,
+		credentialType: AuthCredential["type"],
+		targetIndex: number,
+		blockedUntil: number,
+		routing: CredentialBlockRouting,
+	): UsageLimitMarkResult {
+		if (targetIndex >= 0) {
+			this.#markCredentialBlocked(provider, routing.providerKey, targetIndex, blockedUntil, routing.blockScope);
+		}
+
+		const remainingCredentials = this.#getCredentialsForProvider(provider)
+			.map((credential, index) => ({ credential, index }))
+			.filter(
+				(entry): entry is { credential: AuthCredential; index: number } =>
+					entry.credential.type === credentialType && entry.index !== targetIndex,
+			);
+
+		let retryAtMs: number | undefined;
+		for (const candidate of remainingCredentials) {
+			const candidateBlockedUntil = this.#getCredentialBlockedUntil(
+				provider,
+				routing.providerKey,
+				candidate.index,
+				routing.blockScope,
+			);
+			if (candidateBlockedUntil === undefined) return { switched: true };
+			if (retryAtMs === undefined || candidateBlockedUntil < retryAtMs) retryAtMs = candidateBlockedUntil;
+		}
+		return { switched: false, retryAtMs };
+	}
+
 	/**
 	 * Marks the current session's credential as temporarily blocked due to usage limits.
 	 * Uses usage reports to determine accurate reset time when available.
@@ -3851,17 +3905,14 @@ export class AuthStorage {
 		const credentialType = sessionCredential.type;
 		const targetCredentialId = target.id;
 
-		const providerKey = this.#getProviderTypeKey(provider, credentialType);
-		const strategy = this.#rankingStrategyResolver?.(provider);
-		const rankingContext: CredentialRankingContext = { modelId: options?.modelId };
-		const blockScope = strategy?.blockScope?.(rankingContext);
+		const routing = this.#credentialBlockRouting(provider, credentialType, options?.modelId);
 		const now = Date.now();
 		let blockedUntil = now + (options?.retryAfterMs ?? AuthStorage.#defaultBackoffMs);
 
-		if (credentialType === "oauth" && target.credential.type === "oauth" && strategy) {
+		if (credentialType === "oauth" && target.credential.type === "oauth" && routing.strategy) {
 			const report = await this.#getUsageReport(provider, target.credential, options);
 			if (report) {
-				const scopedLimits = this.#getScopedUsageLimits(strategy, report, rankingContext);
+				const scopedLimits = this.#getScopedUsageLimits(routing.strategy, report, routing.rankingContext);
 				if (this.#isUsageLimitReached(scopedLimits)) {
 					const resetAtMs = this.#getUsageResetAtMs(scopedLimits, Date.now());
 					if (resetAtMs && resetAtMs > blockedUntil) {
@@ -3876,29 +3927,7 @@ export class AuthStorage {
 		const targetIndex = this.#getStoredCredentials(provider).findIndex(
 			entry => entry.id === targetCredentialId && entry.credential.type === credentialType,
 		);
-		if (targetIndex >= 0) {
-			this.#markCredentialBlocked(provider, providerKey, targetIndex, blockedUntil, blockScope);
-		}
-
-		const remainingCredentials = this.#getCredentialsForProvider(provider)
-			.map((credential, index) => ({ credential, index }))
-			.filter(
-				(entry): entry is { credential: AuthCredential; index: number } =>
-					entry.credential.type === credentialType && entry.index !== targetIndex,
-			);
-
-		let retryAtMs: number | undefined;
-		for (const candidate of remainingCredentials) {
-			const candidateBlockedUntil = this.#getCredentialBlockedUntil(
-				provider,
-				providerKey,
-				candidate.index,
-				blockScope,
-			);
-			if (candidateBlockedUntil === undefined) return { switched: true };
-			if (retryAtMs === undefined || candidateBlockedUntil < retryAtMs) retryAtMs = candidateBlockedUntil;
-		}
-		return { switched: false, retryAtMs };
+		return this.#blockCredentialForRotation(provider, credentialType, targetIndex, blockedUntil, routing);
 	}
 
 	#resolveWindowResetAt(window: UsageLimit["window"]): number | undefined {
@@ -5366,6 +5395,7 @@ export class AuthStorage {
 	 * - usage-limit / account-rate-limit error → {@link AuthStorage.markUsageLimitReached}
 	 *   (temporary block via its own backoff — default plus server usage-report
 	 *   reset; sticky left intact so the next resolve re-ranks around the block).
+	 * - 账号级策略拒绝 → 临时屏蔽当前账号但不标记凭证失效，再尝试同类型兄弟凭证。
 	 * - otherwise (hard 401 / auth failure) → mark the credential suspect (or
 	 *   reload when no broker hook is wired) and block it, then drop matching
 	 *   sticky state.
@@ -5381,8 +5411,11 @@ export class AuthStorage {
 		const status = AIError.status(error);
 		const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
 		if (AIError.isUsageLimit(error) || isUsageLimitOutcome(status, message)) {
+			// 使用上游返回的重置窗口，避免额度恢复前重新选中并反复请求同一凭证。
+			const retryAfterMs = extractRetryHint(undefined, message);
 			return (
 				await this.markUsageLimitReached(provider, sessionId, {
+					retryAfterMs,
 					modelId: options?.modelId,
 					apiKey: options?.apiKey,
 					credentialId: options?.credentialId,
@@ -5396,6 +5429,17 @@ export class AuthStorage {
 			apiKey: options?.apiKey,
 		});
 		if (!sessionCredential) return false;
+
+		if (AIError.isAccountPolicyError(error)) {
+			const routing = this.#credentialBlockRouting(provider, sessionCredential.type, options?.modelId);
+			return this.#blockCredentialForRotation(
+				provider,
+				sessionCredential.type,
+				sessionCredential.index,
+				Date.now() + AuthStorage.#defaultBackoffMs,
+				routing,
+			).switched;
+		}
 
 		const providerKey = this.#getProviderTypeKey(provider, sessionCredential.type);
 		// Snapshot sibling availability before mutating so a soft-deleting
