@@ -10,6 +10,8 @@
 
 ### Added
 
+- Added optional `evidence` frontmatter for skills: declared evidence chains (`id`/`phase`/`kind`/`expect`/`sameAs`) are validated at load — invalid declarations drop the section with a skill warning while the skill stays usable — and autoloaded skills render a phase-grouped evidence requirements checklist in the injected prompt.
+- Added bundled `fix-bug` and `build-web` evidence-chain skills materialized under `<agentDir>/builtin-skills`; same-name authored skills override them and `skills.enableBuiltin: false` disables the source.
 - Added same-machine discovery and hub messaging between independent San roots: same-user sessions register with a local broker and exchange messages via exact broker-issued `san:*` ids, with online delivery acknowledgements and reconnect and cleanup on disconnect, while existing in-process hub behavior is unchanged.
 - Added proactive cross-session handoff: root sessions can generate a current-session handoff document and push it through the existing peer transport to an exact live `san:*` target, which receives it as non-authoritative continuation context without switching the source session; Hub remains the discovery, messaging, and remote-control base.
 - Added default-off Response Documents with exact Markdown artifacts, deterministic bounded synopses, branch-persisted recovery, and provider-only context projection that preserves the full transcript while breaking stale native replay chains.
