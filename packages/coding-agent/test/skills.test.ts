@@ -34,6 +34,7 @@ const expectedFixtureSkillOrder: string[] = [
  * the assertion.
  */
 const DISABLE_ALL_BUILTIN_SKILLS = {
+	enableBuiltin: false,
 	enableCodexUser: false,
 	enableClaudeUser: false,
 	enableClaudeProject: false,
@@ -218,6 +219,7 @@ describe("skills", () => {
 			const homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
 			try {
 				const { skills } = await loadSkills({
+					enableBuiltin: false, // keep bundled skills from materializing into the real agent dir
 					enableCodexUser: false,
 					enableClaudeUser: false,
 					enableClaudeProject: false,
@@ -276,6 +278,7 @@ describe("skills", () => {
 			const homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
 			try {
 				const { skills } = await loadSkills({
+					enableBuiltin: false, // keep bundled skills from materializing into the real agent dir
 					enableCodexUser: false,
 					enableClaudeUser: false,
 					enableClaudeProject: false,

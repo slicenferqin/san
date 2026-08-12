@@ -736,12 +736,13 @@ export async function loadSessionExtensions(
  */
 export async function discoverSkills(
 	cwd?: string,
-	_agentDir?: string,
+	agentDir?: string,
 	settings?: SkillsSettings,
 ): Promise<{ skills: Skill[]; warnings: SkillWarning[] }> {
 	return await loadSkillsInternal({
 		...settings,
 		cwd: cwd ?? getProjectDir(),
+		agentDir,
 	});
 }
 

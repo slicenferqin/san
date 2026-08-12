@@ -28,6 +28,12 @@ export interface SkillFrontmatter {
 	 * @see https://agentskills.io/specification
 	 */
 	disableModelInvocation?: boolean;
+	/**
+	 * Optional evidence-chain declaration. Raw YAML value here; validated into
+	 * `SkillEvidenceSpec[]` by `extensibility/skill-evidence.ts` at load time
+	 * (invalid sections are dropped with a SkillWarning, the skill stays usable).
+	 */
+	evidence?: unknown;
 	[key: string]: unknown;
 }
 

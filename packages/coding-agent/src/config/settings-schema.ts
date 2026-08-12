@@ -4614,6 +4614,8 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"skills.enableBuiltin": { type: "boolean", default: true },
+
 	"skills.enableCodexUser": { type: "boolean", default: true },
 
 	"skills.enableClaudeUser": { type: "boolean", default: true },
@@ -5418,6 +5420,7 @@ export interface BranchSummarySettings {
 export interface SkillsSettings {
 	enabled?: boolean;
 	enableSkillCommands?: boolean;
+	enableBuiltin?: boolean;
 	enableCodexUser?: boolean;
 	enableClaudeUser?: boolean;
 	enableClaudeProject?: boolean;

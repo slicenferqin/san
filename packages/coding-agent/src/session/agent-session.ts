@@ -8477,6 +8477,7 @@ export class AgentSession {
 		const discovered = await loadSkills({
 			...skillsSettings,
 			cwd: this.sessionManager.getCwd(),
+			agentDir: this.settings.getAgentDir(),
 			disabledExtensions: this.settings.get("disabledExtensions") ?? [],
 		});
 		this.#skills = discovered.skills;
