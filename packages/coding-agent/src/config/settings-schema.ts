@@ -171,6 +171,17 @@ export type SubmenuOption<V extends string = string> = {
 	description?: string;
 };
 
+/**
+ * Audience layer for the novice-first surface split (M1 plan §3):
+ * - `"daily"` — everyday settings, visible by default.
+ * - `"expert"` — tuning knobs hidden from the default settings UI, reachable
+ *   through the "Show expert settings" toggle.
+ * A missing marker means `"daily"` so existing definitions keep behaving
+ * exactly as before. The marker never affects loading, validation, or
+ * programmatic get/set — only UI visibility.
+ */
+export type SettingAudience = "daily" | "expert";
+
 interface UiBase {
 	tab: SettingTab;
 	/** Section within the tab; must be listed in TAB_GROUPS[tab]. Ungrouped settings render at the top. */
@@ -179,6 +190,8 @@ interface UiBase {
 	description: string;
 	/** Condition function name - setting only shown when true */
 	condition?: string;
+	/** Audience layer; omitted means "daily". Only affects UI visibility. */
+	audience?: SettingAudience;
 }
 
 interface UiBoolean extends UiBase {}
@@ -372,6 +385,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["off", "idle", "display", "system"] as const,
 		default: "idle",
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Power (macOS)",
 			label: "Sleep Prevention",
@@ -405,6 +419,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Advisor",
 			label: "Enable Advisor",
@@ -416,6 +431,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Prewalk",
 			label: "Enable Prewalk",
@@ -427,6 +443,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Advisor",
 			label: "Advisor for Subagents",
@@ -439,6 +456,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["off", "1", "3", "5"] as const,
 		default: "off",
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Advisor",
 			label: "Advisor Sync Backlog",
@@ -451,6 +469,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 3,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Advisor",
 			label: "Advisor Immune Turns",
@@ -472,6 +491,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Git",
 			label: "Enable Git Integration",
@@ -489,6 +509,7 @@ export const SETTINGS_SCHEMA = {
 		type: "record",
 		default: EMPTY_NUMBER_RECORD,
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Services",
 			label: "Max In-Flight Requests",
@@ -504,6 +525,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["global", "project"] as const,
 		default: "global",
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Prompt",
 			label: "Model Role Storage",
@@ -582,6 +604,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["unicode", "nerd", "ascii"] as const,
 		default: "unicode",
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Theme",
 			label: "Symbol Preset",
@@ -632,6 +655,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["powerline", "powerline-thin", "slash", "pipe", "block", "none", "ascii"] as const,
 		default: "powerline-thin",
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Status Line",
 			label: "Status Line Separator",
@@ -652,6 +676,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Status Line",
 			label: "Session Accent",
@@ -663,6 +688,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Status Line",
 			label: "Transparent Status Line",
@@ -674,6 +700,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Status Line",
 			label: "Compact Thinking Level",
@@ -685,6 +712,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 50,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Output Limits",
 			label: "Artifact Spill Threshold (KB)",
@@ -709,6 +737,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 20,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Output Limits",
 			label: "Artifact Tail Size (KB)",
@@ -729,6 +758,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 20,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Output Limits",
 			label: "Artifact Head Size (KB)",
@@ -751,6 +781,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 768,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Output Limits",
 			label: "Output Column Cap",
@@ -771,6 +802,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 500,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Output Limits",
 			label: "Artifact Tail Lines",
@@ -791,6 +823,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Status Line",
 			label: "Show Hook Status",
@@ -809,6 +842,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Images",
 			label: "Show Inline Images",
@@ -821,6 +855,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Images",
 			label: "Auto-Resize Images",
@@ -832,6 +867,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Images",
 			label: "Block Images",
@@ -843,6 +879,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Vision",
 			label: "Describe Images for Text Models",
@@ -876,6 +913,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Display",
 			label: "Native Terminal Progress",
@@ -887,6 +925,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Display",
 			label: "Large Headings (Kitty)",
@@ -899,6 +938,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Display",
 			label: "Render Mermaid Diagrams",
@@ -911,6 +951,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["off", "auto", "always"] as const,
 		default: "auto",
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Display",
 			label: "Terminal Hyperlinks",
@@ -922,6 +963,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Display",
 			label: "Tight Layout",
@@ -932,6 +974,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Display",
 			label: "Rewrite Scrollback",
@@ -945,6 +988,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["classic", "kitt", "disabled"] as const,
 		default: "classic",
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Display",
 			label: "Shimmer",
@@ -961,6 +1005,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Display",
 			label: "Smooth Streaming",
@@ -972,6 +1017,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Display",
 			label: "Show Token Usage",
@@ -983,6 +1029,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Display",
 			label: "Cache Miss Marker",
@@ -994,6 +1041,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Display",
 			label: "Collapse Compacted History",
@@ -1006,6 +1054,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true, // will be computed based on platform if undefined
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Display",
 			label: "Show Hardware Cursor",
@@ -1017,6 +1066,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Display",
 			label: "IME-Safe Prompt Layout",
@@ -1049,6 +1099,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Thinking",
 			label: "Hide Thinking Blocks",
@@ -1059,6 +1110,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Thinking",
 			label: "Prose Only Thinking",
@@ -1070,6 +1122,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Thinking",
 			label: "Omit Thinking summaries",
@@ -1082,6 +1135,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Thinking",
 			label: "Loop Guard",
@@ -1093,6 +1147,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Thinking",
 			label: "Loop Guard Scan Prose",
@@ -1104,6 +1159,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Thinking",
 			label: "Loop Guard Tool-Call Reminder",
@@ -1116,6 +1172,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Thinking",
 			label: "Tool-Call Loop Guard",
@@ -1149,6 +1206,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Thinking",
 			label: "Tool Progress Guard",
@@ -1205,6 +1263,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["auto", "on", "off"] as const,
 		default: "auto",
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Prompt",
 			label: "Inline Tool Descriptors",
@@ -1226,6 +1285,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Prompt",
 			label: "Include Model in Prompt",
@@ -1237,6 +1297,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Prompt",
 			label: "Include Workspace Tree",
@@ -1250,6 +1311,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["default", "friendly", "pragmatic", "none"] as const,
 		default: "default",
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Prompt",
 			label: "Personality",
@@ -1280,6 +1342,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: -1,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Sampling",
 			label: "Temperature",
@@ -1299,6 +1362,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: -1,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Sampling",
 			label: "Top P",
@@ -1318,6 +1382,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: -1,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Sampling",
 			label: "Top K",
@@ -1336,6 +1401,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: -1,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Sampling",
 			label: "Min P",
@@ -1353,6 +1419,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: -1,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Sampling",
 			label: "Presence Penalty",
@@ -1371,6 +1438,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: -1,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Sampling",
 			label: "Repetition Penalty",
@@ -1391,6 +1459,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["low", "medium", "high"] as const,
 		default: "medium",
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Sampling",
 			label: "Text Verbosity",
@@ -1408,6 +1477,7 @@ export const SETTINGS_SCHEMA = {
 		values: SERVICE_TIER_OPENAI_VALUES,
 		default: "none",
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Sampling",
 			label: "Service Tier — OpenAI",
@@ -1422,6 +1492,7 @@ export const SETTINGS_SCHEMA = {
 		values: SERVICE_TIER_ANTHROPIC_VALUES,
 		default: "none",
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Sampling",
 			label: "Service Tier — Anthropic",
@@ -1436,6 +1507,7 @@ export const SETTINGS_SCHEMA = {
 		values: SERVICE_TIER_GOOGLE_VALUES,
 		default: "none",
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Sampling",
 			label: "Service Tier — Google",
@@ -1450,6 +1522,7 @@ export const SETTINGS_SCHEMA = {
 		values: SERVICE_TIER_INHERIT_SETTING_VALUES,
 		default: "inherit",
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Sampling",
 			label: "Service Tier — Subagent",
@@ -1464,6 +1537,7 @@ export const SETTINGS_SCHEMA = {
 		values: SERVICE_TIER_INHERIT_SETTING_VALUES,
 		default: "none",
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Sampling",
 			label: "Service Tier — Advisor",
@@ -1481,6 +1555,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 10,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Retry & Fallback",
 			label: "Retry Attempts",
@@ -1511,6 +1586,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Retry & Fallback",
 			label: "Retry Model Fallback",
@@ -1521,6 +1597,7 @@ export const SETTINGS_SCHEMA = {
 		type: "record",
 		default: {} as Record<string, string[]>,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Retry & Fallback",
 			label: "Retry Fallback Chains",
@@ -1533,6 +1610,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["cooldown-expiry", "never"] as const,
 		default: "cooldown-expiry",
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Retry & Fallback",
 			label: "Fallback Revert Policy",
@@ -1552,6 +1630,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Retry & Fallback",
 			label: "Anthropic Server-Side Fallback (Fable 5)",
@@ -1570,6 +1649,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["all", "one-at-a-time"] as const,
 		default: "one-at-a-time",
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Input",
 			label: "Steering Mode",
@@ -1582,6 +1662,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["all", "one-at-a-time"] as const,
 		default: "one-at-a-time",
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Input",
 			label: "Follow-Up Mode",
@@ -1594,6 +1675,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["immediate", "wait"] as const,
 		default: "immediate",
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Input",
 			label: "Interrupt Mode",
@@ -1606,6 +1688,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["prompt", "compact", "reset"] as const,
 		default: "prompt",
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Input",
 			label: "Loop Mode",
@@ -1632,6 +1715,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["branch", "tree", "none"] as const,
 		default: "tree",
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Input",
 			label: "Double-Escape Action",
@@ -1644,6 +1728,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["default", "no-tools", "user-only", "labeled-only", "all"] as const,
 		default: "default",
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Input",
 			label: "Session Tree Filter",
@@ -1655,6 +1740,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 5,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Input",
 			label: "Autocomplete Items",
@@ -1674,6 +1760,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Input",
 			label: "Emoji Autocomplete",
@@ -1685,6 +1772,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 100,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Input",
 			label: "Large Paste Menu",
@@ -1704,6 +1792,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Startup & Updates",
 			label: "Quiet Startup",
@@ -1715,6 +1804,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Startup & Updates",
 			label: "Show Startup Splash",
@@ -1727,6 +1817,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Startup & Updates",
 			label: "Setup Wizard",
@@ -1738,6 +1829,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Startup & Updates",
 			label: "Check for Updates",
@@ -1750,6 +1842,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["off", "notify", "auto"] as const,
 		default: "notify",
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Startup & Updates",
 			label: "Marketplace Auto-Update",
@@ -1766,6 +1859,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Startup & Updates",
 			label: "Collapse Changelog",
@@ -1777,6 +1871,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Magic Keywords",
 			label: "Magic Keywords",
@@ -1788,6 +1883,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Magic Keywords",
 			label: "Ultrathink Keyword",
@@ -1799,6 +1895,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Magic Keywords",
 			label: "Orchestrate Keyword",
@@ -1810,6 +1907,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Magic Keywords",
 			label: "Workflow Keyword",
@@ -1834,6 +1932,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 0,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Notifications",
 			label: "Ask Timeout",
@@ -1853,6 +1952,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["on", "off"] as const,
 		default: "on",
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Notifications",
 			label: "Ask Notification",
@@ -1864,6 +1964,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Notifications",
 			label: "Idle Recap",
@@ -1875,6 +1976,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 240,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Notifications",
 			label: "Idle Recap Delay",
@@ -1894,6 +1996,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: DEFAULT_RELAY_URL,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Collab",
 			label: "Relay URL",
@@ -1905,6 +2008,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: "",
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Collab",
 			label: "Web UI URL",
@@ -1917,6 +2021,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: "",
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Collab",
 			label: "Display Name",
@@ -1928,6 +2033,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: DEFAULT_SHARE_URL,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Collab",
 			label: "Share Server",
@@ -1941,6 +2047,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["blob", "gist"] as const,
 		default: "blob",
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Collab",
 			label: "Share Store",
@@ -1964,6 +2071,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Collab",
 			label: "Share Secret Redaction",
@@ -1980,6 +2088,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "General",
 			label: "Auto-Promote Context",
@@ -1992,6 +2101,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Compaction",
 			label: "Auto-Compact",
@@ -2003,6 +2113,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Compaction",
 			label: "Mid-Turn Compaction",
@@ -2015,6 +2126,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["context-full", "handoff", "shake", "snapcompact", "off"] as const,
 		default: "snapcompact",
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Compaction",
 			label: "Compaction Strategy",
@@ -2050,6 +2162,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: -1,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Compaction",
 			label: "Compaction Threshold",
@@ -2075,6 +2188,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: -1,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Compaction",
 			label: "Compaction Token Limit",
@@ -2096,6 +2210,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Compaction",
 			label: "Save Handoff Docs",
@@ -2107,6 +2222,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Compaction",
 			label: "Remote Compaction",
@@ -2118,6 +2234,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Compaction",
 			label: "Remote Compaction V2",
@@ -2144,6 +2261,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Compaction",
 			label: "Idle Compaction",
@@ -2155,6 +2273,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 200000,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Compaction",
 			label: "Idle Compaction Threshold",
@@ -2177,6 +2296,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 300,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Compaction",
 			label: "Idle Compaction Delay",
@@ -2196,6 +2316,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Compaction",
 			label: "Supersede Stale Reads",
@@ -2207,6 +2328,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Compaction",
 			label: "Elide Uneventful Results",
@@ -2221,6 +2343,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["none", "agents-md", "all"] as const,
 		default: "none",
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Experimental",
 			label: "Snapcompact System Prompt",
@@ -2246,6 +2369,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Experimental",
 			label: "Snapcompact Tool Results",
@@ -2273,6 +2397,7 @@ export const SETTINGS_SCHEMA = {
 		] as const,
 		default: "auto",
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Experimental",
 			label: "Tool Calling Mode",
@@ -2305,6 +2430,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["auto", ...SHAPE_VARIANT_NAMES] as const,
 		default: "auto",
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Experimental",
 			label: "Snapcompact Shape",
@@ -2413,6 +2539,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "General",
 			label: "Branch Summaries",
@@ -2469,6 +2596,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["off", "local", "hindsight", "mnemopi"] as const,
 		default: "off",
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "General",
 			label: "Memory Backend",
@@ -2493,6 +2621,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Auto-Learn",
 			label: "Auto-Learn (experimental)",
@@ -2504,6 +2633,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Auto-Learn",
 			label: "Auto-run capture at stop",
@@ -2520,6 +2650,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: undefined,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi DB Path",
@@ -2531,6 +2662,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: undefined,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi Bank",
@@ -2543,6 +2675,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["global", "per-project", "per-project-tagged"] as const,
 		default: "per-project",
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi Scoping",
@@ -2573,6 +2706,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["en", "multilingual"] as const,
 		default: "en",
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Embedding variant",
@@ -2597,6 +2731,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi Auto Recall",
@@ -2608,6 +2743,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi Auto Retain",
@@ -2619,6 +2755,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi Polyphonic Recall",
@@ -2630,6 +2767,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi Enhanced Recall",
@@ -2641,6 +2779,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi Proactive Linking",
@@ -2653,6 +2792,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi Disable Embeddings",
@@ -2664,6 +2804,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: undefined,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi Embedding Model",
@@ -2676,6 +2817,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: undefined,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi Embedding API URL",
@@ -2687,6 +2829,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: undefined,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi Embedding API Key",
@@ -2699,6 +2842,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["none", "smol", "remote"] as const,
 		default: "smol",
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi LLM Mode",
@@ -2720,6 +2864,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: undefined,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi LLM Base URL",
@@ -2731,6 +2876,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: undefined,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi LLM API Key",
@@ -2742,6 +2888,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: undefined,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi LLM Model",
@@ -2761,6 +2908,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Experimental",
 			label: "Context Steady State",
@@ -2832,6 +2980,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["off", "auto", "always"] as const,
 		default: "off",
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Experimental",
 			label: "Response Documents",
@@ -2861,6 +3010,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Available Tools",
 			label: "Explore (Experimental)",
@@ -2876,6 +3026,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Experimental",
 			label: "San Brain",
@@ -2914,6 +3065,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Modes",
 			label: "Managed SOP Workflows",
@@ -2924,6 +3076,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Modes",
 			label: "Ad-hoc Workflows",
@@ -2935,6 +3088,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Isolation",
 			label: "Workflow Isolated Writes",
@@ -2948,6 +3102,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Experimental",
 			label: "Execution Loop",
@@ -2985,6 +3140,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: "http://localhost:8888",
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Hindsight",
 			label: "Hindsight API URL",
@@ -2999,6 +3155,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: undefined,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Hindsight",
 			label: "Hindsight Bank ID",
@@ -3013,6 +3170,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["global", "per-project", "per-project-tagged"] as const,
 		default: "per-project-tagged",
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Hindsight",
 			label: "Hindsight Scoping",
@@ -3046,6 +3204,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Hindsight",
 			label: "Hindsight Auto Recall",
@@ -3057,6 +3216,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Hindsight",
 			label: "Hindsight Auto Retain",
@@ -3070,6 +3230,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["full-session", "last-turn"] as const,
 		default: "full-session",
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Hindsight",
 			label: "Hindsight Retain Mode",
@@ -3105,6 +3266,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Hindsight",
 			label: "Hindsight Mental Models",
@@ -3117,6 +3279,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "Hindsight",
 			label: "Hindsight Mental Model Auto-Seed",
@@ -3133,6 +3296,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Rules (TTSR)",
 			label: "TTSR",
@@ -3145,6 +3309,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["discard", "keep"] as const,
 		default: "discard",
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Rules (TTSR)",
 			label: "TTSR Context Mode",
@@ -3157,6 +3322,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["never", "prose-only", "tool-only", "always"] as const,
 		default: "always",
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Rules (TTSR)",
 			label: "TTSR Interrupt Mode",
@@ -3175,6 +3341,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["once", "after-gap"] as const,
 		default: "once",
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Rules (TTSR)",
 			label: "TTSR Repeat Mode",
@@ -3186,6 +3353,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 10,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Rules (TTSR)",
 			label: "TTSR Repeat Gap",
@@ -3204,6 +3372,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "context",
 			group: "Rules (TTSR)",
 			label: "Built-in Rules",
@@ -3232,6 +3401,7 @@ export const SETTINGS_SCHEMA = {
 		values: EDIT_MODES,
 		default: "hashline",
 		ui: {
+			audience: "expert",
 			tab: "files",
 			group: "Editing",
 			label: "Edit Mode",
@@ -3243,6 +3413,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "files",
 			group: "Editing",
 			label: "Fuzzy Match",
@@ -3254,6 +3425,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 0.95,
 		ui: {
+			audience: "expert",
 			tab: "files",
 			group: "Editing",
 			label: "Fuzzy Match Threshold",
@@ -3271,6 +3443,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "files",
 			group: "Editing",
 			label: "Abort on Failed Preview",
@@ -3282,6 +3455,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "files",
 			group: "Editing",
 			label: "Block Auto-Generated Files",
@@ -3293,6 +3467,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "files",
 			group: "Editing",
 			label: "Enforce Seen-Line Guard",
@@ -3304,6 +3479,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "files",
 			group: "Reading",
 			label: "Line Numbers",
@@ -3315,6 +3491,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 300,
 		ui: {
+			audience: "expert",
 			tab: "files",
 			group: "Reading",
 			label: "Default Read Limit",
@@ -3333,6 +3510,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "files",
 			group: "Read Summaries",
 			label: "Read Summaries",
@@ -3344,6 +3522,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "files",
 			group: "Read Summaries",
 			label: "Prose Summaries",
@@ -3412,6 +3591,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "files",
 			group: "Reading",
 			label: "Inline Read Previews",
@@ -3424,6 +3604,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "files",
 			group: "LSP",
 			label: "LSP",
@@ -3435,6 +3616,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "files",
 			group: "LSP",
 			label: "Lazy LSP Startup",
@@ -3447,6 +3629,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "files",
 			group: "LSP",
 			label: "Format on Write",
@@ -3458,6 +3641,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "files",
 			group: "LSP",
 			label: "Diagnostics on Write",
@@ -3469,6 +3653,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "files",
 			group: "LSP",
 			label: "Diagnostics on Edit",
@@ -3480,6 +3665,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "files",
 			group: "LSP",
 			label: "Deduplicate Diagnostics",
@@ -3491,6 +3677,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "shell",
 			group: "Bash",
 			label: "Bash",
@@ -3502,6 +3689,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "shell",
 			group: "Bash",
 			label: "Bash Auto-Background",
@@ -3514,6 +3702,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "shell",
 			group: "Bash",
 			label: "Bash Interceptor",
@@ -3527,6 +3716,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "shell",
 			group: "Bash",
 			label: "Shell Minimizer",
@@ -3548,6 +3738,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["default", "aggressive"] as const,
 		default: "default",
 		ui: {
+			audience: "expert",
 			tab: "shell",
 			group: "Bash",
 			label: "Shell Minimizer Source Outline",
@@ -3564,6 +3755,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "shell",
 			group: "Eval & Runtimes",
 			label: "Python Eval Backend",
@@ -3575,6 +3767,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "shell",
 			group: "Eval & Runtimes",
 			label: "JavaScript Eval Backend",
@@ -3586,6 +3779,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "shell",
 			group: "Eval & Runtimes",
 			label: "Ruby Eval Backend",
@@ -3597,6 +3791,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "shell",
 			group: "Eval & Runtimes",
 			label: "Julia Eval Backend",
@@ -3610,6 +3805,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["session", "per-call"] as const,
 		default: "session",
 		ui: {
+			audience: "expert",
 			tab: "shell",
 			group: "Eval & Runtimes",
 			label: "Python Kernel Mode",
@@ -3620,6 +3816,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: "",
 		ui: {
+			audience: "expert",
 			tab: "shell",
 			group: "Eval & Runtimes",
 			label: "Python Interpreter",
@@ -3631,6 +3828,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: "",
 		ui: {
+			audience: "expert",
 			tab: "shell",
 			group: "Eval & Runtimes",
 			label: "Ruby Interpreter",
@@ -3642,6 +3840,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: "",
 		ui: {
+			audience: "expert",
 			tab: "shell",
 			group: "Eval & Runtimes",
 			label: "Julia Interpreter",
@@ -3659,6 +3858,7 @@ export const SETTINGS_SCHEMA = {
 		type: "record",
 		default: {},
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Approvals",
 			label: "Tool Approval Policies",
@@ -3708,6 +3908,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Available Tools",
 			label: "Todos",
@@ -3719,6 +3920,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Todos",
 			label: "Todo Reminders",
@@ -3730,6 +3932,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 3,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Todos",
 			label: "Todo Reminder Limit",
@@ -3748,6 +3951,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["default", "preferred", "always"] as const,
 		default: "default",
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Todos",
 			label: "Create Todos Automatically",
@@ -3769,6 +3973,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Available Tools",
 			label: "Glob",
@@ -3780,6 +3985,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Available Tools",
 			label: "Grep",
@@ -3791,6 +3997,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 1,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Grep & Browser",
 			label: "Grep Context Before",
@@ -3809,6 +4016,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 3,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Grep & Browser",
 			label: "Grep Context After",
@@ -3828,6 +4036,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Available Tools",
 			label: "AST Grep",
@@ -3839,6 +4048,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Available Tools",
 			label: "AST Edit",
@@ -3852,6 +4062,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Available Tools",
 			label: "Debug",
@@ -3863,6 +4074,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Available Tools",
 			label: "Launch",
@@ -3874,6 +4086,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Available Tools",
 			label: "Generate Image",
@@ -3886,6 +4099,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Available Tools",
 			label: "Inspect Image",
@@ -3897,6 +4111,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Available Tools",
 			label: "Checkpoint/Rewind",
@@ -3909,6 +4124,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Available Tools",
 			label: "Read URLs",
@@ -3920,6 +4136,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Available Tools",
 			label: "Obsidian Vault",
@@ -3932,6 +4149,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Available Tools",
 			label: "GitHub CLI",
@@ -3944,6 +4162,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "GitHub",
 			label: "GitHub View Cache",
@@ -3979,6 +4198,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Available Tools",
 			label: "Web Search",
@@ -3990,6 +4210,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Available Tools",
 			label: "Ask",
@@ -4001,6 +4222,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Available Tools",
 			label: "Browser",
@@ -4012,6 +4234,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Grep & Browser",
 			label: "Headless Browser",
@@ -4023,6 +4246,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Grep & Browser",
 			label: "cmux Browser",
@@ -4034,6 +4258,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: undefined,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Grep & Browser",
 			label: "Screenshot Directory",
@@ -4047,6 +4272,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Execution",
 			label: "Intent Tracing",
@@ -4057,6 +4283,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Execution",
 			label: "Abort On Fabricated Tool Result",
@@ -4069,6 +4296,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 0,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Execution",
 			label: "Max Tool Timeout",
@@ -4089,6 +4317,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Execution",
 			label: "Async Execution",
@@ -4106,6 +4335,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["5s", "10s", "30s", "1m", "5m", "smart"] as const,
 		default: "smart",
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Execution",
 			label: "Max Poll Time",
@@ -4126,6 +4356,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 120_000,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Execution",
 			label: "IRC Timeout",
@@ -4145,6 +4376,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Execution",
 			label: "Cross-Session Transport",
@@ -4162,6 +4394,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Discovery & MCP",
 			label: "xd:// Tools",
@@ -4174,6 +4407,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["inline", "builtins", "catalog"] as const,
 		default: "builtins",
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Discovery & MCP",
 			label: "xd:// Prompt Docs",
@@ -4208,6 +4442,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Discovery & MCP",
 			label: "MCP Project Config",
@@ -4219,6 +4454,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Discovery & MCP",
 			label: "MCP Update Injection",
@@ -4247,6 +4483,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Modes",
 			label: "Plan Mode",
@@ -4258,6 +4495,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Modes",
 			label: "Start in Plan Mode",
@@ -4270,6 +4508,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Modes",
 			label: "Goal Mode",
@@ -4281,6 +4520,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Modes",
 			label: "Goal Status in Footer",
@@ -4303,6 +4543,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Modes",
 			label: "Refresh Title on Replan",
@@ -4327,6 +4568,7 @@ export const SETTINGS_SCHEMA = {
 		] as const,
 		default: "none",
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Isolation",
 			label: "Isolation Mode",
@@ -4364,6 +4606,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["patch", "branch"] as const,
 		default: "patch",
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Isolation",
 			label: "Isolation Merge Strategy",
@@ -4380,6 +4623,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["generic", "ai"] as const,
 		default: "generic",
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Isolation",
 			label: "Isolation Commit Style",
@@ -4395,6 +4639,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: undefined,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Isolation",
 			label: "Worktree Base Directory",
@@ -4408,6 +4653,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["default", "preferred", "always"] as const,
 		default: "default",
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Subagents",
 			label: "Prefer Task Delegation",
@@ -4424,6 +4670,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Subagents",
 			label: "Batch Task Calls",
@@ -4436,6 +4683,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 32,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Subagents",
 			label: "Max Concurrent Tasks",
@@ -4457,6 +4705,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Subagents",
 			label: "LSP in Subagents",
@@ -4469,6 +4718,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 2,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Subagents",
 			label: "Max Task Recursion",
@@ -4487,6 +4737,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 0,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Subagents",
 			label: "Max Subagent Runtime",
@@ -4518,6 +4769,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 200,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Subagents",
 			label: "Soft Subagent Request Budget",
@@ -4536,6 +4788,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Subagents",
 			label: "Soft Request Budget Notice",
@@ -4561,6 +4814,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Subagents",
 			label: "Generic Task Prewalk",
@@ -4573,6 +4827,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 60,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Todos",
 			label: "Todo Auto-Clear Delay",
@@ -4593,6 +4848,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "appearance",
 			group: "Display",
 			label: "Show Resolved Model Badge",
@@ -4607,6 +4863,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Commands & Skills",
 			label: "Skill Commands",
@@ -4639,6 +4896,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Commands & Skills",
 			label: "Claude User Commands",
@@ -4650,6 +4908,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Commands & Skills",
 			label: "Claude Project Commands",
@@ -4661,6 +4920,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Commands & Skills",
 			label: "OpenCode User Commands",
@@ -4672,6 +4932,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "tasks",
 			group: "Commands & Skills",
 			label: "OpenCode Project Commands",
@@ -4688,6 +4949,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Privacy",
 			label: "Hide Secrets",
@@ -4712,6 +4974,7 @@ export const SETTINGS_SCHEMA = {
 		values: SEARCH_PROVIDER_PREFERENCES,
 		default: "auto",
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Services",
 			label: "Web Search Provider",
@@ -4733,6 +4996,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: undefined,
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Services",
 			label: "Gemini web_search model",
@@ -4744,6 +5008,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["auto", "production", "sandbox"] as const,
 		default: "auto",
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Services",
 			label: "Antigravity Endpoint Mode",
@@ -4772,6 +5037,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["auto", "openai", "openai-codex", "antigravity", "xai", "gemini", "openrouter"] as const,
 		default: "auto",
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Services",
 			label: "Image Provider",
@@ -4814,6 +5080,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["standard", "priority"] as const,
 		default: "standard",
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Fireworks",
 			label: "Fireworks Tier",
@@ -4834,6 +5101,7 @@ export const SETTINGS_SCHEMA = {
 		values: TINY_MODEL_DEVICE_SETTING_VALUES,
 		default: TINY_MODEL_DEVICE_DEFAULT,
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Tiny Model",
 			label: "Tiny Model Device",
@@ -4847,6 +5115,7 @@ export const SETTINGS_SCHEMA = {
 		values: TINY_MODEL_DTYPE_SETTING_VALUES,
 		default: TINY_MODEL_DTYPE_DEFAULT,
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Tiny Model",
 			label: "Tiny Model Precision",
@@ -4860,6 +5129,7 @@ export const SETTINGS_SCHEMA = {
 		values: TINY_MEMORY_MODEL_VALUES,
 		default: ONLINE_MEMORY_MODEL_KEY,
 		ui: {
+			audience: "expert",
 			tab: "memory",
 			group: "General",
 			label: "Memory Model",
@@ -4875,6 +5145,7 @@ export const SETTINGS_SCHEMA = {
 		values: AUTO_THINKING_MODEL_VALUES,
 		default: ONLINE_AUTO_THINKING_MODEL_KEY,
 		ui: {
+			audience: "expert",
 			tab: "model",
 			group: "Thinking",
 			label: "Auto Thinking Model",
@@ -4888,6 +5159,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "interaction",
 			group: "Agent",
 			label: "Detect unexpected stops",
@@ -4900,6 +5172,7 @@ export const SETTINGS_SCHEMA = {
 		values: TINY_MEMORY_MODEL_VALUES,
 		default: ONLINE_MEMORY_MODEL_KEY,
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Tiny Model",
 			label: "Unexpected Stop Model",
@@ -4915,6 +5188,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["openai", "anthropic"] as const,
 		default: "anthropic",
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Protocol",
 			label: "Kimi API Format",
@@ -4931,6 +5205,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["auto", "off", "on"] as const,
 		default: "auto",
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Protocol",
 			label: "OpenAI WebSockets",
@@ -4947,6 +5222,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: -1,
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Timeouts",
 			label: "Stream First Event Timeout",
@@ -4966,6 +5242,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: -1,
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Timeouts",
 			label: "Stream Idle Timeout",
@@ -4986,6 +5263,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["default", "nitro", "floor", "online", "exacto"] as const,
 		default: "default",
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Protocol",
 			label: "OpenRouter Routing",
@@ -5009,6 +5287,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["auto", "native", "trafilatura", "lynx", "parallel", "jina"] as const,
 		default: "auto",
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Services",
 			label: "Fetch Provider",
@@ -5033,6 +5312,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["unset", "yes", "no"] as const,
 		default: "unset" as const,
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Services",
 			label: "Codex Auto-Redeem Saved Resets",
@@ -5075,6 +5355,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["auto", "on", "off"] as const,
 		default: "auto",
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Protocol",
 			label: "Append-Only Context",
@@ -5092,13 +5373,20 @@ export const SETTINGS_SCHEMA = {
 	"exa.enabled": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "providers", group: "Services", label: "Exa", description: "Master toggle for all Exa search tools" },
+		ui: {
+			audience: "expert",
+			tab: "providers",
+			group: "Services",
+			label: "Exa",
+			description: "Master toggle for all Exa search tools",
+		},
 	},
 
 	"exa.enableSearch": {
 		type: "boolean",
 		default: true,
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Services",
 			label: "Exa Search",
@@ -5121,6 +5409,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Services",
 			label: "Exa Researcher",
@@ -5132,6 +5421,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Services",
 			label: "Exa Websets",
@@ -5144,6 +5434,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: undefined,
 		ui: {
+			audience: "expert",
 			tab: "providers",
 			group: "Services",
 			label: "SearXNG Endpoint",
@@ -5192,6 +5483,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Developer",
 			label: "Auto QA",
@@ -5203,6 +5495,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: "https://qa.omp.sh/v1/grievances" as const,
 		ui: {
+			audience: "expert",
 			tab: "tools",
 			group: "Developer",
 			label: "Auto QA Push Endpoint",

@@ -8,6 +8,7 @@
 
 ### Added
 
+- Added an `unlisted` flag to `SlashCommand`: unlisted commands are hidden from empty-prefix browse completion and never surface through description or fuzzy-subsequence matching, but exact name/alias prefixes still complete them.
 - Added optional masked rendering to the single-line `Input` component while preserving the submitted value.
 
 ### Fixed

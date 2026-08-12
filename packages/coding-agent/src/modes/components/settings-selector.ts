@@ -46,7 +46,7 @@ import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../thinking";
 import { getTabBarTheme } from "../shared";
 import { bottomBorder, divider, row, topBorder } from "./overlay-box";
 import { handleInputOrEscape, PluginSettingsComponent } from "./plugin-settings";
-import { getSettingDef, getSettingsForTab, type SettingDef } from "./settings-defs";
+import { getSettingDef, getSettingsForTab, type SettingDef, tabHasExpertSettings } from "./settings-defs";
 import { SnapcompactShapePreview } from "./snapcompact-shape-preview";
 import { getPreset } from "./status-line/presets";
 
@@ -329,14 +329,14 @@ class ProviderLimitsSubmenu extends Container {
 let cachedSidebarWidth: number | undefined;
 /**
  * Split-sidebar width derived from every group name in the schema (not just
- * the visible tab), so the divider column never moves when switching tabs or
- * when condition-gated groups appear.
+ * the visible tab), so the divider column never moves when switching tabs,
+ * when condition-gated groups appear, or when expert settings are revealed.
  */
 function settingsSidebarWidth(): number {
 	if (cachedSidebarWidth === undefined) {
 		let nameWidth = 0;
 		for (const tab of SETTING_TABS) {
-			for (const def of getSettingsForTab(tab)) {
+			for (const def of getSettingsForTab(tab, { includeExpert: true })) {
 				if (def.group) nameWidth = Math.max(nameWidth, visibleWidth(def.group));
 			}
 		}
@@ -344,6 +344,9 @@ function settingsSidebarWidth(): number {
 	}
 	return cachedSidebarWidth;
 }
+
+/** Sentinel item id for the per-tab "Show expert settings" toggle row. */
+const EXPERT_TOGGLE_ID = "__expert:toggle";
 
 function getSettingsTabs(): Tab[] {
 	return [
@@ -424,6 +427,14 @@ export class SettingsSelectorComponent implements Component {
 	#searchFirstMatch = new Map<string, string>();
 	#textInputActive = false;
 	#hasSectionJump = false;
+	/**
+	 * Session-scoped expert layer visibility. Off by default so tab browsing
+	 * only shows daily-audience settings; the toggle row at the bottom of each
+	 * tab flips it for the lifetime of the panel. The global search always
+	 * spans both layers — typing a query is an explicit ask, mirroring how
+	 * expert slash commands stay reachable by their full name.
+	 */
+	#showExpert = false;
 	// Frame geometry from the last render, for mouse hit-testing (the
 	// fullscreen overlay paints from screen row 0, so mouse rows map 1:1).
 	#tabRowStart = 0;
@@ -676,7 +687,9 @@ export class SettingsSelectorComponent implements Component {
 		let total = 0;
 		for (const tab of SETTING_TABS) {
 			const candidates: SettingItem[] = [];
-			for (const def of getSettingsForTab(tab)) {
+			// Search spans the expert layer even while it is collapsed: a typed
+			// query is explicit intent, and hiding matches would read as data loss.
+			for (const def of getSettingsForTab(tab, { includeExpert: true })) {
 				const item = this.#defToItem(def);
 				if (item) candidates.push(item);
 			}
@@ -727,6 +740,9 @@ export class SettingsSelectorComponent implements Component {
 		const selected = jumpToSelection ? this.#searchList.getSelectedItem() : undefined;
 		const selectedDef = selected ? getSettingDef(selected.id as SettingPath) : undefined;
 		const targetTab: SettingTab | "plugins" = selectedDef?.tab ?? this.#preSearchTabId;
+		// Landing on an expert row from search must reveal the expert layer,
+		// otherwise the rebuilt tab would not contain the row we jump to.
+		if (selectedDef?.audience === "expert") this.#showExpert = true;
 
 		this.#searchQuery = "";
 		this.#searchFirstMatch.clear();
@@ -1070,9 +1086,9 @@ export class SettingsSelectorComponent implements Component {
 	 * Show a settings tab using definitions.
 	 */
 	#showSettingsTab(tabId: SettingTab): void {
-		const defs = getSettingsForTab(tabId);
+		const defs = getSettingsForTab(tabId, { includeExpert: this.#showExpert });
 
-		const items = this.#buildItemsForDefs(defs);
+		const items = this.#buildItemsForDefs(defs, tabId);
 		// Mirror SettingsList's section detection (leading ungrouped items form
 		// an implicit section) so the footer hint only advertises PgUp/PgDn
 		// when the jump actually changes sections.
@@ -1084,6 +1100,14 @@ export class SettingsSelectorComponent implements Component {
 			10,
 			getSettingsListTheme(),
 			(id, newValue) => {
+				if (id === EXPERT_TOGGLE_ID) {
+					// Rebuild the tab with the new visibility and keep the
+					// cursor on the toggle so flipping back is one keypress.
+					this.#showExpert = newValue === "true";
+					this.#switchToTab(tabId);
+					this.#currentList?.selectItem(EXPERT_TOGGLE_ID);
+					return;
+				}
 				const def = defs.find(d => d.path === id);
 				if (!def) return;
 
@@ -1106,7 +1130,7 @@ export class SettingsSelectorComponent implements Component {
 				// definition-to-item mapping so condition-gated settings (e.g. the
 				// Hindsight cluster guarded by memory.backend) appear/disappear
 				// immediately instead of waiting for the next tab switch.
-				this.#refreshCurrentTabItems(defs);
+				this.#refreshCurrentTabItems(defs, tabId);
 			},
 			() => this.callbacks.onCancel(),
 			// The selector owns type-to-search and the footer hint; pin the
@@ -1119,8 +1143,10 @@ export class SettingsSelectorComponent implements Component {
 	 * Map a definition list to UI items, dropping any whose condition is false.
 	 * Inserts a heading row whenever the (group-sorted) definition list crosses
 	 * into a new group; groups whose items are all condition-hidden emit none.
+	 * Tabs that own expert-audience settings get a trailing toggle row that
+	 * reveals or hides that layer for the lifetime of the panel.
 	 */
-	#buildItemsForDefs(defs: SettingDef[]): SettingItem[] {
+	#buildItemsForDefs(defs: SettingDef[], tab: SettingTab): SettingItem[] {
 		const items: SettingItem[] = [];
 		let lastGroup: string | undefined;
 		for (const def of defs) {
@@ -1132,13 +1158,24 @@ export class SettingsSelectorComponent implements Component {
 			}
 			items.push(item);
 		}
+		if (tabHasExpertSettings(tab)) {
+			items.push({ id: "__heading:Expert", label: "Expert", currentValue: "", heading: true });
+			items.push({
+				id: EXPERT_TOGGLE_ID,
+				label: "Show expert settings",
+				description:
+					"Reveal advanced tuning settings on every tab. They stay hidden by default to keep this screen small; hiding them never changes their values.",
+				currentValue: this.#showExpert ? "true" : "false",
+				values: ["true", "false"],
+			});
+		}
 		return items;
 	}
 
 	/** Re-evaluate condition gates against the current settings and refresh the active list. */
-	#refreshCurrentTabItems(defs: SettingDef[]): void {
+	#refreshCurrentTabItems(defs: SettingDef[], tab: SettingTab): void {
 		if (this.#currentTabId === "plugins" || !this.#currentList) return;
-		this.#currentList.setItems(this.#buildItemsForDefs(defs));
+		this.#currentList.setItems(this.#buildItemsForDefs(defs, tab));
 	}
 
 	/**

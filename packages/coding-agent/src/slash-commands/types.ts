@@ -11,11 +11,23 @@ export interface SubcommandDef {
 	usage?: string;
 }
 
+/**
+ * Audience layer for the novice-first surface split (M1 plan §3):
+ * - `"daily"` — everyday commands, always advertised.
+ * - `"expert"` — power-user/debug commands, hidden from browse-style
+ *   autocomplete but still executable by full name.
+ * A missing marker means `"daily"` so existing definitions keep behaving
+ * exactly as before.
+ */
+export type CommandAudience = "daily" | "expert";
+
 /** Declarative builtin slash command metadata used by autocomplete and help UI. */
 export interface BuiltinSlashCommand {
 	name: string;
 	aliases?: string[];
 	description: string;
+	/** Audience layer; omitted means "daily". Never gates execution. */
+	audience?: CommandAudience;
 	/** Whether the command consumes text after the command name. */
 	allowArgs?: boolean;
 	/** Subcommands for dropdown completion (e.g. /mcp add, /mcp list). */
