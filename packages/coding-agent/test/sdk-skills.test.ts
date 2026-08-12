@@ -29,6 +29,7 @@ describe("createAgentSession skills option", () => {
 	let skillsDir: string;
 	let tempHomeDir = "";
 	let originalHome: string | undefined;
+	let suiteOriginalAgentDir = "";
 	// Auth storage (SQLite DB) and the model registry are immutable across these tests: skill
 	// discovery never touches models, and building them per test would make createAgentSession call
 	// modelRegistry.refreshInBackground(), whose online model discovery saturates the event loop and
@@ -57,6 +58,11 @@ describe("createAgentSession skills option", () => {
 		originalHome = process.env.HOME;
 		tempHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sdk-home-"));
 		process.env.HOME = tempHomeDir;
+		// Pin the global agent dir under the temp home: session paths that fall back
+		// to getAgentDir() (e.g. Settings.isolated -> refreshSkills builtin
+		// materialization) must never write into the real ~/.san/agent.
+		suiteOriginalAgentDir = getAgentDir();
+		setAgentDir(path.join(tempHomeDir, ".san", "agent"));
 		const nativeUserSkillsDir = path.join(tempHomeDir, ".san", "agent", "skills");
 		fs.mkdirSync(nativeUserSkillsDir, { recursive: true });
 
@@ -91,6 +97,9 @@ Loaded via symbolic link.
 		fs.symlinkSync(externalSkillDir, path.join(path.dirname(skillsDir), "symlinked-skill-link"), "dir");
 	});
 
+	afterEach(() => {
+		setAgentDir(suiteOriginalAgentDir);
+	});
 	afterEach(cleanupTempHome(() => ({ tempDir, tempHomeDir, originalHome })));
 
 	it("should discover skills by default and expose them on session.skills", async () => {
