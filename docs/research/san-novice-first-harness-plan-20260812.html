@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>San 面向普通用户的 Harness 收敛规划｜配置减法 · 证据链 Skill · 契约回显</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --card: #ffffff; --ink: #1a2233; --muted: #5b6678;
+    --accent: #2456d6; --accent-soft: #e8eefc; --ok: #1a7f4b; --warn: #b26a00;
+    --danger: #b3261e; --line: #e3e7ee; --code-bg: #f0f2f7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 16px 64px; background: var(--bg); color: var(--ink);
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", -apple-system, sans-serif;
+    line-height: 1.75; font-size: 15px;
+  }
+  main { max-width: 1080px; margin: 0 auto; }
+  header.doc { background: linear-gradient(135deg, #1c2f66 0%, #2456d6 100%); color: #fff;
+    border-radius: 14px; padding: 28px 32px; margin-bottom: 24px; }
+  header.doc h1 { margin: 0 0 10px; font-size: 26px; line-height: 1.4; }
+  header.doc .meta { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 13px; opacity: .92; }
+  header.doc .meta span { background: rgba(255,255,255,.14); padding: 2px 10px; border-radius: 999px; }
+  section.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 24px 28px; margin-bottom: 20px; }
+  h2 { font-size: 20px; margin: 0 0 14px; padding-bottom: 8px; border-bottom: 2px solid var(--accent-soft); }
+  h2 .no { color: var(--accent); margin-right: 8px; }
+  h3 { font-size: 16px; margin: 22px 0 8px; }
+  p { margin: 8px 0; }
+  ul, ol { margin: 8px 0; padding-left: 24px; }
+  li { margin: 4px 0; }
+  code { background: var(--code-bg); border-radius: 4px; padding: 1px 6px; font-size: 13px;
+    font-family: "SF Mono", Menlo, Consolas, monospace; }
+  pre { background: #10182b; color: #dce4f5; border-radius: 10px; padding: 16px 18px;
+    overflow-x: auto; font-size: 13px; line-height: 1.6; }
+  pre code { background: transparent; color: inherit; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+  th { background: var(--accent-soft); text-align: left; padding: 8px 12px; border: 1px solid var(--line); }
+  td { padding: 8px 12px; border: 1px solid var(--line); vertical-align: top; }
+  .pill { display: inline-block; border-radius: 999px; padding: 1px 10px; font-size: 12px; font-weight: 600; }
+  .pill.p0 { background: #fde8e6; color: var(--danger); }
+  .pill.p1 { background: #fff3e0; color: var(--warn); }
+  .pill.p2 { background: #e6f4ea; color: var(--ok); }
+  .pill.m { background: var(--accent-soft); color: var(--accent); }
+  .callout { border-left: 4px solid var(--accent); background: var(--accent-soft);
+    border-radius: 0 10px 10px 0; padding: 12px 18px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: #fff7ec; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin: 14px 0; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; }
+  .stat .num { font-size: 24px; font-weight: 700; color: var(--accent); }
+  .stat .cap { font-size: 13px; color: var(--muted); }
+  .muted { color: var(--muted); font-size: 13px; }
+  .path { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13px; color: #354969; }
+</style>
+</head>
+<body>
+<main>
+
+<header class="doc">
+  <h1>面向普通用户的 Harness 收敛规划<br>配置减法 · 证据链 Skill · 契约回显</h1>
+  <div class="meta">
+    <span>快照日期：2026-08-12</span>
+    <span>基线：main @ 2177ad6502（PR #13 已合并）</span>
+    <span>范围：packages/coding-agent</span>
+    <span>性质：规划 + 技术实现方案</span>
+  </div>
+</header>
+
+<section class="card">
+  <h2><span class="no">0</span>为什么做这件事</h2>
+  <p>San 的战略判断（见 2026-08-11 上游方向分析、2026-08-07 项目简报）已经收敛为一句话：<strong>San 是那个"敢挂一晚上"的 coding agent</strong>——上游 OMP 补横向平台能力，San 押注宿主持有的可验证执行。本文档解决这个定位下的下一个矛盾：</p>
+  <ul>
+    <li><strong>能力是专家向的，目标用户是普通人。</strong>普通用户的输入是"帮我改下这个 bug"这种模糊需求；San 现有的 logical model routing、harness profiles、execution contract 对他们全是噪音。作者本人已表示"自己都玩不明白"——配置面超过了任何单人的认知预算。</li>
+    <li><strong>Skill 是软引导，防不住模型偷懒。</strong>SKILL.md 是静态文本，模型可以读完就跳过复现直接改代码，长会话里更会走着走着忘掉。行业普遍停在这一层。</li>
+    <li><strong>San 独有的硬约束（evidence gates）没有和 skill 打通。</strong><code>AcceptanceGate</code> 目前只能由 San Loop 调用方手工编写传入，没有从技能声明或用户意图自动生成的路径。资产闲置。</li>
+  </ul>
+  <div class="callout">
+    <strong>北极星指标：</strong>无人值守执行长任务，在预算内到达可解释终态的成功率。三个信任维度——下限可预测、失败可解释可恢复、成本有硬顶。本规划的三个里程碑全部服务于该指标，且全部押在"模型变强也不贬值"的一侧（验证、预算、恢复、默认值），不押在"补模型短板"的一侧。
+  </div>
+  <p><strong>一句话规划：</strong>M1 做配置减法（纯删，最快见效）→ M2 把高频模糊需求写成证据链 Skill（软引导提质量）→ M3 用 skill 声明编译出 evidence gate 并加契约回显（硬约束保下限）。三个里程碑各自独立可交付、可单独发布。</p>
+</section>
+
+<section class="card">
+  <h2><span class="no">1</span>现状盘点（基于 2026-08-12 代码调研）</h2>
+
+  <div class="grid">
+    <div class="stat"><div class="num">5,554</div><div class="cap">行 <span class="path">config/settings-schema.ts</span>，约 1,300 个嵌套配置键，顶层 10 组</div></div>
+    <div class="stat"><div class="num">214</div><div class="cap">内置 slash command（<span class="path">slash-commands/builtin-registry.ts</span> 计数）</div></div>
+    <div class="stat"><div class="num">6</div><div class="cap">种证据 verifier：command / browser / api / artifact / review / external</div></div>
+    <div class="stat"><div class="num">0</div><div class="cap">条从 skill 或用户意图自动生成 AcceptanceGate 的路径</div></div>
+  </div>
+
+  <h3>1.1 配置面</h3>
+  <ul>
+    <li>Schema：<span class="path">config/settings-schema.ts</span>（约 1,300 键）+ <span class="path">config/settings.ts</span>（2,200 行装载逻辑）。</li>
+    <li>UI：<span class="path">modes/components/settings-defs.ts</span> 已有 <code>SettingTab</code> 分组与 <code>getSettingsForTab()</code>，具备分层呈现的现成挂点。</li>
+    <li>问题不是缺组织，是缺<strong>裁决</strong>：没有任何机制区分"日常必要"与"专家调参"，所有键地位平等地暴露给用户。</li>
+  </ul>
+
+  <h3>1.2 Skill 机制</h3>
+  <ul>
+    <li>发现与加载：<span class="path">extensibility/skills.ts</span> + <span class="path">discovery/helpers.ts</span>（<code>scanSkillsFromDir</code>），支持 user / project / managed（autolearn 自动生成）三级来源，authored 优先于 managed。</li>
+    <li>触发：system prompt <code>&lt;skills&gt;</code> 列表（description 命中）、<code>skill://&lt;name&gt;</code> 协议、<code>/skill:&lt;name&gt;</code> 命令；注入模板 <span class="path">prompts/skills/autoload.md</span>。</li>
+    <li>缺口：frontmatter 只有 <code>name / description / hide</code> 等描述性字段，<strong>没有任何可被 harness 消费的结构化语义</strong>——skill 说"先复现"，宿主既不知道、也无法检查。</li>
+  </ul>
+
+  <h3>1.3 Evidence gates 与契约</h3>
+  <ul>
+    <li>类型完备（<span class="path">execution-control/types.ts</span>）：<code>AcceptanceGate</code>（gateId / contractRef / objectiveClauseRefs / verifier / status / evidenceRefs / required）；回执 <code>EvidenceReceipt</code> 为 host-sourced，绑定 <code>scopeId / contractRevision / contractHash / freshnessRevision / assignmentId</code>，文本声称一律不算数。</li>
+    <li>校验为纯函数：<span class="path">execution-control/evidence-gates.ts</span> 的 <code>verifyEvidenceGates()</code>，可在任意层复用。</li>
+    <li>San Loop（<span class="path">san-loop/runner.ts</span> 963 行起）接受 <code>acceptanceGates</code> 选项并物化模板、按回执更新终态；<span class="path">san-loop/dogfood.ts</span> 有手写 gate 样例。</li>
+    <li><code>TaskContractRegistry</code>（<span class="path">execution-control/task-contract.ts</span>）已做确定性身份派生与重复派发拒绝。</li>
+    <li>缺口一：gate 的<strong>生产端</strong>只有"调用方手写"一种；缺口二：objective contract 是纯内部机制，用户从头到尾看不见它。</li>
+  </ul>
+</section>
+
+<section class="card">
+  <h2><span class="no">2</span>总体规划</h2>
+  <table>
+    <tr><th style="width:90px">里程碑</th><th>交付物</th><th style="width:110px">预估</th><th style="width:170px">独立价值</th></tr>
+    <tr>
+      <td><span class="pill m">M1</span> 配置减法</td>
+      <td>配置清单审计脚本 + <code>audience</code> 分层标记 + 设置 UI 默认只显日常层 + slash command 同规则收敛</td>
+      <td>1–1.5 周</td>
+      <td>新用户十分钟可上手；作者自己重新"玩得明白"</td>
+    </tr>
+    <tr>
+      <td><span class="pill m">M2</span> 证据链 Skill</td>
+      <td>SKILL.md frontmatter 的 <code>evidence</code> 扩展（纯声明、向后兼容）+ 两条内置 skill：<code>fix-bug</code>、<code>build-web</code> + 写作规范</td>
+      <td>1–2 周</td>
+      <td>模糊需求命中后有专家级证据链引导，即使不启用 M3 也提升质量</td>
+    </tr>
+    <tr>
+      <td><span class="pill m">M3</span> 硬约束 + 契约回显</td>
+      <td>skill evidence 声明 → <code>AcceptanceGate</code> 编译器 + 会话级 gate 检查（软拦截）+ San Loop 终态接线（硬拦截）+ 契约回显 UX</td>
+      <td>2–3 周</td>
+      <td>"完成"必须有宿主回执背书；San 独有的 skill×gate 组合成型</td>
+    </tr>
+  </table>
+  <div class="callout warn">
+    <strong>边界（明确不做）：</strong>不新增任何顶层配置项（M1 是减法，M2/M3 的开关折叠进既有 <code>tools</code>/<code>tasks</code> 组）；不重写 TUI；不强制存量 skill 携带 evidence 声明；不在本轮触碰上游 goal-gates/wayfinding 候选 PR 的合流（保持观察，语义冲突风险见 §6）。
+  </div>
+</section>
+
+<section class="card">
+  <h2><span class="no">3</span>M1 技术实现：配置减法</h2>
+
+  <h3>3.1 第一步：生成可裁决的清单（脚本，一次性）</h3>
+  <p>新增 <span class="path">packages/coding-agent/scripts/audit-settings.ts</span>：从 <code>settings-schema.ts</code> 的 schema 对象递归提取每个键的路径、类型、默认值、所属 <code>SettingTab</code>、描述，输出为一张 JSON/HTML 清单。同理从 <span class="path">slash-commands/builtin-registry.ts</span> 提取 214 个命令的 name/description/分组。这张表是后续所有裁决的工作底稿——先看清全貌，再动刀。</p>
+
+  <h3>3.2 裁决标准：每个键过三问</h3>
+  <table>
+    <tr><th>问题</th><th>答案 → 处置</th></tr>
+    <tr><td>Q1 删掉它并硬选一个默认值，会伤害谁？</td><td>没人 → <strong>降为常量</strong>（从 schema 移除，保留读取兼容：读到旧键时忽略并告警一次）</td></tr>
+    <tr><td>Q2 90% 用户在 90% 场景下是否只用同一个值？</td><td>是 → 标记 <code>audience: "expert"</code>（保留但默认不可见）</td></tr>
+    <tr><td>Q3 它是不是"到达目的地"的前提？</td><td>是（如 provider 凭据、model 选择）→ <code>audience: "daily"</code>，且必须有开箱即用默认或首启引导</td></tr>
+  </table>
+  <p>预期结果量级：daily 层 ≤ 30 键。这不是拍脑袋——参照对象是任何一辆车的仪表盘。</p>
+
+  <h3>3.3 实施挂点（全部是现成缝隙，无新架构）</h3>
+  <pre><code>// settings-defs.ts —— SettingDef 增加一个字段
+interface SettingDef {
+  // ...existing: path/label/description/tab/group/condition
+  audience?: "daily" | "expert";   // 缺省视为 "daily"，存量行为不变
+}
+
+// getSettingsForTab() 增加过滤：默认只返回 daily；
+// 设置界面尾部一个入口（或 /settings expert）切换显示 expert 层。
+// slash command 同规则：CommandDef.audience，autocomplete 默认只列 daily，
+// 完整名称输入时 expert 命令仍可直接执行（不破坏肌肉记忆与脚本）。</code></pre>
+  <ul>
+    <li>降为常量的键：值收进模块内 <code>const</code>，schema 删除；<code>settings.ts</code> 装载时对未知键记 <code>logger.warn</code> 一次并跳过（禁止启动失败）。</li>
+    <li>迁移安全：读取旧配置文件永不报错；写回时自动剔除已降级键。</li>
+    <li>验收（DoD）：新装环境不改任何配置完成"修一个真实 bug"的全流程；设置界面首屏一屏放得下；audit 脚本重跑输出 daily 键数 ≤ 30。</li>
+  </ul>
+</section>
+
+<section class="card">
+  <h2><span class="no">4</span>M2 技术实现：证据链 Skill</h2>
+
+  <h3>4.1 设计原则：证据链，不是步骤清单</h3>
+  <p>专家处理"帮我改个 bug"的方式不是追问用户，而是<strong>从环境收集证据</strong>：先复现拿到失败输出，再定位，修完用同一条复现路径拿到通过输出。每一环的产出是下一环的输入。Skill 正文按这个逻辑写；frontmatter 把"环"声明成宿主可读的结构。</p>
+
+  <h3>4.2 SKILL.md frontmatter 扩展（纯声明、可选、向后兼容）</h3>
+  <pre><code># skills/fix-bug/SKILL.md（frontmatter 部分）
+name: fix-bug
+description: 修复缺陷。用户报告 bug、异常、报错、行为不符合预期时使用。
+evidence:
+  - id: repro
+    phase: before-fix          # 进入修复动作前应当存在
+    kind: command              # 复用 EvidenceVerifierKind，六选一
+    expect: fail               # 此阶段期望的 outcome：先拿到"失败"的复现
+    description: 可复现失败的最小命令及其输出
+  - id: verify
+    phase: before-done         # 报告完成前必须存在
+    kind: command
+    expect: pass
+    sameAs: repro              # 必须与 repro 是同一条命令，防"换个命令绿了"
+    description: 同一复现路径由失败转为通过</code></pre>
+  <ul>
+    <li>解析落点：<span class="path">discovery/helpers.ts</span> 的 <code>scanSkillsFromDir</code> 已解析 frontmatter；在 <span class="path">extensibility/skills.ts</span> 的 <code>Skill</code> 接口上加 <code>evidence?: SkillEvidenceSpec[]</code>，非法声明进入现有 <code>SkillWarning</code> 通道（跳过该段、skill 本体仍可用，不让作者的 YAML 失误炸掉 skill）。</li>
+    <li>类型放 <span class="path">execution-control/types.ts</span> 旁定义 <code>SkillEvidenceSpec</code>，字段与 <code>AcceptanceVerifier</code> 对齐，M3 编译零转换成本。</li>
+    <li>M2 阶段该声明的唯一消费者是注入模板：<span class="path">prompts/skills/autoload.md</span> 渲染 skill 时追加一段 Handlebars 生成的"证据要求"清单，提示模型按链推进——此时仍是软引导，但已经结构化。</li>
+  </ul>
+
+  <h3>4.3 内置两条高频模糊需求 skill</h3>
+  <table>
+    <tr><th>Skill</th><th>证据链</th><th>覆盖的模糊输入</th></tr>
+    <tr><td><code>fix-bug</code></td><td>复现(fail) → 定位 → 修复 → 同路径复验(pass) → 回归面检查</td><td>"帮我改下这个 bug / 这里报错了 / 怎么不对了"</td></tr>
+    <tr><td><code>build-web</code></td><td>需求契约回显 → 骨架可启动(command: dev server 起) → 核心路径可用(browser 断言) → 交付说明</td><td>"帮我做一个网站 / 做个页面 / 搭个后台"</td></tr>
+  </table>
+  <p>正文写作规范（一并入库为 <span class="path">docs/skill-authoring.md</span>）：每环写清"此环的产出物是什么、下一环拿它做什么";禁止无证据依赖的仪式性步骤;篇幅上限 150 行,超出拆子文件按需读取。</p>
+  <p>验收（DoD）：用 10 条真实模糊需求样本（bug 类 6 条、建站类 4 条）做 A/B dogfood，命中 skill 的会话必须在 transcript 中出现"先复现后修复"或"先契约后动工"的行为序列；未命中路径行为与今日一致。</p>
+</section>
+
+<section class="card">
+  <h2><span class="no">5</span>M3 技术实现：skill×gate 硬约束 + 契约回显</h2>
+
+  <h3>5.1 编译器：SkillEvidenceSpec → AcceptanceGate</h3>
+  <pre><code>// 新文件 execution-control/skill-gate-compiler.ts
+// 纯函数，无 IO：输入 skill 声明 + 当前会话 scope 身份，输出 gate 模板
+export function compileSkillGates(input: {
+  skill: Pick&lt;Skill, "name" | "evidence"&gt;;
+  contractRef: ObjectiveContractRef;     // 来自会话 scope（见 5.3）
+  contractRevision: number;
+  contractHash: string;
+}): AcceptanceGate[] {
+  // gateId 命名：`gate:skill:${skill.name}:${spec.id}`（稳定、可去重）
+  // spec.kind → verifier.kind 直通；expect/sameAs 存入 verifier 参数
+  // phase=before-done → required: true；phase=before-fix → required: false（软门）
+}</code></pre>
+
+  <h3>5.2 两级拦截：软在会话，硬在终态</h3>
+  <table>
+    <tr><th>层</th><th>机制</th><th>为什么这样分</th></tr>
+    <tr>
+      <td>软拦截（会话内）</td>
+      <td>skill 触发时把编译出的 gate 挂到会话级 registry；工具管线的既有 before-tool-call 钩子检查:处于 <code>before-fix</code> 阶段而 repro 回执缺失时,对 edit/patch 类工具<strong>注入一次结构化提醒</strong>(不阻断)。同一 gate 只提醒一次,避免唠叨循环。</td>
+      <td>会话内用户在场，最终裁量权在人；阻断式拦截会把"引导"变成"添堵"，违背 novice-first。</td>
+    </tr>
+    <tr>
+      <td>硬拦截（终态）</td>
+      <td>San Loop 已有 gate 物化与终态判定（<span class="path">san-loop/runner.ts</span>、<span class="path">orchestrator.ts</span>）：把编译出的 gate 并入 <code>options.acceptanceGates</code>，<code>required: true</code> 的 gate 无 host 回执则终态不得为 completed——走已有 <code>verifyEvidenceGates()</code>，一行新逻辑都不引入判定层。</td>
+      <td>无人值守场景没有人兜底，"说完成"必须等于"有回执的完成"。这正是北极星指标的分子定义。</td>
+    </tr>
+  </table>
+  <p>回执生产端：<code>command</code> 类 verifier 的回执由 shell 工具执行路径生成——工具层已经拥有 exitCode 与命令文本,新增一个薄适配把它写成 <code>CommandEvidenceReceipt</code>(绑定当前 scopeId/contractHash/freshnessRevision)。<code>sameAs</code> 校验用命令的规范化指纹(复用 <span class="path">progress-classifier.ts</span> 的 <code>stableValueFingerprint</code>)。browser/api 类回执依赖既有 browser 工具的断言产物,首版仅接 command,其余 kind 声明合法但标注"暂无宿主适配"并按 review 门人工放行。</p>
+
+  <h3>5.3 契约回显：objective contract 的 UX 化</h3>
+  <p>把内部机制变成用户可见的一句话。触发条件：会话首个用户消息命中证据链 skill（或 San Loop 任务启动）。流程：</p>
+  <ol>
+    <li>agent 完成初步证据收集后,生成一条固定格式的契约消息:<em>"我理解你要:修复 X(复现命令 Y 当前失败)。完成的标准:Y 通过且 Z 不回归。"</em>——模板放 <span class="path">prompts/</span> 下静态 .md,Handlebars 填充,遵守仓库 prompt 规范。</li>
+    <li>用户确认（回车/继续即视为默认确认，不强制打断）；异议则修订。确认后契约文本与其 hash 写入会话 scope，成为 <code>ObjectiveContractRef</code> 的来源——5.1 编译器所需的 <code>contractRef/contractHash</code> 由此而来。</li>
+    <li>终态汇报时反引契约:"当初约定 Y 通过——回执 #id,exitCode 0"。失败终态同样对着契约解释卡在哪一环、花了多少。</li>
+  </ol>
+  <p>验收（DoD）：fix-bug 场景端到端 dogfood——模型被诱导跳过复现时软提醒出现且只出现一次；San Loop 下伪造"已完成"文本无法把终态置为 completed；契约回显在 TUI 与 RPC 两条呈现路径一致（注意 AGENTS.md 中流式预览多路径的既有教训）。</p>
+</section>
+
+<section class="card">
+  <h2><span class="no">6</span>风险与应对</h2>
+  <table>
+    <tr><th style="width:70px">级别</th><th>风险</th><th>应对</th></tr>
+    <tr><td><span class="pill p0">P0</span></td><td>M3 与上游候选方向（goal quality gates #8062、wayfinding）语义重叠，未来合流冲突</td><td>San 的 gate 编译器与拦截层全部收在 <span class="path">execution-control/</span> 与钩子缝隙内，不改上游同名结构；持续对照上游 PR，语义趋同处优先对齐命名。该领域本就是 San 的差异化主场，先行落地即是筹码。</td></tr>
+    <tr><td><span class="pill p1">P1</span></td><td>配置降级破坏存量用户/脚本</td><td>读旧键永不失败（警告一次并忽略）；expert 命令仍可全名调用；发布说明列出全部降级键与既定常量值。</td></tr>
+    <tr><td><span class="pill p1">P1</span></td><td>软提醒在某些模型上诱发过度合规（反复复现不动工）</td><td>提醒是一次性的且措辞为"建议下一步"，不是禁令；dogfood 覆盖 3 个档位模型（旗舰/中档/小模型）。</td></tr>
+    <tr><td><span class="pill p2">P2</span></td><td>skill frontmatter 扩展与外部生态（Claude/Cursor skills）分叉</td><td><code>evidence</code> 是可选段，外部 skill 无该段时行为与今日完全一致；不修改任何既有字段语义。</td></tr>
+    <tr><td><span class="pill p2">P2</span></td><td>契约回显打断心流</td><td>默认确认制（不阻塞），仅证据链 skill 命中时出现；expert 可用既有 settings 关闭。</td></tr>
+  </table>
+</section>
+
+<section class="card">
+  <h2><span class="no">7</span>度量与后续</h2>
+  <ul>
+    <li><strong>北极星雏形基准：</strong>M3 完成后,把 10 条 dogfood 样本固化为可重跑脚本(复用 context-steady 公开 benchmark 的方法论):指标 = 无人值守终态率、终态可解释率(失败时能否指出卡在哪一环)、预算内完成率。这份数字就是 San 对"什么是好 agent"的可测量回答,也是对外叙事的弹药。</li>
+    <li><strong>顺序即优先级：</strong>M1 不依赖 M2/M3,先发;M2 发布后即可独立观察 skill 命中对行为序列的影响;M3 的软拦截与硬拦截也可分两次发布(先软后硬)。</li>
+    <li><strong>与既有 P0 的关系：</strong>本规划不替代"execution-control 根会话闭环"这一未竟事项——M3 的 San Loop 接线恰好是该闭环的一个具体消费场景,两者互为验证。</li>
+  </ul>
+  <p class="muted">证据索引：settings-schema.ts 5,554 行 / 约 1,300 键（2026-08-12 统计）；builtin-registry.ts 214 命令；evidence-gates.ts verifyEvidenceGates 纯函数；san-loop/runner.ts:963 gate 模板物化点；dogfood.ts 手写 gate 样例；skills.ts + discovery/helpers.ts skill 发现管线；prompts/skills/autoload.md 注入模板；task-contract.ts 确定性身份派生。</p>
+</section>
+
+</main>
+</body>
+</html>
