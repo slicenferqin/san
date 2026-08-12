@@ -6,5 +6,6 @@ export * from "./execution-runtime";
 export * from "./persistence";
 export * from "./provider-health";
 export * from "./scope-registry";
+export * from "./skill-gate-compiler";
 export * from "./task-contract";
 export * from "./types";
