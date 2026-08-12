@@ -62,6 +62,45 @@ describe("CombinedAutocompleteProvider", () => {
 	});
 
 	describe("slash commands", () => {
+		const unlistedFixture = [
+			{ name: "model", description: "Switch model" },
+			{ name: "dump", description: "Copy session transcript", unlisted: true },
+			{ name: "san-loop", aliases: ["sl"], description: "Start loop runs", unlisted: true },
+		];
+
+		it("omits unlisted commands from the empty-prefix browse list", async () => {
+			const provider = new CombinedAutocompleteProvider(unlistedFixture, "/tmp");
+
+			const result = await provider.getSuggestions(["/"], 0, 1);
+
+			expect(result?.items.map(item => item.value)).toEqual(["model"]);
+		});
+
+		it("surfaces unlisted commands on a typed name or alias prefix", async () => {
+			const provider = new CombinedAutocompleteProvider(unlistedFixture, "/tmp");
+
+			const byName = await provider.getSuggestions(["/du"], 0, 3);
+			expect(byName?.items.map(item => item.value)).toEqual(["dump"]);
+
+			const byAlias = await provider.getSuggestions(["/sl"], 0, 3);
+			expect(byAlias?.items.map(item => item.value)).toContain("sl");
+
+			const sync = provider.trySyncSlashCompletion("/du");
+			expect(sync?.items[0]?.value).toBe("dump");
+		});
+
+		it("never matches unlisted commands through descriptions or fuzzy subsequences", async () => {
+			const provider = new CombinedAutocompleteProvider(unlistedFixture, "/tmp");
+
+			// "transcript" only appears in dump's description; "dmp" is a
+			// fuzzy subsequence of the name. Neither may reveal the command.
+			const byDescription = await provider.getSuggestions(["/transcript"], 0, 11);
+			expect(byDescription?.items.some(item => item.value === "dump") ?? false).toBe(false);
+
+			const byFuzzy = await provider.getSuggestions(["/dmp"], 0, 4);
+			expect(byFuzzy?.items.some(item => item.value === "dump") ?? false).toBe(false);
+		});
+
 		it("suggests only skill commands after prose", async () => {
 			const provider = new CombinedAutocompleteProvider(
 				[
