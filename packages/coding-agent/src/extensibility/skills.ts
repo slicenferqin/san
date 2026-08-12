@@ -11,10 +11,13 @@ import type { SourceMeta } from "../capability/types";
 import type { SkillsSettings } from "../config/settings";
 import { type Skill as CapabilitySkill, loadCapability } from "../discovery";
 import { compareSkillOrder, scanSkillsFromDir } from "../discovery/helpers";
+import type { SkillEvidenceSpec } from "../execution-control/types";
 import autoloadTemplate from "../prompts/skills/autoload.md" with { type: "text" };
 import userInvocationTemplate from "../prompts/skills/user-invocation.md" with { type: "text" };
 import type { SkillPromptDetails } from "../session/messages";
 import { expandTilde } from "../tools/path-utils";
+import { loadBuiltinSkills } from "./builtin-skills";
+import { extractSkillEvidence, groupSkillEvidenceByPhase } from "./skill-evidence";
 export interface Skill {
 	name: string;
 	description: string;
@@ -27,6 +30,12 @@ export interface Skill {
 	 * prompt's `<skills>` listing.
 	 */
 	hide?: boolean;
+	/**
+	 * Validated evidence-chain declaration from the frontmatter `evidence`
+	 * section. Absent when the skill declares none (or the section was dropped
+	 * as invalid — see `extensibility/skill-evidence.ts`).
+	 */
+	evidence?: readonly SkillEvidenceSpec[];
 	/** Source metadata for display */
 	_source?: SourceMeta;
 }
@@ -97,23 +106,32 @@ export async function loadSkillsFromDir(options: LoadSkillsFromDirOptions): Prom
 		},
 	);
 
-	return {
-		skills: result.items.map(capSkill => ({
+	const warnings: SkillWarning[] = (result.warnings ?? []).map(message => ({ skillPath: options.dir, message }));
+	const skills = result.items.map(capSkill => {
+		const { evidence, warnings: evidenceWarnings } = extractSkillEvidence(capSkill.frontmatter, capSkill.path);
+		warnings.push(...evidenceWarnings);
+		return {
 			name: capSkill.name,
 			description: typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "",
 			filePath: capSkill.path,
 			baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
 			source: options.source,
 			hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
+			...(evidence ? { evidence } : {}),
 			_source: capSkill._source,
-		})),
-		warnings: (result.warnings ?? []).map(message => ({ skillPath: options.dir, message })),
-	};
+		};
+	});
+	return { skills, warnings };
 }
 
 export interface LoadSkillsOptions extends SkillsSettings {
 	/** Working directory for project-local skills. Default: getProjectDir() */
 	cwd?: string;
+	/**
+	 * Agent directory used for agent-level skill state (builtin skill
+	 * materialization writes under it). Default: getAgentDir().
+	 */
+	agentDir?: string;
 }
 
 /**
@@ -123,7 +141,9 @@ export interface LoadSkillsOptions extends SkillsSettings {
 export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadSkillsResult> {
 	const {
 		cwd = getProjectDir(),
+		agentDir,
 		enabled = true,
+		enableBuiltin = true,
 		enableCodexUser = true,
 		enableClaudeUser = true,
 		enableClaudeProject = true,
@@ -233,6 +253,8 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 				message: `name collision: "${capSkill.name}" already loaded from ${existing.filePath}, skipping this one`,
 			});
 		} else {
+			const { evidence, warnings: evidenceWarnings } = extractSkillEvidence(capSkill.frontmatter, capSkill.path);
+			collisionWarnings.push(...evidenceWarnings);
 			skillMap.set(capSkill.name, {
 				name: capSkill.name,
 				description: typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "",
@@ -240,6 +262,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 				baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
 				source: `${capSkill._source.provider}:${capSkill.level}`,
 				hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
+				...(evidence ? { evidence } : {}),
 				_source: capSkill._source,
 			});
 			realPathSet.add(resolvedPath);
@@ -268,6 +291,8 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 			if (disabledSkillNames.has(capSkill.name)) continue;
 			if (matchesIgnorePatterns(capSkill.name)) continue;
 			if (!matchesIncludePatterns(capSkill.name)) continue;
+			const { evidence, warnings: evidenceWarnings } = extractSkillEvidence(capSkill.frontmatter, capSkill.path);
+			collisionWarnings.push(...evidenceWarnings);
 			allCustomSkills.push({
 				skill: {
 					name: capSkill.name,
@@ -277,6 +302,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 					baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
 					source: "custom:user",
 					hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
+					...(evidence ? { evidence } : {}),
 					_source: { ...capSkill._source, providerName: "Custom" },
 				},
 				path: capSkill.path,
@@ -312,6 +338,35 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		}
 	}
 
+	// Names claimed by any ENABLED authored skill (from the pre-dedup superset).
+	// Builtin and managed both defer to these even when capability dedup hid an
+	// enabled authored skill behind a disabled higher-priority one, so neither
+	// ever masks an authored skill.
+	const enabledAuthoredNames = new Set(
+		result.all
+			.filter(
+				capSkill => capSkill._source.provider !== MANAGED_SKILLS_PROVIDER_ID && isSourceEnabled(capSkill._source),
+			)
+			.map(capSkill => capSkill.name),
+	);
+
+	// Builtin (bundled) skills resolve below every authored source: any
+	// user/project/custom skill with the same name wins. They MUST be inserted
+	// before the managed loop below — its `skillMap.has` veto is what keeps an
+	// auto-generated managed skill from shadowing a curated builtin one.
+	if (enableBuiltin) {
+		const builtinResult = await loadBuiltinSkills(agentDir);
+		collisionWarnings.push(...builtinResult.warnings);
+		for (const skill of builtinResult.skills) {
+			if (disabledSkillNames.has(skill.name)) continue;
+			if (matchesIgnorePatterns(skill.name)) continue;
+			if (!matchesIncludePatterns(skill.name)) continue;
+			if (enabledAuthoredNames.has(skill.name)) continue;
+			if (skillMap.has(skill.name)) continue;
+			skillMap.set(skill.name, skill);
+		}
+	}
+
 	// Managed (auto-learn) skills resolve dead-last with first-wins. Source from
 	// result.all (pre-dedup): capability-level dedup runs BEFORE isSourceEnabled,
 	// so a managed skill can be shadowed by a higher-priority authored skill that
@@ -326,16 +381,6 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 			!disabledSkillNames.has(capSkill.name) &&
 			!matchesIgnorePatterns(capSkill.name) &&
 			matchesIncludePatterns(capSkill.name),
-	);
-	// Names claimed by any ENABLED authored skill (from the pre-dedup superset).
-	// Managed defers to these even when capability dedup hid an enabled authored
-	// skill behind a disabled higher-priority one, so managed never masks it.
-	const enabledAuthoredNames = new Set(
-		result.all
-			.filter(
-				capSkill => capSkill._source.provider !== MANAGED_SKILLS_PROVIDER_ID && isSourceEnabled(capSkill._source),
-			)
-			.map(capSkill => capSkill.name),
 	);
 	const managedRealPaths = await Promise.all(
 		managedCandidates.map(async capSkill => {
@@ -359,6 +404,8 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		if (skillMap.has(capSkill.name)) continue;
 		const rawDescription =
 			typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "";
+		const { evidence, warnings: evidenceWarnings } = extractSkillEvidence(capSkill.frontmatter, capSkill.path);
+		collisionWarnings.push(...evidenceWarnings);
 		skillMap.set(capSkill.name, {
 			name: capSkill.name,
 			description: sanitizeManagedDescription(rawDescription),
@@ -366,6 +413,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 			baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
 			source: `${capSkill._source.provider}:${capSkill.level}`,
 			hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
+			...(evidence ? { evidence } : {}),
 			_source: capSkill._source,
 		});
 		realPathSet.add(resolvedPath);
@@ -469,7 +517,7 @@ function startsWithLocalExecutionPrefix(trimmedStart: string): boolean {
 export type SkillInvocationKind = "user" | "autoload";
 
 export async function buildSkillPromptMessage(
-	skill: Pick<Skill, "name" | "filePath" | "baseDir">,
+	skill: Pick<Skill, "name" | "filePath" | "baseDir" | "evidence">,
 	args: string,
 	invocation: SkillInvocationKind = "user",
 ): Promise<BuiltSkillPromptMessage> {
@@ -496,6 +544,7 @@ export async function buildSkillPromptMessage(
 				body,
 				filePath: skill.filePath,
 				userArgs: trimmedArgs || undefined,
+				evidencePhases: groupSkillEvidenceByPhase(skill.evidence),
 			})
 			.trim();
 	}
