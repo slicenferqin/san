@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Graph 工程与目标保真调研｜San 如何不忘记自己在干什么</title>
+<style>
+	:root { --bg:#0f1115; --panel:#171a21; --text:#d7dce5; --muted:#8b93a3; --accent:#5eb1ff; --good:#4ade80; --warn:#fbbf24; --hot:#f87171; --line:#2a2f3a; }
+	body { margin:0; padding:32px 24px 80px; background:var(--bg); color:var(--text); font:15px/1.75 -apple-system,"PingFang SC",sans-serif; }
+	.wrap { max-width:980px; margin:0 auto; }
+	h1 { font-size:25px; margin:0 0 6px; }
+	h2 { font-size:20px; margin:38px 0 12px; padding-bottom:8px; border-bottom:1px solid var(--line); color:var(--accent); }
+	h3 { font-size:16px; margin:22px 0 8px; }
+	.meta { color:var(--muted); font-size:13px; margin-bottom:22px; }
+	table { width:100%; border-collapse:collapse; margin:14px 0; font-size:13.5px; }
+	th, td { text-align:left; padding:8px 11px; border-bottom:1px solid var(--line); vertical-align:top; }
+	th { color:var(--muted); font-weight:600; white-space:nowrap; }
+	code { background:#1d212b; padding:1px 6px; border-radius:4px; font-size:13px; font-family:"SF Mono",Menlo,monospace; }
+	.ok { color:var(--good); font-weight:700; } .no { color:var(--hot); font-weight:700; } .part { color:var(--warn); font-weight:700; }
+	.callout { background:var(--panel); border-left:3px solid var(--accent); padding:13px 17px; border-radius:0 8px 8px 0; margin:15px 0; }
+	.callout.key { border-left-color:var(--warn); }
+	.card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px 19px; margin:13px 0; }
+	.card h3 { margin-top:0; }
+	.kv { color:var(--muted); font-size:13px; }
+	ul { margin:8px 0; padding-left:22px; } li { margin:5px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Graph 工程与目标保真:San 如何不忘记自己在干什么</h1>
+<div class="meta">2026-08-13 · 触发问题:多轮摘要压缩后 agent 失去目标与进度("不知道在干什么,不知道要干什么")· 来源:LangGraph 1.0 文档与实践论文(arXiv 2607.19297)、Manus 官方 context engineering 博客、agentpatternscatalog、planning-with-files、2026 框架横评(particula/speakeasy/gurusup 等)· San 侧:execution-control / context-steady / san-loop 源码(本仓库)</div>
+
+<div class="callout key">
+<strong>一句话结论:graph 工程对"目标漂移"的解药不是"图",而是"目标与进度是每一步都强制可见的显式状态"。</strong>San 已经拥有比任何 graph 框架都硬的宿主侧目标锚(不可变 objective contract + 摘要无权改写),缺的只是最后一寸:<strong>把锚投影进模型每次请求的高注意力区</strong>。这一寸不需要图,Manus 用一个 todo.md 复诵就解决了;San 用一个新的 context plan 常驻材料就能解决,而且比 Manus 的更强——San 的锚是宿主持有的,模型自己都改写不了。
+</div>
+
+<h2>一、Graph 工程 2026 现状一页纸</h2>
+
+<table>
+<tr><th>系统</th><th>定位与成熟度</th><th>与目标保持相关的核心机制</th></tr>
+<tr><td><strong>LangGraph 1.0</strong>(LangChain)</td><td>最主流的图式编排,1.0 已稳定(Klarna/Replit 等生产使用);低层框架,开发者手写节点与边</td><td>typed state(目标/进度是 state 字段,<strong>每个节点每步可读</strong>);reducer 只增不覆写;checkpointer 每步落盘(SQLite/PG/Redis),线程恢复、时间旅行;<code>interrupt()/Command</code> 一等人机协作;边上手写循环上限守卫</td></tr>
+<tr><td><strong>OpenAI Agents SDK</strong></td><td>极简命令式(Agent/Runner/handoffs/guardrails),v0.10+,1.9 万星;OpenAI 生态绑定</td><td>目标只活在消息列表;<strong>无内置 checkpoint</strong>,session 持久化 opt-in;长任务官方指路 Temporal(durable execution)</td></tr>
+<tr><td><strong>CrewAI Flows</strong></td><td>角色制多代理,Flows 提供事件驱动状态容器</td><td>结构化 state + 事件 checkpoint(JSON/SQLite),<code>resume/from_pending</code>;粒度粗于 LangGraph</td></tr>
+<tr><td><strong>Manus</strong>(2025.12 被 Meta 收购)</td><td>通用自主 agent 的产品标杆,任务平均约 50 次工具调用;其 context engineering 博客是行业必读</td><td><strong>Recitation(复诵)</strong>:agent 维护 todo.md 并每步重写到上下文<strong>末端</strong>,把全局计划推进 recency 高注意力区,明确为对抗 lost-in-the-middle 与 goal drift 而设计;后期演进为<strong>专职 planner 子代理</strong>管计划(早期 executor 自管浪费约 1/3 动作在记账上)</td></tr>
+<tr><td><strong>planning-with-files</strong>(开源 skill)</td><td>把 Manus 模式做成跨 60+ agent 的 SKILL.md:task_plan/findings/progress 三文件落盘</td><td>每 turn 开始由 hook 强制重新注入活跃计划;完成门(Stop hook 检查所有阶段勾选)才准停;crash//clear 后从磁盘恢复目标</td></tr>
+<tr><td><strong>Temporal 路线</strong></td><td>workflow 引擎与 agent 结合(OpenAI SDK 官方 durable 路径)</td><td>代码级 durable execution,重放恢复;解决的是"进程死了怎么办",不解决"模型忘了怎么办"</td></tr>
+</table>
+
+<p class="kv">arXiv 实践论文的清醒定位值得引用:LangGraph 应"按工作流复杂度适配,而非普适默认"——简单工具使用用 ReAct 循环更好;它的价值区在"路由、暂停、审计需要成为显式产品行为"的场景。</p>
+
+<h2>二、目标/进度保持机制横向对比(核心表)</h2>
+
+<table>
+<tr><th>机制</th><th>目标存在哪</th><th>谁能改</th><th>模型每步可见?</th><th>压缩/重启后存活?</th></tr>
+<tr><td>LangGraph typed state</td><td>state 字段(图外持久)</td><td>节点代码经 reducer(只增)</td><td><span class="ok">是</span>——每个节点入参就是 state</td><td><span class="ok">是</span>——checkpointer 每步落盘</td></tr>
+<tr><td>Manus todo.md 复诵</td><td>沙箱文件系统</td><td>agent(后期:专职 planner 子代理)</td><td><span class="ok">是</span>——每步重写到上下文末端(高注意力区)</td><td><span class="ok">是</span>——文件持久,重启重读</td></tr>
+<tr><td>planning-with-files</td><td>项目磁盘三个 md</td><td>agent,hook 强制维护</td><td><span class="ok">是</span>——每 turn 开始 hook 注入</td><td><span class="ok">是</span>——/clear 与 crash 后重读</td></tr>
+<tr><td><strong>San objective contract</strong></td><td>journal + execution scope(宿主)</td><td><span class="ok">没人</span>——不可变,摘要与模型文本无权改写(continuation authority)</td><td><span class="no">否</span>——契约回显只在 turn 开始一次;之后靠消息流,会被摘要稀释</td><td><span class="part">宿主侧是,模型侧否</span>——重放恢复 scope,但模型上下文里没有常驻投影</td></tr>
+<tr><td>San todo 工具</td><td>会话消息流</td><td>模型自愿调用</td><td><span class="part">看运气</span>——todo 消息会滚出工作集/被压缩</td><td><span class="part">部分</span>——entry 在 journal,但可见性同上</td></tr>
+<tr><td>San Loop taskGraph</td><td>run 快照(ledger)</td><td>commander 产出,宿主持有</td><td><span class="ok">是</span>(San Loop 场景内,assignment 注入)</td><td><span class="ok">是</span>——但只在显式 /solo 等命令的场景</td></tr>
+</table>
+
+<div class="callout">
+对比表读出来的结论非常清晰:<strong>San 在"谁能改"一列是全场最强(没人能改,连模型自己都不行),在"模型每步可见"一列是全场最弱。</strong>LangGraph 靠图结构保证可见性,Manus 靠复诵保证可见性,San 两者都没有——这正是作者观察到"多轮压缩后不知道在干什么"的机制根源:<strong>锚在引擎盖下,模型看不见锚。</strong>
+</div>
+
+<h2>三、San 已有 vs 缺口(源码证据)</h2>
+
+<table>
+<tr><th>能力</th><th>状态</th><th>证据</th></tr>
+<tr><td>目标不可变锚(宿主)</td><td class="ok">已有,且强于全场</td><td><code>execution-control</code>:objective contract 从权威用户消息 entry 派生,revision/hash 固定;<code>#ensureExecutionScopeForTurn</code> 每个真实用户 turn mint scope</td></tr>
+<tr><td>摘要无权改写目标</td><td class="ok">已有</td><td><code>context-steady/continuation.ts</code>/<code>summary-authority.ts</code>:活跃用户请求只能从 journal 真实 entries 派生,压缩摘要与 assistant 自述越权有审计</td></tr>
+<tr><td>进度的宿主事实</td><td class="ok">已有</td><td>todo entries、tool_pair、digest 的 actionsTaken/nextSteps、execution ledger 的 progress 观察(#15 之后每工具调用都有)</td></tr>
+<tr><td>plan-executor 图</td><td class="part">已有但仅显式场景</td><td><code>san-loop</code> 的 commander taskGraph + assignment + supervisor——就是一个轻量 LangGraph,但只在 /solo/team/council 触发</td></tr>
+<tr><td><strong>目标+进度在模型每步上下文常驻</strong></td><td class="no"><strong>缺——唯一缺口</strong></td><td>契约回显仅 turn 开始一次(M3);context plan 材料体系(exact/tool_pair/digest/checkpoint/recall/tool_stub)<strong>没有 goal 材料类型</strong>;todo 消息随流滚动会被稀释</td></tr>
+</table>
+
+<h2>四、移植方案(以 San 的形态,不放弃自由 loop)</h2>
+
+<div class="card">
+<h3>方案 A(首选):goal-anchor 常驻材料 —— 把契约+进度做成 context plan 的一等材料</h3>
+<ul>
+<li><strong>做什么</strong>:context plan 新增 <code>goal_anchor</code> 材料类型:内容 = 契约目标(objective contract 的用户原话,不可变)+ 进度快照(todo 状态 + 最近 digest 的 nextSteps + 未满足的 evidence gates)。物化时渲染进 plan 消息——plan 消息本来就注入在最后一条用户消息之前(靠近上下文末端、高注意力区)、每次请求重建、<strong>永不参与压缩</strong>。几百 token 封顶。</li>
+<li><strong>为什么对</strong>:这正是 LangGraph "state 每节点可见" + Manus "复诵到末端"的合成,但锚源是宿主的不可变契约——<strong>模型每步都看见目标,但改不了目标</strong>,比 Manus 的自管 todo.md 强一档(Manus 的 todo 是 agent 自己写的,漂移的 agent 可以写出漂移的 todo;San 的锚漂移不了)。</li>
+<li><strong>改哪里</strong>:<code>plan-types.ts</code>(材料类型)、<code>planner.ts</code>(从 scope 契约 + todo 状态组装,恒定入选不参与预算裁剪——它就是"八项保护"之外的第九项)、<code>materialize.ts</code> + plan 模板(渲染)、契约来源用 <code>getActiveExecutionScopeId → objectiveContract</code>(#15 之后每 turn 都有)。</li>
+<li><strong>工作量</strong>:2-3 天(材料管线是这两周刚摸熟的,挂点全部现成)。</li>
+<li><strong>与自由 loop 兼容性</strong>:满分——不改任何决策路径,只改模型看见什么。</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>方案 B(叠加):压缩后 re-anchor 与长回合复诵</h3>
+<ul>
+<li><strong>做什么</strong>:两个确定性触发点补充 A:(1) 每次 compaction/checkpoint rebase 完成后,立即 fold 一条"目标+进度复诵"(A 的材料照常在,这是对压缩瞬间的额外强化);(2) 单 turn 工具调用数过阈值(如 20 次,Manus 平均 50 次的场景)时复诵一次。复用 TTSR/skill-reminder 的 fold 管线,一次性、不阻断。</li>
+<li><strong>工作量</strong>:1 天。与 watchdog(#15)的提醒管线同构。</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>方案 C(方向,不急):planner-executor 分工进交互会话</h3>
+<ul>
+<li>Manus 后期演进(专职 planner 子代理管计划,executor 专注动作,省 1/3 记账动作)与 San Loop 的 commander/worker 是同一形态。San 可以把 San Loop 的 plan 语义"降档"到普通交互会话:长任务自动派生轻量 plan、由宿主维护进度勾选。<strong>但这是行为变化大的工程,应等 A+B 的数据说明"复诵不够"再上</strong>——Manus 也是先有 recitation 再演进 planner 的。</li>
+</ul>
+</div>
+
+<h2>五、明确不值得借鉴的部分</h2>
+<ul>
+<li><strong>手写图拓扑</strong>(LangGraph 的节点/边/条件路由):San 是通用 coding agent,任务形态不可枚举;把决策路径框进开发者手写的图,等于把"处理未预见情况"的核心价值交出去。arXiv 论文自己也说图值得的场景是"路由与审批需要成为显式产品行为"——San 的对应物(San Loop、审批门)已经存在。</li>
+<li><strong>LangGraph 式 checkpointer</strong>:San 的 append-only journal + scope ledger + resume 重放已覆盖同一职责,且粒度更细(#24 刚修的就是这个体系的边角)。</li>
+<li><strong>把"暂停等人"做成图中断原语</strong>:San 的 PAUSED_FOR_CONTEXT / needs-user 终态 + FIFO 恢复语义已有,补的应该是呈现(人话),不是机制。</li>
+</ul>
+
+<h2>六、对北极星 benchmark 的指标修正</h2>
+
+<table>
+<tr><th>指标</th><th>定义</th><th>怎么测</th></tr>
+<tr><td><strong>目标保真度</strong>(新,核心)</td><td>终态产出与初始契约的一致性</td><td>San 独有优势:初始契约不可变、宿主持有——终态时以(契约原文, 最终 diff/产出, 终态声明)为输入做 LLM-judge 对照评分 + 人工抽检校准;漂移检测可作为 goal-anchor 的副产品(anchor 与最新 digest 的语义偏离度)</td></tr>
+<tr><td><strong>介入效率</strong>(新)</td><td>一次 steering 之后回到正轨的比例;同一问题被迫重复纠正的次数</td><td>benchmark 样本里设计"中途注入一次纠偏"的场景;测纠偏后的目标保真度恢复</td></tr>
+<tr><td>预算内完成 / 终态可解释</td><td>(保留原定义)</td><td>不变</td></tr>
+<tr><td class="kv">删除:"无人值守率"作为独立追求</td><td class="kv" colspan="2">介入不是失败;拉不回来才是。"全自主逼近目标"是渐近方向,不是当期可承诺的指标。</td></tr>
+</table>
+
+<div class="callout key">
+<strong>建议的执行顺序:方案 A(goal-anchor 材料,2-3 天)→ 方案 B(re-anchor 复诵,1 天)→ 用修正后的 benchmark 指标验证"目标保真度"前后对照 → 数据决定是否需要方案 C。</strong>这条线把 graph 工程的精髓(显式状态可见性)、Manus 的实践(复诵进高注意力区)和 San 的独有资产(不可变宿主锚)合成一个别人没有的组合:<em>模型每步看见目标,但谁也改不了目标。</em>
+</div>
+
+<div class="meta" style="margin-top:30px">来源索引:LangGraph 1.0(github.com/langchain-ai/langgraph;josenobile.co/guides/langgraph)· arXiv 2607.19297(Graph-Based Agentic AI with LangGraph,实践定位)· Manus context engineering(manus.im/blog,recitation 原文)· agentpatternscatalog.org/compositions/manus(todo.md 与 planner 演进)· planning-with-files(github)· 2026 框架横评(particula.tech、speakeasy、gurusup、fast.io、stacksandflows)· San 源码:execution-control/、context-steady/continuation.ts、planner.ts、san-loop/types.ts。
+</div>
+
+</div>
+</body>
+</html>
