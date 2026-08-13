@@ -2,6 +2,7 @@ import type { AgentMessage } from "@san/agent";
 import { estimateTokens } from "@san/agent/compaction";
 import { prompt } from "@san/utils";
 import contextPlanTemplate from "../prompts/context-steady/context-plan.md" with { type: "text" };
+import emergencyStubTemplate from "../prompts/context-steady/emergency-stub.md" with { type: "text" };
 import supersededEditStubTemplate from "../prompts/context-steady/superseded-edit-stub.md" with { type: "text" };
 import type { CustomMessageEntry, SessionEntry, SessionMessageEntry } from "../session/session-entries";
 import { validateContextPlanCoverage } from "./coverage";
@@ -193,12 +194,17 @@ function toolStubTargets(branchEntries: readonly SessionEntry[], stubs: readonly
 }
 
 function substituteToolStub(message: AgentMessage, stub: ContextPlanToolStubMaterial): AgentMessage {
-	const text = prompt.render(supersededEditStubTemplate, { path: stub.path }).trim();
+	const template = stub.stubKind === "emergency" ? emergencyStubTemplate : supersededEditStubTemplate;
+	const text = prompt.render(template, { path: stub.path }).trim();
 	return {
 		...message,
 		content: [{ type: "text", text }],
-		// 原 details 可能携带完整 diff;替换为最小 superseded 标记。
-		details: { superseded: true, ...(stub.path ? { path: stub.path } : {}) },
+		// 原 details 可能携带完整 diff;替换为最小降级标记。
+		details: {
+			superseded: true,
+			...(stub.stubKind ? { stubKind: stub.stubKind } : {}),
+			...(stub.path ? { path: stub.path } : {}),
+		},
 	} as AgentMessage;
 }
 
