@@ -25,6 +25,7 @@ import type { SessionManager } from "@san/coding-agent/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "@san/coding-agent/slash-commands/acp-builtins";
 import { removeWithRetries, setProjectDir } from "@san/utils";
 import type { ExecutionRuntime } from "../src/execution-control/execution-runtime";
+import { SessionSkillGateState } from "../src/execution-control/skill-gate-session";
 import * as sanLoopModule from "../src/san-loop";
 
 interface FakeAcpBuiltinSession {
@@ -70,6 +71,7 @@ interface FakeAcpBuiltinSession {
 	redeemResetCredit: (target: ResetCreditTarget) => Promise<ResetCreditRedeemOutcome>;
 	getExecutionRuntime(): ExecutionRuntime | undefined;
 	getActiveExecutionScopeId(): string | undefined;
+	skillGateState?: SessionSkillGateState;
 }
 
 interface FakeAcpBuiltinSessionManager {
@@ -299,6 +301,41 @@ function createRuntime() {
 	};
 }
 
+function minimalSanLoopResult(mode: sanLoopModule.SanLoopMode, objective: string): sanLoopModule.RunSanLoopResult {
+	const now = "2026-07-01T00:00:00.000Z";
+	const run: sanLoopModule.SanLoopRunSnapshot = {
+		schemaVersion: sanLoopModule.SAN_LOOP_SCHEMA_VERSION,
+		revision: 0,
+		runId: `loop-${mode}`,
+		sessionId: "fake-session-id",
+		createdAt: now,
+		updatedAt: now,
+		objective,
+		mode,
+		status: "passed",
+		contextPacketRefs: [],
+		assignments: [],
+		workerResults: [],
+		reviewReports: [],
+		decisions: [],
+		budget: [],
+		retryCount: 0,
+		maxRetries: 2,
+		finalVerdict: "pass",
+	};
+	return {
+		run,
+		runCreated: {
+			run,
+			runEntryId: `run-${mode}`,
+			event: {} as sanLoopModule.SanLoopEvent,
+			eventEntryId: `event-${mode}`,
+		},
+		transitions: [],
+		reviewEntryIds: [],
+	};
+}
+
 describe("ACP builtin slash commands", () => {
 	it("consumes fast status without returning prompt text", async () => {
 		const { output, runtime } = createRuntime();
@@ -493,6 +530,69 @@ describe("ACP builtin slash commands", () => {
 				{ mode: "team", objective: "deliver team objective" },
 				{ mode: "council", objective: "deliver council objective" },
 			]);
+		} finally {
+			runSpy.mockRestore();
+		}
+	});
+
+	it("compiles active skill evidence chains into San Loop gates bound to the scope contract", async () => {
+		const { runtime, session } = createRuntime();
+		runtime.settings.set("san.executionLoop.enabled", true);
+		const gateState = new SessionSkillGateState("fake-session-id");
+		gateState.activate({
+			name: "fix-bug",
+			evidence: [
+				{ id: "repro", phase: "before-fix", kind: "command", expect: "fail", description: "failing repro" },
+				{
+					id: "verify",
+					phase: "before-done",
+					kind: "command",
+					expect: "pass",
+					sameAs: "repro",
+					description: "repro passes after the fix",
+				},
+			],
+		});
+		session.skillGateState = gateState;
+		const runSpy = spyOn(sanLoopModule, "runSanLoop").mockImplementation(async options =>
+			minimalSanLoopResult(options.mode ?? "solo", options.objective),
+		);
+		try {
+			expect(await executeAcpBuiltinSlashCommand("/solo fix the bug", runtime)).toEqual({ consumed: true });
+			const gates = runSpy.mock.calls[0]?.[0]?.acceptanceGates ?? [];
+			// before-done 声明成为绑定真实 scope 契约(而非会话派生契约)的硬门。
+			expect(gates.find(gate => gate.gateId === "gate:skill:fix-bug:verify")).toMatchObject({
+				required: true,
+				contractRevision: ACP_OBJECTIVE_CONTRACT.ref.revision,
+				contractHash: ACP_OBJECTIVE_CONTRACT.ref.contractHash,
+				contractRef: { contractId: ACP_OBJECTIVE_CONTRACT.ref.contractId },
+				// sameAs 链共享链根 checkId:复验必须与复现是同一条命令。
+				verifier: { kind: "command", checkId: "skill-check:fix-bug:repro", expectedExitCode: 0 },
+			});
+			// before-fix 声明保持软门,不拦终态。
+			expect(gates.find(gate => gate.gateId === "gate:skill:fix-bug:repro")).toMatchObject({ required: false });
+		} finally {
+			runSpy.mockRestore();
+		}
+	});
+
+	it("omits skill gates from San Loop when skills.evidenceGates is disabled", async () => {
+		const { runtime, session } = createRuntime();
+		runtime.settings.set("san.executionLoop.enabled", true);
+		runtime.settings.set("skills.evidenceGates", false);
+		const gateState = new SessionSkillGateState("fake-session-id");
+		gateState.activate({
+			name: "fix-bug",
+			evidence: [{ id: "verify", phase: "before-done", kind: "command", expect: "pass", description: "verify" }],
+		});
+		session.skillGateState = gateState;
+		const runSpy = spyOn(sanLoopModule, "runSanLoop").mockImplementation(async options =>
+			minimalSanLoopResult(options.mode ?? "solo", options.objective),
+		);
+		try {
+			expect(await executeAcpBuiltinSlashCommand("/solo fix the bug", runtime)).toEqual({ consumed: true });
+			const gates = runSpy.mock.calls[0]?.[0]?.acceptanceGates ?? [];
+			expect(gates.some(gate => gate.gateId.startsWith("gate:skill:"))).toBe(false);
 		} finally {
 			runSpy.mockRestore();
 		}
