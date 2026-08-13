@@ -3111,6 +3111,10 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 	"san.executionLoop.defaultMode": { type: "enum", values: ["solo", "team", "council"] as const, default: "solo" },
+
+	"san.sessionWatchdog.enabled": { type: "boolean", default: true },
+
+	"san.contractEcho.firstTurn": { type: "boolean", default: true },
 	"san.executionLoop.maxRetries": { type: "number", default: 2 },
 	"san.executionLoop.maxWorkers": { type: "number", default: 3 },
 	"san.executionLoop.ledger.enabled": { type: "boolean", default: true },
