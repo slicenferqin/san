@@ -35,6 +35,12 @@ export const SKILL_PROMPT_MESSAGE_TYPE = "skill-prompt";
  * the user. Rendered through the generic custom-message path in every mode.
  */
 export const SKILL_CONTRACT_ECHO_MESSAGE_TYPE = "skill-contract-echo";
+/**
+ * Session-general working-agreement echo: emitted once, on the first
+ * authoritative user turn that mints an execution scope, for sessions where
+ * no evidence-chain skill drives the contract. Same generic rendering path.
+ */
+export const CONTRACT_ECHO_MESSAGE_TYPE = "contract-echo";
 export const LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE = "lsp-late-diagnostic";
 export const BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE = "background-tan-dispatch";
 

@@ -377,6 +377,7 @@ import type { PlanModeState } from "../plan-mode/state";
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
 import toolProgressFinalizeTemplate from "../prompts/context-steady/tool-progress-finalize.md" with { type: "text" };
 import toolProgressRedirectTemplate from "../prompts/context-steady/tool-progress-redirect.md" with { type: "text" };
+import contractEchoGeneralTemplate from "../prompts/execution/contract-echo-general.md" with { type: "text" };
 import watchdogRedirectTemplate from "../prompts/execution/watchdog-redirect.md" with { type: "text" };
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
@@ -494,6 +495,7 @@ import {
 } from "./exit-diagnostics";
 import {
 	type BashExecutionMessage,
+	CONTRACT_ECHO_MESSAGE_TYPE,
 	type CustomMessage,
 	type CustomMessagePayload,
 	convertToLlm,
@@ -9197,16 +9199,16 @@ export class AgentSession {
 	 * synthetic/model 文本永远不能 mint scope；read-only 会话与固定 scope 的
 	 * child 同样零 scope 写入。
 	 */
-	async #ensureExecutionScopeForTurn(message: AgentMessage): Promise<void> {
+	async #ensureExecutionScopeForTurn(message: AgentMessage): Promise<CustomMessage | undefined> {
 		const runtime = this.#executionRuntime;
-		if (!runtime || this.#executionScopeId !== undefined || !this.#sessionWritesEnabled) return;
+		if (!runtime || this.#executionScopeId !== undefined || !this.#sessionWritesEnabled) return undefined;
 		// 非真实用户消息：只复用当前 active scope（存在时），绝不新建。
 		if (message.role !== "user") {
 			const activeScopeId = runtime.activeScopeId();
 			if (activeScopeId !== undefined) {
 				this.#executionHandle = runtime.getScope(activeScopeId);
 			}
-			return;
+			return undefined;
 		}
 		// 每个新的顶层用户 prompt 都是独立 authoritative turn：即使上一 scope
 		// 仍 active（evidence gate 未满足而保持运行），也不能因“已有 active”
@@ -9227,12 +9229,52 @@ export class AgentSession {
 		} else {
 			entryId = this.#appendSessionMessage(message);
 		}
-		if (entryId === undefined) return;
+		if (entryId === undefined) return undefined;
 		this.#executionHandle = runtime.startScope({
 			rootSessionId: runtime.rootSessionId,
 			logicalTurnId: entryId,
 			objectiveContract: buildAuthoritativeUserObjectiveContract(entryId, message),
 		});
+		return this.#buildGeneralContractEcho(message);
+	}
+
+	/**
+	 * 契约回显泛化(novice-first M3 延伸):会话首个权威用户 turn mint scope 时,
+	 * 把工作契约作为可见消息回显一次。skill 证据链会话有自己的回显(带完成
+	 * 标准),此处只覆盖无 skill 契约的普通会话;分支上已存在任一回显(含
+	 * resume 的历史回显)则永不重复。
+	 */
+	#buildGeneralContractEcho(message: AgentMessage): CustomMessage | undefined {
+		if (this.settings.get("san.contractEcho.firstTurn") !== true) return undefined;
+		// 回显作为伴随消息进 agent 流后持久化为 custom_message entry;skill
+		// 回显同理。任一载体存在都算"已回显",resume 的历史分支同样命中。
+		const isEchoType = (type: string | undefined): boolean =>
+			type === CONTRACT_ECHO_MESSAGE_TYPE || type === SKILL_CONTRACT_ECHO_MESSAGE_TYPE;
+		const hasEcho = this.sessionManager.getBranch().some(entry => {
+			if (entry.type === "custom_message" || entry.type === "custom") return isEchoType(entry.customType);
+			return entry.type === "message" && entry.message.role === "custom" && isEchoType(entry.message.customType);
+		});
+		if (hasEcho) return undefined;
+		const objective = message.role === "user" ? customMessageContentText(message.content).trim() : "";
+		if (!objective) return undefined;
+		const contractRef = this.#executionHandle?.snapshot().objectiveContract?.ref;
+		const text = prompt
+			.render(contractEchoGeneralTemplate, {
+				objective: objective.length > 300 ? `${objective.slice(0, 300)}…` : objective,
+			})
+			.trim();
+		return {
+			role: "custom",
+			customType: CONTRACT_ECHO_MESSAGE_TYPE,
+			content: text,
+			display: true,
+			details: {
+				contractId: contractRef?.contractId,
+				contractHash: contractRef?.contractHash,
+			},
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
 	}
 
 	/**
@@ -11549,8 +11591,10 @@ export class AgentSession {
 			// Execution control：真实宿主用户 turn 在首次 provider 派发前 mint
 			// 根 scope；continuation/steering 复用 active scope。用户消息 entry
 			// id 即 host evidence ref（authoritativeUserTurnId）。synthetic/
-			// model 文本永远不能 mint scope。
-			await this.#ensureExecutionScopeForTurn(message);
+			// model 文本永远不能 mint scope。首个权威 turn 可能返回契约回显,
+			// 作为本批次伴随消息随 prompt 一起进入消息流与转录。
+			const generalContractEcho = await this.#ensureExecutionScopeForTurn(message);
+			if (generalContractEcho) messages.push(generalContractEcho);
 			if (this.#promptGeneration !== generation) {
 				return;
 			}
