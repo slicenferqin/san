@@ -1,0 +1,71 @@
+{
+	"timestamp": "2026-08-13T06:47:48.668Z",
+	"ok": true,
+	"scenarios": [
+		{
+			"name": "soft",
+			"ok": true,
+			"assertions": [
+				{
+					"name": "soft.contract-echo-exactly-once",
+					"ok": true,
+					"detail": "contract echo messages: 1"
+				},
+				{
+					"name": "soft.reminder-at-most-once",
+					"ok": true,
+					"detail": "advisory reminder occurrences: 1"
+				}
+			],
+			"observations": {
+				"fixture": "/var/folders/lh/pg1q691d043_xlt0qn_l7spm0000gn/T/m3-skill-gates-dogfood-4eZwef",
+				"timeline": {
+					"contractEchoes": 1,
+					"reminderHits": 1,
+					"firstMutationIndex": 12,
+					"firstBashIndex": 8
+				},
+				"chain": {
+					"active": true,
+					"contractHash": "fp:1e01e9fe",
+					"contractEchoHash": "fp:fcafc493",
+					"gates": [
+						{
+							"id": "repro",
+							"phase": "before-fix",
+							"expect": "fail",
+							"sameAs": null,
+							"satisfied": false,
+							"reminded": true,
+							"receipts": 0,
+							"fingerprint": null
+						},
+						{
+							"id": "verify",
+							"phase": "before-done",
+							"expect": "pass",
+							"sameAs": "repro",
+							"satisfied": false,
+							"reminded": false,
+							"receipts": 0,
+							"fingerprint": null
+						},
+						{
+							"id": "regression",
+							"phase": "before-done",
+							"expect": "pass",
+							"sameAs": null,
+							"satisfied": true,
+							"reminded": false,
+							"receipts": 1,
+							"fingerprint": "fp:479e6c03"
+						}
+					]
+				},
+				"luredIntoEditingFirst": false,
+				"fixtureTestExitCode": 1,
+				"messageCount": 27
+			}
+		}
+	]
+}
