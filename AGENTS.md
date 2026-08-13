@@ -22,6 +22,17 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 
 **Catalog import convention**: code in this repo imports catalog *values* (bundled models, model-thinking helpers, identity, descriptors, model manager/cache) from `@oh-my-pi/pi-catalog/<module>` — never via `@oh-my-pi/pi-ai`. The pi-ai barrel re-exports only the model/effort *types* its own signatures use (`Model`, `Api`, `ThinkingConfig`, `Effort`, …); type-only imports of those from `@oh-my-pi/pi-ai` are fine.
 
+## Product Principle: Move-in Ready (拎包入住)
+
+San is a fully furnished house, not a toolkit: rich machinery under the hood, zero assembly required from the user. Its predecessor failed exactly here — bare-bones, everything manual. Every user-facing decision follows from this:
+
+- **Defaults are the product.** Every capability works with zero configuration; settings exist for experts only (daily/expert audience layering). Nothing a user must configure or read is a prerequisite for benefiting.
+- **Evidence machinery stays under the hood.** Receipts, ledgers, hashes, scopes, gates, audits exist so the tool never lies to the user — they run invisibly. NEVER surface mechanism vocabulary (evidence/host/scope/gate/receipt/audit) or raw records in user-facing text, messages, or UI. The user perceives trustworthy outcomes, not the machinery that produces them.
+- **Users see exactly three states**: what's happening (one line), what got done ("fixed, tests pass"), or where it's stuck (one plain-language reason). Detail is always behind a fold or `san stats` — never on the main path.
+- **Acceptance bar for any user-facing change**: a novice with zero configuration and zero reading must benefit. A panel the user must understand first is a design failure.
+
+This applies doubly to any GUI/desktop work: no evidence panels, no audit views, no hash/id displays on the main surface.
+
 ## User Working Preferences
 
 - Unless explicitly requested otherwise, produce research notes, design proposals, implementation plans, and architecture summaries as HTML documents.

@@ -106,12 +106,14 @@
 
 ### Changed
 
+- Changed both contract echo messages (skill and general) to plain language: the user-facing text now states the goal and the done criteria in everyday words ("I'll verify each of these with real runs — not just claim them") with no mechanism vocabulary — no evidence/host/scope/gate terminology. The verification machinery underneath is unchanged; only its user-visible projection got simpler.
 - Changed San context steady active engine to ContextPlan-only: package exports mark packet/prune as legacy-compat, digest LLM calls reuse `prepareSimpleStreamOptions`, checkpoint synthesis hard-trims under extreme token budgets, and `qualityWindowTokens=0` resolves to the 240K steady default.
 - Changed remaining user-facing San surfaces to prefer `san`, `.san`, `~/.san`, and `SAN_*` names while keeping documented legacy aliases for compatibility.
 - Changed Hindsight's default bank/context names from `omp` to `san` for new memory configurations.
 
 ### Fixed
 
+- Fixed the general working-agreement echo leaking into subagent sessions: a taskDepth>0 session that owns its runtime (spawned without a fixed parent scope) minted scopes like a root and injected the echo into the provider message stream, corrupting append-only prefix expectations in the subagent message pipeline. Subagent sessions never echo now — their "user" is the orchestrating parent agent.
 - Fixed Linux Chromium discovery accepting invalid wrappers or non-executable files and hanging indefinitely during version probes; bounded probes now validate Chromium-family output without racing trailing stdout.
 - Retried concurrent-request caps with a short backoff without deleting valid Copilot credentials or rotating through sibling accounts.
 - Fixed text print mode suppressing safe transient retries after buffered text while preventing replay once text, tool, image, or server-tool output has been committed ([#7625](https://github.com/can1357/oh-my-pi/issues/7625)).
