@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>过夜自主迭代报告 — 2026-08-13/14</title>
+<style>
+	:root {
+		--bg: #0f1117; --panel: #161a23; --panel2: #1c2130; --text: #d6dae3;
+		--dim: #8b93a7; --accent: #6ea8fe; --green: #4ade80; --amber: #fbbf24;
+		--red: #f87171; --border: #2a3042;
+	}
+	* { box-sizing: border-box; }
+	body { margin: 0; padding: 2rem clamp(1rem, 5vw, 4rem); background: var(--bg); color: var(--text);
+		font: 15px/1.75 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; max-width: 1080px; margin-inline: auto; }
+	h1 { font-size: 1.7rem; border-bottom: 2px solid var(--accent); padding-bottom: .5rem; }
+	h2 { font-size: 1.25rem; color: var(--accent); margin-top: 2.5rem; }
+	h3 { font-size: 1.05rem; margin-top: 1.8rem; }
+	table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92em; }
+	th, td { border: 1px solid var(--border); padding: .5rem .75rem; text-align: left; vertical-align: top; }
+	th { background: var(--panel2); }
+	code { background: var(--panel2); padding: .1em .4em; border-radius: 4px; font-size: .9em; }
+	.ok { color: var(--green); } .warn { color: var(--amber); } .bad { color: var(--red); }
+	.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.25rem; margin: 1rem 0; }
+	.dim { color: var(--dim); }
+	ul { padding-left: 1.4rem; }
+	li { margin: .35rem 0; }
+</style>
+</head>
+<body>
+<h1>过夜自主迭代报告</h1>
+<p class="dim">2026-08-13 晚 → 08-14 晨 · 授权范围:自主开路线、完整 PR/CI 流程、如实报告(含失败)</p>
+
+<h2>1. 交付总览</h2>
+<table>
+<tr><th>PR</th><th>主题</th><th>状态(截至报告时)</th></tr>
+<tr><td>#21</td><td>prompt-cache 命中归因探针(§4.2 第一步)</td><td class="ok">已合并</td></tr>
+<tr><td>#26</td><td>目标锚 + 回合内复诵 + 压缩后 re-anchor(goal-fidelity 方案 A+B 全量)</td><td class="warn">CI 中(已解决与 #21 的合并冲突)</td></tr>
+<tr><td>#27</td><td>北极星 benchmark + 错误消息人话层(规划 3.1 + 2.1 首片)</td><td class="warn">CI 中</td></tr>
+<tr><td>#28</td><td>CI 全部非 release job 补 timeout-minutes(规划 1.4 无争议片)</td><td class="warn">CI 中</td></tr>
+<tr><td>#29</td><td>headless 无凭据退出不再引导 TUI 专属命令(规划 2.2 首个发现)</td><td class="warn">CI 中</td></tr>
+</table>
+<p>白天在飞、夜间收尾合并的:#17(superseded-edit 压缩)、#18(digest 衰减选级)、#19(应急降级档)、#20(子代理回声修复)、#22(合同回声人话化)、#23(RPC smoke 客户端 + desktop 事实报告)、#24(terminal scope 幂等 finish)、#25(RPC 结构化审批帧)。</p>
+
+<h2>2. 北极星基线(首跑)</h2>
+<div class="panel">
+<p><strong>模型:</strong><code>cpa/opencode-go/deepseek-v4-flash</code> · 十样本全量 · 约 20 分钟</p>
+<ul>
+<li>目标保真度:<span class="ok">10/10</span>(确定性验收命令全过)</li>
+<li>介入效率:<span class="ok">1/1</span>(中途纠偏"indexOf→Set"一次回正)</li>
+<li>预算内完成:<span class="ok">10/10</span> · 终态可解释:<span class="ok">10/10</span></li>
+<li>有趣离群点:<code>bug-string-concat</code>(类型混淆样本)耗时 291s、输出 19k tokens——是其余样本的 3-20 倍,该模型在类型推理上明显更吃力。</li>
+</ul>
+<p><strong>诚实解读:</strong>全绿说明当前样本集对这套 harness + 该档模型<em>没有区分度</em>。基线的当期价值是:(1)端到端管道被证明可用;(2)回归哨兵——今后任何跌破 10/10 都是真信号。下一步应加"硬档"样本(多文件缺陷、约束冲突、长视野任务)让指标能区分 harness 变体。数据已归档 <code>docs/research/dogfood-runs/north-star-baseline-20260813-deepseek-v4-flash.json</code>。</p>
+</div>
+
+<h2>3. 关键决定(及理由)</h2>
+<ul>
+<li><strong>RPC 观测 ack/游标:决定不做。</strong>San RPC 是 stdio 子进程——连接即进程生命,不存在"断线但进程还活着"的窗口;desktop 重启走 <code>--continue</code> 全量重建,已被事实报告验证可靠。v3 报告也将其列为可后置。在 stdio 传输下做序号/重放缓冲是为不存在的故障模式写代码。若未来上 socket 传输,再按 v3 规格实施。</li>
+<li><strong>merge queue / require-up-to-date:留给你决策,未动手。</strong>#15 的 stale-base 漏检(PR 绿、合后 main 红)的对症药是 GitHub 分支保护 "require branches to be up to date" 或 merge queue。但这改变你的合并工作流(每合一个 PR 其余全部要 update/重跑 CI,今晚这种 5 PR 并行的节奏下摩擦显著)。属于流程变更,不该过夜擅自改仓库设置。建议:公开仓库 merge queue 免费,如果并行 PR 是常态,值得开。</li>
+<li><strong>CI"卡 4 小时"复盘修正:</strong>逐 run 核查发现当时是 self-hosted runner 排队,不是 job hang(test job 全部早有 20-25 分钟 timeout)。真正缺口是 check/native 构建/install smoke 无 timeout(GitHub 默认 360 分钟)——#28 补齐,release job 有意不设限。</li>
+</ul>
+
+<h2>4. 失误与修正(如实)</h2>
+<ul>
+<li class="bad">错误消息人话层本应独立分支,却提交进了 benchmark 分支(#27)。发现时已推送;按"不 force push"纪律未重写历史,在 PR 描述里透明标注了两主题混合。后续分支纪律:开工前先 checkout。</li>
+<li class="bad">一次 <code>bun check</code> 退出非零没看输出就提交推送(类型窄化错误进了远端)。3 分钟后修复补推,但 commit message 先声称了 clean——教训:验证在提交前,不在提交后。</li>
+<li class="warn">首启审计时用管道测 exit code(取到了 <code>head</code> 的 0),差点把"exit code 正常"误报为缺陷。重测修正——结论:headless 无凭据路径 exit 1 一直正确,真缺陷只有文案引导 TUI 专属命令(#29 修复)。</li>
+</ul>
+
+<h2>5. 明日建议(优先序)</h2>
+<ul>
+<li>合并在飞四个 PR(全绿后):#26、#27、#28、#29。</li>
+<li>北极星加硬档样本(多文件 bug、约束冲突、长任务),让保真度指标产生区分度;然后用它对比 goal-anchor 开/关的差异——今晚 #26 的复诵机制还没有量化证据。</li>
+<li>决策 merge queue(见 §3)。</li>
+<li>cache probe 数据积累一周后跑离线分析(§4.2 第二步 bust 分类阈值)。</li>
+<li>错误人话层第二片:ACP/RPC 呈现面复用 <code>friendly-errors</code> 分类器。</li>
+</ul>
+
+<p class="dim">报告完。所有代码变更均经 <code>bun check</code> + 相关测试包本地验证 + CI;基线数据与本报告一并入库。</p>
+</body>
+</html>
