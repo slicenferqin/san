@@ -19,6 +19,7 @@ import {
 	getType,
 	getUi,
 	SETTING_TABS,
+	type SettingAudience,
 	type SettingPath,
 	type SettingTab,
 	type SubmenuOption,
@@ -44,6 +45,12 @@ interface BaseSettingDef {
 	 * enums, submenus, and text inputs.
 	 */
 	condition?: () => boolean;
+	/**
+	 * Audience layer; omitted means "daily". Expert settings are hidden from
+	 * the default settings UI and only appear behind the "Show expert
+	 * settings" toggle. Never affects loading or programmatic access.
+	 */
+	audience?: SettingAudience;
 }
 
 export interface BooleanSettingDef extends BaseSettingDef {
@@ -145,7 +152,15 @@ function pathToSettingDef(path: SettingPath): SettingDef | null {
 
 	const schemaType = getType(path);
 	const condition = ui.condition ? CONDITIONS[ui.condition] : undefined;
-	const base = { path, label: ui.label, description: ui.description, tab: ui.tab, group: ui.group, condition };
+	const base = {
+		path,
+		label: ui.label,
+		description: ui.description,
+		tab: ui.tab,
+		group: ui.group,
+		condition,
+		audience: ui.audience,
+	};
 
 	if (schemaType === "boolean") {
 		return { ...base, type: "boolean" };
@@ -208,13 +223,25 @@ export function getAllSettingDefs(): SettingDef[] {
 	return defs;
 }
 
+export interface GetSettingsForTabOptions {
+	/**
+	 * Include settings marked `audience: "expert"`. Defaults to false so the
+	 * settings UI only shows the daily layer; the "Show expert settings"
+	 * toggle re-queries with `includeExpert: true`.
+	 */
+	includeExpert?: boolean;
+}
+
 /**
  * Get settings for a specific tab, ordered by the tab's group layout
  * (TAB_GROUPS). Ungrouped settings sort first; within a group, schema
- * declaration order is preserved.
+ * declaration order is preserved. Expert-audience settings are filtered
+ * out unless `includeExpert` is set.
  */
-export function getSettingsForTab(tab: SettingTab): SettingDef[] {
-	const defs = getAllSettingDefs().filter(def => def.tab === tab);
+export function getSettingsForTab(tab: SettingTab, options?: GetSettingsForTabOptions): SettingDef[] {
+	const defs = getAllSettingDefs().filter(
+		def => def.tab === tab && (options?.includeExpert === true || def.audience !== "expert"),
+	);
 	const order = TAB_GROUPS[tab];
 	const rank = (def: SettingDef): number => {
 		if (!def.group) return -1;
@@ -222,6 +249,11 @@ export function getSettingsForTab(tab: SettingTab): SettingDef[] {
 		return index >= 0 ? index : order.length;
 	};
 	return defs.sort((a, b) => rank(a) - rank(b));
+}
+
+/** Whether a tab has any expert-audience settings (drives the toggle row). */
+export function tabHasExpertSettings(tab: SettingTab): boolean {
+	return getAllSettingDefs().some(def => def.tab === tab && def.audience === "expert");
 }
 
 /** Get a setting definition by path */

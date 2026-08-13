@@ -184,6 +184,13 @@ export interface SlashCommand {
 	argumentHint?: string;
 	/** Whether the command consumes argument text after the command name. False means the full input stays normal prompt text once args are present. */
 	allowArgs?: boolean;
+	/**
+	 * Hidden from browse-style completion: the command never shows up for an
+	 * empty `/` prefix or via fuzzy/description matches, and only surfaces when
+	 * the typed prefix is a name/alias prefix match. Execution by full name is
+	 * unaffected (the dispatcher does not consult this flag).
+	 */
+	unlisted?: boolean;
 	/** Dynamic display-only description for slash-command autocomplete. Must be synchronous and side-effect free. */
 	getAutocompleteDescription?: () => string | undefined;
 	// Function to get argument completions for this command
@@ -276,6 +283,10 @@ function commandMatchesNameOrAlias(cmd: CommandEntry, commandName: string): bool
 	return getCommandAliases(cmd).includes(commandName);
 }
 
+function isUnlistedCommand(cmd: CommandEntry): boolean {
+	return "unlisted" in cmd && cmd.unlisted === true;
+}
+
 export function scoreCommandTextMatch(lowerPrefix: string, lowerTarget: string): number {
 	if (lowerPrefix.length === 0) return 1;
 	if (lowerPrefix === lowerTarget) return 1000;
@@ -292,6 +303,11 @@ function buildSlashCommandCompletions(commands: CommandEntry[], lowerPrefix: str
 		.flatMap(cmd => {
 			const name = getCommandName(cmd);
 			if (!name) return [];
+			// Unlisted commands stay out of the browse list (empty `/` prefix)
+			// and never match through descriptions or fuzzy subsequences —
+			// only a typed name/alias prefix surfaces them.
+			const unlisted = isUnlistedCommand(cmd);
+			if (unlisted && lowerPrefix.length === 0) return [];
 			const hint = "argumentHint" in cmd && cmd.argumentHint ? cmd.argumentHint : undefined;
 			const staticDesc = getStaticCommandDescription(cmd);
 			let fullDescMemo: string | undefined;
@@ -310,11 +326,17 @@ function buildSlashCommandCompletions(commands: CommandEntry[], lowerPrefix: str
 			const candidates: Array<AutocompleteItem & { score: number }> = [];
 
 			const isSkillCommand = name.startsWith("skill:");
-			const nameScore =
-				lowerPrefix.length === 0 && isSkillCommand ? 950 : scoreCommandTextMatch(lowerPrefix, name.toLowerCase());
+			const lowerName = name.toLowerCase();
+			const nameScore = unlisted
+				? lowerName.startsWith(lowerPrefix)
+					? scoreCommandTextMatch(lowerPrefix, lowerName)
+					: 0
+				: lowerPrefix.length === 0 && isSkillCommand
+					? 950
+					: scoreCommandTextMatch(lowerPrefix, lowerName);
 			const lowerDesc = staticDesc.toLowerCase();
 			const descScore =
-				lowerDesc && fuzzyMatch(lowerPrefix, lowerDesc) ? fuzzyScore(lowerPrefix, lowerDesc) * 0.5 : 0;
+				!unlisted && lowerDesc && fuzzyMatch(lowerPrefix, lowerDesc) ? fuzzyScore(lowerPrefix, lowerDesc) * 0.5 : 0;
 			const primaryScore = Math.max(nameScore, descScore);
 			if (primaryScore > 0) {
 				const fullDesc = resolveFullDesc();
@@ -329,7 +351,9 @@ function buildSlashCommandCompletions(commands: CommandEntry[], lowerPrefix: str
 			if (lowerPrefix.length > 0) {
 				for (const alias of getCommandAliases(cmd)) {
 					if (alias === name) continue;
-					const aliasScore = scoreCommandTextMatch(lowerPrefix, alias.toLowerCase());
+					const lowerAlias = alias.toLowerCase();
+					if (unlisted && !lowerAlias.startsWith(lowerPrefix)) continue;
+					const aliasScore = scoreCommandTextMatch(lowerPrefix, lowerAlias);
 					if (aliasScore === 0) continue;
 					const fullDesc = resolveFullDesc();
 					candidates.push({

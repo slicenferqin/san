@@ -33,6 +33,7 @@ import {
 	resolveActiveProjectRegistryPath,
 	resolveOrDefaultProjectRegistryPath,
 } from "../discovery/helpers.js";
+import { type AcceptanceGate, compileSkillGates } from "../execution-control";
 import { shareSession } from "../export/share";
 import { PluginManager } from "../extensibility/plugins";
 import {
@@ -119,6 +120,11 @@ export interface TuiBuiltinSlashCommand extends BuiltinSlashCommand {
 	getArgumentCompletions?: (prefix: string) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
 	getInlineHint?: (argumentText: string) => string | null;
 	getAutocompleteDescription?: () => string | undefined;
+	/**
+	 * TUI autocomplete visibility flag derived from `audience`; expert commands
+	 * stay out of browse-style completion but remain executable by full name.
+	 */
+	unlisted?: boolean;
 }
 
 function refreshStatusLine(ctx: InteractiveModeContext): void {
@@ -265,7 +271,7 @@ async function runConfiguredSanLoop(options: {
 	});
 	// 带 host verifier 的 bound checks 物化为 acceptance gate templates；
 	// runner 在 assignment 产生后按 assignment 绑定 freshness/assignmentId。
-	const acceptanceGates = boundChecks
+	const acceptanceGates: AcceptanceGate[] = boundChecks
 		.filter(check => check.verifier !== undefined)
 		.map(check => ({
 			gateId: check.name,
@@ -283,6 +289,31 @@ async function runConfiguredSanLoop(options: {
 			evidenceRefs: [],
 			required: true,
 		}));
+	// M3 硬层:会话中活跃的证据链 skill 用真实 scope 契约重新编译为 gate
+	// 模板并入。gateId 稳定(gate:skill:<skill>:<spec>),与 check 同名时
+	// check 优先;before-fix 声明编译为 required: false,不拦终态。
+	if (options.settings.get("skills.evidenceGates") === true) {
+		const knownGateIds = new Set(acceptanceGates.map(gate => gate.gateId));
+		const declarations = options.session.skillGateState?.activeSkillDeclarations() ?? [];
+		for (const declaration of declarations) {
+			const compiled = compileSkillGates({
+				skill: declaration,
+				contractRef: {
+					contractId: contractRef.contractId,
+					revision: contractRef.revision,
+					contractHash: contractRef.contractHash,
+					clauseRefs: [...contractRef.clauseRefs],
+				},
+				contractRevision: contractRef.revision,
+				contractHash: contractRef.contractHash,
+			});
+			for (const gate of compiled) {
+				if (knownGateIds.has(gate.gateId)) continue;
+				knownGateIds.add(gate.gateId);
+				acceptanceGates.push(gate);
+			}
+		}
+	}
 	return runSanLoop({
 		sessionManager: options.sessionManager,
 		executionRuntime,
@@ -328,6 +359,7 @@ function createSanLoopModeShortcut(mode: SanLoopMode): SlashCommandSpec {
 		acpDescription: `Run San execution loop in ${mode} mode`,
 		acpInputHint: "<objective>",
 		inlineHint: "<objective>",
+		audience: "expert",
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			const objective = command.args.trim();
@@ -557,6 +589,7 @@ function parseShakeMode(args: string): ShakeMode | { error: string } {
 const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "workflows",
+		audience: "expert",
 		description: "List Managed SOP Workflows and Ad-hoc drafts",
 		acpDescription: "List Managed SOP Workflows and Ad-hoc drafts",
 		handle: handleWorkflowCommand,
@@ -564,6 +597,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "workflow",
+		audience: "expert",
 		description: "Review, approve, run and control explicit Workflows",
 		acpDescription: "Review, approve, run and control explicit Workflows",
 		acpInputHint:
@@ -670,6 +704,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "plan-review",
+		audience: "expert",
 		description: "Re-open the plan review for the latest plan (plan mode only)",
 		getTuiAutocompleteDescription: runtime =>
 			runtime.ctx.planModeEnabled ? "Plan review: available" : "Plan review: plan mode inactive",
@@ -680,6 +715,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "vibe",
+		audience: "expert",
 		description: "Toggle vibe mode (direct persistent fast/good worker sessions; read-only toolset)",
 		inlineHint: "[prompt]",
 		allowArgs: true,
@@ -696,6 +732,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "goal",
+		audience: "expert",
 		description: "Toggle goal mode (persistent autonomous objective for this session)",
 		subcommands: [
 			{ name: "set", description: "Set or replace the goal", usage: "<objective>" },
@@ -720,6 +757,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "guided-goal",
+		audience: "expert",
 		description: "Interview and refine a goal before enabling goal mode",
 		inlineHint: "[rough objective]",
 		allowArgs: true,
@@ -730,6 +768,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "loop",
+		audience: "expert",
 		description:
 			"Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Esc cancels the current iteration; /loop again to disable.",
 		inlineHint: "[count|duration] [prompt]",
@@ -750,6 +789,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "queue",
+		audience: "expert",
 		description: "Queue a message for after the agent yields",
 		inlineHint: "<message>",
 		allowArgs: true,
@@ -759,6 +799,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "subagent",
+		audience: "expert",
 		description: "Set the task-role subagent model for this session",
 		allowArgs: true,
 		subcommands: [
@@ -850,6 +891,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "switch",
+		audience: "expert",
 		description: "Switch model for this session (same as /model)",
 		getTuiAutocompleteDescription: runtime => {
 			const model = runtime.ctx.session.model;
@@ -882,6 +924,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "fast",
+		audience: "expert",
 		description: "Toggle priority service tier (OpenAI service_tier=priority, Anthropic speed=fast)",
 		acpDescription: "Toggle fast mode",
 		acpInputHint: "[on|off|status]",
@@ -1016,6 +1059,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "prewalk",
+		audience: "expert",
 		description: "Switch to a fast/cheap model at the next action (works even without --prewalk)",
 		acpDescription: "Prewalk at the next action",
 		handle: async (_command, runtime) => {
@@ -1042,6 +1086,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "advisor",
+		audience: "expert",
 		description: "Toggle the advisor (a second model that reviews each turn and injects notes)",
 		acpDescription: "Toggle advisor",
 		acpInputHint: "[on|off|status|dump [raw]|configure]",
@@ -1185,6 +1230,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "dump",
+		audience: "expert",
 		description: "Copy session transcript to clipboard (and write LLM request JSON to tmp)",
 		acpDescription: "Return full transcript as plain text, with LLM request JSON path",
 		allowArgs: true,
@@ -1242,6 +1288,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "collab",
+		audience: "expert",
 		description: "Share this session live via a relay",
 		inlineHint: "[start|view|stop|status] [relayUrl]",
 		subcommands: [
@@ -1328,6 +1375,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "join",
+		audience: "expert",
 		description: "Join a shared collab session",
 		inlineHint: "<link>",
 		allowArgs: true,
@@ -1356,6 +1404,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "leave",
+		audience: "expert",
 		description: "Leave the collab session",
 		getTuiAutocompleteDescription: runtime => {
 			if (runtime.ctx.collabHost) return "Leave collab: hosting";
@@ -1379,6 +1428,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "browser",
+		audience: "expert",
 		description: "Toggle browser headless vs visible mode",
 		acpInputHint: "[headless|visible]",
 		subcommands: [
@@ -1528,6 +1578,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "session",
+		audience: "expert",
 		description: "Session management commands",
 		acpDescription: "Show session information",
 		acpInputHint: "info|delete",
@@ -1582,6 +1633,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "jobs",
+		audience: "expert",
 		description: "Show async background jobs status",
 		acpDescription: "Show background jobs",
 		getTuiAutocompleteDescription: runtime => {
@@ -1665,6 +1717,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "stats",
+		audience: "expert",
 		description: "Launch the local stats dashboard",
 		inlineHint: "[--port <port>]",
 		allowArgs: true,
@@ -1684,6 +1737,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "changelog",
+		audience: "expert",
 		description: "Show changelog entries",
 		acpDescription: "Show changelog",
 		acpInputHint: "[full]",
@@ -1717,6 +1771,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "tools",
+		audience: "expert",
 		description: "Show tools currently visible to the agent",
 		acpDescription: "Show available tools",
 		getTuiAutocompleteDescription: runtime => {
@@ -1745,6 +1800,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "context",
+		audience: "expert",
 		description: "Show estimated context usage breakdown",
 		acpDescription: "Show context usage",
 		acpInputHint: "[plan|packet [count]]",
@@ -1811,6 +1867,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "brain",
+		audience: "expert",
 		description: "Inspect San Brain automation, review queue, and active state",
 		acpDescription: "Inspect San Brain automation and state",
 		acpInputHint: "[status|inbox|profile|explain|debug|approve|discard|undo|consolidate|decide|project|rebuild]",
@@ -1956,6 +2013,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	createSanLoopModeShortcut("council"),
 	{
 		name: "san-loop",
+		audience: "expert",
 		description: "Start or inspect San execution loop runs",
 		acpDescription: "Start or inspect San execution loop runs",
 		acpInputHint: "[status [count]] | run [--mode solo|team|council] <objective> | stop [runId]",
@@ -2050,6 +2108,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "extensions",
+		audience: "expert",
 		aliases: ["status"],
 		description: "Open Extension Control Center dashboard",
 		handleTui: (_command, runtime) => {
@@ -2059,6 +2118,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "agents",
+		audience: "expert",
 		description: "Open Agent Control Center dashboard",
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showAgentsDashboard();
@@ -2067,6 +2127,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "branch",
+		audience: "expert",
 		description: "Create a new branch from a previous message",
 		handleTui: (_command, runtime) => {
 			if (settings.get("doubleEscapeAction") === "tree") {
@@ -2079,6 +2140,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "fork",
+		audience: "expert",
 		description: "Create a new fork from a previous message",
 		handleTui: async (_command, runtime) => {
 			runtime.ctx.editor.setText("");
@@ -2087,6 +2149,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "tree",
+		audience: "expert",
 		description: "Navigate session tree (switch branches)",
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showTreeSelector();
@@ -2171,6 +2234,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "mcp",
+		audience: "expert",
 		description: "Manage MCP servers (add, list, remove, test)",
 		acpDescription: "Manage MCP servers",
 		inlineHint: "<subcommand>",
@@ -2210,6 +2274,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "ssh",
+		audience: "expert",
 		description: "Manage SSH hosts (add, list, remove)",
 		acpDescription: "Manage SSH connections",
 		inlineHint: "<subcommand>",
@@ -2241,6 +2306,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "fresh",
+		audience: "expert",
 		description: "Reset provider stream state without changing the local transcript",
 		getTuiAutocompleteDescription: runtime =>
 			runtime.ctx.session.isStreaming ? "Fresh: unavailable while streaming" : "Fresh: ready",
@@ -2262,6 +2328,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "drop",
+		audience: "expert",
 		description: "Delete the current session and start a new one",
 		handleTui: async (_command, runtime) => {
 			runtime.ctx.editor.setText("");
@@ -2318,6 +2385,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "shake",
+		audience: "expert",
 		description: "Drop heavy content from context (tool results, large blocks)",
 		acpDescription: "Shake heavy content out of the conversation context",
 		subcommands: [
@@ -2345,6 +2413,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "handoff",
+		audience: "expert",
 		description: "Hand off session context to a new session",
 		inlineHint: "[focus instructions]",
 		allowArgs: true,
@@ -2381,6 +2450,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "btw",
+		audience: "expert",
 		description: "Ask an ephemeral side question using the current session context",
 		inlineHint: "<question>",
 		allowArgs: true,
@@ -2392,6 +2462,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "tan",
+		audience: "expert",
 		description: "Run a full background agent on tangential work",
 		inlineHint: "<work>",
 		allowArgs: true,
@@ -2403,6 +2474,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "omfg",
+		audience: "expert",
 		description: "Forge a TTSR rule from a complaint to stop a recurring behavior",
 		inlineHint: "<complaint>",
 		allowArgs: true,
@@ -2425,6 +2497,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "debug",
+		audience: "expert",
 		description: "Open debug tools selector",
 		handleTui: async (_command, runtime) => {
 			await runtime.ctx.showDebugSelector();
@@ -2433,6 +2506,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "memory",
+		audience: "expert",
 		description: "Inspect and operate memory maintenance",
 		acpDescription: "Manage memory",
 		acpInputHint: "<subcommand>",
@@ -2505,6 +2579,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "rename",
+		audience: "expert",
 		description: "Rename the current session",
 		inlineHint: "<title>",
 		allowArgs: true,
@@ -2532,6 +2607,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "move",
+		audience: "expert",
 		description: "Move the current session to a different directory",
 		acpDescription: "Move the current session to a different directory",
 		inlineHint: "[<path>]",
@@ -2582,6 +2658,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "marketplace",
+		audience: "expert",
 		description: "Manage marketplace plugin sources and installed plugins",
 		acpDescription: "Manage plugins from marketplaces",
 		acpInputHint: "<subcommand>",
@@ -2961,6 +3038,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "plugins",
+		audience: "expert",
 		description: "View and manage installed plugins",
 		acpDescription: "Manage plugins",
 		acpInputHint: "[list|enable|disable]",
@@ -3091,6 +3169,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "reload-plugins",
+		audience: "expert",
 		description: "Reload all plugins (skills, commands, hooks, tools, agents, MCP)",
 		acpDescription: "Reload all plugins",
 		handle: async (_command, runtime) => {
@@ -3113,6 +3192,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "reload",
+		audience: "expert",
 		description: "Reload configuration, models, plugins, or MCP from disk",
 		acpDescription: "Reload runtime state from disk",
 		allowArgs: true,
@@ -3128,6 +3208,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "force",
+		audience: "expert",
 		description: "Force next turn to use a specific tool",
 		aliases: ["force:"],
 		inlineHint: "<tool-name> [prompt]",
@@ -3177,6 +3258,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "pause",
+		audience: "expert",
 		description: "Freeze all agents (main, subagents, advisor) until resumed",
 		handleTui: async (_command, runtime) => {
 			runtime.ctx.editor.setText("");
@@ -3372,6 +3454,7 @@ export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BU
 		aliases: command.aliases,
 		allowArgs: command.allowArgs === true,
 		description: command.description,
+		audience: command.audience,
 		subcommands: command.subcommands,
 		inlineHint: command.inlineHint,
 		getTuiAutocompleteDescription: command.getTuiAutocompleteDescription,
@@ -3383,6 +3466,7 @@ function materializeTuiBuiltinSlashCommand(
 	runtime?: TuiSlashCommandRuntime,
 ): TuiBuiltinSlashCommand {
 	const materialized: TuiBuiltinSlashCommand = { ...cmd };
+	if (cmd.audience === "expert") materialized.unlisted = true;
 	if (cmd.subcommands) {
 		materialized.getArgumentCompletions = buildArgumentCompletions(cmd.subcommands);
 		materialized.getInlineHint = buildSubcommandInlineHint(cmd.subcommands);

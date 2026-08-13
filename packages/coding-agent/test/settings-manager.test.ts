@@ -115,6 +115,31 @@ describe("Settings", () => {
 		});
 	});
 
+	describe("unknown key tolerance", () => {
+		it("loads configs containing unknown keys without failing and keeps known values readable", async () => {
+			// Old configs may carry keys that a newer schema no longer knows
+			// (or that a future round demotes to constants). Loading must never
+			// fail because of them — M1 plan §3.3 migration safety.
+			await writeSettings({
+				setupVersion: 3,
+				totallyUnknownTopLevel: "whatever",
+				compaction: { enabled: false, retiredKnob: 42 },
+				retired: { nested: { key: true } },
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.get("setupVersion")).toBe(3);
+			expect(settings.get("compaction.enabled")).toBe(false);
+
+			// Writing through the live instance keeps working with unknown keys
+			// present in the underlying file.
+			settings.set("setupVersion", 4);
+			await settings.flush();
+			expect((await readSettings()).setupVersion).toBe(4);
+		});
+	});
+
 	describe("defaults", () => {
 		it("keeps eight inline images live by default", async () => {
 			const settings = await Settings.init({ cwd: projectDir, agentDir });

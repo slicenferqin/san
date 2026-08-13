@@ -114,6 +114,36 @@ export type AcceptanceVerifier =
 	| ArtifactAcceptanceVerifier
 	| ReviewAcceptanceVerifier
 	| ExternalAcceptanceVerifier;
+
+/**
+ * skill 声明证据的阶段：
+ * - `before-fix`：开始修改代码之前必须存在（如修 bug 前的失败复现）。
+ * - `before-done`：报告完成之前必须存在（如同路径复验通过）。
+ */
+export type SkillEvidencePhase = "before-fix" | "before-done";
+
+/**
+ * SKILL.md frontmatter `evidence` 段的一环声明。
+ *
+ * M2 阶段为纯声明，唯一消费者是 skill 注入模板（软引导）；M3 会将其编译为
+ * {@link AcceptanceGate}（硬约束），因此 `kind` 直接复用
+ * {@link EvidenceVerifierKind}，`expect` 与 {@link EvidenceReceiptOutcome}
+ * 的规范子集对齐。
+ */
+export interface SkillEvidenceSpec {
+	/** 链内唯一 id，如 "repro"。 */
+	readonly id: string;
+	/** 该证据应当存在的阶段。 */
+	readonly phase: SkillEvidencePhase;
+	/** 复用现有六种 verifier kind，M3 编译零转换成本。 */
+	readonly kind: EvidenceVerifierKind;
+	/** 此阶段期望的 outcome（修 bug 先要"失败"的复现）。 */
+	readonly expect: "pass" | "fail";
+	/** 引用链内另一 spec 的 id：必须是同一命令/路径（防"换个命令绿了"）。 */
+	readonly sameAs?: string;
+	/** 人类可读说明。 */
+	readonly description: string;
+}
 export type EvidenceReceiptOutcome = "pass" | "fail" | "passed" | "failed";
 
 /** Common host-owned binding carried by every receipt that can satisfy a gate. */

@@ -338,6 +338,7 @@ describe("system prompt tool inventory", () => {
 
 		const overridden = await buildSystemPrompt({
 			customPrompt: "extension-owned prompt",
+			skills: [],
 			xdevTools,
 			xdevDocs: "should not be rendered",
 		});

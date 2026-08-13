@@ -1,0 +1,859 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M1 配置减法 · 第一轮裁决报告(2026-08-12)</title>
+<style>
+:root { --fg: #1a1f27; --muted: #5b6472; --line: #dde2e9; --accent: #0b62d6; --bg-soft: #f6f8fb; --warn-bg: #fff7e8; --warn-line: #e8c98a; }
+* { box-sizing: border-box; }
+body { margin: 0 auto; max-width: 1080px; padding: 32px 24px 96px; color: var(--fg); font: 15px/1.7 -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; }
+h1 { font-size: 26px; line-height: 1.35; margin: 0 0 8px; }
+h2 { font-size: 20px; margin: 40px 0 12px; padding-top: 16px; border-top: 1px solid var(--line); }
+h3 { font-size: 17px; margin: 24px 0 8px; }
+h4 { font-size: 15px; margin: 22px 0 4px; color: var(--accent); }
+h4 .count { color: var(--muted); font-weight: normal; font-size: 13px; }
+p { margin: 8px 0; }
+p.reason { color: var(--muted); font-size: 13.5px; margin: 2px 0 6px; }
+code { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font: 12.5px/1.5 "SF Mono", Menlo, Consolas, monospace; word-break: break-all; }
+table { border-collapse: collapse; width: 100%; margin: 8px 0 16px; font-size: 13.5px; }
+th, td { border: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top; }
+th { background: var(--bg-soft); font-weight: 600; white-space: nowrap; }
+tr:nth-child(even) td { background: #fbfcfe; }
+.cards { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
+.card { flex: 1 1 150px; border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; background: var(--bg-soft); }
+.card .num { font-size: 24px; font-weight: 700; color: var(--accent); }
+.card .lbl { font-size: 12.5px; color: var(--muted); }
+.note { background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 8px; padding: 10px 14px; margin: 12px 0; font-size: 13.5px; }
+ul { margin: 8px 0; padding-left: 22px; }
+li { margin: 4px 0; }
+.meta { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+
+<h1>M1 配置减法 · 第一轮裁决报告</h1>
+<p class="meta">日期:2026-08-12 · 分支:<code>work/m1-config-subtraction-20260812</code> · 依据:<code>docs/research/san-novice-first-harness-plan-20260812.html</code> §3 · 审计脚本:<code>packages/coding-agent/scripts/audit-settings.ts</code></p>
+
+<div class="note"><strong>本轮只做标记。</strong>未删除任何键、未把任何键降级为常量、未改变任何默认值。所有 expert 项仍可通过设置面板底部的 “Show expert settings” 开关、全局设置搜索、以及命令全名调用到达。本报告供仓库所有者复核,复核结论决定第二轮“降常量”名单。</div>
+
+<div class="cards">
+<div class="card"><div class="num">503</div><div class="lbl">schema 叶子键总数</div></div>
+<div class="card"><div class="num">283</div><div class="lbl">接入设置面板的键</div></div>
+<div class="card"><div class="num">8</div><div class="lbl">设置 daily 层(目标 ≤ 30)</div></div>
+<div class="card"><div class="num">275</div><div class="lbl">设置 expert 层</div></div>
+<div class="card"><div class="num">73</div><div class="lbl">顶层内置命令</div></div>
+<div class="card"><div class="num">20</div><div class="lbl">命令 daily 层</div></div>
+<div class="card"><div class="num">53</div><div class="lbl">命令 expert 层</div></div>
+</div>
+
+<h2>1. 统计口径</h2>
+<ul>
+<li><strong>设置</strong>:<code>settings-schema.ts</code> 共 503 个叶子键;其中 303 个带 <code>ui</code> 元数据,283 个实际接入设置面板(<code>settings-defs.ts</code> 的 <code>getAllSettingDefs()</code>)。<strong>裁决作用于设置面板层</strong>——不在面板中的键本轮不受 audience 标记影响(见 §5)。</li>
+<li><strong>命令</strong>:<code>builtin-registry.ts</code> 顶层注册条目 73 个(含 3 个动态生成的 San loop 快捷命令)。仓库中约 210 处 <code>name:</code> 字段的其余部分是各命令的<em>子命令</em>(如 <code>/workflow approve</code>),子命令跟随父命令的 audience,不单独裁决。</li>
+<li><strong>缺省语义</strong>:未标记 audience 的定义一律视为 daily,存量行为完全不变;标记只影响 UI 可见性,不影响加载、校验与程序化读写。</li>
+</ul>
+
+<h2>2. 三问裁决标准(规划文档 §3.2)</h2>
+<ul>
+<li><strong>Q1</strong>:新用户第一周会需要动它吗?</li>
+<li><strong>Q2</strong>:不理解内部实现的人能安全地改它吗?</li>
+<li><strong>Q3</strong>:默认值是否已经对绝大多数人足够好?</li>
+</ul>
+<p>任一问指向“专家调参”即标 <code>audience: "expert"</code>;“到达目的地的前提”(凭据、模型选择、主题、无障碍)无条件留 daily。</p>
+
+<h2>3. daily 层设置(8 项,目标 ≤ 30 ✅)</h2>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>默认值</th><th>保留理由</th></tr></thead>
+<tbody>
+<tr><td><code>autoResume</code></td><td>Auto Resume</td><td><code>false</code></td><td>是否自动恢复上次会话——新手第一周就会形成明确偏好的行为开关。</td></tr>
+<tr><td><code>theme.dark</code></td><td>Dark Theme</td><td><code>&quot;titanium&quot;</code></td><td>到达目的地的前提:视觉可用性。第一周就会想换主题;改错零风险,随时可改回。</td></tr>
+<tr><td><code>theme.light</code></td><td>Light Theme</td><td><code>&quot;light&quot;</code></td><td>同上,浅色终端用户的对应项。</td></tr>
+<tr><td><code>colorBlindMode</code></td><td>Color-Blind Mode</td><td><code>false</code></td><td>无障碍前提:色觉障碍用户不开启则 diff/状态色不可辨。必须一眼可达。</td></tr>
+<tr><td><code>statusLine.preset</code></td><td>Status Line Preset</td><td><code>&quot;default&quot;</code></td><td>状态栏一键预设(off/minimal/full)。安全、可逆、即时反馈;自定义模板留在 expert。</td></tr>
+<tr><td><code>defaultThinkingLevel</code></td><td>Thinking Level</td><td><code>&quot;high&quot;</code></td><td>思考等级是日常最高频的成本/质量权衡,等同于模型选择的一部分。</td></tr>
+<tr><td><code>completion.notify</code></td><td>Completion Notification</td><td><code>&quot;on&quot;</code></td><td>任务完成通知总开关。日常偏好,改错零风险。</td></tr>
+<tr><td><code>tools.approvalMode</code></td><td>Tool Approval</td><td><code>&quot;yolo&quot;</code></td><td>工具审批模式(每次询问/自动允许等)是首周必然遭遇的核心安全选择,必须可发现、可调整。</td></tr>
+</tbody>
+</table>
+<p class="meta">注:凭据与模型选择不在设置面板内——它们分别走 <code>/login</code>、<code>/connect</code>、<code>/setup</code>、<code>/model</code> 命令(全部保留在 daily 命令层),因此不占用上表名额。</p>
+
+<h2>4. expert 层设置(275 项,按 tab / 分组)</h2>
+<p>每组给出组级三问理由摘要;组内所有键共享该理由,默认值逐键列出以便复核。</p>
+
+<h4>appearance / Display <span class="count">(14 项)</span></h4>
+<p class="reason">渲染细节微调(行距、时间戳、加载动画、消息 gutter 等)。Q1 否——不影响任务达成;Q2 是——但收益极低;Q3 默认值已按可读性调优。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>terminal.showProgress</code></td><td>Native Terminal Progress</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>tui.textSizing</code></td><td>Large Headings (Kitty)</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>tui.renderMermaid</code></td><td>Render Mermaid Diagrams</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>tui.hyperlinks</code></td><td>Terminal Hyperlinks</td><td>enum</td><td><code>&quot;auto&quot;</code></td></tr>
+<tr><td><code>tui.tight</code></td><td>Tight Layout</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>tui.scrollbackRebuild</code></td><td>Rewrite Scrollback</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>display.shimmer</code></td><td>Shimmer</td><td>enum</td><td><code>&quot;classic&quot;</code></td></tr>
+<tr><td><code>display.smoothStreaming</code></td><td>Smooth Streaming</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>display.showTokenUsage</code></td><td>Show Token Usage</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>display.cacheMissMarker</code></td><td>Cache Miss Marker</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>display.collapseCompacted</code></td><td>Collapse Compacted History</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>showHardwareCursor</code></td><td>Show Hardware Cursor</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>tui.imeSafeCursor</code></td><td>IME-Safe Prompt Layout</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>task.showResolvedModelBadge</code></td><td>Show Resolved Model Badge</td><td>boolean</td><td><code>false</code></td></tr>
+</tbody>
+</table>
+<h4>appearance / Images <span class="count">(3 项)</span></h4>
+<p class="reason">终端内联图片的协议与尺寸细节,依赖终端能力自动检测。Q2 否——误改会导致图片静默不显示;Q3 自动检测已覆盖主流终端。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>terminal.showImages</code></td><td>Show Inline Images</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>images.autoResize</code></td><td>Auto-Resize Images</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>images.blockImages</code></td><td>Block Images</td><td>boolean</td><td><code>false</code></td></tr>
+</tbody>
+</table>
+<h4>appearance / Status Line <span class="count">(5 项)</span></h4>
+<p class="reason">状态栏自定义格式与刷新细节。daily 层保留了一键 preset;自定义模板需要理解占位符体系(Q2 否)。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>statusLine.separator</code></td><td>Status Line Separator</td><td>enum</td><td><code>&quot;powerline-thin&quot;</code></td></tr>
+<tr><td><code>statusLine.sessionAccent</code></td><td>Session Accent</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>statusLine.transparent</code></td><td>Transparent Status Line</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>statusLine.compactThinkingLevel</code></td><td>Compact Thinking Level</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>statusLine.showHookStatus</code></td><td>Show Hook Status</td><td>boolean</td><td><code>true</code></td></tr>
+</tbody>
+</table>
+<h4>appearance / Theme <span class="count">(1 项)</span></h4>
+<p class="reason">主题系统的高级行为(跟随终端自动切换)。daily 层已保留深/浅主题与色盲模式的直接选择。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>symbolPreset</code></td><td>Symbol Preset</td><td>enum</td><td><code>&quot;unicode&quot;</code></td></tr>
+</tbody>
+</table>
+<h4>model / Advisor <span class="count">(4 项)</span></h4>
+<p class="reason">顾问模型(第二模型审阅)配置。高级特性,产生额外成本,应显式选择加入。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>advisor.enabled</code></td><td>Enable Advisor</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>advisor.subagents</code></td><td>Advisor for Subagents</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>advisor.syncBacklog</code></td><td>Advisor Sync Backlog</td><td>enum</td><td><code>&quot;off&quot;</code></td></tr>
+<tr><td><code>advisor.immuneTurns</code></td><td>Advisor Immune Turns</td><td>number</td><td><code>3</code></td></tr>
+</tbody>
+</table>
+<h4>model / Prewalk <span class="count">(1 项)</span></h4>
+<p class="reason">prewalk 快速模型切换。高级成本优化,需要理解模型切换语义。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>prewalk.enabled</code></td><td>Enable Prewalk</td><td>boolean</td><td><code>false</code></td></tr>
+</tbody>
+</table>
+<h4>model / Prompt <span class="count">(5 项)</span></h4>
+<p class="reason">系统提示注入细节(模型名注入、自定义指令拼接)。Q2 否——改动影响所有会话的提示构造。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>modelRoleStorage</code></td><td>Model Role Storage</td><td>enum</td><td><code>&quot;global&quot;</code></td></tr>
+<tr><td><code>inlineToolDescriptors</code></td><td>Inline Tool Descriptors</td><td>enum</td><td><code>&quot;auto&quot;</code></td></tr>
+<tr><td><code>includeModelInPrompt</code></td><td>Include Model in Prompt</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>includeWorkspaceTree</code></td><td>Include Workspace Tree</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>personality</code></td><td>Personality</td><td>enum</td><td><code>&quot;default&quot;</code></td></tr>
+</tbody>
+</table>
+<h4>model / Retry &amp; Fallback <span class="count">(5 项)</span></h4>
+<p class="reason">重试退避与回退链。Q2 否——需要理解 provider 错误语义;Q3 默认链按可用性调优。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>retry.maxRetries</code></td><td>Retry Attempts</td><td>number</td><td><code>10</code></td></tr>
+<tr><td><code>retry.modelFallback</code></td><td>Retry Model Fallback</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>retry.fallbackChains</code></td><td>Retry Fallback Chains</td><td>record</td><td><code>{}</code></td></tr>
+<tr><td><code>retry.fallbackRevertPolicy</code></td><td>Fallback Revert Policy</td><td>enum</td><td><code>&quot;cooldown-expiry&quot;</code></td></tr>
+<tr><td><code>providers.anthropic.serverSideFallback</code></td><td>Anthropic Server-Side Fallback (Fable 5)</td><td>boolean</td><td><code>false</code></td></tr>
+</tbody>
+</table>
+<h4>model / Sampling <span class="count">(12 项)</span></h4>
+<p class="reason">采样参数(temperature、topP、惩罚项等)。Q2 否——误改直接劣化生成质量且难以归因;Q3 默认跟随各模型推荐值。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>temperature</code></td><td>Temperature</td><td>number</td><td><code>-1</code></td></tr>
+<tr><td><code>topP</code></td><td>Top P</td><td>number</td><td><code>-1</code></td></tr>
+<tr><td><code>topK</code></td><td>Top K</td><td>number</td><td><code>-1</code></td></tr>
+<tr><td><code>minP</code></td><td>Min P</td><td>number</td><td><code>-1</code></td></tr>
+<tr><td><code>presencePenalty</code></td><td>Presence Penalty</td><td>number</td><td><code>-1</code></td></tr>
+<tr><td><code>repetitionPenalty</code></td><td>Repetition Penalty</td><td>number</td><td><code>-1</code></td></tr>
+<tr><td><code>textVerbosity</code></td><td>Text Verbosity</td><td>enum</td><td><code>&quot;medium&quot;</code></td></tr>
+<tr><td><code>tier.openai</code></td><td>Service Tier — OpenAI</td><td>enum</td><td><code>&quot;none&quot;</code></td></tr>
+<tr><td><code>tier.anthropic</code></td><td>Service Tier — Anthropic</td><td>enum</td><td><code>&quot;none&quot;</code></td></tr>
+<tr><td><code>tier.google</code></td><td>Service Tier — Google</td><td>enum</td><td><code>&quot;none&quot;</code></td></tr>
+<tr><td><code>tier.subagent</code></td><td>Service Tier — Subagent</td><td>enum</td><td><code>&quot;inherit&quot;</code></td></tr>
+<tr><td><code>tier.advisor</code></td><td>Service Tier — Advisor</td><td>enum</td><td><code>&quot;none&quot;</code></td></tr>
+</tbody>
+</table>
+<h4>model / Thinking <span class="count">(9 项)</span></h4>
+<p class="reason">思考 token 预算与展示细节。daily 层已保留一键思考等级 defaultThinkingLevel。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>hideThinkingBlock</code></td><td>Hide Thinking Blocks</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>proseOnlyThinking</code></td><td>Prose Only Thinking</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>omitThinking</code></td><td>Omit Thinking summaries</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>model.loopGuard.enabled</code></td><td>Loop Guard</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>model.loopGuard.checkAssistantContent</code></td><td>Loop Guard Scan Prose</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>model.loopGuard.toolCallReminder</code></td><td>Loop Guard Tool-Call Reminder</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>model.toolCallLoopGuard.enabled</code></td><td>Tool-Call Loop Guard</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>model.toolProgressGuard.enabled</code></td><td>Tool Progress Guard</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>providers.autoThinkingModel</code></td><td>Auto Thinking Model</td><td>enum</td><td><code>&quot;online&quot;</code></td></tr>
+</tbody>
+</table>
+<h4>model / Vision <span class="count">(1 项)</span></h4>
+<p class="reason">视觉输入细节。默认行为已按模型能力自动适配。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>images.describeForTextModels</code></td><td>Describe Images for Text Models</td><td>boolean</td><td><code>true</code></td></tr>
+</tbody>
+</table>
+<h4>interaction / Agent <span class="count">(1 项)</span></h4>
+<p class="reason">代理消息路由细节。内部机制。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>features.unexpectedStopDetection</code></td><td>Detect unexpected stops</td><td>boolean</td><td><code>false</code></td></tr>
+</tbody>
+</table>
+<h4>interaction / Approvals <span class="count">(1 项)</span></h4>
+<p class="reason">审批的细粒度行为(记忆策略等)。daily 层已保留核心的审批模式选择。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>tools.approval</code></td><td>Tool Approval Policies</td><td>record</td><td><code>{}</code></td></tr>
+</tbody>
+</table>
+<h4>interaction / Collab <span class="count">(6 项)</span></h4>
+<p class="reason">多人协作会话(relay 共享)配置。实验性功能,依赖外部 relay 服务。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>collab.relayUrl</code></td><td>Relay URL</td><td>string</td><td><code>&quot;wss://my.omp.sh&quot;</code></td></tr>
+<tr><td><code>collab.webUrl</code></td><td>Web UI URL</td><td>string</td><td><code>&quot;&quot;</code></td></tr>
+<tr><td><code>collab.displayName</code></td><td>Display Name</td><td>string</td><td><code>&quot;&quot;</code></td></tr>
+<tr><td><code>share.serverUrl</code></td><td>Share Server</td><td>string</td><td><code>&quot;https://my.omp.sh/s&quot;</code></td></tr>
+<tr><td><code>share.store</code></td><td>Share Store</td><td>enum</td><td><code>&quot;blob&quot;</code></td></tr>
+<tr><td><code>share.redactSecrets</code></td><td>Share Secret Redaction</td><td>boolean</td><td><code>true</code></td></tr>
+</tbody>
+</table>
+<h4>interaction / Git <span class="count">(1 项)</span></h4>
+<p class="reason">git 相关的交互开关。Q1 否——默认行为对新手安全。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>git.enabled</code></td><td>Enable Git Integration</td><td>boolean</td><td><code>true</code></td></tr>
+</tbody>
+</table>
+<h4>interaction / Input <span class="count">(9 项)</span></h4>
+<p class="reason">输入法、粘贴、多行编辑等输入管线微调。Q3 默认值兼容主流终端;误改会破坏输入体验且难以自诊断。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>steeringMode</code></td><td>Steering Mode</td><td>enum</td><td><code>&quot;one-at-a-time&quot;</code></td></tr>
+<tr><td><code>followUpMode</code></td><td>Follow-Up Mode</td><td>enum</td><td><code>&quot;one-at-a-time&quot;</code></td></tr>
+<tr><td><code>interruptMode</code></td><td>Interrupt Mode</td><td>enum</td><td><code>&quot;immediate&quot;</code></td></tr>
+<tr><td><code>loop.mode</code></td><td>Loop Mode</td><td>enum</td><td><code>&quot;prompt&quot;</code></td></tr>
+<tr><td><code>doubleEscapeAction</code></td><td>Double-Escape Action</td><td>enum</td><td><code>&quot;tree&quot;</code></td></tr>
+<tr><td><code>treeFilterMode</code></td><td>Session Tree Filter</td><td>enum</td><td><code>&quot;default&quot;</code></td></tr>
+<tr><td><code>autocompleteMaxVisible</code></td><td>Autocomplete Items</td><td>number</td><td><code>5</code></td></tr>
+<tr><td><code>emojiAutocomplete</code></td><td>Emoji Autocomplete</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>paste.largeMenuThreshold</code></td><td>Large Paste Menu</td><td>number</td><td><code>100</code></td></tr>
+</tbody>
+</table>
+<h4>interaction / Magic Keywords <span class="count">(4 项)</span></h4>
+<p class="reason">魔法关键字触发(ultrathink 等)的开关。高级用法,新手无需知晓即可正常使用。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>magicKeywords.enabled</code></td><td>Magic Keywords</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>magicKeywords.ultrathink</code></td><td>Ultrathink Keyword</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>magicKeywords.orchestrate</code></td><td>Orchestrate Keyword</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>magicKeywords.workflow</code></td><td>Workflow Keyword</td><td>boolean</td><td><code>true</code></td></tr>
+</tbody>
+</table>
+<h4>interaction / Notifications <span class="count">(4 项)</span></h4>
+<p class="reason">通知渠道细节(声音、系统通知的细分开关)。daily 层保留了总开关 completion.notify。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>ask.timeout</code></td><td>Ask Timeout</td><td>number</td><td><code>0</code></td></tr>
+<tr><td><code>ask.notify</code></td><td>Ask Notification</td><td>enum</td><td><code>&quot;on&quot;</code></td></tr>
+<tr><td><code>recap.enabled</code></td><td>Idle Recap</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>recap.idleSeconds</code></td><td>Idle Recap Delay</td><td>number</td><td><code>240</code></td></tr>
+</tbody>
+</table>
+<h4>interaction / Power (macOS) <span class="count">(1 项)</span></h4>
+<p class="reason">macOS 电源管理(阻止睡眠)。特定场景的系统级行为,Q1 否。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>power.sleepPrevention</code></td><td>Sleep Prevention</td><td>enum</td><td><code>&quot;idle&quot;</code></td></tr>
+</tbody>
+</table>
+<h4>interaction / Startup &amp; Updates <span class="count">(6 项)</span></h4>
+<p class="reason">启动画面、更新检查、遥测等启动期行为。Q1 否——默认行为不打扰。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>startup.quiet</code></td><td>Quiet Startup</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>startup.showSplash</code></td><td>Show Startup Splash</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>startup.setupWizard</code></td><td>Setup Wizard</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>startup.checkUpdate</code></td><td>Check for Updates</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>marketplace.autoUpdate</code></td><td>Marketplace Auto-Update</td><td>enum</td><td><code>&quot;notify&quot;</code></td></tr>
+<tr><td><code>collapseChangelog</code></td><td>Collapse Changelog</td><td>boolean</td><td><code>false</code></td></tr>
+</tbody>
+</table>
+<h4>context / Compaction <span class="count">(13 项)</span></h4>
+<p class="reason">上下文压缩的阈值、保留窗口与策略选择。Q2 否——需要理解 token 预算与压缩管线,误改会造成上下文丢失或成本上升;Q3 默认策略按内部基准调优。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>compaction.enabled</code></td><td>Auto-Compact</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>compaction.midTurnEnabled</code></td><td>Mid-Turn Compaction</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>compaction.strategy</code></td><td>Compaction Strategy</td><td>enum</td><td><code>&quot;snapcompact&quot;</code></td></tr>
+<tr><td><code>compaction.thresholdPercent</code></td><td>Compaction Threshold</td><td>number</td><td><code>-1</code></td></tr>
+<tr><td><code>compaction.thresholdTokens</code></td><td>Compaction Token Limit</td><td>number</td><td><code>-1</code></td></tr>
+<tr><td><code>compaction.handoffSaveToDisk</code></td><td>Save Handoff Docs</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>compaction.remoteEnabled</code></td><td>Remote Compaction</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>compaction.remoteStreamingV2Enabled</code></td><td>Remote Compaction V2</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>compaction.idleEnabled</code></td><td>Idle Compaction</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>compaction.idleThresholdTokens</code></td><td>Idle Compaction Threshold</td><td>number</td><td><code>200000</code></td></tr>
+<tr><td><code>compaction.idleTimeoutSeconds</code></td><td>Idle Compaction Delay</td><td>number</td><td><code>300</code></td></tr>
+<tr><td><code>compaction.supersedeReads</code></td><td>Supersede Stale Reads</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>compaction.dropUseless</code></td><td>Elide Uneventful Results</td><td>boolean</td><td><code>true</code></td></tr>
+</tbody>
+</table>
+<h4>context / Experimental <span class="count">(8 项)</span></h4>
+<p class="reason">实验性上下文特性(snapcompact 形状、TTSR 试验开关等),尚未稳定,不应向新用户暴露。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>snapcompact.systemPrompt</code></td><td>Snapcompact System Prompt</td><td>enum</td><td><code>&quot;none&quot;</code></td></tr>
+<tr><td><code>snapcompact.toolResults</code></td><td>Snapcompact Tool Results</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>tools.format</code></td><td>Tool Calling Mode</td><td>enum</td><td><code>&quot;auto&quot;</code></td></tr>
+<tr><td><code>snapcompact.shape</code></td><td>Snapcompact Shape</td><td>enum</td><td><code>&quot;auto&quot;</code></td></tr>
+<tr><td><code>san.contextSteady.enabled</code></td><td>Context Steady State</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>san.responseDocuments.mode</code></td><td>Response Documents</td><td>enum</td><td><code>&quot;off&quot;</code></td></tr>
+<tr><td><code>san.brain.enabled</code></td><td>San Brain</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>san.executionLoop.enabled</code></td><td>Execution Loop</td><td>boolean</td><td><code>false</code></td></tr>
+</tbody>
+</table>
+<h4>context / General <span class="count">(2 项)</span></h4>
+<p class="reason">上下文预算与注入的全局细节。Q1 否;Q2 否——与压缩、规则注入耦合。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>contextPromotion.enabled</code></td><td>Auto-Promote Context</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>branchSummary.enabled</code></td><td>Branch Summaries</td><td>boolean</td><td><code>false</code></td></tr>
+</tbody>
+</table>
+<h4>context / Rules (TTSR) <span class="count">(6 项)</span></h4>
+<p class="reason">TTSR 规则引擎调参(触发窗口、冷却、上限)。规则本身用 /omfg 管理,引擎参数属于内部机制。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>ttsr.enabled</code></td><td>TTSR</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>ttsr.contextMode</code></td><td>TTSR Context Mode</td><td>enum</td><td><code>&quot;discard&quot;</code></td></tr>
+<tr><td><code>ttsr.interruptMode</code></td><td>TTSR Interrupt Mode</td><td>enum</td><td><code>&quot;always&quot;</code></td></tr>
+<tr><td><code>ttsr.repeatMode</code></td><td>TTSR Repeat Mode</td><td>enum</td><td><code>&quot;once&quot;</code></td></tr>
+<tr><td><code>ttsr.repeatGap</code></td><td>TTSR Repeat Gap</td><td>number</td><td><code>10</code></td></tr>
+<tr><td><code>ttsr.builtinRules</code></td><td>Built-in Rules</td><td>boolean</td><td><code>true</code></td></tr>
+</tbody>
+</table>
+<h4>memory / Auto-Learn <span class="count">(2 项)</span></h4>
+<p class="reason">实验性自动学习(默认关)。启用前提是理解记忆子系统。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>autolearn.enabled</code></td><td>Auto-Learn (experimental)</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>autolearn.autoContinue</code></td><td>Auto-run capture at stop</td><td>boolean</td><td><code>false</code></td></tr>
+</tbody>
+</table>
+<h4>memory / General <span class="count">(2 项)</span></h4>
+<p class="reason">记忆后端选择与专用模型。整个记忆子系统是实验性可选功能,默认 off,新用户零配置可用不依赖它。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>memory.backend</code></td><td>Memory Backend</td><td>enum</td><td><code>&quot;off&quot;</code></td></tr>
+<tr><td><code>providers.memoryModel</code></td><td>Memory Model</td><td>enum</td><td><code>&quot;online&quot;</code></td></tr>
+</tbody>
+</table>
+<h4>memory / Hindsight <span class="count">(8 项)</span></h4>
+<p class="reason">Hindsight 后端接线(API 地址、bank、召回策略)。依赖外部服务部署,Q2 否。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>hindsight.apiUrl</code></td><td>Hindsight API URL</td><td>string</td><td><code>&quot;http://localhost:8888&quot;</code></td></tr>
+<tr><td><code>hindsight.bankId</code></td><td>Hindsight Bank ID</td><td>string</td><td><code>—</code></td></tr>
+<tr><td><code>hindsight.scoping</code></td><td>Hindsight Scoping</td><td>enum</td><td><code>&quot;per-project-tagged&quot;</code></td></tr>
+<tr><td><code>hindsight.autoRecall</code></td><td>Hindsight Auto Recall</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>hindsight.autoRetain</code></td><td>Hindsight Auto Retain</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>hindsight.retainMode</code></td><td>Hindsight Retain Mode</td><td>enum</td><td><code>&quot;full-session&quot;</code></td></tr>
+<tr><td><code>hindsight.mentalModelsEnabled</code></td><td>Hindsight Mental Models</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>hindsight.mentalModelAutoSeed</code></td><td>Hindsight Mental Model Auto-Seed</td><td>boolean</td><td><code>true</code></td></tr>
+</tbody>
+</table>
+<h4>memory / Mnemopi <span class="count">(17 项)</span></h4>
+<p class="reason">Mnemopi 后端接线(嵌入模型、LLM 模式、数据库路径)。依赖外部服务与嵌入配置,Q2 否。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>mnemopi.dbPath</code></td><td>Mnemopi DB Path</td><td>string</td><td><code>—</code></td></tr>
+<tr><td><code>mnemopi.bank</code></td><td>Mnemopi Bank</td><td>string</td><td><code>—</code></td></tr>
+<tr><td><code>mnemopi.scoping</code></td><td>Mnemopi Scoping</td><td>enum</td><td><code>&quot;per-project&quot;</code></td></tr>
+<tr><td><code>mnemopi.embeddingVariant</code></td><td>Embedding variant</td><td>enum</td><td><code>&quot;en&quot;</code></td></tr>
+<tr><td><code>mnemopi.autoRecall</code></td><td>Mnemopi Auto Recall</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>mnemopi.autoRetain</code></td><td>Mnemopi Auto Retain</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>mnemopi.polyphonicRecall</code></td><td>Mnemopi Polyphonic Recall</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>mnemopi.enhancedRecall</code></td><td>Mnemopi Enhanced Recall</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>mnemopi.proactiveLinking</code></td><td>Mnemopi Proactive Linking</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>mnemopi.noEmbeddings</code></td><td>Mnemopi Disable Embeddings</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>mnemopi.embeddingModel</code></td><td>Mnemopi Embedding Model</td><td>string</td><td><code>—</code></td></tr>
+<tr><td><code>mnemopi.embeddingApiUrl</code></td><td>Mnemopi Embedding API URL</td><td>string</td><td><code>—</code></td></tr>
+<tr><td><code>mnemopi.embeddingApiKey</code></td><td>Mnemopi Embedding API Key</td><td>string</td><td><code>—</code></td></tr>
+<tr><td><code>mnemopi.llmMode</code></td><td>Mnemopi LLM Mode</td><td>enum</td><td><code>&quot;smol&quot;</code></td></tr>
+<tr><td><code>mnemopi.llmBaseUrl</code></td><td>Mnemopi LLM Base URL</td><td>string</td><td><code>—</code></td></tr>
+<tr><td><code>mnemopi.llmApiKey</code></td><td>Mnemopi LLM API Key</td><td>string</td><td><code>—</code></td></tr>
+<tr><td><code>mnemopi.llmModel</code></td><td>Mnemopi LLM Model</td><td>string</td><td><code>—</code></td></tr>
+</tbody>
+</table>
+<h4>files / Editing <span class="count">(6 项)</span></h4>
+<p class="reason">补丁应用与编辑容错细节(模糊匹配阈值、EOL 策略等)。Q2 否——误改会让编辑静默失败或错位。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>edit.mode</code></td><td>Edit Mode</td><td>enum</td><td><code>&quot;hashline&quot;</code></td></tr>
+<tr><td><code>edit.fuzzyMatch</code></td><td>Fuzzy Match</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>edit.fuzzyThreshold</code></td><td>Fuzzy Match Threshold</td><td>number</td><td><code>0.95</code></td></tr>
+<tr><td><code>edit.streamingAbort</code></td><td>Abort on Failed Preview</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>edit.blockAutoGenerated</code></td><td>Block Auto-Generated Files</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>edit.enforceSeenLines</code></td><td>Enforce Seen-Line Guard</td><td>boolean</td><td><code>false</code></td></tr>
+</tbody>
+</table>
+<h4>files / LSP <span class="count">(6 项)</span></h4>
+<p class="reason">LSP 集成的启用面与诊断行为。Q1 否——默认配置开箱即用;Q2 否——需要理解语言服务器生命周期。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>lsp.enabled</code></td><td>LSP</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>lsp.lazy</code></td><td>Lazy LSP Startup</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>lsp.formatOnWrite</code></td><td>Format on Write</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>lsp.diagnosticsOnWrite</code></td><td>Diagnostics on Write</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>lsp.diagnosticsOnEdit</code></td><td>Diagnostics on Edit</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>lsp.diagnosticsDeduplicate</code></td><td>Deduplicate Diagnostics</td><td>boolean</td><td><code>true</code></td></tr>
+</tbody>
+</table>
+<h4>files / Read Summaries <span class="count">(2 项)</span></h4>
+<p class="reason">大文件自动摘要的折叠参数。Q3 默认阈值按内部评测调优,改动影响 agent 读文件的信息密度。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>read.summarize.enabled</code></td><td>Read Summaries</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>read.summarize.prose</code></td><td>Prose Summaries</td><td>boolean</td><td><code>false</code></td></tr>
+</tbody>
+</table>
+<h4>files / Reading <span class="count">(3 项)</span></h4>
+<p class="reason">文件读取的行数/字节预算。Q2 否——与上下文预算联动,调错会放大 token 消耗。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>readLineNumbers</code></td><td>Line Numbers</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>read.defaultLimit</code></td><td>Default Read Limit</td><td>number</td><td><code>300</code></td></tr>
+<tr><td><code>read.toolResultPreview</code></td><td>Inline Read Previews</td><td>boolean</td><td><code>false</code></td></tr>
+</tbody>
+</table>
+<h4>shell / Bash <span class="count">(5 项)</span></h4>
+<p class="reason">bash 工具的执行环境(超时、输出上限、环境注入)。Q2 否——与安全边界和输出截断联动。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>bash.enabled</code></td><td>Bash</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>bash.autoBackground.enabled</code></td><td>Bash Auto-Background</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>bashInterceptor.enabled</code></td><td>Bash Interceptor</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>shellMinimizer.enabled</code></td><td>Shell Minimizer</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>shellMinimizer.sourceOutlineLevel</code></td><td>Shell Minimizer Source Outline</td><td>enum</td><td><code>&quot;default&quot;</code></td></tr>
+</tbody>
+</table>
+<h4>shell / Eval &amp; Runtimes <span class="count">(8 项)</span></h4>
+<p class="reason">eval 运行时(JS/Python 内核)配置。高级特性,涉及执行边界。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>eval.py</code></td><td>Python Eval Backend</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>eval.js</code></td><td>JavaScript Eval Backend</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>eval.rb</code></td><td>Ruby Eval Backend</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>eval.jl</code></td><td>Julia Eval Backend</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>python.kernelMode</code></td><td>Python Kernel Mode</td><td>enum</td><td><code>&quot;session&quot;</code></td></tr>
+<tr><td><code>python.interpreter</code></td><td>Python Interpreter</td><td>string</td><td><code>&quot;&quot;</code></td></tr>
+<tr><td><code>ruby.interpreter</code></td><td>Ruby Interpreter</td><td>string</td><td><code>&quot;&quot;</code></td></tr>
+<tr><td><code>julia.interpreter</code></td><td>Julia Interpreter</td><td>string</td><td><code>&quot;&quot;</code></td></tr>
+</tbody>
+</table>
+<h4>tools / Available Tools <span class="count">(17 项)</span></h4>
+<p class="reason">逐个工具的可用性开关。Q1 否——默认工具集经过整体调优;单独关闭工具会静默削弱 agent 能力且难以自诊断。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>san.codeIntelligence.enabled</code></td><td>Explore (Experimental)</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>todo.enabled</code></td><td>Todos</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>glob.enabled</code></td><td>Glob</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>grep.enabled</code></td><td>Grep</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>astGrep.enabled</code></td><td>AST Grep</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>astEdit.enabled</code></td><td>AST Edit</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>debug.enabled</code></td><td>Debug</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>launch.enabled</code></td><td>Launch</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>generate_image.enabled</code></td><td>Generate Image</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>inspect_image.enabled</code></td><td>Inspect Image</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>checkpoint.enabled</code></td><td>Checkpoint/Rewind</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>fetch.enabled</code></td><td>Read URLs</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>vault.enabled</code></td><td>Obsidian Vault</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>github.enabled</code></td><td>GitHub CLI</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>web_search.enabled</code></td><td>Web Search</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>ask.enabled</code></td><td>Ask</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>browser.enabled</code></td><td>Browser</td><td>boolean</td><td><code>true</code></td></tr>
+</tbody>
+</table>
+<h4>tools / Developer <span class="count">(2 项)</span></h4>
+<p class="reason">开发者/调试工具开关。面向本仓库开发者。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>dev.autoqa</code></td><td>Auto QA</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>dev.autoqaPush.endpoint</code></td><td>Auto QA Push Endpoint</td><td>string</td><td><code>&quot;https://qa.omp.sh/v1/grievances&quot;</code></td></tr>
+</tbody>
+</table>
+<h4>tools / Discovery &amp; MCP <span class="count">(4 项)</span></h4>
+<p class="reason">工具发现与 MCP 通知细节。MCP 服务器管理走 /mcp 命令。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>tools.xdev</code></td><td>xd:// Tools</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>tools.xdevDocs</code></td><td>xd:// Prompt Docs</td><td>enum</td><td><code>&quot;builtins&quot;</code></td></tr>
+<tr><td><code>mcp.enableProjectConfig</code></td><td>MCP Project Config</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>mcp.notifications</code></td><td>MCP Update Injection</td><td>boolean</td><td><code>false</code></td></tr>
+</tbody>
+</table>
+<h4>tools / Execution <span class="count">(7 项)</span></h4>
+<p class="reason">工具执行的并发、确认与生命周期参数。Q2 否——与审批和安全边界联动。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>tools.intentTracing</code></td><td>Intent Tracing</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>tools.abortOnFabricatedResult</code></td><td>Abort On Fabricated Tool Result</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>tools.maxTimeout</code></td><td>Max Tool Timeout</td><td>number</td><td><code>0</code></td></tr>
+<tr><td><code>async.enabled</code></td><td>Async Execution</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>async.pollWaitDuration</code></td><td>Max Poll Time</td><td>enum</td><td><code>&quot;smart&quot;</code></td></tr>
+<tr><td><code>irc.timeoutMs</code></td><td>IRC Timeout</td><td>number</td><td><code>120000</code></td></tr>
+<tr><td><code>crossSession.enabled</code></td><td>Cross-Session Transport</td><td>boolean</td><td><code>true</code></td></tr>
+</tbody>
+</table>
+<h4>tools / GitHub <span class="count">(1 项)</span></h4>
+<p class="reason">GitHub 工具的缓存与行为细节。默认值已按 API 限额调优。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>github.cache.enabled</code></td><td>GitHub View Cache</td><td>boolean</td><td><code>true</code></td></tr>
+</tbody>
+</table>
+<h4>tools / Grep &amp; Browser <span class="count">(5 项)</span></h4>
+<p class="reason">搜索与浏览器工具的内部参数(结果上限、无头模式等)。Q3 默认值已按上下文预算调优。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>grep.contextBefore</code></td><td>Grep Context Before</td><td>number</td><td><code>1</code></td></tr>
+<tr><td><code>grep.contextAfter</code></td><td>Grep Context After</td><td>number</td><td><code>3</code></td></tr>
+<tr><td><code>browser.headless</code></td><td>Headless Browser</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>browser.cmux</code></td><td>cmux Browser</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>browser.screenshotDir</code></td><td>Screenshot Directory</td><td>string</td><td><code>—</code></td></tr>
+</tbody>
+</table>
+<h4>tools / Output Limits <span class="count">(5 项)</span></h4>
+<p class="reason">工具输出截断阈值。Q2 否——与上下文预算联动,调大有 token 成本风险。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>tools.artifactSpillThreshold</code></td><td>Artifact Spill Threshold (KB)</td><td>number</td><td><code>50</code></td></tr>
+<tr><td><code>tools.artifactTailBytes</code></td><td>Artifact Tail Size (KB)</td><td>number</td><td><code>20</code></td></tr>
+<tr><td><code>tools.artifactHeadBytes</code></td><td>Artifact Head Size (KB)</td><td>number</td><td><code>20</code></td></tr>
+<tr><td><code>tools.outputMaxColumns</code></td><td>Output Column Cap</td><td>number</td><td><code>768</code></td></tr>
+<tr><td><code>tools.artifactTailLines</code></td><td>Artifact Tail Lines</td><td>number</td><td><code>500</code></td></tr>
+</tbody>
+</table>
+<h4>tools / Todos <span class="count">(4 项)</span></h4>
+<p class="reason">todo 工具的行为细节。默认行为已符合预期。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>todo.reminders</code></td><td>Todo Reminders</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>todo.remindersMax</code></td><td>Todo Reminder Limit</td><td>number</td><td><code>3</code></td></tr>
+<tr><td><code>todo.eager</code></td><td>Create Todos Automatically</td><td>enum</td><td><code>&quot;default&quot;</code></td></tr>
+<tr><td><code>tasks.todoClearDelay</code></td><td>Todo Auto-Clear Delay</td><td>number</td><td><code>60</code></td></tr>
+</tbody>
+</table>
+<h4>tasks / Commands &amp; Skills <span class="count">(5 项)</span></h4>
+<p class="reason">自定义命令与技能装载细节。面向扩展作者而非日常使用者。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>skills.enableSkillCommands</code></td><td>Skill Commands</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>commands.enableClaudeUser</code></td><td>Claude User Commands</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>commands.enableClaudeProject</code></td><td>Claude Project Commands</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>commands.enableOpencodeUser</code></td><td>OpenCode User Commands</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>commands.enableOpencodeProject</code></td><td>OpenCode Project Commands</td><td>boolean</td><td><code>true</code></td></tr>
+</tbody>
+</table>
+<h4>tasks / Isolation <span class="count">(5 项)</span></h4>
+<p class="reason">子代理隔离(worktree、沙箱)策略。Q2 否——需要理解隔离语义,误改有数据风险。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>san.workflows.allowIsolatedWrite</code></td><td>Workflow Isolated Writes</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>task.isolation.mode</code></td><td>Isolation Mode</td><td>enum</td><td><code>&quot;none&quot;</code></td></tr>
+<tr><td><code>task.isolation.merge</code></td><td>Isolation Merge Strategy</td><td>enum</td><td><code>&quot;patch&quot;</code></td></tr>
+<tr><td><code>task.isolation.commits</code></td><td>Isolation Commit Style</td><td>enum</td><td><code>&quot;generic&quot;</code></td></tr>
+<tr><td><code>worktree.base</code></td><td>Worktree Base Directory</td><td>string</td><td><code>—</code></td></tr>
+</tbody>
+</table>
+<h4>tasks / Modes <span class="count">(7 项)</span></h4>
+<p class="reason">San loop / goal / vibe 等编排模式参数。高级工作流,对应命令也在 expert 层。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>san.workflows.enabled</code></td><td>Managed SOP Workflows</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>san.workflows.adHocEnabled</code></td><td>Ad-hoc Workflows</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>plan.enabled</code></td><td>Plan Mode</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>plan.defaultOnStartup</code></td><td>Start in Plan Mode</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>goal.enabled</code></td><td>Goal Mode</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>goal.statusInFooter</code></td><td>Goal Status in Footer</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>title.refreshOnReplan</code></td><td>Refresh Title on Replan</td><td>boolean</td><td><code>true</code></td></tr>
+</tbody>
+</table>
+<h4>tasks / Subagents <span class="count">(9 项)</span></h4>
+<p class="reason">子代理数量、模型与调度参数。Q2 否——与成本和并发直接相关。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>task.eager</code></td><td>Prefer Task Delegation</td><td>enum</td><td><code>&quot;default&quot;</code></td></tr>
+<tr><td><code>task.batch</code></td><td>Batch Task Calls</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>task.maxConcurrency</code></td><td>Max Concurrent Tasks</td><td>number</td><td><code>32</code></td></tr>
+<tr><td><code>task.enableLsp</code></td><td>LSP in Subagents</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>task.maxRecursionDepth</code></td><td>Max Task Recursion</td><td>number</td><td><code>2</code></td></tr>
+<tr><td><code>task.maxRuntimeMs</code></td><td>Max Subagent Runtime</td><td>number</td><td><code>0</code></td></tr>
+<tr><td><code>task.softRequestBudget</code></td><td>Soft Subagent Request Budget</td><td>number</td><td><code>200</code></td></tr>
+<tr><td><code>task.softRequestBudgetNotice</code></td><td>Soft Request Budget Notice</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>task.prewalk</code></td><td>Generic Task Prewalk</td><td>boolean</td><td><code>false</code></td></tr>
+</tbody>
+</table>
+<h4>providers / Fireworks <span class="count">(1 项)</span></h4>
+<p class="reason">特定供应商(Fireworks)的专有参数。仅该供应商用户在特定场景需要。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>providers.fireworksTier</code></td><td>Fireworks Tier</td><td>enum</td><td><code>&quot;standard&quot;</code></td></tr>
+</tbody>
+</table>
+<h4>providers / Privacy <span class="count">(1 项)</span></h4>
+<p class="reason">数据脱敏/隐私开关。改动有合规含义,应由理解后果的用户显式操作。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>secrets.enabled</code></td><td>Hide Secrets</td><td>boolean</td><td><code>false</code></td></tr>
+</tbody>
+</table>
+<h4>providers / Protocol <span class="count">(4 项)</span></h4>
+<p class="reason">wire 协议与请求编码细节。Q2 否——误配会静默破坏请求。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>providers.kimiApiFormat</code></td><td>Kimi API Format</td><td>enum</td><td><code>&quot;anthropic&quot;</code></td></tr>
+<tr><td><code>providers.openaiWebsockets</code></td><td>OpenAI WebSockets</td><td>enum</td><td><code>&quot;auto&quot;</code></td></tr>
+<tr><td><code>providers.openrouterVariant</code></td><td>OpenRouter Routing</td><td>enum</td><td><code>&quot;default&quot;</code></td></tr>
+<tr><td><code>provider.appendOnlyContext</code></td><td>Append-Only Context</td><td>enum</td><td><code>&quot;auto&quot;</code></td></tr>
+</tbody>
+</table>
+<h4>providers / Services <span class="count">(12 项)</span></h4>
+<p class="reason">内置服务(Exa、GitHub、图像生成等)的逐项开关与限额。Q1 否——默认全部开箱即用;关闭会静默削弱能力。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>providers.maxInFlightRequests</code></td><td>Max In-Flight Requests</td><td>record</td><td><code>{}</code></td></tr>
+<tr><td><code>providers.webSearch</code></td><td>Web Search Provider</td><td>enum</td><td><code>&quot;auto&quot;</code></td></tr>
+<tr><td><code>providers.webSearchGeminiModel</code></td><td>Gemini web_search model</td><td>string</td><td><code>—</code></td></tr>
+<tr><td><code>providers.antigravityEndpoint</code></td><td>Antigravity Endpoint Mode</td><td>enum</td><td><code>&quot;auto&quot;</code></td></tr>
+<tr><td><code>providers.image</code></td><td>Image Provider</td><td>enum</td><td><code>&quot;auto&quot;</code></td></tr>
+<tr><td><code>providers.fetch</code></td><td>Fetch Provider</td><td>enum</td><td><code>&quot;auto&quot;</code></td></tr>
+<tr><td><code>codexResets.autoRedeem</code></td><td>Codex Auto-Redeem Saved Resets</td><td>enum</td><td><code>&quot;unset&quot;</code></td></tr>
+<tr><td><code>exa.enabled</code></td><td>Exa</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>exa.enableSearch</code></td><td>Exa Search</td><td>boolean</td><td><code>true</code></td></tr>
+<tr><td><code>exa.enableResearcher</code></td><td>Exa Researcher</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>exa.enableWebsets</code></td><td>Exa Websets</td><td>boolean</td><td><code>false</code></td></tr>
+<tr><td><code>searxng.endpoint</code></td><td>SearXNG Endpoint</td><td>string</td><td><code>—</code></td></tr>
+</tbody>
+</table>
+<h4>providers / Timeouts <span class="count">(2 项)</span></h4>
+<p class="reason">请求超时与保活。Q2 否——需要理解流式响应行为。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>providers.streamFirstEventTimeoutSeconds</code></td><td>Stream First Event Timeout</td><td>number</td><td><code>-1</code></td></tr>
+<tr><td><code>providers.streamIdleTimeoutSeconds</code></td><td>Stream Idle Timeout</td><td>number</td><td><code>-1</code></td></tr>
+</tbody>
+</table>
+<h4>providers / Tiny Model <span class="count">(3 项)</span></h4>
+<p class="reason">本地小模型推理(标题生成等)配置。内部辅助机制。</p>
+<table>
+<thead><tr><th>键</th><th>标签</th><th>类型</th><th>当前默认值</th></tr></thead>
+<tbody>
+<tr><td><code>providers.tinyModelDevice</code></td><td>Tiny Model Device</td><td>enum</td><td><code>&quot;default&quot;</code></td></tr>
+<tr><td><code>providers.tinyModelDtype</code></td><td>Tiny Model Precision</td><td>enum</td><td><code>&quot;default&quot;</code></td></tr>
+<tr><td><code>providers.unexpectedStopModel</code></td><td>Unexpected Stop Model</td><td>enum</td><td><code>&quot;online&quot;</code></td></tr>
+</tbody>
+</table>
+
+<h2>5. 带 UI 元数据但未接入设置面板的 daily 键(20 项)</h2>
+<p>这些键在 schema 中带 <code>ui</code> 元数据,但 <code>settings-defs.ts</code> 未把它们接入设置面板(多为特殊类型或遗留),因此 audience 标记对它们<strong>没有可见效果</strong>,本轮保持未标记(缺省 daily)。建议第二轮统一处置:要么接入面板并按三问补裁,要么直接进入降常量名单。</p>
+<table>
+<thead><tr><th>键</th><th>tab</th><th>标签</th><th>默认值</th></tr></thead>
+<tbody>
+<tr><td><code>model.toolCallLoopGuard.threshold</code></td><td>model</td><td>Tool-Call Loop Threshold</td><td><code>5</code></td></tr>
+<tr><td><code>model.toolCallLoopGuard.exemptTools</code></td><td>model</td><td>Tool-Call Loop Exempt Tools</td><td><code>[&quot;hub&quot;]</code></td></tr>
+<tr><td><code>retry.maxDelayMs</code></td><td>model</td><td>Max Retry Delay</td><td><code>300000</code></td></tr>
+<tr><td><code>ttsr.disabledRules</code></td><td>context</td><td>Disabled Rules</td><td><code>[]</code></td></tr>
+<tr><td><code>read.summarize.minBodyLines</code></td><td>files</td><td>Read Summary Body Lines</td><td><code>4</code></td></tr>
+<tr><td><code>read.summarize.minCommentLines</code></td><td>files</td><td>Read Summary Comment Lines</td><td><code>6</code></td></tr>
+<tr><td><code>read.summarize.minTotalLines</code></td><td>files</td><td>Read Summary Minimum File Length</td><td><code>100</code></td></tr>
+<tr><td><code>read.summarize.unfoldUntil</code></td><td>files</td><td>Read Summary Unfold Target</td><td><code>50</code></td></tr>
+<tr><td><code>read.summarize.unfoldLimit</code></td><td>files</td><td>Read Summary Unfold Ceiling</td><td><code>100</code></td></tr>
+<tr><td><code>github.cache.softTtlSec</code></td><td>tools</td><td>GitHub Cache Soft TTL</td><td><code>300</code></td></tr>
+<tr><td><code>github.cache.hardTtlSec</code></td><td>tools</td><td>GitHub Cache Hard TTL</td><td><code>604800</code></td></tr>
+<tr><td><code>tools.xdevInlineDevices</code></td><td>tools</td><td>xd:// Inline Devices</td><td><code>[]</code></td></tr>
+<tr><td><code>mcp.notificationDebounceMs</code></td><td>tools</td><td>MCP Notification Debounce</td><td><code>500</code></td></tr>
+<tr><td><code>goal.continuationModes</code></td><td>tasks</td><td>Goal Continuation Modes</td><td><code>[&quot;interactive&quot;]</code></td></tr>
+<tr><td><code>task.agentIdleTtlMs</code></td><td>tasks</td><td>Agent Idle TTL</td><td><code>420000</code></td></tr>
+<tr><td><code>providers.ollama-cloud.maxConcurrency</code></td><td>providers</td><td>Ollama Cloud Max Concurrency</td><td><code>3</code></td></tr>
+<tr><td><code>providers.webSearchExclude</code></td><td>providers</td><td>Excluded Web Search Providers</td><td><code>[]</code></td></tr>
+<tr><td><code>codexResets.minBlockedMinutes</code></td><td>providers</td><td>Codex Auto-Redeem Min Block</td><td><code>60</code></td></tr>
+<tr><td><code>codexResets.keepCredits</code></td><td>providers</td><td>Codex Auto-Redeem Reserve</td><td><code>0</code></td></tr>
+<tr><td><code>exa.searchDelayMs</code></td><td>providers</td><td>Exa Search Delay</td><td><code>1000</code></td></tr>
+</tbody>
+</table>
+
+<h2>6. daily 层命令(20 个)</h2>
+<table>
+<thead><tr><th>命令</th><th>别名</th><th>描述</th><th>保留理由</th></tr></thead>
+<tbody>
+<tr><td><code>/settings</code></td><td>—</td><td>Open settings menu</td><td>配置入口本身,必须可发现。</td></tr>
+<tr><td><code>/setup</code></td><td>providers</td><td>Open provider setup</td><td>供应商引导配置——零配置到可用的关键路径。</td></tr>
+<tr><td><code>/plan</code></td><td>—</td><td>Toggle plan mode (agent plans before executing)</td><td>计划模式是核心工作模式切换,官方引导的一部分。</td></tr>
+<tr><td><code>/model</code></td><td>models</td><td>Switch model for this session</td><td>切换模型——最高频的日常命令之一。</td></tr>
+<tr><td><code>/connect</code></td><td>—</td><td>Connect or manage model providers</td><td>连接模型供应商——到达目的地的前提。</td></tr>
+<tr><td><code>/effort</code></td><td>thinking</td><td>Set thinking effort for this session</td><td>思考等级切换——与 /model 同级的日常权衡。</td></tr>
+<tr><td><code>/export</code></td><td>—</td><td>Export session to HTML file</td><td>导出会话 HTML——日常分享/存档。</td></tr>
+<tr><td><code>/share</code></td><td>—</td><td>Share session via an encrypted link (share server or secret gist)</td><td>加密链接分享会话——与 export 同类的日常协作。</td></tr>
+<tr><td><code>/copy</code></td><td>—</td><td>Pick text or code from the conversation to copy</td><td>从对话中拷贝代码/文本——日常产出物操作。</td></tr>
+<tr><td><code>/todo</code></td><td>—</td><td>View or modify the agent's todo list</td><td>查看/修改 agent 的 todo——日常跟进任务进度。</td></tr>
+<tr><td><code>/usage</code></td><td>—</td><td>Show provider usage and limits</td><td>查看用量与限额——成本敏感用户的日常检查。</td></tr>
+<tr><td><code>/hotkeys</code></td><td>—</td><td>Show all keyboard shortcuts</td><td>快捷键帮助——新手自助入口。</td></tr>
+<tr><td><code>/login</code></td><td>—</td><td>Connect a model provider or submit an OAuth callback</td><td>凭据登录——前提。</td></tr>
+<tr><td><code>/logout</code></td><td>—</td><td>Remove model-provider credentials</td><td>凭据清除——与 login 对称。</td></tr>
+<tr><td><code>/new</code></td><td>clear</td><td>Start a new session</td><td>开新会话——会话生命周期基本操作(别名 clear 保留肌肉记忆)。</td></tr>
+<tr><td><code>/compact</code></td><td>—</td><td>Manually compact the session context</td><td>手动压缩上下文——长会话的日常操作,且有官方提示引导。</td></tr>
+<tr><td><code>/resume</code></td><td>—</td><td>Resume a different session</td><td>恢复历史会话——日常高频。</td></tr>
+<tr><td><code>/retry</code></td><td>—</td><td>Retry the last failed agent turn</td><td>重试失败回合——出错后的第一反应。</td></tr>
+<tr><td><code>/exit</code></td><td>—</td><td>Exit the application</td><td>退出应用。</td></tr>
+<tr><td><code>/quit</code></td><td>q</td><td>Quit the application</td><td>退出应用(别名 q)。</td></tr>
+</tbody>
+</table>
+
+<h2>7. expert 层命令(53 个)</h2>
+<p>expert 命令不出现在空前缀的补全浏览列表中,但输入名称/别名前缀即出现,输入全名总是可执行——肌肉记忆与脚本不受影响。</p>
+<table>
+<thead><tr><th>命令</th><th>别名</th><th>描述</th><th>裁决理由</th></tr></thead>
+<tbody>
+<tr><td><code>/workflows</code></td><td>—</td><td>List Managed SOP Workflows and Ad-hoc drafts</td><td>SOP 工作流列表——高级编排功能,依赖 Workflow 概念体系。</td></tr>
+<tr><td><code>/workflow</code></td><td>—</td><td>Review, approve, run and control explicit Workflows</td><td>工作流审批/运行/控制——高级编排,子命令面向流程管理员。</td></tr>
+<tr><td><code>/plan-review</code></td><td>—</td><td>Re-open the plan review for the latest plan (plan mode only)</td><td>重开计划评审——计划模式的高级操作,主流程会自动弹出评审。</td></tr>
+<tr><td><code>/vibe</code></td><td>—</td><td>Toggle vibe mode (direct persistent fast/good worker sessions; read-only toolset)</td><td>vibe 模式——实验性直连工作模式。</td></tr>
+<tr><td><code>/goal</code></td><td>—</td><td>Toggle goal mode (persistent autonomous objective for this session)</td><td>goal 模式——持久自主目标,高级自治功能。</td></tr>
+<tr><td><code>/guided-goal</code></td><td>—</td><td>Interview and refine a goal before enabling goal mode</td><td>goal 模式的访谈式配置,同上。</td></tr>
+<tr><td><code>/loop</code></td><td>—</td><td>Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Esc cancels the current iteration; /loop again to disable.</td><td>loop 模式——自动重复提交,理解不当会造成意外的持续消耗。</td></tr>
+<tr><td><code>/queue</code></td><td>—</td><td>Queue a message for after the agent yields</td><td>消息排队——高级输入控制。</td></tr>
+<tr><td><code>/subagent</code></td><td>—</td><td>Set the task-role subagent model for this session</td><td>为本会话指定子代理模型——高级调参。</td></tr>
+<tr><td><code>/switch</code></td><td>—</td><td>Switch model for this session (same as /model)</td><td>/model 的同义命令,保留兼容;补全里只展示 /model 一个入口。</td></tr>
+<tr><td><code>/fast</code></td><td>—</td><td>Toggle priority service tier (OpenAI service_tier=priority, Anthropic speed=fast)</td><td>优先服务档位(付费加速)——需要理解供应商计费差异。</td></tr>
+<tr><td><code>/prewalk</code></td><td>—</td><td>Switch to a fast/cheap model at the next action (works even without --prewalk)</td><td>prewalk 模型切换——高级成本优化。</td></tr>
+<tr><td><code>/advisor</code></td><td>—</td><td>Toggle the advisor (a second model that reviews each turn and injects notes)</td><td>顾问第二模型——产生额外成本的高级特性。</td></tr>
+<tr><td><code>/dump</code></td><td>—</td><td>Copy session transcript to clipboard (and write LLM request JSON to tmp)</td><td>转储原始请求 JSON 与转写——调试工具。</td></tr>
+<tr><td><code>/collab</code></td><td>—</td><td>Share this session live via a relay</td><td>relay 实时协作——实验性功能。</td></tr>
+<tr><td><code>/join</code></td><td>—</td><td>Join a shared collab session</td><td>加入协作会话——同上。</td></tr>
+<tr><td><code>/leave</code></td><td>—</td><td>Leave the collab session</td><td>离开协作会话——同上。</td></tr>
+<tr><td><code>/browser</code></td><td>—</td><td>Toggle browser headless vs visible mode</td><td>浏览器有头/无头切换——浏览器工具调试。</td></tr>
+<tr><td><code>/session</code></td><td>—</td><td>Session management commands</td><td>会话管理子命令集——低频管理操作。</td></tr>
+<tr><td><code>/jobs</code></td><td>—</td><td>Show async background jobs status</td><td>后台任务状态——调试/观察工具。</td></tr>
+<tr><td><code>/stats</code></td><td>—</td><td>Launch the local stats dashboard</td><td>本地统计面板——观察工具。</td></tr>
+<tr><td><code>/changelog</code></td><td>—</td><td>Show changelog entries</td><td>查看变更日志——低频信息查询。</td></tr>
+<tr><td><code>/tools</code></td><td>—</td><td>Show tools currently visible to the agent</td><td>列出 agent 可见工具——调试/自省。</td></tr>
+<tr><td><code>/context</code></td><td>—</td><td>Show estimated context usage breakdown</td><td>上下文占用分解——调试/自省。</td></tr>
+<tr><td><code>/brain</code></td><td>—</td><td>Inspect San Brain automation, review queue, and active state</td><td>San Brain 自动化审阅队列——内部高级系统。</td></tr>
+<tr><td><code>/solo</code></td><td>—</td><td>Run San execution loop in solo mode</td><td>San loop solo 档——高级编排快捷方式。</td></tr>
+<tr><td><code>/team</code></td><td>—</td><td>Run San execution loop in team mode</td><td>San loop team 档——同上。</td></tr>
+<tr><td><code>/council</code></td><td>—</td><td>Run San execution loop in council mode</td><td>San loop council 档——同上。</td></tr>
+<tr><td><code>/san-loop</code></td><td>—</td><td>Start or inspect San execution loop runs</td><td>San 执行环主入口——高级编排。</td></tr>
+<tr><td><code>/extensions</code></td><td>status</td><td>Open Extension Control Center dashboard</td><td>扩展控制中心——扩展作者/高级用户面板。</td></tr>
+<tr><td><code>/agents</code></td><td>—</td><td>Open Agent Control Center dashboard</td><td>Agent 控制中心——同上。</td></tr>
+<tr><td><code>/branch</code></td><td>—</td><td>Create a new branch from a previous message</td><td>从历史消息开分支——高级会话树操作。</td></tr>
+<tr><td><code>/fork</code></td><td>—</td><td>Create a new fork from a previous message</td><td>从历史消息开 fork——同上。</td></tr>
+<tr><td><code>/tree</code></td><td>—</td><td>Navigate session tree (switch branches)</td><td>会话树导航——同上。</td></tr>
+<tr><td><code>/mcp</code></td><td>—</td><td>Manage MCP servers (add, list, remove, test)</td><td>MCP 服务器管理——集成配置,面向理解 MCP 的用户。</td></tr>
+<tr><td><code>/ssh</code></td><td>—</td><td>Manage SSH hosts (add, list, remove)</td><td>SSH 主机管理——远程执行集成。</td></tr>
+<tr><td><code>/fresh</code></td><td>—</td><td>Reset provider stream state without changing the local transcript</td><td>重置供应商流状态——故障恢复调试命令。</td></tr>
+<tr><td><code>/drop</code></td><td>—</td><td>Delete the current session and start a new one</td><td>删除当前会话并重开——破坏性操作,刻意不放在补全首屏。</td></tr>
+<tr><td><code>/shake</code></td><td>—</td><td>Drop heavy content from context (tool results, large blocks)</td><td>从上下文丢弃重内容——高级上下文手术,/compact 是日常入口。</td></tr>
+<tr><td><code>/handoff</code></td><td>—</td><td>Hand off session context to a new session</td><td>会话交接到新会话——高级上下文操作。</td></tr>
+<tr><td><code>/btw</code></td><td>—</td><td>Ask an ephemeral side question using the current session context</td><td>临时旁问——高级用法。</td></tr>
+<tr><td><code>/tan</code></td><td>—</td><td>Run a full background agent on tangential work</td><td>切线后台代理——高级编排。</td></tr>
+<tr><td><code>/omfg</code></td><td>—</td><td>Forge a TTSR rule from a complaint to stop a recurring behavior</td><td>从抱怨锻造 TTSR 规则——高级规则系统入口。</td></tr>
+<tr><td><code>/debug</code></td><td>—</td><td>Open debug tools selector</td><td>调试工具选择器——调试。</td></tr>
+<tr><td><code>/memory</code></td><td>—</td><td>Inspect and operate memory maintenance</td><td>记忆维护操作——实验性记忆子系统(对应设置也在 expert)。</td></tr>
+<tr><td><code>/rename</code></td><td>—</td><td>Rename the current session</td><td>重命名会话——低频管理。</td></tr>
+<tr><td><code>/move</code></td><td>—</td><td>Move the current session to a different directory</td><td>移动会话目录——低频管理。</td></tr>
+<tr><td><code>/marketplace</code></td><td>—</td><td>Manage marketplace plugin sources and installed plugins</td><td>插件市场管理——扩展生态。</td></tr>
+<tr><td><code>/plugins</code></td><td>—</td><td>View and manage installed plugins</td><td>插件管理——同上。</td></tr>
+<tr><td><code>/reload-plugins</code></td><td>—</td><td>Reload all plugins (skills, commands, hooks, tools, agents, MCP)</td><td>重载全部插件——扩展开发调试。</td></tr>
+<tr><td><code>/reload</code></td><td>—</td><td>Reload configuration, models, plugins, or MCP from disk</td><td>重载配置/模型/插件——开发调试。</td></tr>
+<tr><td><code>/force</code></td><td>force:</td><td>Force next turn to use a specific tool</td><td>强制下一回合使用特定工具——调试/高级控制。</td></tr>
+<tr><td><code>/pause</code></td><td>—</td><td>Freeze all agents (main, subagents, advisor) until resumed</td><td>冻结所有代理——高级执行控制。</td></tr>
+</tbody>
+</table>
+
+<h2>8. 需要仓库所有者拍板的边界项</h2>
+<ul>
+<li><strong><code>memory</code> tab 整体进入 expert</strong>(含主开关 <code>memory.backend</code>):理由是整个记忆子系统默认 off 且依赖外部服务。副作用:memory tab 默认只剩 “Show expert settings” 一行。若希望记忆功能对新用户可发现,建议把 <code>memory.backend</code> 单独提回 daily。</li>
+<li><strong><code>tools.approvalMode</code> 留在 daily</strong>:它改变安全边界,但首周必然遭遇审批弹窗,裁决认为“可发现”优先。若认为误改风险过高可降 expert(审批弹窗本身仍提供改动入口)。</li>
+<li><strong><code>/share</code> 与 <code>/export</code> 留在 daily</strong>:share 涉及数据外发(加密链接)。若倾向保守可把 <code>/share</code> 降 expert,保留 <code>/export</code>。</li>
+<li><strong><code>/compact</code> 留 daily、<code>/shake</code>/<code>/handoff</code> 标 expert</strong>:上下文手术三兄弟按频率拆分,是否合适请复核。</li>
+<li><strong>San loop 入口全部 expert</strong>(<code>/solo</code>、<code>/team</code>、<code>/council</code>、<code>/san-loop</code>):若 San loop 是希望推广的旗舰工作流,可考虑把 <code>/san-loop</code> 提回 daily 作为唯一入口。</li>
+<li><strong>§5 的 20 个未接线键</strong>:第二轮处置方向(接线面板 vs 降常量)需要决策。</li>
+</ul>
+
+<h2>9. 机制与验证摘要</h2>
+<ul>
+<li><strong>设置面板</strong>:含 expert 项的 tab 底部出现 “Show expert settings” 切换行(会话内生效);全局设置搜索始终跨 daily+expert 两层——输入查询视为明确意图;从搜索跳转到 expert 项会自动展开 expert 层。</li>
+<li><strong>命令补全</strong>:expert 命令派生 <code>unlisted</code> 标志——空前缀浏览列表不显示,名称/别名前缀匹配即显示,描述与模糊子序列匹配不会暴露 unlisted 命令;全名调用不受任何影响。</li>
+<li><strong>兼容性</strong>:audience 只影响 UI;配置文件包含任意未知键时加载不失败的契约有专门测试防守。</li>
+<li><strong>契约测试</strong>:<code>test/modes/components/settings-audience.test.ts</code>(默认过滤/切换包含/缺省 daily/前提项守卫)、<code>test/slash-commands/audience.test.ts</code>(expert 命令全名可执行、补全过滤)、<code>packages/tui/test/autocomplete.test.ts</code>(unlisted 契约)、<code>test/settings-manager.test.ts</code>(未知键容忍)。</li>
+</ul>
+
+</body>
+</html>

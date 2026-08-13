@@ -40,7 +40,7 @@ describe("settings layout", () => {
 
 	it("getSettingsForTab returns contiguous groups in TAB_GROUPS order", () => {
 		for (const tab of SETTING_TABS) {
-			const defs = getSettingsForTab(tab);
+			const defs = getSettingsForTab(tab, { includeExpert: true });
 			expect(defs.length).toBeGreaterThan(0);
 
 			// Collapse the def sequence into the order groups first appear.
@@ -61,7 +61,9 @@ describe("settings layout", () => {
 	});
 
 	it("exposes native terminal progress in the appearance settings menu", () => {
-		const def = getSettingsForTab("appearance").find(def => def.path === "terminal.showProgress");
+		const def = getSettingsForTab("appearance", { includeExpert: true }).find(
+			def => def.path === "terminal.showProgress",
+		);
 
 		expect(def).toMatchObject({
 			type: "boolean",
@@ -71,7 +73,7 @@ describe("settings layout", () => {
 	});
 
 	it("exposes every accepted snapcompact shape in the settings submenu", () => {
-		const def = getSettingsForTab("context").find(def => def.path === "snapcompact.shape");
+		const def = getSettingsForTab("context", { includeExpert: true }).find(def => def.path === "snapcompact.shape");
 
 		expect(def?.type).toBe("submenu");
 		if (def?.type !== "submenu") throw new Error("snapcompact.shape should render as a submenu");
@@ -83,7 +85,9 @@ describe("settings layout", () => {
 	it("hides advisor dependent settings when advisor is disabled", () => {
 		const advisorDependentPaths: SettingPath[] = ["advisor.subagents", "advisor.syncBacklog", "advisor.immuneTurns"];
 		const advisorDependentPathSet = new Set(advisorDependentPaths);
-		const defs = getSettingsForTab("model").filter(def => advisorDependentPathSet.has(def.path));
+		const defs = getSettingsForTab("model", { includeExpert: true }).filter(def =>
+			advisorDependentPathSet.has(def.path),
+		);
 
 		expect(defs.map(def => def.path)).toEqual(advisorDependentPaths);
 		for (const def of defs) {
@@ -98,7 +102,9 @@ describe("settings layout", () => {
 	});
 
 	it("shows provider request limits as a providers services submenu setting", () => {
-		const [def] = getSettingsForTab("providers").filter(item => item.path === "providers.maxInFlightRequests");
+		const [def] = getSettingsForTab("providers", { includeExpert: true }).filter(
+			item => item.path === "providers.maxInFlightRequests",
+		);
 
 		expect(def).toMatchObject({
 			path: "providers.maxInFlightRequests",
@@ -109,7 +115,9 @@ describe("settings layout", () => {
 	});
 
 	it("exposes retry fallback chains as editable JSON in the model settings", () => {
-		const def = getSettingsForTab("model").find(item => item.path === "retry.fallbackChains");
+		const def = getSettingsForTab("model", { includeExpert: true }).find(
+			item => item.path === "retry.fallbackChains",
+		);
 
 		expect(def).toMatchObject({
 			path: "retry.fallbackChains",
@@ -127,7 +135,7 @@ describe("settings layout", () => {
 	});
 
 	it("exposes ask.enabled as a boolean under Available Tools", () => {
-		const def = getSettingsForTab("tools").find(def => def.path === "ask.enabled");
+		const def = getSettingsForTab("tools", { includeExpert: true }).find(def => def.path === "ask.enabled");
 
 		expect(def).toMatchObject({
 			type: "boolean",
