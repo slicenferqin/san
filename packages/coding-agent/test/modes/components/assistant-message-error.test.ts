@@ -99,9 +99,17 @@ describe("AssistantMessageComponent error rendering", () => {
 		expect(head?.length).toBeLessThan(RENDER_WIDTH);
 	});
 
-	it("renders a short single-line error unchanged", () => {
+	it("renders a short error with the friendly headline and the raw diagnostic preserved", () => {
 		const lines = renderLines(erroredMessage("overloaded_error: Overloaded"));
-		expect(lines.some(line => line.includes("Error: overloaded_error: Overloaded"))).toBe(true);
+		// Friendly layer: an overloaded provider gets a plain-language headline
+		// with an actionable next step, and the raw diagnostic stays visible.
+		expect(lines.some(line => line.includes("服务商"))).toBe(true);
+		expect(lines.some(line => line.includes("overloaded_error: Overloaded"))).toBe(true);
+	});
+
+	it("renders an unclassified error unchanged", () => {
+		const lines = renderLines(erroredMessage("mystery failure xyz"));
+		expect(lines.some(line => line.includes("Error: mystery failure xyz"))).toBe(true);
 	});
 });
 

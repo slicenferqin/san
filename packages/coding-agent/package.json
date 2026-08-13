@@ -48,7 +48,8 @@
     "gen:native:reset": "bun --cwd=../natives run gen:native:reset",
     "prepack": "bun run gen:tool-views && bun run gen:bundle",
     "bench:guard": "bun scripts/bench-guard.ts",
-    "bench:context-steady": "bun scripts/san-context-steady-benchmark.ts"
+    "bench:context-steady": "bun scripts/san-context-steady-benchmark.ts",
+    "bench:north-star": "bun scripts/north-star-bench.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "catalog:",

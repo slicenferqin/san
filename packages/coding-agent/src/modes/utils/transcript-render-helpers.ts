@@ -18,6 +18,7 @@ import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/rend
 import { canonicalizeMessage } from "../../utils/thinking-display";
 import { TranscriptBlock } from "../components/transcript-container";
 import { theme } from "../theme/theme";
+import { withFriendlyHeadline } from "./friendly-errors";
 
 type CustomOrHookMessage = Extract<AgentMessage, { role: "custom" | "hookMessage" }>;
 type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
@@ -230,10 +231,10 @@ export function resolveAssistantErrorPresentation(
 		return { kind: "full", text: resolveAbortLabel(message, retryAttempt), isError: true };
 	}
 	if (message.stopReason === "error") {
-		return { kind: "full", text: message.errorMessage || "Error", isError: true };
+		return { kind: "full", text: withFriendlyHeadline(message.errorMessage || "Error"), isError: true };
 	}
 	if (message.errorMessage && shouldRenderAbortReason(message)) {
-		return { kind: "full", text: message.errorMessage, isError: true };
+		return { kind: "full", text: withFriendlyHeadline(message.errorMessage), isError: true };
 	}
 	return { kind: "none" };
 }
