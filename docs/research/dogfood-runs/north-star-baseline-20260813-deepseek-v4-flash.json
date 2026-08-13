@@ -1,0 +1,186 @@
+{
+	"timestamp": "2026-08-13T13:26:17.192Z",
+	"model": "cpa/opencode-go/deepseek-v4-flash",
+	"sampleCount": 10,
+	"metrics": {
+		"goalFidelity": {
+			"passed": 10,
+			"total": 10
+		},
+		"steeringEfficiency": {
+			"passed": 1,
+			"total": 1
+		},
+		"withinBudget": {
+			"passed": 10,
+			"total": 10
+		},
+		"terminalExplained": {
+			"passed": 10,
+			"total": 10
+		}
+	},
+	"totalCostUsd": 0,
+	"results": [
+		{
+			"id": "bug-off-by-one",
+			"kind": "fix-bug",
+			"acceptancePassed": true,
+			"withinBudget": true,
+			"terminalExplained": true,
+			"elapsedMs": 81109,
+			"messageCount": 10,
+			"tokens": {
+				"input": 14668,
+				"output": 479,
+				"cacheRead": 103040
+			},
+			"costUsd": 0,
+			"finalAssistantText": "修复完成，测试通过。\n\n缺陷：`range-sum.ts` 第 4 行循环条件 `i < end` 漏掉了右端点，导致 `rangeSum(1, 3)` 返回 5、`rangeSum(4, 4)` 返回 0。注释明确说明是闭区间 `[start, end]`。\n\n改动：`i < end` → `i <= end`。\n\n验证：`bun test range-sum.test.ts` — 1 pass, 0 fail, 2 个 expect 调用全部通过。测试文件未改动。"
+		},
+		{
+			"id": "bug-empty-input",
+			"kind": "fix-bug",
+			"acceptancePassed": true,
+			"withinBudget": true,
+			"terminalExplained": true,
+			"elapsedMs": 90254,
+			"messageCount": 12,
+			"tokens": {
+				"input": 28566,
+				"output": 551,
+				"cacheRead": 119424
+			},
+			"costUsd": 0,
+			"finalAssistantText": "修复完成，测试通过。\n\n缺陷：`average([])` 对空数组调用 `reduce` 无初始值会抛 `TypeError`，而测试要求空列表返回 0。\n\n改动（`stats.ts`）：加空数组守卫，`length === 0` 时直接返回 0；测试文件未改动。\n\n验证：`bun test stats.test.ts` — 2 pass, 0 fail, 2 个 expect 调用全部通过。"
+		},
+		{
+			"id": "bug-missing-await",
+			"kind": "fix-bug",
+			"acceptancePassed": true,
+			"withinBudget": true,
+			"terminalExplained": true,
+			"elapsedMs": 85646,
+			"messageCount": 12,
+			"tokens": {
+				"input": 29075,
+				"output": 525,
+				"cacheRead": 119680
+			},
+			"costUsd": 0,
+			"finalAssistantText": "修复完成，测试通过。\n\n缺陷：`loader.ts` 第 5 行 `fs.readFile(path, \"utf8\")` 返回 Promise 但没有 `await`，导致 `JSON.parse` 拿到的是 Promise 对象而非文件内容，`countItems` 会抛类型错误。\n\n改动：`loader.ts` 第 5 行补上 `await`。测试文件未改动。\n\n验证：`bun test loader.test.ts` — 1 pass, 0 fail。"
+		},
+		{
+			"id": "bug-string-concat",
+			"kind": "fix-bug",
+			"acceptancePassed": true,
+			"withinBudget": true,
+			"terminalExplained": true,
+			"elapsedMs": 291265,
+			"messageCount": 31,
+			"tokens": {
+				"input": 57567,
+				"output": 19083,
+				"cacheRead": 538880
+			},
+			"costUsd": 0,
+			"finalAssistantText": "修复完成，测试通过。\n\n缺陷：`cart.ts` 第 7 行 `(item.price as unknown as number)` 是编译期类型断言，运行时并不转换 —— `item.price` 仍是字符串，合计依赖 JS 隐式强制转换，且金额用浮点累加会有精度误差（`0.1 + 0.2 = 0.30000000000000004`，`19.99 × 3 = 59.970000000000006`）。\n\n改动：显式 `Number(item.price)` 解析，并按整数分（cents）累加后除以 100，避免浮点漂移。测试文件未改动。\n\n验证：`bun test cart.test.ts` — 1 pass, 0 fail。边界用例：`0.1+0.2 → 0.3`、`19.99×3 → 59.97`、空列表 `→ 0`、整数字符串 `→ 6`。"
+		},
+		{
+			"id": "bug-regex-anchor",
+			"kind": "fix-bug",
+			"acceptancePassed": true,
+			"withinBudget": true,
+			"terminalExplained": true,
+			"elapsedMs": 88237,
+			"messageCount": 13,
+			"tokens": {
+				"input": 29882,
+				"output": 852,
+				"cacheRead": 121088
+			},
+			"costUsd": 0,
+			"finalAssistantText": "修复完成，测试通过。\n\n缺陷：`/[a-z0-9]{3,12}/` 未锚定，`.test()` 只要字符串任意位置有 3-12 个连续小写字母/数字就返回 true，导致 `\"bad handle!\"` 里的 `\"and\"` 被误判为合法。\n\n改动（`validate.ts` 第 3 行）：`/[a-z0-9]{3,12}/` → `/^[a-z0-9]{3,12}$/`，要求整个字符串匹配。测试文件未改动。\n\n验证：`bun test validate.test.ts` — 2 pass, 0 fail, 4 个 expect 调用全部通过。"
+		},
+		{
+			"id": "feat-slugify",
+			"kind": "add-feature",
+			"acceptancePassed": true,
+			"withinBudget": true,
+			"terminalExplained": true,
+			"elapsedMs": 86878,
+			"messageCount": 12,
+			"tokens": {
+				"input": 29633,
+				"output": 648,
+				"cacheRead": 121216
+			},
+			"costUsd": 0,
+			"finalAssistantText": "修复完成，测试通过。\n\n实现（`slug.ts`）：\n- `toLowerCase()` 小写化\n- `/[^a-z0-9]+/g` 把非字母数字的连续字符（空格、标点、连字符）折叠成单个 `-`\n- 去掉首尾连字符\n\n验证：`bun test slug.test.ts` — 2 pass, 0 fail。测试文件未改动。"
+		},
+		{
+			"id": "feat-cli-flag",
+			"kind": "add-feature",
+			"acceptancePassed": true,
+			"withinBudget": true,
+			"terminalExplained": true,
+			"elapsedMs": 94219,
+			"messageCount": 14,
+			"tokens": {
+				"input": 29673,
+				"output": 675,
+				"cacheRead": 122496
+			},
+			"costUsd": 0,
+			"finalAssistantText": "修复完成，测试通过。\n\n改动（`greet.ts`）：\n- 解析 `--shout` 标志，命中时输出大写：`hello sam` → `HELLO SAM`\n- 过滤掉 `--shout` 后再取第一个参数作为名字，保证标志位置不影响 name 解析\n\n验证：`bun test greet.test.ts` — 2 pass, 0 fail。测试文件未改动。"
+		},
+		{
+			"id": "feat-csv-row",
+			"kind": "add-feature",
+			"acceptancePassed": true,
+			"withinBudget": true,
+			"terminalExplained": true,
+			"elapsedMs": 85492,
+			"messageCount": 10,
+			"tokens": {
+				"input": 30341,
+				"output": 873,
+				"cacheRead": 91904
+			},
+			"costUsd": 0,
+			"finalAssistantText": "实现完成，测试通过。\n\n`csv.ts` 新增 `parseRow(line: string): string[]`，状态机解析：\n- 引号外的逗号分隔字段\n- `\"` 进入引号模式，字段内逗号按字面处理\n- 引号内 `\"\"` 转义为单个 `\"`（RFC 4180）\n\n验证：`bun test csv.test.ts` — 2 pass, 0 fail。测试文件未改动。"
+		},
+		{
+			"id": "fuzzy-readable-report",
+			"kind": "fuzzy",
+			"acceptancePassed": true,
+			"withinBudget": true,
+			"terminalExplained": true,
+			"elapsedMs": 99825,
+			"messageCount": 15,
+			"tokens": {
+				"input": 31081,
+				"output": 1591,
+				"cacheRead": 155520
+			},
+			"costUsd": 0,
+			"finalAssistantText": "修复完成，测试通过。\n\n改动（`report.ts`）：把 JSON 行输出改为对齐的文本表格——表头行（`name`/`passed`/`failed` 列）、分隔线、每行数据，列宽按内容自适应 `padEnd` 对齐。测试文件未改动。\n\n验证：\n- `bun test report.test.ts` — 1 pass, 0 fail，4 个 expect 全部通过（表头含 name/passed、无 `{`、≥4 行）\n- 实际输出：\n\n```\nname   passed  failed\n---------------------\nalpha  12      1\nbeta   7       0\ngamma  3       5\n```"
+		},
+		{
+			"id": "steering-method-switch",
+			"kind": "steering",
+			"acceptancePassed": true,
+			"withinBudget": true,
+			"terminalExplained": true,
+			"elapsedMs": 172391,
+			"messageCount": 19,
+			"tokens": {
+				"input": 39643,
+				"output": 1443,
+				"cacheRead": 207104
+			},
+			"costUsd": 0,
+			"finalAssistantText": "已是 Set 实现，无需改动：\n\n```ts\nexport function dedupe<T>(arr: T[]): T[] {\n\treturn [...new Set(arr)];\n}\n```\n\n验证：`bun test dedupe.test.ts` — 2 pass, 0 fail。上一轮即按测试要求（断言含 `Set`、不含 `indexOf`）实现，与你现在的要求一致。"
+		}
+	]
+}
