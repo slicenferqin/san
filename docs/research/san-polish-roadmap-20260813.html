@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>San 打磨规划｜不加功能,只把已有能力磨稳</title>
+<style>
+	:root { --bg:#0f1115; --panel:#171a21; --panel2:#1d212b; --text:#d7dce5; --muted:#8b93a3; --accent:#5eb1ff; --good:#4ade80; --warn:#fbbf24; --hot:#f87171; --line:#2a2f3a; }
+	* { box-sizing:border-box; }
+	body { margin:0; padding:32px 24px 80px; background:var(--bg); color:var(--text); font:15px/1.75 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+	.wrap { max-width:980px; margin:0 auto; }
+	h1 { font-size:26px; margin:0 0 6px; }
+	h2 { font-size:20px; margin:40px 0 12px; padding-bottom:8px; border-bottom:1px solid var(--line); color:var(--accent); }
+	h3 { font-size:16px; margin:24px 0 8px; }
+	p { margin:10px 0; }
+	.meta { color:var(--muted); font-size:13px; margin-bottom:24px; }
+	.callout { background:var(--panel); border-left:3px solid var(--accent); padding:14px 18px; border-radius:0 8px 8px 0; margin:16px 0; }
+	.callout.warn { border-left-color:var(--warn); }
+	table { width:100%; border-collapse:collapse; margin:14px 0; font-size:14px; }
+	th, td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+	th { color:var(--muted); font-weight:600; white-space:nowrap; }
+	code { background:var(--panel2); padding:1px 6px; border-radius:4px; font-size:13px; font-family:"SF Mono",Menlo,monospace; }
+	.p0 { color:var(--hot); font-weight:700; }
+	.p1 { color:var(--warn); font-weight:700; }
+	.p2 { color:var(--muted); font-weight:700; }
+	.done { color:var(--good); }
+	.card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin:14px 0; }
+	.card h3 { margin-top:0; }
+	.kv { color:var(--muted); font-size:13px; }
+	ul { margin:8px 0; padding-left:22px; }
+	li { margin:5px 0; }
+	.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; margin:16px 0; }
+	.stat { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+	.stat .n { font-size:22px; font-weight:700; color:var(--accent); }
+	.stat .l { font-size:12.5px; color:var(--muted); margin-top:2px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>San 打磨规划</h1>
+<div class="meta">2026-08-13 · 基线:main @ PR #16 合并后,在飞 PR #17–#22 · 性质:打磨规划(不加新功能)</div>
+
+<div class="callout">
+<strong>本文档回答一个问题:不加任何新功能,把已有能力磨到什么程度,San 才算兑现两句承诺</strong>——"敢挂一晚上"(可靠性)和"拎包入住"(零门槛)。所有条目都是对<em>已存在机制</em>的收尾、调参、验证或呈现修正;凡是"新能力"一律不在此列。
+</div>
+
+<h2>〇、现状快照:哪些机制已建成但未磨完</h2>
+
+<div class="grid">
+<div class="stat"><div class="n">6 条</div><div class="l">已合并能力线(novice-first M1-M3、watchdog、契约回显、召回工具、decay、应急档)</div></div>
+<div class="stat"><div class="n">2 份</div><div class="l">真实模型 dogfood 报告(M3 soft/hard-live,均 PASS,躺在 /tmp 未归档)</div></div>
+<div class="stat"><div class="n">≥5 组</div><div class="l">拍脑袋参数等待真实数据回归(decay 阈值、watchdog 重复阈值、应急档 stub 成本、缓存 TTL 估计、命中率阈值)</div></div>
+<div class="stat"><div class="n">0 次</div><div class="l">整夜无人值守 dogfood(8/7 简报 P1,至今未跑)</div></div>
+</div>
+
+<p>模式很清楚:<strong>这几天的开发速度远超验证速度</strong>。机制都在、单测都绿,但"真实世界里跑起来是什么样"的证据只有 M3 的两次 dogfood。打磨的主线就是把验证补上,用数据替换拍脑袋值,再把用户可见面修到"零阅读可用"。</p>
+
+<h2>一、可靠性:兑现"敢挂一晚上"</h2>
+
+<div class="card">
+<h3><span class="p0">P0</span> 1.1 整夜无人值守 dogfood(缺口最大的一块)</h3>
+<p class="kv">现状:runaway recovery、watchdog、San Loop、证据门全部就位,但从未在"多小时 + 多 turn + provider 抖动"的真实组合下跑过整夜。8/7 简报把它列为 P1,至今未执行。</p>
+<ul>
+<li>用 <code>cpa/opencode-go/deepseek-v4-flash</code>(你确认过量够)设计 3 个过夜场景:长重构任务(触发 compaction/decay/superseded-edit)、依赖外部信息的任务(触发 needs-user 终态)、故意模糊的任务(触发 watchdog 重复检测)。</li>
+<li>每场景硬预算封顶(maxCost/maxDuration),晨检指标:是否到达可解释终态、token 曲线是否稳态、watchdog 提醒次数、cache probe 归因分布。</li>
+<li>验收:三场景全部在预算内到达可解释终态(完成/阻塞/需要用户皆可,唯独不能是"还在转圈")。</li>
+</ul>
+<p class="kv">预估:脚本半天(复用 m3-skill-gates-dogfood 骨架),跑三晚,晨检各半小时。</p>
+</div>
+
+<div class="card">
+<h3><span class="p0">P0</span> 1.2 用真实数据回归所有拍脑袋参数</h3>
+<p class="kv">现状:decay 的 K=2.4/4.8 与 0.5 压力地板照抄 MC 形态;watchdog repeatThreshold=3;应急档 stub 成本 40 token;cache probe 命中阈值 0.5、TTL 5 分钟——全部是首版起步值,零真实数据支撑。</p>
+<ul>
+<li>1.1 的过夜会话 + 你日常使用一周的 journal,就是参数回归的数据集(cache probe、watchdog 决策、decay tier 选择都已落 journal/audit,数据自动在攒)。</li>
+<li>写一个离线分析脚本(读 journal 聚合,不碰运行时):decay 各 tier 的实际命中分布、watchdog 提醒的误报率(提醒后模型是否真的在原地打转)、应急档触发频率与挽回量。</li>
+<li>验收:每个参数要么被数据确认,要么被数据修正,audit reason 里能看到依据。</li>
+</ul>
+<p class="kv">预估:分析脚本 1 天,数据积累与调参跟着日常使用走。</p>
+</div>
+
+<div class="card">
+<h3><span class="p1">P1</span> 1.3 watchdog 从"提醒"补到"制动"(收尾既有机制,不是新功能)</h3>
+<p class="kv">现状:根会话 watchdog 只 fold 一次性提醒,不阻断。交互会话这是对的(裁量权在人);但 auto-continue / 无人值守场景没人看提醒,失控回合会继续烧钱——这正是"挂一晚上"的洞。</p>
+<ul>
+<li>仅在无人值守路径(auto-continue 激活、San Loop worker)消费 watchdog 的 suspicious 决策:连续 N 次同指纹 suspicious → 停止自动继续,置可解释暂停(复用 PAUSED 语义与恢复路径,不新造状态)。</li>
+<li>交互会话行为零变化。</li>
+<li>验收:1.1 的"模糊任务"场景里,失控回合在制动点停住且晨检能看懂停在哪、为什么。</li>
+</ul>
+<p class="kv">预估:2-3 天(消费点已存在,主要是 auto-continue 路径接线 + 测试)。</p>
+</div>
+
+<div class="card">
+<h3><span class="p1">P1</span> 1.4 flaky 测试系统性清理</h3>
+<p class="kv">现状:pause-gate 靠固定 sleep 的形态修过一例;message-pipeline 那个"分片顺序才暴露"的失败说明还有测试对执行顺序有隐性依赖。CI 一次 28 分钟,flake 一次就是半小时打水漂。</p>
+<ul>
+<li>全量扫描测试里的固定 <code>Bun.sleep</code> 等待(约束:等待条件而不是等待时间),以及跨文件全局状态(registerCustomApi 等注册表)的清理缺失。</li>
+<li>验收:连续 5 次全量 CI 无 flake;新增 lint 约束或测试守则条目防回潮。</li>
+</ul>
+<p class="kv">预估:1-2 天。</p>
+</div>
+
+<h2>二、信任呈现:兑现"拎包入住"</h2>
+
+<div class="card">
+<h3><span class="p0">P0</span> 2.1 错误消息人话化审计(拎包入住的最痛点)</h3>
+<p class="kv">现状:契约回显刚人话化(PR #22),但错误路径没审过。provider 报错、凭据缺失、预算触顶、PAUSED_FOR_CONTEXT——这些时刻用户最需要一句人话,现在很多是原始错误直出。</p>
+<ul>
+<li>枚举高频错误场景(凭据无效/额度耗尽/网络断/上下文暂停/工具超时),对每个场景检查 TUI 实际呈现,按"一句话说清卡在哪 + 一个可执行的下一步"重写。</li>
+<li>验收标准就用 AGENTS.md 新原则:零配置零阅读的小白看到错误后知道下一步做什么。</li>
+</ul>
+<p class="kv">预估:审计半天 + 修 2-3 天(文案为主,少量呈现分支)。</p>
+</div>
+
+<div class="card">
+<h3><span class="p1">P1</span> 2.2 首启体验:唯一的硬门槛是凭据</h3>
+<p class="kv">现状:M1 配置减法解决了"配置面吓人",但第一次打开 san 到第一个任务完成之间的路径没有专门审过。凭据配置是唯一绕不开的一步,它的引导质量决定第一印象。</p>
+<ul>
+<li>跑一次"新机器冷启动"演练:干净环境装 san → 首启 → 配凭据 → 完成第一个任务,记录每一步的摩擦(提示是否明确、失败是否可恢复、默认模型选择是否合理)。</li>
+<li>只修摩擦点,不加向导框架(避免变成新功能)。</li>
+<li>验收:冷启动到第一个任务完成 ≤ 5 分钟、零文档查阅。</li>
+</ul>
+<p class="kv">预估:演练半天,修补 1-2 天。</p>
+</div>
+
+<div class="card">
+<h3><span class="p2">P2</span> 2.3 "三状态"呈现一致性审查</h3>
+<p class="kv">现状:AGENTS.md 定了"用户只见三状态"(在干什么/完成了/卡在哪),但存量呈现没有按这个标准过一遍。San Loop 的结果输出、task 子代理的状态、后台任务通知——各有各的格式。</p>
+<ul>
+<li>对照三状态标准过一遍主要呈现面,把机制词汇和原始记录收进折叠层。</li>
+<li>验收:主路径上任何一条 agent 产生的状态消息,截屏给一个没用过 San 的人,能看懂。</li>
+</ul>
+<p class="kv">预估:2-3 天,可拆小步随手做。</p>
+</div>
+
+<h2>三、证据闭环:让"更好地完成任务"可测量</h2>
+
+<div class="card">
+<h3><span class="p0">P0</span> 3.1 北极星 benchmark 固化(novice-first 计划 §7 的未竟项)</h3>
+<p class="kv">现状:指标定义早就有了(无人值守终态率/终态可解释率/预算内完成率),M3 dogfood 脚本是雏形,但"10 条固定样本可重跑"没做。没有它,所有打磨都无法回答"变好了还是变坏了"。</p>
+<ul>
+<li>把 M3 的 fixture 模式扩成 10 条固定样本:5 条修 bug(不同语言/复杂度)、3 条小功能、2 条模糊需求,全部预算封顶。</li>
+<li>产出一个 <code>bun run bench:north-star</code>:跑完输出三个指标 + 每样本终态明细,JSON 落盘可对比历史。</li>
+<li>验收:同一 commit 跑两遍指标稳定;每次大改动前后各跑一遍成为惯例。这份数字也是将来对外叙事的弹药("什么是好 agent"的可测量回答)。</li>
+</ul>
+<p class="kv">预估:2-3 天(样本设计是主要工作量,跑法复用 dogfood 骨架)。</p>
+</div>
+
+<div class="card">
+<h3><span class="p1">P1</span> 3.2 cache probe 基线 → §4.2 本体(严格按"观测先行"推进)</h3>
+<p class="kv">现状:归因观测已上(PR #21),基线在日常使用中自动积累。§4.2 本体(bust 时机对齐)必须等数据。</p>
+<ul>
+<li>一周后跑离线聚合:prefix_diverged 占比多高、集中发生在什么操作之后(checkpoint rebase?plan 重写?)。</li>
+<li>若数据显示 prefix_diverged 是主要击穿源且集中可归因 → 做对齐改动,前后对照验证;若不是 → §4.2 关闭,省下 1-2 周。</li>
+<li>验收:决策由数据做出,两个方向都算完成。</li>
+</ul>
+<p class="kv">预估:聚合脚本半天(可与 1.2 合并),决策点在一周后。</p>
+</div>
+
+<div class="card">
+<h3><span class="p2">P2</span> 3.3 dogfood 资产归档制度化</h3>
+<p class="kv">现状:两份 M3 真实模型报告躺在 /tmp,重启就没了。这些是"San 兑现承诺"的第一批证据,应该入库。</p>
+<ul>
+<li>把 /tmp 两份 JSON 归档进 <code>docs/research/dogfood-runs/</code>;dogfood 脚本加 <code>--archive</code> 直接写该目录。</li>
+<li>验收:任何 dogfood 运行一条命令即可归档,报告带 commit hash 可追溯。</li>
+</ul>
+<p class="kv">预估:半天。</p>
+</div>
+
+<h2>四、内置内容:证据链 skill 的密度</h2>
+
+<div class="card">
+<h3><span class="p1">P1</span> 4.1 证据链 skill 从 2 条扩到覆盖高频场景(内容补齐,不是新机制)</h3>
+<p class="kv">现状:机制(M2/M3)支持任意证据链 skill,但内置只有 fix-bug 和 build-web。用户日常任务的大头(重构、加小功能、查性能、升依赖)没有证据链兜底——机制的杠杆没拉满。</p>
+<ul>
+<li>按 M2 写作规范补 3-4 条:<code>refactor</code>(改前后行为等价:同套测试前后都过)、<code>add-feature</code>(新测试先失败后通过 + 回归面)、<code>debug-perf</code>(基准数字前后对比)、<code>upgrade-dep</code>(升级后全量测试 + 构建)。</li>
+<li>每条都跑一次 soft dogfood 验证引导有效(复用现有脚本,deepseek-v4-flash)。</li>
+<li>验收:北极星 benchmark(3.1)的样本任务全部有对应证据链命中。</li>
+</ul>
+<p class="kv">预估:每条半天(写 + dogfood),共 2 天。</p>
+</div>
+
+<h2>五、执行顺序与本周建议</h2>
+
+<table>
+<tr><th>周期</th><th>做什么</th><th>为什么先做它</th></tr>
+<tr><td><span class="p0">本周</span></td><td>3.1 北极星 benchmark → 1.1 整夜 dogfood(前者是后者的度量工具)→ 2.1 错误消息审计(穿插做)</td><td>先立尺子再跑夜车:没有 benchmark,后面所有调参和打磨都没有"变好了"的判据。错误消息审计独立无依赖,适合等 CI/跑夜车的间隙推进。</td></tr>
+<tr><td><span class="p1">下周</span></td><td>1.2 参数回归(夜车数据已攒)→ 1.3 watchdog 制动 → 4.1 skill 扩充 → 3.2 cache 数据决策</td><td>全部依赖第一周的数据与尺子;skill 扩充给 benchmark 样本提供证据链覆盖。</td></tr>
+<tr><td><span class="p2">随手</span></td><td>1.4 flaky 清理、2.2 首启演练、2.3 三状态审查、3.3 归档制度</td><td>无依赖、可拆小,适合 CI 等待间隙与心情调剂。</td></tr>
+</table>
+
+<div class="callout warn">
+<strong>不做清单(明确排除,防止打磨变扩张)</strong>:TUI 重写、web console、desktop(单独立项,不混进打磨)、上游横向功能追随、跨会话记忆库、语义检索栈、§4.2 本体在数据到位前的任何实现。判据只有一条:这件事让"稳定完成任务"的三个北极星指标变好吗?不能回答就不做。
+</div>
+
+<h2>六、一句话总结</h2>
+<p>这几天把"敢挂一晚上"的机器造完了;接下来两周的全部工作,是<strong>让机器自己证明这句话</strong>(benchmark + 整夜 dogfood + 数据调参),同时把用户会碰到的每一句话磨成人话(错误消息 + 首启 + 三状态)。功能一个不加,承诺全部兑现。</p>
+
+<div class="meta" style="margin-top:32px">证据索引:novice-first 计划(san-novice-first-harness-plan-20260812.html)§7 北极星定义;8/7 项目简报 P1(真实语义活锁证据缺失);M3 dogfood 报告(/tmp/m3-dogfood-{soft,hard-live}.json,2026-08-13,deepseek-v4-flash,均 PASS);magic-context 对比研究 §4.2(观测先行原则);AGENTS.md "Move-in Ready" 原则(PR #22);decay/watchdog/应急档参数出处见各实现 PR(#15、#18、#19、#21)。</div>
+
+</div>
+</body>
+</html>
