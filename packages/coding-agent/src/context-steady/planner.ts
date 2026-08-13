@@ -125,13 +125,16 @@ const TOOL_STUB_TOKEN_ESTIMATE = 40;
 function buildToolStubMaterials(
 	sourceIndex: ContextSourceIndex,
 	protectedEntryRefs: readonly string[],
+	emergencyStubEntryRefs: readonly string[] = [],
 ): ContextPlanToolStubMaterial[] {
 	const protectedRefs = new Set(protectedEntryRefs);
 	const materials: ContextPlanToolStubMaterial[] = [];
+	const stubbedResultRefs = new Set<string>();
 	for (const pair of sourceIndex.toolPairs) {
 		if (pair.supersededByToolCallId === undefined || pair.resultEntryId === undefined) continue;
 		if (protectedRefs.has(pair.resultEntryId)) continue;
 		if (pair.assistantEntryId !== undefined && protectedRefs.has(pair.assistantEntryId)) continue;
+		stubbedResultRefs.add(pair.resultEntryId);
 		materials.push({
 			audit: {
 				materialId: materialId("tool_stub", pair.resultEntryId),
@@ -144,8 +147,39 @@ function buildToolStubMaterials(
 			toolCallId: pair.toolCallId,
 			resultEntryId: pair.resultEntryId,
 			...(pair.path ? { path: pair.path } : {}),
+			stubKind: "superseded",
 			coveredEntryRefs: [],
 		});
+	}
+	// 应急降级档(§4.3):quality gate 判定的可挽回集合;superseded 已覆盖的
+	// 条目不重复建材料。
+	if (emergencyStubEntryRefs.length > 0) {
+		const pairByResultRef = new Map(
+			sourceIndex.toolPairs
+				.filter(pair => pair.resultEntryId !== undefined)
+				.map(pair => [pair.resultEntryId as string, pair]),
+		);
+		for (const resultEntryId of emergencyStubEntryRefs) {
+			if (stubbedResultRefs.has(resultEntryId)) continue;
+			const pair = pairByResultRef.get(resultEntryId);
+			if (!pair) continue;
+			stubbedResultRefs.add(resultEntryId);
+			materials.push({
+				audit: {
+					materialId: materialId("tool_stub", resultEntryId),
+					kind: "tool_pair",
+					representation: "evidence_stub",
+					entryRefs: [resultEntryId],
+					tokenEstimate: TOOL_STUB_TOKEN_ESTIMATE,
+					reason: `emergency pressure downgrade of ${pair.toolName ?? "tool"} output`,
+				},
+				toolCallId: pair.toolCallId,
+				resultEntryId,
+				...(pair.path ? { path: pair.path } : {}),
+				stubKind: "emergency",
+				coveredEntryRefs: [],
+			});
+		}
 	}
 	return materials;
 }
@@ -410,7 +444,11 @@ export function buildContextPlan(options: BuildContextPlanOptions): BuiltContext
 	const fitted = fitMaterialsToPlanBudget(candidateMaterials, budget.planTokenBudget, buildAudit);
 	// Tool stubs 不进 plan 渲染与 planTokenBudget fitting:它们作用于 payload
 	// 投影(替换,不省略),在 fitting 定型后追加并补录审计。
-	const toolStubMaterials = buildToolStubMaterials(sourceIndex, qualityGate.protectedEntryRefs);
+	const toolStubMaterials = buildToolStubMaterials(
+		sourceIndex,
+		qualityGate.protectedEntryRefs,
+		qualityGate.emergencyStubEntryRefs ?? [],
+	);
 	const materials = [...fitted.materials, ...toolStubMaterials];
 	const audit: ContextPlanAudit = {
 		...fitted.audit,
