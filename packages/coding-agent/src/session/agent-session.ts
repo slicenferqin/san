@@ -238,7 +238,11 @@ import { generateDigest as generateContextSteadyDigest } from "../context-steady
 import { type ContextExpandResult, expandDigestSpan } from "../context-steady/expand";
 import { generateFallbackDigest } from "../context-steady/fallback";
 import { estimateContextPlanProjectedTokens, materializeContextPlanMessages } from "../context-steady/materialize";
-import { type BuiltContextPlan, CONTEXT_PLAN_CUSTOM_TYPE } from "../context-steady/plan-types";
+import {
+	type BuiltContextPlan,
+	CONTEXT_PLAN_CUSTOM_TYPE,
+	type ContextPlanGoalAnchorInput,
+} from "../context-steady/plan-types";
 import { type BuildContextPlanOptions, buildContextPlan } from "../context-steady/planner";
 import {
 	appendContextProbeRecord,
@@ -379,6 +383,7 @@ import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "tex
 import toolProgressFinalizeTemplate from "../prompts/context-steady/tool-progress-finalize.md" with { type: "text" };
 import toolProgressRedirectTemplate from "../prompts/context-steady/tool-progress-redirect.md" with { type: "text" };
 import contractEchoGeneralTemplate from "../prompts/execution/contract-echo-general.md" with { type: "text" };
+import goalRecitationTemplate from "../prompts/execution/goal-recitation.md" with { type: "text" };
 import watchdogRedirectTemplate from "../prompts/execution/watchdog-redirect.md" with { type: "text" };
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
@@ -1984,6 +1989,9 @@ function isUserQueuedMessage(message: AgentMessage): boolean {
  */
 const FILE_MUTATION_TOOL_NAMES: ReadonlySet<string> = new Set(["edit", "write", "ast_edit"]);
 
+/** 单 turn 内目标复诵的节拍(每 N 次工具调用一次;Manus 平均 50 调用的量级)。 */
+const GOAL_RECITATION_INTERVAL = 20;
+
 /** Custom-message types of the hidden magic-keyword notices that `#createMagicKeywordNotices`
  *  enqueues alongside a user prompt. Keep in sync with that method. */
 const MAGIC_KEYWORD_NOTICE_TYPES: ReadonlySet<string> = new Set([
@@ -2353,6 +2361,8 @@ export class AgentSession {
 	#skillGateState: SessionSkillGateState | undefined;
 	/** 已发出 watchdog 提醒的 strategy fingerprint(同一重复动作只提醒一次)。 */
 	#watchdogRemindedStrategies = new Set<string>();
+	/** 本 turn 已完成的工具调用数(goal recitation 的节拍;turn_start 重置)。 */
+	#turnToolCallCount = 0;
 
 	// Custom commands (TypeScript slash commands)
 	#customCommands: LoadedCustomCommand[] = [];
@@ -4995,6 +5005,8 @@ export class AgentSession {
 			this.#resetStreamingEditState();
 			// TTSR: Reset buffer on turn start
 			this.#ttsrManager?.resetBuffer();
+			// Goal recitation:每个新 turn 重新起拍。
+			this.#turnToolCallCount = 0;
 		}
 
 		// TTSR: Increment message count on turn end (for repeat-after-gap tracking)
@@ -6219,7 +6231,26 @@ export class AgentSession {
 		this.#recordSkillGateCommandObservation(ctx);
 		const ttsrResult = this.#ttsrAfterToolCall(ctx);
 		const folded = this.#skillGateReminderFold(ctx, ttsrResult) ?? ttsrResult;
-		return this.#hostWatchdogAfterToolCall(ctx, folded) ?? folded;
+		const watched = this.#hostWatchdogAfterToolCall(ctx, folded) ?? folded;
+		return this.#goalRecitationFold(ctx, watched) ?? watched;
+	}
+
+	/** 单 turn 内每 N 次工具调用复诵一次目标(goal-fidelity 方案 B):plan 里的
+	 *  goal anchor 每请求只注入一次,长循环会让它沉入上下文中部;复诵把目标
+	 *  重新推进 recency 高注意力区。与 TTSR/skill/watchdog 同 fold 机制,不阻断。 */
+	#goalRecitationFold(
+		ctx: AfterToolCallContext,
+		prior: AfterToolCallResult | undefined,
+	): AfterToolCallResult | undefined {
+		this.#turnToolCallCount += 1;
+		if (this.#turnToolCallCount % GOAL_RECITATION_INTERVAL !== 0) return undefined;
+		const anchor = this.#buildGoalAnchorInput();
+		if (!anchor) return undefined;
+		const recitation = prompt
+			.render(goalRecitationTemplate, { objective: anchor.objective, todoLines: anchor.todoLines ?? [] })
+			.trim();
+		const baseContent = prior?.content ?? ctx.result.content;
+		return { ...(prior ?? {}), content: [{ type: "text", text: recitation }, ...baseContent] };
 	}
 
 	/**
@@ -9495,6 +9526,40 @@ export class AgentSession {
 	}
 
 	/**
+	 * 目标锚事实组装(goal-fidelity 方案 A):从当前执行 scope 的不可变契约取
+	 * 目标原文,叠加 todo 进度与未满足的 before-done 证据门,注入 context plan
+	 * 作为常驻材料 — 模型每步看见目标,但谁也改不了目标。无 scope/无契约/
+	 * 原文缺失时返回 undefined(plan 不产生锚材料,行为与之前完全一致)。
+	 */
+	#buildGoalAnchorInput(): ContextPlanGoalAnchorInput | undefined {
+		const runtime = this.#executionRuntime;
+		if (!runtime) return undefined;
+		const scopeId = this.getActiveExecutionScopeId();
+		if (scopeId === undefined) return undefined;
+		const contract = runtime.getScope(scopeId)?.snapshot().objectiveContract;
+		if (!contract) return undefined;
+		const entry = this.sessionManager.getBranch().find(item => item.id === contract.authoritativeUserTurnId);
+		if (!entry || entry.type !== "message" || entry.message.role !== "user") return undefined;
+		const objective = customMessageContentText(entry.message.content).trim();
+		if (!objective) return undefined;
+		const todoLines: string[] = [];
+		for (const phase of this.getTodoPhases()) {
+			for (const task of phase.tasks) {
+				todoLines.push(`[${task.status === "completed" ? "x" : " "}] ${task.content}`);
+			}
+		}
+		const pendingGates: string[] = [];
+		for (const chain of this.#skillGateState?.chains() ?? []) {
+			for (const tracked of chain.gates) {
+				if (tracked.spec.phase === "before-done" && !tracked.satisfied) {
+					pendingGates.push(tracked.spec.description);
+				}
+			}
+		}
+		return { objective, todoLines, pendingGates };
+	}
+
+	/**
 	 * Context-steady 自助召回(`context_expand` 工具的会话侧能力):按 digest
 	 * entry id 把其 source 区间从当前分支 journal 解压为有界文本。仅根会话
 	 * 且 context steady 开启时提供;固定 scope 的子会话读的是父的历史,不提供。
@@ -10342,6 +10407,7 @@ export class AgentSession {
 			archivedEntryCount: activeScope.archivedEntryCount,
 			activeCutoffEntryId: activeScope.activeCutoffEntryId,
 			maintenanceId: this.#contextSteadyMaintenanceId,
+			goalAnchor: this.#buildGoalAnchorInput(),
 			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
 		};
 		const plan = this.#buildContextSteadyPlanForProvider(commonOptions, messages, planningEntries);
@@ -10552,6 +10618,7 @@ export class AgentSession {
 			archivedEntryCount: activeScope.archivedEntryCount,
 			activeCutoffEntryId: activeScope.activeCutoffEntryId,
 			maintenanceId: this.#contextSteadyMaintenanceId,
+			goalAnchor: this.#buildGoalAnchorInput(),
 			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
 		};
 		const plan = this.#buildContextSteadyPlanForProvider(commonOptions, messages, planningEntries, "full");
