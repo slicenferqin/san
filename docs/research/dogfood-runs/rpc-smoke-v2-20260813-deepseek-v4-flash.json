@@ -1,0 +1,103 @@
+{
+	"timestamp": "2026-08-13T08:30:36.508Z",
+	"model": "cpa/opencode-go/deepseek-v4-flash",
+	"ok": false,
+	"steps": [
+		{
+			"name": "handshake.ready",
+			"ok": true,
+			"detail": "ready frame received"
+		},
+		{
+			"name": "state.get",
+			"ok": true,
+			"detail": "get_state responded",
+			"facts": {
+				"keys": [
+					"model",
+					"thinkingLevel",
+					"isStreaming",
+					"isCompacting",
+					"steeringMode",
+					"followUpMode",
+					"interruptMode",
+					"sessionFile",
+					"sessionId",
+					"autoCompactionEnabled",
+					"messageCount",
+					"queuedMessageCount",
+					"todoPhases",
+					"systemPrompt",
+					"dumpTools",
+					"contextUsage"
+				]
+			}
+		},
+		{
+			"name": "approval.shape",
+			"ok": true,
+			"detail": "approval arrived as extension_ui_request method=select (generic dialog degradation; no structured tool-approval frame)",
+			"facts": {
+				"type": "extension_ui_request",
+				"id": "1555dcafd25f83f6",
+				"method": "select",
+				"title": "Allow tool: bash\nCommand: ls",
+				"options": [
+					"Approve",
+					"Deny"
+				]
+			}
+		},
+		{
+			"name": "prompt.stream",
+			"ok": true,
+			"detail": "prompt accepted (response = acceptance, not completion); turn idle=true",
+			"facts": {
+				"observedFrameTypes": [
+					"ready",
+					"available_commands_update",
+					"response",
+					"agent_start",
+					"turn_start",
+					"message_start",
+					"message_end",
+					"message_update",
+					"extension_ui_request",
+					"tool_execution_start",
+					"tool_execution_end",
+					"turn_end",
+					"agent_end"
+				]
+			}
+		},
+		{
+			"name": "abort.settles",
+			"ok": true,
+			"detail": "abort responded=true, aborted prompt acceptance=true, idle after abort=true"
+		},
+		{
+			"name": "transcript.baseline",
+			"ok": true,
+			"detail": "message count before restart: 9"
+		},
+		{
+			"name": "restart.resume",
+			"ok": true,
+			"detail": "restarted with --continue; message count after restart: 9 (baseline 9)"
+		},
+		{
+			"name": "session.model",
+			"ok": false,
+			"detail": "new_session settled=true latencyMs=1; fresh transcript count: 9",
+			"facts": {
+				"rawResponse": {
+					"id": "new-1",
+					"type": "response",
+					"command": "new_session",
+					"success": false,
+					"error": "Execution scope scope:019ffa3d-3613-7000-802f-bd2572ece156:223a4692 is already terminal with state aborted_by_user; late finish events are rejected."
+				}
+			}
+		}
+	]
+}
