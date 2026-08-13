@@ -33,6 +33,7 @@ import {
 	resolveActiveProjectRegistryPath,
 	resolveOrDefaultProjectRegistryPath,
 } from "../discovery/helpers.js";
+import { type AcceptanceGate, compileSkillGates } from "../execution-control";
 import { shareSession } from "../export/share";
 import { PluginManager } from "../extensibility/plugins";
 import {
@@ -270,7 +271,7 @@ async function runConfiguredSanLoop(options: {
 	});
 	// 带 host verifier 的 bound checks 物化为 acceptance gate templates；
 	// runner 在 assignment 产生后按 assignment 绑定 freshness/assignmentId。
-	const acceptanceGates = boundChecks
+	const acceptanceGates: AcceptanceGate[] = boundChecks
 		.filter(check => check.verifier !== undefined)
 		.map(check => ({
 			gateId: check.name,
@@ -288,6 +289,31 @@ async function runConfiguredSanLoop(options: {
 			evidenceRefs: [],
 			required: true,
 		}));
+	// M3 硬层:会话中活跃的证据链 skill 用真实 scope 契约重新编译为 gate
+	// 模板并入。gateId 稳定(gate:skill:<skill>:<spec>),与 check 同名时
+	// check 优先;before-fix 声明编译为 required: false,不拦终态。
+	if (options.settings.get("skills.evidenceGates") === true) {
+		const knownGateIds = new Set(acceptanceGates.map(gate => gate.gateId));
+		const declarations = options.session.skillGateState?.activeSkillDeclarations() ?? [];
+		for (const declaration of declarations) {
+			const compiled = compileSkillGates({
+				skill: declaration,
+				contractRef: {
+					contractId: contractRef.contractId,
+					revision: contractRef.revision,
+					contractHash: contractRef.contractHash,
+					clauseRefs: [...contractRef.clauseRefs],
+				},
+				contractRevision: contractRef.revision,
+				contractHash: contractRef.contractHash,
+			});
+			for (const gate of compiled) {
+				if (knownGateIds.has(gate.gateId)) continue;
+				knownGateIds.add(gate.gateId);
+				acceptanceGates.push(gate);
+			}
+		}
+	}
 	return runSanLoop({
 		sessionManager: options.sessionManager,
 		executionRuntime,
