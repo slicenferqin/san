@@ -14,7 +14,8 @@ export type ContextPlanSourceKind =
 	| "turn_digest"
 	| "checkpoint"
 	| "recall"
-	| "live_tail";
+	| "live_tail"
+	| "goal_anchor";
 export type ContextPlanRepresentation = "exact" | "evidence_stub" | "digest" | "checkpoint" | "recall" | "omitted";
 export type ContextPlanQualityOutcome = "pass" | "burst_required" | "hard_pressure";
 
@@ -177,11 +178,38 @@ export interface ContextPlanToolStubMaterial {
 	coveredEntryRefs: string[];
 }
 
+/** 调用方(会话宿主)注入的目标锚事实;objective 为空时不建锚材料。 */
+export interface ContextPlanGoalAnchorInput {
+	/** 权威用户目标原文(不可变契约的 authoritative turn 文本,调用方截断)。 */
+	objective: string;
+	/** todo 进度快照行(如 "[x] 完成 A"),调用方压平并截断。 */
+	todoLines?: readonly string[];
+	/** 未满足的 before-done 证据门描述(skill 证据链会话)。 */
+	pendingGates?: readonly string[];
+}
+
+/**
+ * 目标锚材料(graph/goal-fidelity 研究方案 A):把不可变契约目标与进度快照
+ * 作为常驻一等材料渲染进每次请求的 plan 消息 — 模型每步看见目标,但谁也
+ * 改不了目标。永不参与预算裁剪(fit 只裁 recall/digest/checkpoint),
+ * 永不授权 coverage。
+ */
+export interface ContextPlanGoalAnchorMaterial {
+	audit: ContextPlanMaterialAudit;
+	objective: string;
+	todoLines: string[];
+	pendingGates: string[];
+	/** 最新 digest 的 nextSteps(planner 内部补充)。 */
+	nextSteps: string[];
+	coveredEntryRefs: string[];
+}
+
 export type ContextPlanMaterial =
 	| ContextPlanDigestMaterial
 	| ContextPlanCheckpointMaterial
 	| ContextPlanRecallMaterial
-	| ContextPlanToolStubMaterial;
+	| ContextPlanToolStubMaterial
+	| ContextPlanGoalAnchorMaterial;
 
 export interface ContextPlanDigestSource {
 	entryId: string;

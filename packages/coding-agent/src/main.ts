@@ -1702,14 +1702,19 @@ export async function runRootCommand(
 			if (modelRegistryError) {
 				process.stderr.write(`${chalk.red(modelRegistryError.message)}\n\n`);
 			}
-			if (modelFallbackMessage) {
+			// The generic fallback message suggests /login and /model, which only
+			// exist inside the interactive TUI — a dead end for scripted callers.
+			// Keep specific diagnostics (enabledModels filters, logical-model
+			// failures); replace only the generic one with headless guidance.
+			if (modelFallbackMessage && !modelFallbackMessage.startsWith("No models available.")) {
 				process.stderr.write(`${chalk.red(modelFallbackMessage)}\n`);
 			} else {
 				process.stderr.write(`${chalk.red("No models available.")}\n`);
 			}
 			process.stderr.write(`${chalk.yellow("\nSet an API key environment variable:")}\n`);
 			process.stderr.write("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.\n");
-			process.stderr.write(`${chalk.yellow(`\nOr create ${ModelsConfigFile.path()}`)}\n`);
+			process.stderr.write(`${chalk.yellow("\nOr run `san` once interactively and use /login to sign in,")}\n`);
+			process.stderr.write(`${chalk.yellow(`or create ${ModelsConfigFile.path()}`)}\n`);
 			process.exit(1);
 		}
 
