@@ -327,11 +327,13 @@ describe("AgentSession retry recovery", () => {
 		}
 		expect(terminalError).toMatchObject({ role: "assistant", stopReason: "error" });
 		expect(terminalError.retryRecovery).toBeUndefined();
-		expect(resolveAssistantErrorPresentation(terminalError)).toEqual({
-			kind: "full",
-			text: terminalErrorText,
-			isError: true,
-		});
+		// Presentation may prepend a friendly headline; the raw diagnostic stays verbatim.
+		const presentation = resolveAssistantErrorPresentation(terminalError);
+		expect(presentation.kind).toBe("full");
+		expect(presentation.isError).toBe(true);
+		if (presentation.kind === "full") {
+			expect(presentation.text.endsWith(terminalErrorText)).toBe(true);
+		}
 	});
 
 	it("maps assistant error presentation for recovered, unrecovered, and silent abort turns", () => {
@@ -358,11 +360,15 @@ describe("AgentSession retry recovery", () => {
 			).toEqual({ kind: "compact-recovered", text: testCase.note, isError: false });
 		}
 
-		expect(
-			resolveAssistantErrorPresentation(
-				assistantMessage({ stopReason: "error", errorMessage: "503 service unavailable" }),
-			),
-		).toEqual({ kind: "full", text: "503 service unavailable", isError: true });
+		const unrecovered = resolveAssistantErrorPresentation(
+			assistantMessage({ stopReason: "error", errorMessage: "503 service unavailable" }),
+		);
+		expect(unrecovered.kind).toBe("full");
+		expect(unrecovered.isError).toBe(true);
+		if (unrecovered.kind === "full") {
+			// Friendly headline on top, raw diagnostic preserved verbatim at the end.
+			expect(unrecovered.text.endsWith("503 service unavailable")).toBe(true);
+		}
 		expect(
 			resolveAssistantErrorPresentation(
 				assistantMessage({ stopReason: "aborted", errorMessage: SILENT_ABORT_MARKER }),
