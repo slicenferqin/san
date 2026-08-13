@@ -57,6 +57,7 @@ jobs:
    release_metadata:
       name: Resolve release metadata
       runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
+      timeout-minutes: 10
       outputs:
          is-release: ${{ steps.detect.outputs.is-release }}
          release-tag: ${{ steps.detect.outputs.release-tag }}
@@ -109,6 +110,7 @@ jobs:
    native_artifact_lookup:
       name: Look up cached native artifacts
       runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
+      timeout-minutes: 10
       outputs:
          source-hash: ${{ steps.compute.outputs.source-hash }}
          linux-x64-run-id: ${{ steps.find.outputs.linux-x64-run-id }}
@@ -200,6 +202,7 @@ jobs:
    check:
       name: Lint, type check & web build
       runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
+      timeout-minutes: 20
       steps:
          - uses: actions/checkout@v4
          - uses: ./.github/actions/bun-install
@@ -214,6 +217,7 @@ jobs:
    native_linux_x64:
       name: "Native: Linux x64 (${{ matrix.variant }})"
       needs: [release_metadata, native_artifact_lookup]
+      timeout-minutes: 45
       if: ${{ needs.release_metadata.outputs.is-release == 'true' || needs.native_artifact_lookup.outputs.linux-x64-run-id == '' }}
       runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
       strategy:
@@ -240,6 +244,7 @@ jobs:
    native_cross_platform_kata:
       name: "Native: ${{ matrix.platform }} ${{ matrix.arch }}"
       needs: [release_metadata, native_artifact_lookup]
+      timeout-minutes: 60
       if: ${{ needs.release_metadata.outputs.is-release == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.native_artifact_lookup.outputs.cross-platform-run-id == '') }}
       strategy:
          fail-fast: false
@@ -263,6 +268,7 @@ jobs:
    native_cross_platform_macos:
       name: "Native: ${{ matrix.platform }} ${{ matrix.arch }}"
       needs: [release_metadata, native_artifact_lookup]
+      timeout-minutes: 60
       if: ${{ needs.release_metadata.outputs.is-release == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.native_artifact_lookup.outputs.cross-platform-run-id == '') }}
       strategy:
          fail-fast: false
@@ -502,6 +508,7 @@ jobs:
    install_methods:
       name: Install method smoke tests
       runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
+      timeout-minutes: 30
       steps:
          - uses: actions/checkout@v4
          - uses: ./.github/actions/ensure-rust-toolchain
