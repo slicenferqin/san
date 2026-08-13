@@ -313,9 +313,12 @@ import type {
 	ImmutableObjectiveContract,
 } from "../execution-control";
 import { ProviderCircuitOpenError, StaleExecutionRevisionError } from "../execution-control";
+import { isTerminalExecutionState, TerminalExecutionStateError } from "../execution-control/execution-ledger";
+import { toolCompletionObservation } from "../execution-control/host-observation-adapter";
 import { stableValueFingerprint } from "../execution-control/progress-classifier";
 import { SessionSkillGateState } from "../execution-control/skill-gate-session";
 import type { TaskContractRegistry } from "../execution-control/task-contract";
+import type { WatchdogDecision } from "../execution-control/watchdog";
 import type { TtsrManager, TtsrMatchContext } from "../export/ttsr";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
@@ -374,6 +377,7 @@ import type { PlanModeState } from "../plan-mode/state";
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
 import toolProgressFinalizeTemplate from "../prompts/context-steady/tool-progress-finalize.md" with { type: "text" };
 import toolProgressRedirectTemplate from "../prompts/context-steady/tool-progress-redirect.md" with { type: "text" };
+import watchdogRedirectTemplate from "../prompts/execution/watchdog-redirect.md" with { type: "text" };
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import skillContractEchoTemplate from "../prompts/skills/contract-echo.md" with { type: "text" };
@@ -2344,6 +2348,8 @@ export class AgentSession {
 	 * 无证据链 skill 的会话保持 undefined,所有钩子路径零行为变化。
 	 */
 	#skillGateState: SessionSkillGateState | undefined;
+	/** 已发出 watchdog 提醒的 strategy fingerprint(同一重复动作只提醒一次)。 */
+	#watchdogRemindedStrategies = new Set<string>();
 
 	// Custom commands (TypeScript slash commands)
 	#customCommands: LoadedCustomCommand[] = [];
@@ -6209,7 +6215,65 @@ export class AgentSession {
 		}
 		this.#recordSkillGateCommandObservation(ctx);
 		const ttsrResult = this.#ttsrAfterToolCall(ctx);
-		return this.#skillGateReminderFold(ctx, ttsrResult) ?? ttsrResult;
+		const folded = this.#skillGateReminderFold(ctx, ttsrResult) ?? ttsrResult;
+		return this.#hostWatchdogAfterToolCall(ctx, folded) ?? folded;
+	}
+
+	/**
+	 * 根会话 watchdog 闭环:每个完成的工具调用规范化为 HostObservation 喂进
+	 * execution runtime(经 scheduler.enforce 走 Watchdog 并落 ledger),可疑
+	 * 决策(同一动作反复、无变化轮询、重复派发)fold 一次性 redirect 提醒进
+	 * 工具结果 — 与 TTSR/skill-gate 同机制,不阻断执行。观察失败绝不影响
+	 * 工具结果本身;terminal scope 拒绝迟到观察(不喂、不警告)。
+	 */
+	#hostWatchdogAfterToolCall(
+		ctx: AfterToolCallContext,
+		prior: AfterToolCallResult | undefined,
+	): AfterToolCallResult | undefined {
+		if (this.settings.get("san.sessionWatchdog.enabled") !== true) return undefined;
+		const runtime = this.#executionRuntime;
+		if (!runtime) return undefined;
+		const scopeId = this.getActiveExecutionScopeId();
+		if (scopeId === undefined) return undefined;
+		const handle = runtime.getScope(scopeId);
+		if (!handle || isTerminalExecutionState(handle.snapshot().state)) return undefined;
+		const contractId = handle.snapshot().objectiveContract?.ref.contractId;
+		const observation = toolCompletionObservation({
+			toolName: ctx.toolCall.name,
+			args: ctx.args,
+			isError: ctx.isError,
+			details: ctx.result.details,
+			workKey: contractId ?? `scope:${scopeId}`,
+		});
+		if (!observation) return undefined;
+		// 每次工具完成都是独立宿主事实:以 toolCall id 作 ledger 观察身份,
+		// 否则同一动作重复时会撞 progress 记录的不可变约束。
+		const identifiedObservation = { ...observation, observationId: `tool:${ctx.toolCall.id}` };
+		let decision: WatchdogDecision;
+		try {
+			const result = runtime.recordHostObservation({ scopeId, observation: identifiedObservation });
+			if (result.kind !== "observation") return undefined;
+			decision = result.decision;
+		} catch (error) {
+			// 观察是尽力而为的宿主事实登记:scope 恰在本次调用间隙被 finish 属于
+			// 正常竞争,绝不让它污染工具结果。其余错误照常上抛。
+			if (error instanceof TerminalExecutionStateError || error instanceof StaleExecutionRevisionError) {
+				return undefined;
+			}
+			throw error;
+		}
+		const suspicious =
+			decision.suspicious || decision.action === "suppress_unchanged_poll" || decision.action === "reject_duplicate";
+		if (!suspicious) return undefined;
+		if (this.#watchdogRemindedStrategies.has(decision.strategyFingerprint)) return undefined;
+		this.#watchdogRemindedStrategies.add(decision.strategyFingerprint);
+		const reminder = prompt
+			.render(watchdogRedirectTemplate, {
+				alerts: [{ reason: decision.reason, repeatCount: decision.repeatCount }],
+			})
+			.trim();
+		const baseContent = prior?.content ?? ctx.result.content;
+		return { ...(prior ?? {}), content: [{ type: "text", text: reminder }, ...baseContent] };
 	}
 
 	/**
