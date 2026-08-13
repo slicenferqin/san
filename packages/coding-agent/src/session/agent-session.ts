@@ -5000,6 +5000,12 @@ export class AgentSession {
 					: event.message;
 			this.#responseDocuments.rememberVisibleAssistant(event.message, visibleMessage);
 		}
+		if (event.type === "message_end" && event.message.role === "compactionSummary") {
+			// 压缩刚改写了模型上下文里的历史表述 — 目标最容易在此刻被稀释。
+			// 让下一个完成的工具调用立即复诵目标(goal-fidelity 方案 B 的
+			// re-anchor 档),之后恢复正常节拍。
+			this.#turnToolCallCount = GOAL_RECITATION_INTERVAL - 1;
+		}
 
 		if (event.type === "turn_start") {
 			this.#resetStreamingEditState();

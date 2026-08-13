@@ -131,6 +131,29 @@ describe("AgentSession goal recitation", () => {
 		expect(recitations).toEqual([20, 40]);
 	});
 
+	it("recites on the first tool call after a compaction summary lands", async () => {
+		await createSession();
+		// Normal cadence: calls 1..5 stay silent.
+		for (let call = 1; call <= 5; call++) {
+			expect(foldedText(session.agent.afterToolCall?.(toolContext(call)))).not.toContain(RECITATION_MARKER);
+		}
+		// A compaction summary just rewrote the model-visible history — the very
+		// next completed tool call must re-anchor the goal.
+		session.agent.emitExternalEvent({
+			type: "message_end",
+			message: {
+				role: "compactionSummary",
+				summary: "compressed history",
+				shortSummary: "compressed",
+				tokensBefore: 1000,
+				timestamp: Date.now(),
+			} as never,
+		});
+		await Bun.sleep(50);
+		const folded = session.agent.afterToolCall?.(toolContext(6));
+		expect(foldedText(folded)).toContain(RECITATION_MARKER);
+	});
+
 	it("carries the objective text and never recites without an active scope contract", async () => {
 		await createSession();
 		let recitationText = "";
