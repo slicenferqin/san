@@ -9247,6 +9247,10 @@ export class AgentSession {
 	 */
 	#buildGeneralContractEcho(message: AgentMessage): CustomMessage | undefined {
 		if (this.settings.get("san.contractEcho.firstTurn") !== true) return undefined;
+		// 子代理的"用户"是编排它的父代理:工作协议回显只属于人类根会话。
+		// 子代理即便持有自己的 runtime(独立 spawn 场景)也不得往 provider
+		// 消息流里注入回显。
+		if (this.#agentKind !== "main") return undefined;
 		// 回显作为伴随消息进 agent 流后持久化为 custom_message entry;skill
 		// 回显同理。任一载体存在都算"已回显",resume 的历史分支同样命中。
 		const isEchoType = (type: string | undefined): boolean =>
