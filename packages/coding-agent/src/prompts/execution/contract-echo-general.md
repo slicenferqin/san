@@ -1,5 +1,3 @@
-[Working agreement]
+My read of the job: {{objective}}
 
-Goal: {{objective}}
-
-The host records command runs, file changes, and progress evidence on this turn's execution scope. If you have explicit acceptance criteria, state them now and they become the completion bar; otherwise the final report will cite the recorded evidence for what was done.
+When I finish, I'll report what was actually done and verified. If you have a specific bar for "done", tell me now and I'll work to that.

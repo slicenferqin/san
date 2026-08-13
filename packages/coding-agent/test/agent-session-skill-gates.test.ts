@@ -138,10 +138,12 @@ describe("AgentSession skill evidence gates", () => {
 		expect(echo.display).toBe(true);
 		expect(echo.attribution).toBe("agent");
 		const text = typeof echo.content === "string" ? echo.content : "";
-		// 回显必须携带目标与 before-done 门(完成标准),软门不进完成标准。
+		// 回显必须携带目标与 before-done 门的人话描述(完成标准);软门与
+		// 机制术语(gate id、kind 标签)都不得出现在用户可见文案里。
 		expect(text).toContain("the parser crashes on empty input");
-		expect(text).toContain("verify");
-		expect(text).not.toContain("`repro` [command]");
+		expect(text).toContain("same command flips to passing");
+		expect(text).not.toContain("minimal failing command");
+		expect(text).not.toContain("[command]");
 		expect(state?.chain("fix-bug")?.contractEcho?.text).toBe(text);
 	});
 
