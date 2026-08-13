@@ -136,6 +136,21 @@ class RpcProcess {
 		return promise;
 	}
 
+	/** prompt 的 response 只是受理确认;回合完成要等流式停止。 */
+	async waitForIdle(timeoutMs: number): Promise<boolean> {
+		const start = Date.now();
+		while (Date.now() - start < timeoutMs) {
+			const id = `idle-${Date.now()}`;
+			this.send({ id, type: "get_state" });
+			const state = await this.waitFor(frame => frame.id === id && frame.type === "response", 10_000, {
+				fromNow: true,
+			});
+			if (state && (state.data as { isStreaming?: boolean } | undefined)?.isStreaming === false) return true;
+			await Bun.sleep(1_000);
+		}
+		return false;
+	}
+
 	async shutdown(): Promise<void> {
 		try {
 			this.proc.kill();
@@ -230,13 +245,17 @@ async function main(): Promise<void> {
 		});
 	}
 	const promptDone = await client.waitFor(frame => frame.id === "prompt-1" && frame.type === "response", 180_000);
+	// response 是受理确认(fire-and-forget);等回合真正结束再继续。
+	const idleAfterPrompt = await client.waitForIdle(120_000);
 	const streamedTypes = [
 		...new Set(client.frames.filter(entry => entry.dir === "in").map(entry => String(entry.frame.type))),
 	];
 	steps.push({
 		name: "prompt.stream",
-		ok: promptDone?.success === true,
-		detail: promptDone ? "prompt settled" : "prompt did not settle in 180s",
+		ok: promptDone?.success === true && idleAfterPrompt,
+		detail: promptDone
+			? `prompt accepted (response = acceptance, not completion); turn idle=${idleAfterPrompt}`
+			: "prompt not accepted in 180s",
 		facts: { observedFrameTypes: streamedTypes },
 	});
 
@@ -250,10 +269,11 @@ async function main(): Promise<void> {
 	client.send({ id: "abort-1", type: "abort" });
 	const abortResponse = await client.waitFor(frame => frame.id === "abort-1" && frame.type === "response", 30_000);
 	const prompt2Settled = await client.waitFor(frame => frame.id === "prompt-2" && frame.type === "response", 30_000);
+	const idleAfterAbort = await client.waitForIdle(60_000);
 	steps.push({
 		name: "abort.settles",
-		ok: abortResponse !== undefined && prompt2Settled !== undefined,
-		detail: `abort responded=${abortResponse !== undefined}, aborted prompt settled=${prompt2Settled !== undefined}`,
+		ok: abortResponse !== undefined && prompt2Settled !== undefined && idleAfterAbort,
+		detail: `abort responded=${abortResponse !== undefined}, aborted prompt acceptance=${prompt2Settled !== undefined}, idle after abort=${idleAfterAbort}`,
 	});
 
 	// ── 5. transcript 完整性(重启前基线) ──
@@ -281,14 +301,17 @@ async function main(): Promise<void> {
 
 	// ── 7. 会话模型:new_session ──
 	client.send({ id: "new-1", type: "new_session" });
-	const newSession = await client.waitFor(frame => frame.id === "new-1" && frame.type === "response", 15_000);
+	const newSessionSentAt = Date.now();
+	const newSession = await client.waitFor(frame => frame.id === "new-1" && frame.type === "response", 90_000);
+	const newSessionLatencyMs = newSession ? Date.now() - newSessionSentAt : undefined;
 	client.send({ id: "messages-3", type: "get_messages" });
 	const messagesNew = await client.waitFor(frame => frame.id === "messages-3" && frame.type === "response", 15_000);
 	const newCount = messageCount(messagesNew);
 	steps.push({
 		name: "session.model",
 		ok: newSession?.success === true,
-		detail: `new_session in-process swap works (single active session per process); fresh transcript count: ${String(newCount)}`,
+		detail: `new_session settled=${newSession !== undefined} latencyMs=${String(newSessionLatencyMs)}; fresh transcript count: ${String(newCount)}`,
+		facts: { rawResponse: newSession },
 	});
 
 	await client.shutdown();

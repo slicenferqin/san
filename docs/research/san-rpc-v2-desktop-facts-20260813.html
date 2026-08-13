@@ -44,10 +44,17 @@
 </tr>
 <tr>
 <td><strong>会话模型是什么?</strong></td>
-<td>单进程单活跃会话;<code>new_session</code>/<code>switch_session</code>/<code>branch</code> 是进程内切换。<span class="bad">实测 new_session 响应异常</span>(未成功切换,transcript 未清空)——待查的真实 bug 线索。</td>
-<td>desktop 多 tab 的稳妥架构:<strong>一个会话 = 一个 RPC 子进程</strong>(隔离好、崩溃不互相影响、天然并发);进程内切换只用于同 tab 的历史切换。在 new_session 修复前不要依赖它。</td>
+<td>单进程单活跃会话;<code>new_session</code>/<code>switch_session</code>/<code>branch</code> 是进程内切换。<span class="bad">已定位的真 bug</span>:会话含 aborted 回合时,<code>--continue</code> 重启后 <code>new_session</code> 立即失败,error 为 "Execution scope … is already terminal with state aborted_by_user; late finish events are rejected"——resume 重放恢复了 terminal 执行 scope,而 new_session 内部的 abort 试图再次 finish 它,被 ledger 的迟到 finish 守卫拒绝。修复在 San 侧进行中(finish 前检查 scope 终态,幂等跳过)。</td>
+<td>desktop 多 tab 的稳妥架构:<strong>一个会话 = 一个 RPC 子进程</strong>(隔离好、崩溃不互相影响、天然并发);进程内切换只用于同 tab 的历史切换。San 修复合入前,恢复型会话上避免 new_session(直接开新进程)。</td>
 </tr>
 </table>
+
+<h2>一·五、最容易踩的坑:prompt 的 response 是"受理",不是"完成"</h2>
+
+<div class="callout" style="border-left-color:var(--hot)">
+<strong><code>prompt</code> / <code>abort_and_prompt</code> 的 response 帧在受理后立即返回(实现是 fire-and-forget,rpc-mode.ts 注释原文 "Don't await — events will stream")。</strong>客户端把它当"回合完成"会踩两个坑:一,收到 response 就允许用户关窗口/杀进程 → 模型响应尚未落盘,重启后这一回合消失(消息一旦 settle 即同步持久化,但 in-flight 回合没有可保存的东西——重启后"未完成回合消失"是正确语义,不是丢数据);二,收到 response 立即发 <code>new_session</code>/<code>switch_session</code> 之类的会话操作 → 内部 <code>await abort()</code> 要等 agent 真正空闲,可能长时间挂起(冒烟首跑的 new_session 异常与此吻合)。<br><br>
+<strong>正确姿势:回合完成以事件流为准</strong>(assistant <code>message_end</code> 且不再流式;或轮询 <code>get_state</code> 直到 <code>isStreaming: false</code>)。冒烟客户端 v2 已内置 <code>waitForIdle</code> 演示该模式。
+</div>
 
 <h2>二、实测帧样例(客户端可直接对照)</h2>
 
