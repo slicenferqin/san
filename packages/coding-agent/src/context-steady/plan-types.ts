@@ -47,6 +47,10 @@ export interface ContextPlanQualityGateAudit {
 	requiredBurstTokens?: number;
 	projectedInputTokens?: number;
 	projectedInputLimit?: number;
+	/** 应急降级档:hard_pressure 前把这些非保护已闭合工具输出降为 stub 可挽回超额。 */
+	emergencyStubEntryRefs?: string[];
+	/** 应急降级预计挽回的 token(estimates 缺失的候选按 0 计)。 */
+	emergencyStubReclaimedTokens?: number;
 }
 
 export interface ContextPlanQualityGateOptions {
@@ -168,6 +172,8 @@ export interface ContextPlanToolStubMaterial {
 	toolCallId: string;
 	resultEntryId: string;
 	path?: string;
+	/** 降级来源:superseded(同文件后续 mutation)或 emergency(压力应急档)。 */
+	stubKind?: "superseded" | "emergency";
 	coveredEntryRefs: string[];
 }
 

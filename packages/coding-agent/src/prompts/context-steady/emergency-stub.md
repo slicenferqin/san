@@ -1,0 +1,1 @@
+[output elided under context pressure{{#if path}} — {{path}}{{/if}}] This tool output was downgraded to keep the session under its context ceiling. The action itself still happened as recorded. Re-run the command or read the file if you need the exact content again.
