@@ -481,6 +481,7 @@ import { generateSessionTitle } from "../utils/title-generator";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import type { VibeModeState } from "../vibe/state";
 import type { AuthStorage } from "./auth-storage";
+import { CACHE_PROBE_CUSTOM_TYPE, type CacheProbeSample, classifyCacheProbe, systemPromptHash } from "./cache-probe";
 import type { ClientBridge, ClientBridgePermissionOption, ClientBridgePermissionOutcome } from "./client-bridge";
 import {
 	type CodexAutoRedeemRedeemDecision,
@@ -2363,6 +2364,8 @@ export class AgentSession {
 	#watchdogRemindedStrategies = new Set<string>();
 	/** 本 turn 已完成的工具调用数(goal recitation 的节拍;turn_start 重置)。 */
 	#turnToolCallCount = 0;
+	/** 上一条 cache probe 样本(归因对比基准;进程内状态,resume 后重新起算)。 */
+	#lastCacheProbe: CacheProbeSample | undefined;
 
 	// Custom commands (TypeScript slash commands)
 	#customCommands: LoadedCustomCommand[] = [];
@@ -4999,6 +5002,7 @@ export class AgentSession {
 					? displayEvent.message
 					: event.message;
 			this.#responseDocuments.rememberVisibleAssistant(event.message, visibleMessage);
+			this.#recordCacheProbe(event.message);
 		}
 		if (event.type === "message_end" && event.message.role === "compactionSummary") {
 			// 压缩刚改写了模型上下文里的历史表述 — 目标最容易在此刻被稀释。
@@ -9563,6 +9567,29 @@ export class AgentSession {
 			}
 		}
 		return { objective, todoLines, pendingGates };
+	}
+
+	/**
+	 * Prompt-cache 命中归因观测(§4.2 基线):assistant 回合 settle 时把请求
+	 * 事实归因为一条确定性样本落 journal。纯观测、零行为变化;usage 缺失
+	 * (中断/零输入)的回合不产样本。
+	 */
+	#recordCacheProbe(message: AssistantMessage): void {
+		if (this.settings.get("san.cacheProbe.enabled") !== true) return;
+		if (!this.#sessionWritesEnabled) return;
+		const usage = message.usage;
+		if (!usage || usage.input <= 0) return;
+		const sample = classifyCacheProbe(this.#lastCacheProbe, {
+			provider: message.provider,
+			model: message.model,
+			systemPromptHash: systemPromptHash(this.agent.state.systemPrompt),
+			timestampMs: Date.now(),
+			input: usage.input,
+			cacheRead: usage.cacheRead,
+			cacheWrite: usage.cacheWrite,
+		});
+		this.#lastCacheProbe = sample;
+		this.sessionManager.appendCustomEntry(CACHE_PROBE_CUSTOM_TYPE, sample);
 	}
 
 	/**
