@@ -3,6 +3,7 @@ import { estimateTokens } from "@san/agent/compaction";
 import type { SessionEntry } from "../session/session-entries";
 import type { ContextPlanBudgetSettings } from "./budget";
 import { resolveContextPlanBudget } from "./budget";
+import { projectDigestTier, selectDigestTier } from "./decay";
 import { renderContextPlanContent } from "./materialize";
 import {
 	type BuiltContextPlan,
@@ -155,6 +156,7 @@ function buildMaterials(
 	recall: ContextPacketRecallLayer | undefined,
 	planTokenBudget: number,
 	currentPromptText: string | undefined,
+	contextPressure: number,
 ): ContextPlanMaterial[] {
 	const materials: ContextPlanMaterial[] = [];
 	let remainingBudget = Math.max(0, Math.floor(planTokenBudget));
@@ -194,9 +196,14 @@ function buildMaterials(
 		.filter(source => !coveredDigestRefs.has(source.entryId) || !includeCheckpoint)
 		.filter(source => !requireRelevance || isDigestRelevantToPrompt(promptText, source.digest))
 		.slice(-Math.max(0, Math.floor(maxDigestMaterials)));
-	for (const source of selectedDigests) {
+	for (const [index, source] of selectedDigests.entries()) {
 		const canCoverSource = source.digest.fallback !== true;
-		const estimate = materialTokenEstimate(source.digest);
+		// Decay 选级:selectedDigests 旧→新有序,ageRank 0 = 最新。渲染粒度
+		// 随年龄与预算压力确定性降级;coverage 授权与粒度无关(原文可经
+		// context_expand 取回)。
+		const ageRank = selectedDigests.length - 1 - index;
+		const tier = selectDigestTier(ageRank, contextPressure);
+		const estimate = materialTokenEstimate(projectDigestTier(source.digest, tier));
 		if (estimate > remainingBudget) continue;
 		const material: ContextPlanDigestMaterial = {
 			audit: {
@@ -205,11 +212,12 @@ function buildMaterials(
 				representation: "digest",
 				entryRefs: [source.entryId],
 				tokenEstimate: estimate,
-				reason: canCoverSource ? "recent settled turn digest" : "fallback digest for reference only",
+				reason: `${canCoverSource ? "recent settled turn digest" : "fallback digest for reference only"} (tier: ${tier})`,
 			},
 			entryId: source.entryId,
 			digest: source.digest,
 			coveredEntryRefs: canCoverSource ? source.sourceEntryRefs : [],
+			tier,
 		};
 		materials.push(material);
 		remainingBudget -= estimate;
@@ -349,12 +357,17 @@ export function buildContextPlan(options: BuildContextPlanOptions): BuiltContext
 		maintenanceId: options.maintenanceId,
 		recoveryAttempt: options.recoveryAttempt,
 	});
+	// Decay 压力信号:整体投影输入占用率。projectedInputTokens 是调用方对
+	// 物化后 payload 的真实估算;缺省(如早期调用)回退到保护集占用。
+	const pressureBasis = options.projectedInputTokens ?? qualityGate.selectedInputTokens;
+	const contextPressure = budget.messageBudget > 0 ? pressureBasis / budget.messageBudget : 0;
 	const candidateMaterials = buildMaterials(
 		sourceIndex,
 		options.maxDigestMaterials ?? 5,
 		options.recall,
 		budget.planTokenBudget,
 		options.currentPromptText,
+		contextPressure,
 	);
 	const promptText = options.currentPromptText?.trim() ?? "";
 	const topicShift = promptText.length > 0 && isTopicShiftPrompt(promptText);

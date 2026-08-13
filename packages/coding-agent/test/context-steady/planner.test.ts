@@ -265,7 +265,9 @@ describe("buildContextPlan", () => {
 		const projected = materializeContextPlanMessages(asMessages([oldUser, oldAssistant, currentUser]), entries, plan);
 		const text = JSON.stringify(projected);
 
-		expect(plan.audit.materials.map(material => material.reason)).toContain("fallback digest for reference only");
+		expect(
+			plan.audit.materials.some(material => material.reason.startsWith("fallback digest for reference only")),
+		).toBe(true);
 		expect(plan.audit.coverage).toEqual([]);
 		expect(text).toContain("fallback raw user");
 		expect(text).toContain("fallback raw assistant");
