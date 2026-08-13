@@ -1,0 +1,1 @@
+[superseded edit{{#if path}} — {{path}}{{/if}}] This mutation's diff/output was elided: the same file was modified again later in this session, so this intermediate state is stale. Read the file for its current content.

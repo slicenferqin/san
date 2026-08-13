@@ -2,9 +2,10 @@ import type { AgentMessage } from "@san/agent";
 import { estimateTokens } from "@san/agent/compaction";
 import { prompt } from "@san/utils";
 import contextPlanTemplate from "../prompts/context-steady/context-plan.md" with { type: "text" };
+import supersededEditStubTemplate from "../prompts/context-steady/superseded-edit-stub.md" with { type: "text" };
 import type { CustomMessageEntry, SessionEntry, SessionMessageEntry } from "../session/session-entries";
 import { validateContextPlanCoverage } from "./coverage";
-import type { BuiltContextPlan, ContextPlanMaterial } from "./plan-types";
+import type { BuiltContextPlan, ContextPlanMaterial, ContextPlanToolStubMaterial } from "./plan-types";
 import { CONTEXT_PLAN_MESSAGE_TYPE } from "./plan-types";
 import { CONTEXT_PACKET_MESSAGE_TYPE } from "./types";
 
@@ -109,7 +110,7 @@ function materialViews(materials: readonly ContextPlanMaterial[]) {
 				risks: clampArray(digest.risks, 4, 180),
 				nextSteps: clampArray(digest.nextSteps, 4, 180),
 			});
-		} else {
+		} else if ("recall" in material) {
 			recalls.push({
 				materialId: material.audit.materialId,
 				query: clampString(material.recall.query, 300),
@@ -121,6 +122,8 @@ function materialViews(materials: readonly ContextPlanMaterial[]) {
 				})),
 			});
 		}
+		// tool_stub materials act on payload projection only — never rendered
+		// into the plan message.
 	}
 	return { checkpoints, digests, recalls };
 }
@@ -169,6 +172,36 @@ function stripPriorDerivedPlanMessages(messages: readonly AgentMessage[]): Agent
 	);
 }
 
+function isToolStubMaterial(material: ContextPlanMaterial): material is ContextPlanToolStubMaterial {
+	return "toolCallId" in material && "resultEntryId" in material;
+}
+
+/** Superseded mutation 的替换映射:消息引用与内容键双通道,与 covered 消息同一匹配机制。 */
+function toolStubTargets(branchEntries: readonly SessionEntry[], stubs: readonly ContextPlanToolStubMaterial[]) {
+	const byRef = new WeakMap<AgentMessage, ContextPlanToolStubMaterial>();
+	const byKey = new Map<string, ContextPlanToolStubMaterial>();
+	if (stubs.length === 0) return { byRef, byKey };
+	const stubByResultEntryId = new Map(stubs.map(stub => [stub.resultEntryId, stub]));
+	for (const entry of branchEntries) {
+		if (entry.type !== "message") continue;
+		const stub = stubByResultEntryId.get(entry.id);
+		if (!stub || entry.message.role !== "toolResult") continue;
+		byRef.set(entry.message, stub);
+		byKey.set(sessionMessageEntryKey(entry), stub);
+	}
+	return { byRef, byKey };
+}
+
+function substituteToolStub(message: AgentMessage, stub: ContextPlanToolStubMaterial): AgentMessage {
+	const text = prompt.render(supersededEditStubTemplate, { path: stub.path }).trim();
+	return {
+		...message,
+		content: [{ type: "text", text }],
+		// 原 details 可能携带完整 diff;替换为最小 superseded 标记。
+		details: { superseded: true, ...(stub.path ? { path: stub.path } : {}) },
+	} as AgentMessage;
+}
+
 export function materializeContextPlanMessages(
 	messages: readonly AgentMessage[],
 	branchEntries: readonly SessionEntry[],
@@ -181,6 +214,8 @@ export function materializeContextPlanMessages(
 	});
 	const coveredEntryIds = validation.valid ? new Set(validation.coveredEntryRefs) : new Set<string>();
 	const { refs, messageKeys, customKeys } = coveredMessageRefs(branchEntries, coveredEntryIds);
+	const stubs = plan.materials.filter(isToolStubMaterial);
+	const stubTargets = toolStubTargets(branchEntries, stubs);
 	const stripped = stripPriorDerivedPlanMessages(messages);
 	const projected = stripped.filter(message => {
 		const messageKey = sessionMessageKey(message);
@@ -191,11 +226,21 @@ export function materializeContextPlanMessages(
 		}
 		return !consumeCount(messageKeys, messageKey) && !consumeCount(customKeys, customKey);
 	});
+	// 省略(coverage)先行,替换(stub)后行:已被省略的消息不需要 stub。
+	const substituted =
+		stubs.length === 0
+			? projected
+			: projected.map(message => {
+					const stub =
+						stubTargets.byRef.get(message) ??
+						(message.role === "toolResult" ? stubTargets.byKey.get(sessionMessageKey(message) ?? "") : undefined);
+					return stub ? substituteToolStub(message, stub) : message;
+				});
 	const insertAt = Math.max(
 		0,
-		projected.findLastIndex(message => message.role === "user"),
+		substituted.findLastIndex(message => message.role === "user"),
 	);
-	return [...projected.slice(0, insertAt), plan.message, ...projected.slice(insertAt)];
+	return [...substituted.slice(0, insertAt), plan.message, ...substituted.slice(insertAt)];
 }
 
 export function estimateContextPlanProjectedTokens(
