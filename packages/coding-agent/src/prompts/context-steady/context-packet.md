@@ -11,9 +11,9 @@ Stable checkpoint:
 
 {{/if}}
 {{#if digests.length}}
-Recent turn digests:
+Recent turn digests (each is a summary of a settled span; pass its ref to the `context_expand` tool to re-read the original messages when the summary is not enough):
 {{#each digests}}
-- Turn {{index}}:
+- Turn {{index}} [ref: {{ref}}]:
   userIntent: {{userIntent}}
   actionsTaken:{{#if actionsTaken.length}}{{#each actionsTaken}} {{this}};{{/each}}{{else}} none{{/if}}
   decisions:{{#if decisions.length}}{{#each decisions}} {{this}};{{/each}}{{else}} none{{/if}}

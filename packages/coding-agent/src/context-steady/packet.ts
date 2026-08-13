@@ -49,6 +49,8 @@ export interface PreviousContextPacketRefs {
 
 interface PacketDigestView {
 	index: number;
+	/** Digest entry id — the model quotes this to `context_expand` for the raw span. */
+	ref: string;
 	userIntent: string;
 	actionsTaken: string[];
 	decisions: string[];
@@ -132,9 +134,10 @@ function clampStringArray(values: readonly string[], maxItems: number, maxLength
 	return result;
 }
 
-function digestView(index: number, digest: TurnDigest): PacketDigestView {
+function digestView(index: number, entryId: string, digest: TurnDigest): PacketDigestView {
 	return {
 		index,
+		ref: entryId,
 		userIntent: clampNarrative(digest.userIntent, 240),
 		actionsTaken: clampStringArray(digest.actionsTaken, 5, 180),
 		decisions: clampStringArray(digest.decisions, 5, 180),
@@ -186,7 +189,7 @@ function renderPacketContent(
 	checkpoint?: ContextCheckpoint,
 	recall?: ContextPacketRecallLayer,
 ): string {
-	const views = digests.map((entry, index) => digestView(index + 1, entry.digest));
+	const views = digests.map((entry, index) => digestView(index + 1, entry.entryId, entry.digest));
 	return prompt.render(packetTemplate, {
 		checkpoint: checkpoint ? checkpointView(checkpoint) : undefined,
 		digests: views,
@@ -195,7 +198,7 @@ function renderPacketContent(
 }
 
 function renderDigestLedgerContent(digests: readonly DigestEntryRef[]): string {
-	const views = digests.map((entry, index) => digestView(index + 1, entry.digest));
+	const views = digests.map((entry, index) => digestView(index + 1, entry.entryId, entry.digest));
 	return prompt.render(packetTemplate, { digests: views });
 }
 

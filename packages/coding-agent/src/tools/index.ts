@@ -6,6 +6,7 @@ import type { AsyncJobManager } from "../async/job-manager";
 import type { Rule } from "../capability/rule";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
+import type { ContextExpandResult } from "../context-steady/expand";
 import { EditTool } from "../edit";
 import { checkJuliaKernelAvailability } from "../eval/jl/kernel";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
@@ -43,6 +44,7 @@ import { BashTool } from "./bash";
 import { BrowserTool } from "./browser";
 import { type BuiltinToolName, type HiddenToolName, normalizeToolNames } from "./builtin-names";
 import { type CheckpointState, CheckpointTool, type CompletedRewindState, RewindTool } from "./checkpoint";
+import { ContextExpandTool } from "./context-expand";
 import { DebugTool } from "./debug";
 import { EvalTool } from "./eval";
 import { resolveEvalBackends } from "./eval-backends";
@@ -347,6 +349,10 @@ export interface ToolSession {
 	setCheckpointState?: (state: CheckpointState | null) => void;
 	/** Get the most recent completed rewind, if this session just rewound a checkpoint. */
 	getLastCompletedRewind?: () => CompletedRewindState | undefined;
+	/** Context-steady 自助召回:按 digest entry id 把其 source 区间从 journal
+	 *  解压为有界文本。仅 context-steady 开启的根会话提供;`context_expand`
+	 *  工具据此条件创建。 */
+	expandContextDigest?: (digestEntryId: string) => ContextExpandResult | undefined;
 
 	/** Per-session snapshot store of file contents as last shown to the model
 	 *  by `read`/`search`. Used by hashline anchor-stale recovery to
@@ -413,6 +419,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	browser: s => new BrowserTool(s),
 	checkpoint: CheckpointTool.createIf,
 	rewind: RewindTool.createIf,
+	context_expand: ContextExpandTool.createIf,
 	task: s => TaskTool.create(s),
 	hub: s => new HubTool(s),
 	session_handoff: SessionHandoffTool.createIf,
