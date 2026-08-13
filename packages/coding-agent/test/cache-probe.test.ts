@@ -17,14 +17,14 @@ import { createMockModel, type MockModel } from "@san/ai/providers/mock";
 import { getBundledModel } from "@san/catalog/models";
 import { ModelRegistry } from "@san/coding-agent/config/model-registry";
 import { Settings } from "@san/coding-agent/config/settings";
+import { AgentSession } from "@san/coding-agent/session/agent-session";
+import { AuthStorage } from "@san/coding-agent/session/auth-storage";
 import {
 	CACHE_PROBE_CUSTOM_TYPE,
 	type CacheProbeRequestFacts,
 	type CacheProbeSample,
 	classifyCacheProbe,
 } from "@san/coding-agent/session/cache-probe";
-import { AgentSession } from "@san/coding-agent/session/agent-session";
-import { AuthStorage } from "@san/coding-agent/session/auth-storage";
 import { SessionManager } from "@san/coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@san/utils";
 
@@ -68,9 +68,7 @@ describe("classifyCacheProbe", () => {
 		expect(
 			classifyCacheProbe(previous, facts({ systemPromptHash: "sp-2", timestampMs: 1_010_000 })).attribution,
 		).toBe("system_prompt_changed");
-		expect(classifyCacheProbe(previous, facts({ timestampMs: 1_000_000 + 6 * 60_000 })).attribution).toBe(
-			"idle_gap",
-		);
+		expect(classifyCacheProbe(previous, facts({ timestampMs: 1_000_000 + 6 * 60_000 })).attribution).toBe("idle_gap");
 		expect(classifyCacheProbe(previous, facts({ timestampMs: 1_010_000 })).attribution).toBe("prefix_diverged");
 	});
 
