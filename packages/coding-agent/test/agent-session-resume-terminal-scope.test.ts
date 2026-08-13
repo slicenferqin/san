@@ -18,10 +18,7 @@ import { createMockModel, type MockModel } from "@san/ai/providers/mock";
 import { getBundledModel } from "@san/catalog/models";
 import { ModelRegistry } from "@san/coding-agent/config/model-registry";
 import { Settings } from "@san/coding-agent/config/settings";
-import {
-	createExecutionRuntime,
-	type ExecutionRuntime,
-} from "@san/coding-agent/execution-control/execution-runtime";
+import { createExecutionRuntime, type ExecutionRuntime } from "@san/coding-agent/execution-control/execution-runtime";
 import { ProviderHealthRegistry } from "@san/coding-agent/execution-control/provider-health";
 import { TaskContractRegistry } from "@san/coding-agent/execution-control/task-contract";
 import type { ImmutableObjectiveContract } from "@san/coding-agent/execution-control/types";
