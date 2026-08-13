@@ -13,6 +13,8 @@ import {
 	type ContextPlanAudit,
 	type ContextPlanCoverageAudit,
 	type ContextPlanDigestMaterial,
+	type ContextPlanGoalAnchorInput,
+	type ContextPlanGoalAnchorMaterial,
 	type ContextPlanMaterial,
 	type ContextPlanRecallMaterial,
 	type ContextPlanToolStubMaterial,
@@ -54,6 +56,8 @@ export interface BuildContextPlanOptions {
 	rebaseReason?: ContextPlanAudit["rebaseReason"];
 	/** Current user prompt text for relevance / topic-shift material selection. */
 	currentPromptText?: string;
+	/** 目标锚事实(宿主注入);缺省或 objective 为空时不产生锚材料。 */
+	goalAnchor?: ContextPlanGoalAnchorInput;
 }
 
 function materialTokenEstimate(value: unknown): number {
@@ -115,6 +119,53 @@ function buildEvidenceStubAuditMaterials(sourceIndex: ContextSourceIndex): Conte
 
 /** Stub 替换文本很小且尺寸稳定;审计用固定估算,避免为它渲染真实模板。 */
 const TOOL_STUB_TOKEN_ESTIMATE = 40;
+
+/** 目标锚各字段的裁剪上限:锚必须恒小(几百 token 封顶),永不与内容材料争预算。 */
+const GOAL_ANCHOR_LIMITS = {
+	objectiveChars: 480,
+	todoLines: 8,
+	pendingGates: 4,
+	nextSteps: 3,
+	lineChars: 160,
+} as const;
+
+function clampAnchorLine(value: string): string {
+	return value.length <= GOAL_ANCHOR_LIMITS.lineChars ? value : `${value.slice(0, GOAL_ANCHOR_LIMITS.lineChars - 1)}…`;
+}
+
+/**
+ * 目标锚材料(goal-fidelity 方案 A):不可变契约目标 + 进度快照,每次请求
+ * 常驻 plan 消息。fit 只裁 recall/digest/checkpoint,锚天然不可裁;不授权
+ * coverage。objective 为空不建锚。
+ */
+function buildGoalAnchorMaterial(
+	input: ContextPlanGoalAnchorInput | undefined,
+	sourceIndex: ContextSourceIndex,
+): ContextPlanGoalAnchorMaterial | undefined {
+	const objective = input?.objective.trim();
+	if (!objective) return undefined;
+	const latestDigest = sourceIndex.digests.at(-1)?.digest;
+	const material: ContextPlanGoalAnchorMaterial = {
+		audit: {
+			materialId: `goal_anchor_${crypto.randomUUID().slice(-12)}`,
+			kind: "goal_anchor",
+			representation: "exact",
+			entryRefs: [],
+			tokenEstimate: 0,
+			reason: "host-pinned objective and progress anchor (immutable contract projection)",
+		},
+		objective:
+			objective.length <= GOAL_ANCHOR_LIMITS.objectiveChars
+				? objective
+				: `${objective.slice(0, GOAL_ANCHOR_LIMITS.objectiveChars - 1)}…`,
+		todoLines: (input?.todoLines ?? []).slice(0, GOAL_ANCHOR_LIMITS.todoLines).map(clampAnchorLine),
+		pendingGates: (input?.pendingGates ?? []).slice(0, GOAL_ANCHOR_LIMITS.pendingGates).map(clampAnchorLine),
+		nextSteps: (latestDigest?.nextSteps ?? []).slice(0, GOAL_ANCHOR_LIMITS.nextSteps).map(clampAnchorLine),
+		coveredEntryRefs: [],
+	};
+	material.audit.tokenEstimate = materialTokenEstimate(material);
+	return material;
+}
 
 /**
  * Superseded mutation 的表示降级材料(magic-context 研究 §4.4):同一文件
@@ -403,6 +454,10 @@ export function buildContextPlan(options: BuildContextPlanOptions): BuiltContext
 		options.currentPromptText,
 		contextPressure,
 	);
+	// 目标锚置于材料列表最前:渲染在 plan 消息头部,且 fit 裁剪(只认
+	// recall/digest/checkpoint 字段)永远碰不到它。
+	const goalAnchorMaterial = buildGoalAnchorMaterial(options.goalAnchor, sourceIndex);
+	if (goalAnchorMaterial) candidateMaterials.unshift(goalAnchorMaterial);
 	const promptText = options.currentPromptText?.trim() ?? "";
 	const topicShift = promptText.length > 0 && isTopicShiftPrompt(promptText);
 	const naturalTopicChange =
