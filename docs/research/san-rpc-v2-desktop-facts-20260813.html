@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>San RPC v2 现状事实报告｜给 desktop 客户端开发</title>
+<style>
+	:root { --bg:#0f1115; --panel:#171a21; --text:#d7dce5; --muted:#8b93a3; --accent:#5eb1ff; --good:#4ade80; --warn:#fbbf24; --hot:#f87171; --line:#2a2f3a; }
+	body { margin:0; padding:32px 24px 80px; background:var(--bg); color:var(--text); font:15px/1.75 -apple-system,"PingFang SC",sans-serif; }
+	.wrap { max-width:940px; margin:0 auto; }
+	h1 { font-size:24px; margin:0 0 6px; }
+	h2 { font-size:19px; margin:36px 0 12px; padding-bottom:8px; border-bottom:1px solid var(--line); color:var(--accent); }
+	.meta { color:var(--muted); font-size:13px; margin-bottom:20px; }
+	table { width:100%; border-collapse:collapse; margin:14px 0; font-size:14px; }
+	th, td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+	th { color:var(--muted); font-weight:600; }
+	code, pre { background:#1d212b; border-radius:4px; font-family:"SF Mono",Menlo,monospace; font-size:13px; }
+	code { padding:1px 6px; }
+	pre { padding:12px 14px; overflow-x:auto; line-height:1.5; }
+	.ok { color:var(--good); font-weight:700; } .warn { color:var(--warn); font-weight:700; } .bad { color:var(--hot); font-weight:700; }
+	.callout { background:var(--panel); border-left:3px solid var(--accent); padding:12px 16px; border-radius:0 8px 8px 0; margin:14px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>San RPC v2 现状事实报告(给 desktop 客户端开发)</h1>
+<div class="meta">2026-08-13 · 依据:代码审读 + 真实冒烟运行(<code>scripts/rpc-smoke-client.ts</code>,deepseek-v4-flash,报告 /tmp/rpc-smoke-report.json)· 上游对照:oh-my-pi PR #8196(RPC v3)</div>
+
+<div class="callout">冒烟客户端 8 步全链路真实运行,7 通过 1 异常。结论:<strong>聊天窗口第一版的主数据流(握手/流式/中断/进程级恢复)当下即可开发</strong>;审批与断线续流两处需要按下文事实设计,San 侧各有一个对应的补强项。</div>
+
+<h2>一、三个问题的实测答案</h2>
+
+<table>
+<tr><th>问题</th><th>实测事实</th><th>对客户端的含义</th></tr>
+<tr>
+<td><strong>审批以什么形态到达?</strong></td>
+<td><span class="warn">通用对话降级</span>。工具审批到达为 <code>extension_ui_request method=select</code>,工具名与命令嵌在 <code>title</code> 自由文本里,<code>options</code> 是纯字符串数组(<code>["Approve","Deny"]</code>);回复 <code>extension_ui_response {id, value:"Approve"}</code>。代码层面 <code>requestToolApproval</code> 结构化接口存在但 RPC UI context 未实现。</td>
+<td>能弹对话框、能放行,但客户端<strong>无法结构化识别"这是工具审批"</strong>(只能靠 title 文本猜),做不了风险着色、命令语法高亮、"记住此工具"等专门审批 UI。第一版可以用通用对话渲染顶住;专门审批 UI 需要等 San 侧补强(见 §三)。</td>
+</tr>
+<tr>
+<td><strong>断线后怎么恢复?</strong></td>
+<td><span class="ok">进程级恢复可靠</span>:杀进程后以 <code>--continue</code> 重启,<code>get_messages</code> 返回完整 transcript(5 条 = 5 条,实测)。<span class="warn">但没有细粒度续流协议</span>:无 ack/游标/gap 语义,重连 = 全量重建,流式进行中断线的那条消息按持久化终态恢复。</td>
+<td>客户端把"重连"实现为:重启进程(或重开管道)→ <code>get_messages</code> 全量重建 → 继续订阅事件。<strong>不要尝试增量续流</strong>,当前协议没有这个概念。对聊天窗足够;高频断连场景(移动网络、远程)体验一般。</td>
+</tr>
+<tr>
+<td><strong>会话模型是什么?</strong></td>
+<td>单进程单活跃会话;<code>new_session</code>/<code>switch_session</code>/<code>branch</code> 是进程内切换。<span class="bad">实测 new_session 响应异常</span>(未成功切换,transcript 未清空)——待查的真实 bug 线索。</td>
+<td>desktop 多 tab 的稳妥架构:<strong>一个会话 = 一个 RPC 子进程</strong>(隔离好、崩溃不互相影响、天然并发);进程内切换只用于同 tab 的历史切换。在 new_session 修复前不要依赖它。</td>
+</tr>
+</table>
+
+<h2>二、实测帧样例(客户端可直接对照)</h2>
+
+<pre>// 审批请求(实测原样)
+{"type":"extension_ui_request","id":"1555d4f5ed8de31d","method":"select",
+ "title":"Allow tool: bash\nCommand: ls -A | wc -l","options":["Approve","Deny"]}
+
+// 客户端放行
+{"id":"1555d4f5ed8de31d","type":"extension_ui_response","value":"Approve"}
+
+// 命令面(实测触达):prompt / steer / follow_up / abort / abort_and_prompt /
+// new_session / switch_session / branch / get_state / get_messages /
+// get_available_models / set_model / set_thinking_level / bash / login …
+// 事件面:ready → (session events 原样流) → response{id,command,success}</pre>
+
+<p class="meta">完整帧序列见冒烟报告 JSON;冒烟客户端可随时重跑:<code>bun run scripts/rpc-smoke-client.ts --model &lt;pattern&gt; --out report.json</code></p>
+
+<h2>三、San 侧对应补强(建议顺序)</h2>
+
+<table>
+<tr><th>#</th><th>补强</th><th>内容</th><th>预估</th></tr>
+<tr><td>1</td><td><strong>结构化审批帧</strong></td><td>RPC UI context 实现 <code>requestToolApproval</code>:新帧型 <code>tool_approval_request</code> 带 toolCallId/toolName/tier(read|write|exec)/命令预览/策略来源,响应带六终态结算(借 v3 语义:accepted/cancelled/timed_out/unsupported/failed/disconnected)。旧客户端不受影响(能力未声明时继续 select 降级——v3 的"缺 UI 不强转布尔"原则)。</td><td>2-3 天</td></tr>
+<tr><td>2</td><td><strong>new_session bug</strong></td><td>冒烟已复现:RPC 模式 new_session 响应异常且会话未切换。先修——它挡着单进程内的会话管理语义。</td><td>0.5-1 天</td></tr>
+<tr><td>3</td><td><strong>观测 ack/游标(可后置)</strong></td><td>按 v3 形态加 snapshot-then-subscribe + 累计 ack + gap 事件 + journal 游标重连。聊天窗第一版用"全量重建"即可,此项等 desktop 遇到真实断连痛点再做,字段命名对齐 v3 以便未来概念映射。</td><td>~1 周</td></tr>
+</table>
+
+<div class="callout">给你开发中客户端的一句话建议:<strong>按"一会话一进程 + 全量重建式重连 + 通用对话渲染审批"起步,这三条今天就是稳的</strong>;San 侧先补结构化审批(#1)和 new_session 修复(#2),你的审批专门 UI 等 #1 落地再接。</div>
+
+</div>
+</body>
+</html>
