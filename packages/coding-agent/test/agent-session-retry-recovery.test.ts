@@ -330,8 +330,8 @@ describe("AgentSession retry recovery", () => {
 		// Presentation may prepend a friendly headline; the raw diagnostic stays verbatim.
 		const presentation = resolveAssistantErrorPresentation(terminalError);
 		expect(presentation.kind).toBe("full");
-		expect(presentation.isError).toBe(true);
 		if (presentation.kind === "full") {
+			expect(presentation.isError).toBe(true);
 			expect(presentation.text.endsWith(terminalErrorText)).toBe(true);
 		}
 	});
@@ -364,8 +364,8 @@ describe("AgentSession retry recovery", () => {
 			assistantMessage({ stopReason: "error", errorMessage: "503 service unavailable" }),
 		);
 		expect(unrecovered.kind).toBe("full");
-		expect(unrecovered.isError).toBe(true);
 		if (unrecovered.kind === "full") {
+			expect(unrecovered.isError).toBe(true);
 			// Friendly headline on top, raw diagnostic preserved verbatim at the end.
 			expect(unrecovered.text.endsWith("503 service unavailable")).toBe(true);
 		}
