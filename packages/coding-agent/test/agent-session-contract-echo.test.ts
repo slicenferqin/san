@@ -49,7 +49,9 @@ describe("AgentSession general contract echo", () => {
 	let mock: MockModel;
 	let authStorage: AuthStorage | undefined;
 
-	async function createSession(options: { settings?: Settings; skills?: Skill[] } = {}): Promise<void> {
+	async function createSession(
+		options: { settings?: Settings; skills?: Skill[]; agentKind?: "main" | "sub" } = {},
+	): Promise<void> {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Test model not found in registry");
 		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
@@ -77,6 +79,7 @@ describe("AgentSession general contract echo", () => {
 			modelRegistry,
 			executionRuntime: runtime,
 			skills: options.skills,
+			agentKind: options.agentKind,
 		});
 	}
 
@@ -128,6 +131,17 @@ describe("AgentSession general contract echo", () => {
 		);
 		expect(userIndex).toBeGreaterThanOrEqual(0);
 		expect(echoIndex).toBeGreaterThan(userIndex);
+	});
+
+	it("never echoes in subagent sessions, even with an owned runtime that mints scopes", async () => {
+		// Regression: a taskDepth>0 session created without a fixed parent scope
+		// owns its runtime and mints scopes like a root — but its "user" is the
+		// orchestrating parent agent, so the working-agreement echo must never
+		// enter the provider message stream (it corrupted append-only prefix
+		// expectations in the subagent message pipeline).
+		await createSession({ agentKind: "sub" });
+		await session.prompt("subagent objective");
+		expect(generalEchoes()).toHaveLength(0);
 	});
 
 	it("stays silent when san.contractEcho.firstTurn is disabled", async () => {
