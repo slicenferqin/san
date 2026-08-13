@@ -235,6 +235,7 @@ import {
 	rebaseActiveContinuationState,
 } from "../context-steady/continuation";
 import { generateDigest as generateContextSteadyDigest } from "../context-steady/digest";
+import { type ContextExpandResult, expandDigestSpan } from "../context-steady/expand";
 import { generateFallbackDigest } from "../context-steady/fallback";
 import { estimateContextPlanProjectedTokens, materializeContextPlanMessages } from "../context-steady/materialize";
 import { type BuiltContextPlan, CONTEXT_PLAN_CUSTOM_TYPE } from "../context-steady/plan-types";
@@ -9372,6 +9373,17 @@ export class AgentSession {
 
 	getCheckpointState(): CheckpointState | undefined {
 		return this.#checkpointState;
+	}
+
+	/**
+	 * Context-steady 自助召回(`context_expand` 工具的会话侧能力):按 digest
+	 * entry id 把其 source 区间从当前分支 journal 解压为有界文本。仅根会话
+	 * 且 context steady 开启时提供;固定 scope 的子会话读的是父的历史,不提供。
+	 */
+	expandContextDigest(digestEntryId: string): ContextExpandResult | undefined {
+		if (this.settings.get("san.contextSteady.enabled") !== true) return undefined;
+		if (this.#executionScopeId !== undefined) return undefined;
+		return expandDigestSpan(this.sessionManager.getBranch(), digestEntryId);
 	}
 
 	getLastCompletedRewind(): CompletedRewindState | undefined {

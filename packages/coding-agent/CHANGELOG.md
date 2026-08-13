@@ -10,6 +10,7 @@
 
 ### Added
 
+- Added a `context_expand` tool as the agent-facing recall channel for context steady state: turn digests in the context packet now carry an expandable `[ref: …]` id, and the model can pass that ref to re-read the original journal span behind a lossy summary (bounded output, oldest side truncated). Available on root sessions with context steady enabled; the append-only journal already guaranteed the raw span was preserved — this opens the existing system-side re-read path to the model.
 - Added session-level skill evidence gates behind the default-on `skills.evidenceGates` setting: triggering an evidence-chain skill echoes a visible working-agreement contract message, completed `bash` commands mint host receipts against matching command gates (`sameAs` chains require the same command fingerprint), and file-mutation tools receive a one-time advisory reminder while declared before-fix evidence is missing.
 - Added San Loop hard-gate wiring for skill evidence chains: active session chains recompile against the run's scope objective contract and merge into its acceptance gates, so `before-done` declarations become required host-verified gates that completion claims cannot bypass.
 - Added optional `evidence` frontmatter for skills: declared evidence chains (`id`/`phase`/`kind`/`expect`/`sameAs`) are validated at load — invalid declarations drop the section with a skill warning while the skill stays usable — and autoloaded skills render a phase-grouped evidence requirements checklist in the injected prompt.
