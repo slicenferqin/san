@@ -140,6 +140,8 @@ export interface ContextPlanDigestMaterial {
 	entryId: string;
 	digest: TurnDigest;
 	coveredEntryRefs: string[];
+	/** 渲染粒度(decay 选级;缺省 full)。coverage 语义与粒度无关。 */
+	tier?: "full" | "compact" | "anchor";
 }
 
 export interface ContextPlanCheckpointMaterial {

@@ -5,6 +5,7 @@ import contextPlanTemplate from "../prompts/context-steady/context-plan.md" with
 import supersededEditStubTemplate from "../prompts/context-steady/superseded-edit-stub.md" with { type: "text" };
 import type { CustomMessageEntry, SessionEntry, SessionMessageEntry } from "../session/session-entries";
 import { validateContextPlanCoverage } from "./coverage";
+import { projectDigestTier } from "./decay";
 import type { BuiltContextPlan, ContextPlanMaterial, ContextPlanToolStubMaterial } from "./plan-types";
 import { CONTEXT_PLAN_MESSAGE_TYPE } from "./plan-types";
 import { CONTEXT_PACKET_MESSAGE_TYPE } from "./types";
@@ -97,18 +98,17 @@ function materialViews(materials: readonly ContextPlanMaterial[]) {
 				),
 			});
 		} else if ("digest" in material) {
-			const digest = material.digest;
+			// Decay 选级投影:粒度由 planner 定级;缺省 full(旧 plan 兼容)。
+			const view = projectDigestTier(material.digest, material.tier ?? "full");
 			digests.push({
 				materialId: material.audit.materialId,
 				refs: material.audit.entryRefs.join(", "),
-				userIntent: clampString(digest.userIntent, 240),
-				actionsTaken: clampArray(digest.actionsTaken, 5, 180),
-				decisions: clampArray(digest.decisions, 5, 180),
-				filesTouched: digest.filesTouched
-					.slice(0, 8)
-					.map(file => ({ path: clampString(file.path, 240), action: file.action })),
-				risks: clampArray(digest.risks, 4, 180),
-				nextSteps: clampArray(digest.nextSteps, 4, 180),
+				userIntent: view.userIntent,
+				actionsTaken: view.actionsTaken,
+				decisions: view.decisions,
+				filesTouched: view.filesTouched,
+				risks: view.risks,
+				nextSteps: view.nextSteps,
 			});
 		} else if ("recall" in material) {
 			recalls.push({
