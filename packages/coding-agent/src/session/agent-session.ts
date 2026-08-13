@@ -314,6 +314,7 @@ import type {
 } from "../execution-control";
 import { ProviderCircuitOpenError, StaleExecutionRevisionError } from "../execution-control";
 import { stableValueFingerprint } from "../execution-control/progress-classifier";
+import { SessionSkillGateState } from "../execution-control/skill-gate-session";
 import type { TaskContractRegistry } from "../execution-control/task-contract";
 import type { TtsrManager, TtsrMatchContext } from "../export/ttsr";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands";
@@ -375,6 +376,8 @@ import toolProgressFinalizeTemplate from "../prompts/context-steady/tool-progres
 import toolProgressRedirectTemplate from "../prompts/context-steady/tool-progress-redirect.md" with { type: "text" };
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
+import skillContractEchoTemplate from "../prompts/skills/contract-echo.md" with { type: "text" };
+import skillEvidenceReminderTemplate from "../prompts/skills/evidence-reminder.md" with { type: "text" };
 import parentIrcSteerTemplate from "../prompts/steering/parent-irc.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import crossSessionHandoffTemplate from "../prompts/system/cross-session-handoff.md" with { type: "text" };
@@ -501,6 +504,7 @@ import {
 	type PythonExecutionMessage,
 	readQueueChipText,
 	SILENT_ABORT_MARKER,
+	SKILL_CONTRACT_ECHO_MESSAGE_TYPE,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	stripImagesFromMessage,
 	USER_INTERRUPT_LABEL,
@@ -1967,6 +1971,12 @@ function isUserQueuedMessage(message: AgentMessage): boolean {
 	return message.role === "custom" && message.attribution === "user" && message.display !== false;
 }
 
+/**
+ * 文件修改类内置工具:before-fix 软拦截只对这些工具生效。bash 虽然也能改
+ * 文件,但把它计入会让"先跑复现命令"这一推荐动作本身触发提醒,故排除。
+ */
+const FILE_MUTATION_TOOL_NAMES: ReadonlySet<string> = new Set(["edit", "write", "ast_edit"]);
+
 /** Custom-message types of the hidden magic-keyword notices that `#createMagicKeywordNotices`
  *  enqueues alongside a user prompt. Keep in sync with that method. */
 const MAGIC_KEYWORD_NOTICE_TYPES: ReadonlySet<string> = new Set([
@@ -2329,6 +2339,11 @@ export class AgentSession {
 
 	#skills: Skill[];
 	#skillWarnings: SkillWarning[];
+	/**
+	 * 会话级 skill evidence gate 容器(M3)。首个证据链 skill 触发时才创建;
+	 * 无证据链 skill 的会话保持 undefined,所有钩子路径零行为变化。
+	 */
+	#skillGateState: SessionSkillGateState | undefined;
 
 	// Custom commands (TypeScript slash commands)
 	#customCommands: LoadedCustomCommand[] = [];
@@ -6192,7 +6207,48 @@ export class AgentSession {
 			this.#synchronouslyTerminatedYieldToolCallIds.add(ctx.toolCall.id);
 			this.agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
 		}
-		return this.#ttsrAfterToolCall(ctx);
+		this.#recordSkillGateCommandObservation(ctx);
+		const ttsrResult = this.#ttsrAfterToolCall(ctx);
+		return this.#skillGateReminderFold(ctx, ttsrResult) ?? ttsrResult;
+	}
+
+	/**
+	 * 会话级 skill gate 的 command 回执薄适配:bash 完成即从 host 事实
+	 * (exitCode + 命令文本)生成回执。超时/取消/缺失退出码的调用不算完成的
+	 * 命令,不产回执。容器不存在(会话没有证据链 skill)时零行为。
+	 */
+	#recordSkillGateCommandObservation(ctx: AfterToolCallContext): void {
+		const state = this.#skillGateState;
+		if (!state?.hasActiveChains) return;
+		if (ctx.toolCall.name !== "bash") return;
+		const command = typeof ctx.args.command === "string" ? ctx.args.command : "";
+		if (!command) return;
+		const details = ctx.result.details as { exitCode?: unknown; timedOut?: unknown } | undefined;
+		if (details?.timedOut === true) return;
+		// bash 只在非零退出时写 details.exitCode;成功结果 exitCode 缺失即 0。
+		// isError 且无退出码(取消、缺失退出状态)不是完成的命令观察。
+		const exitCode = typeof details?.exitCode === "number" ? details.exitCode : ctx.isError ? undefined : 0;
+		if (exitCode === undefined) return;
+		state.recordCommandObservation({ command, exitCode });
+	}
+
+	/**
+	 * before-fix 软拦截:文件修改类工具产出结果时,若存在尚无满足回执的
+	 * before-fix 门,把一次性结构化提醒 fold 进工具结果(与 TTSR 同机制,
+	 * 不阻断执行)。容器负责"同一 gate 只提醒一次"。
+	 */
+	#skillGateReminderFold(
+		ctx: AfterToolCallContext,
+		prior: AfterToolCallResult | undefined,
+	): AfterToolCallResult | undefined {
+		const state = this.#skillGateState;
+		if (!state?.hasActiveChains) return undefined;
+		if (!FILE_MUTATION_TOOL_NAMES.has(ctx.toolCall.name)) return undefined;
+		const reminders = state.takeBeforeFixReminders();
+		if (reminders.length === 0) return undefined;
+		const reminder = prompt.render(skillEvidenceReminderTemplate, { reminders }).trim();
+		const baseContent = prior?.content ?? ctx.result.content;
+		return { ...(prior ?? {}), content: [{ type: "text", text: reminder }, ...baseContent] };
 	}
 
 	/** `afterToolCall` hook: fold any per-tool TTSR reminders into the result. */
@@ -11113,10 +11169,17 @@ export class AgentSession {
 		if (message.customType === SKILL_PROMPT_MESSAGE_TYPE && message.attribution === "user") {
 			const details = message.details;
 			let skillArgs = "";
-			if (details && typeof details === "object" && "args" in details && typeof details.args === "string") {
-				skillArgs = details.args;
+			let skillName = "";
+			if (details && typeof details === "object") {
+				if ("args" in details && typeof details.args === "string") skillArgs = details.args;
+				if ("name" in details && typeof details.name === "string") skillName = details.name;
 			}
 			keywordNotices = this.#createMagicKeywordNotices(skillArgs);
+			// 证据链 skill:编译 gate 挂到会话容器,并把契约回显作为可见伴随
+			// 消息注入 — 与 keyword notices 走同一投递机制,queue/steer/prompt
+			// 三条分支自动一致。
+			const contractEcho = this.#activateSkillEvidenceGates(skillName, skillArgs);
+			if (contractEcho) keywordNotices.push(contractEcho);
 		}
 
 		if (options?.queueOnly) {
@@ -11157,6 +11220,49 @@ export class AgentSession {
 			...options,
 			prependMessages: keywordNotices.length > 0 ? keywordNotices : undefined,
 		});
+	}
+
+	/**
+	 * 证据链 skill 触发时:编译 evidence 声明为 acceptance gate 并挂到会话级
+	 * 容器,返回契约回显消息(可见、agent 归属)。以下情况返回 undefined 且
+	 * 零副作用:开关关闭、skill 不存在或无 evidence 声明、同名链已激活(重复
+	 * 触发不重置回执,也不重复回显)。
+	 */
+	#activateSkillEvidenceGates(skillName: string, skillArgs: string): CustomMessage | undefined {
+		if (!skillName) return undefined;
+		if (this.settings.get("skills.evidenceGates") !== true) return undefined;
+		const skill = this.#skills.find(candidate => candidate.name === skillName);
+		if (!skill?.evidence?.length) return undefined;
+		this.#skillGateState ??= new SessionSkillGateState(this.sessionManager.getSessionId());
+		const chain = this.#skillGateState.activate(skill);
+		if (!chain) return undefined;
+		const text = prompt
+			.render(skillContractEchoTemplate, {
+				skillName: skill.name,
+				objective: skillArgs.trim() || undefined,
+				skillDescription: skill.description,
+				doneGates: skill.evidence.filter(spec => spec.phase === "before-done"),
+			})
+			.trim();
+		const echoHash = this.#skillGateState.recordContractEcho(skill.name, text);
+		return {
+			role: "custom",
+			customType: SKILL_CONTRACT_ECHO_MESSAGE_TYPE,
+			content: text,
+			display: true,
+			details: {
+				skillName: skill.name,
+				contractHash: chain.contractRef.contractHash,
+				echoHash,
+			},
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+	}
+
+	/** 会话级 skill gate 容器(测试与 San Loop 接线读取;无证据链 skill 时为 undefined)。 */
+	get skillGateState(): SessionSkillGateState | undefined {
+		return this.#skillGateState;
 	}
 
 	async #promptWithMessage(

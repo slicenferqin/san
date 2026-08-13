@@ -4859,6 +4859,8 @@ export const SETTINGS_SCHEMA = {
 	// Skills
 	"skills.enabled": { type: "boolean", default: true },
 
+	"skills.evidenceGates": { type: "boolean", default: true },
+
 	"skills.enableSkillCommands": {
 		type: "boolean",
 		default: true,
@@ -5712,6 +5714,7 @@ export interface BranchSummarySettings {
 
 export interface SkillsSettings {
 	enabled?: boolean;
+	evidenceGates?: boolean;
 	enableSkillCommands?: boolean;
 	enableBuiltin?: boolean;
 	enableCodexUser?: boolean;

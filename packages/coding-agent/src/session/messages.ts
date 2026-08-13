@@ -29,6 +29,12 @@ import type { OutputMeta } from "../tools/output-meta";
 import { formatOutputNotice } from "../tools/output-meta";
 
 export const SKILL_PROMPT_MESSAGE_TYPE = "skill-prompt";
+/**
+ * Visible companion injected right before an evidence-chain skill prompt:
+ * echoes the working agreement (goal + before-done evidence gates) back to
+ * the user. Rendered through the generic custom-message path in every mode.
+ */
+export const SKILL_CONTRACT_ECHO_MESSAGE_TYPE = "skill-contract-echo";
 export const LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE = "lsp-late-diagnostic";
 export const BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE = "background-tan-dispatch";
 
