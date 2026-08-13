@@ -14,6 +14,7 @@ import {
 	type ContextPlanDigestMaterial,
 	type ContextPlanMaterial,
 	type ContextPlanRecallMaterial,
+	type ContextPlanToolStubMaterial,
 	type ContextSourceIndex,
 } from "./plan-types";
 import { evaluateContextPlanQualityGate } from "./quality-gate";
@@ -109,6 +110,43 @@ function buildEvidenceStubAuditMaterials(sourceIndex: ContextSourceIndex): Conte
 		tokenEstimate: materialTokenEstimate(source.paths),
 		reason: "file evidence stub",
 	}));
+}
+
+/** Stub 替换文本很小且尺寸稳定;审计用固定估算,避免为它渲染真实模板。 */
+const TOOL_STUB_TOKEN_ESTIMATE = 40;
+
+/**
+ * Superseded mutation 的表示降级材料(magic-context 研究 §4.4):同一文件
+ * 存在更晚完整 mutation 时,旧 toolResult 的 diff/输出已无信息量,物化层
+ * 将其替换为小型 stub。保护集内的 entry(活跃文件、最近工具对等 quality
+ * gate 八项保护)一律跳过;不授权 coverage,不参与省略路径。
+ */
+function buildToolStubMaterials(
+	sourceIndex: ContextSourceIndex,
+	protectedEntryRefs: readonly string[],
+): ContextPlanToolStubMaterial[] {
+	const protectedRefs = new Set(protectedEntryRefs);
+	const materials: ContextPlanToolStubMaterial[] = [];
+	for (const pair of sourceIndex.toolPairs) {
+		if (pair.supersededByToolCallId === undefined || pair.resultEntryId === undefined) continue;
+		if (protectedRefs.has(pair.resultEntryId)) continue;
+		if (pair.assistantEntryId !== undefined && protectedRefs.has(pair.assistantEntryId)) continue;
+		materials.push({
+			audit: {
+				materialId: materialId("tool_stub", pair.resultEntryId),
+				kind: "tool_pair",
+				representation: "evidence_stub",
+				entryRefs: [pair.resultEntryId],
+				tokenEstimate: TOOL_STUB_TOKEN_ESTIMATE,
+				reason: `superseded ${pair.toolName ?? "mutation"} output for ${pair.path ?? "unknown path"}`,
+			},
+			toolCallId: pair.toolCallId,
+			resultEntryId: pair.resultEntryId,
+			...(pair.path ? { path: pair.path } : {}),
+			coveredEntryRefs: [],
+		});
+	}
+	return materials;
 }
 
 function buildMaterials(
@@ -357,8 +395,14 @@ export function buildContextPlan(options: BuildContextPlanOptions): BuiltContext
 	// Render the complete final audit for each candidate. Never string-slice a
 	// covering replacement after coverage is assigned (C-04/C-05 atomicity).
 	const fitted = fitMaterialsToPlanBudget(candidateMaterials, budget.planTokenBudget, buildAudit);
-	const materials = fitted.materials;
-	const audit = fitted.audit;
+	// Tool stubs 不进 plan 渲染与 planTokenBudget fitting:它们作用于 payload
+	// 投影(替换,不省略),在 fitting 定型后追加并补录审计。
+	const toolStubMaterials = buildToolStubMaterials(sourceIndex, qualityGate.protectedEntryRefs);
+	const materials = [...fitted.materials, ...toolStubMaterials];
+	const audit: ContextPlanAudit = {
+		...fitted.audit,
+		materials: [...fitted.audit.materials, ...toolStubMaterials.map(material => material.audit)],
+	};
 	const renderedContent = fitted.renderedContent;
 	const tokenEstimate = fitted.tokenEstimate;
 	const message: AgentMessage = {

@@ -97,6 +97,10 @@ export interface ContextPlanToolPairSource {
 	assistantEntryId?: string;
 	resultEntryId?: string;
 	complete: boolean;
+	/** 文件修改类工具的目标路径(从 toolCall 参数提取;仅 mutation 工具设置)。 */
+	path?: string;
+	/** 同一路径后续又有完整 mutation 时,指向取代它的那次调用。 */
+	supersededByToolCallId?: string;
 }
 
 export interface ContextPlanFileEvidenceSource {
@@ -151,7 +155,25 @@ export interface ContextPlanRecallMaterial {
 	coveredEntryRefs: string[];
 }
 
-export type ContextPlanMaterial = ContextPlanDigestMaterial | ContextPlanCheckpointMaterial | ContextPlanRecallMaterial;
+/**
+ * Superseded mutation 的表示降级材料:物化层把 `resultEntryId` 对应的
+ * toolResult 内容替换为小型 stub(保留 tool 配对),消息本身不省略。
+ * 刻意不授权 coverage(`coveredEntryRefs` 恒为空)— 它走"替换"而非"省略",
+ * 不进 coverage 校验的省略路径。
+ */
+export interface ContextPlanToolStubMaterial {
+	audit: ContextPlanMaterialAudit;
+	toolCallId: string;
+	resultEntryId: string;
+	path?: string;
+	coveredEntryRefs: string[];
+}
+
+export type ContextPlanMaterial =
+	| ContextPlanDigestMaterial
+	| ContextPlanCheckpointMaterial
+	| ContextPlanRecallMaterial
+	| ContextPlanToolStubMaterial;
 
 export interface ContextPlanDigestSource {
 	entryId: string;

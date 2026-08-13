@@ -46,17 +46,48 @@ function textToolName(block: unknown): string | undefined {
 	return typeof block.name === "string" && block.name.length > 0 ? block.name : undefined;
 }
 
-function assistantToolCalls(entry: SessionEntry): Array<{ id: string; name?: string }> {
+/** 文件修改类内置工具:同一路径的后续完整 mutation 使旧输出失去信息量。 */
+const MUTATION_TOOL_NAMES: Record<string, true> = { edit: true, write: true, ast_edit: true };
+
+function mutationPath(block: unknown): string | undefined {
+	if (!isRecord(block) || block.type !== "toolCall" || !isRecord(block.arguments)) return undefined;
+	for (const key of ["path", "file_path", "filePath"]) {
+		const value = block.arguments[key];
+		if (typeof value === "string" && value.length > 0) return value;
+	}
+	return undefined;
+}
+
+function assistantToolCalls(entry: SessionEntry): Array<{ id: string; name?: string; path?: string }> {
 	if (entry.type !== "message" || entry.message.role !== "assistant" || !Array.isArray(entry.message.content))
 		return [];
-	const calls: Array<{ id: string; name?: string }> = [];
+	const calls: Array<{ id: string; name?: string; path?: string }> = [];
 	for (const block of entry.message.content) {
 		const id = textToolCallId(block);
 		if (!id) continue;
 		const name = textToolName(block);
-		calls.push(name ? { id, name } : { id });
+		const path = name && MUTATION_TOOL_NAMES[name] ? mutationPath(block) : undefined;
+		calls.push({ id, ...(name ? { name } : {}), ...(path ? { path } : {}) });
 	}
 	return calls;
+}
+
+/**
+ * 标记 superseded mutation:同一路径存在**更晚的完整** mutation pair 时,
+ * 较早的完整 pair 记 `supersededByToolCallId`。最后一次 mutation、未闭合
+ * pair(结果未落地)与非 mutation 工具永不标记。
+ */
+function markSupersededMutations(pairs: ContextPlanToolPairSource[]): void {
+	const latestByPath = new Map<string, string>();
+	for (const pair of pairs) {
+		if (!pair.path || !pair.complete || pair.resultEntryId === undefined) continue;
+		latestByPath.set(pair.path, pair.toolCallId);
+	}
+	for (const pair of pairs) {
+		if (!pair.path || !pair.complete || pair.resultEntryId === undefined) continue;
+		const latest = latestByPath.get(pair.path);
+		if (latest !== undefined && latest !== pair.toolCallId) pair.supersededByToolCallId = latest;
+	}
 }
 
 function collectExactEntries(entries: readonly SessionEntry[]): ContextPlanExactSource[] {
@@ -83,11 +114,11 @@ function collectTurnBundles(entries: readonly SessionEntry[]): ContextPlanTurnBu
 }
 
 function collectToolPairs(entries: readonly SessionEntry[]): ContextPlanToolPairSource[] {
-	const pending = new Map<string, { name?: string; assistantEntryId: string }>();
+	const pending = new Map<string, { name?: string; path?: string; assistantEntryId: string }>();
 	const pairs: ContextPlanToolPairSource[] = [];
 	for (const entry of entries) {
 		for (const call of assistantToolCalls(entry)) {
-			pending.set(call.id, { name: call.name, assistantEntryId: entry.id });
+			pending.set(call.id, { name: call.name, path: call.path, assistantEntryId: entry.id });
 		}
 		if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
 		const toolCallId = typeof entry.message.toolCallId === "string" ? entry.message.toolCallId : undefined;
@@ -100,6 +131,7 @@ function collectToolPairs(entries: readonly SessionEntry[]): ContextPlanToolPair
 			toolCallId,
 			...(toolName ? { toolName } : {}),
 			...(match ? { assistantEntryId: match.assistantEntryId } : {}),
+			...(match?.path ? { path: match.path } : {}),
 			resultEntryId: entry.id,
 			complete: match !== undefined,
 		});
@@ -111,10 +143,12 @@ function collectToolPairs(entries: readonly SessionEntry[]): ContextPlanToolPair
 			entryIds: [match.assistantEntryId],
 			toolCallId,
 			...(match.name ? { toolName: match.name } : {}),
+			...(match.path ? { path: match.path } : {}),
 			assistantEntryId: match.assistantEntryId,
 			complete: false,
 		});
 	}
+	markSupersededMutations(pairs);
 	return pairs;
 }
 
