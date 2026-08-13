@@ -1,14 +1,14 @@
-Working agreement for skill `{{skillName}}`:
+My read of the job:
 
 {{#if objective}}
-Goal: {{objective}}
+**Goal:** {{objective}}
 {{else}}
-Goal: {{skillDescription}}
+**Goal:** {{skillDescription}}
 {{/if}}
 
-Done means the host has observed:
+Done means:
 {{#each doneGates}}
-- `{{id}}` [{{kind}}]: {{description}}{{#if sameAs}} (must reuse the exact same command/path as `{{sameAs}}`){{/if}}
+- {{description}}
 {{/each}}
 
-Verification is host-backed: completion claims count only when the evidence above is observed from actual command runs, not from text assertions. Reply to adjust this agreement; continuing without objection confirms it.
+I'll verify each of these with real runs — not just claim them. If your bar for "done" is different, say so now; otherwise I'll get started.

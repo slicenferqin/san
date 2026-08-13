@@ -103,6 +103,7 @@
 
 ### Changed
 
+- Changed both contract echo messages (skill and general) to plain language: the user-facing text now states the goal and the done criteria in everyday words ("I'll verify each of these with real runs — not just claim them") with no mechanism vocabulary — no evidence/host/scope/gate terminology. The verification machinery underneath is unchanged; only its user-visible projection got simpler.
 - Changed San context steady active engine to ContextPlan-only: package exports mark packet/prune as legacy-compat, digest LLM calls reuse `prepareSimpleStreamOptions`, checkpoint synthesis hard-trims under extreme token budgets, and `qualityWindowTokens=0` resolves to the 240K steady default.
 - Changed remaining user-facing San surfaces to prefer `san`, `.san`, `~/.san`, and `SAN_*` names while keeping documented legacy aliases for compatibility.
 - Changed Hindsight's default bank/context names from `omp` to `san` for new memory configurations.
