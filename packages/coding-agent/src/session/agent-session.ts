@@ -9299,6 +9299,15 @@ export class AgentSession {
 		if (scopeId === undefined || this.#finishedExecutionScopes.has(scopeId)) return;
 		const handle = runtime.getScope(scopeId);
 		if (!handle) return;
+		// Resume 重放可恢复 terminal scope,而内存 one-shot 守卫在新进程里是
+		// 空的:迟到 finish 的正确语义是幂等跳过,不是抛错。否则含 aborted
+		// 回合的会话 --continue 后,newSession/abort 的终态化路径会在 ledger
+		// 的迟到 finish 守卫上炸掉(冒烟实证:RPC new_session 立即失败)。
+		if (isTerminalExecutionState(handle.snapshot().state)) {
+			this.#finishedExecutionScopes.add(scopeId);
+			if (this.#executionHandle?.scopeId === scopeId) this.#executionHandle = undefined;
+			return;
+		}
 		if (state === "completed") {
 			const snapshot = handle.snapshot();
 			const requiredGates = snapshot.gates.filter(gate => gate.required !== false);
