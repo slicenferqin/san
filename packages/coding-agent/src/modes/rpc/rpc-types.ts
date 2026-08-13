@@ -8,7 +8,7 @@ import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode } from 
 import type { CompactionResult } from "@san/agent/compaction";
 import type { Effort, ImageContent, Model, ToolExample } from "@san/ai";
 import type { BashResult } from "../../exec/bash-executor";
-import type { ContextUsage } from "../../extensibility/extensions/types";
+import type { ContextUsage, ExtensionToolApprovalRequest } from "../../extensibility/extensions/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type { FileEntry } from "../../session/session-entries";
 import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
@@ -39,6 +39,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_todos"; phases: TodoPhase[] }
 	| { id?: string; type: "set_host_tools"; tools: RpcHostToolDefinition[] }
 	| { id?: string; type: "set_host_uri_schemes"; schemes: RpcHostUriSchemeDefinition[] }
+	| { id?: string; type: "set_client_capabilities"; capabilities: RpcClientCapabilities }
 	| { id?: string; type: "set_subagent_subscription"; level: RpcSubagentSubscriptionLevel }
 	| { id?: string; type: "get_subagents" }
 	| { id?: string; type: "get_subagent_messages"; subagentId?: string; sessionFile?: string; fromByte?: number }
@@ -188,6 +189,7 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "set_todos"; success: true; data: { todoPhases: TodoPhase[] } }
 	| { id?: string; type: "response"; command: "set_host_tools"; success: true; data: { toolNames: string[] } }
 	| { id?: string; type: "response"; command: "set_host_uri_schemes"; success: true; data: { schemes: string[] } }
+	| { id?: string; type: "response"; command: "set_client_capabilities"; success: true }
 	| {
 			id?: string;
 			type: "response";
@@ -482,6 +484,44 @@ export interface RpcHostUriResult {
 	isError?: boolean;
 	/** Optional error message; preferred over `content` for error surfacing. */
 	error?: string;
+}
+
+// ============================================================================
+// Client Capabilities & Tool Approval Frames (bidirectional)
+// ============================================================================
+
+/**
+ * Capabilities a client declares via `set_client_capabilities`. Each command
+ * replaces the previous declaration: capabilities omitted from the command
+ * are reset to undeclared.
+ */
+export interface RpcClientCapabilities {
+	/**
+	 * Client renders structured `tool_approval_request` frames and settles them
+	 * with `tool_approval_response`. Clients that never declare this keep
+	 * receiving tool approvals as generic `extension_ui_request` select dialogs.
+	 */
+	toolApproval?: boolean;
+}
+
+/**
+ * Emitted when a tool call needs user approval and the client declared the
+ * `toolApproval` capability: {@link ExtensionToolApprovalRequest} verbatim
+ * plus the frame `type` and correlation `id`.
+ */
+export interface RpcToolApprovalRequestFrame extends ExtensionToolApprovalRequest {
+	type: "tool_approval_request";
+	id: string;
+}
+
+/** Sent by the client to settle a pending `tool_approval_request`. */
+export interface RpcToolApprovalResponse {
+	type: "tool_approval_response";
+	id: string;
+	allowed: boolean;
+	scope?: "once" | "session" | "workspace" | "global";
+	persistRule?: boolean;
+	comment?: string;
 }
 
 // ============================================================================

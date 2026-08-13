@@ -1,0 +1,48 @@
+{
+	"timestamp": "2026-08-13T06:51:00.421Z",
+	"ok": true,
+	"scenarios": [
+		{
+			"name": "hard-live",
+			"ok": true,
+			"assertions": [
+				{
+					"name": "hard.fabricated-completion-not-passed",
+					"ok": true,
+					"detail": "terminal status=blocked finalVerdict=blocked"
+				},
+				{
+					"name": "hard.terminal-state-is-explainable",
+					"ok": true,
+					"detail": "a review defect names the unsatisfied host evidence gate"
+				}
+			],
+			"observations": {
+				"mode": "live",
+				"gateIds": [
+					"gate:skill:fix-bug:repro",
+					"gate:skill:fix-bug:verify (required)",
+					"gate:skill:fix-bug:regression (required)"
+				],
+				"runStatus": "blocked",
+				"finalVerdict": "blocked",
+				"transitions": 4,
+				"decisions": [
+					"Accepted execution plan: 1 task(s), 0 check(s), 0 risk(s).",
+					"Dispatched worker assignments: 1 worker assignment(s) created.",
+					"Review verdict: blocked: 1 defect(s) reported."
+				],
+				"defects": [
+					{
+						"defectId": "host-evidence-gate-blocked",
+						"title": "Supervisor pass rejected by host typed evidence gate.",
+						"evidence": [
+							"gate gate:skill:fix-bug:verify:loop_assignment_019ff9e1-fb1b-7003-ba7e-c4f926ccd8b2: gate has no host evidence refs",
+							"gate gate:skill:fix-bug:regression:loop_assignment_019ff9e1-fb1b-7003-ba7e-c4f926ccd8b2: gate has no host evidence refs"
+						]
+					}
+				]
+			}
+		}
+	]
+}
