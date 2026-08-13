@@ -111,6 +111,7 @@
 
 ### Fixed
 
+- Fixed resumed sessions with an aborted turn breaking `new_session`/abort finalization: journal replay restores the terminal execution scope while the in-memory one-shot finish guard starts empty, so the late finish attempt hit the ledger's "late finish events are rejected" guard and surfaced as an instant RPC `new_session` failure. Late finishes against an already-terminal scope are now an idempotent no-op.
 - Fixed the general working-agreement echo leaking into subagent sessions: a taskDepth>0 session that owns its runtime (spawned without a fixed parent scope) minted scopes like a root and injected the echo into the provider message stream, corrupting append-only prefix expectations in the subagent message pipeline. Subagent sessions never echo now — their "user" is the orchestrating parent agent.
 - Fixed Linux Chromium discovery accepting invalid wrappers or non-executable files and hanging indefinitely during version probes; bounded probes now validate Chromium-family output without racing trailing stdout.
 - Retried concurrent-request caps with a short backoff without deleting valid Copilot credentials or rotating through sibling accounts.
