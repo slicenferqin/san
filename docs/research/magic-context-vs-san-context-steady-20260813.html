@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>magic-context 与 San 上下文稳态体系对比研究(2026-08-13)</title>
+<style>
+:root { --fg: #1a1f27; --muted: #5b6472; --line: #dde2e9; --accent: #0b62d6; --bg-soft: #f6f8fb; --warn-bg: #fff7e8; --warn-line: #e8c98a; --good: #0a7d43; --bad: #b3352c; }
+* { box-sizing: border-box; }
+body { margin: 0 auto; max-width: 1100px; padding: 32px 24px 96px; color: var(--fg); font: 15px/1.7 -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; }
+h1 { font-size: 26px; line-height: 1.35; margin: 0 0 8px; }
+h2 { font-size: 20px; margin: 40px 0 12px; padding-top: 16px; border-top: 1px solid var(--line); }
+h3 { font-size: 17px; margin: 24px 0 8px; }
+h4 { font-size: 15px; margin: 20px 0 4px; color: var(--accent); }
+p { margin: 8px 0; }
+code { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font: 12.5px/1.5 "SF Mono", Menlo, Consolas, monospace; word-break: break-all; }
+pre { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font: 12.5px/1.6 "SF Mono", Menlo, Consolas, monospace; }
+pre code { background: none; border: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 8px 0 16px; font-size: 13.5px; }
+th, td { border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top; }
+th { background: var(--bg-soft); font-weight: 600; white-space: nowrap; }
+tr:nth-child(even) td { background: #fbfcfe; }
+.cards { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
+.card { flex: 1 1 160px; border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; background: var(--bg-soft); }
+.card .num { font-size: 22px; font-weight: 700; color: var(--accent); }
+.card .lbl { font-size: 12.5px; color: var(--muted); }
+.note { background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 8px; padding: 10px 14px; margin: 12px 0; font-size: 13.5px; }
+.verdict { border-left: 4px solid var(--accent); background: var(--bg-soft); padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0; }
+ul, ol { margin: 8px 0; padding-left: 22px; }
+li { margin: 4px 0; }
+.meta { color: var(--muted); font-size: 13px; }
+.src { color: var(--muted); font-size: 12.5px; }
+.src::before { content: "来源:"; }
+.tag-borrow { color: var(--good); font-weight: 600; }
+.tag-skip { color: var(--bad); font-weight: 600; }
+.unverified { background: var(--warn-bg); border-radius: 3px; padding: 0 4px; font-size: 12.5px; color: #8a6116; }
+</style>
+</head>
+<body>
+
+<h1>magic-context 与 San 上下文稳态体系对比研究</h1>
+<p class="meta">日期:2026-08-13 · 调研对象:<a href="https://github.com/cortexkit/magic-context">github.com/cortexkit/magic-context</a>(master 分支)· San 侧依据:<code>docs/research/context-steady-state-san.html</code>、<code>docs/research/san-context-steady-240k-redesign-proposal-20260712.html</code>、<code>docs/research/san-context-segment-steady-architecture-proposal-20260716.html</code>、<code>packages/coding-agent/src/context-steady/</code>(26 个源文件,约 6,700 行)</p>
+
+<div class="note"><strong>取证口径。</strong>magic-context 侧所有事实来自其 GitHub 公开材料:仓库元数据(GitHub API)、<code>README.md</code>、<code>ARCHITECTURE.md</code>、commit 历史、<code>package.json</code>、git tree。其源码文件未逐行阅读(其 <code>ARCHITECTURE.md</code> 引用的 <code>src/</code> 路径均已在 git tree 中核对存在);标注 <span class="unverified">未核实</span> 的信息为二手陈述或无法从公开材料确认的推断。San 侧事实来自本仓库文档与源码,均可本地复核。</div>
+
+<div class="cards">
+<div class="card"><div class="num">1,731</div><div class="lbl">magic-context stars(82 forks)</div></div>
+<div class="card"><div class="num">~5 个月</div><div class="lbl">仓库年龄(2026-03-26 创建)</div></div>
+<div class="card"><div class="num">v74</div><div class="lbl">SQLite schema 迁移版本数</div></div>
+<div class="card"><div class="num">3 个 harness</div><div class="lbl">OpenCode / Pi / OMP(San 上游)</div></div>
+<div class="card"><div class="num">TS + Rust</div><div class="lbl">正在向 Rust(subc daemon)迁移</div></div>
+</div>
+
+<h2>一、magic-context 是什么</h2>
+
+<h3>1.1 定位与设计目标</h3>
+<p>magic-context 自称「coding agent 的海马体」:一个挂载在 <strong>OpenCode / Pi / Oh My Pi(OMP)</strong> 三个 harness 上的上下文管理与长期记忆<strong>插件</strong>,属于 CortexKit 插件家族(另有 AFT「感觉运动皮层」与未发布的 Alfonso「前额叶」)。它的口号概括了全部目标:<em>"Unbounded context. Memory that manages itself. One session, for life."</em>——让一个会话跑数周、数月甚至数年,永不因 compaction 停顿,也永不遗忘。</p>
+<p class="src">GitHub 仓库描述与 <a href="https://raw.githubusercontent.com/cortexkit/magic-context/master/README.md">README.md</a>("What is Magic Context?"、"Part of CortexKit" 两节)。</p>
+<p>它对问题的叙事是:coding agent 患有「顺行性遗忘症」——每个任务都是一次新雇佣,任务中途还会被 compaction 打断并悄悄丢失已知信息。它给出两条承诺:<strong>agent 永远不停下来管理上下文</strong>(无 compaction 停顿),以及<strong>永远不遗忘</strong>(跨会话、跨 harness 的项目记忆)。</p>
+<p>值得注意的排他性设计:magic-context 要求<strong>端到端独占上下文管理权</strong>——安装时关闭宿主内建 compaction(OpenCode 的 <code>compaction.auto/prune</code>、OMP 的 <code>compaction.enabled</code> 与 <code>memory.backend</code>),检测到其它上下文管理插件(DCP、oh-my-opencode 的三个 hook)时 fail-safe 自禁用。理由是「两个上下文管理器会双重压缩历史并打爆 prompt cache」。</p>
+<p class="src">README.md "Quick start" 与 "Compatibility with other context-management plugins" 节。其中 OMP 适配要求 OMP ≥ 17.1.7,并声明「honors OMP profiles、<code>PI_CODING_AGENT_DIR</code>」——即它直接触碰 San 上游 oh-my-pi 的 compaction/memory 配置面。San 作为改名后的 fork 是否仍在其检测范围内,<span class="unverified">未核实</span>。</p>
+
+<h3>1.2 核心机制</h3>
+<p>其根 <code>ARCHITECTURE.md</code>(约 41KB,工程细节密度极高)给出了完整机制图。骨架是:<strong>插件在每次 LLM 调用时重写 message array 与 system prompt</strong>,变换本身不做任何 LLM 调用,重活全部交给后台隐藏子代理。</p>
+
+<h4>(a)m[0]/m[1] 双块缓存稳定注入</h4>
+<p>注入内容拆成两个消息块:<code>m[0]</code> 是<strong>稳定基线</strong>(项目记忆、<code>ARCHITECTURE.md</code>/<code>STRUCTURE.md</code> 文档、按 decay 渲染的分舱历史,截至上次物化),常规轮次<strong>永不改变</strong>;<code>m[1]</code> 是<strong>易变增量</strong>(新记忆、新分舱、用户画像增量)。关键创新是把 <code>m[0]</code> 的重建时机(HARD fold)围绕「<strong>bust 分类学</strong>」组织:只有当 provider 缓存<strong>本来就要失效</strong>(模型切换、system prompt 哈希变化、闲置超过缓存 TTL)或基线内容真正变化时才折叠;新分舱、新记忆等日常增长<strong>刻意不触发</strong>折叠,只进 <code>m[1]</code>,等下一次天然 bust 时搭便车合并。另有压力兜底:<code>m[1]</code> 相对 <code>m[0]</code> 过大(约 20% 历史预算)时在下一个 bust 点强制重折。</p>
+<p class="src"><a href="https://raw.githubusercontent.com/cortexkit/magic-context/master/ARCHITECTURE.md">ARCHITECTURE.md</a> "m[0]/m[1]"、"mustMaterialize (HARD fold) triggers" 节。</p>
+
+<h4>(b)Historian 分舱压缩(后台异步)</h4>
+<p>后台 historian 子代理(推荐用便宜甚至本地模型)把旧原始历史压成<strong>分层分舱(tiered compartments)</strong>:每舱携带 <strong>4 个 paraphrase 层级</strong>(p1 详尽 → p4 仅锚点)、importance 分数(衰减率语义)、episode 类型。触发按阈值相对压力(<code>context_limit × execute_threshold × 5%</code>,夹在 5k–50k)。「protected-tail boundary」用<strong>真实 token 尺寸</strong>(而非用户轮数)决定哪段前缀可压,尾部保护;未闭合的工具调用对(open tool arcs)只在「近期」时挡住边界,过期的死工具调用不会永久冻结 historian;已闭合的工具对保持原子,不被舱边界切开。压缩<strong>不阻塞前台</strong>——这是它「无 compaction 停顿」承诺的实现基础。</p>
+<p class="src">ARCHITECTURE.md "Historian compartment flow" 与 "Protected-tail boundary" 节;README.md "Context management" 节。</p>
+
+<h4>(c)确定性 decay 渲染(无 LLM)</h4>
+<p>每次组装 prompt 时,由确定性公式为每个分舱<strong>选择渲染层级</strong>:半衰期 <code>H = H50·2^((I−50)/D)/max(p, 0.10)</code>(<code>H50=24</code>、<code>D=25</code>,I 为 importance,p 为本 pass 的预算压力),对数成本层级边界 <code>[0.201, 0.729, 1.322, 2.587]</code>。越旧、越不重要、压力越大的舱降到越粗的层级,过归档线渲染 p4 或丢弃。因为是确定性规则,同样的历史永远渲染出同样的字节——旧历史「平滑淡出」而非「掉下悬崖」,且自动适配不同模型窗口。</p>
+<p class="src">ARCHITECTURE.md "Render (decay)" 节(<code>decay-render.ts</code>、<code>decay-curve.ts</code>);README.md "Decay rendering"。</p>
+
+<h4>(d)Replay-everything 缓存不变量</h4>
+<p>所有持久性消息变换(reasoning 清除、噪声剥离、caveman 压缩、drop 占位符等)在<strong>每个 transform pass 上确定性重放</strong>,保证线上字节逐位一致,provider prompt cache 存活整个会话。这是「插件没有 loop 控制权」的补偿:它无法保证宿主传入的数组不变,只能保证自己的变换幂等。</p>
+<p class="src">ARCHITECTURE.md "Overview" 节第三条 tenet。</p>
+
+<h4>(e)Agent 参与式缩减与应急梯度</h4>
+<ul>
+<li><strong><code>ctx_reduce</code></strong>:给工具输出打 <code>§N§</code> 标签,agent 可主动标记过期内容;drop <strong>排队并 cache-aware</strong>,只在缓存安全时刻应用。配套两条 nudge 通道(工具输出附注 + 一次性合成用户消息)。</li>
+<li><strong>Smart drops(可选)</strong>:自动压缩「已被覆盖的旧 edit」为 <code>edit_marker</code>(保留 <code>filePath</code> 与 40 字符区域提示,输出替换为 <code>[dropped §N§]</code>)、丢弃过期控制面输出(旧 todowrite 等)。</li>
+<li><strong>分层应急驱逐(≥85% 压力带)</strong>:工具输出按层级 oldest-first 驱逐(T3 杂项 → T2 编辑/搜索 → T1 导航),最新 20% 保留;被丢的近期工具调用保留 <code>tool_use</code> 骨架以维持 provider 配对。≥95% 且无折叠可用时 <strong>fail-closed 阻断请求</strong>而非静默溢出。</li>
+</ul>
+<p class="src">ARCHITECTURE.md "ctx_reduce nudges"、"Smart-drops"、"Tiered emergency drop"、"Error handling" 节。</p>
+
+<h4>(f)记忆三部曲:Capture / Consolidate / Recall</h4>
+<ul>
+<li><strong>Capture</strong>:historian 压缩历史时「顺路」提炼持久知识进项目记忆(5 类分类法:PROJECT_RULES / ARCHITECTURE / CONSTRAINTS / CONFIG_VALUES / NAMING)——「记忆免费,来自你本来就在做的工作」。也可用 <code>ctx_memory</code> 显式写入。</li>
+<li><strong>Consolidate(dreamer)</strong>:夜间后台代理跑 12+ 种维护任务(map-memories 映射记忆到支撑文件、verify 对照代码库校验、curate 去重收紧、classify 打分、retrospective 从用户纠正中学习、维护 ARCHITECTURE.md/STRUCTURE.md、用户画像、primers、smart notes),按任务 cron 调度、冲突域租约串行化、临时子会话执行。</li>
+<li><strong>Recall</strong>:每回合自动、缓存稳定地注入活跃记忆与压缩历史;<code>ctx_search</code> 一个查询横跨记忆、原始对话(FTS5)、git commit 索引、notes、primers(语义嵌入 + 全文回退);<code>ctx_expand</code> 把压缩历史区间解压回原文;auto search hints 每回合后台搜索并「耳语」提示。跨会话、跨 harness 继承。</li>
+</ul>
+<p class="src">README.md "Capture / Consolidate / Recall" 三节;ARCHITECTURE.md "Memory, search & embeddings"、"Dreamer" 节。</p>
+
+<h4>(g)持久化与架构分层</h4>
+<p>所有持久状态在单一本地 SQLite(<code>~/.local/share/cortexkit/magic-context/context.db</code>),跨 harness 共享;记忆键在「稳定项目身份」上(从 git repo 派生,跨 worktree/clone/fork 跟随项目)。嵌入向量为 SQLite BLOB + 内存 Float32Array 余弦扫描(明确拒绝 sqlite-vec,理由是 bun:sqlite 无法加载扩展 + 写放大);本地嵌入模型 Xenova/all-MiniLM-L6-v2(约 90MB ONNX)。存储不可用时 <strong>fail-closed</strong>(宁可报错也不让 prompt 无限增长)。分层:bootstrap → 薄适配层(<code>src/plugin/</code>)→ 运行时 transform(<code>src/hooks/magic-context/</code>)→ 特性服务(<code>src/features/magic-context/</code>)→ 工具(<code>src/tools/</code>)。另有实验性 Rust 运行时:<code>crates/mc-core / mc-store / mc-module / mc-tokenizer</code> 在 subc daemon 下重写整条 transform 管线,TS 层退为协调器(状态同步 + LKG 回退)。</p>
+<p class="src">README.md "Storage" 节;ARCHITECTURE.md "Overview"、"Layers"、"Storage & migrations" 节;git tree(<code>crates/</code> 四个 crate、<code>packages/plugin</code> 873 文件、<code>packages/pi-plugin</code> 153 文件)。</p>
+
+<h3>1.3 成熟度评估</h3>
+<table>
+<thead><tr><th>维度</th><th>观察</th><th>来源</th></tr></thead>
+<tbody>
+<tr><td>社区规模</td><td>1,731 stars、82 forks、12 open issues、5 watchers;MIT 许可</td><td>GitHub API(2026-08-13 抓取)</td></tr>
+<tr><td>活跃度</td><td>创建于 2026-03-26,最后推送 2026-08-13(调研当日);最近两天约 30 个 commit,几乎全部来自单一作者 ualtinok;commit 风格为「mason:(规划)→ fix/audit/merge(实现)」成对出现,疑似 agent 辅助工作流 <span class="unverified">推断,未核实</span></td><td>GitHub API commits</td></tr>
+<tr><td>文档</td><td>README 有 22 种语言翻译;根目录 ARCHITECTURE.md / STRUCTURE.md / CONFIGURATION.md / AUDITOR.md / CHANGELOG.md;独立文档站 docs.cortexkit.io(<span class="unverified">站内内容未抓取</span>);<code>docs/specs/</code> 内有 prompt-surface 预算批准记录、决策模板等治理文档</td><td>git tree、README.md</td></tr>
+<tr><td>工程深度</td><td>SQLite 迁移 v1–v74;e2e 测试包(121 文件)+ Docker e2e;桌面应用(dashboard,123 文件,Electron <span class="unverified">框架未核实</span>);CLI 安装向导 + doctor 自检;Rust workspace 四 crate</td><td>ARCHITECTURE.md、git tree、package.json</td></tr>
+<tr><td>单点风险</td><td>主力开发者一人;组织 cortexkit 下另有 AFT 仓库;Alfonso 未发布</td><td>commits、README.md</td></tr>
+</tbody>
+</table>
+
+<h2>二、San 上下文稳态是什么(一页纸)</h2>
+
+<p>San 的 Context Steady State 是<strong>内建于 coding-agent 的会话级子系统</strong>(<code>packages/coding-agent/src/context-steady/</code>,26 文件约 6,700 行),不是插件。目标定义:「每轮 agent 停下时都把上下文收敛到结构化、可裁剪、可缓存、可召回的工作态,而不是等到爆窗再被动压缩」;并且明确<strong>质量优先于预算</strong>——「240K 不是一把砍内容的刀,而是一块足够宽的高质量工作台」。</p>
+<p class="src"><code>docs/research/context-steady-state-san.html</code>(2026-07-04 愿景稿);<code>docs/research/san-context-steady-240k-redesign-proposal-20260712.html</code>(质量优先重构)。</p>
+
+<h4>三层数据架构</h4>
+<pre><code>Journal(不可变事实层,append-only,永久保留)
+  → Coverage Ledger(替代关系层:digest/checkpoint 对原始 entry 的 replacement coverage)
+    → Provider Working Set(执行上下文层:每次请求由 Context Planner 重新选择物化)</code></pre>
+<p>核心规则:「没有明确 replacement coverage,就不能从 provider payload 省略原始 entry」;同一个 <code>ContextPlan</code> 同时驱动发送、token 统计、状态栏与 compaction(单一决策点,消灭多套裁剪逻辑漂移)。</p>
+<p class="src">240k 重设计提案「基本模型」节;<code>context-steady/plan-types.ts</code>(<code>ContextPlanAudit</code>/<code>ContextPlanCoverageAudit</code>/<code>ContextSourceIndex</code>)、<code>planner.ts</code>、<code>materialize.ts</code>。</p>
+
+<h4>预算:三段控制带,不是配额</h4>
+<p><code>budget.ts</code> 推导:<code>steadyTarget = min(配置 240K, hardInputCeiling)</code>,其中 <code>hardInputCeiling = contextWindow − max(32K, contextWindow × reserveRatio)</code>;<code>controlMax ≈ steadyTarget × 13/12</code>(约 260K 控制带);<code>burstCeiling</code>(默认 320K)为质量弹性区,由 quality gate 判定 <code>burst_required</code> 时启用。0–200K 舒适区 / 200–260K 稳态控制带 / 260–320K 质量弹性区 / 320K+ 强审查区。2026-07-24 的事故报告修正了小窗口模型(256K)下 steadyTarget 被 clamp 后弹性带被抹平的适配盲区。</p>
+<p class="src"><code>context-steady/budget.ts</code>(1–56 行);240k 重设计提案第三节;<code>docs/research/san-context-steady-multi-window-adaptation-and-tool-loop-pause-research-20260724.html</code>。</p>
+
+<h4>沉淀单元:TurnDigest / Checkpoint / Segment</h4>
+<ul>
+<li><strong>TurnDigest</strong>(<code>types.ts</code>):逻辑 turn 结束后生成的结构化摘要——userIntent、actionsTaken、decisions、filesTouched、toolEvidence、factsLearned、openQuestions、risks、nextSteps、memoryCandidates,带 <code>source</code> 区间(fromEntryId/toEntryId)与 token 统计;LLM 生成失败时走<strong>确定性 fallback</strong>(<code>fallback.ts</code>),失败原因入档,append-only 升级替代。</li>
+<li><strong>Checkpoint</strong>(<code>checkpoint.ts</code>):每 N 轮把 digest ledger 合并为稳定摘要,v2 带 <code>epochId</code>、<code>coveredSourceEntryRefs</code>、<code>rebaseReason</code>(checkpoint / resume / budget_pressure / topic_shift)——低频改写以保缓存。</li>
+<li><strong>Segment</strong>(<code>segment.ts</code>):长逻辑 turn 内部的<strong>上下文维护边界</strong>,只描述「已被 compaction summary 替代的 journal 区间」,<strong>不携带执行配额、不能作为停止 agent 的条件</strong>(类型注释明文规定)。40K token / 15 分钟只是维护软提示;segment 数量无上限。每个 segment 携带本地同步生成的最小 checkpoint(摘要模型失败时仍可恢复)。</li>
+</ul>
+<p class="src"><code>context-steady/types.ts</code>(86–262 行)、<code>segment.ts</code>、<code>checkpoint.ts</code>;分段稳态提案第一、五节。</p>
+
+<h4>质量闸门与防饿死状态机</h4>
+<p>裁剪前先证明:识别交付阶段 → 建立 Required Context Set(最新用户指令、活跃文件、未解决错误、工具调用配对等八项保护)→ 验证 replacement coverage → 比较压缩前后风险;证明失败默认<strong>保留或扩张(burst)而非压缩</strong>。执行态状态机:RUNNING → MAINTENANCE_PENDING → RUNNING;硬压力下 RECOVERY_ONCE(一次 compaction + replan + replay,maintenanceId 防循环)→ 仍失败才进入显式 <code>PAUSED_FOR_CONTEXT</code>(可观察、可恢复,用户输入 FIFO 保留),禁止静默停止。<strong>Continuation authority</strong>(<code>continuation.ts</code>/<code>summary-authority.ts</code>):活跃用户请求与执行证据只能从 journal 真实 entries 同步派生,compaction 摘要与 assistant 自述<strong>无权改写</strong>,越权有审计(<code>ContextSummaryAuthorityAudit</code>)。</p>
+<p class="src">240k 重设计提案第四节;分段稳态提案第五节;<code>context-steady/quality-gate.ts</code>、<code>continuation.ts</code>(<code>ActiveContinuationState</code> 注释)、<code>tool-progress-guard.ts</code>。</p>
+
+<h4>召回与记忆</h4>
+<p><code>recall.ts</code> 用「近期相关 digest 行 + 当前 prompt」拼召回查询,经 <code>memory-backend</code>(<code>local-backend/off-backend</code> 可插拔)检索,按 memoryType/scope 过滤去重后作为 ContextPlan 的 recall 材料(只对当前 prompt 生效,不跨轮累积);digest 的 <code>memoryCandidates</code> 带授权分级(<code>explicit_user</code>/<code>inferred</code>,由本地权威分类器设置,<code>memory-authorization.ts</code>)。缓存布局:稳定前缀 + append-only digest ledger + 低频 checkpoint 重写 + 动态召回靠后 + 当前 prompt 最后。</p>
+<p class="src"><code>context-steady/recall.ts</code>、<code>types.ts</code>(memoryCandidates)、<code>packages/coding-agent/src/memory-backend/</code>;愿景稿「缓存命中设计」节。</p>
+
+<h2>三、逐维度对比</h2>
+
+<table>
+<thead><tr><th style="width:110px">维度</th><th>magic-context</th><th>San Context Steady</th><th style="width:220px">评注</th></tr></thead>
+<tbody>
+<tr>
+<td><strong>设计目标</strong></td>
+<td>无界会话 + 跨会话/跨 harness 长期记忆:「一个会话用一辈子」,零 compaction 停顿,缓存成本最优(README)</td>
+<td>单会话高质量工作集:把 provider 输入稳定在质量窗口(240K 控制带),质量优先于预算,可证明的信息覆盖(240k 提案 §1)</td>
+<td>目标函数不同:MC 优化「时间轴无限延伸 + 不忘」;San 优化「当前任务交付质量 + 注意力」。两者都反对「被动爆窗压缩」。</td>
+</tr>
+<tr>
+<td><strong>上下文表示</strong></td>
+<td>tiered compartments(每舱 4 个 paraphrase 层级 + importance + episode 类型)+ m[0]/m[1] 双块注入 + 原始 tail(ARCHITECTURE.md)</td>
+<td>ContextPlan 材料体系:exact / turn_bundle / tool_pair / file_evidence / turn_digest / checkpoint / recall / live_tail,每材料带表示级别(exact/evidence_stub/digest/checkpoint/omitted)与审计(<code>plan-types.ts</code>)</td>
+<td>MC 的历史单元是「分舱」(时间切片,多分辨率);San 是「轮次/材料」(语义切片,单分辨率 + 表示降级)。San 的材料种类更细,MC 的单元分辨率更多。</td>
+</tr>
+<tr>
+<td><strong>压缩 / 淘汰策略</strong></td>
+<td>后台异步 historian(不阻塞前台)+ 确定性 decay 降级 + agent 提示(<code>ctx_reduce</code>)+ smart drops(superseded edit → edit_marker)+ 85% 分层应急驱逐 + 95% fail-closed 阻断</td>
+<td>安全边界内同步维护(mid-turn compaction / 最小 checkpoint,阻塞当前请求但不结束逻辑 turn)+ quality gate 证明先行 + burst 扩张优先于压缩 + RECOVERY_ONCE + <code>PAUSED_FOR_CONTEXT</code></td>
+<td>方向相反的哲学:MC「先压,压错了可 <code>ctx_expand</code> 取回」;San「先证明可压,证明失败宁可扩张/暂停」。MC 的应急梯度比 San 细(San 在 hard_pressure 与 pause 之间缺中间档,见 §4.3)。</td>
+</tr>
+<tr>
+<td><strong>检索 / 召回</strong></td>
+<td>每回合自动注入(缓存稳定)+ <code>ctx_search</code> 统一检索(记忆 + 对话 FTS5 + git commits + notes + primers;本地 ONNX 嵌入 + 全文回退)+ <code>ctx_expand</code> 历史解压 + auto search hints</td>
+<td>Plan 组装期召回:digest 相关性驱动查询 → memory-backend 检索 → recall 材料(仅当前 prompt,不累积);无 agent 主动检索工具、无嵌入向量、无对话全文索引</td>
+<td>MC 的召回是「系统自动 + agent 自助」双通道且横跨五种语料;San 目前只有系统单通道。San 的 journal + entryId 基础设施已具备做 <code>ctx_expand</code> 等价物的条件。</td>
+</tr>
+<tr>
+<td><strong>持久化</strong></td>
+<td>独立 SQLite(跨 harness 共享、项目身份键、迁移 v74、fail-closed);嵌入 BLOB;dreamer 夜间维护记忆质量</td>
+<td>会话 journal 内嵌 custom entries(<code>san.turn_digest</code> / <code>san.context_segment</code> / <code>san.context_checkpoint</code> 等,随会话存储)+ memory-backend(可插拔)</td>
+<td>MC 把「记忆」提升为独立于会话的一等数据库;San 的沉淀物主要活在会话内。这是「一个会话用一辈子」与「会话是工作单元」的直接体现。</td>
+</tr>
+<tr>
+<td><strong>与 agent loop 的耦合</strong></td>
+<td>外挂 transform hook:每次 LLM 调用重写消息数组,宿主 loop 无感知;代价是 replay-everything 不变量、宿主兼容矩阵(三 harness × 版本)、与宿主 compaction 的排他约束</td>
+<td>深度内嵌:prompt 边界组装 ContextPlan、<code>onTurnEnd + willContinue</code> 安全边界做 mid-turn 维护、输入路由器 / FIFO / 暂停状态机直接接管执行语义(分段稳态提案 §三、五)</td>
+<td>MC 没有 loop 控制权,只能「重写字节」;San 拥有 loop,可以「改变行为」(暂停、replay、FIFO)。San 能做到 MC 做不到的执行级保证(工具不重复执行、输入不丢),MC 能做到宿主无关。</td>
+</tr>
+<tr>
+<td><strong>可移植性</strong></td>
+<td>高:OpenCode / Pi / OMP 通吃,数据库跨 harness 池化,Pi 分支 fork 继承状态;正向 Rust/subc 迁移以进一步脱离宿主运行时</td>
+<td>无(设计如此):San 专属子系统,与 session journal、task executor、TUI 深度绑定</td>
+<td>不同的产品形态决定:MC 是「卖给所有 harness 用户的插件」,San 是「自己 harness 的核心能力」。</td>
+</tr>
+<tr>
+<td><strong>成熟度</strong></td>
+<td>5 个月、1,731 stars、单主力作者、日均多 commit;v74 迁移、e2e + Docker、桌面应用、22 语言 README、安装向导 + doctor;经受多 harness 兼容性磨砺(issue 驱动的修复痕迹密集)</td>
+<td>自 2026-07-04 起约 6 周演进,三轮设计迭代 + 两次事故驱动修复(loop failure 20260723、多窗口适配 20260724);有公开 benchmark 设计与发布报告(<code>docs/research/san-context-steady-*benchmark*</code>);单仓自用,无外部用户压力测试</td>
+<td>MC 在「多环境鲁棒性」上明显更成熟;San 在「执行语义正确性」(防饿死、authority 隔离)上思考更深。两者都是高速迭代期。</td>
+</tr>
+</tbody>
+</table>
+
+<h2>四、San 可借鉴的点(与不值得借鉴的点)</h2>
+
+<h3>4.1 <span class="tag-borrow">值得借鉴</span>:多分辨率历史表示 + 确定性 decay 选级</h3>
+<p><strong>借什么。</strong>MC 每个分舱预存 4 个 paraphrase 层级,渲染时由确定性公式(年龄 × importance × 预算压力)选级,旧历史平滑降清晰度且逐字节可重现。San 目前 digest/checkpoint 是单分辨率:一个 TurnDigest 要么整个进 plan、要么被 checkpoint 吸收、要么被裁掉(<code>ContextPacketTrimDecision</code> 只有「省略」没有「降级」);<code>ContextSegment</code> 已有 <code>historicalSummary</code> + <code>shortSummary</code> 双粒度雏形但未体系化。引入「digest 生成时同时产出 2–3 个粒度 + materialize 按 <code>ContextPlanBudgetAudit</code> 压力确定性选级」,可以让 200–260K 控制带内的裁剪从「二值化」变成「渐进式」,直接提高旧轮次信息存活率。</p>
+<p><strong>改哪里。</strong><code>context-steady/digest.ts</code>(生成期多粒度,复用现有 LLM 调用一次产出)、<code>types.ts</code>(TurnDigest 加 tiers 字段,schema v2)、<code>materialize.ts</code> + <code>planner.ts</code>(选级函数,输入用 <code>budget.ts</code> 已有的压力信号)。San 已有确定性 fallback digest 管线,fallback 层级天然是最低 tier。</p>
+<p><strong>预估工作量。</strong>中:3–5 天(含 schema 迁移与既有会话兼容);选级公式本身照抄 MC 的半衰期形态即可起步。</p>
+
+<h3>4.2 <span class="tag-borrow">值得借鉴</span>:bust 分类学——重写时机与缓存失效对齐</h3>
+<p><strong>借什么。</strong>San 的缓存策略是「结构性」的(append-only ledger、checkpoint 低频改写、动态内容靠后),但 checkpoint rebase 的触发(<code>rebaseReason</code>: checkpoint / resume / budget_pressure / topic_shift)完全由自身节奏决定,<strong>没有和「provider 缓存此刻是否本来就要失效」对齐</strong>。MC 的核心洞察是:模型切换、system prompt 变化、闲置超 TTL 这些时刻缓存已死,重写是免费的;而例行增长绝不应主动触发重写。把这个「搭天然 bust 便车」的触发分类引入 San 的 checkpoint rebase 与 plan 刷新决策,可以在不改变任何数据结构的前提下降低缓存击穿率。</p>
+<p><strong>改哪里。</strong><code>context-steady/checkpoint.ts</code>(rebase 触发加 bust 感知条件)、agent-session 的 plan 刷新入口(检测模型/系统提示变化、闲置时长,San 在 session 层天然掌握这些信号,比 MC 的插件位置更容易拿到);配套在 dogfood 观测(<code>dogfood.ts</code>)里加 cache-hit 归因。</p>
+<p><strong>预估工作量。</strong>中偏大:约 1–2 周,难点不在改动而在验证——需要 provider 缓存命中率的前后对照观测。</p>
+
+<h3>4.3 <span class="tag-borrow">值得借鉴</span>:pause 之前的分层应急降级档</h3>
+<p><strong>借什么。</strong>San 的 hard_pressure 路径是 RECOVERY_ONCE → <code>PAUSED_FOR_CONTEXT</code>,fail-closed 语义正确但体验硬(20260724 事故:超 325 tokens 即熔断)。MC 在阻断之前有一整段梯度:85% 压力带按工具类别分层驱逐(杂项 → 编辑/搜索 → 导航,最新 20% 保留),被驱逐的调用保留 <code>tool_use</code> 骨架 + <code>[dropped]</code> 占位维持 provider 配对。San 已有 <code>evidence_stub</code> 表示级别与 entryId 重读路径,quality gate 的八项保护清单恰好界定了「绝不能降级」的边界——在 recovery 与 pause 之间插入一档「把 quality gate 允许的已闭合工具输出降为 stub」,能消化掉大部分几百 token 级的边缘溢出,而不违背「可证明覆盖」原则。</p>
+<p><strong>改哪里。</strong><code>context-steady/prune.ts</code> / <code>tool-progress-guard.ts</code>(已闭合工具对识别已存在)+ <code>quality-gate.ts</code>(在 <code>hard_pressure</code> 判定前增加 stub 降级重算)+ <code>planner.ts</code>(降级材料的 coverage 记账)。</p>
+<p><strong>预估工作量。</strong>中:约 1 周(降级选择器 + 审计 + 回归用例;20260724 报告的会话可直接作为回归场景)。</p>
+
+<h3>4.4 <span class="tag-borrow">值得借鉴</span>:superseded-edit 压缩(小而准)</h3>
+<p><strong>借什么。</strong>「同一文件后续又被编辑过,旧 edit 的完整 diff/输出已无信息量」——MC 压成 <code>edit_marker</code>(保 filePath + 区域提示)。San 的 <code>filesTouched</code>(action: modified/created/deleted)与 <code>tool_pair</code> 材料已具备识别条件,是 planner 里一条低风险高收益的表示降级规则,长重构会话中 edit 输出是 token 大户。</p>
+<p><strong>改哪里。</strong><code>context-steady/source-index.ts</code>(标记 superseded tool_pair)+ <code>planner.ts</code>(降表示为 evidence_stub,写 coverage)。</p>
+<p><strong>预估工作量。</strong>小:2–3 天。</p>
+
+<h3>4.5 <span class="tag-borrow">值得借鉴</span>:历史自助解压工具(<code>ctx_expand</code> 等价物)</h3>
+<p><strong>借什么。</strong>San 的 coverage 体系保证「被替代的原文可重读」,但重读通道目前只有系统侧;MC 把它做成 agent 工具,模型发现摘要不够时自己拉原文区间。San 的 journal + entryId + <code>extractSpanMessages</code>(<code>session.ts</code>)已是现成地基,补一个工具定义即可,与「digest 不能替代证据」的既有原则完全同向。</p>
+<p><strong>改哪里。</strong>coding-agent 工具注册处新增(如 <code>context_expand</code>),实现调 <code>context-steady/session.ts</code> 的区间提取;输出经预算夹紧。</p>
+<p><strong>预估工作量。</strong>小:1–2 天。</p>
+
+<h3>4.6 <span class="tag-skip">不值得借鉴</span></h3>
+<ul>
+<li><strong>Replay-everything 不变量与 m[0]/m[1] 的插件式实现。</strong>这是「没有 loop 控制权」的补偿性复杂度:MC 必须每 pass 重放全部变换以保证字节一致,并用双消息块骗过缓存断点。San 拥有 loop 与 journal,在 plan 层直接决定物化内容即可,引入 replay 语义只会增加一层无收益的间接。借它的 bust 分类思想(§4.2),不借它的实现形态。</li>
+<li><strong>Dreamer 夜间管线全家桶。</strong>12+ 任务、per-task cron、冲突域租约、临时子会话、非 agentic manifest 协议——这套框架服务于「记忆库是跨年资产」的前提。San 的记忆量级(会话内 digest + memoryCandidates + 可插拔 backend)远未到需要夜间整理的规模,先建这套框架是典型的过度设计。其中「verify:记忆对照代码库校验时效」的单点想法值得记下,等 San 跨会话记忆真正成为主路径时再评估。</li>
+<li><strong>本地嵌入模型 + 五语料语义检索栈。</strong>90MB ONNX 下载、向量表、嵌入哈希守卫、provider 替换守卫……对 MC 合理(跨月会话的海量分舱必须语义检索),对 San 当前形态是重资产:San 的召回场景以「本会话 + 近期偏好」为主,digest 相关性 + memory-backend 全文已够用。若未来要做,优先考虑复用 pi 生态既有向量设施而非自建。<span class="unverified">MC 语义检索的实际召回质量未核实(无公开评测)。</span></li>
+<li><strong>排他式接管宿主 compaction。</strong>MC 必须关掉宿主压缩避免双压,这是插件与宿主的领土冲突;San 的 native compaction 本来就是自己体系内的兜底层(「context steady 是常态工作流,compaction 是应急」,愿景稿),双层防御是设计而非冲突,无需改变。</li>
+<li><strong>「一个会话用一辈子」作为产品叙事。</strong>San 的会话模型(journal 为工作单元、跨会话走 memory backend 与 handoff)与之根本不同;追随该叙事意味着重写会话生命周期,收益不明确。San 已有 <code>authoritySource: "handoff"</code> 等跨会话交接原语,方向是「会话可交接」而非「会话不死」。</li>
+</ul>
+
+<h2>五、结论</h2>
+
+<div class="verdict">
+<p><strong>一句话判断:同一问题(长会话上下文治理)的两种解,但目标函数不同</strong>——magic-context 解「会话无限延长 + 跨会话不遗忘 + 缓存成本最优」,San 解「单会话工作集质量 + 执行语义可证明正确」;在「后台压缩 + 分层表示 + 缓存稳定 + 可召回」这个核心子集上两者高度同构,互为镜像验证。</p>
+<p><strong>值得跟踪。</strong>理由:(1)它与 San 同处 pi 生态(直接适配 San 上游 oh-my-pi 的 compaction/memory 配置面),其兼容层动向对 San 有直接情报价值;(2)它以外部用户规模(1,731 stars、三 harness)验证了与 San 高度相似的架构判断(异步压缩、确定性渲染、fail-closed、coverage 式可追溯),它踩过的坑(ARCHITECTURE.md 里密集的 issue 编号)是 San 的免费回归清单;(3)其 Rust/subc 迁移与 San 的 crates/pi-natives 路线可相互印证。建议每 4–6 周扫一次其 CHANGELOG 与 ARCHITECTURE.md diff。</p>
+</div>
+
+<h3>附:证据索引</h3>
+<ul>
+<li>magic-context 仓库元数据与 commit 历史:<a href="https://api.github.com/repos/cortexkit/magic-context">GitHub API /repos</a>、<a href="https://api.github.com/repos/cortexkit/magic-context/commits">/commits</a>(2026-08-13 抓取)</li>
+<li>magic-context 机制陈述:<a href="https://raw.githubusercontent.com/cortexkit/magic-context/master/README.md">README.md</a>、<a href="https://raw.githubusercontent.com/cortexkit/magic-context/master/ARCHITECTURE.md">ARCHITECTURE.md</a>、<a href="https://raw.githubusercontent.com/cortexkit/magic-context/master/package.json">package.json</a>、git tree(<code>/git/trees/master?recursive=1</code>)</li>
+<li>San 设计文档:<code>docs/research/context-steady-state-san.html</code>、<code>docs/research/san-context-steady-240k-redesign-proposal-20260712.html</code>、<code>docs/research/san-context-segment-steady-architecture-proposal-20260716.html</code>、<code>docs/research/san-context-steady-multi-window-adaptation-and-tool-loop-pause-research-20260724.html</code></li>
+<li>San 实现:<code>packages/coding-agent/src/context-steady/</code>(重点核对 <code>types.ts</code>、<code>plan-types.ts</code>、<code>budget.ts</code>、<code>planner.ts</code>、<code>segment.ts</code>、<code>recall.ts</code>、<code>index.ts</code>)、<code>packages/coding-agent/src/memory-backend/</code></li>
+<li>未核实项汇总:docs.cortexkit.io 站内文档、桌面应用实现细节、MC 语义检索质量、MC 对改名后 San 的兼容性、「agent 辅助工作流」推断——均已在正文就地标注。</li>
+</ul>
+
+<p class="meta">报告完。本文件为自包含单文件 HTML,无外部依赖;所有外链为出处引用。</p>
+
+</body>
+</html>
