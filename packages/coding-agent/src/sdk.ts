@@ -2904,16 +2904,43 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				}
 			}
 		}
+		let supersededAbandoned = false;
 		if (existingRef && !sameGenerationReentry && !reclaimedCorpse) {
-			throw new Error(
-				`Agent id "${resolvedAgentId}" is already registered as a ${existingRef.status} ${existingRef.kind} and cannot be reclaimed — refusing to overwrite an existing generation. Revive the existing agent, release it, or use a fresh id.`,
-			);
+			// The guard stops a fresh construction from silently clobbering a
+			// generation that is still live: a ref with no session object yet
+			// (its own construction is still in flight — superseding would
+			// cross-wire the two constructions), a live non-main generation
+			// (subagents are lifecycle-owned and messageable), or a main with
+			// in-flight work (streaming, compacting, generating a handoff).
+			// Those fail closed with the collision intact.
+			// One state is provably not live and is superseded instead, matching
+			// the long-standing SDK contract where a later same-id construction
+			// replaces an earlier one: a main the caller abandoned without
+			// disposing — quiescent (and therefore also already-disposed, whose
+			// registry cleanup somehow missed).
+			const existingSession = existingRef.session;
+			supersededAbandoned =
+				existingRef.kind === "main" &&
+				existingSession !== null &&
+				!existingSession.isStreaming &&
+				!existingSession.isCompacting &&
+				!existingSession.isGeneratingHandoff;
+			if (supersededAbandoned) {
+				logger.warn(
+					`createAgentSession: superseding an abandoned quiescent main generation for agent id "${resolvedAgentId}"`,
+				);
+			} else {
+				throw new Error(
+					`Agent id "${resolvedAgentId}" is already registered as a ${existingRef.status} ${existingRef.kind} and cannot be reclaimed — refusing to overwrite an existing generation. Revive the existing agent, release it, or use a fresh id.`,
+				);
+			}
 		}
 		// A same-generation re-entry keeps its ref (refreshForReentry above);
-		// every other path registers: fresh ids, and fresh constructions over a
-		// reclaimed corpse (the old generation is gone, so a brand-new ref with a
-		// new identity and createdAt is correct).
-		if (!existingRef || reclaimedCorpse) {
+		// every other path registers: fresh ids, fresh constructions over a
+		// reclaimed corpse or an abandoned quiescent main (the old generation
+		// is gone, so a brand-new ref with a new identity and createdAt is
+		// correct).
+		if (!existingRef || reclaimedCorpse || supersededAbandoned) {
 			agentRegistry.register({
 				id: resolvedAgentId,
 				displayName: resolvedAgentDisplayName,
