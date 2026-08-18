@@ -3,7 +3,7 @@
  */
 import * as path from "node:path";
 
-import { type Api, type AssistantMessage, completeSimple, type Model } from "@san/ai";
+import { type Api, type AssistantMessage, completeSimple, type Model, withOneshotRetry } from "@san/ai";
 import { StreamMarkupHealing } from "@san/ai/utils/stream-markup-healing";
 import { isTerminalHeadless, logger, prompt } from "@san/utils";
 import type { ModelRegistry } from "../config/model-registry";
@@ -146,19 +146,23 @@ export async function generateTitleOnline(
 		const maxTokens = TITLE_MAX_TOKENS;
 		logger.debug("title-generator: request", { ...modelContext, maxTokens });
 
-		const response = await completeSimple(
-			model,
-			{
-				systemPrompt,
-				messages: [{ role: "user", content: userMessage, timestamp: Date.now() }],
-			},
-			{
-				apiKey: registry.resolver(model, sessionId),
-				maxTokens,
-				disableReasoning: true,
-				metadata,
-				signal,
-			},
+		const response = await withOneshotRetry(
+			() =>
+				completeSimple(
+					model,
+					{
+						systemPrompt,
+						messages: [{ role: "user", content: userMessage, timestamp: Date.now() }],
+					},
+					{
+						apiKey: registry.resolver(model, sessionId),
+						maxTokens,
+						disableReasoning: true,
+						metadata,
+						signal,
+					},
+				),
+			{ signal },
 		);
 
 		if (response.stopReason === "error") {

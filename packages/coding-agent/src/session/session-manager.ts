@@ -8,6 +8,7 @@ import {
 	getSessionsDir,
 	isEnoent,
 	logger,
+	sanitizeText,
 	stringifyJson,
 	toError,
 } from "@san/utils";
@@ -51,7 +52,12 @@ import {
 	type UsageStatistics,
 } from "./session-entries";
 import { findMostRecentSession, listAllSessions, listSessions, type SessionInfo } from "./session-listing";
-import { loadEntriesFromFile, readTitleSlotFromFile, resolveBlobRefsInEntries } from "./session-loader";
+import {
+	loadEntriesFromFile,
+	loadEntriesFromFileWithMetadata,
+	readTitleSlotFromFile,
+	resolveBlobRefsInEntries,
+} from "./session-loader";
 import { generateId, migrateToCurrentVersion } from "./session-migrations";
 import {
 	computeDefaultSessionDir,
@@ -477,9 +483,10 @@ export class SessionManager {
 
 		if (!this.#diskFailureLogged) {
 			this.#diskFailureLogged = true;
+			// 只展示一次净化的明文警告：剥离 ANSI/控制字符，避免终端注入。
 			logger.error("Session persistence error.", {
 				sessionFile: this.#sessionFile,
-				error: error.message,
+				error: sanitizeText(error.message),
 				stack: error.stack,
 			});
 		}
@@ -608,6 +615,9 @@ export class SessionManager {
 			this.#fileIsCurrent = true;
 			this.#rewriteRequired = false;
 			this.#hasTitleSlot = true;
+			// 全量重写成功即文件已忠实反映内存条目：解除粘滞的持久化错误，
+			// 让后续 append 走热路径恢复，而不是把旧失败永久抛给调用方。
+			this.#clearDiskError();
 		} catch (err) {
 			this.#noteDiskFailure(err);
 		}
@@ -675,10 +685,16 @@ export class SessionManager {
 			if (this.#atomicRewriteFenceEpoch === epoch) this.#atomicRewriteFenceEpoch = null;
 		}
 	}
-
 	#appendToSessionFile(entry: SessionEntry): void {
 		if (this.#released || !this.#persist || !this.#sessionFile) return;
-		if (this.#diskFailure) throw this.#diskFailure;
+
+		if (this.#diskFailure) {
+			this.#rewriteSynchronously();
+			// 重写成功时 rewriteSynchronously 已解除粘滞错误，本条已随全量重写落盘；
+			// 失败则保持错误并抛给调用方显式处理。绝不静默吞掉错误。
+			if (this.#diskFailure) throw this.#diskFailure;
+			return;
+		}
 
 		// Lazy gate: a brand-new session is not written until it has an assistant
 		// message (or someone forced creation), so sessions that never produce
@@ -1016,9 +1032,9 @@ export class SessionManager {
 		const resolvedSessionFile = path.resolve(sessionFile);
 		this.#sessionFile = resolvedSessionFile;
 		this.#rememberBreadcrumb(this.#cwd, resolvedSessionFile);
-
 		const titleSlot = await readTitleSlotFromFile(resolvedSessionFile, this.#storage);
-		const fileEntries = await loadEntriesFromFile(resolvedSessionFile, this.#storage);
+		const loadedFile = await loadEntriesFromFileWithMetadata(resolvedSessionFile, this.#storage);
+		const fileEntries = loadedFile.entries;
 		if (fileEntries.length === 0) {
 			// Explicit but empty/missing path (e.g. --session flag): start fresh but
 			// keep the requested path and materialize the header immediately.
@@ -1052,7 +1068,9 @@ export class SessionManager {
 		this.#titleUpdatedAt = titleSlot?.updatedAt ?? header.timestamp;
 		this.#hasTitleSlot = titleSlot !== undefined;
 		this.#fileIsCurrent = true;
-		this.#rewriteRequired = migrated;
+		// 文件中存在格式错误/撕裂的记录：磁盘字节并非内存条目的忠实序列化，
+		// 下一次 append 必须先做全量重写修复（不能在坏行后继续追加）。
+		this.#rewriteRequired = migrated || loadedFile.malformedCount > 0;
 		this.#forceFileCreation = true;
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;

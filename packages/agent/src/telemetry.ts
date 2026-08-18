@@ -46,6 +46,7 @@ import {
 	shouldSendServiceTier,
 	type ToolChoice,
 	type Usage,
+	withOneshotRetry,
 } from "@san/ai";
 import { AgentRunCollector, type AgentRunCoverage, type AgentRunSummary, type ToolStatus } from "./run-collector";
 import type { AgentTool } from "./types";
@@ -1682,10 +1683,14 @@ export async function instrumentedCompleteSimple<TApi extends Api>(
 	try {
 		return await runInActiveSpan(chatSpan, async () => {
 			const complete = span.completeImpl ?? completeSimple;
-			const message = await complete(model, ctx, {
-				...options,
-				onResponse: captureOnResponse,
-			});
+			const message = await withOneshotRetry(
+				() =>
+					complete(model, ctx, {
+						...options,
+						onResponse: captureOnResponse,
+					}),
+				{ signal: options.signal },
+			);
 			await finishChatSpan(telemetry, chatSpan, message, {
 				stepNumber,
 				serviceTier: options.serviceTier,

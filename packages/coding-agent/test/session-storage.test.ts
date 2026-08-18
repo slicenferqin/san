@@ -337,3 +337,76 @@ describe("IndexedSessionStorage.writeTextAtomic commitGuard", () => {
 		expect(backend.writeFullCalls.map(call => call.content)).toEqual(["pre-seal body"]);
 	});
 });
+
+describe("FileSessionStorageWriter partial-append rollback", () => {
+	let tempDir: string;
+
+	beforeEach(async () => {
+		tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-session-storage-"));
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		await fsp.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("truncates a partially-written line back to the pre-write size on failure", async () => {
+		const storage = new FileSessionStorage();
+		const sessionPath = path.join(tempDir, "session.jsonl");
+		storage.writeTextSync(sessionPath, "first\n");
+		const beforeBytes = fs.readFileSync(sessionPath);
+
+		const realWriteSync = fs.writeSync.bind(fs);
+		const writeSyncSpy = vi.spyOn(fs, "writeSync").mockImplementation(((
+			fd: number,
+			buffer: NodeJS.ArrayBufferView,
+			offset?: number | null,
+			_length?: number | null,
+			position?: number | null,
+		) => {
+			// 第一轮循环真实写入 1 字节（模拟中途失败），下一轮抛错：文件末尾因此
+			// 多出 1 个垃圾字节，必须由 append 的回退截断还原。
+			if (writeSyncSpy.mock.calls.length === 1) return realWriteSync(fd, buffer, offset, 1, position);
+			throw new Error("injected short write");
+		}) as typeof fs.writeSync);
+
+		const writer = storage.openWriter(sessionPath);
+		await expect(writer.append('{"torn":true}\n')).rejects.toThrow("injected short write");
+
+		const afterBytes = fs.readFileSync(sessionPath);
+		expect(afterBytes.equals(beforeBytes)).toBe(true); // 文件逐字节不变
+		expect(writer.getError()?.message).toContain("injected short write");
+		await writer.close();
+	});
+
+	it("surfaces both the append failure and a failed rollback", async () => {
+		const storage = new FileSessionStorage();
+		const sessionPath = path.join(tempDir, "session.jsonl");
+		storage.writeTextSync(sessionPath, "first\n");
+		const beforeBytes = fs.readFileSync(sessionPath);
+
+		const realWriteSync = fs.writeSync.bind(fs);
+		const writeSyncSpy = vi.spyOn(fs, "writeSync").mockImplementation(((
+			fd: number,
+			buffer: NodeJS.ArrayBufferView,
+			offset?: number | null,
+			_length?: number | null,
+			position?: number | null,
+		) => {
+			if (writeSyncSpy.mock.calls.length === 1) return realWriteSync(fd, buffer, offset, 1, position);
+			throw new Error("injected append failure");
+		}) as typeof fs.writeSync);
+		vi.spyOn(fs, "ftruncateSync").mockImplementation(() => {
+			throw new Error("injected rollback failure");
+		});
+
+		const writer = storage.openWriter(sessionPath);
+		await expect(writer.append('{"torn":true}\n')).rejects.toThrow(/injected append failure/);
+
+		const error = writer.getError();
+		expect(error?.message).toContain("injected append failure");
+		expect(error?.message).toContain("injected rollback failure");
+		expect(fs.readFileSync(sessionPath).equals(beforeBytes)).toBe(false); // 回退失败 → 垃圾字节残留，但错误已如实上报
+		await writer.close();
+	});
+});

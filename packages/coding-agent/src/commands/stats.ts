@@ -2,7 +2,7 @@
  * View usage statistics dashboard.
  */
 import { Command, Flags } from "@san/utils/cli";
-import { runStatsCommand, type StatsCommandArgs } from "../cli/stats-cli";
+import { DEFAULT_STATS_HOST, runStatsCommand, type StatsCommandArgs } from "../cli/stats-cli";
 import { initTheme } from "../modes/theme/theme";
 
 export default class Stats extends Command {
@@ -10,6 +10,7 @@ export default class Stats extends Command {
 
 	static flags = {
 		port: Flags.integer({ char: "p", description: "Port for the dashboard server", default: 3847 }),
+		host: Flags.string({ char: "H", description: "Host to bind the dashboard server", default: DEFAULT_STATS_HOST }),
 		json: Flags.boolean({ char: "j", description: "Output stats as JSON", default: false }),
 		summary: Flags.boolean({ char: "s", description: "Print summary to console", default: false }),
 	};
@@ -19,6 +20,7 @@ export default class Stats extends Command {
 
 		const cmd: StatsCommandArgs = {
 			port: flags.port,
+			host: flags.host ?? DEFAULT_STATS_HOST,
 			json: flags.json,
 			summary: flags.summary,
 		};

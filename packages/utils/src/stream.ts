@@ -428,7 +428,25 @@ export async function* readSseEvents(
  * ```
  */
 export function parseJsonlLenient<T>(buffer: string): T[] {
+	return parseJsonlLenientDetailed<T>(buffer).entries;
+}
+
+/**
+ * Parse a complete JSONL string like {@link parseJsonlLenient}, additionally
+ * reporting how many non-whitespace malformed JSONL records were skipped.
+ *
+ * Counting rules:
+ * - A line that fails to parse counts once when its terminating newline is
+ *   reached (blank lines are consumed silently by the parser and never count).
+ * - An unterminated tail at end of input — a torn record from a partial write —
+ *   counts once too, unless it is pure whitespace (whitespace completes with
+ *   `done: true`) or parses as a complete record without a trailing newline.
+ * - Records that span chunk boundaries are only counted after they terminate,
+ *   so an incomplete chunk is never counted twice.
+ */
+export function parseJsonlLenientDetailed<T>(buffer: string): { entries: T[]; malformedCount: number } {
 	let entries: T[] | undefined;
+	let malformedCount = 0;
 
 	while (buffer.length > 0) {
 		const { values, error, read, done } = parseJsonlChunkCompat(buffer);
@@ -441,14 +459,27 @@ export function parseJsonlLenient<T>(buffer: string): T[] {
 			}
 		}
 		if (error) {
+			// 一条格式错误的记录。read 落在上一行末尾的换行上时（nextNewline ===
+			// read），本行尚未终止，只前进一个字节继续扫描、不计数；只有当确实越过
+			// 本行终止换行（nextNewline > read）或输入耗尽（-1）时才计一次。
 			const nextNewline = buffer.indexOf("\n", read);
-			if (nextNewline === -1) break;
+			if (nextNewline === -1) {
+				// 未终止的坏尾：整个输入已耗尽，属于撕裂的尾部记录，计一次。
+				malformedCount++;
+				break;
+			}
+			if (nextNewline > read) malformedCount++;
 			buffer = buffer.substring(nextNewline + 1);
 			continue;
 		}
-		if (read === 0) break;
+		if (read === 0) {
+			// Nothing consumed: either whitespace (done) or an incomplete record
+			// left over at EOF — a torn tail that must count as malformed.
+			if (!done) malformedCount++;
+			break;
+		}
 		buffer = buffer.substring(read);
 		if (done) break;
 	}
-	return entries ?? [];
+	return { entries: entries ?? [], malformedCount };
 }

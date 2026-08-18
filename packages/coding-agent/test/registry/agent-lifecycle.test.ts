@@ -466,3 +466,255 @@ describe("AgentLifecycleManager", () => {
 		expect(lifecycle.has("8-Sub")).toBe(true);
 	});
 });
+
+describe("AgentLifecycleManager.reclaimParkedCorpse", () => {
+	let registry: AgentRegistry;
+	let lifecycle: AgentLifecycleManager;
+
+	beforeEach(() => {
+		AgentRegistry.resetGlobalForTests();
+		AgentLifecycleManager.resetGlobalForTests();
+		registry = AgentRegistry.global();
+		lifecycle = AgentLifecycleManager.global();
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+		AgentLifecycleManager.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+	});
+
+	function registerParkedSub(id: string, sessionFile: string | null = null) {
+		return registry.register({
+			id,
+			displayName: "task",
+			kind: "sub",
+			session: null,
+			sessionFile,
+			status: "parked",
+		});
+	}
+
+	it("reclaims a dead corpse with no session file", async () => {
+		const corpse = registerParkedSub("Corpse-NoFile");
+
+		const reclaimed = await lifecycle.reclaimParkedCorpse("Corpse-NoFile", corpse);
+
+		expect(reclaimed).toBe(true);
+		expect(registry.get("Corpse-NoFile")).toBeUndefined();
+	});
+
+	it("reclaims a session-file-backed corpse when the persisted factory definitively declines", async () => {
+		const corpse = registerParkedSub("Corpse-Declined", "/tmp/Corpse-Declined.jsonl");
+		lifecycle.setPersistedSubagentReviverFactory(async () => undefined, 0);
+
+		const reclaimed = await lifecycle.reclaimParkedCorpse("Corpse-Declined", corpse);
+
+		expect(reclaimed).toBe(true);
+		expect(registry.get("Corpse-Declined")).toBeUndefined();
+	});
+
+	it("reclaims a session-file-backed corpse when no persisted factory is installed", async () => {
+		const corpse = registerParkedSub("Corpse-NoFactory", "/tmp/Corpse-NoFactory.jsonl");
+
+		const reclaimed = await lifecycle.reclaimParkedCorpse("Corpse-NoFactory", corpse);
+
+		expect(reclaimed).toBe(true);
+		expect(registry.get("Corpse-NoFactory")).toBeUndefined();
+	});
+
+	it("preserves a cold-revivable ref: the factory can build a reviver", async () => {
+		const revived = makeSessionStub();
+		const corpse = registerParkedSub("Corpse-Revivable", "/tmp/Corpse-Revivable.jsonl");
+		lifecycle.setPersistedSubagentReviverFactory(async () => async () => revived.session, 0);
+
+		const reclaimed = await lifecycle.reclaimParkedCorpse("Corpse-Revivable", corpse);
+
+		expect(reclaimed).toBe(false);
+		expect(registry.get("Corpse-Revivable")).toBe(corpse);
+		expect(registry.get("Corpse-Revivable")?.status).toBe("parked");
+	});
+
+	it("preserves the ref when the persisted factory probe throws (fail closed)", async () => {
+		const corpse = registerParkedSub("Corpse-ProbeError", "/tmp/Corpse-ProbeError.jsonl");
+		lifecycle.setPersistedSubagentReviverFactory(async () => {
+			throw new Error("probe blew up");
+		}, 0);
+
+		const reclaimed = await lifecycle.reclaimParkedCorpse("Corpse-ProbeError", corpse);
+
+		expect(reclaimed).toBe(false);
+		expect(registry.get("Corpse-ProbeError")).toBe(corpse);
+	});
+
+	it("rejects a live ref: a session is still attached", async () => {
+		const stub = makeSessionStub();
+		const live = registry.register({
+			id: "Corpse-Live",
+			displayName: "task",
+			kind: "sub",
+			session: stub.session,
+			sessionFile: "/tmp/Corpse-Live.jsonl",
+			status: "idle",
+		});
+
+		const reclaimed = await lifecycle.reclaimParkedCorpse("Corpse-Live", live);
+
+		expect(reclaimed).toBe(false);
+		expect(registry.get("Corpse-Live")).toBe(live);
+		expect(registry.get("Corpse-Live")?.session).toBe(stub.session);
+	});
+
+	it("rejects an adopted parked ref: strict lifecycle ownership", async () => {
+		const corpse = registerParkedSub("Corpse-Adopted", "/tmp/Corpse-Adopted.jsonl");
+		lifecycle.adopt("Corpse-Adopted", {
+			idleTtlMs: 0,
+			revive: async () => makeSessionStub().session,
+		});
+
+		const reclaimed = await lifecycle.reclaimParkedCorpse("Corpse-Adopted", corpse);
+
+		expect(reclaimed).toBe(false);
+		expect(registry.get("Corpse-Adopted")).toBe(corpse);
+		expect(lifecycle.has("Corpse-Adopted")).toBe(true);
+	});
+
+	it("rejects a ref mid-park: the park is in flight and the session is still live", async () => {
+		vi.useFakeTimers();
+		const gate = deferred();
+		const stub = makeSessionStub(() => gate.promise);
+		const live = registry.register({
+			id: "Corpse-Parking",
+			displayName: "task",
+			kind: "sub",
+			session: stub.session,
+			sessionFile: "/tmp/Corpse-Parking.jsonl",
+			status: "idle",
+		});
+		lifecycle.adopt("Corpse-Parking", { idleTtlMs: TTL });
+
+		vi.advanceTimersByTime(TTL);
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(lifecycle.isParking("Corpse-Parking")).toBe(true);
+		// Detach + parked happen before dispose resolves: the session is already
+		// out of the registry while the parked ref is mid-flight.
+		expect(registry.get("Corpse-Parking")?.status).toBe("parked");
+		expect(registry.get("Corpse-Parking")?.session).toBeNull();
+
+		const reclaimed = await lifecycle.reclaimParkedCorpse("Corpse-Parking", live);
+
+		expect(reclaimed).toBe(false);
+		expect(registry.get("Corpse-Parking")).toBe(live);
+		expect(registry.get("Corpse-Parking")?.status).toBe("parked");
+		gate.resolve();
+		await flushAsync();
+	});
+
+	it("rejects a ref mid-revive: the revive is in flight", async () => {
+		const gate = deferred();
+		const revived = makeSessionStub();
+		const corpse = registerParkedSub("Corpse-Reviving", "/tmp/Corpse-Reviving.jsonl");
+		lifecycle.adopt("Corpse-Reviving", {
+			idleTtlMs: 0,
+			revive: async () => {
+				await gate.promise;
+				return revived.session;
+			},
+		});
+
+		const reviving = lifecycle.ensureLive("Corpse-Reviving");
+		await Promise.resolve();
+		await Promise.resolve();
+
+		const reclaimed = await lifecycle.reclaimParkedCorpse("Corpse-Reviving", corpse);
+
+		expect(reclaimed).toBe(false);
+		expect(registry.get("Corpse-Reviving")).toBe(corpse);
+		expect(registry.get("Corpse-Reviving")?.status).toBe("parked");
+		gate.resolve();
+		await reviving;
+	});
+	it("rejects a stale expected ref replaced by a new generation during the probe", async () => {
+		const gate = deferred();
+		const corpse = registerParkedSub("Corpse-Stale", "/tmp/Corpse-Stale.jsonl");
+		lifecycle.setPersistedSubagentReviverFactory(async () => {
+			await gate.promise;
+			return undefined;
+		}, 0);
+
+		const reclaiming = lifecycle.reclaimParkedCorpse("Corpse-Stale", corpse);
+		await Promise.resolve();
+		await Promise.resolve();
+		// Another generation takes over the id while the probe is awaiting.
+		const newer = registry.register({
+			id: "Corpse-Stale",
+			displayName: "task",
+			kind: "sub",
+			session: null,
+			sessionFile: "/tmp/Corpse-Stale.jsonl",
+			status: "parked",
+		});
+		gate.resolve();
+
+		const reclaimed = await reclaiming;
+
+		expect(reclaimed).toBe(false);
+		// The newer generation survives; the stale expected ref is untouched.
+		expect(registry.get("Corpse-Stale")).toBe(newer);
+		expect(registry.get("Corpse-Stale")).not.toBe(corpse);
+	});
+
+	it("after a successful reclaim the id is free for a fresh registration", async () => {
+		const corpse = registerParkedSub("Corpse-Reused", "/tmp/Corpse-Reused.jsonl");
+		lifecycle.setPersistedSubagentReviverFactory(async () => undefined, 0);
+
+		expect(await lifecycle.reclaimParkedCorpse("Corpse-Reused", corpse)).toBe(true);
+
+		const fresh = registry.register({
+			id: "Corpse-Reused",
+			displayName: "task",
+			kind: "sub",
+			session: null,
+			status: "running",
+		});
+		expect(registry.get("Corpse-Reused")).toBe(fresh);
+		expect(fresh).not.toBe(corpse);
+	});
+});
+
+describe("AgentRegistry.refreshForReentry", () => {
+	beforeEach(() => {
+		AgentRegistry.resetGlobalForTests();
+		AgentLifecycleManager.resetGlobalForTests();
+	});
+	afterEach(() => {
+		AgentLifecycleManager.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+	});
+
+	it("refreshes a parked ref in place, preserving identity and createdAt", () => {
+		const registry = AgentRegistry.global();
+		const ref = registry.register({
+			id: "Reentry",
+			displayName: "task",
+			kind: "sub",
+			session: null,
+			sessionFile: "/tmp/Reentry.jsonl",
+			status: "parked",
+		});
+		const createdAt = ref.createdAt;
+		const statusChanges: string[] = [];
+		registry.onChange(event => {
+			if (event.type === "status_changed") statusChanges.push(event.ref.status);
+		});
+
+		registry.refreshForReentry("Reentry", "/tmp/Reentry.jsonl");
+
+		expect(registry.get("Reentry")).toBe(ref);
+		expect(registry.get("Reentry")?.status).toBe("running");
+		expect(registry.get("Reentry")?.sessionFile).toBe("/tmp/Reentry.jsonl");
+		expect(registry.get("Reentry")?.createdAt).toBe(createdAt);
+		expect(statusChanges).toEqual(["running"]);
+	});
+});

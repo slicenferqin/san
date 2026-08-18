@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@san/agent";
-import { getBlobsDir, isEnoent, parseJsonlLenient } from "@san/utils";
+import { getBlobsDir, isEnoent, parseJsonlLenientDetailed } from "@san/utils";
 import { BlobStore, isBlobRef, resolveImageData, resolveImageDataUrl } from "./blob-store";
 import { buildSessionContext } from "./session-context";
 import {
@@ -53,10 +53,12 @@ function foldTitleSlot(entries: FileEntry[], slot: SessionTitleUpdate | undefine
 export function parseSessionContent(content: string): {
 	entries: FileEntry[];
 	titleSlot: SessionTitleUpdate | undefined;
+	/** 非空白格式错误的 JSONL 记录数（含文件尾部的截断记录）；title slot 不计入。 */
+	malformedCount: number;
 } {
 	const { body, slot } = splitTitleSlot(content);
-	const entries = parseJsonlLenient<RawFileEntry>(body) as FileEntry[];
-	return { entries: foldTitleSlot(entries, slot), titleSlot: slot };
+	const { entries, malformedCount } = parseJsonlLenientDetailed<RawFileEntry>(body);
+	return { entries: foldTitleSlot(entries as FileEntry[], slot), titleSlot: slot, malformedCount };
 }
 
 function elideCompactionSummary(entry: CompactionEntry | undefined): boolean {
@@ -105,9 +107,12 @@ function elideSupersededCompactionEntries(entries: FileEntry[]): void {
 export async function loadEntriesFromFileStream(filePath: string): Promise<{
 	entries: FileEntry[];
 	titleSlot: SessionTitleUpdate | undefined;
+	/** 非空白格式错误的 JSONL 记录数；title slot、空行不计入，跨 chunk 的坏行只计一次。 */
+	malformedCount: number;
 }> {
 	const entries: FileEntry[] = [];
 	let titleSlot: SessionTitleUpdate | undefined;
+	let malformedCount = 0;
 	let sawFirstLine = false;
 	// Byte buffer (NOT a decoded string): multibyte UTF-8 sequences that straddle
 	// a stream-chunk boundary stay intact, and Bun.JSONL.parseChunk accepts typed
@@ -117,20 +122,33 @@ export async function loadEntriesFromFileStream(filePath: string): Promise<{
 	let buffer: Uint8Array = new Uint8Array();
 	const decoder = new TextDecoder();
 
-	const drain = () => {
+	const drain = (atEof: boolean) => {
 		while (buffer.length > 0) {
 			const { values, error, read, done } = Bun.JSONL.parseChunk(buffer);
 			if (values.length > 0) {
 				for (const value of values) entries.push(value as FileEntry);
 			}
 			if (error) {
-				// Malformed record: skip past the next newline and continue.
+				// Malformed record. read 落在上一行末尾的换行上时（nextNewline ===
+				// read）说明坏行尚未终止，只前进一个字节继续扫描、不计数；只有越过
+				// 本行终止换行（nextNewline > read）才计一次，避免重复计数。
 				const nextNewline = buffer.indexOf(0x0a, read);
-				if (nextNewline === -1) break; // rest of the bad line not yet received
+				if (nextNewline === -1) {
+					// 坏行的结束换行尚未收到：丢弃已消费的好前缀（否则下一 chunk 会
+					// 重复产出这些值），保留坏行前缀等更多数据；计数留给其终止时。
+					buffer = buffer.subarray(read);
+					break;
+				}
+				if (nextNewline > read) malformedCount++;
 				buffer = buffer.subarray(nextNewline + 1);
 				continue;
 			}
-			if (read === 0) break; // incomplete record awaiting more data
+			if (read === 0) {
+				// 纯空白（done）或未完成的记录。流中途可能还有数据，不计数；只有
+				// EOF（atEof）残留、解析器又未完成的内容才是撕裂的尾部记录，计一次。
+				if (atEof && !done) malformedCount++;
+				break;
+			}
 			buffer = buffer.subarray(read);
 			if (done) {
 				buffer = new Uint8Array();
@@ -161,20 +179,20 @@ export async function loadEntriesFromFileStream(filePath: string): Promise<{
 					}
 				}
 			}
-			drain();
+			drain(false);
 		}
 		// A trailing record without a final newline: terminate it so the parser
 		// can complete it (readline yielded it; parseChunk needs the delimiter).
 		if (buffer.length > 0 && buffer[buffer.length - 1] !== 0x0a) {
 			buffer = Buffer.concat([buffer, new Uint8Array([0x0a])]);
 		}
-		drain();
+		drain(true);
 	} catch (err) {
-		if (isEnoent(err)) return { entries: [], titleSlot: undefined };
+		if (isEnoent(err)) return { entries: [], titleSlot: undefined, malformedCount: 0 };
 		throw err;
 	}
 
-	return { entries: foldTitleSlot(entries, titleSlot), titleSlot };
+	return { entries: foldTitleSlot(entries, titleSlot), titleSlot, malformedCount };
 }
 
 /** Read only the fixed-size head window to detect a physical title slot. */
@@ -198,12 +216,23 @@ export function parseSessionEntries(content: string): FileEntry[] {
 	return parseSessionContent(content).entries;
 }
 
-/** Exported for testing */
-export async function loadEntriesFromFile(
+export interface LoadEntriesFromFileResult {
+	entries: FileEntry[];
+	titleSlot: SessionTitleUpdate | undefined;
+	/** 非空白格式错误的 JSONL 记录数（含文件尾部的截断记录）。 */
+	malformedCount: number;
+}
+
+/**
+ * Load a session file with corruption metadata. Callers that resume a writable
+ * session (e.g. SessionManager) use `malformedCount > 0` to force a full rewrite
+ * before the next append, repairing torn tails instead of appending onto them.
+ */
+export async function loadEntriesFromFileWithMetadata(
 	filePath: string,
 	storage: SessionStorage = new FileSessionStorage(),
-): Promise<FileEntry[]> {
-	let loaded: { entries: FileEntry[]; titleSlot: SessionTitleUpdate | undefined };
+): Promise<LoadEntriesFromFileResult> {
+	let loaded: LoadEntriesFromFileResult;
 	try {
 		const stat = storage.statSync(filePath);
 		loaded =
@@ -211,20 +240,28 @@ export async function loadEntriesFromFile(
 				? await loadEntriesFromFileStream(filePath)
 				: parseSessionContent(await storage.readText(filePath));
 	} catch (err) {
-		if (isEnoent(err)) return [];
+		if (isEnoent(err)) return { entries: [], titleSlot: undefined, malformedCount: 0 };
 		throw err;
 	}
 	const { entries } = loaded;
 	elideSupersededCompactionEntries(entries);
 
 	// Validate session header
-	if (entries.length === 0) return entries;
+	if (entries.length === 0) return loaded;
 	const header = entries[0] as SessionHeader;
 	if (header.type !== "session" || typeof header.id !== "string") {
-		return [];
+		return { entries: [], titleSlot: loaded.titleSlot, malformedCount: loaded.malformedCount };
 	}
 
-	return entries;
+	return loaded;
+}
+
+/** Exported for testing */
+export async function loadEntriesFromFile(
+	filePath: string,
+	storage: SessionStorage = new FileSessionStorage(),
+): Promise<FileEntry[]> {
+	return (await loadEntriesFromFileWithMetadata(filePath, storage)).entries;
 }
 
 /**

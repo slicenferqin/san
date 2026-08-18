@@ -1719,7 +1719,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "stats",
 		audience: "expert",
 		description: "Launch the local stats dashboard",
-		inlineHint: "[--port <port>]",
+		inlineHint: "[--port <port>] [--host <host>]",
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			const parsed = parseStatsDashboardArgs(command.args);

@@ -119,6 +119,7 @@ import {
 } from "@san/ai";
 import * as AIError from "@san/ai/error";
 import { resetOpenAICodexHistoryAfterCompaction } from "@san/ai/providers/openai-codex-responses";
+import { kCursorExecResolved } from "@san/ai/utils/block-symbols";
 import { toolWireSchema } from "@san/ai/utils/schema";
 import { GeminiHeaderRunDetector, isGeminiThinkingModel } from "@san/ai/utils/thinking-loop";
 import { type RepeatedToolCallDetection, ToolCallLoopGuard } from "@san/ai/utils/tool-call-loop-guard";
@@ -549,6 +550,9 @@ import { YieldQueue } from "./yield-queue";
 
 const SESSION_STOP_CONTINUATION_CAP = 8;
 const PLAN_MODE_REMINDER_MAX = 3;
+const STREAM_STALL_ERROR_RE = /stream stall/i;
+const HTTP2_STREAM_RESET_ERROR_RE =
+	/stream closed with error code\s+nghttp2_(?:internal_error|refused_stream)|nghttp2_(?:internal_error|refused_stream)|HTTP2(?:StreamReset|RefusedStream|EnhanceYourCalm)/i;
 
 type BashAppendDestination =
 	| { kind: "current"; manager: SessionManager }
@@ -4611,6 +4615,30 @@ export class AgentSession {
 		}
 		this.#emit(event);
 	}
+	/**
+	 * Emit an `auto_compaction_end` lifecycle event.
+	 *
+	 * Post-commit fan-out is purely informational after the compaction entry is
+	 * committed. Mid-turn maintenance runs between provider calls, so a hung
+	 * extension handler here must not hold the next request hostage for the full
+	 * extension-handler timeout: `detached` fire-and-forgets the emission with
+	 * centralized error logging while manual/pre_turn/idle paths keep the
+	 * awaited behavior (subscribers may gate on the event settling).
+	 */
+	#emitCompactionEndEvent(
+		event: Extract<AgentSessionEvent, { type: "auto_compaction_end" }>,
+		detached: boolean,
+	): Promise<void> {
+		if (!detached) return this.#emitSessionEvent(event);
+		void this.#emitSessionEvent(event).catch((error: unknown) => {
+			logger.error("auto_compaction_end emit failed", {
+				maintenanceId: event.maintenanceId,
+				action: event.action,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
+		return Promise.resolve();
+	}
 
 	// Track last assistant message for auto-compaction check
 	#lastAssistantMessage: AssistantMessage | undefined = undefined;
@@ -4797,7 +4825,31 @@ export class AgentSession {
 		return entryId;
 	}
 
+	#isSyntheticUnexecutedToolResult(message: ToolResultMessage): boolean {
+		const details = message.details;
+		return isRecord(details) && details.__synthetic === true && details.executed === false;
+	}
+
+	#discardDuplicateSyntheticToolResult(message: ToolResultMessage): boolean {
+		if (!this.#isSyntheticUnexecutedToolResult(message)) return false;
+		const messages = this.agent.state.messages;
+		const messageIndex = messages.lastIndexOf(message);
+		const hasRealResult = messages.some(
+			(candidate, index) =>
+				index !== messageIndex &&
+				candidate.role === "toolResult" &&
+				candidate.toolCallId === message.toolCallId &&
+				!this.#isSyntheticUnexecutedToolResult(candidate),
+		);
+		if (!hasRealResult) return false;
+		if (messageIndex >= 0) {
+			this.agent.replaceMessages([...messages.slice(0, messageIndex), ...messages.slice(messageIndex + 1)]);
+		}
+		return true;
+	}
+
 	#persistSessionMessageIfMissing(message: AgentMessage): void {
+		if (message.role === "toolResult" && this.#discardDuplicateSyntheticToolResult(message)) return;
 		if (!this.#sessionWritesEnabled) return;
 		if (
 			message.role !== "user" &&
@@ -4901,6 +4953,13 @@ export class AgentSession {
 	}
 
 	#processAgentEvent = async (event: AgentEvent): Promise<void> => {
+		if (
+			event.type === "message_end" &&
+			event.message.role === "toolResult" &&
+			this.#discardDuplicateSyntheticToolResult(event.message)
+		) {
+			return;
+		}
 		// Step the mid-run todo counter synchronously, BEFORE any await in this
 		// handler. The agent loop's next-turn `getAsideMessages` poll can run
 		// before queued microtasks drain, so `#takeMidRunTodoNudge` MUST see the
@@ -5430,8 +5489,14 @@ export class AgentSession {
 				return;
 			}
 
-			if (this.#isRetryableReasonlessAbort(msg)) {
-				const didRetry = await this.#handleRetryableError(msg, { allowModelFallback: false });
+			const resolvedInterruptedToolTurn = this.#classifyResolvedInterruptedToolTurn(msg);
+			if (this.#isRetryableReasonlessAbort(msg) || resolvedInterruptedToolTurn === "reasonless-abort") {
+				const didRetry = await this.#handleRetryableError(
+					msg,
+					resolvedInterruptedToolTurn === "reasonless-abort"
+						? { allowModelFallback: false, preserveFailedTurn: true }
+						: { allowModelFallback: false },
+				);
 				if (didRetry) {
 					await emitAgentEndNotification({ willContinue: true });
 					return;
@@ -5474,8 +5539,12 @@ export class AgentSession {
 					return;
 				}
 			}
-			if (this.#isRetryableError(msg)) {
-				const didRetry = await this.#handleRetryableError(msg);
+			const resumeResolvedStreamStall = resolvedInterruptedToolTurn === "stream-stall";
+			if (resumeResolvedStreamStall || this.#isRetryableError(msg)) {
+				const didRetry = await this.#handleRetryableError(
+					msg,
+					resumeResolvedStreamStall ? { preserveFailedTurn: true } : undefined,
+				);
 				if (didRetry) {
 					await emitAgentEndNotification({ willContinue: true });
 					return;
@@ -17319,6 +17388,14 @@ export class AgentSession {
 		const compactionSettings = this.settings.getGroup("compaction");
 		if (compactionSettings.strategy === "off") return COMPACTION_CHECK_NONE;
 		if (reason !== "idle" && !compactionSettings.enabled) return COMPACTION_CHECK_NONE;
+		const effectivePhase: CodexCompactionContext["phase"] =
+			options.phase ?? (reason === "threshold" ? "pre_turn" : reason === "idle" ? "standalone_turn" : "mid_turn");
+		// Mid-turn maintenance runs between provider calls (onTurnEnd / tool-loop
+		// budget recovery / overflow recovery). Its post-commit lifecycle fan-out
+		// (`auto_compaction_end`, `session_compact`) is detached so a hung
+		// extension handler cannot hold the next request hostage for the full
+		// extension-handler timeout; manual/pre_turn/idle paths stay awaited.
+		const detachMidTurnLifecycle = effectivePhase === "mid_turn";
 		const generation = this.#promptGeneration;
 		const trigger: ContextMaintenanceTrigger =
 			options.trigger ?? (reason === "threshold" ? "native_threshold" : reason === "overflow" ? "overflow" : reason);
@@ -17344,6 +17421,7 @@ export class AgentSession {
 				terminalTextAnswer,
 				options.triggerContextTokens,
 				suppressContinuation,
+				detachMidTurnLifecycle,
 			);
 			if (outcome !== "fallback") return outcome;
 			fallbackFromShake = true;
@@ -17479,14 +17557,17 @@ export class AgentSession {
 				if (!handoffResult) {
 					const aborted = autoCompactionSignal.aborted || handoffSwitchCancelled;
 					if (aborted) {
-						await this.#emitSessionEvent({
-							type: "auto_compaction_end",
-							maintenanceId,
-							action,
-							result: undefined,
-							aborted: true,
-							willRetry: false,
-						});
+						await this.#emitCompactionEndEvent(
+							{
+								type: "auto_compaction_end",
+								maintenanceId,
+								action,
+								result: undefined,
+								aborted: true,
+								willRetry: false,
+							},
+							detachMidTurnLifecycle,
+						);
 						return COMPACTION_CHECK_NONE;
 					}
 					logger.warn("Auto-handoff returned no document; falling back to context-full maintenance", {
@@ -17500,14 +17581,17 @@ export class AgentSession {
 						...this.#contextProbeActiveCompaction,
 						tokensAfter: this.#estimateStoredContextTokens(),
 					};
-					await this.#emitSessionEvent({
-						type: "auto_compaction_end",
-						maintenanceId,
-						action,
-						result: undefined,
-						aborted: false,
-						willRetry: false,
-					});
+					await this.#emitCompactionEndEvent(
+						{
+							type: "auto_compaction_end",
+							maintenanceId,
+							action,
+							result: undefined,
+							aborted: false,
+							willRetry: false,
+						},
+						detachMidTurnLifecycle,
+					);
 					const continuationScheduled =
 						!autoCompactionSignal.aborted &&
 						(!this.#continuationAuthoritySourceMissing() || this.#hasQueuedUserMessage()) &&
@@ -17529,17 +17613,20 @@ export class AgentSession {
 					"model_unavailable",
 					"No active model is selected for context maintenance.",
 				);
-				await this.#emitSessionEvent({
-					type: "auto_compaction_end",
-					maintenanceId,
-					action,
-					result: undefined,
-					aborted: false,
-					willRetry: false,
-					skipped: true,
-					failureStage: failure.failureStage,
-					failureReason: failure.failureReason,
-				});
+				await this.#emitCompactionEndEvent(
+					{
+						type: "auto_compaction_end",
+						maintenanceId,
+						action,
+						result: undefined,
+						aborted: false,
+						willRetry: false,
+						skipped: true,
+						failureStage: failure.failureStage,
+						failureReason: failure.failureReason,
+					},
+					detachMidTurnLifecycle,
+				);
 				return failure;
 			}
 
@@ -17549,17 +17636,20 @@ export class AgentSession {
 					"model_unavailable",
 					"No authenticated model is available for context maintenance.",
 				);
-				await this.#emitSessionEvent({
-					type: "auto_compaction_end",
-					maintenanceId,
-					action,
-					result: undefined,
-					aborted: false,
-					willRetry: false,
-					skipped: true,
-					failureStage: failure.failureStage,
-					failureReason: failure.failureReason,
-				});
+				await this.#emitCompactionEndEvent(
+					{
+						type: "auto_compaction_end",
+						maintenanceId,
+						action,
+						result: undefined,
+						aborted: false,
+						willRetry: false,
+						skipped: true,
+						failureStage: failure.failureStage,
+						failureReason: failure.failureReason,
+					},
+					detachMidTurnLifecycle,
+				);
 				return failure;
 			}
 
@@ -17575,17 +17665,20 @@ export class AgentSession {
 					"preparation",
 					"Compaction preparation found no settled history that can be rewritten.",
 				);
-				await this.#emitSessionEvent({
-					type: "auto_compaction_end",
-					maintenanceId,
-					action,
-					result: undefined,
-					aborted: false,
-					willRetry: false,
-					skipped: true,
-					failureStage: failure.failureStage,
-					failureReason: failure.failureReason,
-				});
+				await this.#emitCompactionEndEvent(
+					{
+						type: "auto_compaction_end",
+						maintenanceId,
+						action,
+						result: undefined,
+						aborted: false,
+						willRetry: false,
+						skipped: true,
+						failureStage: failure.failureStage,
+						failureReason: failure.failureReason,
+					},
+					detachMidTurnLifecycle,
+				);
 				const noProgressDeadEnd = reason !== "idle";
 				let continuationScheduled = false;
 				if (!suppressContinuation && this.agent.hasQueuedMessages()) {
@@ -17630,16 +17723,19 @@ export class AgentSession {
 						"extension_cancelled",
 						"A session_before_compact extension cancelled automatic context maintenance.",
 					);
-					await this.#emitSessionEvent({
-						type: "auto_compaction_end",
-						maintenanceId,
-						action,
-						result: undefined,
-						aborted: true,
-						willRetry: false,
-						failureStage: failure.failureStage,
-						failureReason: failure.failureReason,
-					});
+					await this.#emitCompactionEndEvent(
+						{
+							type: "auto_compaction_end",
+							maintenanceId,
+							action,
+							result: undefined,
+							aborted: true,
+							willRetry: false,
+							failureStage: failure.failureStage,
+							failureReason: failure.failureReason,
+						},
+						detachMidTurnLifecycle,
+					);
 					return failure;
 				}
 
@@ -17773,9 +17869,7 @@ export class AgentSession {
 				codexCompaction = createCodexCompactionContext({
 					trigger: "auto",
 					reason: "context_limit",
-					phase:
-						options.phase ??
-						(reason === "threshold" ? "pre_turn" : reason === "idle" ? "standalone_turn" : "mid_turn"),
+					phase: effectivePhase,
 				});
 
 				for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex++) {
@@ -17908,14 +18002,17 @@ export class AgentSession {
 			}
 
 			if (autoCompactionSignal.aborted) {
-				await this.#emitSessionEvent({
-					type: "auto_compaction_end",
-					maintenanceId,
-					action,
-					result: undefined,
-					aborted: true,
-					willRetry: false,
-				});
+				await this.#emitCompactionEndEvent(
+					{
+						type: "auto_compaction_end",
+						maintenanceId,
+						action,
+						result: undefined,
+						aborted: true,
+						willRetry: false,
+					},
+					detachMidTurnLifecycle,
+				);
 				return COMPACTION_CHECK_NONE;
 			}
 
@@ -18063,11 +18160,23 @@ export class AgentSession {
 				| undefined;
 
 			if (this.#extensionRunner && savedCompactionEntry) {
-				await this.#extensionRunner.emit({
-					type: "session_compact",
+				const sessionCompactEvent = {
+					type: "session_compact" as const,
 					compactionEntry: savedCompactionEntry,
 					fromExtension,
-				});
+				};
+				if (detachMidTurnLifecycle) {
+					// Mid-turn maintenance: the post-commit `session_compact` hook is
+					// informational; a hung handler must not block the next provider
+					// call. Errors are logged through the centralized logger.
+					void this.#extensionRunner.emit(sessionCompactEvent).catch((error: unknown) => {
+						logger.error("session_compact emit failed", {
+							error: error instanceof Error ? error.message : String(error),
+						});
+					});
+				} else {
+					await this.#extensionRunner.emit(sessionCompactEvent);
+				}
 			}
 
 			const result: CompactionResult = {
@@ -18163,14 +18272,17 @@ export class AgentSession {
 				await this.sessionManager.rewriteEntries();
 			}
 
-			await this.#emitSessionEvent({
-				type: "auto_compaction_end",
-				maintenanceId,
-				action,
-				result,
-				aborted: false,
-				willRetry,
-			});
+			await this.#emitCompactionEndEvent(
+				{
+					type: "auto_compaction_end",
+					maintenanceId,
+					action,
+					result,
+					aborted: false,
+					willRetry,
+				},
+				detachMidTurnLifecycle,
+			);
 
 			const authoritySourceMissing = this.#continuationAuthoritySourceMissing();
 			if (retryFits && !authoritySourceMissing) {
@@ -18196,35 +18308,41 @@ export class AgentSession {
 				: COMPACTION_CHECK_NONE;
 		} catch (error) {
 			if (autoCompactionSignal.aborted) {
-				await this.#emitSessionEvent({
-					type: "auto_compaction_end",
-					maintenanceId,
-					action,
-					result: undefined,
-					aborted: true,
-					willRetry: false,
-				});
+				await this.#emitCompactionEndEvent(
+					{
+						type: "auto_compaction_end",
+						maintenanceId,
+						action,
+						result: undefined,
+						aborted: true,
+						willRetry: false,
+					},
+					detachMidTurnLifecycle,
+				);
 				return COMPACTION_CHECK_NONE;
 			}
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
 			const failure = failMaintenance("compaction_failed", errorMessage);
 			terminalFailure = failure;
-			await this.#emitSessionEvent({
-				type: "auto_compaction_end",
-				maintenanceId,
-				action,
-				result: undefined,
-				aborted: false,
-				willRetry: false,
-				failureStage: failure.failureStage,
-				failureReason: failure.failureReason,
-				errorMessage:
-					reason === "overflow"
-						? `Context overflow recovery failed: ${errorMessage}`
-						: reason === "incomplete"
-							? `Incomplete response recovery failed: ${errorMessage}`
-							: `Auto-compaction failed: ${errorMessage}`,
-			});
+			await this.#emitCompactionEndEvent(
+				{
+					type: "auto_compaction_end",
+					maintenanceId,
+					action,
+					result: undefined,
+					aborted: false,
+					willRetry: false,
+					failureStage: failure.failureStage,
+					failureReason: failure.failureReason,
+					errorMessage:
+						reason === "overflow"
+							? `Context overflow recovery failed: ${errorMessage}`
+							: reason === "incomplete"
+								? `Incomplete response recovery failed: ${errorMessage}`
+								: `Auto-compaction failed: ${errorMessage}`,
+				},
+				detachMidTurnLifecycle,
+			);
 		} finally {
 			if (this.#contextProbeActiveMaintenanceDecision?.maintenanceId === maintenanceId) {
 				this.#recordContextMaintenanceProbe(
@@ -18261,6 +18379,7 @@ export class AgentSession {
 		terminalTextAnswer: boolean,
 		triggerContextTokens?: number,
 		suppressContinuation = false,
+		detachMidTurnLifecycle = false,
 	): Promise<CompactionCheckResult | "fallback"> {
 		const action = "shake";
 		this.#autoCompactionAbortController?.abort();
@@ -18292,14 +18411,17 @@ export class AgentSession {
 				tokensAfter: this.#estimateStoredContextTokens(),
 			};
 			if (signal.aborted) {
-				await this.#emitSessionEvent({
-					type: "auto_compaction_end",
-					maintenanceId,
-					action,
-					result: undefined,
-					aborted: true,
-					willRetry: false,
-				});
+				await this.#emitCompactionEndEvent(
+					{
+						type: "auto_compaction_end",
+						maintenanceId,
+						action,
+						result: undefined,
+						aborted: true,
+						willRetry: false,
+					},
+					detachMidTurnLifecycle,
+				);
 				return COMPACTION_CHECK_NONE;
 			}
 			const reclaimed = result.toolResultsDropped + result.blocksDropped > 0;
@@ -18342,27 +18464,33 @@ export class AgentSession {
 				const errorMessage = reclaimed
 					? `Auto-shake reclaimed ~${result.tokensFreed} tokens but context is still above the threshold; falling back to context-full compaction.`
 					: "Auto-shake found nothing eligible to drop; falling back to context-full compaction.";
-				await this.#emitSessionEvent({
+				await this.#emitCompactionEndEvent(
+					{
+						type: "auto_compaction_end",
+						maintenanceId,
+						action,
+						result: undefined,
+						aborted: false,
+						willRetry: false,
+						skipped: !reclaimed,
+						errorMessage,
+					},
+					detachMidTurnLifecycle,
+				);
+				return "fallback";
+			}
+			await this.#emitCompactionEndEvent(
+				{
 					type: "auto_compaction_end",
 					maintenanceId,
 					action,
 					result: undefined,
 					aborted: false,
-					willRetry: false,
+					willRetry,
 					skipped: !reclaimed,
-					errorMessage,
-				});
-				return "fallback";
-			}
-			await this.#emitSessionEvent({
-				type: "auto_compaction_end",
-				maintenanceId,
-				action,
-				result: undefined,
-				aborted: false,
-				willRetry,
-				skipped: !reclaimed,
-			});
+				},
+				detachMidTurnLifecycle,
+			);
 
 			let continuationScheduled = false;
 			const authoritySourceMissing = this.#continuationAuthoritySourceMissing();
@@ -18407,27 +18535,33 @@ export class AgentSession {
 			};
 		} catch (error) {
 			if (signal.aborted) {
-				await this.#emitSessionEvent({
+				await this.#emitCompactionEndEvent(
+					{
+						type: "auto_compaction_end",
+						maintenanceId,
+						action,
+						result: undefined,
+						aborted: true,
+						willRetry: false,
+					},
+					detachMidTurnLifecycle,
+				);
+				return COMPACTION_CHECK_NONE;
+			}
+			const message = error instanceof Error ? error.message : "shake failed";
+			await this.#emitCompactionEndEvent(
+				{
 					type: "auto_compaction_end",
 					maintenanceId,
 					action,
 					result: undefined,
-					aborted: true,
+					aborted: false,
 					willRetry: false,
-				});
-				return COMPACTION_CHECK_NONE;
-			}
-			const message = error instanceof Error ? error.message : "shake failed";
-			await this.#emitSessionEvent({
-				type: "auto_compaction_end",
-				maintenanceId,
-				action,
-				result: undefined,
-				aborted: false,
-				willRetry: false,
-				errorMessage: message,
-				skipped: false,
-			});
+					errorMessage: message,
+					skipped: false,
+				},
+				detachMidTurnLifecycle,
+			);
 			// Overflow still needs recovery even if shake threw.
 			return reason === "overflow" ? "fallback" : COMPACTION_CHECK_NONE;
 		} finally {
@@ -18522,6 +18656,66 @@ export class AgentSession {
 
 		message.errorId = AIError.create(AIError.Flag.Abort);
 		return true;
+	}
+	/**
+	 * Recognize interrupted tool turns whose results already reconcile every
+	 * emitted call. Keeping the assistant/result pair lets continuation reuse
+	 * completed side effects while synthetic results identify calls that never ran.
+	 */
+	#classifyResolvedInterruptedToolTurn(message: AssistantMessage): "reasonless-abort" | "stream-stall" | undefined {
+		const id = this.#classifyRetryMessage(message);
+		const genericAbort = this.#isGenericAbortSentinel(message);
+		const reasonlessAbort =
+			(message.stopReason === "aborted" || message.stopReason === "error") &&
+			!this.#abortInProgress &&
+			!this.#isDisposed &&
+			!this.#streamingEditAbortTriggered &&
+			((message.stopReason === "aborted" && AIError.is(id, AIError.Flag.Abort)) || genericAbort);
+		const errorMessage = message.errorMessage ?? "";
+		const streamStall =
+			message.stopReason === "error" && STREAM_STALL_ERROR_RE.test(errorMessage) && AIError.retriable(id);
+		const transportReset =
+			message.stopReason === "error" &&
+			HTTP2_STREAM_RESET_ERROR_RE.test(errorMessage) &&
+			AIError.retriable(id) &&
+			!this.#abortInProgress &&
+			!this.#isDisposed &&
+			!this.#streamingEditAbortTriggered;
+		if (!reasonlessAbort && !streamStall && !transportReset) return undefined;
+		if (reasonlessAbort && genericAbort) message.errorId = AIError.create(AIError.Flag.Abort);
+
+		const resolvedToolCallIds: string[] = [];
+		for (const block of message.content) {
+			if (block.type !== "toolCall") continue;
+			if (
+				streamStall &&
+				message.provider === "cursor" &&
+				(!(kCursorExecResolved in block) || block[kCursorExecResolved] !== true)
+			) {
+				return undefined;
+			}
+			resolvedToolCallIds.push(block.id);
+		}
+		if (resolvedToolCallIds.length === 0) return undefined;
+
+		const messages = this.agent.state.messages;
+		let assistantIndex = -1;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const candidate = messages[i];
+			if (candidate.role === "assistant" && this.#isSameAssistantMessage(candidate, message)) {
+				assistantIndex = i;
+				break;
+			}
+		}
+		if (assistantIndex < 0) return undefined;
+
+		const unresolvedToolCallIds = new Set(resolvedToolCallIds);
+		for (let i = assistantIndex + 1; i < messages.length; i++) {
+			const candidate = messages[i];
+			if (candidate.role === "toolResult") unresolvedToolCallIds.delete(candidate.toolCallId);
+		}
+		if (unresolvedToolCallIds.size > 0) return undefined;
+		return reasonlessAbort ? "reasonless-abort" : "stream-stall";
 	}
 
 	/**
@@ -19560,6 +19754,7 @@ export class AgentSession {
 			fireworksFastFallback?: boolean;
 			hardErrorFallback?: boolean;
 			hardErrorRouteFallback?: boolean;
+			preserveFailedTurn?: boolean;
 		},
 	): Promise<boolean> {
 		const retrySettings = this.settings.getGroup("retry");
@@ -19807,8 +20002,12 @@ export class AgentSession {
 			errorId: message.errorId,
 		});
 
-		// Remove the failed assistant message from active context before retrying.
-		this.#removeAssistantMessageFromActiveContext(message, "auto-retry");
+		// Resolved interrupted tool turns keep the assistant/tool-result pair in
+		// context so continuation can distinguish completed side effects from calls
+		// represented by synthetic executed:false results.
+		if (options?.preserveFailedTurn !== true) {
+			this.#removeAssistantMessageFromActiveContext(message, "auto-retry");
+		}
 
 		// A thinking/response loop retried into identical context loops again. Inject a
 		// hidden redirect so the retried turn sees a directive to break the repeated

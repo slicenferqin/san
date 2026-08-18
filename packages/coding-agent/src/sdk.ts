@@ -1779,7 +1779,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	 */
 	const unregisterUnlessParked = (): void => {
 		if (agentRegistry.get(resolvedAgentId)?.status === "parked") return;
-		if (AgentLifecycleManager.global().isParking(resolvedAgentId)) return;
+		// Parking state belongs to the lifecycle that manages THIS registry; a
+		// custom registry may not be the global manager's, whose isParking would
+		// consult unrelated park state.
+		const lifecycle = AgentLifecycleManager.global();
+		if (lifecycle.manages(agentRegistry) && lifecycle.isParking(resolvedAgentId)) return;
 		agentRegistry.unregister(resolvedAgentId);
 	};
 	const evalKernelOwnerId = `agent-session:${Snowflake.next()}`;
@@ -2867,15 +2871,59 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// so that subagents launched in the same parallel batch can see each other in
 		// their initial `# IRC Peers` block (rendered inside `rebuildSystemPrompt`).
 		// The session reference is attached after construction below.
-		agentRegistry.register({
-			id: resolvedAgentId,
-			displayName: resolvedAgentDisplayName,
-			kind: agentKind,
-			parentId: options.parentAgentId,
-			session: null,
-			sessionFile: sessionManager.getSessionFile() ?? null,
-			status: "running",
-		});
+		const incomingSessionFile = sessionManager.getSessionFile() ?? null;
+		const existingRef = agentRegistry.get(resolvedAgentId);
+		let sameGenerationReentry = false;
+		let reclaimedCorpse = false;
+		if (existingRef) {
+			// Same-generation re-entry (lifecycle revive, subtask resume): the same
+			// agent re-constructs over its own parked ref — refresh it in place
+			// (identity and createdAt preserved) instead of registering a new
+			// generation over it.
+			sameGenerationReentry =
+				existingRef.status === "parked" &&
+				existingRef.session === null &&
+				existingRef.sessionFile !== null &&
+				existingRef.sessionFile === incomingSessionFile &&
+				incomingSessionFile !== null;
+			if (sameGenerationReentry) {
+				agentRegistry.refreshForReentry(resolvedAgentId, incomingSessionFile);
+			} else {
+				// Fresh construction colliding with an existing generation: never
+				// silently overwrite it. A provably dead parked corpse may be
+				// reclaimed (identity/CAS-checked, cold-revivable refs preserved);
+				// anything else fails the construction with the collision intact.
+				// Ownership: reclaim consults the lifecycle's adopt/park/revive
+				// state AND its persisted reviver factory — both describe the
+				// registry the lifecycle manages. For a custom registry the
+				// global manager owns neither, so reclaiming through it could
+				// misread unrelated state; fail closed instead.
+				const lifecycle = AgentLifecycleManager.global();
+				if (lifecycle.manages(agentRegistry)) {
+					reclaimedCorpse = await lifecycle.reclaimParkedCorpse(resolvedAgentId, existingRef);
+				}
+			}
+		}
+		if (existingRef && !sameGenerationReentry && !reclaimedCorpse) {
+			throw new Error(
+				`Agent id "${resolvedAgentId}" is already registered as a ${existingRef.status} ${existingRef.kind} and cannot be reclaimed — refusing to overwrite an existing generation. Revive the existing agent, release it, or use a fresh id.`,
+			);
+		}
+		// A same-generation re-entry keeps its ref (refreshForReentry above);
+		// every other path registers: fresh ids, and fresh constructions over a
+		// reclaimed corpse (the old generation is gone, so a brand-new ref with a
+		// new identity and createdAt is correct).
+		if (!existingRef || reclaimedCorpse) {
+			agentRegistry.register({
+				id: resolvedAgentId,
+				displayName: resolvedAgentDisplayName,
+				kind: agentKind,
+				parentId: options.parentAgentId,
+				session: null,
+				sessionFile: incomingSessionFile,
+				status: "running",
+			});
+		}
 		hasRegistered = true;
 
 		// Partition the initial enabled set for the xd:// transport: ambient

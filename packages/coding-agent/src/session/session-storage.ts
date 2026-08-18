@@ -115,8 +115,12 @@ class FileSessionStorageWriter implements SessionStorageWriter {
 	async append(line: string): Promise<void> {
 		if (this.#closed) throw new Error("Writer closed");
 		if (this.#error) throw this.#error;
+		let preWriteSize = 0;
 		try {
 			const buf = Buffer.from(line, "utf-8");
+			// 部分写入安全：先记录写入前的字节数，若本行中途写入失败（short write /
+			// 磁盘错误），回退截断到该尺寸，绝不把撕裂的半行留在文件尾。
+			preWriteSize = fs.fstatSync(this.#fd).size;
 			let offset = 0;
 			while (offset < buf.length) {
 				const written = fs.writeSync(this.#fd, buf, offset, buf.length - offset);
@@ -126,8 +130,27 @@ class FileSessionStorageWriter implements SessionStorageWriter {
 				offset += written;
 			}
 		} catch (err) {
-			throw this.#recordError(err);
+			throw this.#recordError(this.#rollbackAppend(err, preWriteSize));
 		}
+	}
+
+	/** Truncate a partially-appended line back to its pre-write byte size. */
+	#rollbackAppend(appendError: unknown, preWriteSize: number): Error {
+		const error = toError(appendError);
+		try {
+			const size = fs.fstatSync(this.#fd).size;
+			if (size !== preWriteSize) fs.ftruncateSync(this.#fd, preWriteSize);
+		} catch (rollbackErr) {
+			// 回退自身失败：把两个失败都带出来，绝不静默接受一条撕裂的行。
+			const rollbackError = toError(rollbackErr);
+			return new Error(
+				`Session append failed and rollback to pre-write size ${preWriteSize} also failed (append: ${
+					error.message
+				}; rollback: ${rollbackError.message})`,
+				{ cause: error },
+			);
+		}
+		return error;
 	}
 
 	async flush(): Promise<void> {

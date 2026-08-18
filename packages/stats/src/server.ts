@@ -1,3 +1,4 @@
+import { lookup as dnsLookup } from "node:dns/promises";
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -22,6 +23,12 @@ import embeddedClientArchiveTxt from "./embedded-client.generated.txt";
 import { getGainDashboardStats } from "./gain-aggregator";
 
 const EMBEDDED_CLIENT_ARCHIVE = decodeEmbeddedClientArchive(embeddedClientArchiveTxt);
+
+/** Loopback-only bind host for the stats dashboard. */
+export const DEFAULT_STATS_HOST = "127.0.0.1";
+
+/** Identity reported (and probed for) by the stats dashboard's health endpoint. */
+const STATS_SERVER_NAME = "san-stats";
 
 const CLIENT_DIR = path.join(import.meta.dir, "client");
 const STATIC_DIR = path.join(import.meta.dir, "..", "dist", "client");
@@ -293,60 +300,224 @@ async function handleStatic(requestPath: string): Promise<Response> {
 	return new Response("Not Found", { status: 404 });
 }
 
+// =============================================================================
+// Bind host handling
+// =============================================================================
+
+/**
+ * Normalize a bind-host value: trim whitespace, strip surrounding IPv6
+ * brackets, and reject empty, whitespace-bearing, or path-like inputs.
+ */
+export function normalizeStatsHost(host: string): string {
+	const normalized = host.trim().replace(/^\[|\]$/g, "");
+	if (!normalized || /[\s/]/.test(normalized)) {
+		throw new Error(`Invalid stats host: ${host}`);
+	}
+	return normalized;
+}
+
+/**
+ * Format a stats dashboard URL, bracketing IPv6 literals so the link is valid.
+ */
+export function formatStatsUrl(host: string, port: number): string {
+	const normalized = normalizeStatsHost(host);
+	const hostPart = normalized.includes(":") ? `[${normalized}]` : normalized;
+	return `http://${hostPart}:${port}`;
+}
+
+/** Wildcard bind hosts by IP family. */
+function wildcardFamily(host: string): "ipv4" | "ipv6" | null {
+	if (host === "0.0.0.0") return "ipv4";
+	if (host === "::") return "ipv6";
+	return null;
+}
+
+async function resolveHostAddresses(host: string): Promise<string[]> {
+	try {
+		const entries = await dnsLookup(host, { all: true });
+		return entries.map(entry => `${entry.family === 4 ? "ipv4" : "ipv6"}:${entry.address.toLowerCase()}`);
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Whether an existing instance bound to `foundHost` serves the requested
+ * `host`. A wildcard only matches the same-family wildcard; a wildcard
+ * instance serves same-family specific targets; two specific hosts compare
+ * resolved address sets so `localhost` matches a `127.0.0.1` instance.
+ */
+async function statsHostsCompatible(requested: string, foundHost: string): Promise<boolean> {
+	const requestedHost = normalizeStatsHost(requested);
+	const foundHostNormalized = normalizeStatsHost(foundHost);
+	if (requestedHost === foundHostNormalized) return true;
+
+	const requestedWildcard = wildcardFamily(requestedHost);
+	if (requestedWildcard) return wildcardFamily(foundHostNormalized) === requestedWildcard;
+
+	const foundWildcard = wildcardFamily(foundHostNormalized);
+	if (foundWildcard) return (requestedHost.includes(":") ? "ipv6" : "ipv4") === foundWildcard;
+
+	const requestedAddresses = await resolveHostAddresses(requestedHost);
+	const foundAddresses = await resolveHostAddresses(foundHostNormalized);
+	return requestedAddresses.length > 0 && requestedAddresses.some(address => foundAddresses.includes(address));
+}
+
+/** Address to probe for a requested bind host (wildcards probe loopback). */
+function probeHostFor(host: string): string {
+	const normalized = normalizeStatsHost(host);
+	if (normalized === "0.0.0.0") return "127.0.0.1";
+	if (normalized === "::") return "::1";
+	return normalized;
+}
+
+type ProbeResult =
+	| { kind: "available" }
+	| { kind: "reusable"; foundHost: string }
+	| { kind: "different-host"; foundHost: string }
+	| { kind: "unidentified" };
+
+/**
+ * Probe a host:port for an existing San stats dashboard. Refused or timed-out
+ * connections mean the port is free to bind; a responding service that does
+ * not identify as San stats (or is bound to a different host) is left alone.
+ */
+async function probeStatsServer(host: string, port: number): Promise<ProbeResult> {
+	const probeUrl = `${formatStatsUrl(probeHostFor(host), port)}/api/health`;
+	let response: Response;
+	try {
+		response = await fetch(probeUrl, { signal: AbortSignal.timeout(500) });
+	} catch {
+		return { kind: "available" };
+	}
+	if (!response.ok) return { kind: "unidentified" };
+	let health: { status?: unknown; name?: unknown; host?: unknown } | null = null;
+	try {
+		health = (await response.json()) as { status?: unknown; name?: unknown; host?: unknown } | null;
+	} catch {
+		return { kind: "unidentified" };
+	}
+	if (health?.status !== "ok" || health?.name !== STATS_SERVER_NAME || typeof health?.host !== "string") {
+		return { kind: "unidentified" };
+	}
+	const compatible = await statsHostsCompatible(host, health.host);
+	return compatible
+		? { kind: "reusable", foundHost: health.host }
+		: { kind: "different-host", foundHost: health.host };
+}
+
+/**
+ * Handle returned by {@link startServer}.
+ */
+export interface StatsServerHandle {
+	port: number;
+	host: string;
+	/** True when a confirmed dashboard already serving this host:port was reused. */
+	reused: boolean;
+	stop: () => void;
+}
+
 /**
  * Start the HTTP server.
+ *
+ * Binds loopback-only by default ({@link DEFAULT_STATS_HOST}); an explicit
+ * host (e.g. `0.0.0.0` in containers) is honored as-is.
+ *
+ * When a confirmed San stats dashboard is already serving the requested
+ * host:port it is reused instead of failing or taking the port over. An
+ * unidentified process, or an instance bound to a different host, is never
+ * reused, stopped, or taken over.
  */
-export async function startServer(port = 3847): Promise<{ port: number; stop: () => void }> {
+export async function startServer(port = 3847, host = DEFAULT_STATS_HOST): Promise<StatsServerHandle> {
+	const normalizedHost = normalizeStatsHost(host);
+
+	// `port: 0` means "pick a free port" and has nothing to probe.
+	if (port > 0) {
+		const probe = await probeStatsServer(normalizedHost, port);
+		if (probe.kind === "reusable") {
+			return { port, host: normalizedHost, reused: true, stop: () => {} };
+		}
+		if (probe.kind === "different-host") {
+			throw new Error(
+				`Port ${port} is already in use by a San stats dashboard bound to ${probe.foundHost}; ` +
+					`refusing to start another instance on ${formatStatsUrl(normalizedHost, port)}.`,
+			);
+		}
+		if (probe.kind === "unidentified") {
+			throw new Error(
+				`Port ${port} on ${normalizedHost} is already in use by a process that is not a San stats ` +
+					"dashboard; refusing to take it over.",
+			);
+		}
+	}
+
 	await ensureClientBuild();
 
-	const server = Bun.serve({
-		port,
-		async fetch(req) {
-			const url = new URL(req.url);
-			const path = url.pathname;
+	try {
+		const server = Bun.serve({
+			hostname: normalizedHost,
+			port,
+			async fetch(req) {
+				const url = new URL(req.url);
+				const path = url.pathname;
 
-			// CORS headers for local development
-			const corsHeaders = {
-				"Access-Control-Allow-Origin": "*",
-				"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-				"Access-Control-Allow-Headers": "Content-Type",
-			};
-
-			if (req.method === "OPTIONS") {
-				return new Response(null, { headers: corsHeaders });
-			}
-
-			try {
-				let response: Response;
-
-				if (path.startsWith("/api/")) {
-					response = await handleApi(req);
-				} else {
-					response = await handleStatic(path);
+				// Identity endpoint used to confirm an already-running San
+				// stats dashboard before reusing its host:port.
+				if (path === "/api/health") {
+					return Response.json({ status: "ok", name: STATS_SERVER_NAME, host: normalizedHost });
 				}
 
-				// Add CORS headers to all responses
-				const headers = new Headers(response.headers);
-				for (const [key, value] of Object.entries(corsHeaders)) {
-					headers.set(key, value);
+				// CORS headers for local development
+				const corsHeaders = {
+					"Access-Control-Allow-Origin": "*",
+					"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+					"Access-Control-Allow-Headers": "Content-Type",
+				};
+
+				if (req.method === "OPTIONS") {
+					return new Response(null, { headers: corsHeaders });
 				}
 
-				return new Response(response.body, {
-					status: response.status,
-					headers,
-				});
-			} catch (error) {
-				console.error("Server error:", error);
-				return Response.json(
-					{ error: error instanceof Error ? error.message : "Unknown error" },
-					{ status: 500, headers: corsHeaders },
-				);
-			}
-		},
-	});
+				try {
+					let response: Response;
 
-	return {
-		port: server.port ?? port,
-		stop: () => server.stop(),
-	};
+					if (path.startsWith("/api/")) {
+						response = await handleApi(req);
+					} else {
+						response = await handleStatic(path);
+					}
+
+					// Add CORS headers to all responses
+					const headers = new Headers(response.headers);
+					for (const [key, value] of Object.entries(corsHeaders)) {
+						headers.set(key, value);
+					}
+
+					return new Response(response.body, {
+						status: response.status,
+						headers,
+					});
+				} catch (error) {
+					console.error("Server error:", error);
+					return Response.json(
+						{ error: error instanceof Error ? error.message : "Unknown error" },
+						{ status: 500, headers: corsHeaders },
+					);
+				}
+			},
+		});
+
+		return {
+			port: server.port ?? port,
+			host: normalizedHost,
+			reused: false,
+			stop: () => server.stop(),
+		};
+	} catch (error) {
+		throw new Error(
+			`Could not bind the stats dashboard to ${formatStatsUrl(normalizedHost, port)}: ` +
+				"the address appears to be in use by another process. Stop the conflicting process and retry.",
+			{ cause: error },
+		);
+	}
 }

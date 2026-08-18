@@ -51,12 +51,16 @@ function shortenSessionFile(p: string): string {
 	return idx >= 0 ? p.slice(idx + marker.length) : p;
 }
 
+/** Loopback-only bind host for the stats dashboard server. */
+export const DEFAULT_STATS_HOST = "127.0.0.1";
+
 // =============================================================================
 // Types
 // =============================================================================
 
 export interface StatsCommandArgs {
 	port: number;
+	host: string;
 	json: boolean;
 	summary: boolean;
 }
@@ -76,6 +80,7 @@ export function parseStatsArgs(args: string[]): StatsCommandArgs | undefined {
 
 	const result: StatsCommandArgs = {
 		port: 3847,
+		host: DEFAULT_STATS_HOST,
 		json: false,
 		summary: false,
 	};
@@ -90,6 +95,10 @@ export function parseStatsArgs(args: string[]): StatsCommandArgs | undefined {
 			result.port = parseInt(args[++i], 10);
 		} else if (arg.startsWith("--port=")) {
 			result.port = parseInt(arg.split("=")[1], 10);
+		} else if ((arg === "--host" || arg === "-H") && i + 1 < args.length) {
+			result.host = args[++i];
+		} else if (arg.startsWith("--host=")) {
+			result.host = arg.slice("--host=".length);
 		}
 	}
 
@@ -119,9 +128,8 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 		return;
 	}
 	// Lazy import to avoid loading stats module when not needed
-	const { getDashboardStats, syncAllSessions, getTotalMessageCount, startServer, closeDb } = await import(
-		"@san/stats"
-	);
+	const { getDashboardStats, syncAllSessions, getTotalMessageCount, startServer, closeDb, formatStatsUrl } =
+		await import("@san/stats");
 
 	// Sync session files first
 	const progress = createSyncProgressReporter();
@@ -143,11 +151,15 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 	}
 
 	// Start the dashboard server
-	const { port } = await startServer(cmd.port);
-	console.log(chalk.green(`Dashboard available at: http://localhost:${port}`));
+	const server = await startServer(cmd.port, cmd.host);
+	const url = formatStatsUrl(server.host, server.port);
 
 	// Open browser
-	const url = `http://localhost:${port}`;
+	console.log(
+		server.reused
+			? chalk.green(`Reusing existing dashboard at: ${url}`)
+			: chalk.green(`Dashboard available at: ${url}`),
+	);
 	openPath(url);
 
 	console.log("Press Ctrl+C to stop\n");
@@ -216,6 +228,7 @@ ${chalk.bold("Usage:")}
 
 ${chalk.bold("Options:")}
   -p, --port <port>  Port for the dashboard server (default: 3847)
+  -H, --host <host>  Host to bind the dashboard server (default: 127.0.0.1)
   -j, --json         Output stats as JSON and exit
   -s, --summary      Print summary to console and exit
   -h, --help         Show this help message
@@ -225,6 +238,7 @@ ${chalk.bold("Examples:")}
   ${APP_NAME} stats --json       # Print stats as JSON
   ${APP_NAME} stats --summary    # Print summary to console
   ${APP_NAME} stats --port 8080  # Start on custom port
+  ${APP_NAME} stats --host 0.0.0.0 --port 8080  # Expose on all interfaces (containers)
 
 ${chalk.bold("Metrics:")}
   - Total requests and error rate
