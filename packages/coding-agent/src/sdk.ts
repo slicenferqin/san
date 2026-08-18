@@ -112,7 +112,7 @@ import { type CrossSessionClient, createCrossSessionClient } from "./peer";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
-import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
+import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import {
 	collectEnvSecrets,
 	deobfuscateSessionContext,
@@ -1772,6 +1772,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const resolvedAgentDisplayName =
 		options.agentDisplayName ?? ((options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? "sub" : "main");
 	const agentKind = (options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? ("sub" as const) : ("main" as const);
+	// The registry generation this construction owns: the ref it registered, or
+	// the parked ref it refreshed in place on same-generation re-entry. Teardown
+	// below only unregisters while THIS generation still owns the id — a
+	// superseding construction may have replaced the ref (abandoned quiescent
+	// main), and a late dispose of the old session must not unregister the new
+	// generation out from under it.
+	let ourGenerationRef: AgentRef | undefined;
 	/**
 	 * Forget the agent ref on teardown — unless the agent is being parked (or is
 	 * already parked). Parking disposes the session but keeps the ref addressable
@@ -1784,6 +1791,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// consult unrelated park state.
 		const lifecycle = AgentLifecycleManager.global();
 		if (lifecycle.manages(agentRegistry) && lifecycle.isParking(resolvedAgentId)) return;
+		// Generation CAS: only remove the ref this construction registered. If a
+		// newer generation owns the id now, leave its ref alone.
+		if (ourGenerationRef && agentRegistry.get(resolvedAgentId) !== ourGenerationRef) return;
 		agentRegistry.unregister(resolvedAgentId);
 	};
 	const evalKernelOwnerId = `agent-session:${Snowflake.next()}`;
@@ -2887,6 +2897,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				existingRef.sessionFile === incomingSessionFile &&
 				incomingSessionFile !== null;
 			if (sameGenerationReentry) {
+				ourGenerationRef = existingRef;
 				agentRegistry.refreshForReentry(resolvedAgentId, incomingSessionFile);
 			} else {
 				// Fresh construction colliding with an existing generation: never
@@ -2941,7 +2952,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// is gone, so a brand-new ref with a new identity and createdAt is
 		// correct).
 		if (!existingRef || reclaimedCorpse || supersededAbandoned) {
-			agentRegistry.register({
+			ourGenerationRef = agentRegistry.register({
 				id: resolvedAgentId,
 				displayName: resolvedAgentDisplayName,
 				kind: agentKind,
@@ -3432,7 +3443,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// Attach the live session to the pre-registered ref so peers can route IRC
 		// messages here. Refresh sessionFile in case it was unavailable at pre-register
 		// time. The dispose wrapper below unregisters on teardown (unless parked).
-		agentRegistry.attachSession(resolvedAgentId, session, sessionManager.getSessionFile() ?? null);
+		// Generation CAS: a superseding construction may have replaced our ref
+		// while this construction was awaiting prompt/tool setup — never attach
+		// this session onto a newer generation's ref.
+		if (agentRegistry.get(resolvedAgentId) === ourGenerationRef) {
+			agentRegistry.attachSession(resolvedAgentId, session, sessionManager.getSessionFile() ?? null);
+		}
 		// Cross-session client (created right after the dispose wrapper below):
 		// closed by that wrapper, so it is declared here, before it.
 		let crossSessionClient: CrossSessionClient | undefined;

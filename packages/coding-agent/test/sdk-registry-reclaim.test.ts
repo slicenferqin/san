@@ -213,15 +213,20 @@ describe("createAgentSession registry corpse handling", () => {
 			parentTaskPrefix: undefined,
 		});
 
-		try {
-			const ref = AgentRegistry.global().get(id);
-			expect(ref?.kind).toBe("main");
-			expect(ref?.session).toBe(successor);
-			expect(ref?.session).not.toBe(abandoned.session);
-		} finally {
-			await successor.dispose();
-			await abandoned.session.dispose();
-		}
+		const ref = AgentRegistry.global().get(id);
+		expect(ref?.kind).toBe("main");
+		expect(ref?.session).toBe(successor);
+		expect(ref?.session).not.toBe(abandoned.session);
+
+		// Generation safety: a LATE dispose of the abandoned (superseded)
+		// generation must not unregister — or otherwise disturb — the
+		// successor generation's ref.
+		await abandoned.session.dispose();
+		const refAfterOldDispose = AgentRegistry.global().get(id);
+		expect(refAfterOldDispose).toBe(ref);
+		expect(refAfterOldDispose?.session).toBe(successor);
+
+		await successor.dispose();
 		expect(AgentRegistry.global().get(id)).toBeUndefined();
 	});
 
