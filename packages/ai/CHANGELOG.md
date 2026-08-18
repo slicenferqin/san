@@ -11,6 +11,7 @@
 - Added OpenAI-compatible request support for explicit `max` and `ultra` reasoning efforts advertised by custom models, including provider-error fallback from unsupported `ultra` to `max`.
 - Added `AuthStorage.upsertLoginApiKey()` so interactive API-key entry can persist a distinct login-sourced key without replace-all wiping OAuth or sibling API-key accounts for the same provider, including through a remote auth broker.
 - Added OAuth provider unregistration so extension providers can replace or roll back login registrations without leaving stale global state.
+- Added a shared bounded retry wrapper for side-effect-free one-shot completions, covering resolved provider error stops and retryable thrown transport errors while honoring server backoff and cancellation.
 
 ### Changed
 
@@ -23,6 +24,8 @@
 - Fixed account-scoped provider policy denials rotating through eligible sibling credentials without refreshing, invalidating, or usage-blocking the denied account; replay-safe streams can exhaust the sibling set before model fallback.
 - Fixed authentication failures taking ordinary same-route retries before a verified route or model switch, while keeping abort and backpressure failures out of stall recovery.
 - Fixed resumed OpenAI Responses sessions failing with HTTP 400 when replaying a reasoning item whose encrypted content was an empty string.
+- Fixed OpenAI-compatible streams that ended after partial content without a terminal `finish_reason` being reported as successful completions; they now surface retryable incomplete-stream errors.
+- Classified non-standard `insufficient_system_resource` finish reasons as transient provider failures.
 ## [17.0.2] - 2026-07-17
 
 ### Fixed

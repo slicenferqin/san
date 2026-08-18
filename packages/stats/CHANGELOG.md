@@ -6,6 +6,10 @@
 
 - Renamed the published package from `@oh-my-pi/omp-stats` to `@san/stats` and its executable from `omp-stats` to `san-stats`.
 
+### Fixed
+
+- Fixed the dashboard binding to loopback by default, added explicit host selection for container or remote exposure, and refused to reuse unidentified or differently bound processes on the requested port.
+
 ## [17.0.2] - 2026-07-17
 
 ### Fixed

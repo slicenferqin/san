@@ -99,6 +99,34 @@ describe("loadEntriesFromFileStream (Bun.JSONL parity)", () => {
 		expect(entryTypes(stream.entries)).toEqual(["session", "message", "message"]);
 		const ids = messageIds(stream.entries);
 		expect(ids).toEqual(["m1", "m2"]); // valid entries kept in order, malformed skipped
+		// The single malformed line is counted once by both loaders; blank lines
+		// and the peeled title slot contribute nothing to the count.
+		expect(stream.malformedCount).toBe(1);
+		expect(reference.malformedCount).toBe(1);
+	});
+
+	it("counts a torn truncated tail once and keeps stream/common-path parity", async () => {
+		const slotLine = serializeTitleSlot({ title: "Torn tail", source: "user", updatedAt: ISO });
+		// title slot | header | valid | torn tail (truncated JSON, no newline at EOF)
+		const content = [slotLine, JSON.stringify(HEADER), JSON.stringify(msg("m1", "s1", "kept")), '{"b":'].join("\n");
+		const file = await writeTemp(content);
+
+		const stream = await loadEntriesFromFileStream(file);
+		const reference = parseSessionContent(content);
+
+		expect(stream).toEqual(reference);
+		expect(stream.malformedCount).toBe(1); // the torn tail, NOT the title slot
+		expect(stream.entries.map(entry => entry.type)).toEqual(["session", "message"]);
+		expect(messageIds(stream.entries)).toEqual(["m1"]);
+	});
+
+	it("reports zero malformed records for a clean file without a trailing newline", async () => {
+		const content = [JSON.stringify(HEADER), JSON.stringify(msg("m1", "s1", "only"))].join("\n");
+		const file = await writeTemp(content);
+
+		const stream = await loadEntriesFromFileStream(file);
+		expect(stream.malformedCount).toBe(0);
+		expect(parseSessionContent(content).malformedCount).toBe(0);
 	});
 
 	it("matches parseSessionContent when there is no title slot (header is the first line)", async () => {
