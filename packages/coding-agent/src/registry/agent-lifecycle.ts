@@ -155,6 +155,56 @@ export class AgentLifecycleManager {
 	}
 
 	/**
+	 * Reclaim a provably dead parked corpse so a fresh construction can reuse
+	 * its id. The caller holds `expected` (the ref it captured before any of its
+	 * own awaits); this is the identity/CAS gate — the ref is removed only if it
+	 * is still exactly that object, status `parked`, session null, not adopted
+	 * by this manager, and not in park/revive flight.
+	 *
+	 * A session-file-backed corpse is cold-revivable through the persisted
+	 * factory: probe it and FAIL CLOSED — preserve the ref — both when it can
+	 * produce a reviver and when the probe itself throws. Only a definitive
+	 * "not revivable" (`undefined`) proves the ref dead. Every invariant is
+	 * rechecked after the probe awaits; the removal itself is synchronous,
+	 * so identity recheck + unregister are atomic in single-threaded JS.
+	 *
+	 * Returns true iff the corpse was removed; false preserves the ref intact
+	 * (live, adopted, in flight, or cold-revivable — or the expected ref went
+	 * stale because another generation replaced it).
+	 */
+	async reclaimParkedCorpse(id: string, expected: AgentRef): Promise<boolean> {
+		// Synchronous invariant block: nothing can interleave before the one
+		// await below, so these checks describe the world we act on.
+		const ref = this.#registry.get(id);
+		if (ref !== expected) return false;
+		if (ref.status !== "parked" || ref.session !== null) return false;
+		if (this.#adopted.has(id) || this.#parks.has(id) || this.#revivals.has(id)) return false;
+
+		if (ref.sessionFile && this.#persistedReviverFactory) {
+			let revivable = true;
+			try {
+				revivable = (await this.#persistedReviverFactory(ref)) !== undefined;
+			} catch {
+				// Probe failure is not proof of death — fail closed.
+				revivable = true;
+			}
+			if (revivable) return false;
+
+			// The probe awaited: recheck every invariant against the current
+			// world before committing to the removal.
+			const current = this.#registry.get(id);
+			if (current !== ref) return false;
+			if (current.status !== "parked" || current.session !== null) return false;
+			if (this.#adopted.has(id) || this.#parks.has(id) || this.#revivals.has(id)) return false;
+		}
+
+		// No awaits between this identity recheck and the removal: CAS-safe.
+		if (this.#registry.get(id) !== ref) return false;
+		this.#registry.unregister(id);
+		return true;
+	}
+
+	/**
 	 * Dispose the live session, detach it from the registry, and mark the
 	 * agent `parked`. No-op unless the id is adopted and live.
 	 *

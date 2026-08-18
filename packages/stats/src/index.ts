@@ -4,7 +4,7 @@ import { parseArgs } from "node:util";
 import { formatDuration, formatNumber, formatPercent } from "@san/utils";
 import { getDashboardStats, getTotalMessageCount, syncAllSessions } from "./aggregator";
 import { closeDb } from "./db";
-import { startServer } from "./server";
+import { DEFAULT_STATS_HOST, formatStatsUrl, startServer } from "./server";
 
 export {
 	getDashboardStats,
@@ -17,7 +17,7 @@ export {
 } from "./aggregator";
 export { closeDb } from "./db";
 export { getGainDashboardStats } from "./gain-aggregator";
-export { startServer } from "./server";
+export { DEFAULT_STATS_HOST, formatStatsUrl, normalizeStatsHost, startServer } from "./server";
 export type {
 	GainDashboardStats,
 	GainSource,
@@ -102,6 +102,7 @@ async function main(): Promise<void> {
 	const { values } = parseArgs({
 		options: {
 			port: { type: "string", short: "p", default: "3847" },
+			host: { type: "string", short: "H", default: DEFAULT_STATS_HOST },
 			json: { type: "boolean", short: "j", default: false },
 			sync: { type: "boolean", short: "s", default: false },
 			help: { type: "boolean", short: "h", default: false },
@@ -118,12 +119,14 @@ Usage:
 
 Options:
   -p, --port <port>  Port for the dashboard server (default: 3847)
+  -H, --host <host>  Host to bind the dashboard server (default: 127.0.0.1)
   -j, --json         Output stats as JSON and exit
   -s, --sync         Sync session files and show summary
   -h, --help         Show this help message
 
 Examples:
   san-stats              # Start dashboard server
+  san-stats --host 0.0.0.0  # Expose on all interfaces (containers)
   san-stats --json       # Print stats as JSON
   san-stats --port 8080  # Start on custom port
   san-stats --sync       # Sync and show summary
@@ -171,8 +174,9 @@ Examples:
 
 		// Start server
 		const port = parseInt(values.port || "3847", 10);
-		const { port: actualPort } = await startServer(port);
-		console.log(`Dashboard available at: http://localhost:${actualPort}`);
+		const server = await startServer(port, values.host ?? DEFAULT_STATS_HOST);
+		const url = formatStatsUrl(server.host, server.port);
+		console.log(server.reused ? `Reusing existing dashboard at: ${url}` : `Dashboard available at: ${url}`);
 		console.log("Press Ctrl+C to stop\n");
 
 		// Keep process running

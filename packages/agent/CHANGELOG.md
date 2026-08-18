@@ -13,6 +13,7 @@
 ### Fixed
 
 - Fixed compaction summaries being rendered as active task authority. Local, remote, snapcompact, and update-summary paths now frame summaries and quoted tool content as non-authoritative historical evidence without an active `Goal` field.
+- Fixed telemetry-instrumented one-shot completions skipping bounded retries when providers returned transient failures as resolved `stopReason: "error"` messages.
 ## [17.0.2] - 2026-07-17
 
 ### Fixed

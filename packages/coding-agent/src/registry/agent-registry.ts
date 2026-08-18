@@ -155,6 +155,22 @@ export class AgentRegistry {
 		ref.session = null;
 	}
 
+	/**
+	 * Refresh a same-generation ref in place when the agent re-enters through a
+	 * revive/resume construction whose id and sessionFile match its own parked
+	 * ref (lifecycle revive, subtask resume). Preserves ref identity and
+	 * `createdAt` — this is the same agent continuing, not a new generation —
+	 * and emits `status_changed` so rosters and the lifecycle timer follow.
+	 */
+	refreshForReentry(id: string, sessionFile: string | null): void {
+		const ref = this.#refs.get(id);
+		if (!ref) return;
+		ref.sessionFile = sessionFile;
+		ref.status = "running";
+		ref.lastActivity = Date.now();
+		this.#emit({ type: "status_changed", ref });
+	}
+
 	unregister(id: string): void {
 		const ref = this.#refs.get(id);
 		if (!ref) return;

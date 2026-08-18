@@ -14,7 +14,7 @@ import { AuthStorage } from "@san/coding-agent/session/auth-storage";
 import { convertToLlm } from "@san/coding-agent/session/messages";
 import { SessionManager } from "@san/coding-agent/session/session-manager";
 import { EventBus } from "@san/coding-agent/utils/event-bus";
-import { TempDir } from "@san/utils";
+import { TempDir, withTimeout } from "@san/utils";
 import { type } from "arktype";
 
 function activeGoalState(): GoalModeState {
@@ -303,6 +303,49 @@ describe("AgentSession mid-run threshold compaction", () => {
 		expect(observedContexts.length).toBeGreaterThanOrEqual(2);
 		expect(observedContexts[1].join("\n")).toContain("MID-RUN-COMPACTED-WITH-CONTENT-VARIANT");
 	});
+
+	it("does not block the next provider call on a never-settling mid-turn lifecycle handler", async () => {
+		// Regression: mid-turn maintenance runs between provider calls, so its
+		// post-commit lifecycle fan-out (`session_compact`, `auto_compaction_end`)
+		// must detach from the agent loop — a hung extension handler here held the
+		// next provider request hostage for the full extension-handler timeout.
+		const lifecycleGate = Promise.withResolvers<void>();
+		const lifecycleEntered = Promise.withResolvers<void>();
+		let lifecycleEventCount = 0;
+		const extensionRunner = {
+			hasHandlers: vi.fn(
+				(eventType: string) => eventType === "session_compact" || eventType === "auto_compaction_end",
+			),
+			emitBeforeAgentStart: vi.fn(async () => undefined),
+			emit: vi.fn(async (event: { type: string }) => {
+				if (event.type !== "session_compact" && event.type !== "auto_compaction_end") return;
+				lifecycleEventCount++;
+				lifecycleEntered.resolve();
+				// Permanently-pending lifecycle handler: it only settles once the
+				// test has proven the next provider request still dispatched.
+				await lifecycleGate.promise;
+			}),
+		} as unknown as ExtensionRunner;
+		const { session, observedContexts } = await createHarness({}, { extensionRunner });
+		const compactSpy = mockCompaction("DETACHED-LIFECYCLE-COMPACTED");
+
+		const prompt = session.prompt("work on the release");
+		// Both post-commit lifecycle events must reach the hung handler…
+		await withTimeout(lifecycleEntered.promise, 15_000, "mid-run lifecycle handler never reached");
+		// …while the run still completes: the next provider request dispatches
+		// without waiting for the pending handlers to settle.
+		await withTimeout(prompt, 15_000, "next provider call blocked by pending lifecycle handler");
+
+		expect(compactSpy).toHaveBeenCalledTimes(1);
+		expect(lifecycleEventCount).toBe(2);
+		expect(observedContexts.length).toBeGreaterThanOrEqual(2);
+		expect(observedContexts[1].join("\n")).toContain("DETACHED-LIFECYCLE-COMPACTED");
+
+		// Release the handlers so the detached emissions settle and leave no
+		// dangling promises behind.
+		lifecycleGate.resolve();
+		await Promise.resolve();
+	}, 30000);
 
 	it("does not compact mid-run outside goal mode when disabled", async () => {
 		const { session } = await createHarness({ "compaction.midTurnEnabled": false });

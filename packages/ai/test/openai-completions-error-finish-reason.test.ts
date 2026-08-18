@@ -6,6 +6,7 @@
 // #isTransientTransportErrorMessage) so the turn is auto-retried instead of
 // stopping with a pinned error banner.
 import { describe, expect, it } from "bun:test";
+import * as AIError from "@san/ai/error";
 import { streamOpenAICompletions } from "@san/ai/providers/openai-completions";
 import type { Context, FetchImpl, Model } from "@san/ai/types";
 import { getBundledModel } from "@san/catalog/models";
@@ -105,5 +106,28 @@ describe("finish_reason: error", () => {
 
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toMatch(RETRYABLE_PATTERN);
+	}, 10_000);
+
+	it("classifies finish_reason insufficient_system_resource as retryable", async () => {
+		// vLLM/SGLang and gateway proxies report the system failing to complete
+		// generation (worker OOM / context exhaustion) as this non-standard
+		// finish reason. It must surface as an error and classify through the
+		// existing provider-finish-error / transient flags so the turn is
+		// auto-retried instead of surfacing OK with a truncated answer.
+		const fetchMock = createSseFetch([
+			completionChunk({ choices: [{ index: 0, delta: { role: "assistant", content: "Partial" } }] }),
+			completionChunk({ choices: [{ index: 0, delta: {}, finish_reason: "insufficient_system_resource" }] }),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toMatch(RETRYABLE_PATTERN);
+		expect(AIError.is(result.errorId, AIError.Flag.ProviderFinishError)).toBe(true);
+		expect(AIError.retriable(result.errorId)).toBe(true);
 	}, 10_000);
 });

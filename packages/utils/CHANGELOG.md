@@ -11,6 +11,7 @@
 
 - Parsed account-cap reset windows such as “Your limit will reset in 13 minutes” so credential backoff honors the provider's full reset duration.
 - Fixed pinned side runtimes reusing stale dependencies after requested versions, overrides, or trusted dependencies changed.
+- Fixed lenient JSONL parsing at chunk boundaries and truncated file tails so malformed-record counts accurately trigger session repair without double-counting split bad lines.
 
 ## [17.0.2] - 2026-07-17
 

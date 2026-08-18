@@ -112,7 +112,7 @@ import { type CrossSessionClient, createCrossSessionClient } from "./peer";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
-import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
+import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import {
 	collectEnvSecrets,
 	deobfuscateSessionContext,
@@ -1772,6 +1772,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const resolvedAgentDisplayName =
 		options.agentDisplayName ?? ((options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? "sub" : "main");
 	const agentKind = (options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? ("sub" as const) : ("main" as const);
+	// The registry generation this construction owns: the ref it registered, or
+	// the parked ref it refreshed in place on same-generation re-entry. Teardown
+	// below only unregisters while THIS generation still owns the id — a
+	// superseding construction may have replaced the ref (abandoned quiescent
+	// main), and a late dispose of the old session must not unregister the new
+	// generation out from under it.
+	let ourGenerationRef: AgentRef | undefined;
 	/**
 	 * Forget the agent ref on teardown — unless the agent is being parked (or is
 	 * already parked). Parking disposes the session but keeps the ref addressable
@@ -1779,7 +1786,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	 */
 	const unregisterUnlessParked = (): void => {
 		if (agentRegistry.get(resolvedAgentId)?.status === "parked") return;
-		if (AgentLifecycleManager.global().isParking(resolvedAgentId)) return;
+		// Parking state belongs to the lifecycle that manages THIS registry; a
+		// custom registry may not be the global manager's, whose isParking would
+		// consult unrelated park state.
+		const lifecycle = AgentLifecycleManager.global();
+		if (lifecycle.manages(agentRegistry) && lifecycle.isParking(resolvedAgentId)) return;
+		// Generation CAS: only remove the ref this construction registered. If a
+		// newer generation owns the id now, leave its ref alone.
+		if (ourGenerationRef && agentRegistry.get(resolvedAgentId) !== ourGenerationRef) return;
 		agentRegistry.unregister(resolvedAgentId);
 	};
 	const evalKernelOwnerId = `agent-session:${Snowflake.next()}`;
@@ -2867,15 +2881,87 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// so that subagents launched in the same parallel batch can see each other in
 		// their initial `# IRC Peers` block (rendered inside `rebuildSystemPrompt`).
 		// The session reference is attached after construction below.
-		agentRegistry.register({
-			id: resolvedAgentId,
-			displayName: resolvedAgentDisplayName,
-			kind: agentKind,
-			parentId: options.parentAgentId,
-			session: null,
-			sessionFile: sessionManager.getSessionFile() ?? null,
-			status: "running",
-		});
+		const incomingSessionFile = sessionManager.getSessionFile() ?? null;
+		const existingRef = agentRegistry.get(resolvedAgentId);
+		let sameGenerationReentry = false;
+		let reclaimedCorpse = false;
+		if (existingRef) {
+			// Same-generation re-entry (lifecycle revive, subtask resume): the same
+			// agent re-constructs over its own parked ref — refresh it in place
+			// (identity and createdAt preserved) instead of registering a new
+			// generation over it.
+			sameGenerationReentry =
+				existingRef.status === "parked" &&
+				existingRef.session === null &&
+				existingRef.sessionFile !== null &&
+				existingRef.sessionFile === incomingSessionFile &&
+				incomingSessionFile !== null;
+			if (sameGenerationReentry) {
+				ourGenerationRef = existingRef;
+				agentRegistry.refreshForReentry(resolvedAgentId, incomingSessionFile);
+			} else {
+				// Fresh construction colliding with an existing generation: never
+				// silently overwrite it. A provably dead parked corpse may be
+				// reclaimed (identity/CAS-checked, cold-revivable refs preserved);
+				// anything else fails the construction with the collision intact.
+				// Ownership: reclaim consults the lifecycle's adopt/park/revive
+				// state AND its persisted reviver factory — both describe the
+				// registry the lifecycle manages. For a custom registry the
+				// global manager owns neither, so reclaiming through it could
+				// misread unrelated state; fail closed instead.
+				const lifecycle = AgentLifecycleManager.global();
+				if (lifecycle.manages(agentRegistry)) {
+					reclaimedCorpse = await lifecycle.reclaimParkedCorpse(resolvedAgentId, existingRef);
+				}
+			}
+		}
+		let supersededAbandoned = false;
+		if (existingRef && !sameGenerationReentry && !reclaimedCorpse) {
+			// The guard stops a fresh construction from silently clobbering a
+			// generation that is still live: a ref with no session object yet
+			// (its own construction is still in flight — superseding would
+			// cross-wire the two constructions), a live non-main generation
+			// (subagents are lifecycle-owned and messageable), or a main with
+			// in-flight work (streaming, compacting, generating a handoff).
+			// Those fail closed with the collision intact.
+			// One state is provably not live and is superseded instead, matching
+			// the long-standing SDK contract where a later same-id construction
+			// replaces an earlier one: a main the caller abandoned without
+			// disposing — quiescent (and therefore also already-disposed, whose
+			// registry cleanup somehow missed).
+			const existingSession = existingRef.session;
+			supersededAbandoned =
+				existingRef.kind === "main" &&
+				existingSession !== null &&
+				!existingSession.isStreaming &&
+				!existingSession.isCompacting &&
+				!existingSession.isGeneratingHandoff;
+			if (supersededAbandoned) {
+				logger.warn(
+					`createAgentSession: superseding an abandoned quiescent main generation for agent id "${resolvedAgentId}"`,
+				);
+			} else {
+				throw new Error(
+					`Agent id "${resolvedAgentId}" is already registered as a ${existingRef.status} ${existingRef.kind} and cannot be reclaimed — refusing to overwrite an existing generation. Revive the existing agent, release it, or use a fresh id.`,
+				);
+			}
+		}
+		// A same-generation re-entry keeps its ref (refreshForReentry above);
+		// every other path registers: fresh ids, fresh constructions over a
+		// reclaimed corpse or an abandoned quiescent main (the old generation
+		// is gone, so a brand-new ref with a new identity and createdAt is
+		// correct).
+		if (!existingRef || reclaimedCorpse || supersededAbandoned) {
+			ourGenerationRef = agentRegistry.register({
+				id: resolvedAgentId,
+				displayName: resolvedAgentDisplayName,
+				kind: agentKind,
+				parentId: options.parentAgentId,
+				session: null,
+				sessionFile: incomingSessionFile,
+				status: "running",
+			});
+		}
 		hasRegistered = true;
 
 		// Partition the initial enabled set for the xd:// transport: ambient
@@ -3357,7 +3443,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// Attach the live session to the pre-registered ref so peers can route IRC
 		// messages here. Refresh sessionFile in case it was unavailable at pre-register
 		// time. The dispose wrapper below unregisters on teardown (unless parked).
-		agentRegistry.attachSession(resolvedAgentId, session, sessionManager.getSessionFile() ?? null);
+		// Generation CAS: a superseding construction may have replaced our ref
+		// while this construction was awaiting prompt/tool setup — never attach
+		// this session onto a newer generation's ref.
+		if (agentRegistry.get(resolvedAgentId) === ourGenerationRef) {
+			agentRegistry.attachSession(resolvedAgentId, session, sessionManager.getSessionFile() ?? null);
+		}
 		// Cross-session client (created right after the dispose wrapper below):
 		// closed by that wrapper, so it is declared here, before it.
 		let crossSessionClient: CrossSessionClient | undefined;

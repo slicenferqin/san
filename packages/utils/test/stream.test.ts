@@ -2,6 +2,7 @@ import { describe, expect, it, spyOn } from "bun:test";
 import { sanitizeText } from "@san/utils/sanitize-text";
 import {
 	parseJsonlLenient,
+	parseJsonlLenientDetailed,
 	readJsonl,
 	readLines,
 	readSseEvents,
@@ -177,6 +178,47 @@ describe("parseJsonlLenient", () => {
 	it("handles input without trailing newline", () => {
 		const result = parseJsonlLenient<{ x: number }>('{"x":42}');
 		expect(result).toEqual([{ x: 42 }]);
+	});
+});
+
+describe("parseJsonlLenientDetailed", () => {
+	it("is entry-parity with parseJsonlLenient", () => {
+		const content = '{"a":1}\n{bad json}\n{"a":3}\n';
+		expect(parseJsonlLenientDetailed(content).entries).toEqual(parseJsonlLenient(content));
+	});
+
+	it("counts each terminated malformed line exactly once", () => {
+		const result = parseJsonlLenientDetailed<{ a: number }>('{"a":1}\n{bad json}\n{garbage}\n{"a":3}\n');
+		expect(result.entries).toEqual([{ a: 1 }, { a: 3 }]);
+		expect(result.malformedCount).toBe(2);
+	});
+
+	it("does not count blank or whitespace-only lines", () => {
+		const result = parseJsonlLenientDetailed<{ a: number }>('\n\n{"a":1}\n   \n\n');
+		expect(result.entries).toEqual([{ a: 1 }]);
+		expect(result.malformedCount).toBe(0);
+	});
+
+	it("counts a torn truncated tail at EOF once", () => {
+		const result = parseJsonlLenientDetailed<Record<string, number>>('{"a":1}\n{"b":');
+		expect(result.entries).toEqual([{ a: 1 }]);
+		expect(result.malformedCount).toBe(1);
+	});
+
+	it("counts an unterminated garbage tail at EOF once", () => {
+		const result = parseJsonlLenientDetailed<{ a: number }>('{"a":1}\n{garbage');
+		expect(result.entries).toEqual([{ a: 1 }]);
+		expect(result.malformedCount).toBe(1);
+	});
+
+	it("does not count a complete record lacking a trailing newline", () => {
+		const result = parseJsonlLenientDetailed<Record<string, number>>('{"a":1}\n{"b":2}');
+		expect(result.entries).toEqual([{ a: 1 }, { b: 2 }]);
+		expect(result.malformedCount).toBe(0);
+	});
+	it("returns an empty result for empty and whitespace-only input", () => {
+		expect(parseJsonlLenientDetailed("")).toEqual({ entries: [], malformedCount: 0 });
+		expect(parseJsonlLenientDetailed("  \n\n")).toEqual({ entries: [], malformedCount: 0 });
 	});
 });
 

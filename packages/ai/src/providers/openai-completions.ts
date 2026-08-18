@@ -1290,6 +1290,20 @@ const streamOpenAICompletionsOnce = (
 				finishPendingToolCallBlocks();
 			}
 
+			// Premature transport closure: the loop ended without any
+			// `finish_reason` chunk. A stream that produced no visible content
+			// stays on the empty-completion retry path (a benign gateway
+			// hiccup), but once text/tool/image content actually streamed the
+			// partial output must not be delivered as a clean "stop" — surface
+			// it as a retryable incomplete-stream error so the turn can be
+			// re-attempted instead of silently truncated.
+			if (streamFinishedAt === undefined && hasVisibleAssistantContent(output)) {
+				throw new AIError.ProviderResponseError(
+					"OpenAI completions stream closed before a finish_reason was received",
+					{ provider: model.provider, kind: "incomplete-stream" },
+				);
+			}
+
 			// Some OpenAI-compatible hosts stream structured `tool_calls` but report
 			// `finish_reason: "stop"` instead of `"tool_calls"`. In the OpenAI contract a
 			// tool call always means "execute and continue", so promote that
@@ -2230,6 +2244,18 @@ function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | str
 } {
 	if (reason === null) return { stopReason: "stop" };
 	switch (reason) {
+		case "insufficient_system_resource":
+			// vLLM/SGLang and gateway proxies report the system failing to
+			// complete generation (worker OOM / context exhaustion) through this
+			// non-standard finish reason. Like a bare `error` finish it is
+			// transient — the next attempt usually lands on a healthier worker —
+			// so word the message to match the session retry classifier's
+			// transient-transport pattern (`provider.?returned.?error`) and the
+			// provider-finish-error flag, and get the turn auto-retried.
+			return {
+				stopReason: "error",
+				errorMessage: "Provider returned error finish_reason: insufficient_system_resource",
+			};
 		case "stop":
 		case "end":
 			return { stopReason: "stop" };
