@@ -9,7 +9,8 @@ import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@san/agent";
 import * as compactionModule from "@san/agent/compaction";
 import { estimateTokens } from "@san/agent/compaction";
-import type { ProviderSessionState } from "@san/ai";
+import type { AssistantMessage, ProviderSessionState } from "@san/ai";
+import * as ai from "@san/ai";
 import { createMockModel } from "@san/ai/providers/mock";
 import { getBundledModel } from "@san/catalog/models";
 import { applySanBrainMutation } from "@san/coding-agent/brain/commands";
@@ -67,6 +68,61 @@ const BASE_SETTINGS = {
 	"san.contextSteady.checkpoint.everyTurns": 8,
 	"san.contextSteady.checkpoint.maxTokens": 12000,
 };
+
+const DIGEST_LLM_SETTINGS = {
+	"san.contextSteady.digest.llm.enabled": true,
+	"san.contextSteady.digest.llm.modelRole": "anthropic/claude-sonnet-4-5",
+	// Default 16k keeps small sessions entirely inside the recent-exact window,
+	// so nothing is coverable and every plan is net-negative. Shrink it so the
+	// digest coverage this suite asserts actually engages.
+	"san.contextSteady.contextPlan.recentExactTokens": 0,
+} as const;
+
+/** Net-benefit padding: covered raw history must outweigh the plan wire cost. */
+const RAW_BODY = "alpha beta gamma delta epsilon zeta ".repeat(96);
+
+function digestAssistant(turn: number, prefix: string): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [
+			{
+				type: "toolCall",
+				id: `digest_${prefix}_${turn}`,
+				name: "record_turn_digest",
+				arguments: {
+					userIntent: `${prefix} turn ${turn}: continue the settled implementation`,
+					actionsTaken: [`Completed settled turn ${turn}.`],
+					decisions: ["Keep the stable checkpoint before the digest tail."],
+					filesTouched: [],
+					factsLearned: [`Invariant ${turn} remained valid.`],
+					openQuestions: [],
+					risks: [],
+					nextSteps: [`Continue turn ${turn + 1}.`],
+					memoryCandidates: [],
+				},
+			},
+		],
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "claude-sonnet-4-5",
+		usage: {
+			input: 10,
+			output: 5,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 15,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "toolUse",
+		timestamp: Date.now(),
+	};
+}
+
+/** Authoritative digests authorize coverage, so plans over padded turns are net-positive. */
+function authoritativeDigestSpy(prefix: string) {
+	let turn = 0;
+	return vi.spyOn(ai, "completeSimple").mockImplementation(async () => digestAssistant(++turn, prefix));
+}
 
 const echoToolSchema = {
 	type: "object",
@@ -134,6 +190,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 	});
 
 	it("injects the previous turn digest into the next real user prompt and writes plan audit", async () => {
+		authoritativeDigestSpy("parser fix");
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({
 			handler: context => ({
@@ -147,14 +204,14 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 			convertToLlm,
 		});
 		const sessionManager = SessionManager.inMemory();
-		const settings = Settings.isolated(BASE_SETTINGS);
+		const settings = Settings.isolated({ ...BASE_SETTINGS, ...DIGEST_LLM_SETTINGS });
 		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
 		authStorages.push(authStorage);
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 
 		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
-		await session.prompt("Fix the parser bug");
+		await session.prompt(`Fix the parser bug ${RAW_BODY}`);
 		await session.waitForIdle();
 
 		expect(customEntries(sessionManager, TURN_DIGEST_CUSTOM_TYPE)).toHaveLength(1);
@@ -173,7 +230,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		);
 		expect(planMessage).toBeDefined();
 		expect(planMessage?.role).toBe("user");
-		expect(JSON.stringify(planMessage?.content)).toContain("Fix the parser bug");
+		expect(JSON.stringify(planMessage?.content)).toContain("parser fix turn 1");
 
 		const planEntries = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE);
 		expect(planEntries.length).toBeGreaterThanOrEqual(1);
@@ -191,7 +248,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		expect(fromEntry?.type).toBe("message");
 	});
 
-	it("keeps the emitted quality-gated ContextPlan within its configured wire budget", async () => {
+	it("withdraws a plan that cannot fit its configured wire budget instead of shipping a useless skeleton", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
 		const agent = new Agent({
@@ -216,29 +273,21 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		await session.prompt("continue the budgeted context turn");
 		await session.waitForIdle();
 
-		const planMessage = mock.calls[1]!.context.messages.find(message => {
-			return JSON.stringify(message.content).includes("<san_context_plan>");
-		});
-		expect(planMessage).toBeDefined();
-		expect(planMessage?.role).toBe("user");
-		const planContent =
-			typeof planMessage?.content === "string"
-				? planMessage.content
-				: Array.isArray(planMessage?.content)
-					? planMessage.content
-							.flatMap(block =>
-								block.type === "text" && "text" in block && typeof block.text === "string" ? [block.text] : [],
-							)
-							.join("\n")
-					: "";
-		expect(estimateTokens({ role: "user", content: planContent, timestamp: Date.now() })).toBeLessThanOrEqual(135);
+		// A 135-token budget cannot fit any material, so the fitted plan saves
+		// nothing: the net-benefit gate withdraws it and raw history ships alone.
+		const secondCallPayload = JSON.stringify(mock.calls[1]!.context.messages);
+		expect(secondCallPayload).not.toContain("<san_context_plan>");
+		expect(secondCallPayload).toContain("first budgeted context turn");
 
 		const audit = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).at(-1)!.data as {
 			budget: { planTokenBudget: number };
 			qualityGate: { projectedInputTokens?: number };
+			netBenefit?: { withdrawn: boolean; netBenefit: number };
 		};
 		expect(audit.budget.planTokenBudget).toBe(135);
 		expect(audit.qualityGate.projectedInputTokens).toBeGreaterThan(0);
+		expect(audit.netBenefit?.withdrawn).toBe(true);
+		expect(audit.netBenefit?.netBenefit).toBeLessThanOrEqual(0);
 	});
 
 	it("injects latest San execution loop role context into real user prompts", async () => {
@@ -333,7 +382,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		});
 	});
 
-	it("keeps fallback-digest raw transcript while adding ContextPlan reference", async () => {
+	it("keeps fallback-digest raw transcript and withdraws the net-negative reference plan", async () => {
 		const rawUserMarker = "RAW_USER_CONTEXT_STEADY_PRUNE_MARKER";
 		const rawAssistantMarker = "RAW_ASSISTANT_CONTEXT_STEADY_PRUNE_MARKER";
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
@@ -363,8 +412,10 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		await session.prompt("Continue after provider pruning");
 		await session.waitForIdle();
 
+		// Fallback digests authorize no omission, so the reference-only plan saves
+		// nothing and is withdrawn: raw transcript ships without the plan message.
 		const secondProviderPayload = JSON.stringify(mock.calls[1]!.context.messages);
-		expect(secondProviderPayload).toContain("<san_context_plan>");
+		expect(secondProviderPayload).not.toContain("<san_context_plan>");
 		expect(secondProviderPayload).toContain("Layer one baseline task");
 		expect(secondProviderPayload).toContain("Continue after provider pruning");
 		expect(secondProviderPayload).toContain(rawUserMarker);
@@ -374,6 +425,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		expect(planEntries.length).toBeGreaterThan(0);
 		const planData = planEntries.at(-1)!.data as Record<string, unknown>;
 		expect(planData.coverage).toEqual([]);
+		expect((planData.netBenefit as Record<string, unknown> | undefined)?.withdrawn).toBe(true);
 	});
 
 	it("does not inject ContextPacket when context packet setting is disabled", async () => {
@@ -413,6 +465,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 	});
 
 	it("prefers ContextPlan settings over legacy ContextPacket aliases", async () => {
+		authoritativeDigestSpy("plan alias");
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
 		const agent = new Agent({
@@ -424,6 +477,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		const sessionManager = SessionManager.inMemory();
 		const settings = Settings.isolated({
 			...BASE_SETTINGS,
+			...DIGEST_LLM_SETTINGS,
 			"san.contextSteady.contextPacket.enabled": false,
 			"san.contextSteady.contextPacket.recentDigests": 1,
 			"san.contextSteady.contextPacket.maxTokens": 10,
@@ -437,9 +491,9 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 
 		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
-		await session.prompt("Plan alias task one");
+		await session.prompt(`Plan alias task one ${RAW_BODY}`);
 		await session.waitForIdle();
-		await session.prompt("Plan alias task two");
+		await session.prompt(`Plan alias task two ${RAW_BODY}`);
 		await session.waitForIdle();
 		await session.prompt("Plan alias task three");
 		await session.waitForIdle();
@@ -455,6 +509,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 	});
 
 	it("uses the default latest-five digest material window", async () => {
+		authoritativeDigestSpy("M2 default window");
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
 		const agent = new Agent({
@@ -464,7 +519,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 			convertToLlm,
 		});
 		const sessionManager = SessionManager.inMemory();
-		const settings = Settings.isolated(BASE_SETTINGS);
+		const settings = Settings.isolated({ ...BASE_SETTINGS, ...DIGEST_LLM_SETTINGS });
 		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
 		authStorages.push(authStorage);
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
@@ -472,7 +527,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 
 		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
 		for (let index = 1; index <= 6; index++) {
-			await session.prompt(`M2 default window task ${index}`);
+			await session.prompt(`M2 default window task ${index} ${RAW_BODY}`);
 			await session.waitForIdle();
 		}
 
@@ -492,12 +547,13 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 			.context.messages.filter(message => JSON.stringify(message.content).includes("<san_context_plan>"));
 		expect(finalPacketMessages).toHaveLength(1);
 		const finalPacketContent = JSON.stringify(finalPacketMessages.map(message => message.content));
-		expect(finalPacketContent).toContain("M2 default window task 1");
-		expect(finalPacketContent).toContain("M2 default window task 5");
-		expect(finalPacketContent).not.toContain("M2 default window task 6");
+		expect(finalPacketContent).toContain("M2 default window turn 1");
+		expect(finalPacketContent).toContain("M2 default window turn 5");
+		expect(finalPacketContent).not.toContain("M2 default window turn 6");
 	});
 
 	it("does not replay stale persisted ContextPlan audits into later active turns", async () => {
+		authoritativeDigestSpy("M10 replay");
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
 		const agent = new Agent({
@@ -507,16 +563,16 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 			convertToLlm,
 		});
 		const sessionManager = SessionManager.inMemory();
-		const settings = Settings.isolated(BASE_SETTINGS);
+		const settings = Settings.isolated({ ...BASE_SETTINGS, ...DIGEST_LLM_SETTINGS });
 		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
 		authStorages.push(authStorage);
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 
 		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
-		await session.prompt("M10 replay first turn");
+		await session.prompt(`M10 replay first turn ${RAW_BODY}`);
 		await session.waitForIdle();
-		await session.prompt("M10 replay second turn");
+		await session.prompt(`M10 replay second turn ${RAW_BODY}`);
 		await session.waitForIdle();
 		await session.prompt("M10 replay third turn");
 		await session.waitForIdle();
@@ -533,9 +589,9 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		);
 		expect(thirdCallPackets).toHaveLength(1);
 		const thirdPacketText = JSON.stringify(thirdCallPackets.map(message => message.content));
-		expect(thirdPacketText).toContain("M10 replay first turn");
-		expect(thirdPacketText).toContain("M10 replay second turn");
-		expect(thirdPacketText).not.toContain("M10 replay third turn");
+		expect(thirdPacketText).toContain("M10 replay turn 1");
+		expect(thirdPacketText).toContain("M10 replay turn 2");
+		expect(thirdPacketText).not.toContain("M10 replay turn 3");
 	});
 
 	it("records the ContextPlan budget from quality window settings", async () => {
@@ -576,7 +632,8 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		);
 	});
 
-	it("writes stable checkpoints and includes them before the digest tail in ContextPlan", async () => {
+	it("writes stable checkpoints and includes them before the digest tail", async () => {
+		authoritativeDigestSpy("M4 checkpoint");
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
 		const agent = new Agent({
@@ -588,6 +645,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		const sessionManager = SessionManager.inMemory();
 		const settings = Settings.isolated({
 			...BASE_SETTINGS,
+			...DIGEST_LLM_SETTINGS,
 			"san.contextSteady.checkpoint.everyTurns": 2,
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
@@ -596,9 +654,9 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 
 		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
-		await session.prompt("M4 checkpoint stable task one");
+		await session.prompt(`M4 checkpoint stable task one ${RAW_BODY}`);
 		await session.waitForIdle();
-		await session.prompt("M4 checkpoint stable task two");
+		await session.prompt(`M4 checkpoint stable task two ${RAW_BODY}`);
 		await session.waitForIdle();
 
 		const checkpointEntries = customEntries(sessionManager, CONTEXT_CHECKPOINT_CUSTOM_TYPE);
@@ -617,7 +675,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		};
 		session.providerSessionState.set("checkpoint-rebase", checkpointProviderState);
 
-		await session.prompt("M4 checkpoint stable task three");
+		await session.prompt(`M4 checkpoint stable task three ${RAW_BODY}`);
 		await session.waitForIdle();
 		expect(checkpointRebaseCloseCount).toBe(1);
 		expect(session.providerSessionState.has("checkpoint-rebase")).toBe(false);
@@ -668,9 +726,9 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 			.context.messages.filter(message => JSON.stringify(message.content).includes("<san_context_plan>"));
 		const finalPlanContent = JSON.stringify(finalPlanMessages.map(message => message.content));
 		expect(finalPlanContent).toContain("Stable checkpoints");
-		expect(finalPlanContent).toContain("M4 checkpoint stable task one");
-		expect(finalPlanContent).toContain("M4 checkpoint stable task three");
-		expect(finalPlanContent).not.toContain("M4 checkpoint stable task four");
+		expect(finalPlanContent).toContain("M4 checkpoint turn 1");
+		expect(finalPlanContent).toContain("M4 checkpoint turn 3");
+		expect(finalPlanContent).not.toContain("M4 checkpoint turn 4");
 	});
 
 	it("injects read-only recalled memory as ContextPlan recall material", async () => {
@@ -1114,10 +1172,15 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 	});
 
 	it("keeps ContextPlan bytes stable while a legal tool-loop tail grows inside the control band", async () => {
+		authoritativeDigestSpy("control band");
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const toolPayload = "Q".repeat(20_000);
 		const mock = createMockModel({
 			responses: [
+				// Warm-up turn: its settled authoritative digest is what makes the
+				// next turn's plan net-positive (and thus injectable) from its
+				// first provider call onward.
+				{ content: ["control-band warm-up settled"] },
 				{
 					content: [{ type: "toolCall", id: "call_control", name: "echo", arguments: { value: "seed" } }],
 				},
@@ -1133,6 +1196,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		const sessionManager = SessionManager.inMemory();
 		const settings = Settings.isolated({
 			...BASE_SETTINGS,
+			...DIGEST_LLM_SETTINGS,
 			"san.contextSteady.qualityWindowTokens": 8_000,
 			"san.contextSteady.burstWindowTokens": 12_000,
 			"san.contextSteady.contextPlan.maxTokens": 2_000,
@@ -1155,14 +1219,16 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		agent.setTools([controlEcho]);
 		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
 
-		await session.prompt("control-band tool tail probe");
+		await session.prompt(`control-band warm-up ${RAW_BODY}`);
+		await session.waitForIdle();
+		await session.prompt("Continue the control-band tool tail probe");
 		await session.waitForIdle();
 
-		expect(mock.calls).toHaveLength(2);
+		expect(mock.calls).toHaveLength(3);
 		const plan = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).at(-1)?.data as ContextPlanAudit;
 		const secondProviderTokens =
 			computeNonMessageTokens(session) +
-			mock.calls[1]!.context.messages.reduce(
+			mock.calls[2]!.context.messages.reduce(
 				(sum, message) => sum + estimateTokens(message as unknown as AgentMessage),
 				0,
 			);
@@ -1173,8 +1239,8 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		const planMessages = mock.calls.map(call =>
 			call.context.messages.find(message => JSON.stringify(message).includes("<san_context_plan>")),
 		);
-		expect(planMessages[0]).toBeDefined();
-		expect(JSON.stringify(planMessages[1])).toBe(JSON.stringify(planMessages[0]));
+		expect(planMessages[1]).toBeDefined();
+		expect(JSON.stringify(planMessages[2])).toBe(JSON.stringify(planMessages[1]));
 	});
 
 	it("appends Segment checkpoints without starting physical compaction", async () => {

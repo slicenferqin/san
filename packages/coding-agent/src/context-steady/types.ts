@@ -23,6 +23,12 @@ export const CONTEXT_CHECKPOINT_CUSTOM_TYPE = "san.context_checkpoint";
 export const CONTEXT_PACKET_SCHEMA_VERSION = 1;
 export const CONTEXT_PACKET_CUSTOM_TYPE = "san.context_packet";
 export const CONTEXT_PACKET_MESSAGE_TYPE = "san.context_packet.injected";
+/**
+ * Volatile recall channel (stable-projection mode): per-request retrieved
+ * context injected before the current user prompt, stripped on the next
+ * request. Never carries coverage authority; independent of the frozen plan.
+ */
+export const CONTEXT_RECALL_MESSAGE_TYPE = "san.context_recall.injected";
 
 /** Identifies the session span this digest covers. */
 export interface TurnDigestSource {

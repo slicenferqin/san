@@ -227,7 +227,7 @@ import {
 } from "../config/settings";
 import { resolveDialect } from "../config/tool-dialect";
 import { resolveContextPlanBudget } from "../context-steady/budget";
-import { appendContextCheckpoint, buildContextCheckpoint } from "../context-steady/checkpoint";
+import { appendContextCheckpoint, buildContextCheckpoint, latestContextCheckpoint } from "../context-steady/checkpoint";
 import {
 	appendActiveContinuationState,
 	buildActiveContinuationState,
@@ -238,9 +238,18 @@ import {
 import { generateDigest as generateContextSteadyDigest } from "../context-steady/digest";
 import { type ContextExpandResult, expandDigestSpan } from "../context-steady/expand";
 import { generateFallbackDigest } from "../context-steady/fallback";
-import { estimateContextPlanProjectedTokens, materializeContextPlanMessages } from "../context-steady/materialize";
+import {
+	auditProjectionCoverage,
+	buildContextRecallMessage,
+	estimateContextPlanProjectedTokens,
+	materializeContextPlanMessages,
+} from "../context-steady/materialize";
 import { type BuiltContextPlan, CONTEXT_PLAN_CUSTOM_TYPE } from "../context-steady/plan-types";
-import { type BuildContextPlanOptions, buildContextPlan } from "../context-steady/planner";
+import {
+	applyContextPlanNetBenefitGate,
+	type BuildContextPlanOptions,
+	buildContextPlan,
+} from "../context-steady/planner";
 import {
 	appendContextProbeRecord,
 	type BuildContextProbeSnapshotOptions,
@@ -2496,6 +2505,10 @@ export class AgentSession {
 		  }
 		| undefined = undefined;
 	#contextSteadyRequestPlan: BuiltContextPlan | undefined = undefined;
+	/** Stable-projection mode: per-request volatile recall message (independent of the plan). */
+	#contextSteadyRecallMessage: AgentMessage | undefined = undefined;
+	/** Monotonic counter for explicit topic-shift epoch boundaries (stable-projection mode). */
+	#contextSteadyTopicShiftEpoch = 0;
 	#contextSteadyGlobalInjectionAllowed = true;
 	/** Survives turn end so idle status/compaction can share the last plan snapshot. */
 	#contextSteadyLastPlan: BuiltContextPlan | undefined = undefined;
@@ -9148,7 +9161,21 @@ export class AgentSession {
 				transformedMessages,
 				this.sessionManager.getBranch(),
 				plan,
+				this.#contextSteadyRecallMessage,
 			);
+			// End-to-end orphan audit: every projectable scope entry must be present,
+			// stubbed, or covered. Never throws in production — a violation is a loud
+			// log signal, not a broken request.
+			const projectionAudit = auditProjectionCoverage(plannedMessages, this.sessionManager.getBranch(), plan);
+			if (projectionAudit.missingProjectableRefs.length > 0 || projectionAudit.invalidCoverage.length > 0) {
+				logger.error("ContextPlan projection orphaned projectable entries", {
+					sessionId: this.sessionId,
+					planId: plan.audit.planId,
+					missingProjectableRefs: projectionAudit.missingProjectableRefs,
+					invalidCoverage: projectionAudit.invalidCoverage,
+					withdrawn: plan.withdrawn === true,
+				});
+			}
 			return this.#responseDocuments.project(plannedMessages);
 		}
 		return responseProjectedMessages;
@@ -10185,9 +10212,31 @@ export class AgentSession {
 		return `epoch_${this.sessionId}_${reasonTag}_${rebase}`.slice(0, 140);
 	}
 
+	/**
+	 * Stable-projection epoch key: changes exactly on the epoch-boundary events —
+	 * new rebase checkpoint, physical compaction, model/context-window change, or
+	 * an explicit topic shift. Ordinary turns and non-message budget drift keep
+	 * the key so the frozen plan artifact stays reusable across turns. The
+	 * checkpoint leg reads the journal directly: a freshly appended checkpoint
+	 * flips the epoch regardless of rebase side-effect ordering.
+	 */
+	#contextSteadyStableEpochKey(): string {
+		const branch = this.sessionManager.getBranch();
+		const latestCompaction = getLatestCompactionEntry(branch);
+		const latestCheckpoint = latestContextCheckpoint(branch);
+		return [
+			latestCheckpoint?.entryId ?? "base",
+			latestCompaction?.id ?? "none",
+			String(this.model?.contextWindow ?? 0),
+			String(this.#contextSteadyTopicShiftEpoch),
+		].join("|");
+	}
+
 	#contextSteadyActivePlan(): BuiltContextPlan | undefined {
 		const plan = this.#contextSteadyRequestPlan ?? this.#contextSteadyLastPlan;
-		return plan && !this.#contextSteadyPlanInputsChanged(plan) ? plan : undefined;
+		return plan && !this.#contextSteadyPlanInputsChanged(plan, { relaxed: plan.projectionMode === "pinned" })
+			? plan
+			: undefined;
 	}
 
 	/**
@@ -10257,12 +10306,34 @@ export class AgentSession {
 		);
 	}
 
-	#contextSteadyPlanInputsChanged(plan: BuiltContextPlan): boolean {
+	#contextSteadyPlanInputsChanged(plan: BuiltContextPlan, options?: { relaxed?: boolean }): boolean {
 		const sourceEntryIds = new Set(plan.sourceIndex.entryIds);
 		const latestCompaction = getLatestCompactionEntry(this.sessionManager.getBranch());
 		if (latestCompaction && !sourceEntryIds.has(latestCompaction.id)) return true;
 		if (plan.audit.budget.contextWindow !== (this.model?.contextWindow ?? 0)) return true;
+		// Relaxed (stable-projection): non-message budget drift re-runs gates
+		// without invalidating the frozen epoch artifact.
+		if (options?.relaxed === true) return false;
 		return plan.audit.budget.nonMessageTokens !== computeNonMessageTokens(this);
+	}
+
+	/**
+	 * Stable-projection epoch reuse: within one epoch the plan artifact —
+	 * material set, tiers, rendered bytes — is frozen and reused verbatim
+	 * across turns. Gate dynamics are re-checked on every provider call by the
+	 * refresh path; only epoch-boundary events (see #contextSteadyStableEpochKey)
+	 * re-lay the plan out.
+	 */
+	#contextSteadyFrozenEpochPlan(): BuiltContextPlan | undefined {
+		const candidate = this.#contextSteadyRequestPlan ?? this.#contextSteadyLastPlan;
+		if (candidate?.projectionMode !== "pinned") return undefined;
+		// A withdrawn plan ships nothing; freezing it would pin "no plan" for the
+		// whole epoch even after coverage grows. Re-evaluate each turn instead.
+		if (candidate.withdrawn === true) return undefined;
+		if (candidate.epochKey === undefined) return undefined;
+		if (candidate.epochKey !== this.#contextSteadyStableEpochKey()) return undefined;
+		if (this.#contextSteadyPlanInputsChanged(candidate, { relaxed: true })) return undefined;
+		return candidate;
 	}
 
 	/**
@@ -10334,8 +10405,10 @@ export class AgentSession {
 
 	/**
 	 * Rendered ContextPlans include their projected-input audit, so that audit can
-	 * change the final wire size. Rebuild until the recorded projection equals
-	 * the final wire estimate; fail closed if it cannot settle promptly.
+	 * change the final wire size. Rebuild until the recorded projection equals the
+	 * final wire estimate; fail closed if it cannot settle promptly. The net-benefit
+	 * gate participates in the fixed point: a withdrawn plan ships raw history, so
+	 * the convergence target is the post-gate wire size, not the ungated estimate.
 	 */
 	#buildContextSteadyPlanForProvider(
 		commonOptions: Omit<BuildContextPlanOptions, "projectedInputTokens">,
@@ -10343,15 +10416,27 @@ export class AgentSession {
 		planningEntries: readonly SessionEntry[],
 		mode: "pending" | "full" = "pending",
 	): BuiltContextPlan {
+		const rawProjectedTokens = this.#estimateMaterializedProjectedInputTokens(messages, planningEntries, null, mode);
+		const gate = (candidate: BuiltContextPlan): BuiltContextPlan =>
+			applyContextPlanNetBenefitGate(candidate, {
+				rawProjectedTokens,
+				projectedTokens: this.#estimateMaterializedProjectedInputTokens(messages, planningEntries, candidate, mode),
+			});
+		const shippedTokens = (candidate: BuiltContextPlan): number =>
+			candidate.withdrawn === true ? rawProjectedTokens : candidate.audit.netBenefit!.projectedTokens;
+
 		let plan = buildContextPlan(commonOptions);
-		let projectedInputTokens = this.#estimateMaterializedProjectedInputTokens(messages, planningEntries, plan, mode);
+		let projectedInputTokens = shippedTokens(gate(plan));
 		for (let attempt = 0; attempt < 4; attempt++) {
 			plan = buildContextPlan({ ...commonOptions, projectedInputTokens });
-			const finalProjection = this.#estimateMaterializedProjectedInputTokens(messages, planningEntries, plan, mode);
-			if (finalProjection === projectedInputTokens) return plan;
-			projectedInputTokens = finalProjection;
+			const gated = gate(plan);
+			const shipped = shippedTokens(gated);
+			if (shipped === projectedInputTokens) return gated;
+			projectedInputTokens = shipped;
 		}
-		return buildContextPlan({ ...commonOptions, projectedInputTokens: Number.MAX_SAFE_INTEGER });
+		// Fail-closed fallback pressures the gate into hard_pressure, which is
+		// never withdrawn — the shipped size then equals the ungated estimate.
+		return gate(buildContextPlan({ ...commonOptions, projectedInputTokens: Number.MAX_SAFE_INTEGER }));
 	}
 
 	async #buildContextSteadyRequestPlan(
@@ -10365,6 +10450,11 @@ export class AgentSession {
 		const persistAudit = options?.persistAudit !== false;
 		const throwOnHardPressure = options?.throwOnHardPressure !== false;
 		const recall = options?.liveTailOnly ? undefined : await this.#buildContextSteadyRecallLayer(expandedText);
+		const stableProjection = this.#contextSteadyStableProjection();
+		// Volatile recall channel: per-request rendered message, independent of
+		// the frozen plan; ships even when the plan itself is withdrawn.
+		this.#contextSteadyRecallMessage =
+			stableProjection && recall && recall.items.length > 0 ? buildContextRecallMessage(recall) : undefined;
 		const branchEntries = this.sessionManager.getBranch();
 		const activeScope = this.#contextSteadyActivePlanningEntries(branchEntries);
 		const rebaseBoundary = this.#contextSteadyRebaseBoundary(activeScope.entries);
@@ -10380,6 +10470,13 @@ export class AgentSession {
 			tokenEstimateByEntryRef,
 		);
 		const topicShift = expandedText.trim().length > 0 && isTopicShiftPrompt(expandedText);
+		// Explicit topic shift is an epoch boundary: bump before the frozen-reuse
+		// check so this turn re-lays the plan out while subsequent turns freeze.
+		if (stableProjection && topicShift) this.#contextSteadyTopicShiftEpoch += 1;
+		if (stableProjection) {
+			const frozen = this.#contextSteadyFrozenEpochPlan();
+			if (frozen) return frozen;
+		}
 		// Pending semantic reasons outrank a stale checkpoint boundary so resume /
 		// topic_shift / budget_pressure remain auditable after checkpoints exist.
 		const pendingReason: ContextCheckpointRebaseReason | undefined = this.#contextSteadyPendingResumeRebase
@@ -10407,6 +10504,11 @@ export class AgentSession {
 			nonMessageTokens: computeNonMessageTokens(this),
 			recall,
 			maxDigestMaterials: this.#contextSteadyRecentDigests(),
+			...(stableProjection ? { stableProjection: true } : {}),
+			...(this.#contextSteadyToolOutputOffload()
+				? { toolOutputOffload: this.#contextSteadyToolOutputOffload() }
+				: {}),
+			...(this.#contextSteadyImageOffload() ? { offloadAgedImages: true } : {}),
 			baseRequiredEntryRefs: this.#contextSteadySemanticRequiredEntryRefs(
 				planningEntries,
 				new Set(currentPromptEntryRefs),
@@ -10424,6 +10526,7 @@ export class AgentSession {
 			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
 		};
 		const plan = this.#buildContextSteadyPlanForProvider(commonOptions, messages, planningEntries);
+		if (stableProjection) plan.epochKey = this.#contextSteadyStableEpochKey();
 		if (plan.audit.qualityGate.outcome === "hard_pressure") {
 			this.#contextSteadyPendingBudgetPressureRebase = true;
 			// Persist the refused prompt + audit, and sync active agent context so the
@@ -10562,7 +10665,10 @@ export class AgentSession {
 	 * Tool-loop re-gate: rebuild plan from current branch + live messages when
 	 * projected full input would cross control/burst bands or the plan's inputs
 	 * changed. Freezes old-history selection from the request-start plan only
-	 * while the source history and non-message context are unchanged.
+	 * while the source history and non-message context are unchanged. In
+	 * stable-projection mode a pressure rebuild pins the epoch-frozen digest /
+	 * checkpoint materials so gates re-run without reselecting the history
+	 * representation.
 	 */
 	async #refreshContextSteadyPlanForProviderCall(
 		messages: readonly AgentMessage[],
@@ -10574,8 +10680,8 @@ export class AgentSession {
 		// Tool-loop: `messages` is already the full transformed provider context.
 		const projected = this.#estimateMaterializedProjectedInputTokens(messages, branchEntries, existing, "full");
 		const controlMax = existing.audit.budget.controlMax;
-		const nonMessageTokens = computeNonMessageTokens(this);
-		if (!this.#contextSteadyPlanInputsChanged(existing) && projected <= controlMax) {
+		const stable = existing.projectionMode === "pinned";
+		if (!this.#contextSteadyPlanInputsChanged(existing, { relaxed: stable }) && projected <= controlMax) {
 			// 同一逻辑 turn 内冻结 ContextPlan 字节。每次工具调用都重写投影值会让
 			// plan 之后的整条 turn 前缀失效，实际会把 provider cache read 压到仅剩
 			// system/tools。实时 projected 只用于门控；跨过 controlMax 时才重建。
@@ -10612,8 +10718,23 @@ export class AgentSession {
 				burstWindowTokens: this.#contextSteadyBurstWindowTokens(),
 			},
 			contextWindow: this.model?.contextWindow ?? 0,
-			nonMessageTokens,
+			nonMessageTokens: computeNonMessageTokens(this),
 			maxDigestMaterials: this.#contextSteadyRecentDigests(),
+			...(stable
+				? {
+						stableProjection: true,
+						// Epoch-frozen history representation: a pressure rebuild may
+						// re-run gates and re-render audit numbers, but never reselects
+						// checkpoint/digest materials or their tiers.
+						frozenMaterials: existing.materials.filter(
+							material => "digest" in material || "checkpoint" in material,
+						),
+					}
+				: {}),
+			...(this.#contextSteadyToolOutputOffload()
+				? { toolOutputOffload: this.#contextSteadyToolOutputOffload() }
+				: {}),
+			...(this.#contextSteadyImageOffload() ? { offloadAgedImages: true } : {}),
 			baseRequiredEntryRefs: this.#contextSteadySemanticRequiredEntryRefs(
 				planningEntries,
 				new Set(currentPromptEntryRefs),
@@ -10631,6 +10752,7 @@ export class AgentSession {
 			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
 		};
 		const plan = this.#buildContextSteadyPlanForProvider(commonOptions, messages, planningEntries, "full");
+		if (stable) plan.epochKey = existing.epochKey;
 		this.#contextSteadyRequestPlan = plan;
 		this.#contextSteadyLastPlan = plan;
 		if (plan.audit.qualityGate.outcome === "hard_pressure") {
@@ -10828,6 +10950,22 @@ export class AgentSession {
 		return this.settings.get("san.contextSteady.contextPacket.enabled") === true;
 	}
 
+	#contextSteadyStableProjection(): boolean {
+		return this.settings.get("san.contextSteady.contextPlan.stableProjection") === true;
+	}
+
+	#contextSteadyToolOutputOffload(): { minTokens: number } | undefined {
+		if (this.settings.get("san.contextSteady.contextPlan.toolOutputOffload") !== true) return undefined;
+		const configured = Math.floor(
+			this.settings.get("san.contextSteady.contextPlan.toolOutputOffloadMinTokens") as number,
+		);
+		return { minTokens: Number.isFinite(configured) && configured > 0 ? configured : 2000 };
+	}
+
+	#contextSteadyImageOffload(): boolean {
+		return this.settings.get("san.contextSteady.contextPlan.imageOffload") === true;
+	}
+
 	#contextSteadyRecentDigests(): number {
 		return this.settings.isConfigured("san.contextSteady.contextPlan.recentDigests")
 			? (this.settings.get("san.contextSteady.contextPlan.recentDigests") as number)
@@ -10857,13 +10995,16 @@ export class AgentSession {
 	#estimateMaterializedProjectedInputTokens(
 		messages: readonly AgentMessage[],
 		planningEntries: readonly SessionEntry[],
-		plan: BuiltContextPlan,
+		plan: BuiltContextPlan | null,
 		mode: "pending" | "full" = "pending",
 	): number {
 		const activeMessages = mode === "full" ? [...messages] : [...this.messages, ...messages];
+		// The volatile recall message only exists (and only counts) in
+		// stable-projection mode; legacy mode renders recall inside the plan.
+		const volatileRecall = this.#contextSteadyStableProjection() ? this.#contextSteadyRecallMessage : undefined;
 		return (
 			computeNonMessageTokens(this) +
-			estimateContextPlanProjectedTokens(activeMessages, planningEntries, plan, message =>
+			estimateContextPlanProjectedTokens(activeMessages, planningEntries, plan, volatileRecall, message =>
 				this.#estimateProviderWireMessageTokens(message),
 			)
 		);
@@ -11353,6 +11494,7 @@ export class AgentSession {
 			);
 			const items = normalizeContextSteadyRecallItems(result.items, {
 				maxItems: recallPlan.maxItems,
+				maxTokens: recallPlan.tokenBudget,
 				memoryTypes: recallPlan.memoryTypes,
 				scopeKeys: recallPlan.scopeKeys,
 			});
@@ -11755,7 +11897,9 @@ export class AgentSession {
 			// 审计，以便 TurnDigest settledLeafId 指向非 plan entry。
 			if (this.#contextSteadyRequestPlan) {
 				this.#contextSteadyRequestPlan = this.#remapContextSteadyPlanPendingRefs(this.#contextSteadyRequestPlan);
-				this.#contextSteadyLastPlan = this.#contextSteadyPlanInputsChanged(this.#contextSteadyRequestPlan)
+				this.#contextSteadyLastPlan = this.#contextSteadyPlanInputsChanged(this.#contextSteadyRequestPlan, {
+					relaxed: this.#contextSteadyRequestPlan.projectionMode === "pinned",
+				})
 					? undefined
 					: this.#contextSteadyRequestPlan;
 			}
@@ -14792,8 +14936,12 @@ export class AgentSession {
 		return (
 			computeNonMessageTokens(this) +
 			(plan
-				? estimateContextPlanProjectedTokens(activeMessages, this.sessionManager.getBranch(), plan, message =>
-						this.#estimateProviderWireMessageTokens(message, opts),
+				? estimateContextPlanProjectedTokens(
+						activeMessages,
+						this.sessionManager.getBranch(),
+						plan,
+						this.#contextSteadyStableProjection() ? this.#contextSteadyRecallMessage : undefined,
+						message => this.#estimateProviderWireMessageTokens(message, opts),
 					)
 				: activeMessages.reduce((sum, message) => sum + estimateTokens(message, opts), 0))
 		);
@@ -18308,6 +18456,13 @@ export class AgentSession {
 				},
 				detachMidTurnLifecycle,
 			);
+
+			// Steady-target maintenance is protective, not a failure — but without a
+			// visible line the user perceives the reorganized history as the model
+			// silently "forgetting". One plain line; detail stays behind the fold.
+			if (trigger === "steady_target" && !noProgressDeadEnd) {
+				this.emitNotice("info", "Reorganized earlier history; continuing from a summary.", "compaction");
+			}
 
 			const authoritySourceMissing = this.#continuationAuthoritySourceMissing();
 			if (retryFits && !authoritySourceMissing) {
@@ -22014,7 +22169,12 @@ export class AgentSession {
 		const activeMessages = [...this.messages, ...pendingMessages];
 		const activePlan = this.#contextSteadyActivePlan();
 		const resolvedActiveMessages = activePlan
-			? materializeContextPlanMessages(activeMessages, branchEntries, activePlan)
+			? materializeContextPlanMessages(
+					activeMessages,
+					branchEntries,
+					activePlan,
+					this.#contextSteadyStableProjection() ? this.#contextSteadyRecallMessage : undefined,
+				)
 			: activeMessages;
 		if (activePlan) {
 			// ContextPlan is ephemeral per request. A provider usage anchor from the

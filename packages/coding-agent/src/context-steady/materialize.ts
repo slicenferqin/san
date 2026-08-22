@@ -1,15 +1,18 @@
 import type { AgentMessage } from "@san/agent";
 import { estimateTokens } from "@san/agent/compaction";
 import { prompt } from "@san/utils";
+import agedOutputStubTemplate from "../prompts/context-steady/aged-output-stub.md" with { type: "text" };
 import contextPlanTemplate from "../prompts/context-steady/context-plan.md" with { type: "text" };
+import contextRecallTemplate from "../prompts/context-steady/context-recall.md" with { type: "text" };
 import emergencyStubTemplate from "../prompts/context-steady/emergency-stub.md" with { type: "text" };
+import offloadedImageTemplate from "../prompts/context-steady/offloaded-image.md" with { type: "text" };
 import supersededEditStubTemplate from "../prompts/context-steady/superseded-edit-stub.md" with { type: "text" };
 import type { CustomMessageEntry, SessionEntry, SessionMessageEntry } from "../session/session-entries";
 import { validateContextPlanCoverage } from "./coverage";
 import { projectDigestTier } from "./decay";
 import type { BuiltContextPlan, ContextPlanMaterial, ContextPlanToolStubMaterial } from "./plan-types";
 import { CONTEXT_PLAN_MESSAGE_TYPE } from "./plan-types";
-import { CONTEXT_PACKET_MESSAGE_TYPE } from "./types";
+import { CONTEXT_PACKET_MESSAGE_TYPE, CONTEXT_RECALL_MESSAGE_TYPE, type ContextPacketRecallLayer } from "./types";
 
 const DIGEST_PRUNABLE_CUSTOM_MESSAGE_TYPES: Record<string, true> = { "image-attachment-description": true };
 
@@ -169,12 +172,66 @@ function stripPriorDerivedPlanMessages(messages: readonly AgentMessage[]): Agent
 	return messages.filter(
 		message =>
 			!(message.role === "custom" && message.customType === CONTEXT_PACKET_MESSAGE_TYPE) &&
-			!(message.role === "custom" && message.customType === CONTEXT_PLAN_MESSAGE_TYPE),
+			!(message.role === "custom" && message.customType === CONTEXT_PLAN_MESSAGE_TYPE) &&
+			!(message.role === "custom" && message.customType === CONTEXT_RECALL_MESSAGE_TYPE),
 	);
+}
+
+/** Volatile recall rides before the current user prompt — after the frozen prefix. */
+function injectVolatileRecall(messages: readonly AgentMessage[], recall: AgentMessage | undefined): AgentMessage[] {
+	if (!recall) return [...messages];
+	const insertAt = Math.max(
+		0,
+		messages.findLastIndex(message => message.role === "user"),
+	);
+	return [...messages.slice(0, insertAt), recall, ...messages.slice(insertAt)];
+}
+
+/** Render the per-request volatile recall message (stable-projection mode). */
+export function buildContextRecallMessage(recall: ContextPacketRecallLayer): AgentMessage {
+	const content = prompt.render(contextRecallTemplate, {
+		query: clampString(recall.query, 300),
+		items: recall.items.map(item => ({
+			content: clampString(item.content, 320),
+			source: item.source ? clampString(item.source, 120) : undefined,
+			timestamp: item.timestamp ? clampString(item.timestamp, 40) : undefined,
+			score: typeof item.score === "number" ? item.score.toFixed(3) : undefined,
+		})),
+	});
+	return {
+		role: "custom",
+		customType: CONTEXT_RECALL_MESSAGE_TYPE,
+		content,
+		display: false,
+		attribution: "agent",
+		timestamp: Date.now(),
+	};
 }
 
 function isToolStubMaterial(material: ContextPlanMaterial): material is ContextPlanToolStubMaterial {
 	return "toolCallId" in material && "resultEntryId" in material;
+}
+
+/** Role+timestamp identity: survives stub/image substitution, which rewrites content. */
+function messageSubstitutionKey(message: AgentMessage): string | undefined {
+	if (
+		message.role !== "user" &&
+		message.role !== "developer" &&
+		message.role !== "assistant" &&
+		message.role !== "toolResult"
+	) {
+		return undefined;
+	}
+	return `${message.role}\0${timestampKey(message.timestamp)}`;
+}
+
+function messageCarriesImages(message: AgentMessage): boolean {
+	return (
+		Array.isArray((message as { content?: unknown }).content) &&
+		((message as { content: unknown[] }).content as unknown[]).some(
+			block => (block as { type?: unknown } | null)?.type === "image",
+		)
+	);
 }
 
 /** Superseded mutation 的替换映射:消息引用与内容键双通道,与 covered 消息同一匹配机制。 */
@@ -194,8 +251,13 @@ function toolStubTargets(branchEntries: readonly SessionEntry[], stubs: readonly
 }
 
 function substituteToolStub(message: AgentMessage, stub: ContextPlanToolStubMaterial): AgentMessage {
-	const template = stub.stubKind === "emergency" ? emergencyStubTemplate : supersededEditStubTemplate;
-	const text = prompt.render(template, { path: stub.path }).trim();
+	const template =
+		stub.stubKind === "emergency"
+			? emergencyStubTemplate
+			: stub.stubKind === "aged"
+				? agedOutputStubTemplate
+				: supersededEditStubTemplate;
+	const text = prompt.render(template, { tool: stub.toolName, path: stub.path }).trim();
 	return {
 		...message,
 		content: [{ type: "text", text }],
@@ -212,7 +274,11 @@ export function materializeContextPlanMessages(
 	messages: readonly AgentMessage[],
 	branchEntries: readonly SessionEntry[],
 	plan: BuiltContextPlan,
+	volatileRecall?: AgentMessage,
 ): AgentMessage[] {
+	// Net-benefit gate rejected the plan: revoke derived replacement only. The
+	// volatile recall channel is independent and still ships.
+	if (plan.withdrawn === true) return injectVolatileRecall(stripPriorDerivedPlanMessages(messages), volatileRecall);
 	const validation = validateContextPlanCoverage({
 		audit: plan.audit,
 		materials: plan.materials,
@@ -242,28 +308,199 @@ export function materializeContextPlanMessages(
 						(message.role === "toolResult" ? stubTargets.byKey.get(sessionMessageKey(message) ?? "") : undefined);
 					return stub ? substituteToolStub(message, stub) : message;
 				});
-	const insertAt = Math.max(
+	// Image offload: projection-only content substitution. The current turn
+	// (last user message onward) keeps its images verbatim; earlier image
+	// blocks become a small re-reference marker. The journal is never touched.
+	const offloaded = plan.offloadAgedImages === true ? offloadAgedImages(substituted) : substituted;
+	// Stable-projection mode pins the plan at the payload head so the prefix
+	// [plan, kept history] survives turns; the legacy mode floats it before the
+	// last user message.
+	const insertAt =
+		plan.projectionMode === "pinned"
+			? 0
+			: Math.max(
+					0,
+					offloaded.findLastIndex(message => message.role === "user"),
+				);
+	const withPlan = [...offloaded.slice(0, insertAt), plan.message, ...offloaded.slice(insertAt)];
+	return injectVolatileRecall(withPlan, volatileRecall);
+}
+
+function offloadAgedImages(messages: readonly AgentMessage[]): AgentMessage[] {
+	const currentTurnStart = Math.max(
 		0,
-		substituted.findLastIndex(message => message.role === "user"),
+		messages.findLastIndex(message => message.role === "user"),
 	);
-	return [...substituted.slice(0, insertAt), plan.message, ...substituted.slice(insertAt)];
+	const marker = prompt.render(offloadedImageTemplate, {}).trim();
+	return messages.map((message, index) => {
+		if (index >= currentTurnStart || !messageCarriesImages(message)) return message;
+		const content = (message as { content: unknown[] }).content.map(block =>
+			(block as { type?: unknown }).type === "image" ? { type: "text", text: marker } : block,
+		);
+		return { ...message, content } as AgentMessage;
+	});
 }
 
 export function estimateContextPlanProjectedTokens(
 	messages: readonly AgentMessage[],
 	branchEntries: readonly SessionEntry[],
 	plan: BuiltContextPlan | null,
+	volatileRecall?: AgentMessage,
 	estimate: (message: AgentMessage) => number = estimateTokens,
 ): number {
 	const projected = plan
-		? materializeContextPlanMessages(messages, branchEntries, plan)
-		: stripPriorDerivedPlanMessages(messages);
+		? materializeContextPlanMessages(messages, branchEntries, plan, volatileRecall)
+		: injectVolatileRecall(stripPriorDerivedPlanMessages(messages), volatileRecall);
 	return projected.reduce((sum, message) => sum + estimateProjectedMessage(message, estimate), 0);
 }
 
 function estimateProjectedMessage(message: AgentMessage, estimate: (message: AgentMessage) => number): number {
-	if (message.role === "custom" && message.customType === CONTEXT_PLAN_MESSAGE_TYPE) {
+	if (
+		message.role === "custom" &&
+		(message.customType === CONTEXT_PLAN_MESSAGE_TYPE || message.customType === CONTEXT_RECALL_MESSAGE_TYPE)
+	) {
 		return estimate({ role: "user", content: message.content, attribution: "agent", timestamp: message.timestamp });
 	}
 	return estimate(message);
+}
+
+// ── End-to-end projection coverage audit ────────────────────────────────────
+
+/** Journal custom_message types that are derived injections, not projectable sources. */
+const DERIVED_INJECTION_CUSTOM_TYPES: Record<string, true> = {
+	[CONTEXT_PACKET_MESSAGE_TYPE]: true,
+	[CONTEXT_PLAN_MESSAGE_TYPE]: true,
+	[CONTEXT_RECALL_MESSAGE_TYPE]: true,
+};
+
+/**
+ * An entry is projectable when it is expected to participate in the provider
+ * context: message entries and non-derived custom_message entries. Journal
+ * metadata (compaction, labels, mode changes, audit custom entries) never
+ * projects and must not be flagged as missing.
+ */
+type ProjectableSourceEntry = Extract<SessionEntry, { type: "message" | "custom_message" }>;
+
+function isProjectableSourceEntry(entry: SessionEntry): entry is ProjectableSourceEntry {
+	if (entry.type === "message") return true;
+	return entry.type === "custom_message" && !DERIVED_INJECTION_CUSTOM_TYPES[entry.customType];
+}
+
+export interface ProjectionCoverageAudit {
+	/** The only failing category: projectable entries with no payload presence, coverage, or stub. */
+	missingProjectableRefs: string[];
+	coveredRefs: string[];
+	stubbedRefs: string[];
+	/** Scope entries that correctly never project (journal metadata, derived injections). */
+	unmatchedNonProjectableRefs: string[];
+	/** Content-key ambiguities where the key channel could not uniquely account for scope entries. */
+	duplicateMatches: string[];
+	/** Coverage authorizations that failed validation (refs, materials, duplicates). */
+	invalidCoverage: string[];
+}
+
+/**
+ * Reverse-audit the final projection: every projectable scope entry must be
+ * present in the payload (original or stub-substituted) or legitimately
+ * omitted via validated coverage. There is no third state — an entry in any
+ * other state is an orphan and turns silent history loss into a loud signal.
+ */
+export function auditProjectionCoverage(
+	messages: readonly AgentMessage[],
+	branchEntries: readonly SessionEntry[],
+	plan: BuiltContextPlan,
+): ProjectionCoverageAudit {
+	// A withdrawn plan revokes all derived replacement: everything must be present.
+	const withdrawn = plan.withdrawn === true;
+	const validation = validateContextPlanCoverage({
+		audit: plan.audit,
+		materials: plan.materials,
+		sourceIndex: plan.sourceIndex,
+	});
+	const coveredEntryIds = withdrawn || !validation.valid ? new Set<string>() : new Set(validation.coveredEntryRefs);
+	const invalidCoverage = validation.issues
+		.filter(issue => issue.code !== "material_audit_missing" && issue.code !== "material_audit_mismatch")
+		.map(issue => issue.entryRef ?? issue.materialId ?? issue.code);
+	const stubEntryIds = withdrawn
+		? new Set<string>()
+		: new Set(plan.materials.filter(isToolStubMaterial).map(stub => stub.resultEntryId));
+	const scopeEntryIds = new Set(plan.sourceIndex.entryIds);
+
+	const payloadRefs = new Set<AgentMessage>(messages);
+	const payloadKeys = new Map<string, number>();
+	// Substitution channel: stubs and image offload clone the message with new
+	// content, so the ref and content-key channels cannot see them. Role+timestamp
+	// survives substitution and is millisecond-unique in practice; it is only
+	// consulted for entries that are legitimate substitution targets, so a real
+	// loss still fails loudly.
+	const payloadSubstitutionKeys = new Map<string, number>();
+	for (const message of messages) {
+		const key = sessionMessageKey(message) ?? customMessageKey(message);
+		if (key !== undefined) payloadKeys.set(key, (payloadKeys.get(key) ?? 0) + 1);
+		const substitutionKey = messageSubstitutionKey(message);
+		if (substitutionKey !== undefined) {
+			payloadSubstitutionKeys.set(substitutionKey, (payloadSubstitutionKeys.get(substitutionKey) ?? 0) + 1);
+		}
+	}
+	const consumedKeys = new Map<string, number>();
+	const consumePayloadKey = (key: string | undefined): boolean => {
+		if (key === undefined) return false;
+		const remaining = (payloadKeys.get(key) ?? 0) - (consumedKeys.get(key) ?? 0);
+		if (remaining <= 0) return false;
+		consumedKeys.set(key, (consumedKeys.get(key) ?? 0) + 1);
+		return true;
+	};
+	const consumedSubstitutionKeys = new Map<string, number>();
+	const consumeSubstitutionKey = (key: string | undefined): boolean => {
+		if (key === undefined) return false;
+		const remaining = (payloadSubstitutionKeys.get(key) ?? 0) - (consumedSubstitutionKeys.get(key) ?? 0);
+		if (remaining <= 0) return false;
+		consumedSubstitutionKeys.set(key, (consumedSubstitutionKeys.get(key) ?? 0) + 1);
+		return true;
+	};
+
+	const missingProjectableRefs: string[] = [];
+	const coveredRefs: string[] = [];
+	const stubbedRefs: string[] = [];
+	const unmatchedNonProjectableRefs: string[] = [];
+	const duplicateMatches = new Set<string>();
+
+	for (const entry of branchEntries) {
+		if (!scopeEntryIds.has(entry.id)) continue;
+		if (!isProjectableSourceEntry(entry)) {
+			unmatchedNonProjectableRefs.push(entry.id);
+			continue;
+		}
+		if (coveredEntryIds.has(entry.id)) {
+			coveredRefs.push(entry.id);
+			continue;
+		}
+		const entryKey = entry.type === "message" ? sessionMessageEntryKey(entry) : customMessageEntryKey(entry);
+		const entrySubstitutionKey = entry.type === "message" ? messageSubstitutionKey(entry.message) : undefined;
+		// Substitution channel as a last-resort fallback for every message entry:
+		// stubs, image offload, and pre-materialize provider transforms (image
+		// normalization, obfuscation) all clone or rewrite content, defeating the
+		// ref and content-key channels even though the entry is represented.
+		const present =
+			(entry.type === "message" && payloadRefs.has(entry.message)) ||
+			consumePayloadKey(entryKey) ||
+			(entry.type === "message" && consumeSubstitutionKey(entrySubstitutionKey));
+		if (present) {
+			if (stubEntryIds.has(entry.id)) stubbedRefs.push(entry.id);
+			continue;
+		}
+		missingProjectableRefs.push(entry.id);
+		// The payload holds this key but this entry could not claim one of its
+		// occurrences — identical duplicates made the key channel ambiguous.
+		if ((payloadKeys.get(entryKey) ?? 0) > 0) duplicateMatches.add(entryKey);
+	}
+
+	return {
+		missingProjectableRefs,
+		coveredRefs,
+		stubbedRefs,
+		unmatchedNonProjectableRefs,
+		duplicateMatches: [...duplicateMatches],
+		invalidCoverage,
+	};
 }

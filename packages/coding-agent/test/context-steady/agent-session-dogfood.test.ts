@@ -10,6 +10,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@san/agent";
 import * as compactionModule from "@san/agent/compaction";
+import type { AssistantMessage } from "@san/ai";
+import * as ai from "@san/ai";
 import { createMockModel } from "@san/ai/providers/mock";
 import { getBundledModel } from "@san/catalog/models";
 import { ModelRegistry } from "@san/coding-agent/config/model-registry";
@@ -46,6 +48,58 @@ const BASE_SETTINGS = {
 	"san.contextSteady.checkpoint.everyTurns": 4,
 	"san.contextSteady.checkpoint.maxTokens": 12000,
 };
+
+const DIGEST_LLM_SETTINGS = {
+	"san.contextSteady.digest.llm.enabled": true,
+	"san.contextSteady.digest.llm.modelRole": "anthropic/claude-sonnet-4-5",
+	// Shrink the recent-exact window so digest coverage engages in small sessions.
+	"san.contextSteady.contextPlan.recentExactTokens": 0,
+} as const;
+
+/** Net-benefit padding: covered raw history must outweigh the plan wire cost. */
+const RAW_BODY = "alpha beta gamma delta epsilon zeta ".repeat(96);
+
+function digestAssistant(turn: number, prefix: string): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [
+			{
+				type: "toolCall",
+				id: `digest_${prefix}_${turn}`,
+				name: "record_turn_digest",
+				arguments: {
+					userIntent: `${prefix} turn ${turn}: continue the settled implementation`,
+					actionsTaken: [`Completed settled turn ${turn}.`],
+					decisions: ["Keep the stable checkpoint before the digest tail."],
+					filesTouched: [],
+					factsLearned: [`Invariant ${turn} remained valid.`],
+					openQuestions: [],
+					risks: [],
+					nextSteps: [`Continue turn ${turn + 1}.`],
+					memoryCandidates: [],
+				},
+			},
+		],
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "claude-sonnet-4-5",
+		usage: {
+			input: 10,
+			output: 5,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 15,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "toolUse",
+		timestamp: Date.now(),
+	};
+}
+
+function authoritativeDigestSpy(prefix: string) {
+	let turn = 0;
+	return vi.spyOn(ai, "completeSimple").mockImplementation(async () => digestAssistant(++turn, prefix));
+}
 
 const echoToolSchema = {
 	type: "object",
@@ -97,6 +151,7 @@ describe("Context Steady AgentSession dogfood runtime", () => {
 	});
 
 	it("runs multi-turn provider steps with plan audits, digests, checkpoints, and tool loop", async () => {
+		authoritativeDigestSpy("dogfood");
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const responses: Array<Record<string, unknown>> = [];
 		for (let turn = 1; turn <= 8; turn++) {
@@ -117,7 +172,7 @@ describe("Context Steady AgentSession dogfood runtime", () => {
 			convertToLlm,
 		});
 		const sessionManager = SessionManager.inMemory();
-		const settings = Settings.isolated(BASE_SETTINGS);
+		const settings = Settings.isolated({ ...BASE_SETTINGS, ...DIGEST_LLM_SETTINGS });
 		const authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
 		authStorages.push(authStorage);
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
@@ -125,7 +180,7 @@ describe("Context Steady AgentSession dogfood runtime", () => {
 		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
 
 		for (let turn = 1; turn <= 8; turn++) {
-			await session.prompt(`Dogfood turn ${turn}: continue San context steady implementation`);
+			await session.prompt(`Dogfood turn ${turn}: continue San context steady implementation ${RAW_BODY}`);
 			await session.waitForIdle();
 		}
 

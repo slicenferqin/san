@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { materializeContextPlanMessages } from "../../src/context-steady/materialize";
+import { auditProjectionCoverage, materializeContextPlanMessages } from "../../src/context-steady/materialize";
 import {
 	type BuiltContextPlan,
 	CONTEXT_PLAN_SCHEMA_VERSION,
@@ -208,5 +208,95 @@ describe("materializeContextPlanMessages", () => {
 		expect(text).not.toContain("old plan");
 		expect(text).toContain("context plan");
 		expect(text).toContain("current prompt");
+	});
+});
+
+describe("auditProjectionCoverage", () => {
+	const customEntryRecord = (id: string, customType: string, data: unknown): Record<string, unknown> => ({
+		type: "custom",
+		id,
+		parentId: null,
+		timestamp: new Date().toISOString(),
+		customType,
+		data,
+	});
+
+	function scopedPlan(): BuiltContextPlan {
+		const base = plan();
+		return {
+			...base,
+			sourceIndex: { ...base.sourceIndex, entryIds: ["u1", "u2", "d1"] },
+		};
+	}
+
+	test("classifies a clean projection without orphans", () => {
+		const oldUser = { role: "user", content: "old raw user", timestamp: 1, provider: "x", model: "x" };
+		const currentUser = { role: "user", content: "current prompt", timestamp: 2, provider: "x", model: "x" };
+		const entries = asEntries([
+			messageEntry("u1", oldUser),
+			messageEntry("u2", currentUser),
+			customEntryRecord("d1", "san.turn_digest", {}),
+		]);
+		const scoped = scopedPlan();
+		const projected = materializeContextPlanMessages(asMessages([oldUser, currentUser]), entries, scoped);
+
+		const audit = auditProjectionCoverage(projected, entries, scoped);
+
+		expect(audit.missingProjectableRefs).toEqual([]);
+		expect(audit.coveredRefs).toEqual(["u1"]);
+		expect(audit.unmatchedNonProjectableRefs).toEqual(["d1"]);
+		expect(audit.invalidCoverage).toEqual([]);
+		expect(audit.duplicateMatches).toEqual([]);
+	});
+
+	test("flags a projectable entry that vanished from the payload without coverage", () => {
+		const oldUser = { role: "user", content: "old raw user", timestamp: 1, provider: "x", model: "x" };
+		const currentUser = { role: "user", content: "current prompt", timestamp: 2, provider: "x", model: "x" };
+		const entries = asEntries([messageEntry("u1", oldUser), messageEntry("u2", currentUser)]);
+		const scoped = scopedPlan();
+		const projected = materializeContextPlanMessages(asMessages([oldUser, currentUser]), entries, scoped);
+		const tampered = projected.filter(message => (message as { content?: unknown }).content !== "current prompt");
+
+		const audit = auditProjectionCoverage(tampered, entries, scoped);
+
+		expect(audit.missingProjectableRefs).toEqual(["u2"]);
+		expect(audit.coveredRefs).toEqual(["u1"]);
+	});
+
+	test("withdrawn plan gets no coverage credit and must keep full presence", () => {
+		const oldUser = { role: "user", content: "old raw user", timestamp: 1, provider: "x", model: "x" };
+		const currentUser = { role: "user", content: "current prompt", timestamp: 2, provider: "x", model: "x" };
+		const entries = asEntries([
+			messageEntry("u1", oldUser),
+			messageEntry("u2", currentUser),
+			customEntryRecord("d1", "san.turn_digest", {}),
+		]);
+		const withdrawn: BuiltContextPlan = { ...scopedPlan(), withdrawn: true };
+		const projected = materializeContextPlanMessages(asMessages([oldUser, currentUser]), entries, withdrawn);
+
+		expect(projected).toHaveLength(2);
+		const audit = auditProjectionCoverage(projected, entries, withdrawn);
+		expect(audit.missingProjectableRefs).toEqual([]);
+		expect(audit.coveredRefs).toEqual([]);
+	});
+
+	test("reports invalid coverage instead of trusting unauthorized omission", () => {
+		const oldUser = { role: "user", content: "old raw user", timestamp: 1, provider: "x", model: "x" };
+		const currentUser = { role: "user", content: "current prompt", timestamp: 2, provider: "x", model: "x" };
+		const entries = asEntries([messageEntry("u1", oldUser), messageEntry("u2", currentUser)]);
+		// Coverage points at a material id that no runtime material carries.
+		const broken = plan({
+			audit: {
+				...plan().audit,
+				coverage: [{ sourceEntryRefs: ["u1"], replacementMaterialId: "ghost", reason: "stale" }],
+			},
+		});
+
+		const projected = materializeContextPlanMessages(asMessages([oldUser, currentUser]), entries, broken);
+		const audit = auditProjectionCoverage(projected, entries, broken);
+
+		expect(audit.invalidCoverage).toEqual(["ghost"]);
+		// Validation failure means no omission was authorized: the raw entry ships.
+		expect(audit.missingProjectableRefs).toEqual([]);
 	});
 });

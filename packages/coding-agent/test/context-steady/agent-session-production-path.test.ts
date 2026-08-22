@@ -596,7 +596,15 @@ describe("Context Steady production-path completion", () => {
 		await resumed.session.prompt("Use the restored Context Steady activation latch.");
 		await resumed.session.waitForIdle();
 
-		expect(contextPlanText(resumed.mock.calls[0]!.context)).toContain("<san_context_plan>");
+		// No digests exist in this session (digest was disabled for the initial
+		// turns), so the plan cannot be net-positive and is withdrawn from the
+		// wire — the persisted plan audit is the proof the steady pipeline ran.
+		expect(contextPlanText(resumed.mock.calls[0]!.context)).not.toContain("<san_context_plan>");
+		expect(customEntries(resumed.sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).length).toBeGreaterThanOrEqual(1);
+		const resumedAudit = customEntries(resumed.sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).at(-1)!.data as {
+			netBenefit?: { withdrawn: boolean };
+		};
+		expect(resumedAudit.netBenefit?.withdrawn).toBe(true);
 		expect(customEntries(resumed.sessionManager, CONTEXT_STEADY_ACTIVATION_CUSTOM_TYPE)).toHaveLength(1);
 	});
 

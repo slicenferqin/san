@@ -2951,6 +2951,29 @@ export const SETTINGS_SCHEMA = {
 	"san.contextSteady.contextPlan.maxTokens": { type: "number", default: 2000 },
 	"san.contextSteady.contextPlan.recentExactTokens": { type: "number", default: 16000 },
 	"san.contextSteady.contextPlan.liveTailTokens": { type: "number", default: 24000 },
+	"san.contextSteady.contextPlan.stableProjection": {
+		type: "boolean",
+		default: false,
+		description:
+			"Pin the ContextPlan message at the head of the payload and freeze its bytes for the whole epoch (material set, tiers, rendered audit): only a new checkpoint, physical compaction, an explicit topic shift, or a model/window change re-lays it out; non-message budget drift re-runs gates without reselecting materials. Recall moves out of the plan into a per-request volatile message injected before the current user prompt. Crossing the control band still rebuilds (correctness over cache).",
+	},
+	"san.contextSteady.contextPlan.toolOutputOffload": {
+		type: "boolean",
+		default: false,
+		description:
+			"Stub old, large, completed tool outputs (beyond the protected recent window) with a small re-readable reference instead of shipping them verbatim every request. Projection-only: messages stay, the journal is untouched, and superseded/emergency downgrade stubs take precedence.",
+	},
+	"san.contextSteady.contextPlan.toolOutputOffloadMinTokens": {
+		type: "number",
+		default: 2000,
+		description: "Minimum estimated size for a tool result to qualify for aged output offload.",
+	},
+	"san.contextSteady.contextPlan.imageOffload": {
+		type: "boolean",
+		default: false,
+		description:
+			"Replace image blocks from earlier turns with a short re-reference marker at provider projection time; the current turn's images always ship verbatim. Projection-only — the journal keeps every original image.",
+	},
 	"san.contextSteady.segment.enabled": { type: "boolean", default: true },
 	"san.contextSteady.segment.maxTokens": {
 		type: "number",

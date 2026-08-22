@@ -13,6 +13,7 @@ import {
 	type ContextPlanAudit,
 	type ContextPlanCoverageAudit,
 	type ContextPlanDigestMaterial,
+	type ContextPlanDigestSource,
 	type ContextPlanMaterial,
 	type ContextPlanRecallMaterial,
 	type ContextPlanToolStubMaterial,
@@ -54,6 +55,21 @@ export interface BuildContextPlanOptions {
 	rebaseReason?: ContextPlanAudit["rebaseReason"];
 	/** Current user prompt text for relevance / topic-shift material selection. */
 	currentPromptText?: string;
+	/**
+	 * Stable-projection mode: pin the plan message at the payload head, freeze
+	 * its bytes for the epoch, and keep recall out of the rendered plan (it
+	 * ships via the independent volatile channel instead).
+	 */
+	stableProjection?: boolean;
+	/**
+	 * Epoch-frozen digest/checkpoint materials reused verbatim on a gate
+	 * recompute — pressure rebuilds must not reselect history representation.
+	 */
+	frozenMaterials?: readonly ContextPlanMaterial[];
+	/** M4 aged tool-output offload: stub old, large, non-protected results. */
+	toolOutputOffload?: { minTokens: number };
+	/** M4 image offload: replace earlier-turn image blocks with a re-reference marker. */
+	offloadAgedImages?: boolean;
 }
 
 function materialTokenEstimate(value: unknown): number {
@@ -126,6 +142,11 @@ function buildToolStubMaterials(
 	sourceIndex: ContextSourceIndex,
 	protectedEntryRefs: readonly string[],
 	emergencyStubEntryRefs: readonly string[] = [],
+	agedOffload?: {
+		tokenEstimateByEntryRef?: ReadonlyMap<string, number>;
+		minTokens: number;
+		budgetTokens: number;
+	},
 ): ContextPlanToolStubMaterial[] {
 	const protectedRefs = new Set(protectedEntryRefs);
 	const materials: ContextPlanToolStubMaterial[] = [];
@@ -146,6 +167,7 @@ function buildToolStubMaterials(
 			},
 			toolCallId: pair.toolCallId,
 			resultEntryId: pair.resultEntryId,
+			...(pair.toolName ? { toolName: pair.toolName } : {}),
 			...(pair.path ? { path: pair.path } : {}),
 			stubKind: "superseded",
 			coveredEntryRefs: [],
@@ -175,8 +197,44 @@ function buildToolStubMaterials(
 				},
 				toolCallId: pair.toolCallId,
 				resultEntryId,
+				...(pair.toolName ? { toolName: pair.toolName } : {}),
 				...(pair.path ? { path: pair.path } : {}),
 				stubKind: "emergency",
+				coveredEntryRefs: [],
+			});
+		}
+	}
+	// 常规年龄卸载档(M4):保护集之外、超出最小体积的旧完整工具输出
+	// oldest-first 换成可重读引用 stub,直到预算耗尽。消息保留、仅内容
+	// 降级;原文永在 journal。live tail 已在保护集内,近期结果不受影响。
+	if (agedOffload) {
+		let reclaimed = 0;
+		for (const pair of sourceIndex.toolPairs) {
+			if (agedOffload.budgetTokens > 0 && reclaimed >= agedOffload.budgetTokens) break;
+			if (!pair.complete || pair.resultEntryId === undefined) continue;
+			if (stubbedResultRefs.has(pair.resultEntryId)) continue;
+			if (protectedRefs.has(pair.resultEntryId)) continue;
+			if (pair.assistantEntryId !== undefined && protectedRefs.has(pair.assistantEntryId)) continue;
+			const estimate = Math.max(0, Math.floor(agedOffload.tokenEstimateByEntryRef?.get(pair.resultEntryId) ?? 0));
+			if (estimate < agedOffload.minTokens) continue;
+			const reclaimable = estimate - TOOL_STUB_TOKEN_ESTIMATE;
+			if (reclaimable <= 0) continue;
+			stubbedResultRefs.add(pair.resultEntryId);
+			reclaimed += reclaimable;
+			materials.push({
+				audit: {
+					materialId: materialId("tool_stub", pair.resultEntryId),
+					kind: "tool_pair",
+					representation: "evidence_stub",
+					entryRefs: [pair.resultEntryId],
+					tokenEstimate: TOOL_STUB_TOKEN_ESTIMATE,
+					reason: `aged ${pair.toolName ?? "tool"} output offload (${estimate} tokens; re-readable via ${pair.path ?? "session journal"})`,
+				},
+				toolCallId: pair.toolCallId,
+				resultEntryId: pair.resultEntryId,
+				...(pair.toolName ? { toolName: pair.toolName } : {}),
+				...(pair.path ? { path: pair.path } : {}),
+				stubKind: "aged",
 				coveredEntryRefs: [],
 			});
 		}
@@ -184,46 +242,74 @@ function buildToolStubMaterials(
 	return materials;
 }
 
+/** Non-continuation prompts use relevance to drop unrelated derived history. */
+function checkpointRelevanceRequired(promptText: string): boolean {
+	const topicShift = promptText.length > 0 && isTopicShiftPrompt(promptText);
+	const continuation = promptText.length > 0 && isContinuationPrompt(promptText);
+	// Explicit topic shift always drops; natural topic changes use soft relevance.
+	return promptText.length > 0 && (topicShift || !continuation);
+}
+
+function digestRelevanceRequired(promptText: string): boolean {
+	return checkpointRelevanceRequired(promptText);
+}
+
+/** Shared digest-material construction for planner and checkpoint-restore paths. */
+function buildDigestMaterial(
+	source: ContextPlanDigestSource,
+	ageRank: number,
+	contextPressure: number,
+): ContextPlanDigestMaterial {
+	const canCoverSource = source.digest.fallback !== true;
+	// Decay 选级:候选集旧→新有序,ageRank 0 = 最新。渲染粒度随年龄与
+	// 预算压力确定性降级;coverage 授权与粒度无关(原文可经 context_expand 取回)。
+	const tier = selectDigestTier(ageRank, contextPressure);
+	return {
+		audit: {
+			materialId: materialId("digest", source.entryId),
+			kind: "turn_digest",
+			representation: "digest",
+			entryRefs: [source.entryId],
+			tokenEstimate: materialTokenEstimate(projectDigestTier(source.digest, tier)),
+			reason: `${canCoverSource ? "recent settled turn digest" : "fallback digest for reference only"} (tier: ${tier})`,
+		},
+		entryId: source.entryId,
+		digest: source.digest,
+		coveredEntryRefs: canCoverSource ? source.sourceEntryRefs : [],
+		tier,
+	};
+}
+
 function buildMaterials(
 	sourceIndex: ContextSourceIndex,
 	maxDigestMaterials: number,
 	recall: ContextPacketRecallLayer | undefined,
-	planTokenBudget: number,
 	currentPromptText: string | undefined,
 	contextPressure: number,
 ): ContextPlanMaterial[] {
 	const materials: ContextPlanMaterial[] = [];
-	let remainingBudget = Math.max(0, Math.floor(planTokenBudget));
 	const latestCheckpoint = sourceIndex.checkpoints.at(-1);
 	const coveredDigestRefs = new Set(latestCheckpoint?.coveredDigestEntryRefs ?? []);
 	const promptText = currentPromptText?.trim() ?? "";
-	const topicShift = promptText.length > 0 && isTopicShiftPrompt(promptText);
-	const continuation = promptText.length > 0 && isContinuationPrompt(promptText);
-	// Non-continuation prompts use relevance to drop unrelated derived history.
-	// Explicit topic shift always drops; natural topic changes use soft relevance.
-	const requireRelevance = promptText.length > 0 && (topicShift || !continuation);
+	const requireRelevance = checkpointRelevanceRequired(promptText);
 	const includeCheckpoint =
 		!!latestCheckpoint &&
 		(!requireRelevance || isCheckpointRelevantToPrompt(promptText, latestCheckpoint.checkpoint));
 	if (latestCheckpoint && includeCheckpoint) {
-		const checkpointEstimate = latestCheckpoint.checkpoint.tokenEstimate;
-		if (checkpointEstimate <= remainingBudget) {
-			materials.push({
-				audit: {
-					materialId: materialId("checkpoint", latestCheckpoint.entryId),
-					kind: "checkpoint",
-					representation: "checkpoint",
-					entryRefs: [latestCheckpoint.entryId],
-					tokenEstimate: latestCheckpoint.checkpoint.tokenEstimate,
-					reason: "latest stable checkpoint",
-				},
-				entryId: latestCheckpoint.entryId,
-				checkpoint: latestCheckpoint.checkpoint,
-				// Source-index already strips fallback-digest spans from coverage.
-				coveredEntryRefs: latestCheckpoint.coveredSourceEntryRefs,
-			});
-			remainingBudget -= checkpointEstimate;
-		}
+		materials.push({
+			audit: {
+				materialId: materialId("checkpoint", latestCheckpoint.entryId),
+				kind: "checkpoint",
+				representation: "checkpoint",
+				entryRefs: [latestCheckpoint.entryId],
+				tokenEstimate: latestCheckpoint.checkpoint.tokenEstimate,
+				reason: "latest stable checkpoint",
+			},
+			entryId: latestCheckpoint.entryId,
+			checkpoint: latestCheckpoint.checkpoint,
+			// Source-index already strips fallback-digest spans from coverage.
+			coveredEntryRefs: latestCheckpoint.coveredSourceEntryRefs,
+		});
 	}
 
 	const selectedDigests = sourceIndex.digests
@@ -231,35 +317,32 @@ function buildMaterials(
 		.filter(source => !requireRelevance || isDigestRelevantToPrompt(promptText, source.digest))
 		.slice(-Math.max(0, Math.floor(maxDigestMaterials)));
 	for (const [index, source] of selectedDigests.entries()) {
-		const canCoverSource = source.digest.fallback !== true;
-		// Decay 选级:selectedDigests 旧→新有序,ageRank 0 = 最新。渲染粒度
-		// 随年龄与预算压力确定性降级;coverage 授权与粒度无关(原文可经
-		// context_expand 取回)。
-		const ageRank = selectedDigests.length - 1 - index;
-		const tier = selectDigestTier(ageRank, contextPressure);
-		const estimate = materialTokenEstimate(projectDigestTier(source.digest, tier));
-		if (estimate > remainingBudget) continue;
-		const material: ContextPlanDigestMaterial = {
-			audit: {
-				materialId: materialId("digest", source.entryId),
-				kind: "turn_digest",
-				representation: "digest",
-				entryRefs: [source.entryId],
-				tokenEstimate: estimate,
-				reason: `${canCoverSource ? "recent settled turn digest" : "fallback digest for reference only"} (tier: ${tier})`,
-			},
-			entryId: source.entryId,
-			digest: source.digest,
-			coveredEntryRefs: canCoverSource ? source.sourceEntryRefs : [],
-			tier,
-		};
-		materials.push(material);
-		remainingBudget -= estimate;
+		materials.push(buildDigestMaterial(source, selectedDigests.length - 1 - index, contextPressure));
 	}
 
 	const recallMaterial = buildRecallMaterial(recall);
-	if (recallMaterial && recallMaterial.audit.tokenEstimate <= remainingBudget) materials.push(recallMaterial);
+	if (recallMaterial) materials.push(recallMaterial);
 	return materials;
+}
+
+function buildCoveredCheckpointDigestMaterials(
+	sourceIndex: ContextSourceIndex,
+	maxDigestMaterials: number,
+	currentPromptText: string | undefined,
+	contextPressure: number,
+): ContextPlanDigestMaterial[] {
+	const latestCheckpoint = sourceIndex.checkpoints.at(-1);
+	if (!latestCheckpoint) return [];
+	const coveredDigestRefs = new Set(latestCheckpoint.coveredDigestEntryRefs);
+	const promptText = currentPromptText?.trim() ?? "";
+	const requireRelevance = digestRelevanceRequired(promptText);
+	const selectedDigests = sourceIndex.digests
+		.filter(source => coveredDigestRefs.has(source.entryId))
+		.filter(source => !requireRelevance || isDigestRelevantToPrompt(promptText, source.digest))
+		.slice(-Math.max(0, Math.floor(maxDigestMaterials)));
+	return selectedDigests.map((source, index) =>
+		buildDigestMaterial(source, selectedDigests.length - 1 - index, contextPressure),
+	);
 }
 
 /**
@@ -270,16 +353,21 @@ function fitMaterialsToPlanBudget(
 	materials: ContextPlanMaterial[],
 	planTokenBudget: number,
 	buildAudit: (materials: ContextPlanMaterial[]) => ContextPlanAudit,
+	coveredCheckpointDigests: readonly ContextPlanDigestMaterial[],
 ): { materials: ContextPlanMaterial[]; audit: ContextPlanAudit; renderedContent: string; tokenEstimate: number } {
 	let selected = materials;
+	let restoredCheckpointDigests = false;
 	for (;;) {
 		const audit = buildAudit(selected);
 		const renderedContent = renderContextPlanContent({ audit, materials: selected });
 		const tokenEstimate = estimateContextPlanWireTokens(renderedContent);
-		if (planTokenBudget <= 0 || tokenEstimate <= planTokenBudget || selected.length === 0) {
+		if (planTokenBudget <= 0 || tokenEstimate <= planTokenBudget) {
 			return { materials: selected, audit, renderedContent, tokenEstimate };
 		}
-		// Drop recall first, then oldest digests, then checkpoint last.
+		if (selected.length === 0) return { materials: selected, audit, renderedContent, tokenEstimate };
+		// Drop recall first, then oldest digests. If the checkpoint itself still
+		// cannot fit, restore the digest candidates it had suppressed before
+		// continuing the same final-wire fitting loop.
 		const recallIndex = selected.findIndex(material => "recall" in material);
 		if (recallIndex >= 0) {
 			selected = selected.filter((_, index) => index !== recallIndex);
@@ -293,6 +381,18 @@ function fitMaterialsToPlanBudget(
 		const checkpointIndex = selected.findIndex(material => "checkpoint" in material);
 		if (checkpointIndex >= 0) {
 			selected = selected.filter((_, index) => index !== checkpointIndex);
+			if (!restoredCheckpointDigests) {
+				// Prepend (oldest first) so the subsequent drop-oldest iterations
+				// sacrifice restored covered digests before fresher uncovered ones.
+				const presentDigestRefs = new Set(
+					selected.flatMap(material => ("digest" in material ? [material.entryId] : [])),
+				);
+				selected = [
+					...coveredCheckpointDigests.filter(material => !presentDigestRefs.has(material.entryId)),
+					...selected,
+				];
+				restoredCheckpointDigests = true;
+			}
 			continue;
 		}
 		return { materials: selected, audit, renderedContent, tokenEstimate };
@@ -302,12 +402,19 @@ function fitMaterialsToPlanBudget(
 function buildOmittedAuditMaterials(
 	sourceIndex: ContextSourceIndex,
 	runtimeMaterials: readonly ContextPlanMaterial[],
+	checkpointExcludedByRelevance: boolean,
 ): ContextPlanAudit["materials"] {
 	const representedDigestRefs = new Set(
 		runtimeMaterials.flatMap(material => ("digest" in material ? [material.entryId] : [])),
 	);
-	const checkpointCoveredRefs = new Set(sourceIndex.checkpoints.at(-1)?.coveredDigestEntryRefs ?? []);
-	return sourceIndex.digests
+	const admittedCheckpoint = runtimeMaterials.find(material => "checkpoint" in material);
+	const checkpointCoveredRefs = new Set(
+		admittedCheckpoint && "checkpoint" in admittedCheckpoint
+			? (sourceIndex.checkpoints.find(checkpoint => checkpoint.entryId === admittedCheckpoint.entryId)
+					?.coveredDigestEntryRefs ?? [])
+			: [],
+	);
+	const omittedDigests: ContextPlanAudit["materials"] = sourceIndex.digests
 		.filter(source => !representedDigestRefs.has(source.entryId) && !checkpointCoveredRefs.has(source.entryId))
 		.map(source => ({
 			materialId: materialId("omitted", source.entryId),
@@ -317,6 +424,44 @@ function buildOmittedAuditMaterials(
 			tokenEstimate: materialTokenEstimate(source.digest),
 			reason: "outside ContextPlan material budget or window",
 		}));
+	const latestCheckpoint = sourceIndex.checkpoints.at(-1);
+	const checkpointAdmitted =
+		latestCheckpoint !== undefined &&
+		runtimeMaterials.some(material => "checkpoint" in material && material.entryId === latestCheckpoint.entryId);
+	const checkpointOmission: ContextPlanAudit["materials"] =
+		!latestCheckpoint || checkpointAdmitted
+			? []
+			: [
+					{
+						materialId: materialId("omitted_checkpoint", latestCheckpoint.entryId),
+						kind: "checkpoint",
+						representation: "omitted",
+						entryRefs: [latestCheckpoint.entryId],
+						tokenEstimate: latestCheckpoint.checkpoint.tokenEstimate,
+						reason: checkpointExcludedByRelevance
+							? "checkpoint excluded by prompt relevance gate"
+							: "checkpoint did not fit the final ContextPlan wire budget",
+					},
+				];
+	// No checkpoint AND no digest made it in while history existed to represent:
+	// surface the degradation instead of letting representation silently vanish.
+	const representationDegraded =
+		runtimeMaterials.every(material => !("checkpoint" in material || "digest" in material)) &&
+		sourceIndex.digests.length > 0;
+	const degradationEntry: ContextPlanAudit["materials"] = representationDegraded
+		? [
+				{
+					materialId: `representation_${latestCheckpoint?.entryId ?? "none"}`,
+					kind: "representation",
+					representation: "omitted",
+					entryRefs: [],
+					tokenEstimate: 0,
+					reason:
+						"history representation degraded: no checkpoint or turn digest admitted; recall is the only derived context",
+				},
+			]
+		: [];
+	return [...omittedDigests, ...checkpointOmission, ...degradationEntry];
 }
 
 function coverageForMaterials(
@@ -395,14 +540,18 @@ export function buildContextPlan(options: BuildContextPlanOptions): BuiltContext
 	// 物化后 payload 的真实估算;缺省(如早期调用)回退到保护集占用。
 	const pressureBasis = options.projectedInputTokens ?? qualityGate.selectedInputTokens;
 	const contextPressure = budget.messageBudget > 0 ? pressureBasis / budget.messageBudget : 0;
-	const candidateMaterials = buildMaterials(
-		sourceIndex,
-		options.maxDigestMaterials ?? 5,
-		options.recall,
-		budget.planTokenBudget,
-		options.currentPromptText,
-		contextPressure,
-	);
+	// Stable-projection keeps recall out of the rendered plan (volatile channel)
+	// and reuses epoch-frozen materials verbatim on gate recomputes so a
+	// pressure rebuild never reselects the history representation.
+	const candidateMaterials = options.frozenMaterials
+		? [...options.frozenMaterials]
+		: buildMaterials(
+				sourceIndex,
+				options.maxDigestMaterials ?? 5,
+				options.stableProjection === true ? undefined : options.recall,
+				options.currentPromptText,
+				contextPressure,
+			);
 	const promptText = options.currentPromptText?.trim() ?? "";
 	const topicShift = promptText.length > 0 && isTopicShiftPrompt(promptText);
 	const naturalTopicChange =
@@ -414,6 +563,11 @@ export function buildContextPlan(options: BuildContextPlanOptions): BuiltContext
 		!sourceIndex.digests.some(source => isDigestRelevantToPrompt(promptText, source.digest));
 	const planId = `plan_${crypto.randomUUID().slice(-12)}`;
 	const createdAt = options.createdAt ?? new Date().toISOString();
+	const latestCheckpoint = sourceIndex.checkpoints.at(-1);
+	const checkpointExcludedByRelevance =
+		latestCheckpoint !== undefined &&
+		checkpointRelevanceRequired(promptText) &&
+		!isCheckpointRelevantToPrompt(promptText, latestCheckpoint.checkpoint);
 	const buildAudit = (materials: ContextPlanMaterial[]): ContextPlanAudit => {
 		const coverage = coverageForMaterials(materials, qualityGate.protectedEntryRefs, sourceIndex.entryIds);
 		return {
@@ -434,20 +588,40 @@ export function buildContextPlan(options: BuildContextPlanOptions): BuiltContext
 				...materials.map(material => material.audit),
 				...buildExactAuditMaterials(sourceIndex, qualityGate.protectedEntryRefs),
 				...buildEvidenceStubAuditMaterials(sourceIndex),
-				...buildOmittedAuditMaterials(sourceIndex, materials),
+				...buildOmittedAuditMaterials(sourceIndex, materials, checkpointExcludedByRelevance),
 			],
 			coverage,
 		};
 	};
 	// Render the complete final audit for each candidate. Never string-slice a
 	// covering replacement after coverage is assigned (C-04/C-05 atomicity).
-	const fitted = fitMaterialsToPlanBudget(candidateMaterials, budget.planTokenBudget, buildAudit);
+	const fitted = fitMaterialsToPlanBudget(
+		candidateMaterials,
+		budget.planTokenBudget,
+		buildAudit,
+		buildCoveredCheckpointDigestMaterials(
+			sourceIndex,
+			options.maxDigestMaterials ?? 5,
+			options.currentPromptText,
+			contextPressure,
+		),
+	);
 	// Tool stubs 不进 plan 渲染与 planTokenBudget fitting:它们作用于 payload
 	// 投影(替换,不省略),在 fitting 定型后追加并补录审计。
 	const toolStubMaterials = buildToolStubMaterials(
 		sourceIndex,
 		qualityGate.protectedEntryRefs,
 		qualityGate.emergencyStubEntryRefs ?? [],
+		options.toolOutputOffload
+			? {
+					tokenEstimateByEntryRef: options.tokenEstimateByEntryRef,
+					minTokens: options.toolOutputOffload.minTokens,
+					// Aged offload is steady-state reclaim, not pressure recovery: cap it
+					// at a quarter of the message budget so one plan never rewrites most
+					// of the history payload in a single request.
+					budgetTokens: Math.max(0, Math.floor(budget.messageBudget / 4)),
+				}
+			: undefined,
 	);
 	const materials = [...fitted.materials, ...toolStubMaterials];
 	const audit: ContextPlanAudit = {
@@ -474,6 +648,41 @@ export function buildContextPlan(options: BuildContextPlanOptions): BuiltContext
 		message,
 		tokenEstimate,
 		coverageEntryRefs: audit.coverage.flatMap(item => item.sourceEntryRefs),
+		...(options.stableProjection === true ? { projectionMode: "pinned" as const } : {}),
+		...(options.offloadAgedImages === true ? { offloadAgedImages: true } : {}),
+	};
+}
+
+/**
+ * Net-benefit gate (measured on the final provider projection):
+ * `rawProjectedTokens - projectedTokens`, where the latter already includes the
+ * plan wire cost. A non-positive plan is withdrawn — only derived replacement
+ * is revoked; raw history, the current prompt, and tool calls are untouched.
+ * Steady-state ("pass") plans only: burst/hard-pressure paths need every
+ * reclaim they can get, so withdrawing there could worsen the pressure.
+ * Recall-bearing plans are exempt: recall is additive retrieved context, not a
+ * replacement, so the token difference understates its value — the stable /
+ * volatile channel split owns that accounting instead.
+ */
+export function applyContextPlanNetBenefitGate(
+	plan: BuiltContextPlan,
+	projection: { rawProjectedTokens: number; projectedTokens: number },
+): BuiltContextPlan {
+	const netBenefit = projection.rawProjectedTokens - projection.projectedTokens;
+	const carriesVolatileContext = plan.materials.some(material => "recall" in material);
+	const withdrawn = !carriesVolatileContext && plan.audit.qualityGate.outcome === "pass" && netBenefit <= 0;
+	return {
+		...plan,
+		audit: {
+			...plan.audit,
+			netBenefit: {
+				rawProjectedTokens: projection.rawProjectedTokens,
+				projectedTokens: projection.projectedTokens,
+				netBenefit,
+				withdrawn,
+			},
+		},
+		...(withdrawn ? { withdrawn: true } : {}),
 	};
 }
 
