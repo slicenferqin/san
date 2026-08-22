@@ -2510,7 +2510,7 @@ export class AgentSession {
 	#contextSteadyMaintenanceId: string | undefined;
 	#contextSteadyRecoveryAttempt = 0;
 	#contextProbeWrite: Promise<void> = Promise.resolve();
-	#contextProbeLastPrefixFingerprint: { sessionId: string; value: string } | undefined;
+	#contextProbeLastPrefixFingerprint: { promptCacheKey: string; value: string } | undefined;
 	#contextProbeActiveMaintenanceDecision: ContextProbeMaintenanceDecision | undefined;
 	#contextProbeActiveCompaction: ContextProbeCompactionObservation | undefined;
 	#sessionStopContinuationCount = 0;
@@ -4182,7 +4182,12 @@ export class AgentSession {
 					undefined,
 					undefined,
 					{
-						thinkingLevel: advisorCompactionThinkingLevel,
+						thinkingLevel: this.#resolveCompactionThinkingLevel(
+							advisorModel,
+							candidate,
+							availableModels,
+							advisorCompactionThinkingLevel,
+						),
 						convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 						telemetry,
 						tools: agent.state.tools,
@@ -5774,12 +5779,17 @@ export class AgentSession {
 					},
 				};
 				const digestModelRole = steadySettings.digest.llm.modelRole || "@smol";
-				const resolvedDigestModel = steadySettings.digest.llm.enabled
-					? resolveModelOverride([digestModelRole], this.#modelRegistry, settings).model
+				const digestModelOverride = steadySettings.digest.llm.enabled
+					? resolveModelOverride([digestModelRole], this.#modelRegistry, settings)
+					: undefined;
+				const resolvedDigestModel = digestModelOverride?.model;
+				const digestThinkingLevel = digestModelOverride?.explicitThinkingLevel
+					? concreteThinkingLevel(digestModelOverride.thinkingLevel)
 					: undefined;
 				const digestModel = resolvedDigestModel
 					? {
 							model: resolvedDigestModel,
+							thinkingLevel: digestThinkingLevel,
 							apiKey: this.#modelRegistry.resolver(resolvedDigestModel, this.sessionId),
 							metadata: this.agent.metadataForProvider(resolvedDigestModel.provider),
 							obfuscator: this.#obfuscator,
@@ -10456,11 +10466,8 @@ export class AgentSession {
 		}
 		if (rebaseBoundary) this.#applyContextSteadySafeRebase(rebaseBoundary);
 		else if (pendingReason === "topic_shift" || pendingReason === "resume" || pendingReason === "budget_pressure") {
-			// Safe rebase without a new checkpoint: rotate provider session for semantic boundary.
-			this.#closeAllProviderSessions(`context steady ${pendingReason} rebase`);
-			this.#freshProviderSessionId = Bun.randomUUIDv7();
-			this.#syncAgentSessionId();
-			this.agent.appendOnlyContext?.invalidateForModelChange();
+			// Safe rebase without a new checkpoint: same semantic boundary, same chain reset.
+			this.#rebaseProviderSessionForContextSteady(pendingReason);
 		}
 		if (pendingReason === "resume") this.#contextSteadyPendingResumeRebase = false;
 		if (pendingReason === "budget_pressure") this.#contextSteadyPendingBudgetPressureRebase = false;
@@ -11054,11 +11061,40 @@ export class AgentSession {
 		return "checkpoint";
 	}
 
-	#applyContextSteadySafeRebase(boundary: { checkpointEntryId: string; reason: ContextCheckpointRebaseReason }): void {
-		this.#closeAllProviderSessions(`context steady ${boundary.reason} rebase`);
-		this.#freshProviderSessionId = Bun.randomUUIDv7();
-		this.#syncAgentSessionId();
+	/**
+	 * Drop the provider chain at a context-steady rebase boundary.
+	 *
+	 * Closing the provider sessions is what actually makes the rebase safe: it discards
+	 * `previous_response_id` chain state along with the one-way strict-tools and
+	 * reasoning-effort latches, so nothing carries a stale baseline across the rewrite.
+	 *
+	 * Minting a new provider session id is a separate act with a separate cost. That id is the
+	 * wire `prompt_cache_key` whenever no key is pinned, and rotating it voids the upstream
+	 * prefix cache wholesale — including the instructions, tool schemas, and settled history
+	 * that a rebase leaves untouched. A periodic checkpoint therefore used to buy a guaranteed
+	 * cold prefill of the entire surviving prefix in exchange for nothing the session close had
+	 * not already delivered. Preserve the key by default; the old behaviour stays reachable for
+	 * providers that key cache state to the session id itself.
+	 */
+	#rebaseProviderSessionForContextSteady(reason: ContextCheckpointRebaseReason): void {
+		this.#closeAllProviderSessions(`context steady ${reason} rebase`);
+		if (this.settings.get("san.contextSteady.rebase.rotateProviderCacheKey") === true) {
+			const previousProviderSessionId = this.sessionId;
+			this.#freshProviderSessionId = Bun.randomUUIDv7();
+			this.#syncAgentSessionId();
+			// Loud on purpose: this discards the upstream prompt cache, and the cost only shows up
+			// later as an unexplained cold prefill.
+			logger.warn("Rotated provider prompt cache key at context steady rebase", {
+				reason,
+				previousProviderSessionId,
+				providerSessionId: this.sessionId,
+			});
+		}
 		this.agent.appendOnlyContext?.invalidateForModelChange();
+	}
+
+	#applyContextSteadySafeRebase(boundary: { checkpointEntryId: string; reason: ContextCheckpointRebaseReason }): void {
+		this.#rebaseProviderSessionForContextSteady(boundary.reason);
 		this.#contextSteadyLastRebaseCheckpointEntryId = boundary.checkpointEntryId;
 	}
 
@@ -14643,8 +14679,9 @@ export class AgentSession {
 		const segmentIds = collectContextSegmentRefs(branch).map(ref => ref.segment.segmentId);
 		const contextWindow = requestContextWindow ?? this.model?.contextWindow ?? 0;
 		const activeEstimatedTokens = this.#estimateStoredContextTokens();
+		const nonMessageTokens = computeNonMessageTokens(this);
 		const rawJournalEstimatedTokens =
-			computeNonMessageTokens(this) +
+			nonMessageTokens +
 			branch.reduce(
 				(sum, entry) =>
 					entry.type === "message" ? sum + this.#estimateProviderWireMessageTokens(entry.message) : sum,
@@ -14653,9 +14690,24 @@ export class AgentSession {
 		const compactionSettings = this.settings.getGroup("compaction");
 		const nativeCompactionThresholdTokens =
 			contextWindow > 0 ? resolveThresholdTokens(contextWindow, compactionSettings) : 0;
-		const configuredSteadyTarget = Math.floor(this.settings.get("san.contextSteady.qualityWindowTokens") as number);
-		const steadyTargetTokens =
-			contextWindow > 0 ? Math.min(contextWindow, configuredSteadyTarget > 0 ? configuredSteadyTarget : 240_000) : 0;
+		// Report the target the planner actually enforces. The raw quality window ignores the
+		// reserve-derived hard ceiling, so whenever reserveRatio binds the probe used to show
+		// headroom that did not exist (240k reported against 193.5k enforced).
+		const probeBudget = resolveContextPlanBudget({
+			settings: {
+				qualityWindowTokens: this.settings.get("san.contextSteady.qualityWindowTokens") as number,
+				reserveRatio: this.settings.get("san.contextSteady.reserveRatio") as number,
+				planMaxTokens: this.#contextSteadyPlanMaxTokens(),
+				burstWindowTokens: this.#contextSteadyBurstWindowTokens(),
+			},
+			contextWindow,
+			nonMessageTokens,
+		});
+		const steadyTargetTokens = contextWindow > 0 ? probeBudget.steadyTarget : 0;
+		// The wire cache key is part of the cacheable identity: rotating it voids the upstream
+		// prefix just as surely as editing the system prompt. Keep it inside the fingerprint so a
+		// rotation can never be reported as an unchanged prefix.
+		const promptCacheKey = this.agent.promptCacheKey ?? this.sessionId;
 		const prefixFingerprint = String(
 			Bun.hash(
 				JSON.stringify({
@@ -14665,6 +14717,7 @@ export class AgentSession {
 					toolSignature: this.#lastAppliedToolSignature,
 					contextPlan: this.#contextSteadyRequestPlan?.renderedContent,
 					latestCompactionId: compactionIds.at(-1),
+					promptCacheKey,
 				}),
 			),
 		);
@@ -14688,11 +14741,15 @@ export class AgentSession {
 			...(this.#contextProbeActiveCompaction ? { compaction: this.#contextProbeActiveCompaction } : {}),
 			...(authorityState ? { authorityState } : {}),
 			...(this.#toolProgressGuard ? { convergence: this.#toolProgressGuard.snapshot() } : {}),
-			...(this.#contextProbeLastPrefixFingerprint?.sessionId === this.sessionId
-				? { previousPrefixFingerprint: this.#contextProbeLastPrefixFingerprint.value }
+			promptCacheKey,
+			...(this.#contextProbeLastPrefixFingerprint
+				? {
+						previousPrefixFingerprint: this.#contextProbeLastPrefixFingerprint.value,
+						previousPromptCacheKey: this.#contextProbeLastPrefixFingerprint.promptCacheKey,
+					}
 				: {}),
 		};
-		this.#contextProbeLastPrefixFingerprint = { sessionId: this.sessionId, value: prefixFingerprint };
+		this.#contextProbeLastPrefixFingerprint = { promptCacheKey, value: prefixFingerprint };
 		return { sessionFile, options };
 	}
 
@@ -14751,6 +14808,39 @@ export class AgentSession {
 		return compactionContextTokens(breakdown?.usedTokens ?? 0, localEstimate);
 	}
 
+	/**
+	 * Physical-maintenance ceiling shared by the pre-prompt and mid-turn gates.
+	 *
+	 * `steadyTarget` is what the planner aims for; `controlMax` is what the plan is actually
+	 * allowed to fill (`selectedInputLimit` in steady mode, and the plan-reuse gate at
+	 * {@link #contextSteadyReusablePlan}). Compacting the instant the aim is missed throws the
+	 * whole elastic band away: a 754-token overshoot bought a full history rewrite plus a cold
+	 * prefill (session 019ffe1d, 2026-08-21T02:15Z). Trigger on the band's ceiling instead, so
+	 * maintenance fires exactly where the plan gate would refuse rather than well before it.
+	 *
+	 * Both gates read this one number. When they disagreed, the pre-prompt gate let a turn be
+	 * billed at full size and the mid-turn gate compacted it away seconds later — the prefill
+	 * was paid for a history that no longer existed.
+	 *
+	 * Returns `undefined` when context steady is inactive or compaction cannot rewrite history.
+	 */
+	#contextSteadyPhysicalMaintenanceCeiling(contextWindow: number, contextSteadyActive: boolean): number | undefined {
+		if (!contextSteadyActive || contextWindow <= 0) return undefined;
+		const compactionSettings = this.settings.getGroup("compaction");
+		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return undefined;
+		const budget = resolveContextPlanBudget({
+			settings: {
+				qualityWindowTokens: this.settings.get("san.contextSteady.qualityWindowTokens") as number,
+				reserveRatio: this.settings.get("san.contextSteady.reserveRatio") as number,
+				planMaxTokens: this.#contextSteadyPlanMaxTokens(),
+				burstWindowTokens: this.#contextSteadyBurstWindowTokens(),
+			},
+			contextWindow,
+			nonMessageTokens: computeNonMessageTokens(this),
+		});
+		return Math.max(1, budget.controlMax);
+	}
+
 	async #runPrePromptCompactionIfNeeded(messages: AgentMessage[]): Promise<void> {
 		const model = this.model;
 		if (!model) return;
@@ -14758,8 +14848,16 @@ export class AgentSession {
 		if (contextWindow <= 0) return;
 		const compactionSettings = this.settings.getGroup("compaction");
 		const contextTokens = this.#estimatePrePromptContextTokens(messages, contextWindow);
-		this.#contextSteadyIsActive(contextTokens);
-		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) return;
+		const contextSteadyActive = this.#contextSteadyIsActive(contextTokens);
+		// Steady maintenance must be decided here too, not only after the response returns.
+		// The mid-turn gate uses the steady budget while this gate used the native threshold
+		// alone, so a context parked between the two (e.g. right after switching to a
+		// smaller-window model) was sent at full size, billed as a cold prefill, and then
+		// compacted on arrival — paying for a history that was about to be discarded.
+		const steadyCeiling = this.#contextSteadyPhysicalMaintenanceCeiling(contextWindow, contextSteadyActive);
+		const nativeMaintenanceRequired = shouldCompact(contextTokens, contextWindow, compactionSettings);
+		const steadyMaintenanceRequired = steadyCeiling !== undefined && contextTokens > steadyCeiling;
+		if (!nativeMaintenanceRequired && !steadyMaintenanceRequired) return;
 
 		// Auto-promote first: switching to a larger-context model avoids compacting
 		// the history at all. The post-turn threshold path already promotes before
@@ -14777,11 +14875,21 @@ export class AgentSession {
 		logger.debug("Pre-prompt context maintenance triggered by pending prompt size", {
 			contextTokens,
 			contextWindow,
+			steadyCeiling,
+			nativeMaintenanceRequired,
+			steadyMaintenanceRequired,
 			model: `${model.provider}/${model.id}`,
 		});
+		const matchedTriggers: ContextMaintenanceTrigger[] = [];
+		if (nativeMaintenanceRequired) matchedTriggers.push("native_threshold");
+		if (steadyMaintenanceRequired) matchedTriggers.push("steady_target");
 		await this.#runAutoCompaction("threshold", false, false, false, {
 			autoContinue: false,
 			triggerContextTokens: contextTokens,
+			// A steady-only firing must not be recorded as a native-threshold one: the two
+			// carry different costs and different fixes, and the probe is what tells them apart.
+			trigger: nativeMaintenanceRequired ? "native_threshold" : "steady_target",
+			matchedTriggers,
 			phase: "pre_turn",
 		});
 	}
@@ -14976,23 +15084,12 @@ export class AgentSession {
 		const contextSteadyActive = this.#contextSteadyIsActive(
 			Math.max(calculatePromptTokens(lastAssistant.usage), storedContextTokens),
 		);
-		// Use the unified budget resolver so the maintenance threshold aligns with
-		// the ContextPlan gate's steadyTarget (which accounts for hardInputCeiling).
-		// The old independent formula could set a target above the gate's ceiling,
-		// causing hard_pressure to fire before maintenance ever triggered.
-		const unifiedBudget = resolveContextPlanBudget({
-			settings: {
-				qualityWindowTokens: this.settings.get("san.contextSteady.qualityWindowTokens") as number,
-				reserveRatio: this.settings.get("san.contextSteady.reserveRatio") as number,
-				planMaxTokens: this.#contextSteadyPlanMaxTokens(),
-				burstWindowTokens: this.#contextSteadyBurstWindowTokens(),
-			},
-			contextWindow,
-			nonMessageTokens: computeNonMessageTokens(this),
-		});
-		const contextSteadyTarget = contextSteadyActive
-			? Math.max(1, unifiedBudget.steadyTarget)
-			: Number.POSITIVE_INFINITY;
+		// One shared ceiling with the pre-prompt gate (#contextSteadyPhysicalMaintenanceCeiling):
+		// the plan's control band, not its steady aim. Keeps maintenance aligned with the point
+		// the ContextPlan gate refuses, and keeps the two gates from disagreeing about whether
+		// this turn should have been compacted before it was billed.
+		const contextSteadyTarget =
+			this.#contextSteadyPhysicalMaintenanceCeiling(contextWindow, contextSteadyActive) ?? Number.POSITIVE_INFINITY;
 		const steadyMaintenanceRequired = physicalMaintenanceEnabled && contextTokens > contextSteadyTarget;
 		const segmentHint = this.#contextSteadySegmentMaintenanceHint();
 		const nativeMaintenanceRequired =
@@ -16707,6 +16804,28 @@ export class AgentSession {
 		return this.#resolveConfiguredModelTarget(currentModel.compactionModel, currentModel, availableModels);
 	}
 
+	#resolveCompactionThinkingLevel(
+		sourceModel: Model | null | undefined,
+		candidate: Model,
+		availableModels: Model[],
+		fallback: ThinkingLevel | undefined,
+	): ThinkingLevel | undefined {
+		const configuredTarget = sourceModel
+			? this.#resolveCompactionConfiguredTarget(sourceModel, availableModels)
+			: undefined;
+		if (!sourceModel?.compactionModel || !configuredTarget || !modelsAreEqual(configuredTarget, candidate)) {
+			return fallback;
+		}
+
+		const configuredLevel = extractExplicitThinkingSelector(sourceModel.compactionModel, this.settings, {
+			isLiteralModelId: (provider, id) =>
+				availableModels.some(model => model.provider === provider && model.id === id),
+		});
+		const concreteLevel = concreteThinkingLevel(configuredLevel);
+		if (concreteLevel === undefined || concreteLevel === ThinkingLevel.Inherit) return fallback;
+		return resolveThinkingLevelForModel(candidate, concreteLevel);
+	}
+
 	#resolveRoleModelFull(
 		role: string,
 		availableModels: Model[],
@@ -16876,8 +16995,8 @@ export class AgentSession {
 		options?: SummaryOptions,
 		precomputedCandidates?: Model[],
 	): Promise<CompactionResult> {
-		const candidates =
-			precomputedCandidates ?? this.#getCompactionModelCandidates(this.#modelRegistry.getAvailable());
+		const availableModels = this.#modelRegistry.getAvailable();
+		const candidates = precomputedCandidates ?? this.#getCompactionModelCandidates(availableModels);
 		const telemetry = resolveTelemetry(this.agent.telemetry, this.sessionId);
 
 		for (const candidate of candidates) {
@@ -16896,11 +17015,14 @@ export class AgentSession {
 						metadata: this.agent.metadataForProvider(candidate.provider),
 						convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 						telemetry,
-						// Honor the user's /model thinking selection (incl. `off`) on
-						// the manual `/compact` path. Clamped per-model inside compact()
-						// via resolveCompactionEffort so unsupported-effort models
-						// (xai-oauth/grok-build) don't trip requireSupportedEffort.
-						thinkingLevel: this.thinkingLevel,
+						// Honor an explicit effort on compactionModel for its configured
+						// target; other candidates inherit the active /model selection.
+						thinkingLevel: this.#resolveCompactionThinkingLevel(
+							this.model,
+							candidate,
+							availableModels,
+							this.thinkingLevel,
+						),
 						tools: this.agent.state.tools,
 						sessionId: this.sessionId,
 						promptCacheKey: this.sessionId,
@@ -17795,11 +17917,14 @@ export class AgentSession {
 									initiatorOverride: "agent",
 									convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 									telemetry,
-									// Honor the user's /model thinking selection on the
-									// auto-compaction path — the most-fired compaction
-									// site. Clamped per-model inside compact() via
-									// resolveCompactionEffort.
-									thinkingLevel: this.thinkingLevel,
+									// Honor an explicit effort on compactionModel for its
+									// configured target; other candidates inherit /model.
+									thinkingLevel: this.#resolveCompactionThinkingLevel(
+										this.model,
+										candidate,
+										availableModels,
+										this.thinkingLevel,
+									),
 									tools: this.agent.state.tools,
 									sessionId: this.sessionId,
 									promptCacheKey: this.sessionId,

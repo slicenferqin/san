@@ -2940,6 +2940,12 @@ export const SETTINGS_SCHEMA = {
 			"Hard burst ceiling for full provider input under quality pressure. Requests above this outcome are hard_pressure.",
 	},
 	"san.contextSteady.reserveRatio": { type: "number", default: 0.2 },
+	"san.contextSteady.rebase.rotateProviderCacheKey": {
+		type: "boolean",
+		default: false,
+		description:
+			"Mint a new provider session id at every context-steady rebase. The session close already drops chain state and the strict-tools/reasoning latches, so rotating only voids the upstream prompt cache for the prefix the rebase kept. Enable for providers that key cache state to the session id.",
+	},
 	"san.contextSteady.contextPlan.enabled": { type: "boolean", default: true },
 	"san.contextSteady.contextPlan.recentDigests": { type: "number", default: 5 },
 	"san.contextSteady.contextPlan.maxTokens": { type: "number", default: 2000 },

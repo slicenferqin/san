@@ -50,7 +50,7 @@ describe("Context steady sidecar probe", () => {
 		});
 
 		expect(record.request).toEqual({ kind: "agent", stopReason: "stop" });
-		expect(record.schemaVersion).toBe(3);
+		expect(record.schemaVersion).toBe(4);
 		expect(record.usage).toMatchObject({ promptTokens: 105_000, cacheReadRate: 80_000 / 105_000 });
 		expect(record.context).toMatchObject({
 			steadyEnabled: true,
@@ -166,7 +166,7 @@ describe("Context steady sidecar probe", () => {
 		});
 
 		expect(record).toMatchObject({
-			schemaVersion: 3,
+			schemaVersion: 4,
 			request: { kind: "maintenance" },
 			maintenance: {
 				maintenanceId: "maintenance-1",
@@ -188,6 +188,54 @@ describe("Context steady sidecar probe", () => {
 				executionClaimConflictCount: 2,
 			},
 			convergence: { softRedirects: 1, forcedFinalizations: 1 },
+		});
+	});
+
+	test("reports the wire cache key and never hides a rotation behind an unchanged prefix", () => {
+		const base = {
+			sessionFile: "/tmp/session-1.jsonl",
+			requestKind: "agent" as const,
+			assistant: assistant(),
+			contextWindow: 500_000,
+			steadyEnabled: true,
+			activeEstimatedTokens: 120_000,
+			rawJournalEstimatedTokens: 120_000,
+			nativeCompactionStrategy: "snapcompact",
+			nativeCompactionThresholdTokens: 240_000,
+			steadyTargetTokens: 193_500,
+			compactionIds: [],
+			segmentIds: [],
+		};
+
+		// No pinned key: the provider session id is what reaches the wire.
+		const rotated = buildContextProbeRecord({
+			...base,
+			sessionId: "provider-session-2",
+			prefixFingerprint: "prefix-a",
+			previousPrefixFingerprint: "prefix-a",
+			previousPromptCacheKey: "provider-session-1",
+		});
+		expect(rotated.cache).toEqual({
+			promptCacheKey: "provider-session-2",
+			providerSessionId: "provider-session-2",
+			prefixFingerprint: "prefix-a",
+			prefixChanged: false,
+			cacheKeyChanged: true,
+		});
+
+		// A pinned provider key survives session rotation, so the cache identity holds.
+		const pinned = buildContextProbeRecord({
+			...base,
+			sessionId: "provider-session-2",
+			promptCacheKey: "pinned-key",
+			previousPromptCacheKey: "pinned-key",
+			prefixFingerprint: "prefix-a",
+			previousPrefixFingerprint: "prefix-a",
+		});
+		expect(pinned.cache).toMatchObject({
+			promptCacheKey: "pinned-key",
+			providerSessionId: "provider-session-2",
+			cacheKeyChanged: false,
 		});
 	});
 

@@ -1,0 +1,305 @@
+<title>gpt-5.6-sol 缓存计费异常</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+:root{
+  --ground:#F1F4F6; --surface:#FFFFFF; --surface2:#F8FAFB; --inset:#EDF1F4;
+  --ink:#131A24; --ink2:#4C5967; --ink3:#74818E;
+  --rule:#DBE2E8; --rule2:#BFC9D2;
+  --copper:#A9541F; --copper-soft:#F7EDE5; --copper-line:#E2C7B2;
+  --teal:#0E655C; --teal-soft:#E6F1EF;
+  --crit:#9E2B22;
+  --serif:"Noto Serif SC",Songti SC,Georgia,serif;
+  --sans:"Noto Sans SC",-apple-system,"PingFang SC","Helvetica Neue",Arial,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#0C1116; --surface:#141B22; --surface2:#19222A; --inset:#101820;
+    --ink:#E3E9EF; --ink2:#98A5B2; --ink3:#7B8996;
+    --rule:#232E38; --rule2:#334150;
+    --copper:#E08A55; --copper-soft:#251A12; --copper-line:#4A3021;
+    --teal:#4FB3A6; --teal-soft:#0F221F;
+    --crit:#E0685E;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0C1116; --surface:#141B22; --surface2:#19222A; --inset:#101820;
+  --ink:#E3E9EF; --ink2:#98A5B2; --ink3:#7B8996;
+  --rule:#232E38; --rule2:#334150;
+  --copper:#E08A55; --copper-soft:#251A12; --copper-line:#4A3021;
+  --teal:#4FB3A6; --teal-soft:#0F221F;
+  --crit:#E0685E;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:var(--sans); font-size:16px; line-height:1.78;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px;margin:0 auto;padding:0 28px 96px}
+.col{max-width:70ch}
+h1,h2,h3{font-family:var(--serif);text-wrap:balance;margin:0}
+p{margin:0 0 1.05em}
+a{color:var(--copper)}
+code{font-family:var(--mono);font-size:.88em}
+strong{font-weight:700}
+
+/* ---------- filing header ---------- */
+header{padding:64px 0 34px;border-bottom:1px solid var(--rule)}
+.kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--copper);margin-bottom:20px}
+h1{font-size:clamp(30px,4.4vw,46px);font-weight:700;line-height:1.22;letter-spacing:-.01em}
+.dek{margin-top:16px;font-size:18px;color:var(--ink2);max-width:64ch;line-height:1.7}
+.meta{margin-top:36px;display:grid;grid-template-columns:repeat(auto-fit,minmax(196px,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule)}
+.meta div{background:var(--surface);padding:11px 14px}
+.meta dt{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink3);margin:0 0 3px}
+.meta dd{margin:0;font-family:var(--mono);font-size:13.5px;font-weight:500;color:var(--ink)}
+
+/* ---------- verdict ---------- */
+.verdict{margin:44px 0 0;background:var(--copper-soft);border:1px solid var(--copper-line);padding:28px 30px}
+.verdict .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--copper);margin-bottom:14px}
+.verdict p{font-size:16.5px;line-height:1.8;color:var(--ink)}
+.verdict p:last-child{margin-bottom:0}
+
+/* ---------- stat strip ---------- */
+.stats{margin:34px 0 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule)}
+.stat{background:var(--surface);padding:20px 18px}
+.stat .v{font-family:var(--mono);font-size:27px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;color:var(--copper);line-height:1.15}
+.stat .k{margin-top:8px;font-size:13px;color:var(--ink2);line-height:1.5}
+
+/* ---------- sections ---------- */
+section{margin-top:64px}
+.shead{display:flex;align-items:baseline;gap:16px;padding-bottom:12px;border-bottom:2px solid var(--ink);margin-bottom:26px}
+.snum{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--copper);letter-spacing:.04em;flex:none}
+h2{font-size:22px;font-weight:700;letter-spacing:-.005em}
+h3{font-size:16.5px;font-weight:600;margin:30px 0 10px;color:var(--ink)}
+.lede{font-size:17px;color:var(--ink2)}
+
+ul,ol{margin:0 0 1.1em;padding-left:1.35em}
+li{margin-bottom:.5em;padding-left:.1em}
+li::marker{color:var(--ink3)}
+ol.tight li{margin-bottom:.75em}
+
+/* ---------- tables ---------- */
+.tscroll{overflow-x:auto;border:1px solid var(--rule);background:var(--surface);margin:0 0 12px}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{padding:9px 13px;text-align:left;border-bottom:1px solid var(--rule);white-space:nowrap}
+thead th{background:var(--inset);font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink2);font-weight:500;border-bottom:1px solid var(--rule2)}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:nth-child(even) td{background:var(--surface2)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;font-weight:500}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.small{font-size:12px;color:var(--ink2)}
+.idx{font-family:var(--mono);font-size:12px;color:var(--ink3);text-align:right;width:38px}
+.neg{color:var(--teal);font-weight:700}
+.pos{color:var(--ink2)}
+.warn{color:var(--copper);font-weight:700}
+.chip{display:inline-block;font-family:var(--mono);font-size:11px;padding:1px 7px;border:1px solid var(--rule2);color:var(--ink2);letter-spacing:.03em}
+caption,.tnote{font-size:13px;color:var(--ink3);line-height:1.6;margin-bottom:14px}
+.tnote{margin-top:0}
+
+/* ---------- id list ---------- */
+.ids{border:1px solid var(--rule);background:var(--surface);padding:6px 0;margin:0 0 12px}
+.idrow{display:flex;gap:14px;align-items:center;padding:5px 16px;font-family:var(--mono);font-size:12.5px}
+.idrow+.idrow{border-top:1px solid var(--rule)}
+.idn{color:var(--ink3);width:20px;text-align:right;flex:none}
+.idrow code{color:var(--ink);word-break:break-all;white-space:normal}
+
+/* ---------- ruled-out list ---------- */
+.ruled{display:grid;gap:1px;background:var(--rule);border:1px solid var(--rule)}
+.ruled article{background:var(--surface);padding:20px 22px}
+.ruled h3{margin:0 0 8px;font-size:15.5px;display:flex;align-items:center;gap:10px}
+.tag{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--teal);background:var(--teal-soft);border:1px solid var(--teal);padding:1px 7px;flex:none;font-weight:500}
+.ruled p{margin:0;font-size:14.5px;color:var(--ink2);line-height:1.72}
+
+/* ---------- ask list ---------- */
+.asks{counter-reset:a;display:grid;gap:14px;margin-top:6px}
+.ask{display:grid;grid-template-columns:34px 1fr;gap:14px;background:var(--surface);border:1px solid var(--rule);padding:18px 20px}
+.ask::before{counter-increment:a;content:"Q" counter(a);font-family:var(--mono);font-size:12px;font-weight:700;color:var(--copper)}
+.ask p{margin:0;font-size:15px;line-height:1.7}
+.ask p+p{margin-top:7px;color:var(--ink2);font-size:14px}
+
+footer{margin-top:70px;padding-top:22px;border-top:1px solid var(--rule);font-size:13px;color:var(--ink3);font-family:var(--mono);line-height:1.9}
+@media (max-width:640px){
+  .wrap{padding:0 18px 64px} header{padding-top:40px}
+  .verdict{padding:22px 20px} .ask{grid-template-columns:1fr}
+  .ask::before{display:block}
+}
+</style>
+
+<div class="wrap">
+<header>
+  <div class="kicker">Prompt Cache · 计费异常排查 · 2026-08-20</div>
+  <h1>已预热的 prompt 前缀被记为 0 缓存并按全价计费</h1>
+  <p class="dek">同一会话、同一 <code>prompt_cache_key</code>、逐字节相同的前缀，在数秒前刚刚发送过，本次却返回 <code>cache_read = 0</code>。当天 536 笔请求中出现 13 笔，另有 11 笔命中深度显著不足。本报告给出可直接在贵方日志中定位的 response id 清单。</p>
+  <div class="meta">
+    <div><dt>日期</dt><dd>2026-08-20（GMT+8）</dd></div>
+    <div><dt>API Key 名称</dt><dd>bite</dd></div>
+    <div><dt>Account ID</dt><dd>4</dd></div>
+    <div><dt>分组</dt><dd>默认（禁止破限）</dd></div>
+    <div><dt>模型</dt><dd>gpt-5.6-sol</dd></div>
+    <div><dt>入站端点</dt><dd>/v1/responses</dd></div>
+    <div><dt>客户端 IP</dt><dd>12.19.137.13</dd></div>
+    <div><dt>样本</dt><dd>536 笔 / 全天</dd></div>
+  </div>
+</header>
+
+<div class="verdict">
+  <div class="lbl">结论</div>
+  <p>有 <strong>13 笔</strong>请求的可缓存前缀在 6&thinsp;–&thinsp;244 秒前刚刚成功发送过，内容完全相同、<code>prompt_cache_key</code> 未变，本次仍被记为 <code>cache_read = 0</code>，整个 prompt 按 <code>input</code> 单价（$5/M，为 cache read 单价的 10 倍）计费。另有 <strong>11 笔</strong>只命中了远小于已预热长度的前缀。</p>
+  <p>更值得注意的是首字延迟：这 13 笔中有 <strong>9 笔比相邻的命中请求更快</strong>，中位数快 1.0 秒。如果上游真的重新 prefill 了 5&thinsp;–&thinsp;19 万 tokens，不可能比命中缓存更快。因此我们倾向于认为<strong>上游实际命中了缓存，只是 <code>cached_tokens</code> 未被回传或未被计入账单</strong>。这一点只有贵方能确认，也是本报告最想请求协助的部分。</p>
+</div>
+
+<div class="stats">
+  <div class="stat"><div class="v">13</div><div class="k">前缀已预热却 0 缓存</div></div>
+  <div class="stat"><div class="v">11</div><div class="k">命中深度显著不足</div></div>
+  <div class="stat"><div class="v">1.87M</div><div class="k">应按 cache read 计价却按 input 计价的 tokens</div></div>
+  <div class="stat"><div class="v">10.6%</div><div class="k">占当天计费额（$1.68 / $15.87）</div></div>
+</div>
+
+<section>
+  <div class="shead"><span class="snum">01</span><h2>数据来源与核对口径</h2></div>
+  <div class="col">
+    <p class="lede">两份独立数据交叉核对，不是单方面推测。</p>
+    <ul>
+      <li><strong>贵方用量导出</strong>：<code>usage_2026-08-20_to_2026-08-20</code>，536 行，字段含 input / output / cache read tokens、首字与总耗时、计费与原价。</li>
+      <li><strong>客户端逐请求遥测</strong>：我们的客户端对每一次 provider 调用都会落盘一条记录，含发出的 <code>prompt_cache_key</code>、可缓存前缀的指纹、上游返回的 usage 与 response id。</li>
+    </ul>
+    <p>两边按「input / output / cache_read 三个数值完全相等且时间差 &lt; 5 秒」对齐，<strong>536 行中 506 行精确匹配，客户端侧无一条未匹配</strong>。未匹配的 30 行为：21 行 0 token 记录（见第 07 节）、5 行 09:01 的请求（早于本次客户端遥测窗口）、4 行边界情况。下文所有结论都建立在这 506 行双向对齐的数据上。</p>
+    <p>作为口径校准，我们用 536 行反解了单价，残差为 0：<code>input $5.000/M</code>、<code>output $30.000/M</code>、<code>cache read $0.500/M</code>，倍率 <code>0.2</code>。当天合计计费 <code>$15.8729</code>（原价 <code>$79.3647</code>），整体缓存命中率 <code>86.4%</code>。</p>
+  </div>
+</section>
+
+<section>
+  <div class="shead"><span class="snum">02</span><h2>先排除我们自己的问题</h2></div>
+  <div class="col">
+    <p class="lede">客户端改写 prompt 前缀会正当地导致缓存失效。我们把这部分先全部剔除了。</p>
+    <p>我们的客户端会在每次请求前为「可缓存前缀」计算一个指纹，覆盖：模型标识、system prompt、工具定义表、上下文计划、最近一次上下文压缩点。任何一项变化都会被记录下来。</p>
+    <p>当天 <code>cache_read = 0</code> 且 prompt 超过 2 万 tokens 的请求共 <strong>44 笔</strong>。其中 <strong>31 笔确实是我们改了前缀</strong>——上下文压缩、工具表变更等——这 31 笔属于预期行为，<strong>我们不认为是贵方的问题，也不在本报告的索赔范围内</strong>。剩下 <strong>13 笔</strong>的前缀指纹与上一笔请求完全一致。</p>
+    <p>以其中一笔（15:20:15）为例可以逐 token 验证前缀未被改写：上一笔请求 prompt 合计 121,254 tokens、输出 660 tokens，两笔之间客户端只追加了一个 7,429 字符的工具返回，本笔 prompt 为 124,918 tokens——纯追加，无任何前缀重写；紧随其后的下一笔请求又正常命中了 120,320 tokens，说明这条前缀链本身是连续且可缓存的。</p>
+  </div>
+</section>
+
+<section>
+  <div class="shead"><span class="snum">03</span><h2>逐一排除其他可能的解释</h2></div>
+  <div class="ruled">
+    <article>
+      <h3><span class="tag">已排除</span>缓存自然过期（TTL）</h3>
+      <p>这 13 笔距离「上一次成功发送同一前缀」的间隔为：最小 <strong>5.9 秒</strong>、中位 <strong>13.1 秒</strong>、最大 244 秒，<strong>无一超过 5 分钟</strong>。同一天 453 笔正常命中的间隔分布是中位 12.5 秒、p90 26.5 秒、最长 140 秒——两个分布基本重合。若缓存在 10 秒内就会失效，全天不可能保持 86% 的命中率。唯一可再讨论的是 10:08:58 那笔（间隔 244 秒），它是当天唯一超出正常命中间隔观测范围的样本。</p>
+    </article>
+    <article>
+      <h3><span class="tag">已排除</span>传输方式（WS / Stream）差异</h3>
+      <p>当天 14 点前后我们切换过通道。<code>WS</code> 258 笔、命中率 86.8%、全丢 23 笔；<code>Stream</code> 257 笔、命中率 86.0%、全丢 24 笔。两种通道表现一致，问题与传输方式无关。</p>
+    </article>
+    <article>
+      <h3><span class="tag">已排除</span>上游过载导致的连带失效</h3>
+      <p>客户端当天收到 <strong>55 次</strong> <code>server_error: Our servers are currently overloaded</code>，全部集中在 14:00&thinsp;–&thinsp;16:50。但 13 笔异常里只有 5 笔发生在报错后 5 分钟内，而当天有 44.7% 的请求都处于「报错后 5 分钟内」这一状态——该条件下的异常率 2.21%，反而低于全天平均 2.57%。10:00&thinsp;–&thinsp;11:20 的那 8 笔前后 10 分钟内一次报错都没有。<strong>两者没有相关性</strong>，缓存丢失并不是过载的副作用。</p>
+    </article>
+  </div>
+</section>
+
+<section>
+  <div class="shead"><span class="snum">04</span><h2>异常 A：前缀已预热，仍返回 0 缓存</h2></div>
+  <p class="tnote">「间隔」= 距上一次成功发送同一前缀的时间；「上一笔 prompt」= 那次请求的 prompt 总量，即本次理应可命中的深度；「邻近命中首字」= 本笔前后各 3 笔中命中缓存请求的首字延迟中位数。Δ 为负表示<strong>本笔比命中请求更快</strong>。</p>
+  <div class="tscroll"><table>
+    <thead><tr><th>#</th><th>时间</th><th>通道</th><th>计费 input</th><th>间隔</th><th>上一笔 prompt</th><th>本笔首字 ms</th><th>邻近命中首字 ms</th><th>Δ ms</th></tr></thead>
+    <tbody>
+<tr><td class="idx">1</td><td class="mono">10:08:58</td><td><span class="chip">WS</span></td><td class="num">186,258</td><td class="num">244.2s</td><td class="num">184,388</td><td class="num">7,067</td><td class="num">11,111</td><td class="num neg">-4,044</td></tr>
+<tr><td class="idx">2</td><td class="mono">10:27:45</td><td><span class="chip">WS</span></td><td class="num">53,285</td><td class="num">9.0s</td><td class="num">215,683</td><td class="num">7,823</td><td class="num">9,093</td><td class="num neg">-1,270</td></tr>
+<tr><td class="idx">3</td><td class="mono">10:41:10</td><td><span class="chip">WS</span></td><td class="num">113,830</td><td class="num">16.8s</td><td class="num">84,503</td><td class="num">5,890</td><td class="num">8,498</td><td class="num neg">-2,608</td></tr>
+<tr><td class="idx">4</td><td class="mono">10:45:01</td><td><span class="chip">WS</span></td><td class="num">155,766</td><td class="num">9.2s</td><td class="num">154,835</td><td class="num">5,283</td><td class="num">6,461</td><td class="num neg">-1,178</td></tr>
+<tr><td class="idx">5</td><td class="mono">10:58:39</td><td><span class="chip">WS</span></td><td class="num">57,543</td><td class="num">6.7s</td><td class="num">52,039</td><td class="num">4,525</td><td class="num">5,539</td><td class="num neg">-1,014</td></tr>
+<tr><td class="idx">6</td><td class="mono">11:03:34</td><td><span class="chip">WS</span></td><td class="num">90,952</td><td class="num">13.0s</td><td class="num">90,587</td><td class="num">3,849</td><td class="num">5,928</td><td class="num neg">-2,079</td></tr>
+<tr><td class="idx">7</td><td class="mono">11:05:17</td><td><span class="chip">WS</span></td><td class="num">119,627</td><td class="num">5.9s</td><td class="num">118,352</td><td class="num">3,926</td><td class="num">4,025</td><td class="num neg">-99</td></tr>
+<tr><td class="idx">8</td><td class="mono">11:17:38</td><td><span class="chip">WS</span></td><td class="num">88,479</td><td class="num">16.7s</td><td class="num">85,827</td><td class="num">5,370</td><td class="num">6,864</td><td class="num neg">-1,494</td></tr>
+<tr><td class="idx">9</td><td class="mono">15:19:00</td><td><span class="chip">Stream</span></td><td class="num">48,117</td><td class="num">17.5s</td><td class="num">38,837</td><td class="num">6,909</td><td class="num">6,315</td><td class="num pos">+594</td></tr>
+<tr><td class="idx">10</td><td class="mono">15:20:15</td><td><span class="chip">Stream</span></td><td class="num">124,918</td><td class="num">10.3s</td><td class="num">121,254</td><td class="num">8,174</td><td class="num">7,411</td><td class="num pos">+763</td></tr>
+<tr><td class="idx">11</td><td class="mono">15:46:24</td><td><span class="chip">Stream</span></td><td class="num">57,538</td><td class="num">18.9s</td><td class="num">53,105</td><td class="num">6,868</td><td class="num">7,447</td><td class="num neg">-579</td></tr>
+<tr><td class="idx">12</td><td class="mono">15:59:10</td><td><span class="chip">Stream</span></td><td class="num">163,631</td><td class="num">22.5s</td><td class="num">79,978</td><td class="num">12,066</td><td class="num">6,285</td><td class="num pos">+5,781</td></tr>
+<tr><td class="idx">13</td><td class="mono">16:50:21</td><td><span class="chip">Stream</span></td><td class="num">173,361</td><td class="num">13.1s</td><td class="num">172,428</td><td class="num">6,578</td><td class="num">6,526</td><td class="num pos">+52</td></tr>
+    </tbody>
+  </table></div>
+  <p class="tnote">13 笔合计计费 input <strong>1,433,305</strong> tokens，其中约 <strong>1,289,418</strong> tokens 本应按 cache read 计价。首字延迟 Δ 的中位数为 <strong>&minus;1,014 ms</strong>，13 笔中 9 笔快于邻近的命中请求。</p>
+  <h3>对应的 response id（可直接在贵方日志中检索）</h3>
+  <div class="ids">
+<div class="idrow"><span class="idn">1</span><code>resp_0b798bf73fb0327c016a8661a7b04c81938f366f0c7c65f008</code></div>
+<div class="idrow"><span class="idn">2</span><code>resp_0750e52358235fe8016a8666183adc8194a532e6a37ed900bf</code></div>
+<div class="idrow"><span class="idn">3</span><code>resp_0069db15eab7eff7016a86693716988196bcfc56ff962f70fe</code></div>
+<div class="idrow"><span class="idn">4</span><code>resp_0099d7d7fd543f77016a866a24b3588190954ec165f12316b2</code></div>
+<div class="idrow"><span class="idn">5</span><code>resp_0ee0acf92fdd2c37016a866d5a3aa887d18fc0e801191877c9</code></div>
+<div class="idrow"><span class="idn">6</span><code>resp_0a861548e5fc1268016a866e79effc87d1ad717a3e91b877e9</code></div>
+<div class="idrow"><span class="idn">7</span><code>resp_0f7d3ac22a152c24016a866ee7f17887d18da3f9a873e901a6</code></div>
+<div class="idrow"><span class="idn">8</span><code>resp_0f312239be4de7c0016a8671c2bcb887d188562a154a9b7689</code></div>
+<div class="idrow"><span class="idn">9</span><code>resp_01276b70c83880b4016a86aa545a5c8190ae8758db0ada5040</code></div>
+<div class="idrow"><span class="idn">10</span><code>resp_0c0f1c9c04457fae016a86aaa74b508190bfdee9bcabc626d5</code></div>
+<div class="idrow"><span class="idn">11</span><code>resp_08b21bf8fa0f3394016a86b0bf927081939e40e52d58c6c1d2</code></div>
+<div class="idrow"><span class="idn">12</span><code>resp_0214c85aa6cd0a5e016a86b3c49d7c8190be3fb60996cfd669</code></div>
+<div class="idrow"><span class="idn">13</span><code>resp_0916631dbfd34c85016a86bfc19c788190b673f33acc330d78</code></div>
+  </div>
+</section>
+
+<section>
+  <div class="shead"><span class="snum">05</span><h2>异常 B：命中深度显著不足</h2></div>
+  <p class="tnote">这些请求命中了缓存，但命中长度远小于几秒前刚发送过的前缀长度——像是命中了更早、更浅的一份快照。「可命中深度」按上一笔成功请求的 prompt 总量取 128 token 对齐下界，是保守估计。</p>
+  <div class="tscroll"><table>
+    <thead><tr><th>#</th><th>时间</th><th>通道</th><th>可命中深度 ≥</th><th>实际 cache read</th><th>差额</th><th>间隔</th><th>response id</th></tr></thead>
+    <tbody>
+<tr><td class="idx">B1</td><td class="mono">10:27:59</td><td><span class="chip">WS</span></td><td class="num">53,248</td><td class="num">28,160</td><td class="num warn">25,088</td><td class="num">14.3s</td><td class="mono small">resp_01a662580478c5e6016a8666211c948196921bb8eeec93fed9</td></tr>
+<tr><td class="idx">B2</td><td class="mono">10:28:59</td><td><span class="chip">WS</span></td><td class="num">154,496</td><td class="num">52,736</td><td class="num warn">101,760</td><td class="num">8.3s</td><td class="mono small">resp_026bd842450d565f016a8666639a008196be55721b1d98823e</td></tr>
+<tr><td class="idx">B3</td><td class="mono">10:45:48</td><td><span class="chip">WS</span></td><td class="num">166,656</td><td class="num">155,392</td><td class="num warn">11,264</td><td class="num">21.5s</td><td class="mono small">resp_042ad7a6cfcbcf99016a866a4744548194814b0e8a895bbd37</td></tr>
+<tr><td class="idx">B4</td><td class="mono">10:46:57</td><td><span class="chip">WS</span></td><td class="num">239,744</td><td class="num">28,160</td><td class="num warn">211,584</td><td class="num">8.1s</td><td class="mono small">resp_05a07fcb8a74b116016a866a9a06fc819397c08d8150184614</td></tr>
+<tr><td class="idx">B5</td><td class="mono">10:58:47</td><td><span class="chip">WS</span></td><td class="num">57,472</td><td class="num">51,712</td><td class="num warn">5,760</td><td class="num">7.5s</td><td class="mono small">resp_0e636520fbc1353b016a866d60bf0c87d197057bf5786da3b5</td></tr>
+<tr><td class="idx">B6</td><td class="mono">11:02:58</td><td><span class="chip">WS</span></td><td class="num">88,448</td><td class="num">65,024</td><td class="num warn">23,424</td><td class="num">9.0s</td><td class="mono small">resp_03898cd765bd71a0016a866e59622887d185b9d3d76bce9d5c</td></tr>
+<tr><td class="idx">B7</td><td class="mono">11:05:23</td><td><span class="chip">WS</span></td><td class="num">119,552</td><td class="num">65,024</td><td class="num warn">54,528</td><td class="num">6.2s</td><td class="mono small">resp_0d4d4d14586e661c016a866eedd0dc87d195f24cf983e65854</td></tr>
+<tr><td class="idx">B8</td><td class="mono">15:12:51</td><td><span class="chip">Stream</span></td><td class="num">54,656</td><td class="num">28,160</td><td class="num warn">26,496</td><td class="num">12.8s</td><td class="mono small">resp_03ff0c22851917c3016a86a8e9e2e481948ea1e20c1807e793</td></tr>
+<tr><td class="idx">B9</td><td class="mono">15:19:16</td><td><span class="chip">Stream</span></td><td class="num">48,000</td><td class="num">38,400</td><td class="num warn">9,600</td><td class="num">16.7s</td><td class="mono small">resp_0f7bd4724eab5dee016a86aa66400c819094625e32dd209f35</td></tr>
+<tr><td class="idx">B10</td><td class="mono">15:59:34</td><td><span class="chip">Stream</span></td><td class="num">170,240</td><td class="num">79,360</td><td class="num warn">90,880</td><td class="num">10.3s</td><td class="mono small">resp_0fbde9d87650d92b016a86b3de56fc87d1af7a7c1848b5cd24</td></tr>
+<tr><td class="idx">B11</td><td class="mono">16:27:42</td><td><span class="chip">Stream</span></td><td class="num">47,872</td><td class="num">28,160</td><td class="num warn">19,712</td><td class="num">20.8s</td><td class="mono small">resp_0ccd04107563282f016a86ba6f2d048196afe96b6ae0048da3</td></tr>
+    </tbody>
+  </table></div>
+  <p class="tnote">11 笔合计差额 <strong>580,096</strong> tokens。最极端的一笔（10:46:57）在 8.1 秒前刚发送过 239,744 tokens 的同一前缀，本次只命中 28,160 tokens。</p>
+</section>
+
+<section>
+  <div class="shead"><span class="snum">06</span><h2>计费影响</h2></div>
+  <div class="col">
+    <p class="lede">按贵方自己的单价口径计算，差额来自同一批 tokens 被按 10 倍单价结算。</p>
+    <ul>
+      <li>异常 A：<strong>1,289,418</strong> tokens 应计 cache read，实计 input</li>
+      <li>异常 B：<strong>580,096</strong> tokens 同上</li>
+      <li>合计 <strong>1,869,514</strong> tokens × ($5.00 &minus; $0.50)/M = <strong>$8.41</strong> 原价，按 0.2 倍率约 <strong>$1.68</strong></li>
+      <li>占当天计费额 $15.8729 的 <strong>约 10.6%</strong></li>
+    </ul>
+    <p>需要说明的是，这个数字是刻意保守的：我们已经把 128 token 分块对齐造成的零碎差额（428 笔请求共 258,688 tokens）全部剔除，不计入异常。若一并计入，差额为 2,105,472 tokens、约 $9.47 原价 / $1.89 计费额。</p>
+  </div>
+</section>
+
+<section>
+  <div class="shead"><span class="snum">07</span><h2>附带观察</h2></div>
+  <div class="col">
+    <p class="lede">以下几项不构成投诉，只是排查过程中发现的、可能对贵方定位有帮助的现象。</p>
+    <ol class="tight">
+      <li><strong>失败请求在用量导出中不可见。</strong>客户端在 14:00&thinsp;–&thinsp;16:50 观察到 55 次上游 5xx，用量导出中没有任何对应记录；我们无法自行核对失败率。此外我们的客户端熔断器当天对该端点触发过 8 次。</li>
+      <li><strong>21 行 0 token 记录。</strong>导出中有 21 行 input / output / cache read 全为 0、无首字时间、耗时 1&thinsp;–&thinsp;2041 ms 的记录，全部为 <code>WS</code> 通道，分布在 10:04&thinsp;–&thinsp;14:18。想确认这些代表什么（连接建立？客户端取消？失败重试？）。</li>
+      <li><strong>Cache Creation Tokens 全天恒为 0。</strong>如果这个字段本应记录缓存写入，那么它与 cache read 的异常可能出自同一处计量逻辑。</li>
+      <li><strong>首字延迟存在约 6 秒的地板。</strong>即使新增 input 不足 5,000 tokens，首字中位数也有 6,143 ms；新增 input 到 10&thinsp;–&thinsp;20 万 tokens 时，中位数才 7,031 ms。首字几乎不随 prefill 量增长——这既是我们判断「缓存可能其实命中了」的依据，也说明这条链路上有一段固定开销值得排查。</li>
+    </ol>
+  </div>
+</section>
+
+<section>
+  <div class="shead"><span class="snum">08</span><h2>希望协助确认的问题</h2></div>
+  <div class="asks">
+    <div class="ask"><div><p>用第 04 节的 13 个 response id，查一下上游返回的原始 usage 中 <code>prompt_tokens_details.cached_tokens</code> 是多少？</p><p>这一条能直接区分两种情况：上游确实未命中（路由/亲和性问题），还是上游命中了但中转层未透传或未计入账单（计量问题）。首字延迟的证据更偏向后者。</p></div></div>
+    <div class="ask"><div><p>中转层是否把客户端传入的 <code>prompt_cache_key</code> 原样透传给上游？<code>WS</code> 通道是否同样透传？</p><p>我们确认客户端在整个会话中发送的是同一个固定值，未做任何轮换。</p></div></div>
+    <div class="ask"><div><p>Account ID 4 这个分组下是否有多个上游账号或节点在轮询？同一 <code>prompt_cache_key</code> 是否保证落到同一上游？</p><p>异常 B 中「命中了一份更浅的旧快照」的形态，与请求在多个上游之间轮转的表现一致。</p></div></div>
+    <div class="ask"><div><p>如果确认属于计量侧未计入 <code>cached_tokens</code>，能否按第 06 节的口径修正当天账单？</p><p>我们更关心的是止损后续，而不是这一天的金额本身——如果是计量 bug，它每天都在按 10 倍单价结算这部分 tokens。</p></div></div>
+  </div>
+</section>
+
+<footer>
+  报告生成于 2026-08-20 · 数据源：贵方全量用量导出 + 客户端逐请求遥测（506 行双向对齐）<br>
+  所有时间为 GMT+8 · 单价与倍率由用量导出反解，残差为 0
+</footer>
+</div>

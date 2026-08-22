@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Context Steady 全量复盘 · 2026-08-21</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #20242a; --muted: #697386; --line: #d8e0ea;
+      --paper: #fbfcfd; --panel: #ffffff; --band: #f2f6f8;
+      --green: #0f766e; --blue: #2457a6; --amber: #a16207;
+      --red: #a33a3a; --code: #edf2f7;
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; color:var(--ink); background:var(--paper);
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; line-height:1.65; }
+    header { background:#fff; border-bottom:1px solid var(--line); }
+    .wrap { width:min(1100px,calc(100% - 40px)); margin:0 auto; }
+    .hero { padding:52px 0 36px; }
+    .eyebrow { margin:0 0 10px; color:var(--green); font-size:13px; font-weight:700; text-transform:uppercase; }
+    h1 { max-width:900px; margin:0; font-size:clamp(28px,4vw,48px); line-height:1.08; }
+    .subtitle { max-width:860px; margin:16px 0 0; color:var(--muted); font-size:17px; }
+    main { padding:28px 0 62px; }
+    section { padding:28px 0; border-bottom:1px solid var(--line); }
+    section:last-child { border-bottom:0; }
+    h2 { margin:0 0 14px; font-size:22px; line-height:1.25; }
+    h3 { margin:20px 0 8px; font-size:17px; }
+    p { margin:10px 0; }
+    ul,ol { margin:10px 0; padding-left:22px; }
+    li { margin:6px 0; }
+    table { width:100%; margin:14px 0; border-collapse:collapse; background:var(--panel); font-size:14px; }
+    th,td { padding:10px 13px; border:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { background:var(--band); font-weight:700; }
+    td.num { text-align:right; font-variant-numeric:tabular-nums; }
+    code { padding:2px 5px; border-radius:4px; background:var(--code);
+      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em; }
+    pre { overflow:auto; margin:14px 0; padding:14px 16px; border:1px solid var(--line);
+      border-radius:8px; background:#101820; color:#eef6f3; line-height:1.55; font-size:13px; }
+    pre code { padding:0; border-radius:0; background:transparent; color:inherit; }
+    .callout { margin:16px 0; padding:14px 16px; border-left:4px solid var(--green);
+      background:var(--band); font-size:14.5px; }
+    .callout.warning { border-left-color:var(--amber); }
+    .callout.risk    { border-left-color:var(--red); }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px;
+      font-weight:700; color:#fff; vertical-align:middle; margin-right:4px; }
+    .badge.red   { background:var(--red); }
+    .badge.amber { background:var(--amber); }
+    .badge.blue  { background:var(--blue); }
+    .badge.green { background:var(--green); }
+    .verdict-box { margin:0 0 20px; padding:18px 20px; border:2px solid var(--red);
+      border-radius:8px; background:#fdf4f4; }
+    .verdict-box p { margin:6px 0; }
+    .meta { color:var(--muted); font-size:13px; margin-top:8px; }
+    .toc { margin:18px 0 0; padding:14px 18px; background:var(--panel);
+      border:1px solid var(--line); border-radius:8px; font-size:14px; }
+    .toc ol { margin:6px 0 0; }
+    .toc a { color:var(--blue); text-decoration:none; }
+    .toc a:hover { text-decoration:underline; }
+    .anchor { color:var(--muted); font-size:13px; font-weight:400; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="hero">
+      <p class="eyebrow">San · Context Steady 子系统复盘</p>
+      <h1>上下文稳态子系统全量复盘：18 项缺陷，其中一项吃掉了全部归档收益</h1>
+      <p class="subtitle">
+        本文重新梳理 <code>src/context-steady/</code> 全部 11 个模块与 <code>agent-session.ts</code> 的四个接入点，
+        列出复盘中确认的每一项缺陷。所有结论都用生产数据验证：会话
+        <code>01a00e60-43bf-7000-bd9c-69cbcee1adcc</code> 的 38,612 条 journal entry、
+        2,349 条 probe 记录，以及把真实压缩后窗口直接喂进生产 planner 的重放实验。
+      </p>
+      <p class="meta">复盘日期 2026-08-21 · 分支 <code>tmp/reliability-commit-20260817</code> · 未修改任何 <code>src/</code> 代码</p>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+<section>
+  <div class="verdict-box">
+    <p><strong>核心结论。</strong>ContextPlan 的物料准入用 <code>JSON.stringify</code> 估算 token，
+    淘汰环却用渲染后的 markdown 估算。两者系统性偏差：checkpoint 渲染体积只有 JSON 估算的
+    <strong>0.76 倍</strong>，digest 约 <strong>0.46 倍</strong>。于是一个真实上线只要
+    <strong>2,483</strong> token 的 checkpoint，被 <code>maxTokens: 3000</code> 的预算按
+    <strong>3,279</strong> 的虚高估算拒掉。</p>
+    <p>而 checkpoint 落选时，它折叠的 digest <em>仍然</em>被过滤在候选之外
+    （<code>planner.ts:230</code> 判的是 <code>includeCheckpoint</code> 而不是"是否真的进了 materials"），
+    历史覆盖权直接归零。审计里既没有 checkpoint 条目、也没有 <code>omitted</code> 条目，
+    <strong>全程静默</strong>。</p>
+    <p><strong>用生产输入实测：</strong>线上配置下 ContextPlan 归档 2 条 entry（8 token）、自身花掉 254 token
+    ——<strong>净亏 246 token</strong>。仅把 <code>maxTokens</code> 从 3000 抬到 3400、其它一律不动，
+    归档变成 154 条 entry（39,733 token）、自身 2,551 token ——<strong>净省 37,182 token</strong>。</p>
+    <p>覆盖权归零 ⟹ 投影 token ≈ 原始 journal ⟹ steady 门触发 ⟹ 压缩 ⟹ 冷启动。
+    本会话 <strong>74 次压缩</strong>中 <strong>70 次</strong>的 <code>primaryTrigger</code> 就是
+    <code>steady_target</code>；<strong>97 次冷启动共 9,495,490 token</strong>，占本会话 prompt token 的 4.1%。</p>
+  </div>
+
+  <div class="toc">
+    <strong>缺陷索引</strong>
+    <ol>
+      <li><a href="#s1">覆盖权坍塌 — D1〜D4（P0，本次新发现，已用生产输入证明）</a></li>
+      <li><a href="#s2">正反馈环：74 次压缩从哪来 — D5〜D6（P0）</a></li>
+      <li><a href="#s3">缓存维度：plan 每轮重渲染 — D7〜D9（P1）</a></li>
+      <li><a href="#s4">窗口与周期错配 — D10（P1）</a></li>
+      <li><a href="#s5">fallback digest 是纯成本 — D11（P1）</a></li>
+      <li><a href="#s6">配置陷阱：三个互不校验的旋钮 — D12〜D14（P2）</a></li>
+      <li><a href="#s7">性能：每请求二次扫描 — D15（P2）</a></li>
+      <li><a href="#s8">死代码与三份重复实现 — D16〜D18（P2）</a></li>
+      <li><a href="#s9">测试盲区</a></li>
+      <li><a href="#s10">缺陷总表与修复顺序</a></li>
+      <li><a href="#s11">复现方法</a></li>
+      <li><a href="#s12">明确不在本文范围内的问题</a></li>
+    </ol>
+  </div>
+</section>
+
+<section id="s1">
+  <h2>1. 覆盖权坍塌 <span class="anchor">D1〜D4</span></h2>
+
+  <p>先讲清机制，四个缺陷是同一条链上的四环。</p>
+
+  <h3>设计意图</h3>
+  <p>ContextPlan 的价值在于<strong>覆盖权</strong>：一份物料（digest 或 checkpoint）声明它覆盖了哪些原始
+  entry，物化层就可以把那些 entry 从 payload 里删掉。覆盖权由
+  <code>coverage.ts</code> 严格从 <em>当前这一版 plan 的 materials</em> 累加——
+  物料被淘汰，它覆盖的原始 entry 立刻回到 payload。这个设计本身是对的：不能让被删掉的 entry
+  失去任何代表。</p>
+
+  <h3 id="d1">D1 <span class="badge red">P0</span> 准入与淘汰用两套估算器，方向系统性相反</h3>
+  <p><code>planner.ts:59-61</code>（准入）：</p>
+  <pre><code>function materialTokenEstimate(value: unknown): number {
+	return estimateTokens({ role: "user", content: JSON.stringify(value), timestamp: Date.now() });
+}</code></pre>
+  <p><code>planner.ts:480-482</code>（淘汰）：</p>
+  <pre><code>function estimateContextPlanWireTokens(renderedContent: string): number {
+	return estimateTokens({ role: "user", content: renderedContent, attribution: "agent", timestamp: Date.now() });
+}</code></pre>
+  <p>checkpoint 的 <code>tokenEstimate</code> 还有第三套：<code>checkpoint.ts:48</code> 的
+  <code>estimateCheckpointTokens</code>，在 <code>checkpoint.ts:256</code> 落库时算一次，之后
+  planner 直接读这个存量字段（<code>planner.ts:209</code>）。</p>
+  <p>把本会话 5 个真实 checkpoint 和前 8 个真实 digest 分别过一遍"存量估算"和"渲染后上线体积"：</p>
+  <table>
+    <thead><tr><th>物料</th><th class="num">存量 / JSON 估算</th><th class="num">渲染后上线 token</th><th class="num">比值</th><th>备注</th></tr></thead>
+    <tbody>
+      <tr><td>checkpoint #1</td><td class="num">1,926</td><td class="num">1,459</td><td class="num">0.76×</td><td>折叠 6 digest</td></tr>
+      <tr><td>checkpoint #2</td><td class="num">2,970</td><td class="num">2,261</td><td class="num">0.76×</td><td>折叠 12</td></tr>
+      <tr><td>checkpoint #3</td><td class="num">3,098</td><td class="num">2,339</td><td class="num">0.76×</td><td>折叠 18 · <strong>越过 3000</strong></td></tr>
+      <tr><td>checkpoint #4</td><td class="num">3,332</td><td class="num">2,530</td><td class="num">0.76×</td><td>折叠 24</td></tr>
+      <tr><td>checkpoint #5</td><td class="num">3,279</td><td class="num">2,483</td><td class="num">0.76×</td><td>折叠 30</td></tr>
+      <tr><td>digest（8 条区间）</td><td class="num">167〜1,301</td><td class="num">139〜715</td><td class="num">0.39〜0.83×</td><td>中位约 0.46×</td></tr>
+    </tbody>
+  </table>
+  <div class="callout risk">
+    <strong>后果。</strong>偏差恒定 0.76，说明这不是噪声而是两个函数在度量两样不同的东西：
+    JSON 里的引号、花括号、字段名、转义全都被计入了预算，而它们永远不会上线。
+    结果是预算门槛被系统性抬高约 30%：真实只花 2,483 token 的 checkpoint 撞在 3000 的墙上。
+    <strong>我先前的判断是"准入宽松、淘汰严格"，实测方向恰好相反</strong>——准入更严，
+    而且严到让第 3 个 checkpoint 起就永远进不去。
+  </div>
+
+  <h3 id="d2">D2 <span class="badge red">P0</span> checkpoint 落选，但它折叠的 digest 仍被过滤掉</h3>
+  <p><code>planner.ts:196-241</code>，删去无关行：</p>
+  <pre><code>let remainingBudget = Math.max(0, Math.floor(planTokenBudget));
+const latestCheckpoint = sourceIndex.checkpoints.at(-1);
+const coveredDigestRefs = new Set(latestCheckpoint?.coveredDigestEntryRefs ?? []);
+const includeCheckpoint =
+	!!latestCheckpoint &amp;&amp;
+	(!requireRelevance || isCheckpointRelevantToPrompt(promptText, latestCheckpoint.checkpoint));
+
+if (latestCheckpoint &amp;&amp; includeCheckpoint) {
+	const checkpointEstimate = latestCheckpoint.checkpoint.tokenEstimate;
+	if (checkpointEstimate &lt;= remainingBudget) {      // ← 装不下就静默跳过
+		materials.push({ ... });
+		remainingBudget -= checkpointEstimate;
+	}
+}
+
+const selectedDigests = sourceIndex.digests
+	.filter(source =&gt; !coveredDigestRefs.has(source.entryId) || !includeCheckpoint)
+	//                                                            ↑ 判的是"想要"，不是"进了"
+	...</code></pre>
+  <p><code>includeCheckpoint</code> 表达的是"这个 checkpoint 与当前 prompt 相关、我<em>想</em>带上它"。
+  过滤 digest 时复用了这个变量，语义却被当成"checkpoint <em>已经</em>在 materials 里，所以它折叠的
+  digest 可以省掉"。当 <code>checkpointEstimate &gt; remainingBudget</code> 时，两个语义分叉：
+  checkpoint 没进去，它折叠的 30 个 digest 也被排除了。</p>
+
+  <h3 id="d3">D3 <span class="badge red">P0</span> <code>fitMaterialsToPlanBudget</code> 声明的优先级从未生效</h3>
+  <p><code>planner.ts:269-299</code> 的注释写着 <em>"Drop recall first, then oldest digests, then
+  checkpoint last."</em>——checkpoint 优先级最高，最后才淘汰。这个意图是对的：
+  checkpoint 是覆盖权密度最高的物料，一条抵 30 个 digest。</p>
+  <p>但 checkpoint 在 <code>buildMaterials</code> 阶段就已经被拒掉，根本走不到这个淘汰环。
+  于是代码里同时存在两套互相矛盾的优先级：<strong>准入阶段 checkpoint 最先被牺牲，
+  淘汰阶段声明它最后被牺牲</strong>。实际生效的是前者。</p>
+
+  <h3 id="d4">D4 <span class="badge red">P0</span> 坍塌全程不可观测</h3>
+  <p>checkpoint 装不下时，<code>buildMaterials</code> 既不 push runtime 物料，也不写审计条目。
+  而 <code>buildOmittedAuditMaterials</code>（<code>planner.ts:302-320</code>）在生成
+  <code>omitted</code> 记录时，会主动排除掉被 checkpoint 折叠的 digest：</p>
+  <pre><code>const checkpointCoveredRefs = new Set(sourceIndex.checkpoints.at(-1)?.coveredDigestEntryRefs ?? []);
+return sourceIndex.digests
+	.filter(source =&gt; !representedDigestRefs.has(source.entryId) &amp;&amp; !checkpointCoveredRefs.has(source.entryId))</code></pre>
+  <p>逻辑是"被 checkpoint 覆盖的 digest 不算遗漏"——在 checkpoint 真的进去时成立，
+  在它落选时正好把唯一的证据抹掉。</p>
+  <p><strong>实测审计输出</strong>（线上配置，真实窗口）：</p>
+  <pre><code>planMaxTokens=3000 审计里的 material 记录：
+    turn_digest/digest est=49 refs=1 :: recent settled turn digest (tier: full)
+    turn_digest/digest est=99 refs=1 :: recent settled turn digest (tier: full)
+  → 审计里出现 checkpoint 的条目数：0
+  → 审计里 representation=omitted 的条目数：0
+  → 被 checkpoint 折叠但因 checkpoint 落选而彻底消失的 digest 数：2</code></pre>
+  <p>历史语料印证：本会话持久化的 <strong>31 条 <code>san.context_plan</code> 审计中，
+  零条包含 checkpoint 物料</strong>，coverage 计数依次为 1/0/3/0/0/0。checkpoint 机制在这个会话里
+  <strong>从未产生过任何效果</strong>，而没有任何一条日志说过这件事。</p>
+
+  <h3>生产输入重放</h3>
+  <p>取该会话最后一次压缩的 <code>firstKeptEntryId</code> 之后的全部 entry（205 条，
+  与 <code>#contextSteadyActivePlanningEntries</code> 的切片一致），原样喂进
+  <code>buildContextPlan</code>，只改一个数字：</p>
+  <table>
+    <thead><tr><th>配置</th><th>materials</th><th class="num">checkpoint 进入</th><th class="num">归档 entry</th><th class="num">归档 token</th><th class="num">plan 自身</th><th class="num">净收益</th></tr></thead>
+    <tbody>
+      <tr><td><strong>A. 线上现值</strong> <code>maxTokens=3000</code></td><td>digest×2</td><td class="num">否</td><td class="num">2</td><td class="num">8</td><td class="num">254</td><td class="num" style="color:#a33a3a"><strong>−246</strong></td></tr>
+      <tr><td><strong>B.</strong> <code>maxTokens=3400</code>，其余不变</td><td>checkpoint + digest</td><td class="num">是</td><td class="num">154</td><td class="num">39,733</td><td class="num">2,551</td><td class="num" style="color:#0f766e"><strong>+37,182</strong></td></tr>
+      <tr><td><strong>C.</strong> <code>maxTokens=3000</code>, <code>recentDigests=40</code></td><td>digest×2</td><td class="num">否</td><td class="num">2</td><td class="num">8</td><td class="num">254</td><td class="num">−246</td></tr>
+      <tr><td><strong>D.</strong> <code>maxTokens=12000</code>, <code>recentDigests=40</code></td><td>checkpoint + digest×2</td><td class="num">是</td><td class="num">155</td><td class="num">39,737</td><td class="num">2,655</td><td class="num">+37,082</td></tr>
+    </tbody>
+  </table>
+  <p>窗口内 message 类 entry 合计 39,737 token。B 归档了其中 39,733 ——
+  <strong>99.99%</strong>。A 归档了 8 token。C 证明这跟 <code>recentDigests</code> 无关：
+  加大 digest 窗口毫无作用，因为它们被 <code>coveredDigestRefs</code> 过滤掉了。
+  <strong>A 与 B 的唯一差别就是 400 个 token 的预算数字。</strong></p>
+  <div class="callout warning">
+    <strong>关于用户看到的"5 万 token 冷启动换 600 token 瘦身"。</strong>
+    这不是摘要算法的能力上限，而是这条链把它的输出全部丢弃后的残值。
+    同一份 checkpoint、同一份 digest、同一个窗口，预算门放对以后一次归档 39,733 token。
+    算法产出是好的，<strong>准入逻辑把产出扔了</strong>。
+  </div>
+
+  <h3>建议修复</h3>
+  <ol>
+    <li><strong>D1：统一到上线体积。</strong>准入也用渲染后估算——把候选物料先渲染一次再量，
+    或者给 checkpoint / digest 各自落一个 <code>wireTokenEstimate</code> 字段。
+    最小改动版本：<code>materialTokenEstimate</code> 改成走 <code>renderContextPlanContent</code>
+    的单物料路径。存量 <code>tokenEstimate</code> 保留给 <code>checkpoint.maxTokens</code> 的自身收敛逻辑，
+    不再参与 plan 预算判断。</li>
+    <li><strong>D2：把"想要"和"进了"分成两个变量。</strong>
+    <code>const checkpointAdmitted = ...</code>，第 230 行的过滤条件改用
+    <code>checkpointAdmitted</code>。这一行改动单独就能消除坍塌——checkpoint 装不下时，
+    它折叠的 30 个 digest 会重新成为候选，覆盖权退化为"按 digest 粒度"而不是"归零"。</li>
+    <li><strong>D3：让 checkpoint 走淘汰环。</strong>准入阶段无条件收下 checkpoint，
+    超预算的判断交给 <code>fitMaterialsToPlanBudget</code>——它已经写好了正确的优先级。</li>
+    <li><strong>D4：坍塌必须留痕。</strong>checkpoint 落选时写一条
+    <code>representation: "omitted"</code> 的审计，<code>reason</code> 带上
+    <code>checkpointEstimate</code> 与 <code>remainingBudget</code> 的实际数值；
+    <code>buildOmittedAuditMaterials</code> 的 <code>checkpointCoveredRefs</code> 排除条件
+    加上"checkpoint 确实进入了 materials"的前提。</li>
+  </ol>
+  <p class="meta">建议顺序：D2 单独可上（一行，风险最低，立刻止血）→ D4（可观测性，防止再次静默）
+  → D1（估算器统一，收益最大但要重跑 planner 全部测试）→ D3（结构调整，依赖 D1 完成）。</p>
+</section>
+
+<section id="s2">
+  <h2>2. 正反馈环：74 次压缩从哪来 <span class="anchor">D5〜D6</span></h2>
+
+  <h3 id="d5">D5 <span class="badge red">P0</span> 覆盖权归零 → 压缩 → 覆盖权更低</h3>
+  <p>把 §1 的坍塌接到会话级行为上，得到一个自我强化的环：</p>
+  <ol>
+    <li>checkpoint 随折叠的 turn 数增长，第 3 个起 <code>tokenEstimate</code> 越过
+    <code>contextPlan.maxTokens</code>（1,926 → 2,970 → <strong>3,098</strong> → 3,332 → 3,279）。</li>
+    <li>D1+D2：checkpoint 落选，它折叠的 digest 一并消失，覆盖权 ≈ 0。</li>
+    <li>覆盖权 ≈ 0 ⟹ 物化后 payload ≈ 原始 journal ⟹ 投影 token 撞上 steady 门。</li>
+    <li>触发压缩。压缩重写前缀，冷启动一次。</li>
+    <li>压缩把窗口切到 <code>firstKeptEntryId</code> 之后，<strong>更多 digest 的
+    <code>source.fromEntryId</code> 掉到窗口外</strong>（见 D6），能解析出的覆盖范围进一步缩小。</li>
+    <li>回到第 2 步，压力更大。</li>
+  </ol>
+  <p><strong>probe 侧证据</strong>（本会话 2,349 条记录）：</p>
+  <table>
+    <thead><tr><th>指标</th><th class="num">数值</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>agent 请求</td><td class="num">1,882</td><td>—</td></tr>
+      <tr><td>prompt token 合计</td><td class="num">231,778,894</td><td>—</td></tr>
+      <tr><td>cacheRead 合计</td><td class="num">208,736,000</td><td>整体命中率 90.1%</td></tr>
+      <tr><td><strong>冷启动次数</strong>（cacheRead=0 且 prompt≥20k）</td><td class="num">97</td><td>—</td></tr>
+      <tr><td><strong>冷启动 token 合计</strong></td><td class="num">9,495,490</td><td>占 prompt token 的 <strong>4.1%</strong></td></tr>
+      <tr><td>maintenance 记录</td><td class="num">231</td><td><code>checkpoint</code>=154 · <code>context-full</code>=74 · <code>none</code>=3</td></tr>
+      <tr><td><code>primaryTrigger</code> 分布</td><td class="num">—</td><td><code>segment_tokens</code>=150 · <strong><code>steady_target</code>=70</strong> · <code>native_threshold</code>=7 · <code>segment_duration</code>=4</td></tr>
+      <tr><td>压缩前后 token（中位）</td><td class="num">199,609 → 42,249</td><td>77 条带 before/after 的记录</td></tr>
+    </tbody>
+  </table>
+  <div class="callout risk">
+    <strong>关键归因。</strong>74 次 <code>context-full</code> 压缩里，<strong>70 次的
+    <code>primaryTrigger</code> 是 <code>steady_target</code></strong>，只有 7 次是
+    <code>native_threshold</code>。也就是说压缩不是被模型的原生上下文上限逼出来的，
+    <strong>是被我们自己的 steady 门逼出来的</strong>；而 steady 门之所以会触发，
+    是因为覆盖权坍塌导致投影 token ≈ 原始 journal。§1 那四个缺陷直接对应这 9,495,490 token 的冷启动。
+  </div>
+
+  <h3 id="d6">D6 <span class="badge red">P0</span> 压缩后 digest 的 span 解析退化成 <code>toolEvidence</code> 兜底</h3>
+  <p><code>source-index.ts:20-29</code>：</p>
+  <pre><code>function sourceEntryRefsForDigest(entries: readonly SessionEntry[], digest: TurnDigest): string[] {
+	const fromIndex = entries.findIndex(entry =&gt; entry.id === digest.source.fromEntryId);
+	const toIndex = entries.findIndex(entry =&gt; entry.id === digest.source.toEntryId);
+	if (fromIndex &lt; 0 || toIndex &lt; 0 || fromIndex &gt; toIndex) {
+		return digest.toolEvidence
+			.flatMap(evidence =&gt; evidence.entryIds ?? [])
+			.filter(entryId =&gt; entries.some(entry =&gt; entry.id === entryId));
+	}
+	return entries.slice(fromIndex, toIndex + 1).map(entry =&gt; entry.id);
+}</code></pre>
+  <p>planner 看到的 entry 只有压缩后窗口（<code>agent-session.ts:10198-10262</code> 的
+  <code>#contextSteadyActivePlanningEntries</code> 从最近一次压缩的
+  <code>firstKeptEntryId</code> 起切片）。digest 的 <code>fromEntryId</code> 一旦落在切点之前，
+  上面的分支就走兜底路径——<strong>用 <code>toolEvidence</code> 里零散的几个 entryId
+  代替本该是几百条的连续区间</strong>。</p>
+  <p><strong>实测</strong>：该会话 journal 里共 32 条 <code>san.turn_digest</code>，
+  但最后一次压缩后的窗口里 <code>buildContextSourceIndex</code> 只解析出
+  <strong>4 条</strong> digest —— <strong>28 条（87.5%）对 planner 完全不可见</strong>。
+  这 28 条覆盖的历史只剩 checkpoint 一个载体（窗口内唯一那个 checkpoint 的
+  <code>coveredSourceEntryRefs</code> = 153 条、<code>coveredDigestEntryRefs</code> = 2 条）。</p>
+  <div class="callout warning">
+    <strong>为什么这让 §1 变成灾难而不只是缺陷。</strong>digest 大量掉出窗口以后，
+    checkpoint 是压缩后历史的<em>唯一</em>承载者。这时把 checkpoint 拒掉，
+    等于一次性丢掉整段历史的全部代表，而不是"少几条 digest"。
+    D1〜D4 的严重程度是被 D6 放大出来的。
+  </div>
+
+  <h3>建议修复</h3>
+  <ol>
+    <li><strong>D6：让 digest 自带持久化的 span，而不是每次现场反查。</strong>
+    digest 落库时就把它覆盖的 entryId 列表写进去（或者写一个稳定的
+    <code>[fromSeq, toSeq]</code> 序号区间），<code>sourceEntryRefsForDigest</code> 改成
+    "取交集"而不是"找端点"：<code>storedRefs.filter(id =&gt; windowIds.has(id))</code>。
+    这样端点掉出窗口只会等比缩小覆盖范围，不会掉进兜底路径。</li>
+    <li><strong>D6 兜底路径要留痕。</strong>走了 <code>toolEvidence</code> 分支时在审计里标记，
+    否则"解析出 20 条"和"真实 700 条"在日志里长得一模一样。</li>
+    <li><strong>D5：修完 D1〜D4 + D6 后重新量 <code>primaryTrigger</code> 分布。</strong>
+    <code>steady_target</code> 占比应显著下降；若仍居高，说明 steady 门本身的阈值需要单独审视，
+    而不是覆盖权问题。这条是验收指标，不是独立修复项。</li>
+  </ol>
+</section>
+
+<section id="s3">
+  <h2>3. 缓存维度：plan 每轮重渲染破坏前缀 <span class="anchor">D7〜D9</span></h2>
+  <p>这一节是本次调查最初的入口问题（"5 万 token 冷启动换 600 token 瘦身"）。
+  §1 已经说明"600 token"是坍塌后的残值；这一节说明"5 万 token 冷启动"是怎么来的。</p>
+
+  <h3 id="d7">D7 <span class="badge amber">P1</span> plan 消息每轮重渲染，且随覆盖推进塌向 payload 头部</h3>
+  <p>两个机制叠加：</p>
+  <p><strong>(a) 内容会变。</strong><code>materialize.ts:132</code> 的
+  <code>renderContextPlanContent</code> 每次都把每个 digest 过一遍
+  <code>projectDigestTier</code>，而 tier 由 <code>decay.ts</code> 的
+  <code>selectDigestTier(ageRank, pressure)</code> 决定：</p>
+  <pre><code>const PRESSURE_FLOOR = 0.5;
+const COMPACT_ALLOWANCE_K = 2.4;
+const ANCHOR_ALLOWANCE_K = 4.8;
+export function selectDigestTier(ageRank: number, pressure: number): DigestTier {
+	if (ageRank &lt;= 0) return "full";
+	if (!Number.isFinite(pressure) || pressure &lt; PRESSURE_FLOOR) return "full";
+	const effective = Math.max(pressure, 0.1);
+	const compactAllowance = Math.ceil(COMPACT_ALLOWANCE_K / effective);
+	const anchorAllowance = Math.ceil(ANCHOR_ALLOWANCE_K / effective);
+	if (ageRank &gt;= anchorAllowance) return "anchor";
+	if (ageRank &gt;= compactAllowance) return "compact";
+	return "full";
+}</code></pre>
+  <p><code>ageRank</code> 每来一条新 digest 就整体前移，<code>pressure</code> 每轮都在浮动。
+  于是<strong>即使没有新 digest 产生，同一批 digest 的渲染文本也会在某一轮突然从
+  <code>full</code> 变 <code>compact</code></strong>，plan 消息字节改变，其后整条前缀失效。</p>
+  <p><strong>(b) 位置会变。</strong><code>materialize.ts</code> 里
+  <code>insertAt = Math.max(0, substituted.findLastIndex(m =&gt; m.role === "user"))</code>。
+  覆盖权删掉越多老消息，这个下标越往 0 塌，plan 消息越靠 payload 头部——
+  <strong>一个每轮都可能变的消息被放在前缀最前面</strong>，是缓存最坏的位置。</p>
+  <p><strong>实测</strong>（跨会话语料，连续 agent 请求对，同模型同 cache key、其间无压缩、
+  前一笔 promptTokens ≥ 20,000；存活率 = <code>cacheRead(后) / promptTokens(前)</code>）：</p>
+  <table>
+    <thead><tr><th>相邻请求间发生的事</th><th class="num">样本</th><th class="num">存活率中位</th><th class="num">p25</th><th class="num">存活率为 0 的比例</th><th class="num">prefixFingerprint 改变率</th></tr></thead>
+    <tbody>
+      <tr><td>无（纯追加）</td><td class="num">36,606</td><td class="num">0.99</td><td class="num">—</td><td class="num">8%</td><td class="num">—</td></tr>
+      <tr><td>新 checkpoint</td><td class="num">1,433</td><td class="num">0.99</td><td class="num">—</td><td class="num">10%</td><td class="num">0.1%</td></tr>
+      <tr><td><strong>新 digest</strong></td><td class="num">339</td><td class="num" style="color:#a33a3a"><strong>0.46</strong></td><td class="num">0.00</td><td class="num">32%</td><td class="num" style="color:#a33a3a"><strong>97.6%</strong></td></tr>
+    </tbody>
+  </table>
+  <p>digest 场景下前缀存活率随归档量单调崩塌：归档 0 token 时 0.77，归档 0〜20k 时 0.06，
+  归档 20〜60k 时 0.00。digest 事件累计冷启动 19,205,063 token / 339 次（均值 56,652）。</p>
+  <div class="callout">
+    <strong>已有的正确先例。</strong><code>agent-session.ts:10573-10615</code> 已经在
+    <em>单个逻辑 turn 内</em>冻结 plan 字节，注释写得很清楚："每次工具调用都重写投影值会让 plan
+    之后的整条 turn 前缀失效，实际会把 provider cache read 压到仅剩 system/tools。"
+    D7 要做的就是把这个已被证明有效的原则从"turn 内"推广到"turn 间"。
+  </div>
+
+  <h3 id="d8">D8 <span class="badge amber">P1</span> 规划目标函数里没有缓存项</h3>
+  <p><code>buildMaterials</code> 的唯一预算变量是 <code>remainingBudget</code>，
+  计的是 payload token。改写 plan 前缀要付多少冷启动，在整个目标函数里没有任何表示。
+  于是"省 600 payload token"和"付 56,652 token 冷启动"这两件事，
+  在代码里根本不在同一个天平上——<strong>不是权衡错了，是没有权衡</strong>。</p>
+
+  <h3 id="d9">D9 <span class="badge amber">P1</span> decay 为"可复现"设计，而不是"跨轮稳定"</h3>
+  <p><code>decay.ts</code> 头部注释："纯函数,同输入永远同输出——同一历史在同一压力下逐字节可重现。"
+  这个性质对测试和审计很有价值，但它<strong>不等于跨轮不变</strong>：
+  <code>ageRank</code> 和 <code>pressure</code> 每轮都在变，所以"同输入同输出"的前提每轮都不成立。
+  设计目标定的是可复现性，缓存需要的是稳定性，两者被混同了。</p>
+
+  <h3>建议修复（三个选项，需要拍板）</h3>
+  <ol>
+    <li><strong>方案 A（推荐，改动最小）：plan 字节按 epoch 冻结。</strong>
+    把现有的 turn 内冻结提升为"直到发生 rebase 事件（压缩 / 新 checkpoint / 显式失效）才允许重渲染"。
+    digest 的 tier 在冻结期内锁定，新 digest 追加到 plan 尾部而不重排 <code>ageRank</code>。
+    代价：plan 在冻结期内略微偏离最优瘦身。</li>
+    <li><strong>方案 B：把 plan 挪到 payload 尾部。</strong>让 plan 变成前缀里最后一个元素，
+    这样它变化时只失效自己之后的部分。需要确认物化层的语义（plan 必须出现在被它覆盖的
+    entry 之前才能解释删除）是否允许——大概率不允许，所以这是备选。</li>
+    <li><strong>方案 C：给目标函数加缓存项。</strong>在 <code>buildMaterials</code> 里显式估算
+    "改写 plan 的冷启动成本"，只有瘦身收益超过它才允许重渲染。最正确，但需要引入前缀长度的运行时反馈，
+    工程量最大。</li>
+  </ol>
+  <div class="callout warning">
+    <strong>比例提示。</strong>D7〜D9 是真实缺陷，但量级远小于 §1。
+    digest 冷启动 19,205,063 token 是跨全部会话 339 次事件的累计；
+    单看本会话，冷启动总计 9,495,490 token，其中主导项是 70 次
+    <code>steady_target</code> 压缩。<strong>先修 §1，再看 §3 还剩多少。</strong>
+    修完 §1 以后 digest 事件数本身会下降（压缩变少 ⟹ digest 生成变少），
+    D7 的绝对收益需要重新测量再决定投多少工程量。
+  </div>
+</section>
+
+<section id="s4">
+  <h2>4. 窗口与周期错配 <span class="anchor">D10</span></h2>
+  <h3 id="d10">D10 <span class="badge amber">P1</span> <code>recentDigests</code> 与 <code>checkpoint.everyTurns</code> 互不知情</h3>
+  <p>两个独立旋钮共同决定"一条 digest 会不会既进不了 plan、又没被 checkpoint 折叠"：</p>
+  <ul>
+    <li><code>san.contextSteady.contextPlan.recentDigests</code>，默认 <strong>5</strong>
+    （<code>settings-schema.ts:2950</code>）—— plan 最多带几条 digest。</li>
+    <li><code>san.contextSteady.checkpoint.everyTurns</code>，默认 <strong>8</strong>
+    （<code>settings-schema.ts:2976</code>），用户线上配置 <strong>6</strong>
+    —— 每几个 turn 才折叠出一个 checkpoint。</li>
+  </ul>
+  <p><code>checkpoint.ts:~220</code> 明确写着不满一个周期的尾巴不折叠：
+  <em>"Residual digest tails smaller than <code>checkpointEveryTurns</code> intentionally stay unfolded;
+  the ContextPacket recent-digest tail carries those fresh turns."</em>
+  ——这个设计成立的前提是 <code>recentDigests ≥ checkpointEveryTurns</code>。</p>
+  <table>
+    <thead><tr><th>配置</th><th class="num">recentDigests</th><th class="num">everyTurns</th><th>孤儿 digest</th></tr></thead>
+    <tbody>
+      <tr><td>schema 默认</td><td class="num">5</td><td class="num">8</td><td>每 8 条里有 <strong>3 条</strong>既不在 plan 也不在 checkpoint</td></tr>
+      <tr><td>用户线上 <code>.san/config.yml</code></td><td class="num">5</td><td class="num">6</td><td>每 6 条里有 <strong>1 条</strong></td></tr>
+    </tbody>
+  </table>
+  <p>孤儿 digest 的代价：它写入时付了摘要模型的费用，落库占了 journal 体积，
+  但既不上线也不授予任何覆盖权——<strong>纯粹的沉没成本</strong>。</p>
+  <h3>建议修复</h3>
+  <ul>
+    <li>把不变式写进配置解析：<code>recentDigests = max(configured, checkpointEveryTurns)</code>，
+    或在配置校验时对 <code>recentDigests &lt; everyTurns</code> 报警。</li>
+    <li>更彻底的做法是让 <code>recentDigests</code> 从 <code>everyTurns</code> 推导，不再作为独立旋钮暴露。</li>
+  </ul>
+</section>
+
+<section id="s5">
+  <h2>5. fallback digest 是纯成本 <span class="anchor">D11</span></h2>
+  <h3 id="d11">D11 <span class="badge amber">P1</span> 一半以上的 digest 从不授予覆盖权</h3>
+  <p><code>digest.fallback === true</code> 的 digest 在 planner
+  （<code>planner.ts:~238</code> 的 <code>canCoverSource</code>）和 checkpoint
+  （<code>checkpoint.ts:234</code> 的 <code>ref.digest.fallback === true ? [] : ...</code>）
+  两处都被拒绝授予覆盖权——这个设计是对的，确定性兜底摘要不足以代表原始 entry。
+  但它<strong>照样占 plan 的物料预算、照样上线消耗 token</strong>。</p>
+  <p><strong>全语料实测</strong>（方法：遍历 <code>~/.san/agent/sessions/*/ *.jsonl</code>，
+  排除 <code>.context-probe.jsonl</code>，统计 <code>type==="custom" &amp;&amp;
+  customType==="san.turn_digest"</code>）：</p>
+  <table>
+    <thead><tr><th>fallbackReason</th><th class="num">条数</th><th class="num">占 fallback</th></tr></thead>
+    <tbody>
+      <tr><td><code>model_unresolved</code></td><td class="num">350</td><td class="num">55.9%</td></tr>
+      <tr><td><code>request_failed</code></td><td class="num">126</td><td class="num">20.1%</td></tr>
+      <tr><td><em>(未记录)</em></td><td class="num">78</td><td class="num">12.5%</td></tr>
+      <tr><td><code>timeout</code></td><td class="num">44</td><td class="num">7.0%</td></tr>
+      <tr><td><code>auth_unavailable</code></td><td class="num">22</td><td class="num">3.5%</td></tr>
+      <tr><td><code>structured_output_invalid</code></td><td class="num">5</td><td class="num">0.8%</td></tr>
+      <tr><td><code>llm_disabled</code></td><td class="num">1</td><td class="num">0.2%</td></tr>
+      <tr><td><strong>fallback 合计</strong></td><td class="num"><strong>626</strong></td><td class="num">—</td></tr>
+      <tr><td><strong>digest 总数</strong></td><td class="num"><strong>1,189</strong></td><td class="num"><strong>fallback 率 52.6%</strong></td></tr>
+    </tbody>
+  </table>
+  <div class="callout warning">
+    <strong>数字更正。</strong>本次对话早前我报过"46.4%（847/1825）"。
+    那次统计把 probe 侧记录和其它 customType 里出现的 <code>turn_digest</code> 字样一起计入了，
+    分母偏大。上表是按 customType 精确匹配、排除 probe sidecar 后重算的结果：
+    <strong>52.6%（626/1,189）</strong>。方法已写在表上方，可复算。
+  </div>
+  <p><strong>首因是配置问题而非代码缺陷</strong>：<code>model_unresolved</code> 占 55.9%，
+  意味着 <code>digest.llm.modelRole</code>（用户线上配的 <code>ds-flash</code>）在超过一半的调用点
+  解析不出模型。这条不需要改 planner，需要查 modelRole 解析链。</p>
+  <h3>建议修复</h3>
+  <ul>
+    <li><strong>先查 <code>model_unresolved</code>。</strong>350 条里如果大部分来自同一个解析路径
+    （例如 digest 请求走的是与主会话不同的 role 解析上下文），修掉它能把 fallback 率直接砍半。</li>
+    <li><strong>fallback digest 不该占 plan 预算。</strong>既然它永远不授予覆盖权，
+    在 <code>selectedDigests</code> 里就应该排到最后，或者在预算紧张时最先被淘汰。
+    现在它和真 digest 平权竞争 <code>remainingBudget</code>。</li>
+    <li><strong><code>fallbackReason</code> 缺失的 78 条要补齐</strong>——
+    <code>digest.ts</code> 的 <code>fallbackReasonForError</code> 有分类逻辑，
+    说明有一条路径绕过了它。</li>
+  </ul>
+</section>
+
+<section id="s6">
+  <h2>6. 配置陷阱：互不校验的旋钮 <span class="anchor">D12〜D14</span></h2>
+
+  <h3 id="d12">D12 <span class="badge amber">P1</span> <code>checkpoint.maxTokens</code> 允许生成一个 <code>contextPlan.maxTokens</code> 装不下的 checkpoint</h3>
+  <p>用户线上配置：<code>checkpoint.maxTokens: 12000</code>、<code>contextPlan.maxTokens: 3000</code>。
+  <code>checkpoint.ts:285-307</code> 的收敛逻辑（先裁条目上限 20/20/30/12/12，
+  再按 <code>nextSteps → risks → filesTouched → decisions → userIntents</code> 顺序削减，
+  再把叙述文本从 120 字逐步夹到 8 字，最后 <code>return null</code> 失败关闭）
+  唯一的目标就是让 <code>tokenEstimate ≤ checkpointMaxTokens</code> = 12,000。</p>
+  <p>而 checkpoint 唯一的上线容器是 ContextPlan，预算 <code>min(planMaxTokens, messageBudget)</code>
+  = 3,000。<strong>生成器的合法输出空间比容器大 4 倍，且没有任何一处代码校验这个关系。</strong>
+  已确认：<code>grep</code> 全仓库，<code>checkpointMaxTokens</code> 与 <code>planMaxTokens</code>
+  没有任何共同消费点（前者只在 <code>checkpoint.ts</code> 和 <code>dogfood.ts</code>，
+  后者只在 <code>budget.ts</code>、<code>dogfood.ts</code> 和 <code>agent-session.ts</code> 的四个调用点）。</p>
+  <p><strong>修复：</strong>checkpoint 生成时就以 plan 能容纳的上线体积为收敛目标
+  （配合 D1 统一估算器后，这个数就是"渲染后 ≤ planTokenBudget × 某个占比"）；
+  或者至少在配置校验时对 <code>checkpoint.maxTokens &gt; contextPlan.maxTokens</code> 报警。</p>
+
+  <h3 id="d13">D13 <span class="badge blue">P2</span> <code>burstWindowTokens &lt; qualityWindowTokens</code> 静默塌成零弹性带</h3>
+  <p><code>budget.ts:34</code> 一线：</p>
+  <pre><code>const burstCeiling = Math.min(Math.max(configuredBurst, steadyTarget), hardInputCeiling);</code></pre>
+  <p>配一个低于 <code>qualityWindowTokens</code> 的 <code>burstWindowTokens</code>，
+  <code>Math.max</code> 会把它抬回 <code>steadyTarget</code>——<strong>burst 与 steady 相等，
+  弹性带为零，每一次压力尖峰都直接变成压缩</strong>，而配置里看不出任何异常。</p>
+  <p>用户已经踩过这个坑的变体，并把过程写在了 <code>.san/config.yml</code> 的注释里：
+  <em>"reserveRatio 0.25 put the reserve-derived hard ceiling at 193500, below the 240000 quality window,
+  which clamped steady == control == burst: no elastic headroom, so every pressure spike became an
+  immediate compaction and each compaction rewrote the cache prefix."</em>
+  ——踩坑记录进了注释，但代码里仍然没有告警。</p>
+  <p><strong>修复：</strong><code>resolveContextPlanBudget</code> 在
+  <code>burstCeiling === steadyTarget</code> 时输出一条 warn 级审计；配置校验对
+  <code>burstWindowTokens &lt; qualityWindowTokens</code> 直接报错。</p>
+
+  <h3 id="d14">D14 <span class="badge blue">P2</span> 32k 固定 reserve 下限可以把 <code>hardInputCeiling</code> 打到 0</h3>
+  <p><code>budget.ts:31</code>：</p>
+  <pre><code>const reserveTokens = contextWindow &gt; 0 ? Math.max(32_000, Math.floor(contextWindow * reserveRatio)) : 32_000;</code></pre>
+  <p><code>hardInputCeiling = contextWindow − reserveTokens</code>。小窗口模型
+  （32k 及以下）上 <code>hardInputCeiling ≤ 0</code>，后续
+  <code>steadyTarget</code> / <code>controlMax</code> / <code>messageBudget</code> 全部退化。
+  当前线上模型窗口 258,000，不受影响，但这是一枚等着被小模型踩的雷。</p>
+  <p><strong>修复：</strong>reserve 下限改成 <code>min(32_000, floor(contextWindow × 0.2))</code>
+  之类的相对量，并在 <code>hardInputCeiling</code> 非正时明确失败而不是静默降级。</p>
+</section>
+
+<section id="s7">
+  <h2>7. 性能：每请求二次扫描 <span class="anchor">D15</span></h2>
+  <h3 id="d15">D15 <span class="badge blue">P2</span> <code>source-index.ts</code> 在 <code>filter</code> 里嵌 <code>entries.some</code></h3>
+  <p>两处（<code>source-index.ts</code> 的 checkpoint 覆盖过滤与
+  <code>sourceEntryRefsForDigest</code> 的 <code>toolEvidence</code> 兜底）都是
+  <code>O(coveredRefs × planningEntries)</code>：</p>
+  <pre><code>? ref.checkpoint.coveredSourceEntryRefs.filter(entryRef =&gt; entries.some(entry =&gt; entry.id === entryRef))</code></pre>
+  <p><code>coveredSourceEntryRefs</code> 的分布（全语料）：
+  p50 = 98、p75 = 762、p90 = 1,733、p99 = 36,405、max = <strong>38,347</strong>。
+  单条 checkpoint 的 JSON 最大 <strong>0.42 MB</strong>。</p>
+  <p>当前窗口只有 205 条 entry，所以实际开销约 7.2M 次比较/请求，可以忍。
+  但窗口在压缩触发前会长到数千条，此时比较次数进入 <strong>10<sup>8</sup></strong> 量级——
+  而且这发生在<em>每一次</em>请求组装的关键路径上。</p>
+  <div class="callout">
+    <strong>说明我先前的口径。</strong>我一度按整个 38,612 条 journal 估算出 70 亿次比较，
+    那是错的——planner 只看压缩后窗口。正确的表达是
+    <code>coveredRefs × planningEntries</code>，当前约 7.2M，压缩触发前可达 10<sup>8</sup> 量级。
+  </div>
+  <p><strong>修复：</strong>把 <code>entries</code> 预先建成
+  <code>Set&lt;entryId&gt;</code> 或 <code>Map&lt;entryId, index&gt;</code> 传下去，
+  <code>some</code>/<code>findIndex</code> 全部改成 O(1) 查表。这是纯机械改动，无行为变化。
+  配合 D6 的 span 持久化一起做最自然。</p>
+</section>
+
+<section id="s8">
+  <h2>8. 死代码与三份重复实现 <span class="anchor">D16〜D18</span></h2>
+
+  <h3 id="d16">D16 <span class="badge blue">P2</span> <code>prune.ts</code> 221 行没有生产调用方</h3>
+  <p><code>buildContextSteadyPrunedMessages</code> 与
+  <code>estimateContextSteadyPrunedTokens</code> 的全部调用方都在
+  <code>test/context-steady/prune.test.ts</code>（已 <code>grep</code> 确认 <code>src/</code> 下零引用）。
+  它内部还包含第三份 span 解析实现（<code>prune.ts:102</code> 的
+  <code>digestCoveredEntryIds</code>）——一份没人跑的代码，却持续参与"我们有几种覆盖语义"的认知负担。</p>
+
+  <h3 id="d17">D17 <span class="badge blue">P2</span> <code>buildContextPacket</code> 只有测试调用方</h3>
+  <p><code>src/context-steady/index.ts:13</code> 把它再导出，但 <code>src/</code> 下没有任何消费者。
+  slash command 用的是 <code>context-packet-report.ts</code> 的
+  <code>buildContextPacketReportText</code>，读的是已持久化的 entry，与
+  <code>buildContextPacket</code> 无关。</p>
+
+  <h3 id="d18">D18 <span class="badge amber">P1</span> span 解析有三份拷贝，其中两份字节相同</h3>
+  <table>
+    <thead><tr><th>位置</th><th>函数</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td><code>source-index.ts:20</code></td><td><code>sourceEntryRefsForDigest</code></td><td>生产路径（planner）</td></tr>
+      <tr><td><code>checkpoint.ts:56</code></td><td><code>sourceEntryRefsForDigest</code></td><td>生产路径（checkpoint 折叠）· 与上一行 <code>diff</code> 完全相同</td></tr>
+      <tr><td><code>prune.ts:102</code></td><td><code>digestCoveredEntryIds</code></td><td>死代码，语义已漂移</td></tr>
+    </tbody>
+  </table>
+  <div class="callout risk">
+    <strong>这条被标成 P1 而不是 P2，因为它是 D6 的风险放大器。</strong>
+    "一条 digest 覆盖了哪些 entry"是整个子系统的核心语义。
+    它有两份生产实现，意味着修 D6 时必须同时改两处；漏改一处，
+    planner 认为覆盖了而 checkpoint 认为没覆盖（或反之），
+    会产生比现在更难查的覆盖权不一致。
+  </div>
+  <p><strong>修复：</strong>抽成单一导出函数（放 <code>session.ts</code> 或新建
+  <code>span.ts</code>），<code>source-index.ts</code> 和 <code>checkpoint.ts</code> 共用；
+  删掉 <code>prune.ts</code> 与 <code>buildContextPacket</code>，连同它们的测试文件。
+  <strong>删除操作建议单独一个 commit</strong>，与行为修复分开，便于回滚。</p>
+</section>
+
+<section id="s9">
+  <h2>9. 测试盲区</h2>
+  <p><code>test/context-steady/planner.test.ts</code> 里
+  <code>SETTINGS.planMaxTokens = 240_000</code>——比任何真实 checkpoint 大两个数量级，
+  所以准入门在这些用例里<strong>永远不会触发</strong>。超预算路径只有两个用例，
+  用的是 <code>planMaxTokens</code> 40 和 135：小到连一条 digest 都装不下，
+  测的是"预算几乎为零"的退化形态。</p>
+  <p><strong>真实形态从未被测</strong>：checkpoint 刚好越过预算，而 digest 还装得下。
+  这正好是生产上每天发生的情况，也正好是 D1+D2 联合发作的唯一条件。
+  这就解释了为什么一个能把归档收益从 +37,182 打成 −246 的缺陷能通过全部测试。</p>
+  <h3>建议补的用例</h3>
+  <ul>
+    <li><strong>坍塌回归用例：</strong>1 个 checkpoint（<code>tokenEstimate</code> 略高于
+    <code>planMaxTokens</code>、渲染后低于它）+ 若干它折叠的 digest + 2 条新 digest。
+    断言：覆盖的 entry 数必须远大于新 digest 数（即 checkpoint 或它的 digest 至少有一方进来了）。
+    这个断言在修 D2 之前必失败，修完必通过。</li>
+    <li><strong>估算器一致性用例：</strong>对同一物料，断言准入估算与上线估算的比值在合理区间
+    （例如 0.9〜1.1）。D1 修完后成立，防止未来再分叉。</li>
+    <li><strong>净收益不变式：</strong>断言 <code>归档 token &gt; plan 自身 token</code>，
+    否则 plan 不该被注入。这条能自动拦住所有"净亏"形态，包括还没想到的。</li>
+    <li><strong>span 兜底用例：</strong>digest 的 <code>fromEntryId</code> 落在窗口外时，
+    断言覆盖范围按比例缩小而不是掉到 <code>toolEvidence</code>（D6 修完后成立）。</li>
+    <li><strong>配置不变式用例：</strong><code>recentDigests ≥ everyTurns</code>、
+    <code>checkpoint.maxTokens ≤ contextPlan.maxTokens</code>、
+    <code>burstCeiling &gt; steadyTarget</code>。</li>
+  </ul>
+</section>
+
+<section id="s10">
+  <h2>10. 缺陷总表与修复顺序</h2>
+  <table>
+    <thead><tr><th>#</th><th>缺陷</th><th>位置</th><th>级别</th><th>证据</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#d1">D1</a></td><td>准入用 JSON 估算、淘汰用上线估算，方向系统性相反</td><td><code>planner.ts:59</code> / <code>:480</code> / <code>checkpoint.ts:48</code></td><td><span class="badge red">P0</span></td><td>5 个真实 checkpoint 恒定 0.76×；8 个 digest 0.39〜0.83×</td></tr>
+      <tr><td><a href="#d2">D2</a></td><td>checkpoint 落选但它折叠的 digest 仍被过滤</td><td><code>planner.ts:230</code></td><td><span class="badge red">P0</span></td><td>重放：覆盖 2 vs 154 条 entry</td></tr>
+      <tr><td><a href="#d3">D3</a></td><td>淘汰环声明的优先级从未生效</td><td><code>planner.ts:269-299</code></td><td><span class="badge red">P0</span></td><td>代码路径分析 + 重放</td></tr>
+      <tr><td><a href="#d4">D4</a></td><td>坍塌不可观测（无 material、无 omitted 记录）</td><td><code>planner.ts:302-320</code></td><td><span class="badge red">P0</span></td><td>31 条线上审计中 checkpoint 物料 0 条</td></tr>
+      <tr><td><a href="#d5">D5</a></td><td>覆盖权归零 → 压缩 → 覆盖权更低 的正反馈环</td><td>跨模块</td><td><span class="badge red">P0</span></td><td>74 次压缩中 70 次 <code>steady_target</code>；冷启动 9,495,490 token</td></tr>
+      <tr><td><a href="#d6">D6</a></td><td>压缩后 digest span 退化为 <code>toolEvidence</code> 兜底</td><td><code>source-index.ts:20</code></td><td><span class="badge red">P0</span></td><td>32 条 digest 中 28 条对 planner 不可见</td></tr>
+      <tr><td><a href="#d7">D7</a></td><td>plan 每轮重渲染，且随覆盖推进塌向 payload 头部</td><td><code>materialize.ts:132</code> · <code>decay.ts</code></td><td><span class="badge amber">P1</span></td><td>digest 事件 prefixFingerprint 改变率 97.6%；存活率中位 0.46</td></tr>
+      <tr><td><a href="#d8">D8</a></td><td>规划目标函数没有缓存项</td><td><code>planner.ts:196-261</code></td><td><span class="badge amber">P1</span></td><td>代码分析</td></tr>
+      <tr><td><a href="#d9">D9</a></td><td>decay 为可复现性设计，非跨轮稳定性</td><td><code>decay.ts</code></td><td><span class="badge amber">P1</span></td><td>头部注释 + <code>ageRank</code>/<code>pressure</code> 逐轮变化</td></tr>
+      <tr><td><a href="#d10">D10</a></td><td><code>recentDigests</code>(5) 与 <code>everyTurns</code>(6/8) 错配产生孤儿 digest</td><td><code>settings-schema.ts:2950</code>/<code>:2976</code></td><td><span class="badge amber">P1</span></td><td>默认 3-of-8、线上 1-of-6</td></tr>
+      <tr><td><a href="#d11">D11</a></td><td>fallback digest 从不授予覆盖权却照样占预算</td><td><code>planner.ts:238</code> · <code>digest.ts</code></td><td><span class="badge amber">P1</span></td><td>626/1,189 = 52.6%，首因 <code>model_unresolved</code> 350</td></tr>
+      <tr><td><a href="#d12">D12</a></td><td><code>checkpoint.maxTokens</code> 可生成 plan 装不下的 checkpoint</td><td><code>checkpoint.ts:285-307</code> · <code>budget.ts:41</code></td><td><span class="badge amber">P1</span></td><td>12000 vs 3000，全仓库无共同消费点</td></tr>
+      <tr><td><a href="#d18">D18</a></td><td>span 解析三份拷贝，两份生产实现字节相同</td><td><code>source-index.ts:20</code> · <code>checkpoint.ts:56</code> · <code>prune.ts:102</code></td><td><span class="badge amber">P1</span></td><td><code>diff</code> 验证</td></tr>
+      <tr><td><a href="#d13">D13</a></td><td><code>burstWindowTokens &lt; qualityWindowTokens</code> 静默塌成零弹性带</td><td><code>budget.ts:34</code></td><td><span class="badge blue">P2</span></td><td>用户已在配置注释中记录踩坑过程</td></tr>
+      <tr><td><a href="#d14">D14</a></td><td>32k 固定 reserve 下限可把 <code>hardInputCeiling</code> 打到 0</td><td><code>budget.ts:31</code></td><td><span class="badge blue">P2</span></td><td>算术推导；当前 258k 窗口不受影响</td></tr>
+      <tr><td><a href="#d15">D15</a></td><td>每请求 <code>O(coveredRefs × entries)</code> 扫描</td><td><code>source-index.ts</code></td><td><span class="badge blue">P2</span></td><td>当前约 7.2M 次比较，压缩前可达 10<sup>8</sup></td></tr>
+      <tr><td><a href="#d16">D16</a></td><td><code>prune.ts</code> 221 行无生产调用方</td><td><code>prune.ts</code></td><td><span class="badge blue">P2</span></td><td><code>grep src/</code> 零引用</td></tr>
+      <tr><td><a href="#d17">D17</a></td><td><code>buildContextPacket</code> 只有测试调用方</td><td><code>packet.ts</code> · <code>index.ts:13</code></td><td><span class="badge blue">P2</span></td><td><code>grep src/</code> 仅 barrel 再导出</td></tr>
+    </tbody>
+  </table>
+
+  <h3>建议修复顺序</h3>
+  <table>
+    <thead><tr><th>批次</th><th>内容</th><th>预期效果</th><th>风险</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>第 1 批 · 止血</strong></td>
+        <td>D2（一行：<code>includeCheckpoint</code> → <code>checkpointAdmitted</code>）+ D4（坍塌留痕）</td>
+        <td>覆盖权不再归零；再发生退化时日志可见</td>
+        <td>极低。D2 只放宽候选集，D4 只加审计</td>
+      </tr>
+      <tr>
+        <td><strong>第 2 批 · 拿回收益</strong></td>
+        <td>D1（估算器统一到上线体积）+ D3（checkpoint 交给淘汰环）+ 补 §9 前三个用例</td>
+        <td>checkpoint 恢复生效；预期归档收益从 −246 转为 +37,182 量级</td>
+        <td>中。要重跑 planner 全部测试，可能有依赖旧估算值的断言需要改</td>
+      </tr>
+      <tr>
+        <td><strong>第 3 批 · 断开正反馈环</strong></td>
+        <td>D6（span 持久化 + 兜底留痕）+ D18（三份拷贝合一）+ D15（查表化，顺路）</td>
+        <td>压缩后覆盖范围按比例衰减而非崩塌；<code>steady_target</code> 触发占比应下降</td>
+        <td>中。D18 必须与 D6 同批，否则两份生产实现会分叉</td>
+      </tr>
+      <tr>
+        <td><strong>第 4 批 · 配置不变式</strong></td>
+        <td>D10 + D12 + D13 + D14 + §9 的配置用例</td>
+        <td>消除孤儿 digest 与三类静默降级</td>
+        <td>低。纯校验与钳制，无行为路径改动</td>
+      </tr>
+      <tr>
+        <td><strong>第 5 批 · 缓存（需拍板）</strong></td>
+        <td>D7 方案 A/B/C 之一 + D8 + D9</td>
+        <td>digest 事件不再破坏前缀</td>
+        <td>视方案而定。<strong>先量修完前四批之后 D7 还剩多少收益</strong></td>
+      </tr>
+      <tr>
+        <td><strong>第 6 批 · 清理</strong></td>
+        <td>D16 + D17（删代码与对应测试）</td>
+        <td>减少认知负担</td>
+        <td>低，但建议单独 commit 便于回滚</td>
+      </tr>
+      <tr>
+        <td><strong>独立线</strong></td>
+        <td>D11 的 <code>model_unresolved</code>（350 条）根因排查</td>
+        <td>fallback 率有望砍半</td>
+        <td>不在 <code>context-steady/</code> 内，查 modelRole 解析链</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <strong>验收指标。</strong>每批之后重跑 §11 的重放脚本与 probe 统计，看三个数：
+    ① 真实窗口下的 <strong>净收益</strong>（当前 −246，目标为正且量级在万级）；
+    ② <code>primaryTrigger</code> 里 <strong><code>steady_target</code> 的占比</strong>（当前 70/231）；
+    ③ <strong>冷启动 token 占 prompt token 的比例</strong>（当前 4.1%）。
+  </div>
+</section>
+
+<section id="s11">
+  <h2>11. 复现方法</h2>
+  <p>所有实验都是只读的，没有修改 <code>src/</code>。两个关键脚本如下，
+  放到 <code>test/context-steady/</code> 下用 <code>bun test</code> 跑（放 <code>/tmp</code> 解析不了
+  <code>@san/agent</code> 别名）。</p>
+
+  <h3>A. 估算器偏差</h3>
+  <pre><code>import { estimateTokens } from "@san/agent/compaction";
+import { renderContextPlanContent } from "../../src/context-steady/materialize";
+
+// 从真实 session jsonl 里取 san.context_checkpoint / san.turn_digest 的 data，
+// 分别算 JSON.stringify 估算与 renderContextPlanContent 后的上线估算，输出比值。
+const material = { audit: { materialId:"m", kind:"checkpoint", representation:"checkpoint",
+  entryRefs: c.entryRefs.slice(0,3), tokenEstimate: c.tokenEstimate, reason:"r" }, checkpoint: c };
+const wire = estimateTokens({ role:"user",
+  content: renderContextPlanContent({ audit: { budget:{}, qualityGate:{} }, materials:[material] }),
+  attribution:"agent", timestamp:1 });
+// → 5 个真实 checkpoint 全部得到 wire / c.tokenEstimate ≈ 0.76</code></pre>
+
+  <h3>B. 生产窗口重放</h3>
+  <pre><code>import { buildContextPlan } from "../../src/context-steady/planner";
+
+// 1. 逐行 JSON.parse 真实 session jsonl（entry 本身就是 SessionEntry 形状）
+// 2. 取最后一次 type==="compaction" 的 firstKeptEntryId，从该 id 起切片
+//    （与 agent-session.ts:10198 的 #contextSteadyActivePlanningEntries 一致）
+// 3. 原样喂进 buildContextPlan，只改 planMaxTokens
+const plan = buildContextPlan({
+  entries: window, sessionId:"replay", requestKey:"r", epochId:"e", promptGeneration:1,
+  settings: { qualityWindowTokens: 200_000, reserveRatio: 0.15, planMaxTokens },
+  contextWindow: 258_000, nonMessageTokens: 12_000, maxDigestMaterials: 5,
+});
+// 读 plan.coverageEntryRefs.length（归档 entry 数）、plan.tokenEstimate（plan 自身上线体积）、
+// plan.materials.some(m =&gt; m.audit.kind === "checkpoint")（checkpoint 是否进入）</code></pre>
+  <p>被重放的窗口：会话 <code>01a00e60</code> 最后一次压缩之后的 205 条 entry，
+  message 类合计 39,737 token；<code>buildContextSourceIndex</code> 在其中解析出
+  1 个 checkpoint（<code>tokenEstimate</code> 3,279 / <code>coveredSourceEntryRefs</code> 153 /
+  <code>coveredDigestEntryRefs</code> 2）与 4 条 digest。</p>
+  <p class="meta">语料位置：<code>~/.san/agent/sessions/-development-self-projects-san/2026-08-17T06-19-44-959Z_01a00e60-43bf-7000-bd9c-69cbcee1adcc.jsonl</code>
+  （38,612 entry）及同名 <code>.context-probe.jsonl</code>（2,349 条）。
+  fallback 率统计遍历 <code>~/.san/agent/sessions/*/*.jsonl</code>，排除 probe sidecar。</p>
+</section>
+
+<section id="s12">
+  <h2>12. 明确不在本文范围内的问题</h2>
+  <ul>
+    <li><strong>约 8% 的"神秘零缓存"。</strong>相邻请求同模型、同 <code>prompt_cache_key</code>、
+    同 <code>prefixFingerprint</code>、纯 mid-turn 追加，服务商侧仍返回 <code>cacheRead=0</code>。
+    最近样本 08-21 10:29:52（input 162,773 / cacheRead 0），9 秒后同一前缀命中 162,304。
+    这是服务商侧行为，本地无法修复，已另行归档到
+    <code>docs/research/prompt-cache-billing-anomaly-20260820.html</code>。</li>
+    <li><strong>摘要模型与压缩模型自身请求不命中缓存。</strong>设计如此，是必须承担的成本，
+    不计入本文任何缺陷。<code>digest.ts</code> 里
+    <code>sessionId: "&lt;id&gt;:digest:&lt;turnId&gt;"</code> 与
+    <code>promptCacheKey: fallbackDigest.sessionId</code> 的组合是有意为之。</li>
+    <li><strong>已实施但尚未提交的两项修复</strong>不在本文缺陷表内：
+    ① 两个压缩闸门统一到 <code>#contextSteadyPhysicalMaintenanceCeiling</code>；
+    ② <code>controlMax</code> 的约 8.3% 滞回带。二者与本文缺陷正交，
+    位于 <code>agent-session.ts</code> 而非 <code>context-steady/</code> 的规划链。</li>
+  </ul>
+  <div class="callout warning">
+    <strong>生效前提。</strong>本文列出的所有配置项（含 <code>.san/config.yml</code> 的现有改动）
+    在进程启动时读取一次。任何配置或代码改动都需要<strong>重启会话</strong>才会进入正在运行的实例。
+  </div>
+  <p class="meta">
+    复盘范围：<code>src/context-steady/</code> 全部 11 个模块
+    （<code>budget.ts</code> · <code>source-index.ts</code> · <code>planner.ts</code> ·
+    <code>materialize.ts</code> · <code>coverage.ts</code> · <code>decay.ts</code> ·
+    <code>digest.ts</code> · <code>checkpoint.ts</code> · <code>quality-gate.ts</code> ·
+    <code>prune.ts</code> · <code>probe.ts</code>），
+    以及 <code>agent-session.ts</code> 的四个接入点
+    （<code>:10198-10262</code> 窗口切片 · <code>:10369-10425</code> planner 选项 ·
+    <code>:10573-10615</code> turn 内字节冻结 · <code>:14700</code>/<code>:14835</code> 其余调用点）。
+    未修改任何 <code>src/</code> 文件；scratch 脚本已清理。
+  </p>
+</section>
+
+</main>
+</body>
+</html>

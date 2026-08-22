@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeepSeek Harness 架构调研与 San 对照（2026-08-14）</title>
+<style>
+:root { --fg:#18212b; --muted:#66717f; --line:#dbe2ea; --accent:#1769e0; --teal:#087b72; --good:#0b7a3d; --warn:#9a6500; --bad:#b42318; --soft:#f5f8fc; --blue:#edf5ff; --amber:#fff8e8; --green:#effaf3; }
+* { box-sizing:border-box; }
+body { max-width:1120px; margin:0 auto; padding:34px 26px 90px; color:var(--fg); font:15px/1.72 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif; }
+h1 { margin:0 0 7px; font-size:28px; line-height:1.35; }
+h2 { margin:42px 0 13px; padding-top:15px; border-top:1px solid var(--line); font-size:21px; }
+h3 { margin:24px 0 8px; font-size:17px; }
+p { margin:8px 0; }
+a { color:var(--accent); }
+code { padding:1px 5px; border:1px solid var(--line); border-radius:4px; background:var(--soft); font:12.5px/1.5 "SF Mono",Menlo,monospace; word-break:break-word; }
+pre { overflow:auto; padding:13px 15px; border:1px solid var(--line); border-radius:9px; background:var(--soft); font:12.5px/1.55 "SF Mono",Menlo,monospace; }
+pre code { padding:0; border:0; background:none; }
+table { width:100%; margin:11px 0 18px; border-collapse:collapse; font-size:13.5px; }
+th,td { padding:8px 10px; border:1px solid var(--line); text-align:left; vertical-align:top; }
+th { background:var(--soft); white-space:nowrap; }
+tr:nth-child(even) td { background:#fbfcfe; }
+ul,ol { margin:7px 0; padding-left:22px; }
+li { margin:4px 0; }
+.meta,.source { color:var(--muted); font-size:12.8px; }
+.source::before { content:"来源："; font-weight:600; }
+.verdict { margin:17px 0; padding:14px 17px; border-left:4px solid var(--accent); border-radius:0 9px 9px 0; background:var(--blue); }
+.note { margin:13px 0; padding:11px 14px; border:1px solid #ead29b; border-radius:8px; background:var(--amber); font-size:13.5px; }
+.good { color:var(--good); font-weight:700; }
+.warn { color:var(--warn); font-weight:700; }
+.bad { color:var(--bad); font-weight:700; }
+.cards { display:flex; flex-wrap:wrap; gap:11px; margin:16px 0; }
+.card { flex:1 1 165px; min-width:150px; padding:13px 15px; border:1px solid var(--line); border-radius:9px; background:var(--soft); }
+.card .num { color:var(--accent); font-size:21px; font-weight:750; }
+.card .label { color:var(--muted); font-size:12.5px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(285px,1fr)); gap:12px; }
+.panel { padding:13px 15px; border:1px solid var(--line); border-radius:9px; }
+.panel h3 { margin-top:0; }
+.tag { display:inline-block; padding:1px 7px; border-radius:999px; background:var(--green); color:var(--good); font-size:12px; font-weight:650; }
+</style>
+</head>
+<body>
+<h1>DeepSeek Harness：不是“又一个 Coding Agent”，而是一套可重组 Agent 操作系统</h1>
+<p class="meta">调研日期：2026-08-14 · 对象：<a href="https://github.com/deepseek-ai/deepseek-harness">deepseek-ai/deepseek-harness</a> · 取证版本：<code>47f943859bef60e4160492346772ded9b24f765a</code>（2026-08-13）· npm：<code>@deepseek-ai/dsh@0.1.0-rc.6</code> · San 对照：本仓库 <code>@san/agent</code> / <code>@san/coding-agent</code> 当前源码</p>
+
+<div class="verdict">
+<p><strong>一句话结论：</strong>用户的描述基本准确，但“所有能力都能自由替换”需要加两个限定：<strong>替换的是公开 capability seam / service，而不是任意内部函数；部分前端卸载、ACP、持久化迁移和跨平台沙箱仍有明确缺口。</strong></p>
+<p>它真正有价值的地方，不是插件数量，而是把 Agent 的<strong>控制循环、数据面、安全策略和 UI</strong>都放进同一个可撤销依赖图：模型、工具、会话、存储、压缩、子代理、workflow、后台 job、沙箱、LSP、Web UI 都以 Cordis service / event / reversible effect 组合。这个架构比 San 当前的“强内核 + 多扩展点”更彻底；代价是配置、依赖图、版本协同和运行时故障面显著扩大。</p>
+</div>
+
+<div class="cards">
+<div class="card"><div class="num">0.1.0-rc.6</div><div class="label">npm latest / next，仍是 RC</div></div>
+<div class="card"><div class="num">226</div><div class="label"><code>packages/*/*</code> 下 dsh package manifests</div></div>
+<div class="card"><div class="num">7,412</div><div class="label">取证 checkout tracked files</div></div>
+<div class="card"><div class="num">1,943</div><div class="label">test/spec 文件（文件名口径）</div></div>
+<div class="card"><div class="num">2,578</div><div class="label">TS / TSX 文件</div></div>
+<div class="card"><div class="num">MIT</div><div class="label">当前 0.1 RC 与仓库许可</div></div>
+</div>
+
+<div class="note"><strong>成熟度口径：</strong>仓库 README 明示 <em>developer preview</em>，并用大写警告“THERE WILL BE COMPATIBILITY-BREAKING CHANGES”。因此本文把“架构完整、工程量大”与“API/产品稳定”分开评价；包表中的 “Product — stable API” 是项目内部 release expectation，不能覆盖顶层 developer-preview 警告。</div>
+
+<h2>一、它到底是什么</h2>
+<p>DeepSeek Harness（CLI 名 <code>dsh</code>）是 DeepSeek AI 开源的通用 Agent harness。默认产品面是浏览器 UI，不是 TUI：执行 <code>npx @deepseek-ai/dsh web</code>，本地服务默认监听 <code>127.0.0.1:3080</code>。另有 <code>headless</code> profile，接受一个任务、等待 Agent 完成后打印最终回复并退出。</p>
+<p>它基于 DeepSeek vendored 的 <a href="https://github.com/cordiverse/cordis">Cordis</a>。Cordis 的核心抽象只有五件事：</p>
+<ul>
+<li><strong>Plugin：</strong>函数式 <code>apply(ctx)</code> 或 <code>Service</code> 子类。</li>
+<li><strong>Context：</strong>服务仓库；消费者依赖 <code>ctx.tools</code>、<code>ctx.llm</code>、<code>ctx.sessions</code> 等稳定 key，而不依赖具体实现。</li>
+<li><strong>Inject：</strong>声明依赖；服务未就绪时插件等待，启动顺序由依赖图而非手工调用顺序表达。</li>
+<li><strong>Typed Events：</strong><code>emit</code>、<code>waterfall</code>、<code>parallel</code>、<code>serial</code> 四种调度语义。</li>
+<li><strong>Reversible effects：</strong>工具、prompt section、provider、listener 都通过 <code>ctx.effect()</code>/<code>ctx.on()</code> 注册，插件卸载时反向撤销。</li>
+</ul>
+<p class="source"><a href="https://github.com/deepseek-ai/deepseek-harness/blob/master/README.md">README</a>；<a href="https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cordis-primer.md">Cordis Primer</a>。</p>
+
+<h2>二、“Everything is a Plugin”怎样落地</h2>
+
+<h3>2.1 三层组合：bundle → profile → patch</h3>
+<pre><code>空 Cordis entry list
+  → profile 指定的 bundle（按顺序）
+  → profile/cordis.patch.yml
+  → $DSH_HOME/cordis.patch.yml
+  → CLI --patch（可重复）
+  → Cordis Loader 激活依赖图</code></pre>
+<ul>
+<li><strong>Bundle</strong> 是可发布的 Cordis 配置行集合。<code>dsh-base</code> 安装模型、工具、会话、持久化、沙箱、审批、设置、凭据、遥测等基础层。</li>
+<li><strong>Profile</strong> 是命名组合。官方模板有 <code>web</code> 与 <code>headless</code>。</li>
+<li><strong>Patch</strong> 按稳定 row id 替换配置或插入插件；<code>dsh --profile web --dump-config</code> 可查看实际启动树。</li>
+</ul>
+<p>重要限制：row 配置是<strong>整块替换</strong>，不是深合并。覆盖一个 row 时必须重述要保留的所有字段。这是强可组合性背后的直接操作成本。</p>
+<p class="source"><a href="https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.md">Architecture</a>；<a href="https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/bundle/base">dsh-base bundle</a>。</p>
+
+<h3>2.2 能力 seam：Definition / Provider / Consumer</h3>
+<p>项目不是把所有东西简单命名为“plugin”，而是进一步规定一项可替换能力通常拆成三种角色：</p>
+<table>
+<tr><th>角色</th><th>职责</th><th>例子</th></tr>
+<tr><td>Service Definition</td><td>定义稳定 <code>ctx</code> key、类型、错误语义</td><td><code>ctx.fs</code>、<code>ctx.sandbox</code>、<code>ctx.workflowEngine</code></td></tr>
+<tr><td>Service Provider</td><td>提供一种实现</td><td>本地 FS / E2B FS；JSON / SQLite storage；本地 sandbox</td></tr>
+<tr><td>Consumer</td><td>消费能力，通常向模型暴露工具</td><td><code>tool-fs</code>、<code>tool-lsp</code>、<code>tool-workflow</code></td></tr>
+</table>
+<p>这使替换具有传导性。例如 filesystem 与 subprocess 指向同一远程执行世界后，Bash、PTY、LSP 可一起迁移，无需各自 fork。扩展插件被要求依赖 Definition，不依赖具体 Provider。</p>
+
+<h3>2.3 关键能力地图</h3>
+<table>
+<tr><th>能力</th><th>服务 / 插件面</th><th>现成实现与消费面</th></tr>
+<tr><td>模型</td><td><code>ctx.llm</code></td><td>DeepSeek adapter；<code>llm-pi-ai</code> 多 provider；token meter、retry 作为旁路插件</td></tr>
+<tr><td>工具</td><td><code>ctx.tools</code></td><td>FS、Bash/Pwsh、Terminal、Web、LSP、skill、subagent、workflow、todo、ask-user、Cordis 自省</td></tr>
+<tr><td>Agent loop</td><td><code>ctx.agents</code> + <code>ctx.agentLoop</code></td><td>接口与默认 loop 分包；UI/工具依赖 Agent service，不直接依赖默认 loop</td></tr>
+<tr><td>会话</td><td><code>ctx.sessions</code> / <code>ctx.sessionPersistence</code></td><td>append-only session event log；JSONL+zstd / SQLite 后端；fork/resume/projection/query/title</td></tr>
+<tr><td>一般存储</td><td><code>ctx.storage</code> / <code>ctx.storageDomain</code></td><td>JSON / SQLite；与 session 持久化刻意分离</td></tr>
+<tr><td>技能</td><td><code>ctx.skills</code></td><td>filesystem discovery + model-facing loader tool</td></tr>
+<tr><td>沙箱</td><td><code>ctx.sandbox</code> / policy</td><td>Linux bwrap/Landlock、macOS Seatbelt、Windows restricted token + ACL；Bash/Pwsh consumers</td></tr>
+<tr><td>子代理</td><td><code>ctx.subagents</code></td><td>同进程 spawn/fork、ACP、真实 Codex、Claude Code SDK、dsh SDK children</td></tr>
+<tr><td>调度</td><td><code>ctx.jobs</code>、<code>ctx.schedule</code>、<code>ctx.workflowEngine</code></td><td>后台 job；session-local scheduled follow-up；worker-thread workflow；Ralph/tool-workflow</td></tr>
+<tr><td>UI</td><td>Host services + client plugin graph + remote API</td><td>浏览器 shell、chat nodes、slots、client HMR、Typert RPC；Web 与 headless 是 sibling surface</td></tr>
+<tr><td>自修改</td><td><code>ctx.dynamicCordisRunner</code> / inspect</td><td>Agent 可查看 live runtime，并挂载/卸载模型写出的 Cordis plugin</td></tr>
+</table>
+<p class="source"><a href="https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/capability-seams.md">Capability graph</a>；<a href="https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/README.md">Package taxonomy</a>。</p>
+
+<h2>三、最值得看的内部设计</h2>
+
+<div class="grid">
+<div class="panel"><h3>会话日志是模型上下文的事实源</h3><p><code>turn/*</code>、<code>step/*</code>、用户消息、assistant chunk/message、tool call/result 全部成为 durable <code>SessionEvent</code>。<code>deriveMessages()</code> 从日志投影模型历史；UI replay、fork、resume、telemetry 都读同一条流。项目给出硬原则：<strong>model-visible means logged</strong>。</p></div>
+<div class="panel"><h3>控制面与事实面分离</h3><p><code>session/event</code> 是可重放事实；<code>agent/*</code> 是 inbox、status、request、steering、retry 等实时控制。SDK 若要 transcript，应消费 session events，而非把 live event 当历史。</p></div>
+<div class="panel"><h3>Prompt 也不是一个字符串</h3><p><code>ctx.systemPrompt</code> 注册多个 <code>PromptSection</code>；每 step 通过 <code>system-prompt/assemble</code> waterfall 组装，并同时采集当前可用工具 schema。不同插件可增删 prompt section，不需要改 loop。</p></div>
+<div class="panel"><h3>前后端都进入插件图</h3><p>Host 扫描声明 <code>dsh.client</code> 的 Loader entries，生成 <code>window.__DSH_BOOT__</code> entry graph，浏览器从 <code>/plugins/&lt;id&gt;/client.js</code> 加载 client bundles。UI 不是静态壳套后端 API，而是 composition 的另一半。</p></div>
+</div>
+
+<h3>3.1 Turn / step loop</h3>
+<pre><code>turn/start
+  claim inbox input
+  agent/pre-step waterfall（拒绝或改写输入）
+  step/start
+  append user/message
+  assemble prompt + tool schemas
+  agent/request → llm/stream → assistant/chunk* → assistant/message
+  tool/call* → tool pipeline → tool/result*
+  step/end
+  若仍欠一次模型请求或有 next-step input：继续 step
+  agent/turn-stopping
+turn/end</code></pre>
+<p><strong>Loop 本身可替换</strong>，但 durable event vocabulary 与 Agent service contract 是它必须遵守的兼容边界。换言之，不是“随便写个 while 循环即可”，而是在稳定事件协议内换 driver。</p>
+
+<h3>3.2 Tool pipeline</h3>
+<pre><code>tools/pre-execute waterfall
+  → monotonic guards（只允许 deny / abstain，保护 identity）
+  → approval（无可回答审批面时默认 deny）
+  → tools/execute waterfall（timeout / retry / metrics 可包裹执行）
+  → tool body（FS mutation 另过 write/edit intent gate）
+  → tools/post-execute waterfall
+  → outer normalization
+  → ToolDefinition.finalizeContent
+  → tools/result 同步通知
+  → durable tool/result</code></pre>
+<p>这条流水线把权限、安全、沙箱、超时、重试、观测、结果改写从具体工具中抽出，而且保持最终模型可见结果只有一个。Code Mode 的聚合调用与内部 serialized sub-call 也走同一管线，避免建立旁门。</p>
+<p class="source"><a href="https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/agent-lifecycle.md">Agent lifecycle</a>；<a href="https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/tool-execution-pipeline.md">Tool execution pipeline</a>。</p>
+
+<h3>3.3 持久化不是“写个 JSON 文件”</h3>
+<p>JSONL backend 的设计深度明显超过普通 preview 项目：session header 绑定 id/cwd/delegation depth/agent preset；事件 seq 连续；chunk runs 可无损打包；默认 zstd 多 frame；每次 append <code>fsync</code>；首写使用 POSIX hard link 或 Windows write-through no-replace publish；尾 frame 不完整可保留完整记录并补 synthetic closers；已提交 turn 之前的损坏则拒绝加载。</p>
+<p>但它也明确承认：格式仍是 v0、无迁移；不删除日志；同一 session 只能有一个 live writer；更换压缩方式要求新 root。这正是“工程严谨但产品协议未稳定”的典型状态。</p>
+
+<h2>四、成熟度：底盘很深，产品仍早</h2>
+<table>
+<tr><th>维度</th><th>观察</th><th>判断</th></tr>
+<tr><td>发布</td><td>npm 于 2026-08-10 首发；4 天内从 <code>0.0.1-rc.1</code> 到 <code>0.1.0-rc.6</code>；latest/next 均为 rc.6</td><td class="warn">发布链刚打通，版本变动极快</td></tr>
+<tr><td>API 承诺</td><td>包目录将多数 group 标为 “Product — stable API”；顶层 README 同时警告必有 breaking changes</td><td class="warn">内部边界清楚，不等于外部兼容稳定</td></tr>
+<tr><td>工程规模</td><td>226 package manifests、7,412 tracked files、约 1,943 test/spec 文件；Host/Client 分离 type graph、生成式文档图、CI gates</td><td class="good">不是发布前临时拼装的 demo</td></tr>
+<tr><td>可运行性</td><td>实测 Node 26.4 上 <code>npx -y @deepseek-ai/dsh@0.1.0-rc.6 --help</code> 成功，CLI 展示 profile/patch/dump/plugin 命令</td><td class="good">npm 包可安装、入口可启动</td></tr>
+<tr><td>平台支持</td><td>Node 22.19+/24+，CI 覆盖 22.19、24、26；local sandbox 覆盖 Linux/macOS/Windows</td><td class="good">跨平台意图真实，非 README 口号</td></tr>
+<tr><td>生态</td><td>MCP 目前文档只列 client bridge；插件发现主要靠 GitHub <code>dsh-plugin</code> topic；第三方兼容面尚未经历时间检验</td><td class="warn">生态基础有了，生态本身还没有成熟</td></tr>
+</table>
+
+<h3>已确认的硬限制</h3>
+<ul>
+<li><strong>Client runtime 的 <code>loader.unload</code> 仍是 stub：</strong>服务端 reversible effects 的承诺目前比浏览器端完整；Client HMR 失败也没有自动 rollback。</li>
+<li><strong>Sandbox 不等于完整安全边界：</strong>Windows ACL 是 partial，Landlock 在旧 ABI 上可能 partial；macOS 依赖已 deprecated 但仍随系统提供的 <code>sandbox-exec</code>。sandbox vocabulary 也不覆盖网络和进程可见性。</li>
+<li><strong>ACP 只是 automation 子集：</strong>fresh sessions only，不支持 load/list/resume/delete/fork；MCP server、附加目录和多模态输入等也有限制。</li>
+<li><strong>Session JSONL 无生命周期治理：</strong>没有 delete API，格式 v0 无迁移，一个 session 一个 writer。</li>
+<li><strong>配置覆盖有重述风险：</strong>patch 替换整个 row config；高速版本变动中，上游新增字段可能被用户旧 patch 无意抹掉。</li>
+<li><strong>自修改能力风险高：</strong><code>tool-cordis</code> 允许 Agent 改 live runtime，虽然 host runner 使用 <code>node:vm</code>，但这不应被当作“不可信代码的强隔离”。生产 profile 应显式裁掉这一能力，除非场景就是 harness 研发。</li>
+</ul>
+
+<h2>五、与 San 的结构差异</h2>
+<table>
+<tr><th>维度</th><th>DeepSeek Harness</th><th>San 当前结构</th><th>影响</th></tr>
+<tr><td>基本单元</td><td>Cordis service + typed event + reversible effect</td><td><code>@san/agent</code> 强内核 + <code>AgentSession</code> 组合根 + 工具/extension/MCP/custom-command 扩展</td><td>dsh 优化可替换性；San 优化单一产品闭环和直接控制</td></tr>
+<tr><td>Loop</td><td><code>ctx.agents</code> contract 与 <code>ctx.agentLoop</code> concrete driver 分离</td><td><code>Agent.prompt()</code> 进入私有 loop；<code>AgentSession</code> 用 setter/callback 注入 transform、turn-end、tool hooks</td><td>dsh 可整体换 loop；San 更容易做跨层强不变量，但替换 loop 需要改内核</td></tr>
+<tr><td>工具</td><td><code>ctx.tools</code> registry + 三段 waterfall + guards/approval/finalizer</td><td>创建时组装 tool array / registry，<code>agent.setTools()</code>；extension/MCP/xdev 可追加</td><td>San 能扩工具，不等于工具执行策略、审批与注册中心都可独立换</td></tr>
+<tr><td>会话事实</td><td>统一 typed append-only <code>SessionEvent</code>，模型可见内容必须可由日志重构</td><td>Agent messages + SessionManager journal + Context Steady entries + AgentSession events，多层职责由组合根协调</td><td>dsh 的 replay/fork/UI 投影模型更统一；San 的 authority/evidence/context治理更强但结构更专用</td></tr>
+<tr><td>存储</td><td>session persistence 与一般 storage 都是 capability seam，各有 JSON/SQLite provider</td><td>会话 manager、配置、memory backend 等各自抽象，但没有统一 runtime service repository</td><td>dsh 更容易嵌入不同部署；San 的默认路径更少配置、更“拎包入住”</td></tr>
+<tr><td>子代理与 workflow</td><td>provider registry；in-process / ACP / Codex / Claude / dsh SDK 都可挂同一 seam</td><td>task/eval bridge、San Loop、workflow、hub/job/isolation 由 coding-agent 深度集成</td><td>San 的编排与可靠性机制更产品化；dsh 的 provider 替换面更干净</td></tr>
+<tr><td>UI</td><td>Web Host + Client plugin graph + generated Remote API；surface 本身是 bundle</td><td><code>@san/tui</code> 与 coding-agent event/controller/renderers 紧密结合，另有 RPC/collab 面</td><td>dsh 可换整套 surface；San TUI 的差分渲染、流式预览和终端体验更集中、更成熟</td></tr>
+<tr><td>安全</td><td>sandbox / approval / permission preset 是独立 service 与 policy 插件</td><td>tool policy、执行控制、sandbox/tool host 以具体工具和 session runtime 组合</td><td>dsh 的政策注入点更规整；San 的规则可利用更丰富的会话权威状态</td></tr>
+<tr><td>扩展边界</td><td>运行时可 mount/unmount，甚至由 Agent 自修改</td><td>extensions、skills、custom tools、MCP、xd devices 都能扩展；核心 AgentSession 仍是大型 composition root</td><td>San 已可扩展，但不是“所有子系统均同构插件”</td></tr>
+</table>
+<p class="source">San：<code>packages/agent/src/agent.ts</code> 的 <code>Agent.prompt()</code>/<code>setTools()</code>/<code>setTransformContext()</code>；<code>packages/coding-agent/src/session/agent-session.ts</code> 构造器对 tools、context、turn-end、advisor、jobs、MCP/xdev、persistence 的集中装配；<code>packages/coding-agent/src/sdk.ts</code>；本仓库 README 与 San Loop benchmark。</p>
+
+<h3>San 并不是“不插件化”</h3>
+<p>San 已有 extension loader、skills、custom tools、MCP、xdev devices、model provider registry、memory backend、subagent definitions、workflow/eval runtime、RPC host tools 等大量可插拔面。区别是：</p>
+<ul>
+<li>San 的扩展点<strong>异构</strong>：每个子系统按自己的生命周期和配置方式接入。</li>
+<li>dsh 的扩展点<strong>同构</strong>：统一投影成 Cordis context/service/event/effect，再由 Loader 管生命周期。</li>
+<li>San 的核心行为由 <code>AgentSession</code> 聚合，这个集中点便于实现 Context Steady、execution-control、advisor/watchdog、TUI streaming 等跨域不变量；dsh 则通过 event waterfalls 和 service contracts 分散这些横切关注点。</li>
+</ul>
+
+<h2>六、San 应该借什么，不该借什么</h2>
+
+<h3><span class="tag">优先借鉴</span> 1. 建立“能力契约 / provider / consumer”分类，而不是先引入通用插件框架</h3>
+<p>San 最值得吸收的是 dsh 对依赖方向的纪律：model-facing tool 依赖 capability interface，不依赖 local implementation；组合根才选择 provider。可先为 sandbox/subprocess/fs/LSP/subagent 等边界补齐统一命名与 contract tests，不需要先把整个项目迁进 Cordis。</p>
+
+<h3><span class="tag">优先借鉴</span> 2. 把工具执行横切策略收敛为一条可验证 pipeline</h3>
+<p>dsh 的 pre → guard → approval → execute → post → finalize → result 顺序非常清楚，尤其是 monotonic guard 与最终 immutable outcome。San 已有 execution-control、tool hooks、approval、安全和 renderer，但分散在 Agent、AgentSession、具体工具及宿主层。应先画出并冻结 San 自己的顺序契约，再考虑统一注册 API。</p>
+
+<h3><span class="tag">优先借鉴</span> 3. 继续强化 durable fact / live control 的分层</h3>
+<p>dsh 的 session events 与 agent events 分工简洁，能降低 UI、resume、SDK 各自发明状态的风险。San 已有 journal、continuation authority、execution scope、AgentSession events，能力更强，但可以进一步明确哪些 event 是可重放事实，哪些只能作为实时控制信号，并让 UI/SDK 只从相应层读取。</p>
+
+<h3><span class="tag">选择性借鉴</span> 4. Profile / bundle 概念适合“官方组合”，不适合把默认体验交给用户</h3>
+<p>San 的“拎包入住”原则要求默认产品不暴露 226 个包和 Cordis row。可吸收的是内部组合测试：例如 <code>core</code>、<code>desktop</code>、<code>headless</code>、<code>automation</code> 作为官方封闭 profile，每个都做启动闭包验证；不要让普通用户先理解 bundle layering 才能获得完整功能。</p>
+
+<h3><span class="bad">不建议</span> 5. 不要整体迁移到 Cordis，也不要把 AgentSession 拆成几百个 npm 包</h3>
+<ul>
+<li>San 当前优势来自强宿主控制：Context Steady 的 authority/coverage、执行 scope、跨 Agent 预算、TUI 流式预览等都依赖跨层事实。过早服务化会把这些不变量变成事件顺序约定。</li>
+<li>226 packages 带来发布原子性、版本锁步、构建图、类型 declaration merging、Host/Client 双编译面等巨大治理成本。DeepSeek 已用生成图、Typert、workspace constraints 和 CI gate 承担；San 没有必要复制这笔税。</li>
+<li>动态 self-modification 很适合 harness 研究 demo，不适合作为默认 coding-agent 能力。它扩大供应链、权限和可重现性风险。</li>
+</ul>
+
+<h2>七、综合判断</h2>
+<table>
+<tr><th>问题</th><th>判断</th></tr>
+<tr><td>是不是“模型、工具、技能、会话、沙箱、存储、循环、调度、UI 全插件化”？</td><td><strong>基本是。</strong>官方源码和 capability graph 能逐项对应；连默认 loop、Web client graph、prompt assembly、持久化 backend 都在 composition tree 中。</td></tr>
+<tr><td>是不是能“自由替换”？</td><td><strong>在公开 seam 内可以，任意替换则不成立。</strong>provider 必须满足 service/event/durable-log 协议，替换后的组合还要满足 inject 依赖与启动 settlement。</td></tr>
+<tr><td>现在能否当稳定生产底座？</td><td><strong>不建议无条件采用。</strong>developer preview + RC + 明示 breaking changes；更适合研究、原型、内部平台，或锁版本后做受控验证。</td></tr>
+<tr><td>是不是普通用户产品？</td><td><strong>默认 Web UI 可以直接跑，但核心竞争力仍偏开发者平台。</strong>它已经努力提供 profile 与默认 bundle，然而真正价值只有在写 plugin / patch / provider 时才能发挥。</td></tr>
+<tr><td>对 San 的威胁/价值是什么？</td><td><strong>不是短期替代品，而是架构参照物。</strong>dsh 在“可重组能力图”领先；San 在“零配置默认、TUI、上下文与执行正确性、成熟编排”更集中。最优策略是吸收其 seam discipline 与 pipeline contracts，不追求同规模插件化。</td></tr>
+</table>
+
+<div class="verdict">
+<p><strong>最终结论：</strong>DeepSeek Harness 证明了“Agent harness 可以像操作系统一样由 capability providers 组合”不只是概念。它的 session/event 数据面、tool waterfall、安全/审批分层、Host/Client 插件图和动态 provider 替换都做到了源码级闭环。</p>
+<p>但它现在更像<strong>极其完整的 0.1 架构公测</strong>：底盘成熟度高，外部稳定度低。San 不应追逐“插件数”或整体重构；应把它当作一张对照表，逐个审视 San 的 capability 边界、工具执行顺序、durable/live event 分层和官方组合闭包。借纪律，不借规模。</p>
+</div>
+
+<h2>八、来源与复现</h2>
+<ul>
+<li>官方仓库与入口：<a href="https://github.com/deepseek-ai/deepseek-harness">GitHub repository</a>、<a href="https://github.com/deepseek-ai/deepseek-harness/blob/master/README.md">README</a>、<a href="https://www.npmjs.com/package/@deepseek-ai/dsh">npm package</a>。</li>
+<li>架构：<a href="https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.md">architecture.md</a>、<a href="https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cordis-primer.md">cordis-primer.md</a>、<a href="https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/capability-seams.md">capability-seams.md</a>。</li>
+<li>运行路径：<a href="https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/agent-lifecycle.md">agent-lifecycle.md</a>、<a href="https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/tool-execution-pipeline.md">tool-execution-pipeline.md</a>。</li>
+<li>子系统：<a href="https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/session">session</a>、<a href="https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/sandbox">sandbox</a>、<a href="https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/subagent">subagent</a>、<a href="https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/workflow">workflow</a>、<a href="https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/extensions">extensions</a>、<a href="https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/subsystems/client-modules.md">client modules</a>。</li>
+<li>开发与兼容：<a href="https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/development.md">development guide</a>、<a href="https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/index.md">plugin tutorial</a>、<a href="https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/guide/providers.md">provider guide</a>。</li>
+</ul>
+<p class="meta">本地取证：浅克隆 HEAD <code>47f943859bef60e4160492346772ded9b24f765a</code>；规模数据由 tracked file/package filename 统计得出，不等同于 npm 独立发布包数或测试用例数。GitHub API 与 DeepSeek launch page 在取证时分别返回 403/429，因此本文不引用 stars、forks、release count 或官方发布页营销陈述；npm 版本与时间来自 registry.npmjs.org。CLI smoke 在 Node v26.4.0 上执行 <code>npx -y @deepseek-ai/dsh@0.1.0-rc.6 --help</code> 成功。</p>
+</body>
+</html>

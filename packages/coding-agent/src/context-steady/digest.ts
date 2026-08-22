@@ -5,6 +5,7 @@
  * never appends messages to the session, and never triggers new agent_end events.
  */
 
+import { ThinkingLevel } from "@san/agent";
 import {
 	type Api,
 	type ApiKey,
@@ -19,6 +20,7 @@ import { logger, prompt } from "@san/utils";
 
 import type { Settings } from "../config/settings";
 import type { ReadonlySessionManager } from "../session/session-manager";
+import { resolveThinkingLevelForModel, shouldDisableReasoning, toReasoningEffort } from "../thinking";
 import { generateFallbackDigest, generateTurnId } from "./fallback";
 import { normalizeDigest } from "./normalize";
 import turnDigestPrompt from "./prompts/turn-digest.md" with { type: "text" };
@@ -110,6 +112,8 @@ export interface ContextSteadyDigestModel {
 	model: Model<Api>;
 	apiKey: ApiKey;
 	metadata?: Record<string, unknown>;
+	/** Optional concrete effort selected in the digest model selector. */
+	thinkingLevel?: ThinkingLevel;
 	obfuscator?: ContextSteadyDigestObfuscator;
 	/**
 	 * Optional session-prepared stream options (routing, payload hooks, loop guard).
@@ -312,10 +316,17 @@ async function generateLlmDigest(
 	const userContent = formatDigestUserMessage(messages, fallbackDigest);
 	const outboundUserContent = obfuscateDigestText(digestModel.obfuscator, userContent);
 	const timeoutSignal = AbortSignal.timeout(Math.max(1, steadySettings.digest.timeoutMs));
+	const requestedThinkingLevel = digestModel.thinkingLevel;
+	const useConfiguredThinking =
+		requestedThinkingLevel !== undefined && requestedThinkingLevel !== ThinkingLevel.Inherit;
+	const resolvedThinkingLevel = useConfiguredThinking
+		? resolveThinkingLevelForModel(digestModel.model, requestedThinkingLevel)
+		: undefined;
 	const baseOptions: SimpleStreamOptions = {
 		apiKey: digestModel.apiKey,
 		maxTokens: digestModel.model.reasoning ? Math.max(DIGEST_MAX_TOKENS, 4096) : DIGEST_MAX_TOKENS,
-		disableReasoning: true,
+		reasoning: useConfiguredThinking ? toReasoningEffort(resolvedThinkingLevel) : undefined,
+		disableReasoning: useConfiguredThinking ? shouldDisableReasoning(resolvedThinkingLevel) : true,
 		// DeepSeek-family reasoning models always think and reject `tool_choice`
 		// while thinking is enabled (`Thinking mode does not support this
 		// tool_choice`). Only the built-in deepseek provider resolves
