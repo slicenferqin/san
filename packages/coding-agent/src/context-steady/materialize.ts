@@ -26,6 +26,69 @@ function timestampKey(timestamp: unknown): string {
 	return "";
 }
 
+/**
+ * Per-message shape tokens for the sequence as it ships to the provider.
+ *
+ * Deliberately shape-only: role, content extent, and stub kind. A stub
+ * collapses an 8K tool result to one line, so the extent shift is the signal;
+ * hashing full content would re-serialize the whole transcript on every
+ * provider call for no extra discrimination.
+ */
+export function contextWireSequenceTokens(messages: readonly AgentMessage[]): string[] {
+	const tokens: string[] = [];
+	for (const message of messages) {
+		let extent = 0;
+		if (message.role === "fileMention") {
+			// No `content` field at all — the wire payload lives in `files`, so
+			// measuring `content` would score every re-read of a mention as 0.
+			for (const file of message.files) extent += file.path.length + file.content.length + (file.image ? 1 : 0);
+		} else if ("content" in message) {
+			const content = message.content;
+			if (typeof content === "string") extent = content.length;
+			else if (Array.isArray(content)) {
+				for (const part of content) {
+					if (part && typeof part === "object" && "text" in part && typeof part.text === "string") {
+						extent += part.text.length;
+					} else {
+						// Images and other non-text parts carry no cheap length; count
+						// them as presence so an added or dropped part still moves the token.
+						extent += 1;
+					}
+				}
+			}
+		}
+		let stubKind: unknown = "";
+		if ("details" in message && message.details && typeof message.details === "object") {
+			const details = message.details;
+			if ("stubKind" in details) stubKind = details.stubKind ?? "";
+		}
+		tokens.push(`${message.role}:${extent}:${String(stubKind)}`);
+	}
+	return tokens;
+}
+
+/**
+ * Whether `current` still begins with the whole of `previous`.
+ *
+ * Provider prompt caches match on a byte prefix, so appending to the tail is
+ * free and only a rewrite of an already-sent message voids the cache. Equality
+ * is the wrong test — every turn appends, so comparing whole-sequence hashes
+ * would flag every single request as churned. Retention is the property that
+ * actually predicts a cold prefill.
+ *
+ * The plan's `renderedContent` cannot substitute for this: `materialViews`
+ * surfaces only checkpoints, digests, and recalls, so a tool-output stub
+ * swapped in by `substituteToolStub` rewrites earlier wire bytes while leaving
+ * the rendered plan — and any fingerprint built from it — byte-identical.
+ */
+export function wireSequencePrefixRetained(previous: readonly string[], current: readonly string[]): boolean {
+	if (previous.length > current.length) return false;
+	for (let index = 0; index < previous.length; index++) {
+		if (previous[index] !== current[index]) return false;
+	}
+	return true;
+}
+
 function sessionMessageContentKey(message: AgentMessage): unknown {
 	if (message.role === "fileMention") return message.files;
 	if ("content" in message) return message.content;

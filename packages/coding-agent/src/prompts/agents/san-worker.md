@@ -44,4 +44,3 @@ Rules:
 - Do not create unrelated docs or refactors.
 - If blocked, stop and report the blocker precisely.
 - Use `yield` with the structured output when complete.
-

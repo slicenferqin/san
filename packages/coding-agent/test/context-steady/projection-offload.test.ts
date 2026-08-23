@@ -4,7 +4,12 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { auditProjectionCoverage, materializeContextPlanMessages } from "../../src/context-steady/materialize";
+import {
+	auditProjectionCoverage,
+	contextWireSequenceTokens,
+	materializeContextPlanMessages,
+	wireSequencePrefixRetained,
+} from "../../src/context-steady/materialize";
 import { buildContextPlan } from "../../src/context-steady/planner";
 
 const SETTINGS = {
@@ -98,6 +103,64 @@ describe("M4 projection offload", () => {
 		const audit = auditProjectionCoverage(projected, entries, plan);
 		expect(audit.missingProjectableRefs).toEqual([]);
 		expect(audit.stubbedRefs).toEqual(["r1"]);
+	});
+	test("aged stub substitution breaks wire-prefix retention but not the rendered plan", () => {
+		const oldOutput = `old file body ${"x".repeat(4000)}`;
+		const recentOutput = `recent file body ${"y".repeat(4000)}`;
+		const entries = asEntries([
+			toolCallAssistant("a1", "c1", "read", "old.txt"),
+			toolResultEntry("r1", "c1", "read", oldOutput, 1),
+			toolCallAssistant("a2", "c2", "read", "recent.txt"),
+			toolResultEntry("r2", "c2", "read", recentOutput, 2),
+			messageEntry("u1", { role: "user", content: "Continue", timestamp: 3, provider: "x", model: "x" }),
+		]);
+		const messages = asMessages(entries.map(messageOf));
+		const planOptions = {
+			entries,
+			sessionId: "s1",
+			requestKey: "r1",
+			epochId: "e1",
+			promptGeneration: 2,
+			settings: SETTINGS,
+			contextWindow: 500_000,
+			nonMessageTokens: 20_000,
+			currentPromptEntryRefs: ["u1"],
+			baseRequiredEntryRefs: ["a2", "r2"],
+			tokenEstimateByEntryRef: new Map([
+				["r1", 3000],
+				["r2", 3000],
+			]),
+		};
+
+		// Same transcript, same budget: the only difference is whether aged
+		// offload is eligible to stub `r1`.
+		const withoutOffload = buildContextPlan(planOptions);
+		const withOffload = buildContextPlan({ ...planOptions, toolOutputOffload: { minTokens: 2000 } });
+		expect(withoutOffload.materials.some(m => "stubKind" in m && m.stubKind === "aged")).toBe(false);
+		expect(withOffload.materials.some(m => "stubKind" in m && m.stubKind === "aged")).toBe(true);
+
+		const baseline = materializeContextPlanMessages(messages, entries, withoutOffload);
+		const stubbed = materializeContextPlanMessages(messages, entries, withOffload);
+
+		// The stub really did rewrite an earlier message's wire bytes, which is
+		// what voids a provider prefix cache mid-transcript.
+		expect(JSON.stringify(baseline)).toContain("old file body");
+		expect(JSON.stringify(stubbed)).not.toContain("old file body");
+
+		// Regression guard: the rendered plan text — the only projection input the
+		// probe fingerprint hashes — cannot see this rewrite, so retention of the
+		// shipped sequence is the signal that must move.
+		expect(withOffload.renderedContent).toBe(withoutOffload.renderedContent);
+		expect(wireSequencePrefixRetained(contextWireSequenceTokens(baseline), contextWireSequenceTokens(stubbed))).toBe(
+			false,
+		);
+
+		// Appending a turn to an unrewritten sequence keeps the prefix, or every
+		// request would look churned and the signal would be worthless.
+		const appended = [...baseline, { role: "user", content: "next", timestamp: 4 }] as typeof baseline;
+		expect(wireSequencePrefixRetained(contextWireSequenceTokens(baseline), contextWireSequenceTokens(appended))).toBe(
+			true,
+		);
 	});
 
 	test("respects the aged-offload reclaim budget", () => {

@@ -46,4 +46,3 @@ Rules:
 - Return `blocked` only when progress requires user input or an external dependency.
 - Return `out_of_scope` when the implementation does not match the assignment.
 - Use `yield` with the structured output when your gate report is ready.
-

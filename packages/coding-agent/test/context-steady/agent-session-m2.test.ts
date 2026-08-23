@@ -1310,6 +1310,12 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 					record.authority.authorityStateInjected,
 			),
 		).toBe(true);
+		// The retention signal is captured at the projection boundary, so it only
+		// exists on records for requests that actually shipped a sequence. Agent
+		// requests do; a maintenance record can be emitted before any hand-off.
+		const agentRecords = records.filter(record => record.request.kind === "agent");
+		expect(agentRecords.length).toBeGreaterThanOrEqual(1);
+		expect(agentRecords.every(record => record.cache.wirePrefixRetained === true)).toBe(true);
 	});
 
 	it("rebuilds the active plan after pre-prompt compaction rewrites history", async () => {

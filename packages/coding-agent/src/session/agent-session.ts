@@ -241,8 +241,10 @@ import { generateFallbackDigest } from "../context-steady/fallback";
 import {
 	auditProjectionCoverage,
 	buildContextRecallMessage,
+	contextWireSequenceTokens,
 	estimateContextPlanProjectedTokens,
 	materializeContextPlanMessages,
+	wireSequencePrefixRetained,
 } from "../context-steady/materialize";
 import { type BuiltContextPlan, CONTEXT_PLAN_CUSTOM_TYPE } from "../context-steady/plan-types";
 import {
@@ -2524,6 +2526,13 @@ export class AgentSession {
 	#contextSteadyRecoveryAttempt = 0;
 	#contextProbeWrite: Promise<void> = Promise.resolve();
 	#contextProbeLastPrefixFingerprint: { promptCacheKey: string; value: string } | undefined;
+	/**
+	 * Shape tokens of the last message sequence handed to the provider, plus
+	 * whether that hand-off still retained the previous sequence as a prefix.
+	 * Captured at the projection boundary because the probe snapshot is built
+	 * after the request and cannot re-derive what actually shipped.
+	 */
+	#contextProbeWireSequence: { tokens: string[]; prefixRetained: boolean } | undefined;
 	#contextProbeActiveMaintenanceDecision: ContextProbeMaintenanceDecision | undefined;
 	#contextProbeActiveCompaction: ContextProbeCompactionObservation | undefined;
 	#sessionStopContinuationCount = 0;
@@ -9148,9 +9157,9 @@ export class AgentSession {
 		const transformedMessages = await this.#transformContext(messages, signal);
 		const responseProjectedMessages = this.#responseDocuments.project(transformedMessages);
 		if (!this.#contextSteadyIsActive(this.#estimateFullProviderInputTokens(responseProjectedMessages))) {
-			return responseProjectedMessages;
+			return this.#recordProviderWireSequence(responseProjectedMessages);
 		}
-		if (!this.#contextSteadyPlanEnabled()) return responseProjectedMessages;
+		if (!this.#contextSteadyPlanEnabled()) return this.#recordProviderWireSequence(responseProjectedMessages);
 		// Re-gate every provider call (including tool-loop steps) against live tail growth.
 		const plan = await this.#refreshContextSteadyPlanForProviderCall(responseProjectedMessages);
 		if (plan) {
@@ -9176,9 +9185,30 @@ export class AgentSession {
 					withdrawn: plan.withdrawn === true,
 				});
 			}
-			return this.#responseDocuments.project(plannedMessages);
+			return this.#recordProviderWireSequence(this.#responseDocuments.project(plannedMessages));
 		}
-		return responseProjectedMessages;
+		return this.#recordProviderWireSequence(responseProjectedMessages);
+	}
+
+	/**
+	 * Capture the sequence actually handed to the provider, on every exit from
+	 * projection, so the probe sees the shipped bytes rather than the plan text.
+	 * Each exit ships a different array — steady-inactive, plan-disabled, and
+	 * materialized — so all three record through here.
+	 *
+	 * Records prefix *retention* against the previous hand-off: appending to the
+	 * tail keeps a provider cache warm, and only a rewrite of an already-sent
+	 * message forces a cold prefill.
+	 */
+	#recordProviderWireSequence(messages: AgentMessage[]): AgentMessage[] {
+		if (this.settings.get("san.contextSteady.probe.enabled") !== true) return messages;
+		const tokens = contextWireSequenceTokens(messages);
+		const previous = this.#contextProbeWireSequence;
+		this.#contextProbeWireSequence = {
+			tokens,
+			prefixRetained: previous ? wireSequencePrefixRetained(previous.tokens, tokens) : true,
+		};
+		return messages;
 	}
 
 	/** Apply session-level stream hooks to a direct side request. */
@@ -14852,6 +14882,10 @@ export class AgentSession {
 		// prefix just as surely as editing the system prompt. Keep it inside the fingerprint so a
 		// rotation can never be reported as an unchanged prefix.
 		const promptCacheKey = this.agent.promptCacheKey ?? this.sessionId;
+		// Wire-sequence churn is deliberately NOT hashed in here. Every turn appends
+		// messages, so folding the sequence into this identity would report a changed
+		// prefix on literally every request. Caches match on a byte *prefix*, so the
+		// question is retention, not equality — tracked via `wirePrefixRetained`.
 		const prefixFingerprint = String(
 			Bun.hash(
 				JSON.stringify({
@@ -14891,6 +14925,9 @@ export class AgentSession {
 						previousPrefixFingerprint: this.#contextProbeLastPrefixFingerprint.value,
 						previousPromptCacheKey: this.#contextProbeLastPrefixFingerprint.promptCacheKey,
 					}
+				: {}),
+			...(this.#contextProbeWireSequence
+				? { wirePrefixRetained: this.#contextProbeWireSequence.prefixRetained }
 				: {}),
 		};
 		this.#contextProbeLastPrefixFingerprint = { promptCacheKey, value: prefixFingerprint };

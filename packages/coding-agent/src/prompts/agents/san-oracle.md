@@ -27,4 +27,3 @@ Rules:
 - State uncertainty plainly.
 - Recommend one concrete path.
 - Use `yield` with the structured output.
-

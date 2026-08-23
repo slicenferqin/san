@@ -11,7 +11,7 @@ import type {
 	ContextSummarySource,
 } from "./types";
 
-export const CONTEXT_PROBE_SCHEMA_VERSION = 4;
+export const CONTEXT_PROBE_SCHEMA_VERSION = 5;
 
 export type ContextProbeRequestKind = "agent" | "turn_digest" | "compaction" | "maintenance";
 
@@ -102,6 +102,16 @@ export interface ContextProbeRecord {
 		 * how stable the prefix is, so it must never be reported as an unchanged request.
 		 */
 		cacheKeyChanged: boolean;
+		/**
+		 * False when the sequence handed to the provider stopped beginning with the whole of the
+		 * previous hand-off — i.e. an already-sent message was rewritten mid-transcript.
+		 *
+		 * `prefixChanged` cannot see this: it hashes request identity (model, system prompt, tools,
+		 * rendered plan), and a tool-output stub swapped in at materialization leaves every one of
+		 * those byte-identical while voiding the upstream prefix. Absent when the probe observed no
+		 * hand-off for this request.
+		 */
+		wirePrefixRetained?: boolean;
 	};
 }
 
@@ -123,6 +133,8 @@ export interface BuildContextProbeSnapshotOptions {
 	/** Resolved wire cache key. Defaults to `sessionId` when the caller pins nothing. */
 	promptCacheKey?: string;
 	previousPromptCacheKey?: string;
+	/** Prefix retention observed at the projection boundary; omitted when nothing shipped. */
+	wirePrefixRetained?: boolean;
 	maintenanceDecision?: ContextProbeMaintenanceDecision;
 	compaction?: ContextProbeCompactionObservation;
 	authorityState?: ActiveContinuationState;
@@ -232,6 +244,7 @@ function buildContextProbeRecordBase(
 				options.previousPrefixFingerprint !== options.prefixFingerprint,
 			cacheKeyChanged:
 				options.previousPromptCacheKey !== undefined && options.previousPromptCacheKey !== promptCacheKey,
+			...(options.wirePrefixRetained === undefined ? {} : { wirePrefixRetained: options.wirePrefixRetained }),
 		},
 	};
 }

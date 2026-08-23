@@ -50,7 +50,7 @@ describe("Context steady sidecar probe", () => {
 		});
 
 		expect(record.request).toEqual({ kind: "agent", stopReason: "stop" });
-		expect(record.schemaVersion).toBe(4);
+		expect(record.schemaVersion).toBe(5);
 		expect(record.usage).toMatchObject({ promptTokens: 105_000, cacheReadRate: 80_000 / 105_000 });
 		expect(record.context).toMatchObject({
 			steadyEnabled: true,
@@ -166,7 +166,7 @@ describe("Context steady sidecar probe", () => {
 		});
 
 		expect(record).toMatchObject({
-			schemaVersion: 4,
+			schemaVersion: 5,
 			request: { kind: "maintenance" },
 			maintenance: {
 				maintenanceId: "maintenance-1",

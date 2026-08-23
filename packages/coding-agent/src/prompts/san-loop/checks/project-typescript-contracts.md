@@ -16,4 +16,3 @@ verifier:
 - Do not use inline imports.
 - Keep prompts in static `.md` files and import them with `with { type: "text" }`.
 - Prefer focused contract tests for user-visible behavior.
-

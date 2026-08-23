@@ -708,7 +708,7 @@ describe("AgentSession handoff", () => {
 		}
 		const maintenanceRecord = probeRecords.find(record => record.request.kind === "maintenance");
 		expect(maintenanceRecord).toMatchObject({
-			schemaVersion: 4,
+			schemaVersion: 5,
 			maintenance: { primaryTrigger: "manual", matchedTriggers: ["manual"], action: "context-full" },
 			compaction: { tokensBefore: 100, summarySource: "local" },
 			authority: {
