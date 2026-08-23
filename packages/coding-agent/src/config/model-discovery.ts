@@ -883,6 +883,7 @@ export async function discoverProxyModels(
 		if (!api) continue;
 		const isAnthropic = api === "anthropic-messages";
 		const reference = resolveModelReference(id, getBundledModelReferenceIndex());
+		const referenceCompat = reference?.compat as OpenAICompat | undefined;
 		const discoveryName = typeof item.name === "string" ? item.name.trim() : "";
 		const displayName =
 			reference?.name ??
@@ -913,14 +914,24 @@ export async function discoverProxyModels(
 				// OpenAI-compat fields are no-ops on anthropic models; the
 				// Anthropic SDK ignores them. Provider-level disableStrictTools
 				// flows in via #applyProviderCompat for the third-party-Anthropic
-				// path. Cross-wire bundled compat is intentionally not copied:
-				// request-shaping fields are provider-wire specific.
+				// path. Request-shaping fields stay local, but the reference's
+				// reasoning-effort wire facts must carry over: on the
+				// `openai-responses` family a hard `supportsReasoningEffort:
+				// false` makes `resolveModelThinking` drop the effort ladder
+				// entirely, so every reasoning model behind a proxy would lose
+				// its `:high`/`:max` surface and have to be hand-declared.
 				compat: isAnthropic
 					? undefined
 					: {
 							supportsStore: false,
 							supportsDeveloperRole: false,
-							supportsReasoningEffort: false,
+							supportsReasoningEffort: referenceCompat?.supportsReasoningEffort ?? false,
+							...(referenceCompat?.reasoningEffortMap
+								? { reasoningEffortMap: referenceCompat.reasoningEffortMap }
+								: {}),
+							...(referenceCompat?.omitReasoningEffort !== undefined
+								? { omitReasoningEffort: referenceCompat.omitReasoningEffort }
+								: {}),
 						},
 			} as ModelSpec<Api>),
 		);
