@@ -12,6 +12,7 @@ import { estimateTokens } from "@san/agent/compaction";
 import type { AssistantMessage, ProviderSessionState } from "@san/ai";
 import * as ai from "@san/ai";
 import { createMockModel } from "@san/ai/providers/mock";
+import { AssistantMessageEventStream } from "@san/ai/utils/event-stream";
 import { getBundledModel } from "@san/catalog/models";
 import { applySanBrainMutation } from "@san/coding-agent/brain/commands";
 import { appendSanBrainExperienceCandidate } from "@san/coding-agent/brain/ledger";
@@ -1112,6 +1113,113 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		expect(maintenance.detail).toContain("session_before_compact");
 	});
 
+	it.each([
+		false,
+		true,
+	])("recovers a tool-loop hard_pressure after compaction rewrites history (stable projection: %s)", async stableProjection => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const huge = "Z".repeat(400_000);
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [{ type: "toolCall", id: "call_huge", name: "echo", arguments: { value: "seed" } }],
+				},
+				{
+					content: [
+						{ type: "toolCall", id: "call_after_recovery", name: "echo", arguments: { value: "after-recovery" } },
+					],
+				},
+				{ content: ["recovered after compaction"] },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [echoTool] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"compaction.enabled": true,
+			"compaction.strategy": "context-full",
+			"compaction.autoContinue": false,
+			// Disable regular mid-turn maintenance so the steady-target compaction
+			// does not shrink the huge tool result before the hard_pressure
+			// re-gate. The hard_pressure recovery path calls #runAutoCompaction
+			// directly, which respects only `enabled`/`strategy`, not midTurnEnabled.
+			"compaction.midTurnEnabled": false,
+			"compaction.thresholdTokens": 999_999,
+			"compaction.thresholdPercent": -1,
+			"compaction.keepRecentTokens": 1,
+			"contextPromotion.enabled": false,
+			// Tight bands so the 400k-char tool result (~100k tokens) trips the
+			// tool-loop re-gate into hard_pressure.
+			"san.contextSteady.qualityWindowTokens": 8_000,
+			"san.contextSteady.burstWindowTokens": 12_000,
+			"san.contextSteady.contextPlan.maxTokens": 2_000,
+			"san.contextSteady.hardPressure.maxRecoveryPasses": 0,
+			"san.contextSteady.contextPlan.stableProjection": stableProjection,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		// Oversized tool result forces the tool-loop re-gate past burst ceiling.
+		let largeEchoCalls = 0;
+		const largeEcho: AgentTool<typeof echoToolSchema, { value: string }> = {
+			...echoTool,
+			async execute(_toolCallId, params) {
+				const parsed = echoParams(params);
+				const resultSuffix = largeEchoCalls++ === 0 ? huge : "small";
+				return {
+					content: [{ type: "text", text: `echo:${parsed.value}:${resultSuffix}` }],
+					details: parsed,
+				};
+			},
+		};
+		agent.setTools([largeEcho]);
+
+		// Compaction succeeds (no extension cancellation): the mock shrinks
+		// history to a tiny summary so the post-compaction rebuild should fit.
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+			summary: "COMPACTION_RECOVERY_MARKER",
+			shortSummary: undefined,
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: preparation.tokensBefore,
+			details: {},
+		}));
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		await session.prompt("tool loop recovery probe");
+		await session.waitForIdle();
+
+		// Compaction ran at least once during the tool-loop recovery attempt.
+		expect(compactSpy).toHaveBeenCalled();
+		// The post-compaction provider calls succeeded — recovery rebuilt the plan
+		// from the post-compaction state and the tool-loop continued instead of
+		// pausing for context.
+		expect(mock.calls).toHaveLength(3);
+		const recoveredPayload = JSON.stringify(mock.calls[1]!.context.messages);
+		const continuedPayload = JSON.stringify(mock.calls[2]!.context.messages);
+		expect(recoveredPayload).toContain("COMPACTION_RECOVERY_MARKER");
+		expect(continuedPayload).toContain("COMPACTION_RECOVERY_MARKER");
+		// The third provider call must not resurrect the discarded oversized tool
+		// result through Agent's loop-local context array.
+		expect(continuedPayload).not.toContain(huge);
+		// The final provider response reached the session as the assistant result.
+		expect(JSON.stringify(session.messages)).toContain("recovered after compaction");
+		// No paused_for_context maintenance record: the recovery resolved the
+		// pressure rather than giving up on a stale snapshot.
+		const maintenance = customEntries(sessionManager, "san.context_maintenance").at(-1)?.data as
+			| {
+					state: string;
+			  }
+			| undefined;
+		expect(maintenance?.state).not.toBe("paused_for_context");
+	});
+
 	it("does not double-count stored history when re-gating a legal tool-loop tail", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		// ~700k chars ≈ ~175k tokens — under default 260k control / 320k burst when counted once.
@@ -1316,6 +1424,120 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		const agentRecords = records.filter(record => record.request.kind === "agent");
 		expect(agentRecords.length).toBeGreaterThanOrEqual(1);
 		expect(agentRecords.every(record => record.cache.wirePrefixRetained === true)).toBe(true);
+	});
+
+	it("mid-turn side conversions never rewrite the main turn's wire retention state", async () => {
+		authoritativeDigestSpy("wire retention");
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		// Hold the second main provider call open so side-lineage conversions run
+		// while the main turn is mid-request — exactly the /btw / /dump window.
+		let callIndex = 0;
+		const secondCallStarted = Promise.withResolvers<void>();
+		const secondCallGate = Promise.withResolvers<void>();
+		const mock = createMockModel({
+			handler: async () => {
+				callIndex += 1;
+				if (callIndex === 2) {
+					secondCallStarted.resolve();
+					await secondCallGate.promise;
+				}
+				return { content: [`main reply ${callIndex}`] };
+			},
+		});
+		const sideStreamFn = (
+			requestModel: typeof model,
+			_context: unknown,
+			_options?: unknown,
+		): AssistantMessageEventStream => {
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = {
+					role: "assistant",
+					content: [{ type: "text", text: "side reply" }],
+					api: requestModel.api,
+					provider: requestModel.provider,
+					model: requestModel.id,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "stop",
+					timestamp: Date.now(),
+				} as AssistantMessage;
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "side reply", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		};
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.create(tempDir, tempDir);
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			...DIGEST_LLM_SETTINGS,
+			"san.contextSteady.probe.enabled": true,
+			"san.contextSteady.contextPlan.stableProjection": true,
+			"san.contextSteady.contextPlan.imageOffload": true,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "wire-auth.db"));
+		authStorages.push(authStorage);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "wire-models.yml"));
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, sideStreamFn });
+
+		// Padded turn 1: authoritative digest coverage keeps the pinned plan
+		// engaged, so image offload actively projects.
+		await session.prompt(`Fix the parser bug ${RAW_BODY}`);
+		await session.waitForIdle();
+
+		// Turn 2 attaches an image to the CURRENT prompt: the main hand-off
+		// ships it verbatim, while any side projection of the same transcript
+		// treats it as aged and swaps in the offload marker.
+		const second = session.prompt("check this screenshot", {
+			images: [{ type: "image", mimeType: "image/png", data: "QUJD" }],
+		});
+		await secondCallStarted.promise;
+		const side = await session.runEphemeralTurn({ promptText: "unrelated side question" });
+		expect(side.replyText).toBe("side reply");
+		const dumpPath = await session.dumpLlmRequestToTmpDir();
+		expect(dumpPath).toBeDefined();
+		await fs.promises.rm(dumpPath!, { force: true });
+		secondCallGate.resolve();
+		await second;
+		await session.waitForIdle();
+
+		const sessionFile = sessionManager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected persistent session file");
+		const probeFile = contextProbeFilePath(sessionFile);
+		let records: ContextProbeRecord[] = [];
+		for (let attempt = 0; attempt < 100; attempt++) {
+			const file = Bun.file(probeFile);
+			if (await file.exists()) records = Bun.JSONL.parse(await file.text()) as ContextProbeRecord[];
+			if (records.filter(record => record.request.kind === "agent").length >= 2) break;
+			await Bun.sleep(1);
+		}
+		const agentRecords = records.filter(record => record.request.kind === "agent");
+		expect(agentRecords).toHaveLength(2);
+		// The second main turn only appended to turn 1's frozen-prefix sequence,
+		// so its own hand-off retains. The mid-turn ephemeral and dump
+		// projections would have offloaded the current prompt's image — a
+		// session-global sequence field would attribute that rewrite to the
+		// main request and report churn that never reached the provider.
+		expect(agentRecords.map(record => record.cache.wirePrefixRetained)).toEqual([true, true]);
+		// Retention readings belong to the agent lineage only.
+		for (const record of records) {
+			if (record.request.kind !== "agent") {
+				expect(record.cache.wirePrefixRetained).toBeUndefined();
+			}
+		}
 	});
 
 	it("rebuilds the active plan after pre-prompt compaction rewrites history", async () => {

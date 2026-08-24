@@ -947,8 +947,13 @@ type CompactionCheckResult = Readonly<{
 
 interface ToolLoopBudgetRecoveryResult {
 	plan?: BuiltContextPlan;
+	sourceMessages?: AgentMessage[];
 	failureStage?: ContextMaintenanceAudit["failureStage"];
 	failureReason?: string;
+}
+interface ToolLoopPlanRefreshResult {
+	plan?: BuiltContextPlan;
+	sourceMessages?: AgentMessage[];
 }
 
 interface ContextSummaryAuthorityResolution {
@@ -2527,12 +2532,14 @@ export class AgentSession {
 	#contextProbeWrite: Promise<void> = Promise.resolve();
 	#contextProbeLastPrefixFingerprint: { promptCacheKey: string; value: string } | undefined;
 	/**
-	 * Shape tokens of the last message sequence handed to the provider, plus
-	 * whether that hand-off still retained the previous sequence as a prefix.
-	 * Captured at the projection boundary because the probe snapshot is built
-	 * after the request and cannot re-derive what actually shipped.
+	 * Content digests of the last main-turn sequence handed to the provider,
+	 * plus whether that hand-off still retained the previous main-turn sequence
+	 * as a prefix. Main-turn lineage only: side requests (ephemeral turns,
+	 * handoff, dumps) convert through the same pipeline but must not rewrite
+	 * this state — their projections are a different request lineage and a
+	 * session-global field would attribute one request's churn to another.
 	 */
-	#contextProbeWireSequence: { tokens: string[]; prefixRetained: boolean } | undefined;
+	#contextProbeAgentWireSequence: { tokens: string[]; prefixRetained: boolean } | undefined;
 	#contextProbeActiveMaintenanceDecision: ContextProbeMaintenanceDecision | undefined;
 	#contextProbeActiveCompaction: ContextProbeCompactionObservation | undefined;
 	#sessionStopContinuationCount = 0;
@@ -3119,7 +3126,7 @@ export class AgentSession {
 		this.#presentationPinnedToolNames = config.presentationPinnedToolNames;
 		this.#ensureWriteRegistered = config.ensureWriteRegistered;
 		this.#transformContext = config.transformContext ?? (messages => messages);
-		this.agent.setTransformContext((messages, signal) => this.#transformContextForProvider(messages, signal));
+		this.agent.setTransformContext((messages, signal) => this.#transformContextForProvider(messages, signal, true));
 		this.#transformProviderContext = config.transformProviderContext;
 		this.#sideStreamFn = config.sideStreamFn ?? streamSimple;
 		this.#advisorStreamFn = config.advisorStreamFn;
@@ -9149,25 +9156,48 @@ export class AgentSession {
 
 	/** Convert session messages using the same pre-LLM pipeline as the active session. */
 	async convertMessagesToLlm(messages: AgentMessage[], signal?: AbortSignal): Promise<Message[]> {
-		const transformedMessages = await this.#transformContextForProvider(messages, signal);
+		// Side-lineage conversion (ephemeral turns, handoff, dumps): the wire
+		// sequence recorder stays off so these projections never rewrite the
+		// main turn's "already shipped" state.
+		const transformedMessages = await this.#transformContextForProvider(messages, signal, false);
 		return await this.#convertToLlm(transformedMessages);
 	}
 
-	async #transformContextForProvider(messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> {
+	async #transformContextForProvider(
+		messages: AgentMessage[],
+		signal?: AbortSignal | undefined,
+		recordWireSequence?: boolean,
+	): Promise<AgentMessage[]> {
 		const transformedMessages = await this.#transformContext(messages, signal);
 		const responseProjectedMessages = this.#responseDocuments.project(transformedMessages);
 		if (!this.#contextSteadyIsActive(this.#estimateFullProviderInputTokens(responseProjectedMessages))) {
-			return this.#recordProviderWireSequence(responseProjectedMessages);
+			return this.#recordProviderWireSequence(responseProjectedMessages, recordWireSequence);
 		}
-		if (!this.#contextSteadyPlanEnabled()) return this.#recordProviderWireSequence(responseProjectedMessages);
+		if (!this.#contextSteadyPlanEnabled()) {
+			return this.#recordProviderWireSequence(responseProjectedMessages, recordWireSequence);
+		}
 		// Re-gate every provider call (including tool-loop steps) against live tail growth.
-		const plan = await this.#refreshContextSteadyPlanForProviderCall(responseProjectedMessages);
+		const refresh = await this.#refreshContextSteadyPlanForProviderCall(responseProjectedMessages);
+		const plan = refresh?.plan;
+		let materializationMessages = transformedMessages;
+		if (refresh?.sourceMessages) {
+			// Auto-compaction replaces the Agent state while this transform is in
+			// flight. Rebase the live agent-loop array as well as this request's
+			// projection; otherwise the next tool-loop iteration would resurrect
+			// the discarded pre-compaction history from its local snapshot.
+			if (recordWireSequence === true) {
+				messages.splice(0, messages.length, ...refresh.sourceMessages);
+				materializationMessages = await this.#transformContext(messages, signal);
+			} else {
+				materializationMessages = await this.#transformContext(refresh.sourceMessages, signal);
+			}
+		}
 		if (plan) {
 			// Materialize against the original transcript so Context Plan coverage
 			// can still match branch message identity/content, then project any
 			// surviving response documents at the final provider boundary.
 			const plannedMessages = materializeContextPlanMessages(
-				transformedMessages,
+				materializationMessages,
 				this.sessionManager.getBranch(),
 				plan,
 				this.#contextSteadyRecallMessage,
@@ -9185,9 +9215,9 @@ export class AgentSession {
 					withdrawn: plan.withdrawn === true,
 				});
 			}
-			return this.#recordProviderWireSequence(this.#responseDocuments.project(plannedMessages));
+			return this.#recordProviderWireSequence(this.#responseDocuments.project(plannedMessages), recordWireSequence);
 		}
-		return this.#recordProviderWireSequence(responseProjectedMessages);
+		return this.#recordProviderWireSequence(responseProjectedMessages, recordWireSequence);
 	}
 
 	/**
@@ -9196,15 +9226,18 @@ export class AgentSession {
 	 * Each exit ships a different array — steady-inactive, plan-disabled, and
 	 * materialized — so all three record through here.
 	 *
-	 * Records prefix *retention* against the previous hand-off: appending to the
-	 * tail keeps a provider cache warm, and only a rewrite of an already-sent
-	 * message forces a cold prefill.
+	 * Records prefix *retention* against the previous main-turn hand-off:
+	 * appending to the tail keeps a provider cache warm, and only a rewrite of
+	 * an already-sent message forces a cold prefill. `recordWireSequence` is
+	 * set only on the main-turn agent path; side-lineage conversions (ephemeral
+	 * turns, handoff, /dump) pass through untouched so they can neither consume
+	 * nor overwrite the main turn's shipped-wire state.
 	 */
-	#recordProviderWireSequence(messages: AgentMessage[]): AgentMessage[] {
-		if (this.settings.get("san.contextSteady.probe.enabled") !== true) return messages;
+	#recordProviderWireSequence(messages: AgentMessage[], record?: boolean): AgentMessage[] {
+		if (record !== true || this.settings.get("san.contextSteady.probe.enabled") !== true) return messages;
 		const tokens = contextWireSequenceTokens(messages);
-		const previous = this.#contextProbeWireSequence;
-		this.#contextProbeWireSequence = {
+		const previous = this.#contextProbeAgentWireSequence;
+		this.#contextProbeAgentWireSequence = {
 			tokens,
 			prefixRetained: previous ? wireSequencePrefixRetained(previous.tokens, tokens) : true,
 		};
@@ -10702,11 +10735,10 @@ export class AgentSession {
 	 */
 	async #refreshContextSteadyPlanForProviderCall(
 		messages: readonly AgentMessage[],
-	): Promise<BuiltContextPlan | undefined> {
+	): Promise<ToolLoopPlanRefreshResult | undefined> {
 		const existing = this.#contextSteadyRequestPlan;
 		if (!existing) return undefined;
 		const branchEntries = this.sessionManager.getBranch();
-		const activeScope = this.#contextSteadyActivePlanningEntries(branchEntries);
 		// Tool-loop: `messages` is already the full transformed provider context.
 		const projected = this.#estimateMaterializedProjectedInputTokens(messages, branchEntries, existing, "full");
 		const controlMax = existing.audit.budget.controlMax;
@@ -10715,10 +10747,66 @@ export class AgentSession {
 			// 同一逻辑 turn 内冻结 ContextPlan 字节。每次工具调用都重写投影值会让
 			// plan 之后的整条 turn 前缀失效，实际会把 provider cache read 压到仅剩
 			// system/tools。实时 projected 只用于门控；跨过 controlMax 时才重建。
-			return existing;
+			return { plan: existing };
 		}
 		// Crossed control band, or a model/history/non-message input changed: rebuild
 		// with the live tail for an accurate gate and material selection.
+		const { commonOptions, planningEntries } = this.#buildToolLoopPlanCommonOptions(messages, existing);
+		let plan = this.#buildContextSteadyPlanForProvider(commonOptions, messages, planningEntries, "full");
+		if (stable) plan.epochKey = existing.epochKey;
+		this.#contextSteadyRequestPlan = plan;
+		this.#contextSteadyLastPlan = plan;
+		if (plan.audit.qualityGate.outcome === "hard_pressure") {
+			let recoveryFailureStage: ContextMaintenanceAudit["failureStage"];
+			let recoveryFailureReason: string | undefined;
+			// Attempt one bounded recovery (auto-compaction) before pausing. This
+			// covers the case where a model window shrink collapses the budget and
+			// the current input slightly exceeds the new ceiling — compaction can
+			// reclaim enough to continue the tool-loop without user intervention.
+			if (this.#contextSteadyRecoveryAttempt === 0) {
+				this.#contextSteadyRecoveryAttempt++;
+				const recovered = await this.#attemptToolLoopBudgetRecovery(existing);
+				if (recovered.plan?.audit.qualityGate.outcome !== "hard_pressure") {
+					if (recovered.plan) return { plan: recovered.plan, sourceMessages: recovered.sourceMessages };
+				}
+				if (recovered.plan) {
+					plan = recovered.plan;
+					this.#contextSteadyRequestPlan = plan;
+					this.#contextSteadyLastPlan = plan;
+				}
+				recoveryFailureStage = recovered.failureStage;
+				recoveryFailureReason = recovered.failureReason;
+			}
+			// Only tool-loop hard pressure appends an extra audit (refusal evidence).
+			this.sessionManager.appendCustomEntry(CONTEXT_PLAN_CUSTOM_TYPE, plan.audit);
+			const pressureDetail = `Tool-loop input remains above the burst ceiling (${plan.audit.qualityGate.reasons.join(", ") || "tool_loop_overflow"}).`;
+			const detail = recoveryFailureReason
+				? `${pressureDetail} Recovery stopped: ${recoveryFailureReason}`
+				: pressureDetail;
+			this.#pauseForContextSteadyPressure(plan, "mid_turn", detail, recoveryFailureStage);
+			throw new Error(
+				`San ContextPlan hard pressure: projected input exceeds burst ceiling (${plan.audit.qualityGate.reasons.join(", ") || "tool_loop_overflow"}).`,
+			);
+		}
+		// Soft rebuild under control→burst: keep request-start audit as source of truth;
+		// only replace in-memory plan for materialize/status.
+		return { plan };
+	}
+
+	/**
+	 * Derive the ContextPlan commonOptions + planningEntries for a tool-loop
+	 * rebuild from the current branch + live messages. Both the initial gate
+	 * and the post-compaction recovery path call this so a compaction that
+	 * rewrites history is reflected in the rebuild — the recovery path re-reads
+	 * the branch (post-compaction) instead of reusing the stale pre-compaction
+	 * snapshot.
+	 */
+	#buildToolLoopPlanCommonOptions(
+		messages: readonly AgentMessage[],
+		existing: BuiltContextPlan,
+	): { commonOptions: Omit<BuildContextPlanOptions, "projectedInputTokens">; planningEntries: SessionEntry[] } {
+		const branchEntries = this.sessionManager.getBranch();
+		const activeScope = this.#contextSteadyActivePlanningEntries(branchEntries);
 		const liveText = this.#contextSteadyLatestUserText(messages) ?? "";
 		// Synchronous rebuild path (no recall) so transformContext stays non-async beyond current await.
 		const pendingEntries = this.#contextSteadyPendingEntries(
@@ -10735,6 +10823,7 @@ export class AgentSession {
 			currentPromptEntryRefs,
 			tokenEstimateByEntryRef,
 		);
+		const stable = existing.projectionMode === "pinned";
 		const commonOptions = {
 			entries: planningEntries,
 			sessionId: this.sessionId,
@@ -10781,48 +10870,14 @@ export class AgentSession {
 			maintenanceId: this.#contextSteadyMaintenanceId,
 			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
 		};
-		const plan = this.#buildContextSteadyPlanForProvider(commonOptions, messages, planningEntries, "full");
-		if (stable) plan.epochKey = existing.epochKey;
-		this.#contextSteadyRequestPlan = plan;
-		this.#contextSteadyLastPlan = plan;
-		if (plan.audit.qualityGate.outcome === "hard_pressure") {
-			let recoveryFailureStage: ContextMaintenanceAudit["failureStage"];
-			let recoveryFailureReason: string | undefined;
-			// Attempt one bounded recovery (auto-compaction) before pausing. This
-			// covers the case where a model window shrink collapses the budget and
-			// the current input slightly exceeds the new ceiling — compaction can
-			// reclaim enough to continue the tool-loop without user intervention.
-			if (this.#contextSteadyRecoveryAttempt === 0) {
-				this.#contextSteadyRecoveryAttempt++;
-				const recovered = await this.#attemptToolLoopBudgetRecovery(messages, commonOptions);
-				if (recovered.plan) return recovered.plan;
-				recoveryFailureStage = recovered.failureStage;
-				recoveryFailureReason = recovered.failureReason;
-			}
-			// Only tool-loop hard pressure appends an extra audit (refusal evidence).
-			this.sessionManager.appendCustomEntry(CONTEXT_PLAN_CUSTOM_TYPE, plan.audit);
-			const pressureDetail = `Tool-loop input remains above the burst ceiling (${plan.audit.qualityGate.reasons.join(", ") || "tool_loop_overflow"}).`;
-			const detail = recoveryFailureReason
-				? `${pressureDetail} Recovery stopped: ${recoveryFailureReason}`
-				: pressureDetail;
-			this.#pauseForContextSteadyPressure(plan, "mid_turn", detail, recoveryFailureStage);
-			throw new Error(
-				`San ContextPlan hard pressure: projected input exceeds burst ceiling (${plan.audit.qualityGate.reasons.join(", ") || "tool_loop_overflow"}).`,
-			);
-		}
-		// Soft rebuild under control→burst: keep request-start audit as source of truth;
-		// only replace in-memory plan for materialize/status.
-		return plan;
+		return { commonOptions, planningEntries };
 	}
 
 	/**
 	 * 工具循环 hard_pressure 的单次有界恢复：自动压缩后重建 ContextPlan。
 	 * 恢复成功时返回 plan，否则返回维护阶段产生的失败诊断。
 	 */
-	async #attemptToolLoopBudgetRecovery(
-		messages: readonly AgentMessage[],
-		commonOptions: Omit<BuildContextPlanOptions, "projectedInputTokens">,
-	): Promise<ToolLoopBudgetRecoveryResult> {
+	async #attemptToolLoopBudgetRecovery(existing: BuiltContextPlan): Promise<ToolLoopBudgetRecoveryResult> {
 		logger.debug("Context Steady tool-loop budget recovery: attempting auto-compaction", {
 			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
 			contextWindow: this.model?.contextWindow,
@@ -10844,23 +10899,35 @@ export class AgentSession {
 				failureReason: recovery.failureReason,
 			};
 		}
-		// Rebuild the plan against the post-compaction state.
+		// Compaction rewrote history: re-derive planning entries and messages from
+		// the post-compaction state. `messages` (a pre-compaction transformed
+		// snapshot) and the branch it was derived from are both stale now — the
+		// agent's live message array was replaced by replaceMessages. Rebuild the
+		// plan from `this.messages` so the projection reflects the compacted
+		// history rather than the oversized pre-compaction tail.
+		const compactedMessages = this.messages;
+		const { commonOptions, planningEntries } = this.#buildToolLoopPlanCommonOptions(compactedMessages, existing);
 		const rebuiltPlan = this.#buildContextSteadyPlanForProvider(
 			commonOptions,
-			messages,
-			commonOptions.entries,
+			compactedMessages,
+			planningEntries,
 			"full",
 		);
 		if (rebuiltPlan.audit.qualityGate.outcome === "hard_pressure") {
-			return {};
+			return {
+				plan: rebuiltPlan,
+				failureStage: recovery.failureStage,
+				failureReason: recovery.failureReason,
+			};
 		}
+		if (existing.projectionMode === "pinned") rebuiltPlan.epochKey = this.#contextSteadyStableEpochKey();
 		this.#contextSteadyRequestPlan = rebuiltPlan;
 		this.#contextSteadyLastPlan = rebuiltPlan;
 		logger.debug("Context Steady tool-loop budget recovery: compaction resolved pressure", {
 			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
 			outcome: rebuiltPlan.audit.qualityGate.outcome,
 		});
-		return { plan: rebuiltPlan };
+		return { plan: rebuiltPlan, sourceMessages: compactedMessages };
 	}
 
 	#contextSteadyLatestUserText(messages: readonly AgentMessage[]): string | undefined {
@@ -14833,7 +14900,7 @@ export class AgentSession {
 		requestKind: Exclude<ContextProbeRequestKind, "maintenance">,
 		requestContextWindow?: number | null,
 	): void {
-		const snapshot = this.#buildContextProbeSnapshot(requestContextWindow);
+		const snapshot = this.#buildContextProbeSnapshot(requestContextWindow, requestKind);
 		if (!snapshot) return;
 		const record = buildContextProbeRecord({
 			...snapshot.options,
@@ -14843,7 +14910,10 @@ export class AgentSession {
 		this.#queueContextProbeRecord(snapshot.sessionFile, record);
 	}
 
-	#buildContextProbeSnapshot(requestContextWindow?: number | null): ContextProbeSnapshot | undefined {
+	#buildContextProbeSnapshot(
+		requestContextWindow?: number | null,
+		requestKind?: Exclude<ContextProbeRequestKind, "maintenance">,
+	): ContextProbeSnapshot | undefined {
 		if (this.settings.get("san.contextSteady.probe.enabled") !== true) return;
 		const sessionFile = this.sessionManager.getSessionFile();
 		if (!sessionFile) return;
@@ -14926,8 +14996,12 @@ export class AgentSession {
 						previousPromptCacheKey: this.#contextProbeLastPrefixFingerprint.promptCacheKey,
 					}
 				: {}),
-			...(this.#contextProbeWireSequence
-				? { wirePrefixRetained: this.#contextProbeWireSequence.prefixRetained }
+			// Wire retention belongs to the request lineage that shipped the
+			// sequence: only agent-kind records attach it. Side requests and
+			// maintenance records convert through other lineages and would
+			// otherwise report someone else's (or stale) retention.
+			...(requestKind === "agent" && this.#contextProbeAgentWireSequence
+				? { wirePrefixRetained: this.#contextProbeAgentWireSequence.prefixRetained }
 				: {}),
 		};
 		this.#contextProbeLastPrefixFingerprint = { promptCacheKey, value: prefixFingerprint };
