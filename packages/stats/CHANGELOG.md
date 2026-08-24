@@ -5,6 +5,7 @@
 ### Breaking Changes
 
 - Renamed the published package from `@oh-my-pi/omp-stats` to `@san/stats` and its executable from `omp-stats` to `san-stats`.
+- Changed non-loopback dashboard binds to require an auth token: `san stats --host 0.0.0.0` now refuses to start without `--token <secret>` (or `SAN_STATS_TOKEN`). Authenticated binds serve API requests only with the token (header or one-time `?token=` link that the dashboard picks up and scrubs from the address bar) and no longer send permissive CORS headers; loopback binds stay anonymous and unchanged.
 
 ### Fixed
 

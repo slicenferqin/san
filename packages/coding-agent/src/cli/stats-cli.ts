@@ -63,6 +63,8 @@ export interface StatsCommandArgs {
 	host: string;
 	json: boolean;
 	summary: boolean;
+	/** Auth token for non-loopback binds; falls back to SAN_STATS_TOKEN. */
+	token?: string;
 }
 
 // =============================================================================
@@ -99,6 +101,10 @@ export function parseStatsArgs(args: string[]): StatsCommandArgs | undefined {
 			result.host = args[++i];
 		} else if (arg.startsWith("--host=")) {
 			result.host = arg.slice("--host=".length);
+		} else if ((arg === "--token" || arg === "-t") && i + 1 < args.length) {
+			result.token = args[++i];
+		} else if (arg.startsWith("--token=")) {
+			result.token = arg.slice("--token=".length);
 		}
 	}
 
@@ -150,17 +156,21 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 		return;
 	}
 
-	// Start the dashboard server
-	const server = await startServer(cmd.port, cmd.host);
+	// Start the dashboard server. Non-loopback binds refuse to start without a
+	// token (the API exposes session contents); SAN_STATS_TOKEN is the env escape hatch.
+	const token = cmd.token ?? Bun.env.SAN_STATS_TOKEN;
+	const server = await startServer(cmd.port, cmd.host, token !== undefined ? { token } : undefined);
 	const url = formatStatsUrl(server.host, server.port);
 
-	// Open browser
+	// Open browser. On authenticated binds the token rides in the link once so
+	// the dashboard can pick it up and drop it from the address bar.
+	const openUrl = token ? `${url}/?token=${encodeURIComponent(token)}` : url;
 	console.log(
 		server.reused
 			? chalk.green(`Reusing existing dashboard at: ${url}`)
 			: chalk.green(`Dashboard available at: ${url}`),
 	);
-	openPath(url);
+	openPath(openUrl);
 
 	console.log("Press Ctrl+C to stop\n");
 
@@ -229,6 +239,7 @@ ${chalk.bold("Usage:")}
 ${chalk.bold("Options:")}
   -p, --port <port>  Port for the dashboard server (default: 3847)
   -H, --host <host>  Host to bind the dashboard server (default: 127.0.0.1)
+  -t, --token <key>  Auth token required by non-loopback hosts (or SAN_STATS_TOKEN)
   -j, --json         Output stats as JSON and exit
   -s, --summary      Print summary to console and exit
   -h, --help         Show this help message
@@ -236,9 +247,9 @@ ${chalk.bold("Options:")}
 ${chalk.bold("Examples:")}
   ${APP_NAME} stats              # Start dashboard server
   ${APP_NAME} stats --json       # Print stats as JSON
-  ${APP_NAME} stats --summary    # Print summary to console
+  ${APP_NAME} stats --summary    # Print summary to console and exit
   ${APP_NAME} stats --port 8080  # Start on custom port
-  ${APP_NAME} stats --host 0.0.0.0 --port 8080  # Expose on all interfaces (containers)
+  ${APP_NAME} stats --host 0.0.0.0 --port 8080 --token <secret>  # Expose on all interfaces (containers)
 
 ${chalk.bold("Metrics:")}
   - Total requests and error rate

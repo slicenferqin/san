@@ -13,6 +13,24 @@ import type {
 
 const API_BASE = "/api";
 
+/**
+ * Auth token for remotely exposed dashboard binds. Picked up once from a
+ * `?token=` link, stashed for the tab's lifetime, and scrubbed from the
+ * address bar so it cannot leak through the URL. Loopback binds never set it.
+ */
+const DASHBOARD_TOKEN = (() => {
+	if (typeof window === "undefined") return "";
+	const url = new URL(window.location.href);
+	const fromUrl = url.searchParams.get("token");
+	if (fromUrl) {
+		window.sessionStorage.setItem("san-stats-token", fromUrl);
+		url.searchParams.delete("token");
+		window.history.replaceState(null, "", url.toString());
+		return fromUrl;
+	}
+	return window.sessionStorage.getItem("san-stats-token") ?? "";
+})();
+
 export class ApiError extends Error {
 	status: number;
 	endpoint: string;
@@ -26,7 +44,11 @@ export class ApiError extends Error {
 }
 
 async function fetchJson<T>(endpoint: string, options?: RequestInit): Promise<T> {
-	const res = await fetch(endpoint, options);
+	const headers = new Headers(options?.headers);
+	if (DASHBOARD_TOKEN && !headers.has("Authorization")) {
+		headers.set("Authorization", `Bearer ${DASHBOARD_TOKEN}`);
+	}
+	const res = await fetch(endpoint, { ...options, headers });
 	if (!res.ok) {
 		throw new ApiError(res.status, endpoint, `HTTP error ${res.status} on ${endpoint}`);
 	}

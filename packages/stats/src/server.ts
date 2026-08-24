@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { lookup as dnsLookup } from "node:dns/promises";
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -332,6 +333,33 @@ function wildcardFamily(host: string): "ipv4" | "ipv6" | null {
 	return null;
 }
 
+/**
+ * Whether a bind host only listens on the machine's own loopback interfaces.
+ * Anything else (wildcards, LAN IPs, hostnames resolving off-box) exposes the
+ * dashboard to other clients and requires an auth token.
+ */
+export function isLoopbackStatsHost(host: string): boolean {
+	const normalized = normalizeStatsHost(host);
+	if (normalized === "localhost" || normalized === "::1") return true;
+	// The whole 127.0.0.0/8 block is loopback.
+	return /^127(?:\.\d{1,3}){3}$/.test(normalized);
+}
+
+/** Constant-time token comparison: hashing both sides equalizes lengths. */
+function statsTokensMatch(provided: string, expected: string): boolean {
+	const providedDigest = createHash("sha256").update(provided).digest();
+	const expectedDigest = createHash("sha256").update(expected).digest();
+	return timingSafeEqual(providedDigest, expectedDigest);
+}
+
+/** Bearer token from the Authorization header or a `?token=` query parameter. */
+function requestStatsToken(req: Request, url: URL): string {
+	const header = req.headers.get("authorization");
+	if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length).trim();
+	const query = url.searchParams.get("token");
+	return query !== null ? query.trim() : "";
+}
+
 async function resolveHostAddresses(host: string): Promise<string[]> {
 	try {
 		const entries = await dnsLookup(host, { all: true });
@@ -421,15 +449,30 @@ export interface StatsServerHandle {
  * Start the HTTP server.
  *
  * Binds loopback-only by default ({@link DEFAULT_STATS_HOST}); an explicit
- * host (e.g. `0.0.0.0` in containers) is honored as-is.
+ * host (e.g. `0.0.0.0` in containers) is honored as-is but requires an auth
+ * token — the API serves session contents, cost data, and can trigger syncs,
+ * so a remotely reachable bind must never be anonymous.
  *
  * When a confirmed San stats dashboard is already serving the requested
  * host:port it is reused instead of failing or taking the port over. An
  * unidentified process, or an instance bound to a different host, is never
  * reused, stopped, or taken over.
  */
-export async function startServer(port = 3847, host = DEFAULT_STATS_HOST): Promise<StatsServerHandle> {
+export async function startServer(
+	port = 3847,
+	host = DEFAULT_STATS_HOST,
+	options?: { token?: string },
+): Promise<StatsServerHandle> {
 	const normalizedHost = normalizeStatsHost(host);
+	const loopback = isLoopbackStatsHost(normalizedHost);
+	const token = options?.token?.trim() ?? "";
+	if (!loopback && token === "") {
+		throw new Error(
+			`Refusing to expose the stats dashboard on ${formatStatsUrl(normalizedHost, port)} without authentication: ` +
+				"the dashboard API exposes session contents and cost data. Start it with --token <secret> " +
+				"(or SAN_STATS_TOKEN), or bind a loopback host such as 127.0.0.1.",
+		);
+	}
 
 	// `port: 0` means "pick a free port" and has nothing to probe.
 	if (port > 0) {
@@ -462,20 +505,33 @@ export async function startServer(port = 3847, host = DEFAULT_STATS_HOST): Promi
 				const path = url.pathname;
 
 				// Identity endpoint used to confirm an already-running San
-				// stats dashboard before reusing its host:port.
+				// stats dashboard before reusing its host:port. Identity only —
+				// no data, so it stays reachable without a token.
 				if (path === "/api/health") {
 					return Response.json({ status: "ok", name: STATS_SERVER_NAME, host: normalizedHost });
 				}
 
-				// CORS headers for local development
-				const corsHeaders = {
-					"Access-Control-Allow-Origin": "*",
-					"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-					"Access-Control-Allow-Headers": "Content-Type",
-				};
+				// Loopback serves local development, so cross-origin tooling may
+				// read the API. A remotely exposed bind must not: every response
+				// carrying data stays same-origin only.
+				const corsHeaders: Record<string, string> = loopback
+					? {
+							"Access-Control-Allow-Origin": "*",
+							"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+							"Access-Control-Allow-Headers": "Content-Type, Authorization",
+						}
+					: {};
 
 				if (req.method === "OPTIONS") {
 					return new Response(null, { headers: corsHeaders });
+				}
+
+				// Remote binds authenticate every API route (static assets carry
+				// no data; the browser UI picks the token up from ?token=).
+				if (!loopback && path.startsWith("/api/")) {
+					if (!statsTokensMatch(requestStatsToken(req, url), token)) {
+						return new Response("Unauthorized", { status: 401, headers: corsHeaders });
+					}
 				}
 
 				try {
