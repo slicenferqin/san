@@ -354,23 +354,21 @@ function buildMaterials(
 		(!requireRelevance || isCheckpointRelevantToPrompt(promptText, latestCheckpoint.checkpoint));
 	if (latestCheckpoint && includeCheckpoint) {
 		const checkpointEstimate = latestCheckpoint.checkpoint.tokenEstimate;
-		if (checkpointEstimate <= remainingBudget) {
-			materials.push({
-				audit: {
-					materialId: materialId("checkpoint", latestCheckpoint.entryId),
-					kind: "checkpoint",
-					representation: "checkpoint",
-					entryRefs: [latestCheckpoint.entryId],
-					tokenEstimate: latestCheckpoint.checkpoint.tokenEstimate,
-					reason: "latest stable checkpoint",
-				},
-				entryId: latestCheckpoint.entryId,
-				checkpoint: latestCheckpoint.checkpoint,
-				// Source-index already strips fallback-digest spans from coverage.
-				coveredEntryRefs: latestCheckpoint.coveredSourceEntryRefs,
-			});
-			remainingBudget -= checkpointEstimate;
-		}
+		materials.push({
+			audit: {
+				materialId: materialId("checkpoint", latestCheckpoint.entryId),
+				kind: "checkpoint",
+				representation: "checkpoint",
+				entryRefs: [latestCheckpoint.entryId],
+				tokenEstimate: latestCheckpoint.checkpoint.tokenEstimate,
+				reason: "latest stable checkpoint",
+			},
+			entryId: latestCheckpoint.entryId,
+			checkpoint: latestCheckpoint.checkpoint,
+			// Source-index already strips fallback-digest spans from coverage.
+			coveredEntryRefs: latestCheckpoint.coveredSourceEntryRefs,
+		});
+		remainingBudget -= checkpointEstimate;
 	}
 
 	const selectedDigests = sourceIndex.digests
