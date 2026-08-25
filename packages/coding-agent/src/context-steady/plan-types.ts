@@ -15,6 +15,9 @@ export type ContextPlanSourceKind =
 	| "checkpoint"
 	| "recall"
 	| "live_tail"
+
+	/** Audit-only: no runtime material exists; marks degraded history representation. */
+	| "representation"
 	| "goal_anchor";
 export type ContextPlanRepresentation = "exact" | "evidence_stub" | "digest" | "checkpoint" | "recall" | "omitted";
 export type ContextPlanQualityOutcome = "pass" | "burst_required" | "hard_pressure";
@@ -126,6 +129,19 @@ export interface ContextPlanCoverageAudit {
 	reason: string;
 }
 
+/**
+ * Net-benefit gate outcome, measured on the final provider projection:
+ * `rawProjectedTokens - projectedTokens` (plan wire cost included in the latter).
+ * `withdrawn: true` means only derived replacement was revoked — raw history,
+ * the current prompt, and tool calls are untouched.
+ */
+export interface ContextPlanNetBenefitAudit {
+	rawProjectedTokens: number;
+	projectedTokens: number;
+	netBenefit: number;
+	withdrawn: boolean;
+}
+
 export interface ContextPlanAudit {
 	schemaVersion: typeof CONTEXT_PLAN_SCHEMA_VERSION;
 	planId: string;
@@ -138,6 +154,7 @@ export interface ContextPlanAudit {
 	qualityGate: ContextPlanQualityGateAudit;
 	materials: ContextPlanMaterialAudit[];
 	coverage: ContextPlanCoverageAudit[];
+	netBenefit?: ContextPlanNetBenefitAudit;
 }
 
 export interface ContextPlanDigestMaterial {
@@ -172,9 +189,10 @@ export interface ContextPlanToolStubMaterial {
 	audit: ContextPlanMaterialAudit;
 	toolCallId: string;
 	resultEntryId: string;
+	toolName?: string;
 	path?: string;
-	/** 降级来源:superseded(同文件后续 mutation)或 emergency(压力应急档)。 */
-	stubKind?: "superseded" | "emergency";
+	/** 降级来源:superseded(同文件后续 mutation)、emergency(压力应急档)或 aged(旧大输出常规卸载)。 */
+	stubKind?: "superseded" | "emergency" | "aged";
 	coveredEntryRefs: string[];
 }
 
@@ -244,6 +262,29 @@ export interface BuiltContextPlan {
 	message: Extract<AgentMessage, { role: "custom" }>;
 	tokenEstimate: number;
 	coverageEntryRefs: string[];
+	/**
+	 * Net-benefit gate rejected the plan: materialization must skip coverage,
+	 * stub substitution, and plan-message injection (raw history preserved).
+	 */
+	withdrawn?: boolean;
+	/**
+	 * "pinned" (stable-projection mode): the plan message is injected at the
+	 * payload head and its bytes are frozen for the whole epoch. "floating"
+	 * (legacy): injected before the last user message, rebuilt per turn.
+	 */
+	projectionMode?: "floating" | "pinned";
+	/**
+	 * Session-level stable-epoch identity stamped by AgentSession when the plan
+	 * is laid out (rebase checkpoint + compaction + window + topic-shift epoch).
+	 * Same key ⇒ the frozen artifact is reusable verbatim.
+	 */
+	epochKey?: string;
+	/**
+	 * Projection offload switches carried on the plan so every materialize /
+	 * estimate path applies them uniformly: aged tool outputs are stub materials
+	 * (no flag needed here); images are content substitution below.
+	 */
+	offloadAgedImages?: boolean;
 }
 
 export interface ContextPlanCoverageValidationIssue {

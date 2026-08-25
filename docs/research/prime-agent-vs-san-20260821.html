@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Prime Agent vs San：运行时与执行治理对比｜2026-08-21</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17211c;
+      --muted: #657168;
+      --paper: #f1efe7;
+      --panel: #fffdf8;
+      --line: #d7ddd7;
+      --green: #176647;
+      --green-soft: #e7f2eb;
+      --blue: #245e83;
+      --blue-soft: #e9f2f7;
+      --amber: #89590f;
+      --amber-soft: #fbf0d8;
+      --red: #963e38;
+      --red-soft: #f9e7e4;
+      --shadow: 0 14px 34px rgb(25 45 34 / 8%);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 7% 0%, rgb(36 94 131 / 11%), transparent 31rem),
+        radial-gradient(circle at 94% 7%, rgb(23 102 71 / 10%), transparent 35rem),
+        var(--paper);
+      font: 16px/1.65 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    main { width: min(1240px, calc(100% - 36px)); margin: 34px auto 72px; }
+    header, section { border: 1px solid var(--line); border-radius: 18px; background: var(--panel); box-shadow: var(--shadow); }
+    header { padding: 38px 42px; border-top: 7px solid var(--green); }
+    section { margin-top: 20px; padding: 28px 32px; }
+    h1, h2, h3 { margin-top: 0; line-height: 1.22; }
+    h1 { margin-bottom: 12px; font-size: clamp(2rem, 5vw, 3.25rem); letter-spacing: -0.04em; }
+    h2 { padding-bottom: 10px; border-bottom: 1px solid var(--line); color: var(--green); font-size: 1.42rem; }
+    h3 { margin-bottom: 7px; color: var(--blue); font-size: 1.04rem; }
+    p { max-width: 98ch; }
+    a { color: var(--blue); text-underline-offset: 3px; }
+    code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+    code { padding: 0.08em 0.34em; border: 1px solid #dfe7e1; border-radius: 5px; background: #edf2ee; overflow-wrap: anywhere; }
+    .meta { display: flex; flex-wrap: wrap; gap: 9px 24px; color: var(--muted); font-size: 0.92rem; }
+    .lede { max-width: 96ch; color: #405349; font-size: 1.12rem; }
+    .status { display: inline-block; margin-bottom: 13px; padding: 4px 10px; border-radius: 999px; color: #fff; background: var(--green); font-size: 0.82rem; font-weight: 800; letter-spacing: 0.03em; }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 20px; }
+    .card { padding: 15px 16px; border: 1px solid var(--line); border-radius: 12px; background: #f8faf8; }
+    .card strong { display: block; color: var(--green); font-size: 1.16rem; line-height: 1.25; }
+    .card span { color: var(--muted); font-size: 0.87rem; }
+    .callout { padding: 15px 18px; border-left: 5px solid var(--blue); border-radius: 9px; background: var(--blue-soft); }
+    .callout.good { border-left-color: var(--green); background: var(--green-soft); }
+    .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    .callout.bad { border-left-color: var(--red); background: var(--red-soft); }
+    table { width: 100%; margin-top: 14px; border-collapse: collapse; }
+    th, td { padding: 12px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 0.84rem; letter-spacing: 0.04em; text-transform: uppercase; }
+    td:first-child { width: 13%; font-weight: 750; }
+    .tag { display: inline-block; padding: 2px 7px; border-radius: 5px; color: #fff; background: var(--green); font: 750 0.78rem/1.6 ui-monospace, monospace; }
+    .tag.blue { background: var(--blue); }
+    .tag.amber { background: var(--amber); }
+    .tag.red { background: var(--red); }
+    .small { color: var(--muted); font-size: 0.88rem; }
+    .grid-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .mini { padding: 16px 18px; border: 1px solid var(--line); border-radius: 11px; background: #fffefa; }
+    .mini h3 { margin-bottom: 5px; }
+    .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
+    .flow > div { position: relative; padding: 13px 10px; border: 1px solid var(--line); border-radius: 10px; background: #f8faf8; text-align: center; font-size: 0.86rem; }
+    .flow > div:not(:last-child)::after { position: absolute; top: 50%; right: -10px; z-index: 2; color: var(--green); font-weight: 800; content: "→"; transform: translate(50%, -50%); }
+    .flow strong { display: block; color: var(--green); }
+    .matrix-wrap { overflow-x: auto; }
+    .matrix { min-width: 1050px; }
+    .matrix td:nth-child(2), .matrix td:nth-child(3) { width: 32%; }
+    .matrix td:last-child { width: 23%; }
+    pre { margin: 10px 0 0; padding: 14px 16px; overflow-x: auto; border: 1px solid var(--line); border-radius: 9px; background: #f5f7f4; color: #31443a; font: 0.88rem/1.55 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+    li + li { margin-top: 6px; }
+    ul, ol { padding-left: 1.3rem; }
+    .priority { display: inline-block; min-width: 38px; margin-right: 5px; padding: 2px 7px; border-radius: 5px; color: #fff; background: var(--green); text-align: center; font: 750 0.78rem/1.6 ui-monospace, monospace; }
+    .priority.p1 { background: var(--blue); }
+    .priority.p2 { background: var(--amber); }
+    footer { margin-top: 20px; padding: 20px 4px; color: var(--muted); font-size: 0.88rem; }
+    @media (max-width: 900px) {
+      .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .flow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .flow > div::after { display: none; }
+    }
+    @media (max-width: 620px) {
+      main { width: min(100% - 18px, 1240px); margin-top: 12px; }
+      header, section { padding: 22px 19px; border-radius: 13px; }
+      .cards, .grid-two, .flow { grid-template-columns: 1fr; }
+      table, thead, tbody, tr, th, td { display: block; width: 100%; }
+      thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+      tbody { display: grid; gap: 12px; }
+      tr { padding: 5px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fffefa; }
+      td, td:first-child { width: 100%; padding: 8px 0; border-bottom: 1px dashed var(--line); overflow-wrap: anywhere; }
+      td:last-child { border-bottom: 0; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="status">已完成官方资料核查与本地源码对比</span>
+    <div class="meta">
+      <span>研究日期：2026-08-21</span>
+      <span>Prime Agent：<code>main</code> / 稳定包 <code>0.7.4</code></span>
+      <span>San 本地包：<code>@san/coding-agent 17.0.2</code></span>
+      <span>性质：架构与产品能力比较，不是同任务性能 benchmark</span>
+    </div>
+    <h1>Prime Agent vs San</h1>
+    <p class="lede">两者共享 TypeScript coding-agent 基础、TUI、会话持久化、provider、MCP、skills 和子代理等共同血缘，但核心问题不同：Prime Agent 把<strong>持久化运行时、RLM/kernel 和长期自治</strong>放在第一层；San 把<strong>Context Steady、证据约束和可恢复执行循环</strong>放在第一层。Prime 不是 San 的替代品，San 也不应整体追随 Prime 的架构。更准确的路线是：保留 San 的上下文与执行治理，吸收 Prime 的 resident runtime、任务恢复和长期调度能力。</p>
+    <div class="cards">
+      <div class="card"><strong>Prime 的最大领先</strong><span>daemon 持有 root session tree、persistent IPython、RLM 子代理、heartbeat、schedule、goal、autonomous continuation</span></div>
+      <div class="card"><strong>San 的最大领先</strong><span>ContextPacket 预算与质量门、immutable objective、typed host evidence、CAS ledger、San Checks</span></div>
+      <div class="card"><strong>不应照搬</strong><span>把所有模型能力收缩成一个无边界的 IPython 工具，或把 shell gate 通过等同于任务完成</span></div>
+      <div class="card"><strong>建议优先级</strong><span>P0 resident worker / child admission；P1 MCP ownership / evidence-aware autonomy；P2 optional kernel workspace</span></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>1. 结论先行</h2>
+    <div class="callout good"><strong>判断：</strong>Prime Agent 更像“长期运行的 agent operating runtime”，San 更像“带上下文稳态和验收闭环的工程执行系统”。若目标是让 San 在断开终端后继续可靠完成任务，最值得吸收的是 Prime 的运行时持有和恢复语义；若目标是高风险修改不被模型自报完成带过，San 的 ledger、typed receipt 和 quality gate 应继续作为不可替代的核心。</div>
+    <div class="grid-two" style="margin-top: 16px">
+      <div class="mini">
+        <h3>Prime Agent 解决的首要问题</h3>
+        <ul>
+          <li>如何让一个 agent 在终端关闭、客户端重连、kernel 重启和多轮 compaction 后继续工作。</li>
+          <li>如何把上下文、文件/数据处理、递归子代理和技能组合成可编程的 Python 控制面。</li>
+          <li>如何让 goals、heartbeat、cron schedule 和 bounded autonomous mode 共享同一个 resident worker。</li>
+        </ul>
+      </div>
+      <div class="mini">
+        <h3>San 解决的首要问题</h3>
+        <ul>
+          <li>如何让 provider-bound context 在长任务中保持有界，同时不丢失目标、决策、文件、风险和下一步。</li>
+          <li>如何让计划、执行、复验、失败收口和用户阻塞拥有明确状态，而不是依赖一段模型总结。</li>
+          <li>如何让完成结论必须绑定真实宿主证据，避免模型文本伪造通过状态。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 两套系统的运行时拓扑</h2>
+    <div class="grid-two">
+      <div class="mini">
+        <h3>Prime Agent：runtime-first</h3>
+        <pre>client / TUI / JSON / RPC
+        ↓ local daemon protocol
+supervisor
+        ↓ one resident worker per root tree
+AgentSessionRuntime
+  ├─ root AgentSession
+  ├─ scheduler / goals / autonomous policy
+  ├─ persistent IPython kernel
+  └─ RLM child sessions + kernels
+        ↓
+JSONL session + session artifacts</pre>
+        <p class="small">官方架构文档明确规定：client 负责 UI，supervisor 负责路由、attachments、health 和消息投递；worker 才拥有 provider、tools、compaction、kernel、scheduler 和 descendants。</p>
+      </div>
+      <div class="mini">
+        <h3>San：context/evidence-first</h3>
+        <pre>San AgentSession
+  ├─ explicit tools + eval bridges + MCP
+  ├─ Context Steady
+  │   └─ digest → checkpoint → bounded packet → prune
+  ├─ ExecutionRuntime / scope journal
+  │   └─ ledger / CAS / watchdog / leases
+  ├─ San Loop
+  │   └─ Commander → Worker → Supervisor → Oracle
+  ├─ task / agent bridge / worktree isolation
+  └─ goals + launch/peer lifecycle substrate
+        ↓
+append-only session JSONL + typed custom entries</pre>
+        <p class="small">San 已有 daemon/launch broker、跨会话 peer broker 和长期 goal/调度部件，但它们目前服务于上述执行与上下文底座，而不是取代它们。</p>
+      </div>
+    </div>
+    <div class="callout" style="margin-top: 16px"><strong>关键差异：</strong>Prime 的 worker 是“执行所有事情的常驻所有者”；San 的主要创新是“模型下一轮应该看到什么、什么证据才算完成”。前者决定任务能否持续活着，后者决定任务是否真的完成。</div>
+  </section>
+
+  <section>
+    <h2>3. 关键维度差异矩阵</h2>
+    <div class="matrix-wrap">
+      <table class="matrix">
+        <thead><tr><th>维度</th><th>Prime Agent（官方 main 资料）</th><th>San（本地源码与文档）</th><th>判断</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>产品中心</td>
+            <td>“Self-Improving RLM Agent”；面向 coding、research、general work 和 long-running work。核心抽象是 prompt-as-variable、persistent REPL、continual harness。</td>
+            <td>San v0.2 Execution Loop；默认 <code>solo</code>，按风险切换 <code>team</code>/<code>council</code>，强调长期上下文稳态、角色分工、复验和失败收口。</td>
+            <td><span class="tag blue">互补</span>不是同一条产品赛道。</td>
+          </tr>
+          <tr>
+            <td>进程与会话所有权</td>
+            <td>每个 root session tree 有 resident worker；supervisor 负责连接与路由，worker 负责 AgentSession、kernel、scheduler 和所有 descendants。客户端 detach 不停止任务。</td>
+            <td>有 launch/daemon broker：认证 socket、PTY、readiness、restart policy、persist/detached、日志和生命周期状态；同时有 user-global peer broker。但核心 session/执行治理仍由 San runtime 体系承载。</td>
+            <td><span class="tag">Prime 领先</span>长期任务产品化更完整；San 有可复用底座。</td>
+          </tr>
+          <tr>
+            <td>模型控制面</td>
+            <td>默认模型可见工具是一个持久 <code>ipython</code>；文件、shell、工具、skill、子代理和上下文管理通过 Python 组合。TypeScript host 保留 provider、状态和安全政策。</td>
+            <td>模型直接看到显式 <code>read/write/edit/grep/glob/lsp/debug/browser/ssh/task/hub/todo</code> 等工具；Python/JS/Ruby/Julia eval 是补充桥接，eval agent 还受 allowedTools、pathScope、token limit 和递归上限约束。</td>
+            <td><span class="tag blue">取舍</span>Prime 组合能力强；San 可观测、可审批、可约束。</td>
+          </tr>
+          <tr>
+            <td>上下文与压缩</td>
+            <td>automatic compaction 保留 kernel namespace；Python 变量、imports、helpers 和 task handles 跨 tool call/compaction 存活。大变量会被排除或清理以避免拖慢后续回合。</td>
+            <td>TurnDigest、checkpoint、bounded ContextPacket、provider payload prune；planner 以预算选材，quality gate 保护当前请求、live tail、未完成 tool pair 和 required entries，并对不可恢复压力 fail-closed。</td>
+            <td><span class="tag">San 领先</span>San 的目标是稳定 provider-bound 输入，不只是保住 kernel 状态。</td>
+          </tr>
+          <tr>
+            <td>记忆与自我改进</td>
+            <td>Continual Harness 持久化 prompt notes、memories、skill descriptions、subagent specs；<code>/refine</code> 只改 supplemental state，保留 before/after snapshot 和 rollback。</td>
+            <td>Context Steady memory candidates、recall 层、local/Hindsight/Mnemopi 后端；auto-learn 根据实际工具存在性注入指引并管理 skills，stable system prompt 不被随意改写。</td>
+            <td><span class="tag blue">互补</span>Prime 更像可复用操作模式库；San 更重视来源、预算和注入边界。</td>
+          </tr>
+          <tr>
+            <td>子代理与并行</td>
+            <td><code>rlm()</code> 在 admission 后立即返回 handle，不返回答案；结果通过 <code>agent_message</code> 或文件回传。parent-scoped registry 可在 compaction、kernel restart、restore 后恢复，默认递归深度为 1。</td>
+            <td><code>task</code>、eval <code>agent()</code> 和 San Loop executor 支持 inline/detached/background、model override、schema、worktree isolation、nested patch、plan reference、progress 和 host evidence；执行作用域可由 root 共享。</td>
+            <td><span class="tag blue">各有强项</span>Prime 的 retained family 更自然；San 的隔离和验收更强。</td>
+          </tr>
+          <tr>
+            <td>跨会话通信</td>
+            <td>daemon 直接路由 active session 和 retained subagent；family roster 支持 parent/sibling/child，消息有 auto/steer/follow-up 语义和 queued/delivered receipt。</td>
+            <td><code>CrossSessionClient</code> + user-global peer broker，Unix socket/pipe、token、同机同用户、<code>san:&lt;12 hex&gt;</code> 地址、replyTo、expectsReply 和 delivery receipt；消息进入同一 IrcBus。</td>
+            <td><span class="tag blue">接近</span>Prime 的树内拓扑更深；San 的 transport 边界更明确且不分享 transcript。</td>
+          </tr>
+          <tr>
+            <td>目标、心跳、schedule、自治</td>
+            <td>goal、user/RLM heartbeat、一次性/cron schedule、autonomous mode 全部由 resident worker 的 queue/policy 驱动；autonomous 默认上限为 3 continuations、12 turns、80,000 tokens、30 分钟。</td>
+            <td>Goal runtime 有 active/paused/budget-limited/complete/drop、usage accounting、hidden continuation message；DurableScheduler 有 supervisor decision、CAS、dispatch admission、assignment lease 和 watchdog。跨设备 remote-control 仍是路线文档中的分阶段方向。</td>
+            <td><span class="tag">Prime 领先</span>San 具备政策零件，但需要统一成用户可感知的后台工作流。</td>
+          </tr>
+          <tr>
+            <td>完成与复验</td>
+            <td>autonomous gate 执行 bounded shell commands；失败输出回送模型，未变工作区避免重复 gate。文档明确：gate 通过只证明该 gate，不等于任务成功。</td>
+            <td>ExecutionLedger 绑定 immutable objective contract；required acceptance gate 必须 pass 且关联已记录 host evidence；stale revision、伪造 objective、无 typed external blocker 的 <code>needs_user</code> 都被拒绝。San Loop review 还区分 defects、retryable、blocked 和 out_of_scope。</td>
+            <td><span class="tag">San 明显领先</span>这是 San 的核心差异，不应被普通 shell gate 替换。</td>
+          </tr>
+          <tr>
+            <td>Skills 与扩展</td>
+            <td>Agent Skills 标准 + Python-backed skill；skill 可安装依赖、暴露 async callable、调用 RLM，并可由 skill creator 创建。</td>
+            <td>SKILL.md metadata + 按需读取，支持 native/Claude/Codex/Agents/OpenCode/GitHub/plugin/managed providers、custom tools、extensions、hooks 和 auto-learn；技能本身主要是文件内容，执行能力由显式工具提供。</td>
+            <td><span class="tag blue">Prime 更强但风险更高</span>San 的默认边界更保守。</td>
+          </tr>
+          <tr>
+            <td>MCP / ACP</td>
+            <td>稳定包已有 MCP/ACP 能力；main 最近提交 <code>c75a637</code> 增加 ACP session-scoped stdio/HTTP MCP program，做 owner fencing、detach release、失败回滚、transport reap，并补充测试。</td>
+            <td>MCPManager 已有 stdio/http/sse、OAuth/profile、250ms fast-start + deferred tools、并行 connect/list、late registration、reconnect backoff 和 crash-storm circuit breaker；配置与凭据边界较完整。</td>
+            <td><span class="tag amber">互相借鉴</span>San 不需重做 MCP 基础，应吸收 Prime 的 session ownership/lease 细节。</td>
+          </tr>
+          <tr>
+            <td>安全与信任</td>
+            <td>IPython、stdio MCP 和 worker 都是同 OS 权限，不是 sandbox；Jupyter HMAC、daemon token、generation fencing 解决协议/生命周期问题，不改变信任边界。</td>
+            <td>MCP stdio 同样执行任意命令；peer runtime 目录/token/socket 有权限约束；programmatic child 可限制工具与 path scope；typed evidence 只接受 host 生成的有界事实。</td>
+            <td><span class="tag blue">San 治理更细</span>两者都不能把进程隔离误称为安全沙箱。</td>
+          </tr>
+          <tr>
+            <td>工程工具与生态</td>
+            <td>Python 数据处理、持久 namespace、MCP/skill 包适合 research 和复杂数据工作；默认工具面很小。</td>
+            <td>显式工程工具覆盖 read/write/edit、AST、search、LSP、DAP/debug、browser、SSH、多语言 eval、native 加速和 TUI 渲染；源码方式为主，Bun >= 1.3.14。</td>
+            <td><span class="tag blue">San 日常 coding 更完整</span>Prime 的 Python 生态更适合探索型工作。</td>
+          </tr>
+          <tr>
+            <td>发布与成熟度</td>
+            <td>有 macOS/Linux installer、稳定/开发版本、compiled binary、daemon doctor/status/update，main 在 2026-08-20 仍有高频提交。</td>
+            <td>本地包为 <code>17.0.2</code>，README 已把 v0.1 Context Steady/v0.2 Execution Loop 作为产品主线；当前仓库以源码和 dogfood/benchmark 证据为主。</td>
+            <td><span class="tag">Prime 领先</span>不是代码质量结论，而是交付与后台运行产品化程度。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>4. 最值得关注的四处差异</h2>
+    <div class="grid-two">
+      <div class="mini">
+        <h3>4.1 Kernel 不是 Context Steady 的替代品</h3>
+        <p>Prime 的 persistent IPython 解决的是“模型可以把大对象、解析结果、函数和子任务句柄留在外部 namespace 中”；San 的 Context Steady 解决的是“下一次 provider request 究竟携带哪些有界、可追溯的状态”。前者保存工作状态，后者治理模型输入。引入 kernel 可以减少重复读取和程序化组合成本，但不能证明目标、风险、验收和工具证据仍然存在。</p>
+        <div class="callout warn"><strong>决策：</strong>San 可以增加可选的 kernel workspace，但不能用 kernel namespace 替换 digest/checkpoint/packet/quality gate。</div>
+      </div>
+      <div class="mini">
+        <h3>4.2 Autonomous gate 与 San acceptance gate 不是同一层</h3>
+        <p>Prime 的 gate 是 host policy：运行命令、截断输出、失败后继续；它刻意不把 gate pass 说成任务成功。San 的 acceptance gate 更靠近完成状态机：objective contract、gate revision、assignment/freshness 和 host receipt 必须一致，ledger 才允许进入 completed。</p>
+        <div class="callout good"><strong>决策：</strong>借 Prime 的 continuation policy，借 San 的 completion invariant；任何自动续行都只能消费 typed receipt，不能直接把模型文本升格为通过。</div>
+      </div>
+      <div class="mini">
+        <h3>4.3 Prime 的 resident worker 是 San 的长期任务缺口</h3>
+        <p>Prime 把 detach、reconnect、schedule、heartbeat、goal、child runtime 和 artifact recovery 放进一个明确的 worker ownership 模型。San 已有 launch broker、goal runtime、durable scheduler、peer transport 和 remote-control 设计，但用户是否能“关掉终端后仍有一个可恢复的 San 任务”还需要把这些部件收成一个一致的产品路径。</p>
+        <div class="callout"><strong>决策：</strong>优先构建 San 的 resident root runtime；不要先做 Web UI 或更多 agent 角色。</div>
+      </div>
+      <div class="mini">
+        <h3>4.4 ACP MCP 提交暴露了一个可复用的 ownership 模式</h3>
+        <p>Prime main 最近的 ACP MCP commit 不只是“接入更多 MCP”：它把 session-scoped server 绑定到 ACP client owner，阻止另一个 attached client 替换或清理，释放时先撤销 credential source 再关闭 kernel transport，并覆盖失败 claim rollback 与 reap。</p>
+        <div class="callout"><strong>决策：</strong>San 的 MCP profile 已经覆盖发现、OAuth 和 reconnect；下一步应补 session/client scoped ownership，而不是再加一套 server config 格式。</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>5. San 应直接借鉴、谨慎借鉴、无需跟随</h2>
+    <table>
+      <thead><tr><th>类别</th><th>建议</th><th>为什么</th><th>边界 / 验收口径</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="tag">直接借鉴</span></td>
+          <td><span class="priority">P0</span>Resident root worker + detach/reattach/recovery</td>
+          <td>这是 Prime 相对 San 最清晰的产品差距，直接决定长任务能否跨终端继续。</td>
+          <td>worker 只能成为 San AgentSession 的持有者；恢复后必须重放 session journal、Context Steady 状态和 ExecutionRuntime，不得生成第二份任务状态。</td>
+        </tr>
+        <tr>
+          <td><span class="tag">直接借鉴</span></td>
+          <td><span class="priority">P0</span>Admission handle + retained child registry</td>
+          <td>并行子任务不应阻塞父 turn，也不应要求父模型轮询；Prime 的 handle/消息/retain 语义值得吸收。</td>
+          <td>child 必须继承 execution scope、预算和 capability policy；完成报告只通过 host observation/typed receipt 进入 San ledger，文本报告不能直接完成 gate。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">直接借鉴</span></td>
+          <td><span class="priority p1">P1</span>统一 goal、heartbeat、schedule、后台队列</td>
+          <td>San 已有 GoalRuntime 和 DurableScheduler，缺的是统一的用户入口、worker ownership 和恢复语义。</td>
+          <td>每个自动 tick 都要有去重、claim、取消、预算和可恢复状态；漏 tick 合并而非无限堆积；完成仍需 acceptance evidence。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">直接借鉴</span></td>
+          <td><span class="priority p1">P1</span>MCP session ownership / lease fencing</td>
+          <td>Prime 的 ACP MCP commit 给出明确的 owner-bound configuration、release、rollback、reap 形态，能补 San 多客户端/跨会话场景的生命周期风险。</td>
+          <td>同名 session-scoped server 不能覆盖别的 owner；断开先移除 credential binding，再关闭 transport；释放失败不可阻塞整个 session shutdown。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">谨慎借鉴</span></td>
+          <td><span class="priority p1">P1</span>Evidence-aware autonomous continuation</td>
+          <td>Prime 的 bounded limits、gate output、changed-worktree 去重逻辑实用；但 San 的完成条件更严格。</td>
+          <td>把 gate 结果转换为 typed receipt；只在缺少 required evidence 或有 retryable defect 时续行；limit reached 永不渲染成 success。</td>
+        </tr>
+        <tr>
+          <td><span class="tag amber">谨慎借鉴</span></td>
+          <td><span class="priority p2">P2</span>Optional persistent Python/JS kernel workspace</td>
+          <td>适合数据清洗、长文档、批量分析和程序化工具组合，San 已有 eval bridge 可作为切入点。</td>
+          <td>默认不改变显式工具与审批语义；限制内存、执行时间、并发和依赖安装；kernel snapshot 只保存工作变量，不成为完成证据或系统 prompt。</td>
+        </tr>
+        <tr>
+          <td><span class="tag amber">谨慎借鉴</span></td>
+          <td><span class="priority p2">P2</span>Python-backed executable skills</td>
+          <td>能把重复 research workflow 封装成真正 callable，比纯 Markdown 指引更强。</td>
+          <td>先做显式安装、依赖锁定、审核和隔离；不允许 skill 自行修改稳定 prompt 或静默取得 provider/MCP credential。</td>
+        </tr>
+        <tr>
+          <td><span class="tag red">无需跟随</span></td>
+          <td>把 San 的默认模型面改成单一 <code>ipython</code> 工具</td>
+          <td>会削弱 San 现有工具级 schema、审批、渲染、LSP/debug 和 typed evidence 边界；收益主要来自组合便利，不足以抵消治理损失。</td>
+          <td>保留显式工具；若增加 kernel，只作为额外工具/工作区，不做全量控制面替换。</td>
+        </tr>
+        <tr>
+          <td><span class="tag red">无需跟随</span></td>
+          <td>把 continual harness 或 raw kernel state 当成 San 的 Context Steady</td>
+          <td>它们保存可复用工作状态，却不自动保证 active request、来源引用、保护带和 provider budget 正确。</td>
+          <td>Context Steady、summary authority、quality gate 和 journal-derived continuation 保持为独立硬边界。</td>
+        </tr>
+        <tr>
+          <td><span class="tag red">无需跟随</span></td>
+          <td>默认所有任务都多 agent / autonomous</td>
+          <td>San 自己的 GSAR README 结论也是 solo 作为日常默认，team/council 作为风险开关；Prime 的自治同样是 bounded policy，不是成功保证。</td>
+          <td>继续用风险分层：solo 低开销，team/council 高风险；自动化必须有预算、取消和可解释 blocker。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>6. 建议的 San 下一步顺序</h2>
+    <ol>
+      <li><strong>先收拢 resident runtime。</strong>把现有 launch broker、session lease、GoalRuntime、DurableScheduler、CrossSessionClient 和 session journal 串成一个“San background task”产品对象。第一版不需要 Web；CLI 关闭后可重连、可查看状态、可取消、可恢复就足够。</li>
+      <li><strong>再统一子代理 admission 与证据回传。</strong>让 task/eval agent/San Loop 三条入口共享 child registry、execution scope、budget 和 lifecycle event；父模型收到的是 handle/status，完成与否由 host receipt 和 San Loop review 决定。</li>
+      <li><strong>随后补 MCP owner fencing。</strong>沿用现有 MCPManager 的 config/profile/OAuth/reconnect，不新造平行配置；增加 session-scoped ACP/remote client server map、owner token、release/reap 和 failure rollback。</li>
+      <li><strong>最后做可选 kernel workspace。</strong>先用 San 已有 eval/worker bridge 证明数据处理和批量操作收益，再决定是否引入持久 IPython；不要为了架构对称而引入。</li>
+    </ol>
+    <div class="callout good"><strong>目标架构：</strong><code>Resident San Worker → AgentSession → Context Steady + ExecutionRuntime → San Loop / task children</code>。Prime 提供 worker/runtime 方向，San 继续负责“模型看什么”和“什么证据才算完成”。</div>
+  </section>
+
+  <section>
+    <h2>7. 证据边界与未验证事项</h2>
+    <ul>
+      <li><strong>已观察：</strong>Prime 官方仓库 README、architecture/daemon/RLM/long-running/skills/usage 文档、<code>autonomous.ts</code>、package metadata、main commit feed 与 ACP MCP patch；San 本地 README、package metadata、Context Steady、execution-control、San Loop、goals、task/eval、peer、launch 和 MCP 文档/源码。</li>
+      <li><strong>未做：</strong>没有在同一任务集上安装并运行 Prime 与 San 的对照实验；没有重新执行 San README 中的 GSAR 或 Context Steady benchmark；没有把 Prime 文档中的 daemon stress benchmark 当作已验证性能结果。</li>
+      <li><strong>因此：</strong>“Prime 在 resident runtime 更完整”“San 在 typed completion governance 更强”是基于源码/设计边界的架构判断，不是吞吐、成本、成功率或用户体验的实测排名。</li>
+      <li><strong>版本注意：</strong>Prime package <code>0.7.4</code> 发布于 2026-08-19，而 main 的 ACP MCP 提交更新于 2026-08-20；该提交代表当前 main 的方向，不应自动视为稳定包已发布能力。San 的 <code>17.0.2</code> 是本地 package metadata，源码可能包含 Unreleased 变更。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>8. 资料来源</h2>
+    <div class="grid-two">
+      <div class="mini">
+        <h3>Prime Agent 官方来源</h3>
+        <ul>
+          <li><a href="https://github.com/PrimeIntellect-ai/prime-agent">GitHub repository</a></li>
+          <li><a href="https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/main/README.md">README.md</a></li>
+          <li><a href="https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/main/packages/coding-agent/docs/architecture.md">Architecture Overview</a></li>
+          <li><a href="https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/main/packages/coding-agent/docs/daemon.md">Daemon Architecture</a></li>
+          <li><a href="https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/main/packages/coding-agent/docs/rlm.md">RLM Programming Model</a></li>
+          <li><a href="https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/main/packages/coding-agent/docs/rlm-runtime.md">RLM Runtime Architecture</a></li>
+          <li><a href="https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/main/packages/coding-agent/docs/long-running-agents.md">Long-Running and Background Agents</a></li>
+          <li><a href="https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/main/packages/coding-agent/docs/skills.md">Skills</a> · <a href="https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/main/packages/coding-agent/src/core/autonomous.ts">autonomous.ts</a></li>
+          <li><a href="https://github.com/PrimeIntellect-ai/prime-agent/commit/c75a637b00d3b52762841e72efe92289a0d55b49.patch">ACP MCP commit patch</a> · <a href="https://github.com/PrimeIntellect-ai/prime-agent/commits/main.atom">main commit feed</a></li>
+        </ul>
+      </div>
+      <div class="mini">
+        <h3>San 本地来源</h3>
+        <ul>
+          <li><a href="../../README.md">README.md</a> · <a href="../../packages/coding-agent/README.md">coding-agent README</a> · <a href="../../packages/coding-agent/package.json">package.json</a></li>
+          <li><a href="../../packages/coding-agent/src/context-steady/">Context Steady source</a></li>
+          <li><a href="../../packages/coding-agent/src/execution-control/">Execution control source</a></li>
+          <li><a href="../../packages/coding-agent/src/san-loop/">San Loop source</a></li>
+          <li><a href="../../packages/coding-agent/src/goals/runtime.ts">Goal runtime</a> · <a href="../../packages/coding-agent/src/task/executor.ts">Task executor</a></li>
+          <li><a href="../../packages/coding-agent/src/eval/agent-bridge.ts">Eval agent bridge</a> · <a href="../../packages/coding-agent/src/peer/client.ts">Cross-session client</a></li>
+          <li><a href="../../packages/coding-agent/src/launch/broker.ts">Launch broker</a> · <a href="../../packages/coding-agent/src/launch/protocol.ts">Launch protocol</a></li>
+          <li><a href="../mcp-runtime-lifecycle.md">MCP runtime lifecycle</a> · <a href="../mcp-config.md">MCP configuration</a> · <a href="../skills.md">Skills</a></li>
+          <li><a href="./san-cross-session-messaging-design-20260809.html">Cross-session design</a> · <a href="./san-remote-control-direction-20260804.html">Remote-control direction</a></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>结论状态：可用于 San 架构排序；不应被解读为 Prime/San 的性能或安全认证。下一次更新应在 Prime main 的 daemon/MCP ownership 继续变化，或 San resident runtime 进入可运行 smoke path 后补充实测。</footer>
+</main>
+</body>
+</html>

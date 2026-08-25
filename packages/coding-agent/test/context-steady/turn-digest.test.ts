@@ -14,6 +14,7 @@
  */
 
 import { afterEach, describe, expect, test, vi } from "bun:test";
+import { ThinkingLevel } from "@san/agent";
 import type { Api, AssistantMessage, Model } from "@san/ai";
 import * as ai from "@san/ai";
 import { getBundledModel } from "@san/catalog/models";
@@ -605,6 +606,39 @@ describe("LLM digest orchestration", () => {
 		expect(context?.tools?.map(tool => tool.name)).toContain("record_turn_digest");
 		expect(result?.digest).toMatchObject({ fallback: false });
 		expect(sessionManager.getEntries()).toHaveLength(1);
+	});
+
+	test("forwards an explicit digest thinking level to the LLM request", async () => {
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue(
+			assistantWithDigest({
+				userIntent: "Digest with configured reasoning.",
+				actionsTaken: [],
+				decisions: [],
+				filesTouched: [],
+				factsLearned: [],
+				openQuestions: [],
+				risks: [],
+				nextSteps: [],
+				memoryCandidates: [],
+			}),
+		);
+		const source = { sessionId: "s", fromEntryId: "e1", toEntryId: "e2", promptGeneration: 1 };
+		const sessionManager = createSessionManager();
+		const model = getBundledModel("deepseek", "deepseek-v4-flash");
+		if (!model) throw new Error("Expected bundled digest test model");
+
+		await generateDigest(
+			asM([umsg("Use the configured digest effort"), amsg("Done.")]),
+			source,
+			sessionManager as never,
+			{} as never,
+			steadySettings(true),
+			{ model, thinkingLevel: ThinkingLevel.High, apiKey: async () => "test-key" },
+		);
+
+		const options = completeSimpleMock.mock.calls[0]?.[2];
+		expect(options?.reasoning).toBe(ThinkingLevel.High);
+		expect(options?.disableReasoning).toBe(false);
 	});
 
 	test("still forces the named tool_choice for non-deepseek digest models", async () => {

@@ -2,13 +2,18 @@
 #
 # 只放模型选择和执行策略，不放 provider key。密钥继续放在用户级配置、
 # 环境变量或未跟踪的 agent dir 中。
+# 角色值必须是可解析的目标:全限定 model id,或带 `@` 前缀的角色引用
+# (`@smol`)。裸角色名(`smol`)不是角色引用 —— 它走模糊模型名匹配,匹配不到就
+# 静默 UNRESOLVED,调用方各自降级(digest 落 fallback 摘要)。历史踩坑:`ds-flash`
+# 与 `ds-pro` 两个字面量在 models.yml 里都不存在,导致 smol 角色长期解析失败。
 modelRoles:
-  default: asxs/gpt-5.6-sol:xhigh
-  smol: self-botcf/gpt-5.4-mini
-  slow: self-botcf/gpt-5.6-sol
-  plan: asxs/gpt-5.6-sol:xhigh
-  advisor: self-botcf/claude-opus-4-8
-  task: deepseek/deepseek-v4-pro
+  default: sol:xhigh
+  smol: opencode-go/mimo-v2.5
+  slow: sol
+  vision: asxs-grok/grok-4.6
+  plan: agentrouter/claude-opus-5
+  advisor: asxs/gpt-5.6-sol
+  task: zhou/gpt-5.6-luna
 
 setupVersion: 1
 
@@ -30,9 +35,14 @@ san:
       timeoutMs: 30000
       llm:
         enabled: true
-        modelRole: self-botcf/deepseek-v4-flash
-    qualityWindowTokens: 240000
-    reserveRatio: 0.25
+        # 全限定 id:摘要模型与 smol 角色解耦,调角色不会牵动摘要档位。
+        modelRole: model-proxy/deepseek-v4-flash
+    # steady 200000 / control 216666 / burst 219300 on a 258000 window.
+    # reserveRatio 0.25 put the reserve-derived hard ceiling at 193500, below the 240000
+    # quality window, which clamped steady == control == burst: no elastic headroom, so every
+    # pressure spike became an immediate compaction and each compaction rewrote the cache prefix.
+    qualityWindowTokens: 200000
+    reserveRatio: 0.15
     contextPlan:
       enabled: true
       recentDigests: 5
@@ -56,6 +66,8 @@ san:
       maxTokens: 1000
       maxQueryChars: 2000
 
+  contractEcho:
+    firstTurn: false
   executionLoop:
     enabled: true
     defaultMode: solo
@@ -70,13 +82,13 @@ san:
       projectDir: .san/checks
     roles:
       commander:
-        modelRole: self-botcf/claude-opus-4-8
+        modelRole: slow
       worker:
-        modelRole: deepseek/deepseek-v4-pro
+        modelRole: smol
       supervisor:
-        modelRole: self-botcf/claude-opus-4-8
+        modelRole: advisor
       oracle:
-        modelRole: asxs/gpt-5.6-sol:xhigh
+        modelRole: plan
         enabledInModes:
           - council
     roleContext:

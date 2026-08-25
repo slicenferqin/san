@@ -10,4 +10,3 @@ appliesTo: ["supervisor"]
 - Treat missing focused validation as a defect unless the Worker explains why it is unnecessary.
 - Return `needs_fix` with concrete defects when retry can repair the issue.
 - Return `blocked` only for missing user input or external dependencies.
-

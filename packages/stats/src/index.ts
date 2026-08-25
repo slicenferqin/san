@@ -10,6 +10,7 @@ export {
 	getDashboardStats,
 	getToolDashboardStats,
 	getTotalMessageCount,
+	getUsageAnalyticsStats,
 	type SyncOptions,
 	type SyncProgress,
 	smokeTestSyncWorker,
@@ -32,11 +33,17 @@ export type {
 	ModelPerformancePoint,
 	ModelStats,
 	ModelTimeSeriesPoint,
+	ProjectUsageStats,
+	ProviderUsageStats,
 	TimeSeriesPoint,
 	ToolDashboardStats,
 	ToolModelStats,
 	ToolTimeSeriesPoint,
 	ToolUsageStats,
+	UsageAggregate,
+	UsageAnalyticsStats,
+	UsageModelStats,
+	UsageTrendPoint,
 } from "./types";
 
 /**
@@ -103,6 +110,7 @@ async function main(): Promise<void> {
 		options: {
 			port: { type: "string", short: "p", default: "3847" },
 			host: { type: "string", short: "H", default: DEFAULT_STATS_HOST },
+			token: { type: "string", short: "t" },
 			json: { type: "boolean", short: "j", default: false },
 			sync: { type: "boolean", short: "s", default: false },
 			help: { type: "boolean", short: "h", default: false },
@@ -120,13 +128,14 @@ Usage:
 Options:
   -p, --port <port>  Port for the dashboard server (default: 3847)
   -H, --host <host>  Host to bind the dashboard server (default: 127.0.0.1)
+  -t, --token <key>  Auth token required by non-loopback hosts (or SAN_STATS_TOKEN)
   -j, --json         Output stats as JSON and exit
   -s, --sync         Sync session files and show summary
   -h, --help         Show this help message
 
 Examples:
   san-stats              # Start dashboard server
-  san-stats --host 0.0.0.0  # Expose on all interfaces (containers)
+  san-stats --host 0.0.0.0 --token <secret>  # Expose on all interfaces (containers)
   san-stats --json       # Print stats as JSON
   san-stats --port 8080  # Start on custom port
   san-stats --sync       # Sync and show summary
@@ -172,9 +181,15 @@ Examples:
 			return;
 		}
 
-		// Start server
+		// Start server. Non-loopback binds refuse to start without a token
+		// (the API exposes session contents); SAN_STATS_TOKEN is the env escape hatch.
 		const port = parseInt(values.port || "3847", 10);
-		const server = await startServer(port, values.host ?? DEFAULT_STATS_HOST);
+		const token = values.token ?? Bun.env.SAN_STATS_TOKEN;
+		const server = await startServer(
+			port,
+			values.host ?? DEFAULT_STATS_HOST,
+			token !== undefined ? { token } : undefined,
+		);
 		const url = formatStatsUrl(server.host, server.port);
 		console.log(server.reused ? `Reusing existing dashboard at: ${url}` : `Dashboard available at: ${url}`);
 		console.log("Press Ctrl+C to stop\n");

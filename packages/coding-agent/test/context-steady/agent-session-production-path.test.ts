@@ -313,7 +313,27 @@ describe("Context Steady production-path completion", () => {
 		expect(checkpoint.entryRefs.some(entryRef => digestEntryRefs.has(entryRef))).toBe(false);
 	});
 
-	it("bounds 20 fallback-only turns by compacting once before hard-pressure refusal", async () => {
+	it("forwards the configured digest model thinking selector to the side request", async () => {
+		const digestSpy = vi
+			.spyOn(ai, "completeSimple")
+			.mockImplementation(async () => digestAssistant(1, "Configured digest effort"));
+		const harness = await createHarness({
+			...PRODUCTION_SETTINGS,
+			"san.contextSteady.digest.llm.enabled": true,
+			"san.contextSteady.digest.llm.modelRole": "anthropic/claude-sonnet-4-5:high",
+		});
+
+		await harness.session.prompt("Use the configured digest effort.");
+		await harness.session.waitForIdle();
+
+		const digestCall = digestSpy.mock.calls.find(
+			([, , options]) => options?.metadata?.sanSideRequest === "context_steady.turn_digest",
+		);
+		expect(digestCall?.[2]?.reasoning).toBe(ai.Effort.High);
+		expect(digestCall?.[2]?.disableReasoning).toBe(false);
+	});
+
+	it("bounds 20 fallback-only turns by compacting before the plan needs the burst band", async () => {
 		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
 			summary: "Fallback-only history compacted at the ContextPlan safety boundary.",
 			shortSummary: "Fallback history compacted",
@@ -364,14 +384,86 @@ describe("Context Steady production-path completion", () => {
 		expect(contextPlanWireTokens(finalCall.context)).toBeLessThanOrEqual(finalAudit.budget.planTokenBudget);
 		expect(finalAudit.qualityGate.archivedEntryCount).toBeGreaterThan(0);
 		expect(finalAudit.qualityGate.activeCutoffEntryId).toBeTruthy();
-		expect(maintenanceAudits.some(audit => audit.state === "maintenance")).toBe(true);
-		expect(maintenanceAudits.some(audit => audit.state === "recovered")).toBe(true);
-		expect(rawMarkersInPayload(finalCall.context, "FALLBACK_RAW_END", 20).length).toBeLessThanOrEqual(8);
+		// The pre-turn gate compacts while the plan is still inside its control band, so neither
+		// the burst band nor the hard-pressure rescue is ever needed. While the two gates
+		// disagreed, this same run escalated to `burst_required` for three consecutive turns and
+		// was saved only by the emergency recovery pass, at 23,851 of 24,000 projected tokens.
+		// Total compactions are unchanged — one — the fix moved when it happens, not how often.
+		expect(plans.map(entry => (entry.data as ContextPlanAudit).qualityGate.outcome)).not.toContain("burst_required");
+		expect(maintenanceAudits).toHaveLength(0);
+		// Raw survivors must be a contiguous recent tail — everything older is projected into
+		// digests and checkpoints. Compacting at the control band instead of at the burst ceiling
+		// moves the cut earlier (before turn 12, not turn 15), so the reclaimed budget flows back
+		// into verbatim recency: more raw turns kept under the same token ceiling, not fewer.
+		const rawTurns = rawMarkersInPayload(finalCall.context, "FALLBACK_RAW_END", 20).map(marker =>
+			Number(marker.slice("FALLBACK_RAW_END_".length)),
+		);
+		expect(rawTurns.length).toBeLessThanOrEqual(12);
+		expect(rawTurns).toEqual(Array.from({ length: rawTurns.length }, (_, index) => 21 - rawTurns.length + index));
 		expect(
 			customEntries(harness.sessionManager, CONTEXT_CHECKPOINT_CUSTOM_TYPE).every(entry => {
 				return ((entry.data as ContextCheckpoint).coveredSourceEntryRefs ?? []).length === 0;
 			}),
 		).toBe(true);
+	});
+
+	it("recovers a single-step jump past the burst ceiling instead of refusing the turn", async () => {
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+			summary: "History compacted to absorb a single oversized prompt.",
+			shortSummary: "History compacted for oversized prompt",
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: preparation.tokensBefore,
+			details: {},
+		}));
+		const harness = await createHarness(
+			{
+				...PRODUCTION_SETTINGS,
+				"san.contextSteady.digest.llm.enabled": false,
+				"san.contextSteady.qualityWindowTokens": 18_000,
+				"san.contextSteady.burstWindowTokens": 24_000,
+				"san.contextSteady.contextPlan.maxTokens": 1500,
+				"compaction.enabled": true,
+				"compaction.strategy": "context-full",
+				"compaction.thresholdTokens": 200_000,
+				"compaction.keepRecentTokens": 1000,
+			},
+			{ contextWindow: 500_000, responsePrefix: "jump bounded" },
+		);
+		const rawBody = "alpha beta gamma delta epsilon zeta ".repeat(180);
+
+		// Ten ordinary turns settle inside the control band, so the pre-turn steady gate has
+		// nothing to do and the accumulation never reaches the burst ceiling on its own.
+		for (let turn = 1; turn <= 10; turn++) {
+			await harness.session.prompt(`Jump bounded turn ${turn}: continue the same work ${rawBody}`);
+			await harness.session.waitForIdle();
+		}
+		const settledPlans = customEntries(harness.sessionManager, CONTEXT_PLAN_CUSTOM_TYPE);
+		expect(settledPlans.every(entry => (entry.data as ContextPlanAudit).qualityGate.outcome === "pass")).toBe(true);
+		expect(compactSpy.mock.calls).toHaveLength(0);
+
+		// One prompt then clears the whole control→burst margin in a single step — a window
+		// shrink or a pasted payload does the same thing. No gate can pre-empt this, so the
+		// pre-turn hard-pressure recovery has to reclaim the history and let the turn through.
+		await harness.session.prompt(
+			`Jump bounded overflow: ${"alpha beta gamma delta epsilon zeta ".repeat(1200)} JUMP_RAW_END`,
+		);
+		await harness.session.waitForIdle();
+
+		const maintenanceAudits = customEntries(harness.sessionManager, CONTEXT_MAINTENANCE_CUSTOM_TYPE).map(
+			entry => entry.data as ContextMaintenanceAudit,
+		);
+		expect(maintenanceAudits.map(audit => audit.state)).toEqual(["maintenance", "recovered"]);
+		expect(maintenanceAudits.every(audit => audit.phase === "pre_turn")).toBe(true);
+		expect(maintenanceAudits.every(audit => audit.reason === "hard_pressure")).toBe(true);
+		expect(compactSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+
+		// Recovery must produce a sendable request, not a refusal.
+		expect(harness.mock.calls).toHaveLength(11);
+		const finalAudit = customEntries(harness.sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).at(-1)!
+			.data as ContextPlanAudit;
+		expect(finalAudit.qualityGate.outcome).not.toBe("hard_pressure");
+		const finalObservation = harness.observations.at(-1)!;
+		expect(finalObservation.providerTokens).toBeLessThanOrEqual(finalAudit.qualityGate.projectedInputLimit ?? 0);
 	});
 
 	it("sends a complete covering plan in the burst band while keeping its wire cap", async () => {
@@ -504,7 +596,15 @@ describe("Context Steady production-path completion", () => {
 		await resumed.session.prompt("Use the restored Context Steady activation latch.");
 		await resumed.session.waitForIdle();
 
-		expect(contextPlanText(resumed.mock.calls[0]!.context)).toContain("<san_context_plan>");
+		// No digests exist in this session (digest was disabled for the initial
+		// turns), so the plan cannot be net-positive and is withdrawn from the
+		// wire — the persisted plan audit is the proof the steady pipeline ran.
+		expect(contextPlanText(resumed.mock.calls[0]!.context)).not.toContain("<san_context_plan>");
+		expect(customEntries(resumed.sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).length).toBeGreaterThanOrEqual(1);
+		const resumedAudit = customEntries(resumed.sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).at(-1)!.data as {
+			netBenefit?: { withdrawn: boolean };
+		};
+		expect(resumedAudit.netBenefit?.withdrawn).toBe(true);
 		expect(customEntries(resumed.sessionManager, CONTEXT_STEADY_ACTIVATION_CUSTOM_TYPE)).toHaveLength(1);
 	});
 

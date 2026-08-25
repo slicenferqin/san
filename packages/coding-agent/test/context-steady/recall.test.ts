@@ -66,6 +66,27 @@ describe("Context steady recall quality helpers", () => {
 		expect(query).toBe("Recall the current task");
 	});
 
+	test("fails closed when query or item budgets are disabled and enforces item token limits", () => {
+		expect(
+			buildContextSteadyRecallQuery([digestEntry("d1", digest("t1", "retain this context"))], "Current task", {
+				recentDigests: 1,
+				maxQueryChars: 0,
+			}),
+		).toBe("");
+
+		expect(
+			normalizeContextSteadyRecallItems(
+				[
+					{ id: "too-large", content: "x".repeat(400) },
+					{ id: "small", content: "keep this item" },
+				],
+				{ maxItems: 2, maxTokens: 20 },
+			),
+		).toEqual([{ id: "small", content: "keep this item" }]);
+
+		expect(normalizeContextSteadyRecallItems([{ content: "keep" }], { maxItems: 1, maxTokens: 0 })).toEqual([]);
+	});
+
 	test("deduplicates and trims recall results before building the volatile layer", () => {
 		const items = normalizeContextSteadyRecallItems(
 			[

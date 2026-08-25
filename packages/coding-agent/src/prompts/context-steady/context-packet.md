@@ -8,7 +8,6 @@ Stable checkpoint:
   filesTouched:{{#if checkpoint.filesTouched.length}}{{#each checkpoint.filesTouched}} {{path}} ({{action}});{{/each}}{{else}} none{{/if}}
   risks:{{#if checkpoint.risks.length}}{{#each checkpoint.risks}} {{this}};{{/each}}{{else}} none{{/if}}
   nextSteps:{{#if checkpoint.nextSteps.length}}{{#each checkpoint.nextSteps}} {{this}};{{/each}}{{else}} none{{/if}}
-
 {{/if}}
 {{#if digests.length}}
 Recent turn digests (each is a summary of a settled span; pass its ref to the `context_expand` tool to re-read the original messages when the summary is not enough):

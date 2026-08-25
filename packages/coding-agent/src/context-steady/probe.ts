@@ -11,7 +11,7 @@ import type {
 	ContextSummarySource,
 } from "./types";
 
-export const CONTEXT_PROBE_SCHEMA_VERSION = 3;
+export const CONTEXT_PROBE_SCHEMA_VERSION = 5;
 
 export type ContextProbeRequestKind = "agent" | "turn_digest" | "compaction" | "maintenance";
 
@@ -91,9 +91,27 @@ export interface ContextProbeRecord {
 		"actionRepeatCount" | "noEvidenceCount" | "uniqueResourceCount" | "softRedirects" | "forcedFinalizations"
 	>;
 	cache: {
+		/** Wire `prompt_cache_key`: the pinned provider key when set, else the provider session id. */
 		promptCacheKey: string;
+		/** Provider session id backing the cache key when nothing is pinned. */
+		providerSessionId: string;
 		prefixFingerprint: string;
 		prefixChanged: boolean;
+		/**
+		 * True when the wire cache key itself rotated. A rotation forces a cold prefill no matter
+		 * how stable the prefix is, so it must never be reported as an unchanged request.
+		 */
+		cacheKeyChanged: boolean;
+		/**
+		 * False when the sequence handed to the provider stopped beginning with the whole of the
+		 * previous hand-off — i.e. an already-sent message was rewritten mid-transcript.
+		 *
+		 * `prefixChanged` cannot see this: it hashes request identity (model, system prompt, tools,
+		 * rendered plan), and a tool-output stub swapped in at materialization leaves every one of
+		 * those byte-identical while voiding the upstream prefix. Absent when the probe observed no
+		 * hand-off for this request.
+		 */
+		wirePrefixRetained?: boolean;
 	};
 }
 
@@ -112,6 +130,11 @@ export interface BuildContextProbeSnapshotOptions {
 	segmentIds: readonly string[];
 	prefixFingerprint: string;
 	previousPrefixFingerprint?: string;
+	/** Resolved wire cache key. Defaults to `sessionId` when the caller pins nothing. */
+	promptCacheKey?: string;
+	previousPromptCacheKey?: string;
+	/** Prefix retention observed at the projection boundary; omitted when nothing shipped. */
+	wirePrefixRetained?: boolean;
 	maintenanceDecision?: ContextProbeMaintenanceDecision;
 	compaction?: ContextProbeCompactionObservation;
 	authorityState?: ActiveContinuationState;
@@ -151,6 +174,7 @@ function buildContextProbeRecordBase(
 	const latestSegmentId = options.segmentIds.at(-1);
 	const authorityAudit = options.authorityState?.summaryAuthority;
 	const convergence = options.convergence;
+	const promptCacheKey = options.promptCacheKey ?? options.sessionId;
 	return {
 		schemaVersion: CONTEXT_PROBE_SCHEMA_VERSION,
 		timestamp: options.timestamp ?? new Date().toISOString(),
@@ -212,11 +236,15 @@ function buildContextProbeRecordBase(
 			forcedFinalizations: convergence?.forcedFinalizations ?? 0,
 		},
 		cache: {
-			promptCacheKey: options.sessionId,
+			promptCacheKey,
+			providerSessionId: options.sessionId,
 			prefixFingerprint: options.prefixFingerprint,
 			prefixChanged:
 				options.previousPrefixFingerprint !== undefined &&
 				options.previousPrefixFingerprint !== options.prefixFingerprint,
+			cacheKeyChanged:
+				options.previousPromptCacheKey !== undefined && options.previousPromptCacheKey !== promptCacheKey,
+			...(options.wirePrefixRetained === undefined ? {} : { wirePrefixRetained: options.wirePrefixRetained }),
 		},
 	};
 }

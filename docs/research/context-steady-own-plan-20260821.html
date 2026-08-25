@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Context Steady 重新设计方案：先保证不丢，再谈省 token</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f5f7f6;
+      --surface: #ffffff;
+      --ink: #172126;
+      --muted: #5d6a70;
+      --faint: #849197;
+      --line: #d6dfe0;
+      --line-strong: #aab9bb;
+      --teal: #08786f;
+      --teal-soft: #dff1ed;
+      --blue: #2f5e8d;
+      --blue-soft: #e5edf6;
+      --amber: #a16413;
+      --amber-soft: #f8edd8;
+      --red: #a13e3b;
+      --red-soft: #f7e1df;
+      --purple: #755176;
+      --purple-soft: #eee6ef;
+      --code: #10181d;
+      --shadow: 0 16px 40px rgba(27, 43, 48, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      font-size: 16px;
+      line-height: 1.72;
+    }
+    h1, h2, h3, h4 { margin: 0; line-height: 1.2; text-wrap: balance; }
+    h1, .display { font-family: "Iowan Old Style", "Songti SC", "STSong", Georgia, serif; font-weight: 600; }
+    h1 { max-width: 920px; font-size: clamp(40px, 6vw, 76px); }
+    h2 { margin-bottom: 16px; font-size: clamp(28px, 3.5vw, 44px); }
+    h3 { margin-bottom: 10px; font-size: 21px; }
+    h4 { margin-bottom: 8px; font-size: 16px; }
+    p { margin: 10px 0; text-wrap: pretty; }
+    a { color: var(--teal); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    code {
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: #edf1f0;
+      font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+      font-size: .9em;
+      overflow-wrap: anywhere;
+    }
+    pre {
+      overflow: auto;
+      margin: 16px 0;
+      padding: 16px 18px;
+      border-radius: 7px;
+      background: var(--code);
+      color: #edf7f4;
+      font: 13px/1.6 "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    }
+    .shell { width: min(1160px, calc(100% - 40px)); margin: 0 auto; }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      border-bottom: 1px solid rgba(214, 223, 224, .9);
+      background: rgba(245, 247, 246, .94);
+      backdrop-filter: blur(15px) saturate(130%);
+    }
+    .topbar-inner { display: flex; min-height: 56px; align-items: center; justify-content: space-between; gap: 18px; }
+    .wordmark { color: var(--ink); font: 800 13px "JetBrains Mono", monospace; white-space: nowrap; }
+    .wordmark span { color: var(--teal); }
+    nav { display: flex; gap: 16px; overflow-x: auto; white-space: nowrap; }
+    nav a { color: var(--muted); font-size: 13px; text-decoration: none; }
+    nav a:hover { color: var(--ink); }
+
+    .hero { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(320px, .85fr); gap: 48px; align-items: center; padding: 78px 0 68px; }
+    .eyebrow { margin-bottom: 14px; color: var(--teal); font: 800 12px "JetBrains Mono", monospace; letter-spacing: .08em; text-transform: uppercase; }
+    .hero-copy { max-width: 760px; margin-top: 22px; color: var(--muted); font-size: 19px; }
+    .hero-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 24px; color: var(--faint); font-size: 13px; }
+    .verdict { border: 2px solid var(--teal); background: #fbfffe; box-shadow: var(--shadow); padding: 28px; }
+    .verdict-label { color: var(--teal); font: 800 11px "JetBrains Mono", monospace; letter-spacing: .08em; }
+    .verdict blockquote { margin: 24px 0 18px; font: 600 clamp(26px, 3vw, 39px)/1.38 "Iowan Old Style", "Songti SC", Georgia, serif; }
+    .verdict p { color: var(--muted); }
+    .tag { display: inline-block; margin-right: 6px; padding: 3px 8px; border-radius: 999px; background: var(--teal-soft); color: var(--teal); font: 700 11px "JetBrains Mono", monospace; }
+    .tag.red { background: var(--red-soft); color: var(--red); }
+    .tag.amber { background: var(--amber-soft); color: var(--amber); }
+    .tag.blue { background: var(--blue-soft); color: var(--blue); }
+
+    .band { border-top: 1px solid var(--line); }
+    .band.alt { background: var(--surface); }
+    .section { padding: 70px 0; }
+    .section-kicker { margin-bottom: 12px; color: var(--teal); font: 800 12px "JetBrains Mono", monospace; letter-spacing: .08em; text-transform: uppercase; }
+    .lead { max-width: 800px; color: var(--muted); font-size: 18px; }
+    .small { color: var(--muted); font-size: 14px; }
+    .muted { color: var(--muted); }
+    .faint { color: var(--faint); }
+
+    .signal-grid { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 34px; border-top: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); }
+    .signal { min-height: 170px; padding: 22px 24px 24px 0; }
+    .signal + .signal { border-left: 1px solid var(--line); padding-left: 24px; }
+    .signal-number { color: var(--teal); font: 600 44px/1 "Iowan Old Style", Georgia, serif; }
+    .signal-number.red { color: var(--red); }
+    .signal-number.blue { color: var(--blue); }
+    .signal h3 { margin-top: 18px; font-size: 17px; }
+    .signal p { color: var(--muted); font-size: 14px; }
+
+    .rules { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 34px; }
+    .rule-card { min-height: 210px; border: 1px solid var(--line-strong); background: var(--surface); padding: 24px; }
+    .rule-card .num { color: var(--teal); font: 800 12px "JetBrains Mono", monospace; }
+    .rule-card h3 { margin-top: 28px; font-size: 20px; }
+    .rule-card p { color: var(--muted); font-size: 15px; }
+    .rule-card strong { color: var(--ink); }
+
+    .compare { display: grid; grid-template-columns: 1fr 64px 1fr; align-items: stretch; margin-top: 36px; }
+    .compare-side { border: 1px solid var(--line-strong); background: var(--surface); padding: 26px; }
+    .compare-side.bad { background: #fffafa; border-color: #d8aaa8; }
+    .compare-side.good { background: #fbfffe; border-color: #9bc9c1; }
+    .compare-arrow { display: grid; place-items: center; color: var(--teal); font-size: 28px; }
+    .compare-side h3 { display: flex; align-items: center; gap: 8px; }
+    .compare-side ol { margin: 22px 0 0; padding: 0; list-style: none; }
+    .compare-side li { display: grid; grid-template-columns: 28px 1fr; gap: 10px; border-top: 1px solid var(--line); padding: 12px 0; color: var(--muted); font-size: 14px; }
+    .compare-side li b { color: var(--teal); font: 800 12px "JetBrains Mono", monospace; }
+    .compare-side.bad li b { color: var(--red); }
+
+    .flow-wrap { margin-top: 36px; border: 1px solid var(--line-strong); background: var(--surface); padding: 14px; box-shadow: var(--shadow); }
+    .flow-svg { display: block; width: 100%; height: auto; min-height: 520px; }
+    .flow-svg text { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; }
+    .flow-caption { margin: 4px 10px 10px; color: var(--muted); font-size: 13px; }
+    .flow-legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 10px; color: var(--muted); font-size: 13px; }
+    .legend-item { display: inline-flex; align-items: center; gap: 7px; }
+    .legend-dot { width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--line-strong); }
+    .legend-dot.keep { background: var(--teal-soft); border-color: #8bc5ba; }
+    .legend-dot.check { background: var(--amber-soft); border-color: #d5ae72; }
+    .legend-dot.stop { background: var(--red-soft); border-color: #d5a09d; }
+
+    .drawer-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 36px; }
+    .drawer { position: relative; min-height: 245px; border: 1px solid var(--line-strong); padding: 24px; overflow: hidden; }
+    .drawer::after { content: ""; position: absolute; right: -36px; bottom: -45px; width: 150px; height: 150px; border-radius: 50%; opacity: .55; }
+    .drawer.now { background: var(--teal-soft); }
+    .drawer.now::after { background: #a9dacf; }
+    .drawer.cards { background: var(--amber-soft); }
+    .drawer.cards::after { background: #ebc98e; }
+    .drawer.archive { background: var(--blue-soft); }
+    .drawer.archive::after { background: #b9cee7; }
+    .drawer-index { position: relative; z-index: 1; color: var(--faint); font: 800 11px "JetBrains Mono", monospace; }
+    .drawer h3, .drawer p, .drawer ul { position: relative; z-index: 1; }
+    .drawer h3 { margin-top: 34px; }
+    .drawer p, .drawer li { color: #516066; font-size: 14px; }
+    .drawer ul { padding-left: 20px; }
+
+    .decision-grid { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 38px; margin-top: 38px; }
+    .decision-box { border: 1px solid var(--line-strong); background: var(--surface); padding: 25px; }
+    .decision-box h3 { margin-bottom: 18px; }
+    .decision-list { margin: 0; padding: 0; list-style: none; }
+    .decision-list li { display: grid; grid-template-columns: 28px 1fr; gap: 10px; border-top: 1px solid var(--line); padding: 12px 0; color: var(--muted); font-size: 14px; }
+    .decision-list b { color: var(--teal); font: 800 12px "JetBrains Mono", monospace; }
+    .meter { margin-top: 20px; border: 1px solid var(--line-strong); background: #eef2f1; }
+    .meter-bar { display: flex; height: 34px; }
+    .meter-bar span { display: block; height: 100%; }
+    .meter-exact { width: 22%; background: #63a99d; }
+    .meter-card { width: 18%; background: #d6a257; }
+    .meter-raw { width: 48%; background: #7d9fc5; }
+    .meter-reserve { width: 12%; background: #d9b3b0; }
+    .meter-labels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 10px; color: var(--muted); font-size: 11px; }
+    .meter-labels b { display: block; color: var(--ink); font: 700 11px "JetBrains Mono", monospace; }
+
+    .phase-list { margin-top: 36px; border-top: 1px solid var(--line-strong); }
+    .phase { display: grid; grid-template-columns: 145px minmax(0, 1fr) 220px; gap: 24px; border-bottom: 1px solid var(--line); padding: 22px 0; }
+    .phase-name { color: var(--teal); font: 800 13px "JetBrains Mono", monospace; }
+    .phase h3 { font-size: 19px; }
+    .phase p { color: var(--muted); margin: 4px 0 0; font-size: 14px; }
+    .phase-check { align-self: start; border-left: 2px solid var(--teal); padding-left: 14px; color: var(--muted); font-size: 13px; }
+    .phase-check strong { display: block; color: var(--ink); margin-bottom: 4px; }
+
+    .acceptance { width: 100%; margin-top: 34px; border-collapse: collapse; background: var(--surface); }
+    .acceptance th, .acceptance td { border: 1px solid var(--line); padding: 13px 14px; text-align: left; vertical-align: top; }
+    .acceptance th { background: #edf2f1; color: var(--ink); font-size: 13px; }
+    .acceptance td { color: var(--muted); font-size: 14px; }
+    .acceptance td:first-child { color: var(--ink); font-weight: 700; }
+    .pass { color: var(--teal); font-weight: 700; }
+    .warn { color: var(--amber); font-weight: 700; }
+
+    .review-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 34px; }
+    .review-card { border: 1px solid var(--line-strong); background: var(--surface); padding: 22px; }
+    .review-card h3 { font-size: 18px; }
+    .review-card p { color: var(--muted); font-size: 14px; }
+    .recommend { border-left: 4px solid var(--teal); background: #f4fbf9; }
+    .avoid { border-left: 4px solid var(--amber); background: #fffaf1; }
+
+    .footnote { margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--faint); font-size: 13px; }
+    footer { border-top: 1px solid var(--line); padding: 30px 0 55px; color: var(--faint); font-size: 13px; }
+
+    @media (max-width: 900px) {
+      .hero, .decision-grid { grid-template-columns: 1fr; }
+      .signal-grid, .rules, .drawer-grid { grid-template-columns: 1fr; }
+      .signal + .signal { border-left: 0; border-top: 1px solid var(--line); padding-left: 0; }
+      .compare { grid-template-columns: 1fr; gap: 12px; }
+      .compare-arrow { min-height: 28px; transform: rotate(90deg); }
+      .phase { grid-template-columns: 1fr; gap: 8px; }
+      .phase-check { border-left: 0; border-top: 2px solid var(--teal); padding: 10px 0 0; }
+      .review-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 620px) {
+      .shell { width: min(100% - 28px, 1160px); }
+      nav { display: none; }
+      .section { padding: 52px 0; }
+      .hero { padding: 54px 0 48px; }
+      .flow-svg { min-height: 640px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <div class="wordmark">SAN / <span>CONTEXT STEADY</span></div>
+      <nav aria-label="章节导航">
+        <a href="#thesis">一句话</a>
+        <a href="#flow">流程图</a>
+        <a href="#design">新方案</a>
+        <a href="#rollout">落地</a>
+        <a href="#acceptance">验收</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="shell hero" id="top">
+      <div>
+        <div class="eyebrow">Independent review proposal · 2026-08-21</div>
+        <h1>上下文稳态重新设计：先保证不丢，再谈省 token</h1>
+        <p class="hero-copy">
+          这是一份<strong>独立方案</strong>，不修改、不续写
+          <a href="./context-steady-review-20260821.html">原复盘报告</a>。
+          我把问题换成一个更容易评审的比喻：<strong>搬家时，必须先确认新家已经放下箱子，才能把旧家里的箱子扔掉。</strong>
+          现在的流程偶尔先扔箱子，再发现新家装不下，于是历史就失去了代表。
+        </p>
+        <div class="hero-meta">
+          <span>面向评审的版本</span>
+          <span>少术语</span>
+          <span>静态 HTML，无外部依赖</span>
+          <span>不改原报告</span>
+        </div>
+      </div>
+      <aside class="verdict">
+        <div class="verdict-label">先看结论</div>
+        <blockquote>Context Steady 的第一目标不是“压得最薄”，而是“任何被删掉的内容，都必须有一份已经放进去的替代品”。</blockquote>
+        <p>
+          只要这条规矩成立，摘要模型偶尔失败、预算暂时偏小、缓存优化尚未完成，都只是“省得少”；不会再变成“历史突然没了”。
+        </p>
+      </aside>
+    </section>
+
+    <section class="band alt" id="thesis">
+      <div class="shell section">
+        <div class="section-kicker">01 / 一句话看懂</div>
+        <h2>先修“会不会丢”，再修“省不省”</h2>
+        <p class="lead">
+          目前最严重的不是摘要写得不漂亮，而是摘要没有装进计划时，系统仍然把它覆盖的旧消息排除掉。这个顺序反了。
+        </p>
+        <div class="signal-grid">
+          <article class="signal">
+            <div class="signal-number red">2 → 154</div>
+            <h3>只改 400 个预算单位，覆盖量断崖变化</h3>
+            <p>真实会话重放：预算 3000 时只覆盖 2 条 entry；预算 3400 时覆盖 154 条。说明核心问题在“准入规则”，不是摘要内容。</p>
+          </article>
+          <article class="signal">
+            <div class="signal-number blue">ds-flash</div>
+            <h3>当前摘要模型名称找不到</h3>
+            <p>当前有效配置开启了摘要 LLM，但 <code>san models ds-flash --json</code> 返回空列表。摘要会落到不能替代原文的 fallback 路径。</p>
+          </article>
+          <article class="signal">
+            <div class="signal-number">3 / 31</div>
+            <h3>原报告有一处统计需要更新</h3>
+            <p>引用的 session 中实际有 31 个 plan，其中 3 个包含 checkpoint。原报告“31 个全部没有 checkpoint”不是当前 journal 的准确统计，但核心故障仍可重放。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="shell section" id="rules">
+      <div class="section-kicker">02 / 三条规矩</div>
+      <h2>这份方案只守三条规矩</h2>
+      <p class="lead">它们比具体采用哪种摘要模型、用多少 token 更重要。实现方案可以换，规矩不能换。</p>
+      <div class="rules">
+        <article class="rule-card">
+          <div class="num">RULE 01</div>
+          <h3>没有替代品，就不删原文</h3>
+          <p>摘要没生成、摘要放不下、摘要覆盖范围说不清，全部按“没有替代品”处理。保留原文比静默丢历史更安全。</p>
+        </article>
+        <article class="rule-card">
+          <div class="num">RULE 02</div>
+          <h3>只用“最后真正发送的大小”算账</h3>
+          <p>不要一会儿按 JSON 大小算，一会儿按渲染后的文字算。候选内容先按最终发送形态试装，再决定能不能占位。</p>
+        </article>
+        <article class="rule-card">
+          <div class="num">RULE 03</div>
+          <h3>先摆好，再搬走</h3>
+          <p>规划阶段只做试装，不改变原消息。等替代内容、覆盖范围、总大小都确认后，才一次性生成发送内容。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="band alt" id="current">
+      <div class="shell section">
+        <div class="section-kicker">03 / 现状与目标</div>
+        <h2>现在的流程，和应该有的流程</h2>
+        <div class="compare">
+          <article class="compare-side bad">
+            <h3><span class="tag red">现在</span>先删，后发现装不下</h3>
+            <ol>
+              <li><b>1</b><span>找到一个 checkpoint，觉得它“应该”能代表一段旧历史。</span></li>
+              <li><b>2</b><span>用一套偏大的旧估算判断它装不下，于是跳过 checkpoint。</span></li>
+              <li><b>3</b><span>仍然把 checkpoint 覆盖的 digest 过滤掉。</span></li>
+              <li><b>4</b><span>原文重新回到发送内容，压缩频繁发生，且过程没有明显提示。</span></li>
+            </ol>
+          </article>
+          <div class="compare-arrow" aria-hidden="true">→</div>
+          <article class="compare-side good">
+            <h3><span class="tag">目标</span>先试装，成功后才删</h3>
+            <ol>
+              <li><b>1</b><span>保留当前对话和正在进行的工具调用，不参加“省空间”竞赛。</span></li>
+              <li><b>2</b><span>把 checkpoint、digest 按最终发送形态试装。</span></li>
+              <li><b>3</b><span>只有替代品真的装入计划，才允许它覆盖旧消息。</span></li>
+              <li><b>4</b><span>装不下就退回原文或更小卡片，不允许出现“两个都没了”。</span></li>
+            </ol>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="shell section" id="flow">
+      <div class="section-kicker">04 / 可视化流程</div>
+      <h2>新的发送流程：每一步都能回答“旧内容去哪了”</h2>
+      <p class="lead">绿色路径是正常路径；黄色是可接受的降级；红色是宁可暂停也不偷偷删历史的路径。</p>
+      <div class="flow-wrap">
+        <svg class="flow-svg" viewBox="0 0 1100 650" role="img" aria-labelledby="flow-title flow-desc">
+          <title id="flow-title">Context Steady 新规划流程图</title>
+          <desc id="flow-desc">先保留当前对话，再试装摘要；摘要装入后才删除被替代的原文。装不下时保留原文或暂停，不允许原文和摘要同时消失。</desc>
+          <defs>
+            <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#718084"></path>
+            </marker>
+            <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#08786f"></path>
+            </marker>
+            <marker id="arrow-red" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#a13e3b"></path>
+            </marker>
+          </defs>
+
+          <rect x="34" y="34" width="220" height="72" rx="10" fill="#e5edf6" stroke="#8aa8c8" stroke-width="2"></rect>
+          <text x="144" y="65" text-anchor="middle" font-size="20" font-weight="700" fill="#172126">收到新请求</text>
+          <text x="144" y="91" text-anchor="middle" font-size="14" fill="#5d6a70">当前 turn 进入队列</text>
+
+          <rect x="314" y="34" width="220" height="72" rx="10" fill="#dff1ed" stroke="#83bdb2" stroke-width="2"></rect>
+          <text x="424" y="65" text-anchor="middle" font-size="20" font-weight="700" fill="#172126">先保留手边内容</text>
+          <text x="424" y="91" text-anchor="middle" font-size="14" fill="#5d6a70">当前消息、工具调用、最新结果</text>
+
+          <rect x="594" y="34" width="220" height="72" rx="10" fill="#f8edd8" stroke="#d2ad70" stroke-width="2"></rect>
+          <text x="704" y="65" text-anchor="middle" font-size="20" font-weight="700" fill="#172126">准备历史卡片</text>
+          <text x="704" y="91" text-anchor="middle" font-size="14" fill="#5d6a70">checkpoint / digest / recall</text>
+
+          <polygon points="925,30 1035,70 925,110 815,70" fill="#fffaf1" stroke="#d2ad70" stroke-width="2"></polygon>
+          <text x="925" y="66" text-anchor="middle" font-size="18" font-weight="700" fill="#172126">按最终形态</text>
+          <text x="925" y="88" text-anchor="middle" font-size="18" font-weight="700" fill="#172126">装得下吗？</text>
+
+          <path d="M254 70 H314" stroke="#718084" stroke-width="2" marker-end="url(#arrow)"></path>
+          <path d="M534 70 H594" stroke="#718084" stroke-width="2" marker-end="url(#arrow)"></path>
+          <path d="M814 70 H815" stroke="#718084" stroke-width="2" marker-end="url(#arrow)"></path>
+
+          <rect x="760" y="190" width="280" height="84" rx="10" fill="#dff1ed" stroke="#83bdb2" stroke-width="2"></rect>
+          <text x="900" y="224" text-anchor="middle" font-size="20" font-weight="700" fill="#172126">装入替代品</text>
+          <text x="900" y="251" text-anchor="middle" font-size="14" fill="#5d6a70">记录它能替代哪些旧消息</text>
+          <text x="900" y="271" text-anchor="middle" font-size="14" fill="#5d6a70">然后才允许移除那些旧消息</text>
+
+          <rect x="400" y="190" width="280" height="84" rx="10" fill="#f8edd8" stroke="#d2ad70" stroke-width="2"></rect>
+          <text x="540" y="224" text-anchor="middle" font-size="20" font-weight="700" fill="#172126">换更小的卡片</text>
+          <text x="540" y="251" text-anchor="middle" font-size="14" fill="#5d6a70">降低摘要粒度，重新试装</text>
+          <text x="540" y="271" text-anchor="middle" font-size="14" fill="#5d6a70">仍失败则保留原文</text>
+
+          <rect x="60" y="190" width="280" height="84" rx="10" fill="#f7e1df" stroke="#d5a09d" stroke-width="2"></rect>
+          <text x="200" y="224" text-anchor="middle" font-size="20" font-weight="700" fill="#172126">保留原文 / 暂停</text>
+          <text x="200" y="251" text-anchor="middle" font-size="14" fill="#5d6a70">没有可靠替代品</text>
+          <text x="200" y="271" text-anchor="middle" font-size="14" fill="#5d6a70">不偷偷删除，不假装成功</text>
+
+          <path d="M925 110 V190" stroke="#08786f" stroke-width="3" marker-end="url(#arrow-green)"></path>
+          <text x="944" y="157" font-size="15" fill="#08786f">能装下</text>
+          <path d="M815 70 C720 70 680 125 620 190" fill="none" stroke="#a16413" stroke-width="2" marker-end="url(#arrow)"></path>
+          <text x="705" y="133" font-size="15" fill="#a16413">装不下</text>
+          <path d="M400 232 H340" stroke="#a13e3b" stroke-width="2" marker-end="url(#arrow-red)"></path>
+          <text x="363" y="220" text-anchor="middle" font-size="15" fill="#a13e3b">仍不行</text>
+          <path d="M540 190 V140 C540 125 690 125 690 106" fill="none" stroke="#a16413" stroke-width="2" marker-end="url(#arrow)"></path>
+          <text x="585" y="137" font-size="15" fill="#a16413">重试</text>
+
+          <rect x="760" y="360" width="280" height="84" rx="10" fill="#e5edf6" stroke="#8aa8c8" stroke-width="2"></rect>
+          <text x="900" y="394" text-anchor="middle" font-size="20" font-weight="700" fill="#172126">重新算总大小</text>
+          <text x="900" y="421" text-anchor="middle" font-size="14" fill="#5d6a70">所有内容都按最终发送形态计量</text>
+          <path d="M900 274 V360" stroke="#718084" stroke-width="2" marker-end="url(#arrow)"></path>
+
+          <polygon points="540,355 660,402 540,449 420,402" fill="#fffaf1" stroke="#d2ad70" stroke-width="2"></polygon>
+          <text x="540" y="398" text-anchor="middle" font-size="18" font-weight="700" fill="#172126">在安全范围内？</text>
+          <text x="540" y="421" text-anchor="middle" font-size="14" fill="#5d6a70">还留有输出空间</text>
+          <path d="M760 402 H660" stroke="#718084" stroke-width="2" marker-end="url(#arrow)"></path>
+
+          <rect x="60" y="360" width="280" height="84" rx="10" fill="#f7e1df" stroke="#d5a09d" stroke-width="2"></rect>
+          <text x="200" y="394" text-anchor="middle" font-size="20" font-weight="700" fill="#172126">停在安全边界</text>
+          <text x="200" y="421" text-anchor="middle" font-size="14" fill="#5d6a70">先做一次可靠压缩或请求更大窗口</text>
+          <path d="M420 402 H340" stroke="#a13e3b" stroke-width="2" marker-end="url(#arrow-red)"></path>
+          <text x="380" y="390" text-anchor="middle" font-size="15" fill="#a13e3b">否</text>
+
+          <rect x="400" y="520" width="280" height="72" rx="10" fill="#dff1ed" stroke="#83bdb2" stroke-width="2"></rect>
+          <text x="540" y="551" text-anchor="middle" font-size="20" font-weight="700" fill="#172126">发送给模型</text>
+          <text x="540" y="577" text-anchor="middle" font-size="14" fill="#5d6a70">计划和当前请求一起发送</text>
+          <path d="M540 449 V520" stroke="#08786f" stroke-width="3" marker-end="url(#arrow-green)"></path>
+          <text x="560" y="488" font-size="15" fill="#08786f">是</text>
+        </svg>
+        <div class="flow-legend" aria-label="流程图图例">
+          <span class="legend-item"><span class="legend-dot keep"></span>可以继续</span>
+          <span class="legend-item"><span class="legend-dot check"></span>尝试降级</span>
+          <span class="legend-item"><span class="legend-dot stop"></span>保守停下</span>
+        </div>
+        <p class="flow-caption">核心改变只有一句话：<strong>删除旧消息是最后一步，不是试装失败后的默认动作。</strong></p>
+      </div>
+    </section>
+
+    <section class="band alt" id="design">
+      <div class="shell section">
+        <div class="section-kicker">05 / 新方案的结构</div>
+        <h2>把上下文分成三个抽屉</h2>
+        <p class="lead">每个抽屉有不同职责。不要让一张摘要卡片同时承担“记住事情”“证明覆盖”“节省空间”三个互相冲突的任务。</p>
+        <div class="drawer-grid">
+          <article class="drawer now">
+            <div class="drawer-index">DRAWER A / 永远在手边</div>
+            <h3>正在聊的内容</h3>
+            <p>当前用户请求、最近几轮对话、未完成的工具调用和最新结果。</p>
+            <ul>
+              <li>优先级最高</li>
+              <li>不参加历史压缩</li>
+              <li>直到这一轮结束都不移动</li>
+            </ul>
+          </article>
+          <article class="drawer cards">
+            <div class="drawer-index">DRAWER B / 已整理的卡片</div>
+            <h3>可以替代旧内容的摘要</h3>
+            <p>checkpoint 是较大的总结卡；digest 是较小的回合卡。它们只有在真的装入发送内容后，才有资格替代旧消息。</p>
+            <ul>
+              <li>按最终发送形态计量</li>
+              <li>装不下就降低粒度</li>
+              <li>不能替代原文的 fallback 不占主要预算</li>
+            </ul>
+          </article>
+          <article class="drawer archive">
+            <div class="drawer-index">DRAWER C / 原始档案</div>
+            <h3>完整 journal</h3>
+            <p>完整记录永远留在 session journal 中，供回放、展开和故障恢复使用；发送时是否带上，由已确认的替代关系决定。</p>
+            <ul>
+              <li>不因一次发送失败而删除</li>
+              <li>窗口裁剪只取交集</li>
+              <li>找不到覆盖范围时默认保守</li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="decision-grid">
+          <div class="decision-box">
+            <h3>每张卡片都必须回答三句话</h3>
+            <ol class="decision-list">
+              <li><b>1</b><span><strong>我是谁？</strong>这是一张 checkpoint、digest，还是普通 recall。</span></li>
+              <li><b>2</b><span><strong>我替代谁？</strong>明确列出旧消息范围；范围不完整就只替代已知部分。</span></li>
+              <li><b>3</b><span><strong>我真的进去了？</strong>以最终发送内容为准，不以候选状态或旧估算为准。</span></li>
+            </ol>
+          </div>
+          <div class="decision-box">
+            <h3>预算先看“有效内容”，再看“装饰内容”</h3>
+            <p class="small">下面不是精确比例，而是规划顺序。当前消息和安全余量先占位；摘要只有在能带来真实节省时才进入。</p>
+            <div class="meter" role="img" aria-label="上下文预算优先级示意">
+              <div class="meter-bar"><span class="meter-exact"></span><span class="meter-card"></span><span class="meter-raw"></span><span class="meter-reserve"></span></div>
+              <div class="meter-labels">
+                <div><b>当前</b>必须保留</div>
+                <div><b>卡片</b>有效替代</div>
+                <div><b>原文</b>必要时保留</div>
+                <div><b>余量</b>给模型输出</div>
+              </div>
+            </div>
+            <p class="small">如果“卡片”占满预算却没有减少原文，直接放弃卡片，不为了显示“启用了稳态”而发送它。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="shell section" id="decisions">
+      <div class="section-kicker">06 / 四个关键决定</div>
+      <h2>我建议评审直接拍板这四件事</h2>
+      <div class="review-grid">
+        <article class="review-card recommend">
+          <h3>决定一：安全默认是“保留原文”</h3>
+          <p>摘要模型不可用、范围不完整、预算不够，都不删除原文。代价是偶尔多花 token；收益是不会把错误的摘要当成事实。</p>
+        </article>
+        <article class="review-card recommend">
+          <h3>决定二：checkpoint 大小从容器反推</h3>
+          <p>不要再让 <code>checkpoint.maxTokens=12000</code>、<code>contextPlan.maxTokens=3000</code> 各自独立。checkpoint 的可用大小应由当前计划容器和余量共同决定。</p>
+        </article>
+        <article class="review-card recommend">
+          <h3>决定三：摘要模型启动时必须可验证</h3>
+          <p>配置里写了一个当前找不到的 <code>ds-flash</code>，应该在启动时明确提示并切到“只保留原文”模式，而不是静默生产大量无覆盖能力的 fallback。</p>
+        </article>
+        <article class="review-card avoid">
+          <h3>决定四：缓存优化放到第二阶段</h3>
+          <p>缓存前缀稳定很重要，但它不能掩盖覆盖权错误。先证明“旧内容没有丢、计划确实省了空间”，再冻结 plan 字节和优化重渲染。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="band alt" id="rollout">
+      <div class="shell section">
+        <div class="section-kicker">07 / 落地顺序</div>
+        <h2>四步落地，不一次改完所有东西</h2>
+        <p class="lead">每一步都有独立的“能不能继续”标准。这样出现问题时，知道是安全规则、预算、范围，还是缓存造成的。</p>
+        <div class="phase-list">
+          <article class="phase">
+            <div class="phase-name">STEP 1<br>先止血</div>
+            <div>
+              <h3>禁止“两个都没了”</h3>
+              <p>拆开“摘要与当前请求相关”和“摘要已经装入计划”两个状态。摘要没进计划，就恢复它覆盖的 digest；摘要范围不确定，就保留原文。</p>
+            </div>
+            <div class="phase-check"><strong>通过标准</strong>同一份真实 replay 不再出现“checkpoint 未进入、covered digest 也消失”。</div>
+          </article>
+          <article class="phase">
+            <div class="phase-name">STEP 2<br>统一算尺</div>
+            <div>
+              <h3>所有内容按最后发送的样子计量</h3>
+              <p>候选卡片先渲染、再计量；计划未定稿前不改变原消息。让 checkpoint、digest、淘汰逻辑共用一把尺。</p>
+            </div>
+            <div class="phase-check"><strong>通过标准</strong>预算 3000 的临界用例不再因为 JSON 外壳被误判；计划自身大小不会超过承诺。</div>
+          </article>
+          <article class="phase">
+            <div class="phase-name">STEP 3<br>补牢历史</div>
+            <div>
+              <h3>压缩后仍能找到旧摘要覆盖的那一段</h3>
+              <p>摘要保存稳定的范围标记；当前窗口只取这个范围与窗口的交集。端点在窗口外，不代表整张卡片失效。</p>
+            </div>
+            <div class="phase-check"><strong>通过标准</strong>窗口裁掉一端时，覆盖范围按比例变小，而不是突然变成几个零散 tool evidence。</div>
+          </article>
+          <article class="phase">
+            <div class="phase-name">STEP 4<br>最后稳缓存</div>
+            <div>
+              <h3>同一轮对话不要反复改写计划</h3>
+              <p>沿用现有单回合冻结原则：新工具结果不触发无意义的 plan 重排；只有新 checkpoint、压缩或明确话题切换才重新布局。</p>
+            </div>
+            <div class="phase-check"><strong>通过标准</strong>计划内容在工具循环中稳定，缓存收益不会因为每次重渲染被自己打掉。</div>
+          </article>
+        </div>
+
+        <div class="decision-box" style="margin-top: 34px;">
+          <h3>配置层的同步动作</h3>
+          <p>这不是最终设计，但应立即做：</p>
+          <pre># 用一个当前能解析、并且确实有凭据的模型；不要继续使用 ds-flash
+san:
+  contextSteady:
+    digest:
+      llm:
+        modelRole: &lt;可解析且已认证的模型 selector&gt;</pre>
+          <p class="small">当前项目配置的 <code>reserveRatio: 0.15</code> 已与历史 session 使用的 <code>0.25</code> 不同；项目配置只在从该仓库目录启动的新进程中生效。修改后重启会话，再观察新数据。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="shell section" id="acceptance">
+      <div class="section-kicker">08 / 验收标准</div>
+      <h2>评审不要只看“测试通过”，要看这五个结果</h2>
+      <table class="acceptance">
+        <thead>
+          <tr><th>检查</th><th>现在的基线</th><th>新方案必须做到</th><th>判断</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>预算临界</td>
+            <td>3000 时覆盖 2；3400 时覆盖 154</td>
+            <td>临界时要么卡片进去了，要么它覆盖的 digest 仍然可以进；不能两边都落空</td>
+            <td class="pass">硬条件</td>
+          </tr>
+          <tr>
+            <td>摘要模型</td>
+            <td><code>ds-flash</code> 当前查询不到</td>
+            <td>启动时能发现不可用配置；新 session 不再静默积累无覆盖能力的 fallback</td>
+            <td class="pass">硬条件</td>
+          </tr>
+          <tr>
+            <td>窗口裁剪</td>
+            <td>端点离开窗口后可能退化为零散引用</td>
+            <td>覆盖范围取交集，能保留窗口内仍然可证明的部分</td>
+            <td class="pass">硬条件</td>
+          </tr>
+          <tr>
+            <td>净收益</td>
+            <td>小计划可能比它省下的 token 还贵</td>
+            <td>如果计划自身大于它实际省下的内容，就不注入计划</td>
+            <td class="pass">硬条件</td>
+          </tr>
+          <tr>
+            <td>缓存稳定</td>
+            <td>新 digest 会频繁改变 plan 前缀</td>
+            <td>同一逻辑 turn 内 plan 字节稳定；缓存指标在前三步通过后再比较</td>
+            <td class="warn">第二阶段</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="footnote">
+        现有聚焦测试为 27 pass，但当前测试没有覆盖“checkpoint 存量估算略高于 plan 预算、渲染后却能装下”的真实临界形态。新方案的第一批测试必须直接钉住这条边界，而不是继续扩大宽松预算让测试自然通过。
+      </p>
+    </section>
+
+    <section class="band alt" id="review">
+      <div class="shell section">
+        <div class="section-kicker">09 / 给评审的最终判断</div>
+        <h2>这不是“把参数调大”能解决的问题</h2>
+        <div class="review-grid">
+          <article class="review-card recommend">
+            <h3>应当接受的方向</h3>
+            <p>把 Context Steady 定义为一个保守的“历史搬运系统”：它可以省空间，但不能在没有替代品时删除原文；所有替代关系都要在最终发送内容里成立。</p>
+          </article>
+          <article class="review-card avoid">
+            <h3>不建议接受的方向</h3>
+            <p>继续通过调大 <code>recentDigests</code>、提高 steady 阈值、单独放大 checkpoint 上限来掩盖准入错误。这些只能改变故障出现的时间，不能修复“两个都没了”。</p>
+          </article>
+        </div>
+        <p class="lead" style="margin-top: 34px;">
+          推荐的评审决策：<strong>先批准 Step 1 和 Step 2，暂停缓存层的大改；同时把不可解析的摘要模型配置清掉。</strong>
+          等真实 replay 证明“预算临界时仍然有替代品、窗口裁剪后仍然有覆盖”，再进入缓存稳定化。
+        </p>
+      </div>
+    </section>
+
+    <section class="shell section" id="appendix">
+      <div class="section-kicker">附录 / 事实边界</div>
+      <h2>哪些是已观察事实，哪些是本方案判断</h2>
+      <div class="review-grid">
+        <article class="review-card">
+          <h3>已观察</h3>
+          <p>当前源码在 checkpoint 未准入时仍会按 <code>includeCheckpoint</code> 过滤 covered digest；真实窗口重放得到 3000→2、3400→154；当前有效摘要角色为 <code>ds-flash</code> 且模型查询为空；聚焦测试 27 pass。</p>
+        </article>
+        <article class="review-card">
+          <h3>方案判断</h3>
+          <p>“先试装、后删除”“原文保守保留”“把 checkpoint 大小从容器反推”“缓存放到第二阶段”是本方案的设计选择，不是对现有代码行为的描述。</p>
+        </article>
+      </div>
+      <p class="footnote">
+        相关源码：<a href="../../packages/coding-agent/src/context-steady/planner.ts">planner.ts</a>、<a href="../../packages/coding-agent/src/context-steady/source-index.ts">source-index.ts</a>、<a href="../../packages/coding-agent/src/context-steady/digest.ts">digest.ts</a>、<a href="../../packages/coding-agent/src/context-steady/budget.ts">budget.ts</a>、<a href="../../packages/coding-agent/src/session/agent-session.ts">agent-session.ts</a>。背景报告仅作事实来源之一，本文件没有修改它。
+      </p>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell">San · Context Steady 独立方案 · 2026-08-21</div>
+  </footer>
+</body>
+</html>

@@ -219,6 +219,7 @@ export const NORTH_STAR_SAMPLES: readonly NorthStarSample[] = [
 			"greet.ts": [
 				"const args = process.argv.slice(2);",
 				'const name = args[0] ?? "world";',
+				// biome-ignore lint/suspicious/noTemplateCurlyInString: fixture source intentionally contains a template placeholder
 				"console.log(`hello ${name}`);",
 				"",
 			].join("\n"),

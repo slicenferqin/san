@@ -18,12 +18,18 @@ import type {
 	ModelPerformancePoint,
 	ModelStats,
 	ModelTimeSeriesPoint,
+	ProjectUsageStats,
+	ProviderUsageStats,
 	TimeSeriesPoint,
 	ToolCallStats,
 	ToolModelStats,
 	ToolResultLink,
 	ToolTimeSeriesPoint,
 	ToolUsageStats,
+	UsageAggregate,
+	UsageAnalyticsFilter,
+	UsageModelStats,
+	UsageTrendPoint,
 	UserMessageLink,
 	UserMessageStats,
 } from "./types";
@@ -613,6 +619,255 @@ export function getStatsByFolder(cutoff?: number): FolderStats[] {
 	return rows.map(row => ({
 		folder: row.folder,
 		...buildAggregatedStats([row]),
+	}));
+}
+
+interface UsageAggregateRow {
+	total_requests: number | null;
+	failed_requests: number | null;
+	total_input_tokens: number | null;
+	total_output_tokens: number | null;
+	total_cache_read_tokens: number | null;
+	total_cache_write_tokens: number | null;
+	total_premium_requests: number | null;
+	total_cost: number | null;
+	cost_input: number | null;
+	cost_output: number | null;
+	cost_cache_read: number | null;
+	cost_cache_write: number | null;
+	avg_duration: number | null;
+	avg_ttft: number | null;
+	avg_tokens_per_second: number | null;
+	measured_output_tokens: number | null;
+	measured_duration: number | null;
+	first_timestamp: number | null;
+	last_timestamp: number | null;
+}
+
+interface ProviderUsageRow extends UsageAggregateRow {
+	provider: string;
+}
+
+interface ModelUsageRow extends UsageAggregateRow {
+	model: string;
+	provider: string;
+}
+
+interface ProjectUsageRow extends UsageAggregateRow {
+	folder: string;
+}
+
+const USAGE_AGGREGATE_SELECT = `
+	COUNT(*) as total_requests,
+	SUM(CASE WHEN stop_reason = 'error' THEN 1 ELSE 0 END) as failed_requests,
+	SUM(input_tokens) as total_input_tokens,
+	SUM(output_tokens) as total_output_tokens,
+	SUM(cache_read_tokens) as total_cache_read_tokens,
+	SUM(cache_write_tokens) as total_cache_write_tokens,
+	SUM(premium_requests) as total_premium_requests,
+	SUM(cost_total) as total_cost,
+	SUM(cost_input) as cost_input,
+	SUM(cost_output) as cost_output,
+	SUM(cost_cache_read) as cost_cache_read,
+	SUM(cost_cache_write) as cost_cache_write,
+	AVG(duration) as avg_duration,
+	AVG(ttft) as avg_ttft,
+	AVG(CASE WHEN duration > 0 THEN output_tokens * 1000.0 / duration ELSE NULL END) as avg_tokens_per_second,
+	SUM(CASE WHEN duration > 0 THEN output_tokens ELSE 0 END) as measured_output_tokens,
+	SUM(CASE WHEN duration > 0 THEN duration ELSE 0 END) as measured_duration,
+	MIN(timestamp) as first_timestamp,
+	MAX(timestamp) as last_timestamp
+`;
+
+function buildUsageAggregate(row?: UsageAggregateRow): UsageAggregate {
+	const totalRequests = row?.total_requests ?? 0;
+	const failedRequests = row?.failed_requests ?? 0;
+	const totalInputTokens = row?.total_input_tokens ?? 0;
+	const totalOutputTokens = row?.total_output_tokens ?? 0;
+	const totalCacheReadTokens = row?.total_cache_read_tokens ?? 0;
+	const totalCacheWriteTokens = row?.total_cache_write_tokens ?? 0;
+	const measuredOutputTokens = row?.measured_output_tokens ?? 0;
+	const measuredDuration = row?.measured_duration ?? 0;
+	const successfulRequests = totalRequests - failedRequests;
+
+	return {
+		totalRequests,
+		successfulRequests,
+		failedRequests,
+		errorRate: totalRequests > 0 ? failedRequests / totalRequests : 0,
+		successRate: totalRequests > 0 ? successfulRequests / totalRequests : 0,
+		totalInputTokens,
+		totalOutputTokens,
+		totalCacheReadTokens,
+		totalCacheWriteTokens,
+		totalTokens: totalInputTokens + totalOutputTokens + totalCacheReadTokens + totalCacheWriteTokens,
+		cacheRate:
+			totalInputTokens + totalCacheReadTokens > 0
+				? totalCacheReadTokens / (totalInputTokens + totalCacheReadTokens)
+				: 0,
+		totalCost: row?.total_cost ?? 0,
+		totalPremiumRequests: row?.total_premium_requests ?? 0,
+		costInput: row?.cost_input ?? 0,
+		costOutput: row?.cost_output ?? 0,
+		costCacheRead: row?.cost_cache_read ?? 0,
+		costCacheWrite: row?.cost_cache_write ?? 0,
+		avgDuration: row?.avg_duration ?? null,
+		avgTtft: row?.avg_ttft ?? null,
+		avgTokensPerSecond: row?.avg_tokens_per_second ?? null,
+		weightedTokensPerSecond: measuredDuration > 0 ? (measuredOutputTokens * 1000) / measuredDuration : null,
+		firstTimestamp: row?.first_timestamp ?? 0,
+		lastTimestamp: row?.last_timestamp ?? 0,
+	};
+}
+
+function buildUsageWhere(
+	cutoff: number | null | undefined,
+	filter?: UsageAnalyticsFilter,
+): {
+	clause: string;
+	params: Array<number | string>;
+} {
+	const clauses: string[] = [];
+	const params: Array<number | string> = [];
+	if (cutoff !== undefined && cutoff !== null && cutoff > 0) {
+		clauses.push("timestamp >= ?");
+		params.push(cutoff);
+	}
+	if (filter?.provider) {
+		clauses.push("provider = ?");
+		params.push(filter.provider);
+	}
+	if (filter?.model) {
+		clauses.push("model = ?");
+		params.push(filter.model);
+	}
+	return { clause: clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "", params };
+}
+
+function queryUsageAggregates<T extends UsageAggregateRow>(
+	selectGroup: string,
+	groupBy: string,
+	cutoff?: number,
+	filter?: UsageAnalyticsFilter,
+): T[] {
+	if (!db) return [];
+	const where = buildUsageWhere(cutoff, filter);
+	const stmt = db.prepare(`
+		SELECT ${selectGroup ? `${selectGroup},` : ""}
+			${USAGE_AGGREGATE_SELECT}
+		FROM messages
+		${where.clause}
+		${groupBy ? `GROUP BY ${groupBy}` : ""}
+		ORDER BY total_cost DESC, total_requests DESC
+	`);
+	return stmt.all(...where.params) as T[];
+}
+
+/** Get the unified usage aggregate for a time window. */
+export function getUsageAggregate(cutoff?: number, filter?: UsageAnalyticsFilter): UsageAggregate {
+	const rows = queryUsageAggregates<UsageAggregateRow>("", "", cutoff, filter);
+	return buildUsageAggregate(rows[0]);
+}
+
+/** Get usage grouped by provider. */
+export function getUsageByProvider(cutoff?: number, filter?: UsageAnalyticsFilter): ProviderUsageStats[] {
+	return queryUsageAggregates<ProviderUsageRow>("provider", "provider", cutoff, filter).map(row => ({
+		provider: row.provider,
+		...buildUsageAggregate(row),
+	}));
+}
+
+/** Get usage grouped by model and provider. */
+export function getUsageByModel(cutoff?: number, filter?: UsageAnalyticsFilter): UsageModelStats[] {
+	return queryUsageAggregates<ModelUsageRow>("model, provider", "model, provider", cutoff, filter).map(row => ({
+		model: row.model,
+		provider: row.provider,
+		...buildUsageAggregate(row),
+	}));
+}
+
+/** Get usage grouped by project folder. */
+export function getUsageByProject(cutoff?: number, filter?: UsageAnalyticsFilter): ProjectUsageStats[] {
+	return queryUsageAggregates<ProjectUsageRow>("folder", "folder", cutoff, filter).map(row => ({
+		project: row.folder,
+		...buildUsageAggregate(row),
+	}));
+}
+
+/** Get token, cost, and performance trends for a time window. */
+export function getUsageTrend(
+	hours = 24,
+	cutoff?: number | null,
+	bucketMs = 60 * 60 * 1000,
+	filter?: UsageAnalyticsFilter,
+): UsageTrendPoint[] {
+	if (!db) return [];
+
+	const hasCutoff = cutoff !== null;
+	const seriesCutoff = hasCutoff ? (cutoff ?? Date.now() - hours * 60 * 60 * 1000) : null;
+	const where = buildUsageWhere(seriesCutoff, filter);
+	const stmt = db.prepare(`
+		SELECT
+			(timestamp / ?) * ? as bucket,
+			COUNT(*) as requests,
+			SUM(CASE WHEN stop_reason = 'error' THEN 1 ELSE 0 END) as errors,
+			SUM(input_tokens) as input_tokens,
+			SUM(output_tokens) as output_tokens,
+			SUM(cache_read_tokens) as cache_read_tokens,
+			SUM(cache_write_tokens) as cache_write_tokens,
+			SUM(cost_total) as cost,
+			SUM(cost_input) as cost_input,
+			SUM(cost_output) as cost_output,
+			SUM(cost_cache_read) as cost_cache_read,
+			SUM(cost_cache_write) as cost_cache_write,
+			AVG(ttft) as avg_ttft,
+			SUM(CASE WHEN duration > 0 THEN output_tokens ELSE 0 END) as measured_output_tokens,
+			SUM(CASE WHEN duration > 0 THEN duration ELSE 0 END) as measured_duration
+		FROM messages
+		${where.clause}
+		GROUP BY bucket
+		ORDER BY bucket ASC
+	`);
+	const rows = stmt.all(bucketMs, bucketMs, ...where.params) as Array<{
+		bucket: number;
+		requests: number;
+		errors: number;
+		input_tokens: number;
+		output_tokens: number;
+		cache_read_tokens: number;
+		cache_write_tokens: number;
+		cost: number;
+		cost_input: number;
+		cost_output: number;
+		cost_cache_read: number;
+		cost_cache_write: number;
+		avg_ttft: number | null;
+		measured_output_tokens: number;
+		measured_duration: number;
+	}>;
+
+	return rows.map(row => ({
+		timestamp: row.bucket,
+		requests: row.requests,
+		errors: row.errors,
+		successRate: row.requests > 0 ? (row.requests - row.errors) / row.requests : 0,
+		inputTokens: row.input_tokens ?? 0,
+		outputTokens: row.output_tokens ?? 0,
+		cacheReadTokens: row.cache_read_tokens ?? 0,
+		cacheWriteTokens: row.cache_write_tokens ?? 0,
+		totalTokens:
+			(row.input_tokens ?? 0) +
+			(row.output_tokens ?? 0) +
+			(row.cache_read_tokens ?? 0) +
+			(row.cache_write_tokens ?? 0),
+		cost: row.cost ?? 0,
+		costInput: row.cost_input ?? 0,
+		costOutput: row.cost_output ?? 0,
+		costCacheRead: row.cost_cache_read ?? 0,
+		costCacheWrite: row.cost_cache_write ?? 0,
+		avgTtft: row.avg_ttft ?? null,
+		weightedTokensPerSecond:
+			row.measured_duration > 0 ? ((row.measured_output_tokens ?? 0) * 1000) / row.measured_duration : null,
 	}));
 }
 

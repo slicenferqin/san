@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>San 下一步：吸收 OMP 上游可靠性修复｜2026-08-17</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17211c;
+      --muted: #657168;
+      --paper: #f1efe7;
+      --panel: #fffdf8;
+      --line: #d7ddd7;
+      --green: #176647;
+      --green-soft: #e7f2eb;
+      --blue: #245e83;
+      --blue-soft: #e9f2f7;
+      --amber: #89590f;
+      --amber-soft: #fbf0d8;
+      --red: #963e38;
+      --shadow: 0 14px 34px rgb(25 45 34 / 8%);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 7% 0%, rgb(36 94 131 / 11%), transparent 31rem),
+        radial-gradient(circle at 94% 7%, rgb(23 102 71 / 10%), transparent 35rem),
+        var(--paper);
+      font: 16px/1.65 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    main { width: min(1200px, calc(100% - 36px)); margin: 34px auto 72px; }
+    header, section { border: 1px solid var(--line); border-radius: 18px; background: var(--panel); box-shadow: var(--shadow); }
+    header { padding: 38px 42px; border-top: 7px solid var(--green); }
+    section { margin-top: 20px; padding: 28px 32px; }
+    h1, h2, h3 { margin-top: 0; line-height: 1.22; }
+    h1 { margin-bottom: 12px; font-size: clamp(2rem, 5vw, 3.25rem); letter-spacing: -0.04em; }
+    h2 { padding-bottom: 10px; border-bottom: 1px solid var(--line); color: var(--green); font-size: 1.42rem; }
+    h3 { margin-bottom: 7px; color: var(--blue); font-size: 1.04rem; }
+    p { max-width: 96ch; }
+    a { color: var(--blue); text-underline-offset: 3px; }
+    code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+    code { padding: 0.08em 0.34em; border: 1px solid #dfe7e1; border-radius: 5px; background: #edf2ee; overflow-wrap: anywhere; }
+    .meta { display: flex; flex-wrap: wrap; gap: 9px 24px; color: var(--muted); font-size: 0.92rem; }
+    .lede { max-width: 92ch; color: #405349; font-size: 1.12rem; }
+    .status { display: inline-block; margin-bottom: 13px; padding: 4px 10px; border-radius: 999px; color: #fff; background: var(--green); font-size: 0.82rem; font-weight: 800; letter-spacing: 0.03em; }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 20px; }
+    .card { padding: 15px 16px; border: 1px solid var(--line); border-radius: 12px; background: #f8faf8; }
+    .card strong { display: block; color: var(--green); font-size: 1.35rem; line-height: 1.15; }
+    .card span { color: var(--muted); font-size: 0.87rem; }
+    .callout { padding: 15px 18px; border-left: 5px solid var(--blue); border-radius: 9px; background: var(--blue-soft); }
+    .callout.good { border-left-color: var(--green); background: var(--green-soft); }
+    .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    table { width: 100%; margin-top: 14px; border-collapse: collapse; }
+    th, td { padding: 12px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 0.84rem; letter-spacing: 0.04em; text-transform: uppercase; }
+    td:first-child { width: 13%; font-weight: 750; }
+    .tag { display: inline-block; padding: 2px 7px; border-radius: 5px; color: #fff; background: var(--green); font: 750 0.78rem/1.6 ui-monospace, monospace; }
+    .tag.blue { background: var(--blue); }
+    .tag.amber { background: var(--amber); }
+    .tag.red { background: var(--red); }
+    .small { color: var(--muted); font-size: 0.88rem; }
+    ul, ol { padding-left: 1.3rem; }
+    li + li { margin-top: 6px; }
+    .grid-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .mini { padding: 16px 18px; border: 1px solid var(--line); border-radius: 11px; background: #fffefa; }
+    .mini h3 { margin-bottom: 5px; }
+    .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
+    .flow > div { position: relative; padding: 13px 10px; border: 1px solid var(--line); border-radius: 10px; background: #f8faf8; text-align: center; font-size: 0.86rem; }
+    .flow > div:not(:last-child)::after { position: absolute; top: 50%; right: -10px; z-index: 2; color: var(--green); font-weight: 800; content: "→"; transform: translate(50%, -50%); }
+    .flow strong { display: block; color: var(--green); }
+    @media (max-width: 900px) {
+      .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .flow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .flow > div::after { display: none; }
+    }
+    @media (max-width: 620px) {
+      main { width: min(100% - 18px, 1200px); margin-top: 12px; }
+      header, section { padding: 22px 19px; border-radius: 13px; }
+      .cards, .grid-two, .flow { grid-template-columns: 1fr; }
+      table, thead, tbody, tr, th, td { display: block; width: 100%; }
+      thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+      tbody { display: grid; gap: 12px; }
+      tr { padding: 5px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fffefa; }
+      td, td:first-child { width: 100%; padding: 8px 0; border-bottom: 1px dashed var(--line); overflow-wrap: anywhere; }
+      td:last-child { border-bottom: 0; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="status">已完成上游核查与下一步排序</span>
+    <div class="meta">
+      <span>研究日期：2026-08-17</span>
+      <span>San 基线：<code>66d92666d1</code>（2026-08-13）</span>
+      <span>OMP 主线：<code>d1872493752d</code>（2026-08-17）</span>
+      <span>最新发布：<code>v17.3.5</code>（2026-08-16）</span>
+    </div>
+    <h1>San 下一步：先吸收可靠性修复，不追上游表面版本</h1>
+    <p class="lede">上游最近一轮的高价值变化集中在“失败时不要静默停住、不要丢会话、不要让后台钩子卡住下一回合”这条可靠性主线。San 与 OMP 已经在品牌、构建、会话模型和执行控制上大幅分叉，不能用整体 merge 或版本号追赶；正确路径是按行为合同逐项重做，保留 San 的 <code>.san</code>、<code>@san/*</code>、<code>executionLoop</code> 与 <code>contextSteady</code>。</p>
+    <div class="cards">
+      <div class="card"><strong>3 项</strong><span>现在就做：一次性重试、截断流、Stats host</span></div>
+      <div class="card"><strong>3 项</strong><span>下一轮做：会话耐久、压缩不阻塞、HTTP/2 恢复</span></div>
+      <div class="card"><strong>2 项</strong><span>小范围跟进：Hub stale ref 与 parked corpse</span></div>
+      <div class="card"><strong>0</strong><span>建议整体合并的上游文件域</span></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>1. 结论先行</h2>
+    <div class="callout good"><strong>推荐顺序：</strong>先把“无副作用的一次性调用会在瞬时 Provider 故障时自动重试”做成共享底层能力；随后修正 OpenAI 兼容流在无终止标记时的静默截断；再以回环地址默认不变为前提补齐 Stats 的显式绑定地址。会话文件修复、自动压缩生命周期和 HTTP/2 恢复进入第二阶段，因本地结构差异分别适配，不能机械移植。</div>
+    <ol>
+      <li><strong>第一优先级是错误语义，不是新功能。</strong>这三项都直接减少“模型看似完成但实际没有完成”或“后台任务一次抖动就丢结果”的情况，符合 San 当前“敢挂一晚上”的目标。</li>
+      <li><strong>第二优先级是持久化与恢复。</strong>会话 JSONL 损坏、压缩回调卡住、Cursor HTTP/2 reset 都会破坏长任务连续性；但它们需要对照 San 已有的 session storage、compaction queue 和 replay-unsafe 状态重写。</li>
+      <li><strong>不上游架构迁移。</strong>OMP 的 Bazel、Nix、<code>.omp</code> 品牌和大型 Agent Hub/协议变化不属于 San 的近期交付面。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>2. 上游最近发生了什么</h2>
+    <p>官方提交页显示，<code>main</code> 当前顶端是 2026-08-17 的 PR #7824 合并提交；其父提交包含 GPT 模型上下文窗口下限与价格参数更新。官方 <code>packages/coding-agent/CHANGELOG.md</code> 的 <code>v17.3.5</code> 条目还列出一次性 Anthropic 重试、会话 JSONL 修复、HTTP/2 stream reset 恢复、Hub 生命周期修复和中途自动压缩不再等待扩展处理器等变化。</p>
+    <table>
+      <thead><tr><th>上游主题</th><th>官方行为变化</th><th>对 San 的判断</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="tag">可靠性</span><br />Oneshot retry</td>
+          <td><code>completeSimple</code> 对瞬时故障可能返回 <code>stopReason: "error"</code> 而不是抛异常；上游新增共享重试器，覆盖 Anthropic overload/rate-limit 与 429/500/502/503/529，并读取 retry-after。</td>
+          <td>本地没有对应共享 helper；本地 <code>instrumentedCompleteSimple</code> 的标题、分支摘要、压缩和侧路调用因此存在“一次抖动即失败/空结果”的缺口。应最先适配。</td>
+        </tr>
+        <tr>
+          <td><span class="tag">可靠性</span><br />OpenAI stream</td>
+          <td>流在产生内容后没有收到 <code>finish_reason</code> 就关闭时，不再把半句话当作干净 <code>stop</code>；<code>insufficient_system_resource</code> 也归入可重试的 Provider 错误。</td>
+          <td>本地已经有空生成重试和终止宽限逻辑，但目标文件仍缺少这个“非空且无终止标记”的失败合同；改动可限制在一个 Provider 文件与测试。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">可观测性</span><br />Stats host</td>
+          <td><code>omp stats</code>、<code>/stats</code> 和 stats server 接受显式 <code>--host</code>，默认仍为 <code>127.0.0.1</code>；端口占用复用会校验 dashboard 身份和绑定地址。</td>
+          <td>San 当前 server 与两个入口都只有 port，且没有对应测试。适合做一个隔离的小改动；必须保留 San 已有的回环默认和拒绝不安全复用策略。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">持久化</span><br />Torn JSONL</td>
+          <td>磁盘写失败造成的部分追加会回滚到写前长度；恢复时标记畸形文件，在下一次追加前原子重写，并把持久化故障显式显示出来。</td>
+          <td>本地有 <code>FileSessionStorage</code>、流式 loader 和原子重写 guard，但没有对应的 malformed-record/rewrite 状态。收益高，适合第二阶段单独设计。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">恢复</span><br />HTTP/2 reset</td>
+          <td>Cursor 的 <code>NGHTTP2_INTERNAL_ERROR</code>/<code>NGHTTP2_REFUSED_STREAM</code> 在工具结果已经落盘且可安全继续时，走保留上下文的继续路径。</td>
+          <td>San 没有上游 <code>turn-recovery.ts</code>，但已有 <code>unexpected-stop-classifier</code>、<code>replayUnsafe</code> 和 retry cap。应移植判定合同，不移植文件结构。</td>
+        </tr>
+        <tr>
+          <td><span class="tag amber">生命周期</span><br />Compaction / Hub</td>
+          <td>中途自动压缩不再等待可能挂起的结束事件处理器；无 reviver 的 parked、session-less agent corpse 可在新 spawn 冲突时安全回收。</td>
+          <td>San 的 compaction 生命周期位于 <code>AgentSession</code> 与 shared events，Hub 位于自有 tools/registry 结构；两项都值得做，但必须先画本地状态转换。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>3. San 的推荐执行队列</h2>
+    <div class="flow">
+      <div><strong>A</strong>Oneshot retry<br />共享底层合同</div>
+      <div><strong>B</strong>截断流<br />Provider fail-fast</div>
+      <div><strong>C</strong>Stats host<br />安全默认</div>
+      <div><strong>D</strong>会话恢复<br />JSONL / HTTP2</div>
+      <div><strong>E</strong>生命周期<br />压缩 / Hub</div>
+    </div>
+    <table>
+      <thead><tr><th>阶段</th><th>实现边界</th><th>验收合同</th><th>暂不做什么</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="tag">P0-A</span><br />一次性调用重试</td>
+          <td>在 <code>packages/ai</code> 增加共享 helper；统一包住 branch summary、title、compaction、handoff 等无副作用调用。分类复用 AIError，不碰主 Agent turn 的 replay 规则。</td>
+          <td>同时处理 resolved error-stop 和 thrown error；有界尝试次数；尊重 retry-after；signal 在等待中取消时保留用户取消语义；非重试错误原样返回/抛出。</td>
+          <td>不把它接到已经产生可见文本、工具调用或图片副作用的主回合；不复制多个本地 retry loop。</td>
+        </tr>
+        <tr>
+          <td><span class="tag">P0-B</span><br />截断 OpenAI 流</td>
+          <td>只改 OpenAI-compatible provider 的终态判断，并接入现有空生成重试；保留已有 usage-only 尾块宽限。</td>
+          <td>非空内容 + 无 <code>finish_reason</code> → retryable error；<code>insufficient_system_resource</code> → retryable error；空流仍进入既有 empty-completion retry；正常 stop/toolUse 不变。</td>
+          <td>不重写所有 Provider 的 stream terminal state，不把所有 EOF 都强行判错。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">P1-C</span><br />Stats host</td>
+          <td>为 stats server、<code>san stats</code> 和 <code>/stats</code> 增加 host 参数；回环地址仍是默认值。补 port-conflict 身份/地址校验。</td>
+          <td>默认只监听回环；显式 host 能在容器场景访问；IPv6 URL 正确加括号；不复用不同 host 的 dashboard；不停止无法确认属于 San stats 的进程。</td>
+          <td>不直接照搬 OMP 的包名、CLI 帮助或 wildcard 默认，不放宽本地 stats 安全边界。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">P1-D</span><br />持久化与恢复</td>
+          <td>先做 torn JSONL，再做 HTTP/2 reset；分别落在本地 storage/loader 与 retry classifier/session loop。每项独立提交和测试。</td>
+          <td>写失败后文件不再留下不可解析尾巴；下次追加前能重写；HTTP/2 reset 只有在工具结果已配对且没有 replay-unsafe 输出时才继续；重复恢复有上限。</td>
+          <td>不引入上游不存在于 San 的 <code>turn-recovery.ts</code> 文件形状，不把所有网络错误都变成可重放。</td>
+        </tr>
+        <tr>
+          <td><span class="tag amber">P2-E</span><br />Compaction / Hub</td>
+          <td>先定位 San 的事件 emit、flushCompactionQueue、park/revive/CAS 入口，再分别适配 detached lifecycle emit 和 dead-corpse reclaim。</td>
+          <td>挂起的扩展处理器不能阻塞下一次 Provider 调用；可恢复 parked agent 不被误删；只有 session-less、无 reviver、无并发 park/revive 的 corpse 可回收；CAS 仍严格。</td>
+          <td>不把 OMP 新 Hub、live activity tracking 或 registry UI 整体迁入。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>4. thinking-loop 与 catalog：有选择地吸收</h2>
+    <div class="grid-two">
+      <div class="mini">
+        <h3>Thinking loop：只取算法合同</h3>
+        <p>OMP #8669 将循环检测重组为“所有模型可用的 exact suffix cycle + 特定模型的语义启发式”。San 当前已有 Gemini header、Grok 4.6 和多家族 guard，阈值与上游不同，不能整文件替换。建议先保留现状；若后续真实 dogfood 证明长周期 exact cycle 仍漏检，只移植 bounded tail detector 和 retryable 标记，并用 San 自有样本校准。</p>
+      </div>
+      <div class="mini">
+        <h3>Catalog：生成，不手改</h3>
+        <p>上游最新父提交只涉及 GPT 价格和上下文窗口 floor。San 的 <code>models.json</code> 是生成文件，按仓库规则应周期性运行 <code>bun run gen:models</code>，并对 resolver/descriptor 写回归测试；不为一次 upstream diff 手工改 generated JSON。</p>
+      </div>
+    </div>
+    <div class="callout warn"><strong>判断：</strong>上游 v17.3.5 的 xAI Responses、grok-4.5 默认路由、prompt cache、Nix 和 browser daemon 修复各有价值，但它们不是当前 San 的第一批移植目标。San 的本地 transport、配置命名和安全默认不同，应该在对应用户问题真实出现后单独做合同审查。</div>
+  </section>
+
+  <section>
+    <h2>5. 两周落地节奏</h2>
+    <table>
+      <thead><tr><th>时间</th><th>动作</th><th>完成标志</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="tag">第 1–2 天</span></td>
+          <td>实现 P0-A；先覆盖 <code>retryTransientCompletion</code> 的 resolved/thrown、retry-after、abort 和耗尽边界，再接入一个最典型的 branch-summary/title 调用。</td>
+          <td>瞬时故障不会让无副作用侧路直接丢结果；主回合 replay 行为零变化。</td>
+        </tr>
+        <tr>
+          <td><span class="tag">第 3 天</span></td>
+          <td>实现 P0-B；补 SSE fixture，验证非空 EOF、资源不足终止、空流重试和正常终态。</td>
+          <td>半句话不再静默当作完成；现有正常 tool call、usage 尾块和 empty retry 测试保持通过。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">第 4–5 天</span></td>
+          <td>实现 P1-C；入口解析、server bind、端口冲突、IPv6 URL 和回环安全测试一起落地。</td>
+          <td><code>san stats</code> 默认仍只在本机可见，容器可用显式 host；不同 host 不错误复用。</td>
+        </tr>
+        <tr>
+          <td><span class="tag blue">第 2 周</span></td>
+          <td>先做 torn JSONL，再做 HTTP/2 reset；每项先写本地状态图和失败 fixture，再实现。</td>
+          <td>磁盘尾损坏可恢复，已完成工具不会被重复执行；所有 retry 仍受 replay-unsafe 与次数上限约束。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>6. 本轮核对与验证</h2>
+    <ul>
+      <li>官方来源：<a href="https://github.com/can1357/oh-my-pi/commits/main">OMP main 提交页</a>、<a href="https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/CHANGELOG.md">v17.3.5 coding-agent changelog</a>、<a href="https://github.com/can1357/oh-my-pi/commit/d1872493752dd085173c38ecd38a1134dabf900f">PR #7824 stats host 合并提交</a>、<a href="https://github.com/can1357/oh-my-pi/commit/b445134b4d731c1e55895ce9268d1461ef357e23.patch">PR #8370 oneshot retry 补丁</a>、<a href="https://github.com/can1357/oh-my-pi/commit/ea9e299f96b75c534e032408dbb4d14853c71587.patch">#8563 截断流补丁</a>、<a href="https://github.com/can1357/oh-my-pi/commit/9ae089d71bca00786a24eb2ffc5aadb3ebfefb12.patch">#8598 会话 JSONL 补丁</a>、<a href="https://github.com/can1357/oh-my-pi/commit/63ac830b50fd1a71502ac45d30fff6bd6b802db3.patch">#8516 HTTP/2 恢复补丁</a>、<a href="https://github.com/can1357/oh-my-pi/commit/8344a0e82337f858fbb723f90758af33ed779b3f.patch">#8604 压缩生命周期补丁</a>、<a href="https://github.com/can1357/oh-my-pi/commit/45e4fa78844333be321ed9efa6d9b074bf5962ad.patch">#8492 parked corpse 补丁</a>。</li>
+      <li>本地回归命令：<code>bun test packages/ai/test/stream.test.ts packages/ai/test/thinking-loop.test.ts packages/ai/test/openai-completions-error-finish-reason.test.ts packages/ai/test/empty-completion-retry.test.ts packages/ai/test/error-id.test.ts packages/coding-agent/test/session-loader-stream.test.ts packages/coding-agent/test/session-storage.test.ts packages/coding-agent/test/agent-session-auto-compaction-queue.test.ts packages/coding-agent/test/agent-session-retry-cap.test.ts packages/coding-agent/test/registry/agent-lifecycle.test.ts packages/coding-agent/test/tools/hub-wait.test.ts packages/agent/test/branch-summarization.test.ts</code>。</li>
+      <li>结果：<strong>251 tests，133 pass，118 skip，0 fail</strong>；共 <strong>472,915</strong> 次 expect。此次只写入本研究记录，没有把候选上游实现直接放进生产代码。</li>
+      <li>跳过项不是失败：本地尚不存在上游新增的 stats host、oneshot retry 和 turn-recovery 合同测试，因此它们应在对应实现提交中新增，而不是在研究阶段伪造“已验证”。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>7. 明确不做</h2>
+    <ul>
+      <li>不把 <code>HEAD..upstream/main</code> 的大 diff 整体 merge；两边提交历史、构建系统、品牌目录和运行时边界已经分叉。</li>
+      <li>不把 OMP 的 <code>--host</code> 改动原样带入并默认监听 wildcard；San 的 stats 默认必须继续是 loopback。</li>
+      <li>不直接替换 San 的 thinking-loop、executionLoop 或 contextSteady；上游相似名称不等于相同合同。</li>
+      <li>不为了追版本号手改生成的 catalog 文件，不在本轮引入 Agent Hub、RPC v3、MCP 协议迁移或 Nix/Bazel 构建迁移。</li>
+    </ul>
+    <p class="small">关联研究：<a href="./omp-upstream-iteration-direction-20260811.html">上游迭代方向</a>、<a href="./omp-upstream-next-wave-recommendations-20260811.html">上一轮下一批建议</a>、<a href="./omp-upstream-selective-absorption-report-20260811.html">选择性吸收验收报告</a>、<a href="./san-polish-roadmap-20260813.html">San 打磨规划</a>。</p>
+  </section>
+</main>
+</body>
+</html>

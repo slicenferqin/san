@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>San · Context Steady 稳定性调研与修复方案 v2 · 2026-08-22</title>
+<style>
+	:root {
+		--bg: #0f1115;
+		--panel: #171a21;
+		--panel2: #1d212b;
+		--text: #d7dce5;
+		--dim: #8b93a3;
+		--accent: #6cb6ff;
+		--good: #7ee2a8;
+		--warn: #f2c94c;
+		--bad: #ef8a8a;
+		--line: #2a2f3b;
+		--mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+	}
+	* { box-sizing: border-box; }
+	body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.75 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+	.wrap { max-width: 980px; margin: 0 auto; padding: 48px 28px 96px; }
+	header { border-bottom: 1px solid var(--line); padding-bottom: 24px; margin-bottom: 36px; }
+	h1 { font-size: 26px; margin: 0 0 8px; }
+	.sub { color: var(--dim); font-size: 13px; }
+	h2 { font-size: 19px; margin: 48px 0 12px; padding-top: 18px; border-top: 1px solid var(--line); }
+	h2 .tag { font-size: 12px; color: var(--dim); font-weight: normal; margin-left: 10px; }
+	h3 { font-size: 16px; margin: 28px 0 8px; }
+	p { margin: 10px 0; }
+	ul, ol { margin: 10px 0; padding-left: 22px; }
+	li { margin: 4px 0; }
+	code { font-family: var(--mono); font-size: 12.5px; background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; color: var(--accent); }
+	.mono { font-family: var(--mono); font-size: 12.5px; }
+	table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13.5px; }
+	th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+	th { background: var(--panel2); color: var(--dim); font-weight: 600; white-space: nowrap; }
+	td code { white-space: nowrap; }
+	.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; margin: 16px 0; }
+	.panel p:first-child { margin-top: 0; }
+	.flow { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; font-family: var(--mono); font-size: 12px; line-height: 1.9; overflow-x: auto; white-space: pre; color: var(--dim); }
+	.flow b { color: var(--text); font-weight: 600; }
+	.flow i { color: var(--good); font-style: normal; }
+	.flow u { color: var(--warn); text-decoration: none; }
+	.flow s { color: var(--bad); text-decoration: none; }
+	.verdict { display: inline-block; font-size: 12px; border-radius: 4px; padding: 1px 8px; margin-left: 8px; vertical-align: 1px; }
+	.v-ok { background: rgba(126,226,168,.12); color: var(--good); }
+	.v-warn { background: rgba(242,201,76,.10); color: var(--warn); }
+	.v-bad { background: rgba(239,138,138,.12); color: var(--bad); }
+	.dim { color: var(--dim); }
+	.good { color: var(--good); }
+	.warn { color: var(--warn); }
+	.bad { color: var(--bad); }
+	.ws { border-left: 3px solid var(--accent); }
+	.decision { border-left: 3px solid var(--warn); }
+	.rev { border-left: 3px solid var(--good); }
+	footer { margin-top: 64px; border-top: 1px solid var(--line); padding-top: 16px; color: var(--dim); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+	<h1>Context Steady 稳定性调研与修复方案 <span class="dim">v2（含评审修订）</span></h1>
+	<div class="sub">San · packages/coding-agent · 方案 v2 · 2026-08-22 · 静态 HTML，无外部依赖 · 承接：数据结构全景 / own-plan-20260821 / review-20260821 / 外部评审（2026-08-22）</div>
+</header>
+
+<p>优先级声明（已与评审确认一致，固定不动）：<b>一、不丢历史、交流连续性；二、缓存命中率、降低成本；三、省 token、卸载图片/文件/大段输出。</b></p>
+
+<h2>0 · v1 → v2 修订记录<span class="tag">评审意见的处置</span></h2>
+
+<table>
+	<tr><th>评审意见</th><th>判定</th><th>本稿处置</th></tr>
+	<tr><td>1. orphan 定义过宽，须限定"可投影 entry"</td><td class="good">采纳</td><td>WS1.1 不变量改为只作用于 projectable entries，返回值六分类（§3.1）</td></tr>
+	<tr><td>2. steady_target 趋零目标与触发设计冲突</td><td class="good">采纳</td><td>WS1.2 改为分层指标；故障信号 = 无有效回收或短时重复触发，而非触发本身（§3.2）</td></tr>
+	<tr><td>3. epoch 边界不够严格，须区分动态 gate 重算与快照</td><td class="good">采纳</td><td>WS2.2 增加边界契约表与"gate 动态 / 材料快照"分离规则，测试对齐最终 provider payload（§4.2）</td></tr>
+	<tr><td>4. recall 须现在就按 volatile 独立通道设计</td><td class="good">采纳</td><td>新增 §4.4"stable / volatile 边界契约"，接口定义提前到 M1，M2 直接按最终架构实现（§6）</td></tr>
+	<tr><td>5. 净收益公式不能直接用全部 covered token</td><td class="good">采纳</td><td>WS3.1 改为基于最终 provider projection 的差值公式，含排除清单；"整包不注入"限定为只撤销 derived replacement（§5.1）</td></tr>
+	<tr><td>6. 图片/文件/大段输出卸载未落方案</td><td class="good">采纳</td><td>新增 WS4 投影策略契约（image/file/tool output 三种 policy），立项为 M4（§5.3）</td></tr>
+</table>
+
+<h2>1 · 调研结论（维持 v1，两处事实修正重申）</h2>
+
+<table>
+	<tr><th>目标</th><th>判定</th><th>差距</th></tr>
+	<tr><td><b>P1 不丢</b></td><td><span class="v-ok">设计安全</span> <span class="v-warn">未被证明安全</span></td><td>终极不变量无断言；compaction 侧交棒无告警；记忆可得性降级无观测</td></tr>
+	<tr><td><b>P2 缓存</b></td><td><span class="v-ok">turn 内已冻结</span> <span class="v-bad">跨 turn 结构性失效</span></td><td>插入位置漂移 / 材料按 prompt 重选 / recall query 进 plan——三个跨 turn 字节漂移源</td></tr>
+	<tr><td><b>P3 省 token</b></td><td><span class="v-ok">可达</span> <span class="v-warn">缺净收益门控</span></td><td>无净收益判定；卸载只覆盖 planner material，未覆盖图片/文件/大段输出（评审点 6）</td></tr>
+</table>
+
+<h2>2 · 工作流总览</h2>
+
+<div class="flow">WS1 <b>P1 收口</b>                     WS2 <b>P2 缓存</b>                      WS3/WS4 <b>P3 省 token</b>
+ ├─ 1.1 可投影 orphan 断言            ├─ 2.1 注入位置钉死                      ├─ 3.1 projection 净收益门控
+ ├─ 1.2 steady_target 分层指标          ├─ 2.2 epoch 冻结 + gate/快照分离         ├─ 3.2 上轮 review 遗留小项
+ └─ 1.3 记忆可得性观测                  └─ §4.4 stable/volatile 边界契约          └─ 4 图片/文件/大输出投影策略
+里程碑： M1 = WS1 + WS3.1/3.2 + 接口契约 ──▶ M2 = WS2.1+2.2+volatile 通道(原子) ──▶ M3 = 打磨 ──▶ M4 = WS4</div>
+
+<h2>3 · WS1：不丢消息的收口（P1）</h2>
+
+<h3>3.1 可投影 orphan 断言<span class="tag">v2 修订：限定作用域 + 六分类返回</span></h3>
+<div class="panel ws">
+	<p><b>不变量（修订版）</b>：active scope 中<b>本应参与 provider context 的可投影 entry</b>，在最终 provider payload 中必须存在<b>原文、合法 stub 或已准入 coverage</b> 三者之一；非可投影 journal metadata（custom 审计 entry、compaction/label/mode_change 等元数据）不参与 orphan 判定。</p>
+	<p><b>"可投影"的判定口径</b>：以 provider transform 之前的消息态为准——<code>message</code> 与会被投影的 <code>custom_message</code>；已被 <code>responseDocuments.project()</code> 或 provider transform 正常折叠的内容，按折叠后的对应关系核对，不按原始 entry 逐项机械比对。tool stub 属"保留消息、替换内容"，计为存在（stubbed），不算缺失。</p>
+	<p><b>返回形态（六分类，不只是一个 orphans 列表）</b>：</p>
+<div class="flow">auditProjectionCoverage() → {
+  <i>missingProjectableRefs</i>:   真正的丢失——唯一算失败的类别
+  <i>coveredRefs</i>:              被 coverage 合法省略
+  <i>stubbedRefs</i>:              被 stub 合法替换
+  unmatchedNonProjectableRefs:     本就不投影的 entry(预期类别,用于口径自检)
+  duplicateMatches:               双通道匹配的重复/歧义(口径质量信号)
+  invalidCoverage:                coverage 授权了不该授权的引用
+}</div>
+	<p><b>执行策略</b>：测试环境 <code>missingProjectableRefs</code> 必须为空（写进测试基线 + 真实 replay 回归）；生产环境不 throw，六分类计数进 probe 与 <code>san stats</code>（详情页，不进主表面）。既有基础：<code>validateContextPlanCoverage()</code> 已校验 coverage↔material 一致性、materialize 在校验失败时放弃 coverage——本断言补的是<b>对最终投影 payload 的反向完整性审计</b>。</p>
+	<p><b>验收</b>：review-20260821 的真实重放，修复前 planner 报出 D2 孤儿、修复后 <code>missingProjectableRefs</code> 为空；同时 <code>unmatchedNonProjectableRefs</code> 恰好等于 scope 内非可投影 entry 数（口径自检）。</p>
+</div>
+
+<h3>3.2 steady_target 分层指标<span class="tag">v2 修订：放弃趋零目标</span></h3>
+<div class="panel ws">
+	<p><b>定位修正</b>：steady_target 是稳态物理 ceiling 低于当前上下文时的<b>保护性维护</b>，本身不是 bug——窗口变小、非消息 token 增长、大 tool output、resume 后 scope 大都可能正当触发它。<b>故障信号是：触发后无有效回收、或短时间重复触发。</b></p>
+	<table>
+		<tr><th>指标</th><th>含义</th></tr>
+		<tr><td>触发次数 / 请求数</td><td>基线频率（观测，不判失败）</td></tr>
+		<tr><td>触发后成功回收 token 数</td><td>触发是否产生了实际收益</td></tr>
+		<tr><td>触发后重复触发率</td><td><b>核心故障信号</b>：回收无效、问题未解决</td></tr>
+		<tr><td>steady_target 与 native_threshold 同时命中比例</td><td>区分稳态自身压力与全局压力</td></tr>
+		<tr><td>触发导致的用户可见暂停次数</td><td>体验成本</td></tr>
+		<tr><td>触发前后 cache read rate</td><td>冷启动代价（对照 9.5M token 基线）</td></tr>
+	</table>
+	<p>用户可见一行状态（"已整理较早的历史，正在从摘要继续"）保留；触发时须校验当前 user/tool loop 仍在场（并入断言口径）。</p>
+</div>
+
+<h3>3.3 记忆可得性观测</h3>
+<div class="panel ws">
+	<p>维持 v1：checkpoint 与 digest 同时缺席时审计记"历史代表降级到 recall-only"；<code>memoryCandidates</code> 仍不自动 retain。与 3.1 共用审计通道。</p>
+</div>
+
+<h2>4 · WS2：缓存命中率（P2）</h2>
+
+<h3>4.1 位置钉死（维持 v1）</h3>
+<div class="panel ws">
+<div class="flow">turn N   payload = [历史…, <u>plan_N</u>, user_N, 工具循环…]      ← 公共前缀止于 plan_N 旧位置
+目标      payload = [<i>plan_epoch(冻结)</i>, kept历史…, user_N, …, user_{N+1}, …]  ← 前缀跨 turn 单调增长</div>
+	<p>注入点从 <code>findLastIndex(role === "user")</code> 改为 active scope 头部（firstKeptEntryId 对应消息之前）。<b>测试必须针对最终 provider-bound payload</b>（过完 responseDocuments.project 与 provider transform 之后），不能只测 materialize 的中间数组——防止 plan 被后续 transform 再次移动而不自知。</p>
+</div>
+
+<h3>4.2 epoch 冻结的边界契约<span class="tag">v2 修订：事件表 + gate/快照分离</span></h3>
+<div class="panel ws">
+	<p><b>冻结范围</b>：材料集合、tier、渲染字节<b>三者全部</b>，epoch 内一致。</p>
+	<p><b>epoch 边界事件表</b>（写成测试，不留给实现者临场判断）：</p>
+	<table>
+		<tr><th>事件</th><th>epoch</th><th>说明</th></tr>
+		<tr><td>新增普通 user/assistant/tool entry</td><td class="good">不变</td><td>历史代表材料不重选——这是本设计的核心目的</td></tr>
+		<tr><td>新 checkpoint 落库</td><td class="warn">新 epoch</td><td>rebaseReason = checkpoint</td></tr>
+		<tr><td>物理 compaction</td><td class="warn">新 epoch</td><td>rebaseReason = budget_pressure；scope 头部移动</td></tr>
+		<tr><td>明确 topic shift</td><td class="warn">新 epoch</td><td>rebaseReason = topic_shift</td></tr>
+		<tr><td>model / context-window 变化</td><td class="warn">新 epoch</td><td>渲染依赖 window 推导；现状 <code>#contextSteadyPlanInputsChanged</code> 会失效——归入 epoch 事件而非每次重算</td></tr>
+		<tr><td>non-message budget 变化</td><td class="dim">gate 重算，epoch 不变</td><td>见下方分离规则</td></tr>
+		<tr><td>hard pressure recovery</td><td class="warn">新 epoch</td><td>恢复即压缩，scope 重排</td></tr>
+	</table>
+	<p><b>gate / 快照分离规则（评审点 3 的核心）</b>：每个请求<b>允许</b>动态重算 gate 类数值（projectedInputTokens、压力判定、是否跨 controlMax、emergency stub 档）；<b>不允许</b>因此重选历史材料。落点：<code>#refreshContextSteadyPlanForProviderCall</code> 的重建分支拆成两条路径——gate 超限走"gate 重算 + 材料沿用 epoch 快照"，只有 epoch 事件表命中才走"材料重选"。否则会出现"看起来冻结、实际每次 tool-loop 因 projected input 变化重建 plan"。</p>
+	<p><b>基线事实</b>（已核实）：<code>#contextSteadyEpochId()</code> 由最近 rebase checkpoint + reason 派生，不含 current leaf，是正确起点；<code>#contextSteadyPlanInputsChanged()</code> 的失效三元组（compaction / contextWindow / nonMessageTokens）需要按上表重新归类。</p>
+	<p><b>附不变量</b>：plan 审计 entry 永不成为 digest span 的 toEntryId（<code>resolveDigestToEntryId</code> 现已偏好 message/custom_message，固化为测试）。</p>
+</div>
+
+<h3>4.3 同批落地约束（维持 v1）</h3>
+<div class="panel ws">
+	<p>只钉位不冻结字节会把失效点挪到头部（更糟）；只冻结不钉位前缀仍被切断。feature flag 默认关闭或仅 dogfood；同批原子提交。</p>
+</div>
+
+<h3>4.4 stable / volatile 边界契约<span class="tag">v2 新增：接口先行，避免先锁后拆</span></h3>
+<div class="panel decision">
+	<p><b>现在就定死边界，M2 直接按最终架构实现</b>（消除 v1 里"M2 冻结 recall、M3 再拆"的返工）：</p>
+	<table>
+		<tr><th></th><th>stable plan</th><th>volatile 通道</th></tr>
+		<tr><td>内容</td><td>checkpoint / digest（历史代表）</td><td>recall / 与当前 prompt 相关的即时上下文</td></tr>
+		<tr><td>生命周期</td><td>epoch 级冻结</td><td>每请求可变</td></tr>
+		<tr><td>位置</td><td>scope 头部（冻结前缀首条）</td><td>冻结前缀之后、当前 user 之前</td></tr>
+		<tr><td>coverage 权</td><td>有</td><td><b>永远没有</b>；两侧永不能互相授权</td></tr>
+		<tr><td>估算/注入/剥离</td><td colspan="2">各自独立；token 估算、注入、剥离互不耦合</td></tr>
+	</table>
+	<p><b>volatile 通道的接线清单</b>（少接一条就出现估算与真实 payload 漂移）：独立 custom type；剥离纳入<b>所有</b>路径——实时 transform、transcript rebuild、status/compaction estimate、最终 provider conversion；recall 失败/为空/backend 不可用时<b>静默降级</b>，不影响冻结 plan 与 raw history 保留。现有 <code>stripPriorDerivedPlanMessages()</code> 只认 <code>san.context_packet.injected</code> 与 <code>san.context_plan.injected</code>，新类型须全部补齐。</p>
+</div>
+
+<h2>5 · WS3 / WS4：省 token（P3）</h2>
+
+<h3>5.1 projection 净收益门控<span class="tag">v2 修订：差值公式 + 排除清单</span></h3>
+<div class="panel ws">
+	<p><b>公式（修订版）</b>：</p>
+<div class="flow">netBenefit = rawProjectedTokens − projectedTokensAfterReplacement − replacementWireOverhead</div>
+	<p>必须在<b>最终 provider projection 后</b>测量，不能用"全部 covered entry token 之和"（会把本就不进 payload 的、已被 stub 的、protected 的都算成收益）。天然挂点：<code>#buildContextSteadyPlanForProvider</code> 的定长不动点迭代已经在反复测投影，差值在这里顺手可得。</p>
+	<p><b>排除清单</b>：protected exact/live refs；未实际出现在原始 payload 的 refs；fallback digest 贡献的 coverage；重复 coverage；仅被 stub 替换（未被省略）的 tool result；plan 自身的 budget/reason/refs 包装开销（计入 wire 侧）。</p>
+	<p><b>"整包不注入"的精确语义（修订）</b>：只撤销 <b>derived replacement</b>（coverage 授权与 plan 消息注入）；当前 user、工具调用、必要审计、volatile recall 通道<b>不受影响</b>。≤ 0 时不注入 = fail-safe 行为，与 3.1 断言自然兼容（无覆盖授权 → 无孤儿）。</p>
+</div>
+
+<h3>5.2 上轮 review 遗留小项（维持 v1）</h3>
+<div class="panel ws">
+	<p>omitted reason 区分"预算不够/相关性排除"；恢复路径 digest 年龄淘汰顺序；digest 物料构造两处重复合并。</p>
+</div>
+
+<h3>5.3 WS4：图片 / 文件 / 大段输出的投影策略<span class="tag">v2 新增：评审点 6</span></h3>
+<div class="panel ws">
+	<p>省 token 的大头不在 planner material，在图片、文件内容和大段工具输出。三种 projection policy：</p>
+	<table>
+		<tr><th>类别</th><th>策略</th><th>约束</th></tr>
+		<tr><td>image</td><td>原始 image block → 缩略描述 / 引用</td><td>不能按字符/token 估算一刀切；区分原始 block、描述、文件快照引用三态</td></tr>
+		<tr><td>file content</td><td>→ 有界摘录 + 可重读引用（path / hash-line 锚点）</td><td><b>引用必须可重新验证</b>，不可把无法验证的摘要当原文替代</td></tr>
+		<tr><td>tool output</td><td>→ stub / 可展开引用（"保留最近结果、旧结果 stub"）</td><td>复用既有 superseded/emergency stub 机制并推广</td></tr>
+	</table>
+	<p><b>统一约束</b>：卸载只改 provider projection、永不改 journal；一切卸载必须通过 3.1 的同一 orphan/coverage 审计（stubbedRefs / coveredRefs 类别正是为它准备的）。与 superseded stub 的差别要写清：stub 是"同消息降级"，这里是"整块内容形态置换"。</p>
+	<p><b>立项位置</b>：M4（依赖 3.1 断言先行），不阻塞 M1〜M3。</p>
+</div>
+
+<h2>6 · 里程碑（v2 修订）</h2>
+
+<table>
+	<tr><th>里程碑</th><th>内容</th><th>验收标准</th><th>风险</th></tr>
+	<tr><td><b>M1</b></td><td>WS1 全部 + WS3.1/3.2 + <b>§4.4 接口契约定义</b></td><td>可投影 entry 零 orphan（且旧代码能报出 D2）；coverage 校验失败时 raw 保留；fallback digest 永不授权删除；net benefit ≤ 0 时 derived replacement 不注入（user/tool/审计不受影响）；steady_target 有计数、有原因、有回收结果——<b>触发次数本身不判失败</b>；volatile 通道接口与剥离路径清单评审通过</td><td>极低——只增不改行为</td></tr>
+	<tr><td><b>M2</b></td><td>WS2.1 + 4.2 + 4.3 + <b>4.4 volatile 通道实现</b>（直接按最终架构，无先锁后拆）</td><td>最终 provider payload 公共前缀字节级测试通过；epoch 内材料集合 / tier / renderedContent 三项均不变；4.2 事件表逐行有测试；feature flag 默认关闭或 dogfood 灰度；dogfood cacheRead 对比提升</td><td>中——原子提交 + flag + 灰度</td></tr>
+	<tr><td><b>M3</b></td><td>打磨：分层指标看板、transcript rebuild 路径核对</td><td>volatile 通道在 rebuild/estimate/conversion 各路径估算一致；分层指标在 san stats 详情页可查</td><td>低</td></tr>
+	<tr><td><b>M4</b></td><td>WS4 三种 projection policy</td><td>每类卸载过同一 orphan 审计；文件引用可重读可验证；dogfood 大输出场景 token 对比</td><td>中——内容形态置换，需逐类灰度</td></tr>
+</table>
+
+<div class="panel">
+	<p><b>非目标</b>（维持）：摘要模型配置校验自动化（配置层另行处理）；compaction 子系统重构（只做交棒显式化与分层指标）。M4 的 image policy 不做视觉模型调用，只做投影置换。</p>
+</div>
+
+<h2>7 · 涉及文件（v2 增补）</h2>
+<table>
+	<tr><th>文件</th><th>改动</th></tr>
+	<tr><td><code>context-steady/materialize.ts</code></td><td>3.1 断言（六分类）、4.1 注入位置、4.4 volatile 剥离类型</td></tr>
+	<tr><td><code>context-steady/planner.ts</code></td><td>5.1 净收益门控、4.2 epoch 冻结、5.2 小项</td></tr>
+	<tr><td><code>session/agent-session.ts</code></td><td>3.2 分层指标与用户态、4.2 gate/快照双路径（<code>#refreshContextSteadyPlanForProviderCall</code> 拆分）、断言/门控调用点、4.4 各路径接线</td></tr>
+	<tr><td><code>packages/stats</code></td><td>steady_target 分层聚合、orphan 六分类计数（详情页）</td></tr>
+	<tr><td><code>test/context-steady/</code></td><td>断言基线、provider payload 前缀字节测试、epoch 事件表逐行测试、净收益排除清单用例、真实 replay 回归</td></tr>
+</table>
+
+<footer>
+	San · Context Steady 稳定性调研与修复方案 v2 · 2026-08-22 · 分支 tmp/reliability-commit-20260817 · v1 基于外部评审六条意见修订，全部采纳 · 相关：context-steady-data-structures-20260822 / own-plan-20260821 / review-20260821
+</footer>
+
+</div>
+</body>
+</html>

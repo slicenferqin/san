@@ -81,7 +81,7 @@ export function evaluateContextPlanQualityGate(options: ContextPlanQualityGateOp
 		let reclaimed = 0;
 		// sourceIndex.toolPairs 按 journal 顺序收集,天然 oldest-first。
 		for (const pair of options.sourceIndex.toolPairs) {
-			if (reclaimed > deficit) break;
+			if (reclaimed >= deficit) break;
 			if (!pair.complete || pair.resultEntryId === undefined) continue;
 			if (pair.entryIds.some(entryRef => protectedRefs.has(entryRef))) continue;
 			const resultTokens = Math.max(0, Math.floor(options.tokenEstimateByEntryRef?.get(pair.resultEntryId) ?? 0));
@@ -91,7 +91,7 @@ export function evaluateContextPlanQualityGate(options: ContextPlanQualityGateOp
 			stubbed.push(pair.resultEntryId);
 			reclaimed += reclaimable;
 		}
-		if (reclaimed > deficit && stubbed.length > 0) {
+		if (reclaimed >= deficit && stubbed.length > 0) {
 			emergencyStubEntryRefs = stubbed;
 			emergencyStubReclaimedTokens = reclaimed;
 			reasons.push("emergency_tool_stub_downgrade");

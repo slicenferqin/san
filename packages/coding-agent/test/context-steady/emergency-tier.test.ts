@@ -80,6 +80,31 @@ describe("quality gate emergency downgrade", () => {
 		expect(gate.emergencyStubReclaimedTokens).toBeGreaterThan(5_000);
 	});
 
+	test("downgrades when emergency stubs exactly cover the projected deficit", () => {
+		const sourceIndex = sourceIndexWithPairs(
+			[
+				{ toolCallId: "tc-1", resultEntryId: "r1", entryIds: ["a1", "r1"] },
+				{ toolCallId: "tc-2", resultEntryId: "r2", entryIds: ["a2", "r2"] },
+			],
+			["u-now"],
+		);
+		const gate = evaluateContextPlanQualityGate({
+			sourceIndex,
+			currentPromptEntryRefs: ["u-now"],
+			// The first stub costs 40 tokens, so it reclaims exactly the
+			// 100-token overflow. Selection must stop before the second pair.
+			tokenEstimateByEntryRef: new Map([
+				["r1", 140],
+				["r2", 1_000],
+			]),
+			projectedInputTokens: 120_100,
+			...GATE_BUDGET,
+		});
+		expect(gate.outcome).toBe("burst_required");
+		expect(gate.emergencyStubEntryRefs).toEqual(["r1"]);
+		expect(gate.emergencyStubReclaimedTokens).toBe(100);
+	});
+
 	test("stays hard_pressure when reclaimable outputs cannot cover the deficit", () => {
 		const sourceIndex = sourceIndexWithPairs(
 			[{ toolCallId: "tc-1", resultEntryId: "r1", entryIds: ["a1", "r1"] }],

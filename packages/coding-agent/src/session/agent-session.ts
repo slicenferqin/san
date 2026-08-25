@@ -227,7 +227,7 @@ import {
 } from "../config/settings";
 import { resolveDialect } from "../config/tool-dialect";
 import { resolveContextPlanBudget } from "../context-steady/budget";
-import { appendContextCheckpoint, buildContextCheckpoint } from "../context-steady/checkpoint";
+import { appendContextCheckpoint, buildContextCheckpoint, latestContextCheckpoint } from "../context-steady/checkpoint";
 import {
 	appendActiveContinuationState,
 	buildActiveContinuationState,
@@ -238,13 +238,24 @@ import {
 import { generateDigest as generateContextSteadyDigest } from "../context-steady/digest";
 import { type ContextExpandResult, expandDigestSpan } from "../context-steady/expand";
 import { generateFallbackDigest } from "../context-steady/fallback";
-import { estimateContextPlanProjectedTokens, materializeContextPlanMessages } from "../context-steady/materialize";
+import {
+	auditProjectionCoverage,
+	buildContextRecallMessage,
+	contextWireSequenceTokens,
+	estimateContextPlanProjectedTokens,
+	materializeContextPlanMessages,
+	wireSequencePrefixRetained,
+} from "../context-steady/materialize";
 import {
 	type BuiltContextPlan,
 	CONTEXT_PLAN_CUSTOM_TYPE,
 	type ContextPlanGoalAnchorInput,
 } from "../context-steady/plan-types";
-import { type BuildContextPlanOptions, buildContextPlan } from "../context-steady/planner";
+import {
+	applyContextPlanNetBenefitGate,
+	type BuildContextPlanOptions,
+	buildContextPlan,
+} from "../context-steady/planner";
 import {
 	appendContextProbeRecord,
 	type BuildContextProbeSnapshotOptions,
@@ -942,8 +953,13 @@ type CompactionCheckResult = Readonly<{
 
 interface ToolLoopBudgetRecoveryResult {
 	plan?: BuiltContextPlan;
+	sourceMessages?: AgentMessage[];
 	failureStage?: ContextMaintenanceAudit["failureStage"];
 	failureReason?: string;
+}
+interface ToolLoopPlanRefreshResult {
+	plan?: BuiltContextPlan;
+	sourceMessages?: AgentMessage[];
 }
 
 interface ContextSummaryAuthorityResolution {
@@ -2509,6 +2525,10 @@ export class AgentSession {
 		  }
 		| undefined = undefined;
 	#contextSteadyRequestPlan: BuiltContextPlan | undefined = undefined;
+	/** Stable-projection mode: per-request volatile recall message (independent of the plan). */
+	#contextSteadyRecallMessage: AgentMessage | undefined = undefined;
+	/** Monotonic counter for explicit topic-shift epoch boundaries (stable-projection mode). */
+	#contextSteadyTopicShiftEpoch = 0;
 	#contextSteadyGlobalInjectionAllowed = true;
 	/** Survives turn end so idle status/compaction can share the last plan snapshot. */
 	#contextSteadyLastPlan: BuiltContextPlan | undefined = undefined;
@@ -2523,7 +2543,16 @@ export class AgentSession {
 	#contextSteadyMaintenanceId: string | undefined;
 	#contextSteadyRecoveryAttempt = 0;
 	#contextProbeWrite: Promise<void> = Promise.resolve();
-	#contextProbeLastPrefixFingerprint: { sessionId: string; value: string } | undefined;
+	#contextProbeLastPrefixFingerprint: { promptCacheKey: string; value: string } | undefined;
+	/**
+	 * Content digests of the last main-turn sequence handed to the provider,
+	 * plus whether that hand-off still retained the previous main-turn sequence
+	 * as a prefix. Main-turn lineage only: side requests (ephemeral turns,
+	 * handoff, dumps) convert through the same pipeline but must not rewrite
+	 * this state — their projections are a different request lineage and a
+	 * session-global field would attribute one request's churn to another.
+	 */
+	#contextProbeAgentWireSequence: { tokens: string[]; prefixRetained: boolean } | undefined;
 	#contextProbeActiveMaintenanceDecision: ContextProbeMaintenanceDecision | undefined;
 	#contextProbeActiveCompaction: ContextProbeCompactionObservation | undefined;
 	#sessionStopContinuationCount = 0;
@@ -3110,7 +3139,7 @@ export class AgentSession {
 		this.#presentationPinnedToolNames = config.presentationPinnedToolNames;
 		this.#ensureWriteRegistered = config.ensureWriteRegistered;
 		this.#transformContext = config.transformContext ?? (messages => messages);
-		this.agent.setTransformContext((messages, signal) => this.#transformContextForProvider(messages, signal));
+		this.agent.setTransformContext((messages, signal) => this.#transformContextForProvider(messages, signal, true));
 		this.#transformProviderContext = config.transformProviderContext;
 		this.#sideStreamFn = config.sideStreamFn ?? streamSimple;
 		this.#advisorStreamFn = config.advisorStreamFn;
@@ -4195,7 +4224,12 @@ export class AgentSession {
 					undefined,
 					undefined,
 					{
-						thinkingLevel: advisorCompactionThinkingLevel,
+						thinkingLevel: this.#resolveCompactionThinkingLevel(
+							advisorModel,
+							candidate,
+							availableModels,
+							advisorCompactionThinkingLevel,
+						),
 						convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 						telemetry,
 						tools: agent.state.tools,
@@ -5796,12 +5830,17 @@ export class AgentSession {
 					},
 				};
 				const digestModelRole = steadySettings.digest.llm.modelRole || "@smol";
-				const resolvedDigestModel = steadySettings.digest.llm.enabled
-					? resolveModelOverride([digestModelRole], this.#modelRegistry, settings).model
+				const digestModelOverride = steadySettings.digest.llm.enabled
+					? resolveModelOverride([digestModelRole], this.#modelRegistry, settings)
+					: undefined;
+				const resolvedDigestModel = digestModelOverride?.model;
+				const digestThinkingLevel = digestModelOverride?.explicitThinkingLevel
+					? concreteThinkingLevel(digestModelOverride.thinkingLevel)
 					: undefined;
 				const digestModel = resolvedDigestModel
 					? {
 							model: resolvedDigestModel,
+							thinkingLevel: digestThinkingLevel,
 							apiKey: this.#modelRegistry.resolver(resolvedDigestModel, this.sessionId),
 							metadata: this.agent.metadataForProvider(resolvedDigestModel.provider),
 							obfuscator: this.#obfuscator,
@@ -9158,31 +9197,92 @@ export class AgentSession {
 
 	/** Convert session messages using the same pre-LLM pipeline as the active session. */
 	async convertMessagesToLlm(messages: AgentMessage[], signal?: AbortSignal): Promise<Message[]> {
-		const transformedMessages = await this.#transformContextForProvider(messages, signal);
+		// Side-lineage conversion (ephemeral turns, handoff, dumps): the wire
+		// sequence recorder stays off so these projections never rewrite the
+		// main turn's "already shipped" state.
+		const transformedMessages = await this.#transformContextForProvider(messages, signal, false);
 		return await this.#convertToLlm(transformedMessages);
 	}
 
-	async #transformContextForProvider(messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> {
+	async #transformContextForProvider(
+		messages: AgentMessage[],
+		signal?: AbortSignal | undefined,
+		recordWireSequence?: boolean,
+	): Promise<AgentMessage[]> {
 		const transformedMessages = await this.#transformContext(messages, signal);
 		const responseProjectedMessages = this.#responseDocuments.project(transformedMessages);
 		if (!this.#contextSteadyIsActive(this.#estimateFullProviderInputTokens(responseProjectedMessages))) {
-			return responseProjectedMessages;
+			return this.#recordProviderWireSequence(responseProjectedMessages, recordWireSequence);
 		}
-		if (!this.#contextSteadyPlanEnabled()) return responseProjectedMessages;
+		if (!this.#contextSteadyPlanEnabled()) {
+			return this.#recordProviderWireSequence(responseProjectedMessages, recordWireSequence);
+		}
 		// Re-gate every provider call (including tool-loop steps) against live tail growth.
-		const plan = await this.#refreshContextSteadyPlanForProviderCall(responseProjectedMessages);
+		const refresh = await this.#refreshContextSteadyPlanForProviderCall(responseProjectedMessages);
+		const plan = refresh?.plan;
+		let materializationMessages = transformedMessages;
+		if (refresh?.sourceMessages) {
+			// Auto-compaction replaces the Agent state while this transform is in
+			// flight. Rebase the live agent-loop array as well as this request's
+			// projection; otherwise the next tool-loop iteration would resurrect
+			// the discarded pre-compaction history from its local snapshot.
+			if (recordWireSequence === true) {
+				messages.splice(0, messages.length, ...refresh.sourceMessages);
+				materializationMessages = await this.#transformContext(messages, signal);
+			} else {
+				materializationMessages = await this.#transformContext(refresh.sourceMessages, signal);
+			}
+		}
 		if (plan) {
 			// Materialize against the original transcript so Context Plan coverage
 			// can still match branch message identity/content, then project any
 			// surviving response documents at the final provider boundary.
 			const plannedMessages = materializeContextPlanMessages(
-				transformedMessages,
+				materializationMessages,
 				this.sessionManager.getBranch(),
 				plan,
+				this.#contextSteadyRecallMessage,
 			);
-			return this.#responseDocuments.project(plannedMessages);
+			// End-to-end orphan audit: every projectable scope entry must be present,
+			// stubbed, or covered. Never throws in production — a violation is a loud
+			// log signal, not a broken request.
+			const projectionAudit = auditProjectionCoverage(plannedMessages, this.sessionManager.getBranch(), plan);
+			if (projectionAudit.missingProjectableRefs.length > 0 || projectionAudit.invalidCoverage.length > 0) {
+				logger.error("ContextPlan projection orphaned projectable entries", {
+					sessionId: this.sessionId,
+					planId: plan.audit.planId,
+					missingProjectableRefs: projectionAudit.missingProjectableRefs,
+					invalidCoverage: projectionAudit.invalidCoverage,
+					withdrawn: plan.withdrawn === true,
+				});
+			}
+			return this.#recordProviderWireSequence(this.#responseDocuments.project(plannedMessages), recordWireSequence);
 		}
-		return responseProjectedMessages;
+		return this.#recordProviderWireSequence(responseProjectedMessages, recordWireSequence);
+	}
+
+	/**
+	 * Capture the sequence actually handed to the provider, on every exit from
+	 * projection, so the probe sees the shipped bytes rather than the plan text.
+	 * Each exit ships a different array — steady-inactive, plan-disabled, and
+	 * materialized — so all three record through here.
+	 *
+	 * Records prefix *retention* against the previous main-turn hand-off:
+	 * appending to the tail keeps a provider cache warm, and only a rewrite of
+	 * an already-sent message forces a cold prefill. `recordWireSequence` is
+	 * set only on the main-turn agent path; side-lineage conversions (ephemeral
+	 * turns, handoff, /dump) pass through untouched so they can neither consume
+	 * nor overwrite the main turn's shipped-wire state.
+	 */
+	#recordProviderWireSequence(messages: AgentMessage[], record?: boolean): AgentMessage[] {
+		if (record !== true || this.settings.get("san.contextSteady.probe.enabled") !== true) return messages;
+		const tokens = contextWireSequenceTokens(messages);
+		const previous = this.#contextProbeAgentWireSequence;
+		this.#contextProbeAgentWireSequence = {
+			tokens,
+			prefixRetained: previous ? wireSequencePrefixRetained(previous.tokens, tokens) : true,
+		};
+		return messages;
 	}
 
 	/** Apply session-level stream hooks to a direct side request. */
@@ -9618,7 +9718,7 @@ export class AgentSession {
 		const contract = runtime.getScope(scopeId)?.snapshot().objectiveContract;
 		if (!contract) return undefined;
 		const entry = this.sessionManager.getBranch().find(item => item.id === contract.authoritativeUserTurnId);
-		if (!entry || entry.type !== "message" || entry.message.role !== "user") return undefined;
+		if (entry?.type !== "message" || entry.message.role !== "user") return undefined;
 		const objective = customMessageContentText(entry.message.content).trim();
 		if (!objective) return undefined;
 		const todoLines: string[] = [];
@@ -10273,9 +10373,31 @@ export class AgentSession {
 		return `epoch_${this.sessionId}_${reasonTag}_${rebase}`.slice(0, 140);
 	}
 
+	/**
+	 * Stable-projection epoch key: changes exactly on the epoch-boundary events —
+	 * new rebase checkpoint, physical compaction, model/context-window change, or
+	 * an explicit topic shift. Ordinary turns and non-message budget drift keep
+	 * the key so the frozen plan artifact stays reusable across turns. The
+	 * checkpoint leg reads the journal directly: a freshly appended checkpoint
+	 * flips the epoch regardless of rebase side-effect ordering.
+	 */
+	#contextSteadyStableEpochKey(): string {
+		const branch = this.sessionManager.getBranch();
+		const latestCompaction = getLatestCompactionEntry(branch);
+		const latestCheckpoint = latestContextCheckpoint(branch);
+		return [
+			latestCheckpoint?.entryId ?? "base",
+			latestCompaction?.id ?? "none",
+			String(this.model?.contextWindow ?? 0),
+			String(this.#contextSteadyTopicShiftEpoch),
+		].join("|");
+	}
+
 	#contextSteadyActivePlan(): BuiltContextPlan | undefined {
 		const plan = this.#contextSteadyRequestPlan ?? this.#contextSteadyLastPlan;
-		return plan && !this.#contextSteadyPlanInputsChanged(plan) ? plan : undefined;
+		return plan && !this.#contextSteadyPlanInputsChanged(plan, { relaxed: plan.projectionMode === "pinned" })
+			? plan
+			: undefined;
 	}
 
 	/**
@@ -10345,12 +10467,36 @@ export class AgentSession {
 		);
 	}
 
-	#contextSteadyPlanInputsChanged(plan: BuiltContextPlan): boolean {
+	#contextSteadyPlanInputsChanged(plan: BuiltContextPlan, options?: { relaxed?: boolean }): boolean {
 		const sourceEntryIds = new Set(plan.sourceIndex.entryIds);
 		const latestCompaction = getLatestCompactionEntry(this.sessionManager.getBranch());
 		if (latestCompaction && !sourceEntryIds.has(latestCompaction.id)) return true;
 		if (plan.audit.budget.contextWindow !== (this.model?.contextWindow ?? 0)) return true;
+		// Relaxed (stable-projection): non-message budget drift re-runs gates
+		// without invalidating the frozen epoch artifact.
+		if (options?.relaxed === true) return false;
 		return plan.audit.budget.nonMessageTokens !== computeNonMessageTokens(this);
+	}
+
+	/**
+	 * Stable-projection epoch reuse: within one epoch the plan artifact —
+	 * material set, tiers, rendered bytes — is frozen and reused verbatim
+	 * across turns. Gate dynamics are re-checked on every provider call by the
+	 * refresh path; only epoch-boundary events (see #contextSteadyStableEpochKey)
+	 * re-lay the plan out.
+	 */
+	#contextSteadyFrozenEpochPlan(): BuiltContextPlan | undefined {
+		// Pending semantic rebases must invalidate the frozen artifact first; otherwise a hard-pressure or resume boundary can be hidden by the previous epoch plan.
+		if (this.#contextSteadyPendingResumeRebase || this.#contextSteadyPendingBudgetPressureRebase) return undefined;
+		const candidate = this.#contextSteadyRequestPlan ?? this.#contextSteadyLastPlan;
+		if (candidate?.projectionMode !== "pinned") return undefined;
+		// A withdrawn plan ships nothing; freezing it would pin "no plan" for the
+		// whole epoch even after coverage grows. Re-evaluate each turn instead.
+		if (candidate.withdrawn === true) return undefined;
+		if (candidate.epochKey === undefined) return undefined;
+		if (candidate.epochKey !== this.#contextSteadyStableEpochKey()) return undefined;
+		if (this.#contextSteadyPlanInputsChanged(candidate, { relaxed: true })) return undefined;
+		return candidate;
 	}
 
 	/**
@@ -10422,8 +10568,10 @@ export class AgentSession {
 
 	/**
 	 * Rendered ContextPlans include their projected-input audit, so that audit can
-	 * change the final wire size. Rebuild until the recorded projection equals
-	 * the final wire estimate; fail closed if it cannot settle promptly.
+	 * change the final wire size. Rebuild until the recorded projection equals the
+	 * final wire estimate; fail closed if it cannot settle promptly. The net-benefit
+	 * gate participates in the fixed point: a withdrawn plan ships raw history, so
+	 * the convergence target is the post-gate wire size, not the ungated estimate.
 	 */
 	#buildContextSteadyPlanForProvider(
 		commonOptions: Omit<BuildContextPlanOptions, "projectedInputTokens">,
@@ -10431,15 +10579,27 @@ export class AgentSession {
 		planningEntries: readonly SessionEntry[],
 		mode: "pending" | "full" = "pending",
 	): BuiltContextPlan {
+		const rawProjectedTokens = this.#estimateMaterializedProjectedInputTokens(messages, planningEntries, null, mode);
+		const gate = (candidate: BuiltContextPlan): BuiltContextPlan =>
+			applyContextPlanNetBenefitGate(candidate, {
+				rawProjectedTokens,
+				projectedTokens: this.#estimateMaterializedProjectedInputTokens(messages, planningEntries, candidate, mode),
+			});
+		const shippedTokens = (candidate: BuiltContextPlan): number =>
+			candidate.withdrawn === true ? rawProjectedTokens : candidate.audit.netBenefit!.projectedTokens;
+
 		let plan = buildContextPlan(commonOptions);
-		let projectedInputTokens = this.#estimateMaterializedProjectedInputTokens(messages, planningEntries, plan, mode);
+		let projectedInputTokens = shippedTokens(gate(plan));
 		for (let attempt = 0; attempt < 4; attempt++) {
 			plan = buildContextPlan({ ...commonOptions, projectedInputTokens });
-			const finalProjection = this.#estimateMaterializedProjectedInputTokens(messages, planningEntries, plan, mode);
-			if (finalProjection === projectedInputTokens) return plan;
-			projectedInputTokens = finalProjection;
+			const gated = gate(plan);
+			const shipped = shippedTokens(gated);
+			if (shipped === projectedInputTokens) return gated;
+			projectedInputTokens = shipped;
 		}
-		return buildContextPlan({ ...commonOptions, projectedInputTokens: Number.MAX_SAFE_INTEGER });
+		// Fail-closed fallback pressures the gate into hard_pressure, which is
+		// never withdrawn — the shipped size then equals the ungated estimate.
+		return gate(buildContextPlan({ ...commonOptions, projectedInputTokens: Number.MAX_SAFE_INTEGER }));
 	}
 
 	async #buildContextSteadyRequestPlan(
@@ -10453,6 +10613,11 @@ export class AgentSession {
 		const persistAudit = options?.persistAudit !== false;
 		const throwOnHardPressure = options?.throwOnHardPressure !== false;
 		const recall = options?.liveTailOnly ? undefined : await this.#buildContextSteadyRecallLayer(expandedText);
+		const stableProjection = this.#contextSteadyStableProjection();
+		// Volatile recall channel: per-request rendered message, independent of
+		// the frozen plan; ships even when the plan itself is withdrawn.
+		this.#contextSteadyRecallMessage =
+			stableProjection && recall && recall.items.length > 0 ? buildContextRecallMessage(recall) : undefined;
 		const branchEntries = this.sessionManager.getBranch();
 		const activeScope = this.#contextSteadyActivePlanningEntries(branchEntries);
 		const rebaseBoundary = this.#contextSteadyRebaseBoundary(activeScope.entries);
@@ -10468,6 +10633,13 @@ export class AgentSession {
 			tokenEstimateByEntryRef,
 		);
 		const topicShift = expandedText.trim().length > 0 && isTopicShiftPrompt(expandedText);
+		// Explicit topic shift is an epoch boundary: bump before the frozen-reuse
+		// check so this turn re-lays the plan out while subsequent turns freeze.
+		if (stableProjection && topicShift) this.#contextSteadyTopicShiftEpoch += 1;
+		if (stableProjection) {
+			const frozen = this.#contextSteadyFrozenEpochPlan();
+			if (frozen) return frozen;
+		}
 		// Pending semantic reasons outrank a stale checkpoint boundary so resume /
 		// topic_shift / budget_pressure remain auditable after checkpoints exist.
 		const pendingReason: ContextCheckpointRebaseReason | undefined = this.#contextSteadyPendingResumeRebase
@@ -10495,6 +10667,11 @@ export class AgentSession {
 			nonMessageTokens: computeNonMessageTokens(this),
 			recall,
 			maxDigestMaterials: this.#contextSteadyRecentDigests(),
+			...(stableProjection ? { stableProjection: true } : {}),
+			...(this.#contextSteadyToolOutputOffload()
+				? { toolOutputOffload: this.#contextSteadyToolOutputOffload() }
+				: {}),
+			...(this.#contextSteadyImageOffload() ? { offloadAgedImages: true } : {}),
 			baseRequiredEntryRefs: this.#contextSteadySemanticRequiredEntryRefs(
 				planningEntries,
 				new Set(currentPromptEntryRefs),
@@ -10513,6 +10690,7 @@ export class AgentSession {
 			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
 		};
 		const plan = this.#buildContextSteadyPlanForProvider(commonOptions, messages, planningEntries);
+		if (stableProjection) plan.epochKey = this.#contextSteadyStableEpochKey();
 		if (plan.audit.qualityGate.outcome === "hard_pressure") {
 			this.#contextSteadyPendingBudgetPressureRebase = true;
 			// Persist the refused prompt + audit, and sync active agent context so the
@@ -10555,11 +10733,8 @@ export class AgentSession {
 		}
 		if (rebaseBoundary) this.#applyContextSteadySafeRebase(rebaseBoundary);
 		else if (pendingReason === "topic_shift" || pendingReason === "resume" || pendingReason === "budget_pressure") {
-			// Safe rebase without a new checkpoint: rotate provider session for semantic boundary.
-			this.#closeAllProviderSessions(`context steady ${pendingReason} rebase`);
-			this.#freshProviderSessionId = Bun.randomUUIDv7();
-			this.#syncAgentSessionId();
-			this.agent.appendOnlyContext?.invalidateForModelChange();
+			// Safe rebase without a new checkpoint: same semantic boundary, same chain reset.
+			this.#rebaseProviderSessionForContextSteady(pendingReason);
 		}
 		if (pendingReason === "resume") this.#contextSteadyPendingResumeRebase = false;
 		if (pendingReason === "budget_pressure") this.#contextSteadyPendingBudgetPressureRebase = false;
@@ -10654,76 +10829,41 @@ export class AgentSession {
 	 * Tool-loop re-gate: rebuild plan from current branch + live messages when
 	 * projected full input would cross control/burst bands or the plan's inputs
 	 * changed. Freezes old-history selection from the request-start plan only
-	 * while the source history and non-message context are unchanged.
+	 * while the source history and non-message context are unchanged. In
+	 * stable-projection mode a pressure rebuild pins the epoch-frozen digest /
+	 * checkpoint materials so gates re-run without reselecting the history
+	 * representation.
 	 */
 	async #refreshContextSteadyPlanForProviderCall(
 		messages: readonly AgentMessage[],
-	): Promise<BuiltContextPlan | undefined> {
+	): Promise<ToolLoopPlanRefreshResult | undefined> {
 		const existing = this.#contextSteadyRequestPlan;
 		if (!existing) return undefined;
 		const branchEntries = this.sessionManager.getBranch();
-		const activeScope = this.#contextSteadyActivePlanningEntries(branchEntries);
 		// Tool-loop: `messages` is already the full transformed provider context.
 		const projected = this.#estimateMaterializedProjectedInputTokens(messages, branchEntries, existing, "full");
 		const controlMax = existing.audit.budget.controlMax;
-		const nonMessageTokens = computeNonMessageTokens(this);
-		if (!this.#contextSteadyPlanInputsChanged(existing) && projected <= controlMax) {
+		const stable = existing.projectionMode === "pinned";
+		if (!this.#contextSteadyPlanInputsChanged(existing, { relaxed: stable }) && projected <= controlMax) {
 			// 同一逻辑 turn 内冻结 ContextPlan 字节。每次工具调用都重写投影值会让
 			// plan 之后的整条 turn 前缀失效，实际会把 provider cache read 压到仅剩
 			// system/tools。实时 projected 只用于门控；跨过 controlMax 时才重建。
-			return existing;
+			return { plan: existing };
 		}
 		// Crossed control band, or a model/history/non-message input changed: rebuild
 		// with the live tail for an accurate gate and material selection.
-		const liveText = this.#contextSteadyLatestUserText(messages) ?? "";
-		// Synchronous rebuild path (no recall) so transformContext stays non-async beyond current await.
-		const pendingEntries = this.#contextSteadyPendingEntries(
-			messages.filter(message => {
-				if (message.role !== "user" && message.role !== "assistant" && message.role !== "toolResult") return false;
-				return !branchEntries.some(entry => entry.type === "message" && entry.message === message);
-			}),
-		);
-		const planningEntries = this.#contextSteadyMergePlanningEntries(activeScope.entries, pendingEntries);
-		const currentPromptEntryRefs = this.#contextSteadyCurrentPromptEntryRefs(planningEntries, messages);
-		const tokenEstimateByEntryRef = this.#contextSteadyTokenEstimateByEntryRef(planningEntries);
-		const liveTailEntryRefs = this.#contextSteadyCollectLiveTailEntryRefs(
-			planningEntries,
-			currentPromptEntryRefs,
-			tokenEstimateByEntryRef,
-		);
-		const commonOptions = {
-			entries: planningEntries,
-			sessionId: this.sessionId,
-			requestKey: `${this.#promptGeneration}:live:${this.sessionManager.getLeafId() ?? "root"}:${liveTailEntryRefs.length}`,
-			epochId: existing.audit.epochId,
-			promptGeneration: this.#promptGeneration,
-			settings: {
-				qualityWindowTokens: this.settings.get("san.contextSteady.qualityWindowTokens") as number,
-				reserveRatio: this.settings.get("san.contextSteady.reserveRatio") as number,
-				planMaxTokens: this.#contextSteadyPlanMaxTokens(),
-				burstWindowTokens: this.#contextSteadyBurstWindowTokens(),
-			},
-			contextWindow: this.model?.contextWindow ?? 0,
-			nonMessageTokens,
-			maxDigestMaterials: this.#contextSteadyRecentDigests(),
-			baseRequiredEntryRefs: this.#contextSteadySemanticRequiredEntryRefs(
-				planningEntries,
-				new Set(currentPromptEntryRefs),
-				tokenEstimateByEntryRef,
-			),
-			currentPromptEntryRefs,
-			liveTailEntryRefs,
-			tokenEstimateByEntryRef,
-			currentPromptText: liveText,
-			activeToolCallIds: this.#contextSteadyActiveToolCallIds(planningEntries),
-			activeEntryCount: planningEntries.length,
-			archivedEntryCount: activeScope.archivedEntryCount,
-			activeCutoffEntryId: activeScope.activeCutoffEntryId,
-			maintenanceId: this.#contextSteadyMaintenanceId,
+		const { commonOptions, planningEntries } = this.#buildToolLoopPlanCommonOptions(messages, existing);
+		const commonOptionsWithGoalAnchor = {
+			...commonOptions,
 			goalAnchor: this.#buildGoalAnchorInput(),
-			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
 		};
-		const plan = this.#buildContextSteadyPlanForProvider(commonOptions, messages, planningEntries, "full");
+		let plan = this.#buildContextSteadyPlanForProvider(
+			commonOptionsWithGoalAnchor,
+			messages,
+			planningEntries,
+			"full",
+		);
+		if (stable) plan.epochKey = existing.epochKey;
 		this.#contextSteadyRequestPlan = plan;
 		this.#contextSteadyLastPlan = plan;
 		if (plan.audit.qualityGate.outcome === "hard_pressure") {
@@ -10735,8 +10875,15 @@ export class AgentSession {
 			// reclaim enough to continue the tool-loop without user intervention.
 			if (this.#contextSteadyRecoveryAttempt === 0) {
 				this.#contextSteadyRecoveryAttempt++;
-				const recovered = await this.#attemptToolLoopBudgetRecovery(messages, commonOptions);
-				if (recovered.plan) return recovered.plan;
+				const recovered = await this.#attemptToolLoopBudgetRecovery(existing);
+				if (recovered.plan?.audit.qualityGate.outcome !== "hard_pressure") {
+					if (recovered.plan) return { plan: recovered.plan, sourceMessages: recovered.sourceMessages };
+				}
+				if (recovered.plan) {
+					plan = recovered.plan;
+					this.#contextSteadyRequestPlan = plan;
+					this.#contextSteadyLastPlan = plan;
+				}
 				recoveryFailureStage = recovered.failureStage;
 				recoveryFailureReason = recovered.failureReason;
 			}
@@ -10753,17 +10900,94 @@ export class AgentSession {
 		}
 		// Soft rebuild under control→burst: keep request-start audit as source of truth;
 		// only replace in-memory plan for materialize/status.
-		return plan;
+		return { plan };
+	}
+
+	/**
+	 * Derive the ContextPlan commonOptions + planningEntries for a tool-loop
+	 * rebuild from the current branch + live messages. Both the initial gate
+	 * and the post-compaction recovery path call this so a compaction that
+	 * rewrites history is reflected in the rebuild — the recovery path re-reads
+	 * the branch (post-compaction) instead of reusing the stale pre-compaction
+	 * snapshot.
+	 */
+	#buildToolLoopPlanCommonOptions(
+		messages: readonly AgentMessage[],
+		existing: BuiltContextPlan,
+	): { commonOptions: Omit<BuildContextPlanOptions, "projectedInputTokens">; planningEntries: SessionEntry[] } {
+		const branchEntries = this.sessionManager.getBranch();
+		const activeScope = this.#contextSteadyActivePlanningEntries(branchEntries);
+		const liveText = this.#contextSteadyLatestUserText(messages) ?? "";
+		// Synchronous rebuild path (no recall) so transformContext stays non-async beyond current await.
+		const pendingEntries = this.#contextSteadyPendingEntries(
+			messages.filter(message => {
+				if (message.role !== "user" && message.role !== "assistant" && message.role !== "toolResult") return false;
+				return !branchEntries.some(entry => entry.type === "message" && entry.message === message);
+			}),
+		);
+		const planningEntries = this.#contextSteadyMergePlanningEntries(activeScope.entries, pendingEntries);
+		const currentPromptEntryRefs = this.#contextSteadyCurrentPromptEntryRefs(planningEntries, messages);
+		const tokenEstimateByEntryRef = this.#contextSteadyTokenEstimateByEntryRef(planningEntries);
+		const liveTailEntryRefs = this.#contextSteadyCollectLiveTailEntryRefs(
+			planningEntries,
+			currentPromptEntryRefs,
+			tokenEstimateByEntryRef,
+		);
+		const stable = existing.projectionMode === "pinned";
+		const commonOptions = {
+			entries: planningEntries,
+			sessionId: this.sessionId,
+			requestKey: `${this.#promptGeneration}:live:${this.sessionManager.getLeafId() ?? "root"}:${liveTailEntryRefs.length}`,
+			epochId: existing.audit.epochId,
+			promptGeneration: this.#promptGeneration,
+			settings: {
+				qualityWindowTokens: this.settings.get("san.contextSteady.qualityWindowTokens") as number,
+				reserveRatio: this.settings.get("san.contextSteady.reserveRatio") as number,
+				planMaxTokens: this.#contextSteadyPlanMaxTokens(),
+				burstWindowTokens: this.#contextSteadyBurstWindowTokens(),
+			},
+			contextWindow: this.model?.contextWindow ?? 0,
+			nonMessageTokens: computeNonMessageTokens(this),
+			maxDigestMaterials: this.#contextSteadyRecentDigests(),
+			...(stable
+				? {
+						stableProjection: true,
+						// Epoch-frozen history representation: a pressure rebuild may
+						// re-run gates and re-render audit numbers, but never reselects
+						// checkpoint/digest materials or their tiers.
+						frozenMaterials: existing.materials.filter(
+							material => "digest" in material || "checkpoint" in material,
+						),
+					}
+				: {}),
+			...(this.#contextSteadyToolOutputOffload()
+				? { toolOutputOffload: this.#contextSteadyToolOutputOffload() }
+				: {}),
+			...(this.#contextSteadyImageOffload() ? { offloadAgedImages: true } : {}),
+			baseRequiredEntryRefs: this.#contextSteadySemanticRequiredEntryRefs(
+				planningEntries,
+				new Set(currentPromptEntryRefs),
+				tokenEstimateByEntryRef,
+			),
+			currentPromptEntryRefs,
+			liveTailEntryRefs,
+			tokenEstimateByEntryRef,
+			currentPromptText: liveText,
+			activeToolCallIds: this.#contextSteadyActiveToolCallIds(planningEntries),
+			activeEntryCount: planningEntries.length,
+			archivedEntryCount: activeScope.archivedEntryCount,
+			activeCutoffEntryId: activeScope.activeCutoffEntryId,
+			maintenanceId: this.#contextSteadyMaintenanceId,
+			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
+		};
+		return { commonOptions, planningEntries };
 	}
 
 	/**
 	 * 工具循环 hard_pressure 的单次有界恢复：自动压缩后重建 ContextPlan。
 	 * 恢复成功时返回 plan，否则返回维护阶段产生的失败诊断。
 	 */
-	async #attemptToolLoopBudgetRecovery(
-		messages: readonly AgentMessage[],
-		commonOptions: Omit<BuildContextPlanOptions, "projectedInputTokens">,
-	): Promise<ToolLoopBudgetRecoveryResult> {
+	async #attemptToolLoopBudgetRecovery(existing: BuiltContextPlan): Promise<ToolLoopBudgetRecoveryResult> {
 		logger.debug("Context Steady tool-loop budget recovery: attempting auto-compaction", {
 			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
 			contextWindow: this.model?.contextWindow,
@@ -10785,23 +11009,35 @@ export class AgentSession {
 				failureReason: recovery.failureReason,
 			};
 		}
-		// Rebuild the plan against the post-compaction state.
+		// Compaction rewrote history: re-derive planning entries and messages from
+		// the post-compaction state. `messages` (a pre-compaction transformed
+		// snapshot) and the branch it was derived from are both stale now — the
+		// agent's live message array was replaced by replaceMessages. Rebuild the
+		// plan from `this.messages` so the projection reflects the compacted
+		// history rather than the oversized pre-compaction tail.
+		const compactedMessages = this.messages;
+		const { commonOptions, planningEntries } = this.#buildToolLoopPlanCommonOptions(compactedMessages, existing);
 		const rebuiltPlan = this.#buildContextSteadyPlanForProvider(
 			commonOptions,
-			messages,
-			commonOptions.entries,
+			compactedMessages,
+			planningEntries,
 			"full",
 		);
 		if (rebuiltPlan.audit.qualityGate.outcome === "hard_pressure") {
-			return {};
+			return {
+				plan: rebuiltPlan,
+				failureStage: recovery.failureStage,
+				failureReason: recovery.failureReason,
+			};
 		}
+		if (existing.projectionMode === "pinned") rebuiltPlan.epochKey = this.#contextSteadyStableEpochKey();
 		this.#contextSteadyRequestPlan = rebuiltPlan;
 		this.#contextSteadyLastPlan = rebuiltPlan;
 		logger.debug("Context Steady tool-loop budget recovery: compaction resolved pressure", {
 			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
 			outcome: rebuiltPlan.audit.qualityGate.outcome,
 		});
-		return { plan: rebuiltPlan };
+		return { plan: rebuiltPlan, sourceMessages: compactedMessages };
 	}
 
 	#contextSteadyLatestUserText(messages: readonly AgentMessage[]): string | undefined {
@@ -10921,6 +11157,22 @@ export class AgentSession {
 		return this.settings.get("san.contextSteady.contextPacket.enabled") === true;
 	}
 
+	#contextSteadyStableProjection(): boolean {
+		return this.settings.get("san.contextSteady.contextPlan.stableProjection") === true;
+	}
+
+	#contextSteadyToolOutputOffload(): { minTokens: number } | undefined {
+		if (this.settings.get("san.contextSteady.contextPlan.toolOutputOffload") !== true) return undefined;
+		const configured = Math.floor(
+			this.settings.get("san.contextSteady.contextPlan.toolOutputOffloadMinTokens") as number,
+		);
+		return { minTokens: Number.isFinite(configured) && configured > 0 ? configured : 2000 };
+	}
+
+	#contextSteadyImageOffload(): boolean {
+		return this.settings.get("san.contextSteady.contextPlan.imageOffload") === true;
+	}
+
 	#contextSteadyRecentDigests(): number {
 		return this.settings.isConfigured("san.contextSteady.contextPlan.recentDigests")
 			? (this.settings.get("san.contextSteady.contextPlan.recentDigests") as number)
@@ -10950,13 +11202,16 @@ export class AgentSession {
 	#estimateMaterializedProjectedInputTokens(
 		messages: readonly AgentMessage[],
 		planningEntries: readonly SessionEntry[],
-		plan: BuiltContextPlan,
+		plan: BuiltContextPlan | null,
 		mode: "pending" | "full" = "pending",
 	): number {
 		const activeMessages = mode === "full" ? [...messages] : [...this.messages, ...messages];
+		// The volatile recall message only exists (and only counts) in
+		// stable-projection mode; legacy mode renders recall inside the plan.
+		const volatileRecall = this.#contextSteadyStableProjection() ? this.#contextSteadyRecallMessage : undefined;
 		return (
 			computeNonMessageTokens(this) +
-			estimateContextPlanProjectedTokens(activeMessages, planningEntries, plan, message =>
+			estimateContextPlanProjectedTokens(activeMessages, planningEntries, plan, volatileRecall, message =>
 				this.#estimateProviderWireMessageTokens(message),
 			)
 		);
@@ -11154,11 +11409,40 @@ export class AgentSession {
 		return "checkpoint";
 	}
 
-	#applyContextSteadySafeRebase(boundary: { checkpointEntryId: string; reason: ContextCheckpointRebaseReason }): void {
-		this.#closeAllProviderSessions(`context steady ${boundary.reason} rebase`);
-		this.#freshProviderSessionId = Bun.randomUUIDv7();
-		this.#syncAgentSessionId();
+	/**
+	 * Drop the provider chain at a context-steady rebase boundary.
+	 *
+	 * Closing the provider sessions is what actually makes the rebase safe: it discards
+	 * `previous_response_id` chain state along with the one-way strict-tools and
+	 * reasoning-effort latches, so nothing carries a stale baseline across the rewrite.
+	 *
+	 * Minting a new provider session id is a separate act with a separate cost. That id is the
+	 * wire `prompt_cache_key` whenever no key is pinned, and rotating it voids the upstream
+	 * prefix cache wholesale — including the instructions, tool schemas, and settled history
+	 * that a rebase leaves untouched. A periodic checkpoint therefore used to buy a guaranteed
+	 * cold prefill of the entire surviving prefix in exchange for nothing the session close had
+	 * not already delivered. Preserve the key by default; the old behaviour stays reachable for
+	 * providers that key cache state to the session id itself.
+	 */
+	#rebaseProviderSessionForContextSteady(reason: ContextCheckpointRebaseReason): void {
+		this.#closeAllProviderSessions(`context steady ${reason} rebase`);
+		if (this.settings.get("san.contextSteady.rebase.rotateProviderCacheKey") === true) {
+			const previousProviderSessionId = this.sessionId;
+			this.#freshProviderSessionId = Bun.randomUUIDv7();
+			this.#syncAgentSessionId();
+			// Loud on purpose: this discards the upstream prompt cache, and the cost only shows up
+			// later as an unexplained cold prefill.
+			logger.warn("Rotated provider prompt cache key at context steady rebase", {
+				reason,
+				previousProviderSessionId,
+				providerSessionId: this.sessionId,
+			});
+		}
 		this.agent.appendOnlyContext?.invalidateForModelChange();
+	}
+
+	#applyContextSteadySafeRebase(boundary: { checkpointEntryId: string; reason: ContextCheckpointRebaseReason }): void {
+		this.#rebaseProviderSessionForContextSteady(boundary.reason);
 		this.#contextSteadyLastRebaseCheckpointEntryId = boundary.checkpointEntryId;
 	}
 
@@ -11417,6 +11701,7 @@ export class AgentSession {
 			);
 			const items = normalizeContextSteadyRecallItems(result.items, {
 				maxItems: recallPlan.maxItems,
+				maxTokens: recallPlan.tokenBudget,
 				memoryTypes: recallPlan.memoryTypes,
 				scopeKeys: recallPlan.scopeKeys,
 			});
@@ -11819,7 +12104,9 @@ export class AgentSession {
 			// 审计，以便 TurnDigest settledLeafId 指向非 plan entry。
 			if (this.#contextSteadyRequestPlan) {
 				this.#contextSteadyRequestPlan = this.#remapContextSteadyPlanPendingRefs(this.#contextSteadyRequestPlan);
-				this.#contextSteadyLastPlan = this.#contextSteadyPlanInputsChanged(this.#contextSteadyRequestPlan)
+				this.#contextSteadyLastPlan = this.#contextSteadyPlanInputsChanged(this.#contextSteadyRequestPlan, {
+					relaxed: this.#contextSteadyRequestPlan.projectionMode === "pinned",
+				})
 					? undefined
 					: this.#contextSteadyRequestPlan;
 			}
@@ -14723,7 +15010,7 @@ export class AgentSession {
 		requestKind: Exclude<ContextProbeRequestKind, "maintenance">,
 		requestContextWindow?: number | null,
 	): void {
-		const snapshot = this.#buildContextProbeSnapshot(requestContextWindow);
+		const snapshot = this.#buildContextProbeSnapshot(requestContextWindow, requestKind);
 		if (!snapshot) return;
 		const record = buildContextProbeRecord({
 			...snapshot.options,
@@ -14733,7 +15020,10 @@ export class AgentSession {
 		this.#queueContextProbeRecord(snapshot.sessionFile, record);
 	}
 
-	#buildContextProbeSnapshot(requestContextWindow?: number | null): ContextProbeSnapshot | undefined {
+	#buildContextProbeSnapshot(
+		requestContextWindow?: number | null,
+		requestKind?: Exclude<ContextProbeRequestKind, "maintenance">,
+	): ContextProbeSnapshot | undefined {
 		if (this.settings.get("san.contextSteady.probe.enabled") !== true) return;
 		const sessionFile = this.sessionManager.getSessionFile();
 		if (!sessionFile) return;
@@ -14743,8 +15033,9 @@ export class AgentSession {
 		const segmentIds = collectContextSegmentRefs(branch).map(ref => ref.segment.segmentId);
 		const contextWindow = requestContextWindow ?? this.model?.contextWindow ?? 0;
 		const activeEstimatedTokens = this.#estimateStoredContextTokens();
+		const nonMessageTokens = computeNonMessageTokens(this);
 		const rawJournalEstimatedTokens =
-			computeNonMessageTokens(this) +
+			nonMessageTokens +
 			branch.reduce(
 				(sum, entry) =>
 					entry.type === "message" ? sum + this.#estimateProviderWireMessageTokens(entry.message) : sum,
@@ -14753,9 +15044,28 @@ export class AgentSession {
 		const compactionSettings = this.settings.getGroup("compaction");
 		const nativeCompactionThresholdTokens =
 			contextWindow > 0 ? resolveThresholdTokens(contextWindow, compactionSettings) : 0;
-		const configuredSteadyTarget = Math.floor(this.settings.get("san.contextSteady.qualityWindowTokens") as number);
-		const steadyTargetTokens =
-			contextWindow > 0 ? Math.min(contextWindow, configuredSteadyTarget > 0 ? configuredSteadyTarget : 240_000) : 0;
+		// Report the target the planner actually enforces. The raw quality window ignores the
+		// reserve-derived hard ceiling, so whenever reserveRatio binds the probe used to show
+		// headroom that did not exist (240k reported against 193.5k enforced).
+		const probeBudget = resolveContextPlanBudget({
+			settings: {
+				qualityWindowTokens: this.settings.get("san.contextSteady.qualityWindowTokens") as number,
+				reserveRatio: this.settings.get("san.contextSteady.reserveRatio") as number,
+				planMaxTokens: this.#contextSteadyPlanMaxTokens(),
+				burstWindowTokens: this.#contextSteadyBurstWindowTokens(),
+			},
+			contextWindow,
+			nonMessageTokens,
+		});
+		const steadyTargetTokens = contextWindow > 0 ? probeBudget.steadyTarget : 0;
+		// The wire cache key is part of the cacheable identity: rotating it voids the upstream
+		// prefix just as surely as editing the system prompt. Keep it inside the fingerprint so a
+		// rotation can never be reported as an unchanged prefix.
+		const promptCacheKey = this.agent.promptCacheKey ?? this.sessionId;
+		// Wire-sequence churn is deliberately NOT hashed in here. Every turn appends
+		// messages, so folding the sequence into this identity would report a changed
+		// prefix on literally every request. Caches match on a byte *prefix*, so the
+		// question is retention, not equality — tracked via `wirePrefixRetained`.
 		const prefixFingerprint = String(
 			Bun.hash(
 				JSON.stringify({
@@ -14765,6 +15075,7 @@ export class AgentSession {
 					toolSignature: this.#lastAppliedToolSignature,
 					contextPlan: this.#contextSteadyRequestPlan?.renderedContent,
 					latestCompactionId: compactionIds.at(-1),
+					promptCacheKey,
 				}),
 			),
 		);
@@ -14788,11 +15099,22 @@ export class AgentSession {
 			...(this.#contextProbeActiveCompaction ? { compaction: this.#contextProbeActiveCompaction } : {}),
 			...(authorityState ? { authorityState } : {}),
 			...(this.#toolProgressGuard ? { convergence: this.#toolProgressGuard.snapshot() } : {}),
-			...(this.#contextProbeLastPrefixFingerprint?.sessionId === this.sessionId
-				? { previousPrefixFingerprint: this.#contextProbeLastPrefixFingerprint.value }
+			promptCacheKey,
+			...(this.#contextProbeLastPrefixFingerprint
+				? {
+						previousPrefixFingerprint: this.#contextProbeLastPrefixFingerprint.value,
+						previousPromptCacheKey: this.#contextProbeLastPrefixFingerprint.promptCacheKey,
+					}
+				: {}),
+			// Wire retention belongs to the request lineage that shipped the
+			// sequence: only agent-kind records attach it. Side requests and
+			// maintenance records convert through other lineages and would
+			// otherwise report someone else's (or stale) retention.
+			...(requestKind === "agent" && this.#contextProbeAgentWireSequence
+				? { wirePrefixRetained: this.#contextProbeAgentWireSequence.prefixRetained }
 				: {}),
 		};
-		this.#contextProbeLastPrefixFingerprint = { sessionId: this.sessionId, value: prefixFingerprint };
+		this.#contextProbeLastPrefixFingerprint = { promptCacheKey, value: prefixFingerprint };
 		return { sessionFile, options };
 	}
 
@@ -14835,8 +15157,12 @@ export class AgentSession {
 		return (
 			computeNonMessageTokens(this) +
 			(plan
-				? estimateContextPlanProjectedTokens(activeMessages, this.sessionManager.getBranch(), plan, message =>
-						this.#estimateProviderWireMessageTokens(message, opts),
+				? estimateContextPlanProjectedTokens(
+						activeMessages,
+						this.sessionManager.getBranch(),
+						plan,
+						this.#contextSteadyStableProjection() ? this.#contextSteadyRecallMessage : undefined,
+						message => this.#estimateProviderWireMessageTokens(message, opts),
 					)
 				: activeMessages.reduce((sum, message) => sum + estimateTokens(message, opts), 0))
 		);
@@ -14851,6 +15177,39 @@ export class AgentSession {
 		return compactionContextTokens(breakdown?.usedTokens ?? 0, localEstimate);
 	}
 
+	/**
+	 * Physical-maintenance ceiling shared by the pre-prompt and mid-turn gates.
+	 *
+	 * `steadyTarget` is what the planner aims for; `controlMax` is what the plan is actually
+	 * allowed to fill (`selectedInputLimit` in steady mode, and the plan-reuse gate at
+	 * {@link #contextSteadyReusablePlan}). Compacting the instant the aim is missed throws the
+	 * whole elastic band away: a 754-token overshoot bought a full history rewrite plus a cold
+	 * prefill (session 019ffe1d, 2026-08-21T02:15Z). Trigger on the band's ceiling instead, so
+	 * maintenance fires exactly where the plan gate would refuse rather than well before it.
+	 *
+	 * Both gates read this one number. When they disagreed, the pre-prompt gate let a turn be
+	 * billed at full size and the mid-turn gate compacted it away seconds later — the prefill
+	 * was paid for a history that no longer existed.
+	 *
+	 * Returns `undefined` when context steady is inactive or compaction cannot rewrite history.
+	 */
+	#contextSteadyPhysicalMaintenanceCeiling(contextWindow: number, contextSteadyActive: boolean): number | undefined {
+		if (!contextSteadyActive || contextWindow <= 0) return undefined;
+		const compactionSettings = this.settings.getGroup("compaction");
+		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return undefined;
+		const budget = resolveContextPlanBudget({
+			settings: {
+				qualityWindowTokens: this.settings.get("san.contextSteady.qualityWindowTokens") as number,
+				reserveRatio: this.settings.get("san.contextSteady.reserveRatio") as number,
+				planMaxTokens: this.#contextSteadyPlanMaxTokens(),
+				burstWindowTokens: this.#contextSteadyBurstWindowTokens(),
+			},
+			contextWindow,
+			nonMessageTokens: computeNonMessageTokens(this),
+		});
+		return Math.max(1, budget.controlMax);
+	}
+
 	async #runPrePromptCompactionIfNeeded(messages: AgentMessage[]): Promise<void> {
 		const model = this.model;
 		if (!model) return;
@@ -14858,8 +15217,16 @@ export class AgentSession {
 		if (contextWindow <= 0) return;
 		const compactionSettings = this.settings.getGroup("compaction");
 		const contextTokens = this.#estimatePrePromptContextTokens(messages, contextWindow);
-		this.#contextSteadyIsActive(contextTokens);
-		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) return;
+		const contextSteadyActive = this.#contextSteadyIsActive(contextTokens);
+		// Steady maintenance must be decided here too, not only after the response returns.
+		// The mid-turn gate uses the steady budget while this gate used the native threshold
+		// alone, so a context parked between the two (e.g. right after switching to a
+		// smaller-window model) was sent at full size, billed as a cold prefill, and then
+		// compacted on arrival — paying for a history that was about to be discarded.
+		const steadyCeiling = this.#contextSteadyPhysicalMaintenanceCeiling(contextWindow, contextSteadyActive);
+		const nativeMaintenanceRequired = shouldCompact(contextTokens, contextWindow, compactionSettings);
+		const steadyMaintenanceRequired = steadyCeiling !== undefined && contextTokens > steadyCeiling;
+		if (!nativeMaintenanceRequired && !steadyMaintenanceRequired) return;
 
 		// Auto-promote first: switching to a larger-context model avoids compacting
 		// the history at all. The post-turn threshold path already promotes before
@@ -14877,11 +15244,21 @@ export class AgentSession {
 		logger.debug("Pre-prompt context maintenance triggered by pending prompt size", {
 			contextTokens,
 			contextWindow,
+			steadyCeiling,
+			nativeMaintenanceRequired,
+			steadyMaintenanceRequired,
 			model: `${model.provider}/${model.id}`,
 		});
+		const matchedTriggers: ContextMaintenanceTrigger[] = [];
+		if (nativeMaintenanceRequired) matchedTriggers.push("native_threshold");
+		if (steadyMaintenanceRequired) matchedTriggers.push("steady_target");
 		await this.#runAutoCompaction("threshold", false, false, false, {
 			autoContinue: false,
 			triggerContextTokens: contextTokens,
+			// A steady-only firing must not be recorded as a native-threshold one: the two
+			// carry different costs and different fixes, and the probe is what tells them apart.
+			trigger: nativeMaintenanceRequired ? "native_threshold" : "steady_target",
+			matchedTriggers,
 			phase: "pre_turn",
 		});
 	}
@@ -15076,23 +15453,12 @@ export class AgentSession {
 		const contextSteadyActive = this.#contextSteadyIsActive(
 			Math.max(calculatePromptTokens(lastAssistant.usage), storedContextTokens),
 		);
-		// Use the unified budget resolver so the maintenance threshold aligns with
-		// the ContextPlan gate's steadyTarget (which accounts for hardInputCeiling).
-		// The old independent formula could set a target above the gate's ceiling,
-		// causing hard_pressure to fire before maintenance ever triggered.
-		const unifiedBudget = resolveContextPlanBudget({
-			settings: {
-				qualityWindowTokens: this.settings.get("san.contextSteady.qualityWindowTokens") as number,
-				reserveRatio: this.settings.get("san.contextSteady.reserveRatio") as number,
-				planMaxTokens: this.#contextSteadyPlanMaxTokens(),
-				burstWindowTokens: this.#contextSteadyBurstWindowTokens(),
-			},
-			contextWindow,
-			nonMessageTokens: computeNonMessageTokens(this),
-		});
-		const contextSteadyTarget = contextSteadyActive
-			? Math.max(1, unifiedBudget.steadyTarget)
-			: Number.POSITIVE_INFINITY;
+		// One shared ceiling with the pre-prompt gate (#contextSteadyPhysicalMaintenanceCeiling):
+		// the plan's control band, not its steady aim. Keeps maintenance aligned with the point
+		// the ContextPlan gate refuses, and keeps the two gates from disagreeing about whether
+		// this turn should have been compacted before it was billed.
+		const contextSteadyTarget =
+			this.#contextSteadyPhysicalMaintenanceCeiling(contextWindow, contextSteadyActive) ?? Number.POSITIVE_INFINITY;
 		const steadyMaintenanceRequired = physicalMaintenanceEnabled && contextTokens > contextSteadyTarget;
 		const segmentHint = this.#contextSteadySegmentMaintenanceHint();
 		const nativeMaintenanceRequired =
@@ -16807,6 +17173,28 @@ export class AgentSession {
 		return this.#resolveConfiguredModelTarget(currentModel.compactionModel, currentModel, availableModels);
 	}
 
+	#resolveCompactionThinkingLevel(
+		sourceModel: Model | null | undefined,
+		candidate: Model,
+		availableModels: Model[],
+		fallback: ThinkingLevel | undefined,
+	): ThinkingLevel | undefined {
+		const configuredTarget = sourceModel
+			? this.#resolveCompactionConfiguredTarget(sourceModel, availableModels)
+			: undefined;
+		if (!sourceModel?.compactionModel || !configuredTarget || !modelsAreEqual(configuredTarget, candidate)) {
+			return fallback;
+		}
+
+		const configuredLevel = extractExplicitThinkingSelector(sourceModel.compactionModel, this.settings, {
+			isLiteralModelId: (provider, id) =>
+				availableModels.some(model => model.provider === provider && model.id === id),
+		});
+		const concreteLevel = concreteThinkingLevel(configuredLevel);
+		if (concreteLevel === undefined || concreteLevel === ThinkingLevel.Inherit) return fallback;
+		return resolveThinkingLevelForModel(candidate, concreteLevel);
+	}
+
 	#resolveRoleModelFull(
 		role: string,
 		availableModels: Model[],
@@ -16976,8 +17364,8 @@ export class AgentSession {
 		options?: SummaryOptions,
 		precomputedCandidates?: Model[],
 	): Promise<CompactionResult> {
-		const candidates =
-			precomputedCandidates ?? this.#getCompactionModelCandidates(this.#modelRegistry.getAvailable());
+		const availableModels = this.#modelRegistry.getAvailable();
+		const candidates = precomputedCandidates ?? this.#getCompactionModelCandidates(availableModels);
 		const telemetry = resolveTelemetry(this.agent.telemetry, this.sessionId);
 
 		for (const candidate of candidates) {
@@ -16996,11 +17384,14 @@ export class AgentSession {
 						metadata: this.agent.metadataForProvider(candidate.provider),
 						convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 						telemetry,
-						// Honor the user's /model thinking selection (incl. `off`) on
-						// the manual `/compact` path. Clamped per-model inside compact()
-						// via resolveCompactionEffort so unsupported-effort models
-						// (xai-oauth/grok-build) don't trip requireSupportedEffort.
-						thinkingLevel: this.thinkingLevel,
+						// Honor an explicit effort on compactionModel for its configured
+						// target; other candidates inherit the active /model selection.
+						thinkingLevel: this.#resolveCompactionThinkingLevel(
+							this.model,
+							candidate,
+							availableModels,
+							this.thinkingLevel,
+						),
 						tools: this.agent.state.tools,
 						sessionId: this.sessionId,
 						promptCacheKey: this.sessionId,
@@ -17895,11 +18286,14 @@ export class AgentSession {
 									initiatorOverride: "agent",
 									convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 									telemetry,
-									// Honor the user's /model thinking selection on the
-									// auto-compaction path — the most-fired compaction
-									// site. Clamped per-model inside compact() via
-									// resolveCompactionEffort.
-									thinkingLevel: this.thinkingLevel,
+									// Honor an explicit effort on compactionModel for its
+									// configured target; other candidates inherit /model.
+									thinkingLevel: this.#resolveCompactionThinkingLevel(
+										this.model,
+										candidate,
+										availableModels,
+										this.thinkingLevel,
+									),
 									tools: this.agent.state.tools,
 									sessionId: this.sessionId,
 									promptCacheKey: this.sessionId,
@@ -18283,6 +18677,13 @@ export class AgentSession {
 				},
 				detachMidTurnLifecycle,
 			);
+
+			// Steady-target maintenance is protective, not a failure — but without a
+			// visible line the user perceives the reorganized history as the model
+			// silently "forgetting". One plain line; detail stays behind the fold.
+			if (trigger === "steady_target" && !noProgressDeadEnd) {
+				this.emitNotice("info", "Reorganized earlier history; continuing from a summary.", "compaction");
+			}
 
 			const authoritySourceMissing = this.#continuationAuthoritySourceMissing();
 			if (retryFits && !authoritySourceMissing) {
@@ -21989,7 +22390,12 @@ export class AgentSession {
 		const activeMessages = [...this.messages, ...pendingMessages];
 		const activePlan = this.#contextSteadyActivePlan();
 		const resolvedActiveMessages = activePlan
-			? materializeContextPlanMessages(activeMessages, branchEntries, activePlan)
+			? materializeContextPlanMessages(
+					activeMessages,
+					branchEntries,
+					activePlan,
+					this.#contextSteadyStableProjection() ? this.#contextSteadyRecallMessage : undefined,
+				)
 			: activeMessages;
 		if (activePlan) {
 			// ContextPlan is ephemeral per request. A provider usage anchor from the

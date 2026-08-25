@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { materializeContextPlanMessages } from "../../src/context-steady/materialize";
-import { buildContextPlan } from "../../src/context-steady/planner";
+import { applyContextPlanNetBenefitGate, buildContextPlan } from "../../src/context-steady/planner";
 import {
 	CONTEXT_CHECKPOINT_CUSTOM_TYPE,
 	CONTEXT_CHECKPOINT_SCHEMA_VERSION,
@@ -190,6 +190,51 @@ describe("buildContextPlan", () => {
 		expect(plan.audit.coverage.flatMap(item => item.sourceEntryRefs)).toEqual(["u1", "a1", "u2", "a2"]);
 	});
 
+	test("keeps covered digests eligible when a relevant checkpoint cannot enter the plan", () => {
+		const entries = asEntries([
+			messageEntry("u1", { role: "user", content: "first", timestamp: 1, provider: "x", model: "x" }),
+			messageEntry("a1", { role: "assistant", content: "done", timestamp: 2, provider: "x", model: "x" }),
+			customEntry("d1", TURN_DIGEST_CUSTOM_TYPE, digest("t1", "u1", "a1", "first task")),
+			customEntry("ck1", CONTEXT_CHECKPOINT_CUSTOM_TYPE, {
+				...checkpoint(["d1"]),
+				summary: {
+					userIntents: Array.from({ length: 8 }, (_, index) => ({
+						text: `checkpoint item ${index} ${"x".repeat(120)}`,
+						entryRefs: ["d1"],
+					})),
+					decisions: [],
+					filesTouched: [],
+					risks: [],
+					nextSteps: [],
+				},
+				tokenEstimate: 10_000,
+			}),
+			messageEntry("u2", { role: "user", content: "second", timestamp: 3, provider: "x", model: "x" }),
+			messageEntry("a2", { role: "assistant", content: "done", timestamp: 4, provider: "x", model: "x" }),
+			customEntry("d2", TURN_DIGEST_CUSTOM_TYPE, digest("t2", "u2", "a2", "second task")),
+		]);
+
+		const plan = buildContextPlan({
+			entries,
+			sessionId: "s1",
+			requestKey: "r1",
+			epochId: "e1",
+			promptGeneration: 2,
+			settings: { ...SETTINGS, planMaxTokens: 200 },
+			contextWindow: 500_000,
+			nonMessageTokens: 20_000,
+		});
+
+		expect(plan.materials.some(material => "checkpoint" in material)).toBe(false);
+		expect(plan.materials.flatMap(material => ("digest" in material ? [material.entryId] : []))).toEqual(["d1"]);
+		expect(plan.audit.coverage.flatMap(item => item.sourceEntryRefs)).toEqual(["u1", "a1"]);
+		expect(
+			plan.audit.materials.find(
+				material => material.entryRefs.includes("ck1") && material.representation === "omitted",
+			),
+		).toMatchObject({ kind: "checkpoint" });
+	});
+
 	test("records quality burst selection when required protected material exceeds steady budget", () => {
 		const entries = asEntries([
 			messageEntry("spec", { role: "user", content: "long spec", timestamp: 1, provider: "x", model: "x" }),
@@ -216,6 +261,131 @@ describe("buildContextPlan", () => {
 		expect(plan.audit.budget.selectedInputMode).toBe("burst");
 		expect(plan.audit.qualityGate.outcome).toBe("burst_required");
 		expect(plan.audit.qualityGate.protectedEntryRefs).toEqual(["spec", "prompt"]);
+	});
+
+	test("distinguishes relevance exclusion from budget omission in the checkpoint audit and notes degraded representation", () => {
+		const entries = asEntries([
+			messageEntry("u1", { role: "user", content: "first", timestamp: 1, provider: "x", model: "x" }),
+			messageEntry("a1", { role: "assistant", content: "done", timestamp: 2, provider: "x", model: "x" }),
+			customEntry("d1", TURN_DIGEST_CUSTOM_TYPE, digest("t1", "u1", "a1", "first task")),
+			customEntry("ck1", CONTEXT_CHECKPOINT_CUSTOM_TYPE, checkpoint(["d1"])),
+			messageEntry("u2", {
+				role: "user",
+				content: "ignore previous context and start fresh",
+				timestamp: 3,
+				provider: "x",
+				model: "x",
+			}),
+		]);
+
+		const plan = buildContextPlan({
+			entries,
+			sessionId: "s1",
+			requestKey: "r1",
+			epochId: "e1",
+			promptGeneration: 2,
+			settings: SETTINGS,
+			contextWindow: 500_000,
+			nonMessageTokens: 20_000,
+			currentPromptEntryRefs: ["u2"],
+			currentPromptText: "ignore previous context and start fresh",
+		});
+
+		expect(plan.materials.some(material => "checkpoint" in material || "digest" in material)).toBe(false);
+		expect(plan.audit.materials.find(material => material.materialId.includes("ck1"))).toMatchObject({
+			kind: "checkpoint",
+			representation: "omitted",
+			reason: "checkpoint excluded by prompt relevance gate",
+		});
+		expect(plan.audit.materials.find(material => material.kind === "representation")).toMatchObject({
+			representation: "omitted",
+			reason: expect.stringContaining("history representation degraded"),
+		});
+	});
+
+	test("net benefit gate withdraws a steady plan that costs more than it saves", () => {
+		const entries = asEntries([
+			messageEntry("u1", { role: "user", content: "old raw user", timestamp: 1, provider: "x", model: "x" }),
+			messageEntry("a1", { role: "assistant", content: "done", timestamp: 2, provider: "x", model: "x" }),
+			customEntry("d1", TURN_DIGEST_CUSTOM_TYPE, digest("t1", "u1", "a1")),
+			messageEntry("u2", { role: "user", content: "current prompt", timestamp: 3, provider: "x", model: "x" }),
+		]);
+		const base = buildContextPlan({
+			entries,
+			sessionId: "s1",
+			requestKey: "r1",
+			epochId: "e1",
+			promptGeneration: 2,
+			settings: SETTINGS,
+			contextWindow: 500_000,
+			nonMessageTokens: 20_000,
+			currentPromptEntryRefs: ["u2"],
+		});
+		expect(base.audit.qualityGate.outcome).toBe("pass");
+
+		const withdrawn = applyContextPlanNetBenefitGate(base, {
+			rawProjectedTokens: 1_000,
+			projectedTokens: 1_100,
+		});
+		expect(withdrawn.withdrawn).toBe(true);
+		expect(withdrawn.audit.netBenefit).toMatchObject({ netBenefit: -100, withdrawn: true });
+
+		const kept = applyContextPlanNetBenefitGate(base, { rawProjectedTokens: 1_100, projectedTokens: 800 });
+		expect(kept.withdrawn).toBeUndefined();
+		expect(kept.audit.netBenefit).toMatchObject({ netBenefit: 300, withdrawn: false });
+
+		// Pressure outcomes need every reclaim they can get: never withdrawn there.
+		const pressured = buildContextPlan({
+			entries,
+			sessionId: "s1",
+			requestKey: "r1",
+			epochId: "e1",
+			promptGeneration: 2,
+			settings: SETTINGS,
+			contextWindow: 500_000,
+			nonMessageTokens: 20_000,
+			currentPromptEntryRefs: ["u2"],
+			projectedInputTokens: 5_000_000,
+		});
+		expect(pressured.audit.qualityGate.outcome).toBe("hard_pressure");
+		expect(
+			applyContextPlanNetBenefitGate(pressured, { rawProjectedTokens: 1_000, projectedTokens: 2_000 }).withdrawn,
+		).toBeUndefined();
+	});
+
+	test("withdrawn plan materializes raw history without plan message or omission", () => {
+		const oldUser = { role: "user", content: "old raw user", timestamp: 1, provider: "x", model: "x" };
+		const oldAssistant = { role: "assistant", content: "done", timestamp: 2, provider: "x", model: "x" };
+		const currentUser = { role: "user", content: "current prompt", timestamp: 3, provider: "x", model: "x" };
+		const entries = asEntries([
+			messageEntry("u1", oldUser),
+			messageEntry("a1", oldAssistant),
+			customEntry("d1", TURN_DIGEST_CUSTOM_TYPE, digest("t1", "u1", "a1")),
+			messageEntry("u2", currentUser),
+		]);
+		const base = buildContextPlan({
+			entries,
+			sessionId: "s1",
+			requestKey: "r1",
+			epochId: "e1",
+			promptGeneration: 2,
+			settings: SETTINGS,
+			contextWindow: 500_000,
+			nonMessageTokens: 20_000,
+			currentPromptEntryRefs: ["u2"],
+		});
+		const withdrawn = applyContextPlanNetBenefitGate(base, { rawProjectedTokens: 0, projectedTokens: 100 });
+
+		const projected = materializeContextPlanMessages(
+			asMessages([oldUser, oldAssistant, currentUser]),
+			entries,
+			withdrawn,
+		);
+
+		expect(projected).toHaveLength(3);
+		const text = JSON.stringify(projected);
+		expect(text).toContain("old raw user");
+		expect(text).not.toContain("san_context_plan");
 	});
 
 	test("carries epoch and rebase reason into the plan audit", () => {

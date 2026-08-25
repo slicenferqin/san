@@ -5,6 +5,16 @@
 ### Breaking Changes
 
 - Renamed the published package from `@oh-my-pi/omp-stats` to `@san/stats` and its executable from `omp-stats` to `san-stats`.
+- Changed non-loopback dashboard binds to require an auth token: `san stats --host 0.0.0.0` now refuses to start without `--token <secret>` (or `SAN_STATS_TOKEN`). Authenticated binds serve API requests only with the token (header or one-time `?token=` link that the dashboard picks up and scrubs from the address bar) and no longer send permissive CORS headers; loopback binds stay anonymous and unchanged.
+
+### Added
+
+- Added a unified usage analytics API and consumption overview with time-range totals, token and cost breakdowns, success rate, TTFT, weighted Tokens/s, and provider/model/project rankings.
+
+### Fixed
+
+- Fixed the dashboard binding to loopback by default, added explicit host selection for container or remote exposure, and refused to reuse unidentified or differently bound processes on the requested port.
+- Fixed stats dashboard port reuse to validate the existing remote instance's authentication before reusing it, preventing mismatched tokens and anonymous legacy binds from being treated as protected.
 
 ### Fixed
 

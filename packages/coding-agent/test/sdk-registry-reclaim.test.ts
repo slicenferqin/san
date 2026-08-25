@@ -277,7 +277,6 @@ describe("createAgentSession registry corpse handling", () => {
 		expect(ref).toBe(busy);
 		await manager.close();
 	});
-
 	it("fresh construction reuses an id freed by a previous release without ever colliding", async () => {
 		const project = makeTempProject();
 		const id = `Reuse-${Snowflake.next()}`;

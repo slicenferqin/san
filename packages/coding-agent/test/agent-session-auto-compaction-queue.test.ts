@@ -255,7 +255,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 		}
 		const maintenanceRecord = probeRecords.find(record => record.request.kind === "maintenance");
 		expect(maintenanceRecord).toMatchObject({
-			schemaVersion: 3,
+			schemaVersion: 5,
 			maintenance: {
 				primaryTrigger: "native_threshold",
 				matchedTriggers: ["native_threshold"],

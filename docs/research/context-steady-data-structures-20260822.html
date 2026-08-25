@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>San · Context Steady 数据结构全景 · 2026-08-22</title>
+<style>
+	:root {
+		--bg: #0f1115;
+		--panel: #171a21;
+		--panel2: #1d212b;
+		--text: #d7dce5;
+		--dim: #8b93a3;
+		--accent: #6cb6ff;
+		--good: #7ee2a8;
+		--warn: #f2c94c;
+		--bad: #ef8a8a;
+		--line: #2a2f3b;
+		--mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+	}
+	* { box-sizing: border-box; }
+	body {
+		margin: 0;
+		background: var(--bg);
+		color: var(--text);
+		font: 15px/1.75 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+	}
+	.wrap { max-width: 980px; margin: 0 auto; padding: 48px 28px 96px; }
+	header { border-bottom: 1px solid var(--line); padding-bottom: 24px; margin-bottom: 36px; }
+	h1 { font-size: 26px; margin: 0 0 8px; }
+	.sub { color: var(--dim); font-size: 13px; }
+	h2 { font-size: 19px; margin: 48px 0 12px; padding-top: 18px; border-top: 1px solid var(--line); }
+	h2 .tag { font-size: 12px; color: var(--dim); font-weight: normal; margin-left: 10px; }
+	h3 { font-size: 16px; margin: 28px 0 8px; }
+	p { margin: 10px 0; }
+	ul, ol { margin: 10px 0; padding-left: 22px; }
+	li { margin: 4px 0; }
+	code { font-family: var(--mono); font-size: 12.5px; background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; color: var(--accent); }
+	.mono { font-family: var(--mono); font-size: 12.5px; }
+	table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13.5px; }
+	th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+	th { background: var(--panel2); color: var(--dim); font-weight: 600; white-space: nowrap; }
+	td code { white-space: nowrap; }
+	.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; margin: 16px 0; }
+	.panel p:first-child { margin-top: 0; }
+	.layers { display: flex; flex-direction: column; gap: 8px; margin: 18px 0; }
+	.layer { display: flex; align-items: stretch; gap: 10px; }
+	.layer .no { flex: 0 0 44px; display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 18px; color: var(--dim); border-right: 1px solid var(--line); }
+	.layer .box { flex: 1; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
+	.layer .box b { color: var(--accent); }
+	.layer .box span { color: var(--dim); font-size: 13px; }
+	.flow { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; font-family: var(--mono); font-size: 12px; line-height: 1.9; overflow-x: auto; white-space: pre; color: var(--dim); }
+	.flow b { color: var(--text); font-weight: 600; }
+	.flow i { color: var(--good); font-style: normal; }
+	.flow u { color: var(--warn); text-decoration: none; }
+	.flow s { color: var(--bad); text-decoration: none; }
+	.pill { display: inline-block; font-size: 11.5px; border-radius: 20px; padding: 0 9px; margin-left: 6px; vertical-align: 1px; }
+	.pill.p { background: rgba(126, 226, 168, .12); color: var(--good); }
+	.pill.e { background: rgba(242, 201, 76, .10); color: var(--warn); }
+	.pill.l { background: rgba(139, 147, 163, .12); color: var(--dim); }
+	.seam { border-left: 3px solid var(--warn); }
+	.dim { color: var(--dim); }
+	.good { color: var(--good); }
+	.bad { color: var(--bad); }
+	footer { margin-top: 64px; border-top: 1px solid var(--line); padding-top: 16px; color: var(--dim); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+	<h1>Context Steady 数据结构全景</h1>
+	<div class="sub">San · packages/coding-agent/src/context-steady/ · 梳理稿 v1 · 2026-08-22 · 静态 HTML，无外部依赖 · 为后续优化讨论做地基</div>
+</header>
+
+<p>这份文档只回答一个问题：<b>上下文稳态到底用了哪些数据结构，各自长什么样、活多久、锚定在什么上。</b>
+不含优化方案；文末只列出结构本身的接缝，作为下一步讨论的输入。所有结论以当前分支源码为准（本轮 planner 修复之后）。</p>
+
+<h2>0 · 一图总览：五层数据，三种寿命<span class="tag">先看这个</span></h2>
+
+<div class="layers">
+	<div class="layer"><div class="no">L0</div><div class="box"><b>Session Journal</b> — <code>SessionEntry[]</code>，append-only 事实源<br><span>三种 entry：<code>message</code> / <code>custom_message</code>（进 LLM 上下文）、<code>custom</code>（纯账本，不进上下文）。entry id 是全局稳定锚点。</span></div></div>
+	<div class="layer"><div class="no">L1</div><div class="box"><b>派生物料（持久）</b> — 本身也是 journal 里的 <code>custom</code> entry<br><span><code>san.turn_digest</code>（回合卡）、<code>san.context_checkpoint</code>（大总结卡）、<code>san.context_plan</code>（当次计划收据）。同层还有压缩侧的 <code>san.context_segment</code> / continuation。</span></div></div>
+	<div class="layer"><div class="no">L2</div><div class="box"><b>ContextSourceIndex</b> — 内存派生索引，每次规划重建，请求结束即弃<br><span>把 journal 扫描成 7 个视图：exact / turn_bundle / tool_pair / file_evidence / attachment / digest / checkpoint，并<b>解析覆盖锚点</b>。</span></div></div>
+	<div class="layer"><div class="no">L3</div><div class="box"><b>BuiltContextPlan</b> — 一次请求的计划产物<br><span><code>audit</code>（预算 + 质量门 + 物料审计 + 覆盖映射）+ <code>materials</code>（digest/checkpoint/recall/tool_stub）+ <code>renderedContent</code>（渲染成一条消息）。</span></div></div>
+	<div class="layer"><div class="no">L4</div><div class="box"><b>Payload 投影</b> — <code>AgentMessage[]</code>，纯临时<br><span>物化函数按 plan 把被覆盖消息<b>省略</b>、把被取代的工具输出<b>替换</b>成 stub，再把 plan 消息插到最后一条 user 消息之前。发给模型的只有这一层。</span></div></div>
+</div>
+
+<p>数据流只有一条方向：</p>
+<div class="flow">L0 journal ──扫描──▶ L2 source index ──准入+试装──▶ L3 plan ──物化投影──▶ L4 payload ──发给模型
+                 ▲                                    │
+                 └────── 覆盖关系（entry id 引用）──────┘
+<b>关键点：L1 的 digest/checkpoint 不直接进上下文</b>，它们只是"覆盖权凭证"；真正发给模型的是 L3 渲染出来的那一条 plan 消息，和 L4 里未被覆盖的原文。</div>
+
+<h2>1 · L0：Journal —— 唯一事实源<span class="tag">寿命：永久，append-only</span></h2>
+
+<p><code>SessionEntry</code> 是判别联合，三种形态的语义分工是整套设计的地基：</p>
+
+<table>
+	<tr><th>形态</th><th>谁写入</th><th>进 LLM 上下文？</th><th>说明</th></tr>
+	<tr><td><code>message</code></td><td>会话各方</td><td class="good">是</td><td>真实对话消息（user / assistant / toolResult / fileMention…），携带完整 <code>AgentMessage</code></td></tr>
+	<tr><td><code>custom_message</code></td><td>系统注入</td><td class="good">是</td><td>需要模型看见的派生内容（如注入的 plan 消息本身）；同时有展示属性</td></tr>
+	<tr><td><code>custom</code></td><td>稳态/审计</td><td class="bad">否</td><td>纯账本记录：turn_digest、checkpoint、context_plan 审计、maintenance 审计等</td></tr>
+</table>
+
+<p>两条不变的纪律：<b>(a) append-only</b> —— 任何层都不修改、不删除既有 entry（"原文永远留在档案库"）；<b>(b) entry id 是唯一稳定身份</b> —— 所有覆盖关系最终都引用它。窗口裁剪、压缩、resume 都不改变已落盘 entry 的 id。</p>
+
+<h2>2 · L1：派生物料 —— 覆盖权凭证<span class="tag">寿命：永久，但可被同 span 升级覆盖</span></h2>
+
+<h3>2.1 TurnDigest（回合卡）<span class="pill e">覆盖权的最小单位</span></h3>
+<p>一个已落定的逻辑回合的结构化摘要，存为 <code>custom</code> entry。字段分三组：</p>
+<ul>
+	<li><b>锚点组</b>：<code>source: { sessionId, fromEntryId, toEntryId, promptGeneration, userEntryId? }</code> —— 用 journal entry id 区间声明"我替代谁"。<b>这是覆盖权的声明处</b>。</li>
+	<li><b>内容组</b>：<code>userIntent / actionsTaken / decisions / filesTouched / toolEvidence / factsLearned / openQuestions / risks / nextSteps / memoryCandidates</code> —— 渲染进 plan 的素材。</li>
+	<li><b>权威组</b>：<code>fallback: boolean + fallbackReason + supersedesEntryId</code> —— fallback digest 是"仅供参考"的降级品，<b>不授权省略原文</b>（source-index 会剥掉它的覆盖）。同一 span 的权威摘要后落时覆盖 fallback（<code>collectDigestRefs</code> 按 span key 去重）。</li>
+</ul>
+
+<h3>2.2 ContextCheckpoint（大总结卡）<span class="pill p">覆盖权密度最高的物料</span></h3>
+<p>对若干 digest 的二次聚合，同样存为 <code>custom</code> entry。v2 schema 的锚点字段是两级的：</p>
+<ul>
+	<li><code>entryRefs: string[]</code> —— 覆盖的 <b>digest</b> entry id 列表（一级：折了哪些回合卡）；</li>
+	<li><code>coveredSourceEntryRefs?: string[]</code> —— 直接覆盖的<b>原始 entry</b> id 列表（二级：展开后替代哪些原文）。v1 没有，只能从 digest span 展开。</li>
+	<li><code>previousCheckpointEntryId + rebaseReason</code> —— checkpoint 链，声明自己作为安全重排边界的原因（checkpoint / resume / budget_pressure / topic_shift）。</li>
+</ul>
+<p>注意一个历史包袱：<code>tokenEstimate: number</code> 是落库时用 JSON 尺子算的存量值，与渲染后 wire 体积是<b>两种单位</b>（比值约 0.76）。它现在只用于审计展示，但字段名不带单位语义，是 D1 类 bug 的残留土壤。</p>
+
+<h3>2.3 压缩侧的邻居（不同子系统，共享 L0）</h3>
+<ul>
+	<li><code>ContextSegment</code> —— 物理压缩的边界记录：描述 journal 中哪段已被 compaction summary 替代（<code>firstKeptEntryId</code> 之后才是在窗内容）。</li>
+	<li><code>ActiveContinuationState</code> —— 当前逻辑 turn 的权威执行状态（活跃 user 请求、成功 mutation/验证证据），由真实 journal 派生，压缩摘要无权改写。</li>
+</ul>
+<p>这两者属于压缩/维护子系统，与稳态共用 journal 锚点但生命周期不同：digest/checkpoint 是<b>非破坏性投影</b>（每次请求重新决定带不带），segment 是<b>破坏性裁剪</b>（落盘即生效）。</p>
+
+<h3>2.4 ContextPacket<span class="pill l">legacy</span></h3>
+<p><code>san.context_packet</code> 是 M2 时期的注入机制（三层：stable_checkpoint / turn_digest_ledger / retrieved_context），已被 ContextPlan 取代，源码里仅剩识别与剥离逻辑（<code>isContextPlanLegacyPacketEntry</code>、物化时过滤）。复盘 D16〜D18 点名的死代码主要在这一支。</p>
+
+<h2>3 · L2：ContextSourceIndex —— 每次规划重建的内存索引<span class="tag">寿命：单次规划</span></h2>
+
+<p>从窗口内 entries 全量扫描出 7 个视图（<code>source-index.ts</code>）：</p>
+<table>
+	<tr><th>视图</th><th>内容</th><th>用途</th></tr>
+	<tr><td><code>exactEntries</code></td><td>全部消息 entry</td><td>exact 物料、token 估算</td></tr>
+	<tr><td><code>turnBundles</code></td><td>权威 user 消息到下一条 user 消息的分组</td><td>回合边界</td></tr>
+	<tr><td><code>toolPairs</code></td><td>toolCall↔toolResult 配对 + <code>supersededByToolCallId</code> 标记</td><td>stub 替换候选</td></tr>
+	<tr><td><code>fileEvidence / attachments</code></td><td>文件提及 / 图片描述附件</td><td>保护与降级</td></tr>
+	<tr><td><code>digests</code></td><td>去重后的 digest + <b>解析出的</b> <code>sourceEntryRefs</code></td><td>digest 物料</td></tr>
+	<tr><td><code>checkpoints</code></td><td>checkpoint + 解析出的 <code>coveredDigestEntryRefs / coveredSourceEntryRefs</code></td><td>checkpoint 物料</td></tr>
+</table>
+
+<div class="panel">
+	<b>这一层真正重要的不是视图，是覆盖锚点的三条解析规则：</b>
+	<ol>
+		<li><b>digest span 解析</b>（<code>sourceEntryRefsForDigest</code>）：from/to entry id 都在窗内 → 取区间；端点不在（被压缩裁掉）→ <u>退化为 toolEvidence.entryIds 里还存在的零散引用</u>。这就是复盘里"窗口裁剪后覆盖碎裂"的出处。</li>
+		<li><b>checkpoint 一二级展开</b>：<code>coveredDigestEntryRefs = entryRefs ∩ 现存 digest</code>；二级覆盖优先用 v2 显式 <code>coveredSourceEntryRefs</code>（过滤到现存 entry），否则从 digest span 展开。</li>
+		<li><b>fallback 剥离</b>：任何只由 fallback digest 贡献的原始 span，从 checkpoint 覆盖里剥掉 —— fallback 永远不授权省略原文。</li>
+	</ol>
+</div>
+
+<h2>4 · L3：BuiltContextPlan —— 一次请求的计划<span class="tag">寿命：单次请求（turn 内冻结）</span></h2>
+
+<table>
+	<tr><th>组成</th><th>结构</th><th>角色</th></tr>
+	<tr><td><code>audit.budget</code></td><td><code>ContextPlanBudgetAudit</code>：steadyTarget / burstCeiling / messageBudget / planTokenBudget…</td><td>从 contextWindow 和 reserve 反推的容器预算（<code>budget.ts</code>）</td></tr>
+	<tr><td><code>audit.qualityGate</code></td><td>outcome（pass / burst_required / hard_pressure）、protectedEntryRefs、emergencyStubEntryRefs…</td><td>保护集判定：哪些 exact/live 物料不可省略；压力时的应急降级档</td></tr>
+	<tr><td><code>materials</code></td><td>判别联合：<code>digest | checkpoint | recall | tool_stub</code></td><td>前三类渲染进 plan 消息并携带 <code>coveredEntryRefs</code>；tool_stub 只作用于投影替换，<b>恒不授权覆盖</b></td></tr>
+	<tr><td><code>audit.coverage</code></td><td><code>{ sourceEntryRefs[], replacementMaterialId, reason }[]</code></td><td><b>覆盖映射表</b>：entry id → 替代物料。省略的唯一授权来源</td></tr>
+	<tr><td><code>renderedContent / message</code></td><td>Handlebars 模板渲染出的字符串 → 一条 <code>custom_message</code></td><td>真正发给模型的东西；wire token 只量它</td></tr>
+</table>
+
+<p>准入与定型的流程（本轮修复后）：<b>全部候选先入场 → 统一用渲染后 wire 体积试装 → 装不下按 recall → 最旧 digest → checkpoint 顺序淘汰 → checkpoint 被淘汰时恢复它折叠的 digest 候选 → 定型</b>。覆盖映射在定型后由 materials 的 <code>coveredEntryRefs</code> 累加生成，再经 <code>validateContextPlanCoverage</code> 六项校验（无物料、引用缺失、越界、重复、审计不一致）。</p>
+
+<h2>5 · L4：Payload 投影 —— 唯一真正发送的东西<span class="tag">寿命：单次请求</span></h2>
+
+<p><code>materializeContextPlanMessages(messages, branchEntries, plan)</code> 四步：</p>
+<ol>
+	<li><b>校验</b>：coverage 校验不过 → 当作没有覆盖权（保守保留原文）。</li>
+	<li><b>省略</b>：按 <code>coveredEntryIds</code> 从 payload 里删消息。匹配走<b>双通道</b>：WeakSet 引用（消息对象就是 journal entry 里的那个对象）+ 内容键（<code>role + timestamp + content</code>，带计数处理同键重复）。</li>
+	<li><b>替换</b>：superseded / emergency 的 toolResult 内容换成小 stub（省略先行，已被省略的不再替换）。</li>
+	<li><b>注入</b>：先剥掉上一轮的 plan/packet 注入消息，再把本轮 plan 消息插到<b>最后一条 user 消息之前</b>。</li>
+</ol>
+
+<h2>6 · 恒等与锚点模型<span class="tag">整套系统的心脏</span></h2>
+
+<div class="panel">
+	<p><b>覆盖权的传导链：</b></p>
+<div class="flow">digest.source{from,to} ──┐
+                          ├─▶ L2 解析(∩现存,fallback剥离) ─▶ material.coveredEntryRefs
+checkpoint.entryRefs ─────┘                                          │
+                                                                    ▼
+                                            audit.coverage{entryId → materialId}
+                                                                    │
+                                                                    ▼
+                                        L4 投影省略(双通道匹配) ─▶ 最终 payload</div>
+	<p>顶层（L1〜L3）全程用 <b>journal entry id</b> 锚定 —— 稳定、可验证。底层（L4）却要面对"payload 是 <code>AgentMessage[]</code>，不是 entry"的现实：正常路径靠对象引用（WeakSet）匹配，<b>压缩/resume 后消息是副本，只能退到内容键</b>（role+timestamp+content）。锚点体系在最后一公里换了一次坐标。</p>
+	<p><b>两把 token 尺子：</b>JSON 尺（<code>materialTokenEstimate</code>，用于审计字段和落库存量）与 wire 尺（渲染后估算，唯一参与预算决策的尺，本轮已统一）。尺子统一了，但 JSON 尺仍在数据结构里留有存量字段。</p>
+</div>
+
+<h2>7 · 结构本身的接缝<span class="tag">优化的输入，不是优化方案</span></h2>
+<div class="panel seam">
+	<ol>
+		<li><b>锚点双坐标</b>：覆盖传导在 L1〜L3 用 entry id，L4 用"对象引用 / 内容键"双通道。内容键通道是压缩后覆盖权静默失效的结构性风险点（Step 3 讨论的正是这里）。</li>
+		<li><b>覆盖引用四处冗余声明</b>：digest span、checkpoint 两级 refs、material.coveredEntryRefs、audit.coverage 各存一份，靠校验函数事后对账，无单一属主。</li>
+		<li><b>持久化数据里存派生值</b>：<code>checkpoint.tokenEstimate</code> 是落库时的 JSON 尺读数，单位与决策尺不同；类似地 digest 的覆盖依赖运行时解析而非落库时固化的展开结果。</li>
+		<li><b>索引全量重建</b>：每次规划对窗口 entries 完整重扫（span 解析内层 findIndex，最坏 O(n²)），无增量。</li>
+		<li><b>投影位置无锚</b>：plan 消息插在"最后一条 user 消息之前"——位置随 turn 漂移，不在任何持久锚点上（这是缓存稳定问题的结构根源）。</li>
+		<li><b>两套压缩层级并存</b>：稳态（digest→checkpoint，投影式、可逆、每请求重决定）与 compaction（segment，破坏式、落盘生效）共享 journal 但无共同表示树；稳态失败时静默落入 compaction。</li>
+	</ol>
+</div>
+
+<footer>
+	San · Context Steady 数据结构梳理 · 2026-08-22 · 基于分支 tmp/reliability-commit-20260817 当前源码 · 相关：context-steady-own-plan-20260821 / context-steady-review-20260821
+</footer>
+
+</div>
+</body>
+</html>

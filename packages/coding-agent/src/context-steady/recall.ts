@@ -1,3 +1,4 @@
+import { estimateTokens } from "@san/agent/compaction";
 import type { MemoryBackendSearchItem } from "../memory-backend/types";
 import type { SessionEntry } from "../session/session-entries";
 import { isContinuationPrompt, isDigestRelevantToPrompt } from "./relevance";
@@ -16,6 +17,7 @@ export interface ContextSteadyRecallQueryOptions {
 
 export interface ContextSteadyRecallItemsOptions {
 	maxItems: number;
+	maxTokens?: number;
 	memoryTypes?: readonly string[];
 	scopeKeys?: readonly string[];
 }
@@ -92,12 +94,15 @@ export function normalizeContextSteadyRecallItems(
 	options: ContextSteadyRecallItemsOptions,
 ): ContextRecallItem[] {
 	const maxItems = clampNonNegativeInteger(options.maxItems);
-	if (maxItems === 0) return [];
+	const maxTokens =
+		options.maxTokens === undefined ? Number.POSITIVE_INFINITY : clampNonNegativeInteger(options.maxTokens);
+	if (maxItems === 0 || maxTokens === 0) return [];
 
 	const seen = new Set<string>();
 	const memoryTypes = new Set(options.memoryTypes ?? []);
 	const scopeKeys = new Set(options.scopeKeys ?? []);
 	const normalized: ContextRecallItem[] = [];
+	let tokenEstimate = 0;
 	for (const item of items) {
 		if (item.memoryType && memoryTypes.size > 0 && !memoryTypes.has(item.memoryType)) continue;
 		if (scopeKeys.size > 0 && (!item.scope || !scopeKeys.has(item.scope))) continue;
@@ -105,7 +110,7 @@ export function normalizeContextSteadyRecallItems(
 		if (!content) continue;
 		const key = recallItemKey({ ...item, content });
 		if (seen.has(key)) continue;
-		seen.add(key);
+
 		const recallItem: ContextRecallItem = { content };
 		if (item.id !== undefined && item.id.trim().length > 0) recallItem.id = item.id;
 		if (item.source !== undefined && item.source.trim().length > 0) recallItem.source = item.source;
@@ -113,7 +118,16 @@ export function normalizeContextSteadyRecallItems(
 		if (item.score !== undefined) recallItem.score = item.score;
 		if (item.memoryType !== undefined && item.memoryType.trim().length > 0) recallItem.memoryType = item.memoryType;
 		if (item.scope !== undefined && item.scope.trim().length > 0) recallItem.scope = item.scope;
+
+		const itemTokens = estimateTokens({
+			role: "user",
+			content: JSON.stringify(recallItem),
+			timestamp: Date.now(),
+		});
+		if (tokenEstimate + itemTokens > maxTokens) continue;
+		seen.add(key);
 		normalized.push(recallItem);
+		tokenEstimate += itemTokens;
 		if (normalized.length >= maxItems) break;
 	}
 	return normalized;

@@ -89,6 +89,7 @@ import { CollabQrCodeComponent } from "./helpers/collab-qrcode";
 import { buildContextPacketReportText, parseContextPacketReportCount } from "./helpers/context-packet-report";
 import { buildContextPlanReportText, parseContextPlanReportCount } from "./helpers/context-plan-report";
 import { buildContextReportText } from "./helpers/context-report";
+import { buildContextSteadyReportText } from "./helpers/context-steady-report";
 import { formatDuration } from "./helpers/format";
 import { createMarketplaceManager } from "./helpers/marketplace-manager";
 import { handleMcpAcp } from "./helpers/mcp";
@@ -1719,7 +1720,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "stats",
 		audience: "expert",
 		description: "Launch the local stats dashboard",
-		inlineHint: "[--port <port>] [--host <host>]",
+		inlineHint: "[--port <port>] [--host <host>] [--token <secret>]",
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			const parsed = parseStatsDashboardArgs(command.args);
@@ -1803,10 +1804,11 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		audience: "expert",
 		description: "Show estimated context usage breakdown",
 		acpDescription: "Show context usage",
-		acpInputHint: "[plan|packet [count]]",
+		acpInputHint: "[plan|steady|packet [count]]",
 		allowArgs: true,
 		subcommands: [
 			{ name: "plan", description: "Show San ContextPlan audit view", usage: "[count]" },
+			{ name: "steady", description: "Show context maintenance health view" },
 			{ name: "packet", description: "Show legacy San ContextPacket debug view", usage: "[count]" },
 		],
 		getTuiAutocompleteDescription: runtime => {
@@ -1822,13 +1824,17 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				await runtime.output(buildContextPlanReportText(runtime.sessionManager.getEntries(), { count }));
 				return commandConsumed();
 			}
+			if (verb === "steady") {
+				await runtime.output(buildContextSteadyReportText(runtime.sessionManager.getEntries()));
+				return commandConsumed();
+			}
 			if (verb === "packet") {
 				const count = parseContextPacketReportCount(rest);
 				if (typeof count !== "number") return usage(count.error, runtime);
 				await runtime.output(buildContextPacketReportText(runtime.sessionManager.getEntries(), { count }));
 				return commandConsumed();
 			}
-			if (verb) return usage("Usage: /context [plan [count]|packet [count]]", runtime);
+			if (verb) return usage("Usage: /context [plan [count]|steady|packet [count]]", runtime);
 			await runtime.output(buildContextReportText(runtime));
 			return commandConsumed();
 		},
@@ -1842,6 +1848,13 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 						: count.error,
 					{ dim: false },
 				);
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			if (verb === "steady") {
+				runtime.ctx.showStatus(buildContextSteadyReportText(runtime.ctx.session.sessionManager.getEntries()), {
+					dim: false,
+				});
 				runtime.ctx.editor.setText("");
 				return;
 			}

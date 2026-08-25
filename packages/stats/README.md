@@ -41,15 +41,20 @@ san-stats --json
 ### Programmatic
 
 ```typescript
-import { getDashboardStats, syncAllSessions } from "@san/stats";
+import { getDashboardStats, getUsageAnalyticsStats, syncAllSessions } from "@san/stats";
 
 // Sync session logs to database
 const { processed, files } = await syncAllSessions();
 
-// Get aggregated stats
+// Get the existing dashboard aggregate
 const stats = await getDashboardStats();
 console.log(stats.overall.totalCost);
 console.log(stats.byModel[0].avgTokensPerSecond);
+
+// Get the unified consumption analytics payload
+const usage = await getUsageAnalyticsStats("7d");
+console.log(usage.summary.totalTokens);
+console.log(usage.byProvider[0]?.provider);
 ```
 
 ## API Endpoints
@@ -57,6 +62,7 @@ console.log(stats.byModel[0].avgTokensPerSecond);
 | Endpoint | Description |
 |----------|-------------|
 | `GET /api/stats` | Overall stats with all breakdowns |
+| `GET /api/stats/usage?range=24h` | Unified consumption analytics: summary, token/cost breakdown, provider/model/project rankings, and trends |
 | `GET /api/stats/models` | Per-model statistics |
 | `GET /api/stats/folders` | Per-folder/project statistics |
 | `GET /api/stats/timeseries` | Hourly time series data |

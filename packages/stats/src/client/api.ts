@@ -9,9 +9,29 @@ import type {
 	RequestDetails,
 	TimeRange,
 	ToolDashboardStats,
+	UsageAnalyticsFilter,
+	UsageAnalyticsStats,
 } from "./types";
 
 const API_BASE = "/api";
+
+/**
+ * Auth token for remotely exposed dashboard binds. Picked up once from a
+ * `?token=` link, stashed for the tab's lifetime, and scrubbed from the
+ * address bar so it cannot leak through the URL. Loopback binds never set it.
+ */
+const DASHBOARD_TOKEN = (() => {
+	if (typeof window === "undefined") return "";
+	const url = new URL(window.location.href);
+	const fromUrl = url.searchParams.get("token");
+	if (fromUrl) {
+		window.sessionStorage.setItem("san-stats-token", fromUrl);
+		url.searchParams.delete("token");
+		window.history.replaceState(null, "", url.toString());
+		return fromUrl;
+	}
+	return window.sessionStorage.getItem("san-stats-token") ?? "";
+})();
 
 export class ApiError extends Error {
 	status: number;
@@ -26,7 +46,11 @@ export class ApiError extends Error {
 }
 
 async function fetchJson<T>(endpoint: string, options?: RequestInit): Promise<T> {
-	const res = await fetch(endpoint, options);
+	const headers = new Headers(options?.headers);
+	if (DASHBOARD_TOKEN && !headers.has("Authorization")) {
+		headers.set("Authorization", `Bearer ${DASHBOARD_TOKEN}`);
+	}
+	const res = await fetch(endpoint, { ...options, headers });
 	if (!res.ok) {
 		throw new ApiError(res.status, endpoint, `HTTP error ${res.status} on ${endpoint}`);
 	}
@@ -37,6 +61,17 @@ export async function getOverviewStats(range: TimeRange = "24h", signal?: AbortS
 	return fetchJson<OverviewStats>(`${API_BASE}/stats/overview?range=${encodeURIComponent(range)}`, {
 		signal,
 	});
+}
+
+export async function getUsageAnalyticsStats(
+	range: TimeRange = "24h",
+	filter?: UsageAnalyticsFilter,
+	signal?: AbortSignal,
+): Promise<UsageAnalyticsStats> {
+	const params = new URLSearchParams({ range });
+	if (filter?.provider) params.set("provider", filter.provider);
+	if (filter?.model) params.set("model", filter.model);
+	return fetchJson<UsageAnalyticsStats>(`${API_BASE}/stats/usage?${params}`, { signal });
 }
 
 export async function getModelDashboardStats(

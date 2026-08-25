@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Context Steady 代码审查报告 · 2026-08-22</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1f2933;
+      --muted: #637083;
+      --line: #d7dee7;
+      --paper: #f7f9fb;
+      --panel: #ffffff;
+      --band: #eef3f7;
+      --teal: #0f766e;
+      --blue: #2457a6;
+      --amber: #a16207;
+      --red: #a33a3a;
+      --green: #176b4d;
+      --code: #edf2f7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.65;
+    }
+    .wrap { width: min(1120px, calc(100% - 40px)); margin: 0 auto; }
+    header { background: var(--panel); border-bottom: 1px solid var(--line); }
+    .hero { padding: 52px 0 38px; }
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--teal);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    h1 { max-width: 950px; margin: 0; font-size: clamp(30px, 4.5vw, 52px); line-height: 1.08; }
+    .subtitle { max-width: 900px; margin: 18px 0 0; color: var(--muted); font-size: 17px; }
+    .meta { margin: 14px 0 0; color: var(--muted); font-size: 13px; }
+    main { padding: 30px 0 70px; }
+    section { padding: 28px 0; border-bottom: 1px solid var(--line); }
+    section:last-child { border-bottom: 0; }
+    h2 { margin: 0 0 16px; font-size: 23px; line-height: 1.25; }
+    h3 { margin: 22px 0 8px; font-size: 18px; line-height: 1.3; }
+    p { margin: 10px 0; }
+    ul, ol { margin: 10px 0; padding-left: 24px; }
+    li { margin: 6px 0; }
+    code {
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: var(--code);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .9em;
+    }
+    pre {
+      overflow: auto;
+      margin: 14px 0;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #101820;
+      color: #eef6f3;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    pre code { padding: 0; background: transparent; color: inherit; }
+    table { width: 100%; margin: 14px 0; border-collapse: collapse; background: var(--panel); font-size: 14px; }
+    th, td { padding: 10px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: var(--band); font-weight: 700; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .verdict {
+      margin: 0 0 22px;
+      padding: 18px 20px;
+      border: 2px solid var(--green);
+      border-radius: 9px;
+      background: #f0faf5;
+    }
+    .verdict strong { color: var(--green); }
+    .callout { margin: 16px 0; padding: 14px 16px; border-left: 4px solid var(--teal); background: var(--band); }
+    .callout.warning { border-left-color: var(--amber); }
+    .callout.risk { border-left-color: var(--red); background: #fdf4f4; }
+    .badge {
+      display: inline-block;
+      min-width: 34px;
+      margin-right: 6px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      text-align: center;
+      vertical-align: 2px;
+    }
+    .p0, .p1 { background: var(--red); }
+    .p2 { background: var(--amber); }
+    .p3 { background: var(--blue); }
+    .finding { margin: 20px 0 28px; padding: 18px 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .finding h3 { margin-top: 0; }
+    .finding dt { float: left; clear: left; width: 112px; color: var(--muted); font-weight: 700; }
+    .finding dd { margin: 0 0 8px 124px; }
+    .status-pass { color: var(--green); font-weight: 700; }
+    .status-warn { color: var(--amber); font-weight: 700; }
+    .status-fail { color: var(--red); font-weight: 700; }
+    .toc { margin: 18px 0 0; padding: 14px 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .toc ol { margin: 6px 0 0; }
+    a { color: var(--blue); }
+    .small { color: var(--muted); font-size: 13px; }
+    @media (max-width: 700px) {
+      .wrap { width: min(100% - 24px, 1120px); }
+      .hero { padding-top: 34px; }
+      table { display: block; overflow-x: auto; }
+      .finding dt { float: none; width: auto; }
+      .finding dd { margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="hero">
+      <p class="eyebrow">San · Context Steady · Code Review</p>
+      <h1>Context Steady 代码审查报告</h1>
+      <p class="subtitle">本报告覆盖 Context Steady 稳态上下文计划、稳定投影、recall volatile channel、工具输出降级、图像投影卸载、质量门禁与 AgentSession 接入链路。</p>
+      <p class="meta">审查日期：2026-08-22 · 分支：<code>tmp/reliability-commit-20260817</code> · 结论：<code>PASS_WITH_WARNINGS</code></p>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section>
+    <div class="verdict">
+      <p><strong>门禁结论：PASS_WITH_WARNINGS。</strong></p>
+      <p>未发现有证据支持 P0/P1 阻断级代码缺陷。Context Steady 专项测试、workspace 静态检查、coding-agent 构建和 CLI 冒烟均通过。仍有两个 P2 风险：依赖安全审计报告 16 个 high/critical 漏洞；全量 workspace 测试和标准分层脚本未完成。</p>
+    </div>
+    <div class="toc">
+      <strong>目录</strong>
+      <ol>
+        <li><a href="#scope">审查范围与变更概览</a></li>
+        <li><a href="#impact">业务影响与牵连面</a></li>
+        <li><a href="#evidence">证据与执行记录</a></li>
+        <li><a href="#findings">问题清单</a></li>
+        <li><a href="#priority">修复优先级与回归建议</a></li>
+        <li><a href="#risks">未验证风险与假设</a></li>
+        <li><a href="#appendix">附录</a></li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="scope">
+    <h2>1. 审查范围与变更概览</h2>
+    <table>
+      <tbody>
+        <tr><th>仓库</th><td><code>/Users/slicenfer/work/projects/self/san</code></td></tr>
+        <tr><th>对比范围</th><td><code>e747f95115290a32ff5974f438aa8b609ffe87e9..HEAD</code>；使用 <code>main</code> 与 HEAD 的 merge-base</td></tr>
+        <tr><th>HEAD</th><td><code>cf47e45fae0a14c2192bf34adba78821ea3b1ad0</code></td></tr>
+        <tr><th>变更规模</th><td>183 个文件；采集上下文记录新增 20,014 行、删除 994 行</td></tr>
+        <tr><th>主要目录</th><td><code>packages/coding-agent</code>、<code>packages/ai</code>、<code>docs/research</code>、<code>packages/tui</code>、<code>packages/utils</code></td></tr>
+        <tr><th>重点代码</th><td><code>packages/coding-agent/src/context-steady/*</code>、<code>packages/coding-agent/src/session/agent-session.ts</code></td></tr>
+      </tbody>
+    </table>
+    <p>重点检查的行为包括：ContextPlan budget 与 quality gate、checkpoint/digest 覆盖权、fallback digest 权限边界、stable projection epoch 冻结、recall 消息注入、tool-result stub、image substitution、withdrawn plan 回退、hard-pressure recovery 和 session lifecycle 清理。</p>
+  </section>
+
+  <section id="impact">
+    <h2>2. 业务影响与牵连面</h2>
+    <table>
+      <thead><tr><th>层级</th><th>判断</th><th>主要证据</th></tr></thead>
+      <tbody>
+        <tr><th>入口层</th><td>影响每次 provider request 的上下文转换；新增能力默认关闭。</td><td><code>AgentSession.#transformContextForProvider</code>、<code>buildContextSteadyRequestPlan</code></td></tr>
+        <tr><th>核心流程</th><td>影响计划生成、物化、tool-loop re-gate、hard-pressure recovery、resume/rebase。</td><td><code>planner.ts</code>、<code>materialize.ts</code>、<code>agent-session.ts</code></td></tr>
+        <tr><th>数据存储</th><td>扩展 ContextPlan、maintenance、activation 等 journal custom entries；tool/image offload 仅改 provider projection。</td><td>audit persistence 与 pending-ref remap 路径</td></tr>
+        <tr><th>下游依赖</th><td>改变模型收到的历史表示及 prompt-cache 前缀稳定性，不改变外部 HTTP API。</td><td>stable pinned plan、volatile recall、provider wire estimate</td></tr>
+        <tr><th>监控告警</th><td>新增 hard-pressure、projection orphan、maintenance、net-benefit 日志/审计；生产阈值未验证。</td><td><code>auditProjectionCoverage</code>、maintenance audit、logger calls</td></tr>
+      </tbody>
+    </table>
+    <div class="callout">
+      <strong>核心回归面：</strong>checkpoint 预算边界、稳定投影 epoch 变更、recall 两种注入模式、tool stub 与 coverage audit、image substitution、provider 实际 token 估算、长会话 compaction 和 resume。
+    </div>
+  </section>
+
+  <section id="evidence">
+    <h2>3. 证据与执行记录</h2>
+    <table>
+      <thead><tr><th>层级</th><th>检查项</th><th>状态</th><th>关键结果</th></tr></thead>
+      <tbody>
+        <tr><td>static_and_type</td><td>coding-agent check</td><td class="status-pass">PASS</td><td><code>bun run check</code> 通过</td></tr>
+        <tr><td>static_and_type</td><td>workspace 全量 check</td><td class="status-pass">PASS</td><td>所有 workspace package check 通过，耗时 17.39s</td></tr>
+        <tr><td>tests</td><td>Context Steady 专项</td><td class="status-pass">PASS</td><td>31 个文件，296 pass / 0 fail / 1,419 assertions</td></tr>
+        <tr><td>tests</td><td>预算与降级边界</td><td class="status-pass">PASS</td><td>5 个文件，28 pass / 0 fail / 105 assertions</td></tr>
+        <tr><td>tests</td><td>CLI 冒烟</td><td class="status-pass">PASS</td><td><code>--version</code>、<code>--help</code>、<code>stats --help</code>、worker smoke 均通过</td></tr>
+        <tr><td>build</td><td>coding-agent binary build</td><td class="status-pass">PASS</td><td><code>packages/coding-agent bun run build</code> 通过，耗时 4.04s</td></tr>
+        <tr><td>security</td><td>Bun dependency audit</td><td class="status-fail">FAIL</td><td>16 vulnerabilities：1 critical、15 high</td></tr>
+        <tr><td>layered script</td><td>标准 <code>run_layered_checks.py</code></td><td class="status-warn">SKIP</td><td>skill 资源可读，但本机没有可执行脚本文件；已用等价命令补充验证</td></tr>
+      </tbody>
+    </table>
+    <h3>关键实现检查</h3>
+    <ul>
+      <li><code>planner.ts:352-398</code>：最终渲染 wire budget fitting；checkpoint 移除后恢复其 covered digest 候选，并记录 omitted/degraded audit。</li>
+      <li><code>planner.ts:489-653</code>：quality gate、digest decay、stable frozen materials、tool stub 和 coverage audit 构建。</li>
+      <li><code>materialize.ts:273-341</code>：withdrawn plan 保留原始历史；pinned plan 位于 payload head；recall/tool/image 使用独立投影路径。</li>
+      <li><code>agent-session.ts:10413-10439</code>：net-benefit gate 参与 projected-token fixed point；非正收益 steady plan 被撤回。</li>
+      <li><code>source-index.ts:75-152</code>：同路径后续完整 mutation 标记旧结果为 superseded，保留 tool pair 不授权 coverage。</li>
+    </ul>
+  </section>
+
+  <section id="findings">
+    <h2>4. 问题清单</h2>
+
+    <article class="finding">
+      <h3><span class="badge p2">P2</span>F-001：依赖树存在高危/严重漏洞</h3>
+      <dl>
+        <dt>类别</dt><dd>安全 / 依赖供应链</dd>
+        <dt>位置</dt><dd><code>bun.lock</code>；具体漏洞由 Bun audit 根据 workspace 依赖路径报告</dd>
+        <dt>证据</dt><dd><code>bun audit --audit-level=high</code> 返回码 1，报告 16 个漏洞（1 critical、15 high），涉及 <code>tar</code>、<code>adm-zip</code>、<code>sharp</code>、<code>brace-expansion</code>、<code>nanoid</code>、<code>fast-xml-parser</code>、<code>js-yaml</code> 等。</dd>
+        <dt>影响</dt><dd>恶意压缩包、XML/YAML、图像或相关输入在可达处理路径中可能触发路径穿越、任意文件覆盖、拒绝服务或解析器资源耗尽。当前未证明所有漏洞都能从 coding-agent 用户入口到达。</dd>
+        <dt>修复建议</dt><dd>按 workspace 确认可达路径和发布产物；升级含修复版本，必要时使用兼容 override，重新生成 <code>bun.lock</code>。</dd>
+        <dt>验证方式</dt><dd>重新运行 Bun audit；对 archive/XML/YAML/image 入口执行恶意输入测试；确认发布包不携带旧版本。</dd>
+        <dt>置信度</dt><dd>0.99</dd>
+        <dt>是否阻断</dt><dd>否；若发布策略要求零 high/critical，则应升级为发布阻断条件。</dd>
+      </dl>
+    </article>
+
+    <article class="finding">
+      <h3><span class="badge p2">P2</span>F-002：全量 workspace 测试与标准分层报告未完成</h3>
+      <dl>
+        <dt>类别</dt><dd>测试 / 验证覆盖</dd>
+        <dt>位置</dt><dd>审查流程；重点牵连 <code>packages/coding-agent/src/session/agent-session.ts</code></dd>
+        <dt>证据</dt><dd>已通过 Context Steady 专项、workspace check、coding-agent build 和 CLI smoke；未执行仓库级 <code>bun run ci:test:full</code>，标准 <code>run_layered_checks.py</code> 也未能从本机文件系统执行。</dd>
+        <dt>影响</dt><dd>Context Steady 之外的 session、provider、TUI、compaction、worker、SDK 集成回归尚未被证实。<code>agent-session.ts</code> 同时承担多条核心链路，专项通过不能推出全量行为无回归。</dd>
+        <dt>修复建议</dt><dd>在明确的目标工作区上运行全量 TypeScript、native/Rust、coding-agent runtime/UI/heavy 套件；在 CI 固定可复现的分层入口。</dd>
+        <dt>验证方式</dt><dd>运行 <code>bun run ci:test:full</code>、必要的 <code>bun run test:rs</code> 及 coding-agent 全套 runtime/UI/heavy 测试。</dd>
+        <dt>置信度</dt><dd>0.98</dd>
+        <dt>是否阻断</dt><dd>否；当前已有充分的专项行为证据。</dd>
+      </dl>
+    </article>
+
+    <article class="finding">
+      <h3><span class="badge p3">P3</span>F-003：recall 查询与归一化边界缺少直接覆盖</h3>
+      <dl>
+        <dt>类别</dt><dd>测试 / 可维护性</dd>
+        <dt>位置</dt><dd><code>packages/coding-agent/src/context-steady/recall.ts</code>；<code>ContextSteadyRecallItemsOptions</code> 等选项</dd>
+        <dt>证据</dt><dd>现有 stable-projection 测试覆盖已构造 recall layer 的消息物化，但未直接覆盖 recall 输入归一化、空项/超限项、query 截断、重复项及 backend 异常边界。</dd>
+        <dt>影响</dt><dd>异常 recall 输入可能被错误丢弃、重复注入或超出预期 token/数量上限；主要影响增强上下文，不直接破坏原始 journal。</dd>
+        <dt>修复建议</dt><dd>增加 recall normalization 契约测试，覆盖 <code>maxItems</code>、<code>maxTokens</code>、<code>maxQueryChars</code>、重复项、缺省字段、超长 content、disabled/error 回退，以及 stable/legacy 两种注入路径。</dd>
+        <dt>验证方式</dt><dd>运行 recall 专项和 Context Steady 全套测试，断言字段、顺序、上限和错误回退语义。</dd>
+        <dt>置信度</dt><dd>0.90</dd>
+        <dt>是否阻断</dt><dd>否</dd>
+      </dl>
+    </article>
+
+    <div class="callout">
+      <strong>未发现 P0/P1 明确缺陷。</strong>该判断基于已执行的静态、构建、冒烟和 Context Steady 专项证据，不等同于宣称全仓库或生产 provider 行为没有风险。
+    </div>
+  </section>
+
+  <section id="priority">
+    <h2>5. 修复优先级与回归建议</h2>
+    <ol>
+      <li><strong>依赖安全：</strong>确认 F-001 的可达性和发布影响，升级或隔离漏洞依赖，重新审计。</li>
+      <li><strong>全量验证：</strong>补齐 F-002 的 workspace、native/Rust、runtime/UI/heavy 测试，并保留可复现结果。</li>
+      <li><strong>recall 覆盖：</strong>补齐 F-003 的 normalization、边界和异常契约测试。</li>
+      <li><strong>生产观察：</strong>对比 Context Steady 开关前后的 provider prompt tokens、cache read/write、compaction 触发率、hard-pressure/refusal 数和 projection orphan 日志。</li>
+      <li><strong>长会话回放：</strong>验证 checkpoint、物理 compaction、resume、模型窗口变化、topic shift 和 tool-loop pressure 组合场景。</li>
+    </ol>
+  </section>
+
+  <section id="risks">
+    <h2>6. 未验证风险与假设</h2>
+    <ul>
+      <li><strong>全量测试未执行：</strong>尚未运行 <code>bun run ci:test:full</code>、Rust/native 全量测试及 coding-agent runtime/UI/heavy 套件。</li>
+      <li><strong>标准脚本不可用：</strong>CR skill 中的脚本资源可读，但对应本地可执行文件不存在；报告使用已直接执行的等价命令，不将其标记为标准脚本通过。</li>
+      <li><strong>安全覆盖有限：</strong>只执行了 Bun 依赖审计，未执行独立 SAST/DAST，也未完成每个漏洞的可达性分析。</li>
+      <li><strong>生产行为未验证：</strong>未进行真实第三方 provider 兼容性、prompt-cache 命中率、长会话性能或生产数据回放。</li>
+      <li><strong>工作区假设：</strong>审查期间工作区为 dirty；采集上下文记录 13 个 unstaged、12 个 untracked 文件。未跟踪研究文件和生成文件是否属于拟提交范围，需要在提交前明确。</li>
+    </ul>
+  </section>
+
+  <section id="appendix">
+    <h2>7. 附录：关键命令</h2>
+    <pre><code>bun run check
+bun test --cwd packages/coding-agent test/context-steady --only-failures
+bun test --cwd packages/coding-agent test/context-steady/budget.test.ts test/context-steady/quality-gate.test.ts test/context-steady/digest-decay.test.ts test/context-steady/emergency-tier.test.ts test/context-steady/superseded-edit.test.ts
+bun run build                         # cwd: packages/coding-agent
+bun run ci:test:smoke
+bun audit --audit-level=high</code></pre>
+    <p class="small">审查结论：<strong>PASS_WITH_WARNINGS</strong>。本文件记录的是审查时点的证据和风险，不替代发布前的全量 CI、安全修复和生产验证。</p>
+  </section>
+</main>
+</body>
+</html>

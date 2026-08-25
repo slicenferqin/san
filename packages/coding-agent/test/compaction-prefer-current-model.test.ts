@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent } from "@san/agent";
+import { Agent, ThinkingLevel } from "@san/agent";
 import * as compactionModule from "@san/agent/compaction";
 import * as AIError from "@san/ai/error";
 import { buildModel } from "@san/catalog/build";
@@ -170,7 +170,7 @@ describe("compaction prefers the current session model over modelRoles.default",
 		]);
 	});
 
-	it("uses compactionModel only for the summary call and leaves the active model unchanged", async () => {
+	it("uses compactionModel only for the summary call, honors its thinking selector, and leaves the active model unchanged", async () => {
 		const baseCurrentModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const compactionModel = getBundledModel("openai", "gpt-5");
 		if (!baseCurrentModel || !compactionModel) {
@@ -178,7 +178,7 @@ describe("compaction prefers the current session model over modelRoles.default",
 		}
 		const currentModel = buildModel({
 			...baseCurrentModel,
-			compactionModel: `${compactionModel.provider}/${compactionModel.id}`,
+			compactionModel: `${compactionModel.provider}/${compactionModel.id}:high`,
 			compat: baseCurrentModel.compatConfig,
 		});
 
@@ -227,10 +227,11 @@ describe("compaction prefers the current session model over modelRoles.default",
 		await session.compact();
 
 		expect(compactSpy).toHaveBeenCalled();
-		const [, firstCandidate] = compactSpy.mock.calls[0]!;
+		const [, firstCandidate, , , , firstOptions] = compactSpy.mock.calls[0]!;
 		expect(`${firstCandidate.provider}/${firstCandidate.id}`).toBe(
 			`${compactionModel.provider}/${compactionModel.id}`,
 		);
+		expect(firstOptions?.thinkingLevel).toBe(ThinkingLevel.High);
 		expect(`${session.model?.provider}/${session.model?.id}`).toBe(`${currentModel.provider}/${currentModel.id}`);
 	});
 
