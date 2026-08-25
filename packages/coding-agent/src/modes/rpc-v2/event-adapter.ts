@@ -33,6 +33,8 @@ export class AdapterContext {
 	currentTurnId: TurnId | undefined;
 	currentOperationId: string | undefined;
 	currentRunTerminalStatus: "completed" | "failed" | "aborted" | "interrupted" | undefined;
+	/** Error detail for the terminal `run.failed` event; set alongside currentRunTerminalStatus. */
+	currentRunErrorMessage: string | undefined;
 	/** Mirrors StreamPolicy.thinkingDeltas; kept in sync by SessionManager.configureStream. */
 	emitThinkingDeltas = false;
 	#currentMessageId: MessageId | undefined;
@@ -126,9 +128,15 @@ export function adaptSessionEvent(
 						: status === "aborted"
 							? "run.aborted"
 							: "run.interrupted";
+			const errorMessage = status === "failed" ? ctx.currentRunErrorMessage : undefined;
 			return sequencer.emit(
 				eventType,
-				{ runId, status, finishedAt: new Date().toISOString() },
+				{
+					runId,
+					status,
+					finishedAt: new Date().toISOString(),
+					...(errorMessage ? { message: sanitizeRpcText(errorMessage) } : {}),
+				},
 				{ durability: "durable", runId },
 			);
 		}

@@ -82,6 +82,43 @@ describe("event-adapter message_update", () => {
 	});
 });
 
+describe("event-adapter agent_end terminal events", () => {
+	function makeAgentEnd(): AgentSessionEvent {
+		return { type: "agent_end", messages: [assistant] } as AgentSessionEvent;
+	}
+
+	it("attaches the sanitized error message to run.failed", () => {
+		const { ctx, sequencer } = makeContext();
+		ctx.currentRunTerminalStatus = "failed";
+		ctx.currentRunErrorMessage = "provider asxs: connection\ntimeout";
+		const emitted = adaptSessionEvent(makeAgentEnd(), sequencer, ctx);
+		expect(emitted?.type).toBe("run.failed");
+		const data = (emitted?.data ?? {}) as { status?: string; message?: string };
+		expect(data.status).toBe("failed");
+		expect(data.message).toBe("provider asxs: connection\ntimeout");
+	});
+
+	it("omits the error message on completed and aborted runs", () => {
+		for (const status of ["completed", "aborted"] as const) {
+			const { ctx, sequencer } = makeContext();
+			ctx.currentRunTerminalStatus = status;
+			ctx.currentRunErrorMessage = "should not leak";
+			const emitted = adaptSessionEvent(makeAgentEnd(), sequencer, ctx);
+			const data = (emitted?.data ?? {}) as { message?: string };
+			expect(data.message).toBeUndefined();
+		}
+	});
+
+	it("falls back to status-only when no error message was captured", () => {
+		const { ctx, sequencer } = makeContext();
+		ctx.currentRunTerminalStatus = "failed";
+		const emitted = adaptSessionEvent(makeAgentEnd(), sequencer, ctx);
+		const data = (emitted?.data ?? {}) as { status?: string; message?: string };
+		expect(data.status).toBe("failed");
+		expect(data.message).toBeUndefined();
+	});
+});
+
 describe("event-adapter message_end", () => {
 	it("projects bounded visible content and clears the active stream", () => {
 		const { ctx, sequencer } = makeContext();

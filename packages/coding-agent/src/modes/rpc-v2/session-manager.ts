@@ -990,6 +990,7 @@ export class RpcV2SessionManager {
 		active.adapter.currentRunId = runId;
 		active.adapter.currentOperationId = opId;
 		active.adapter.currentRunTerminalStatus = undefined;
+		active.adapter.currentRunErrorMessage = undefined;
 		const response = { runId, operationId: opId, acceptedAt };
 		await this.emitCustom(active, "run.accepted", response, {
 			runId,
@@ -1924,6 +1925,12 @@ export class RpcV2SessionManager {
 			const stopReason = message && "stopReason" in message ? message.stopReason : undefined;
 			const status = stopReason === "aborted" ? "aborted" : stopReason === "error" ? "failed" : "completed";
 			active.adapter.currentRunTerminalStatus = status;
+			// 终态事件是客户端唯一可靠的失败归因通道：把助手消息上的 errorMessage 随 run.failed 上线。
+			const errorMessage =
+				status === "failed" && message && "errorMessage" in message && typeof message.errorMessage === "string"
+					? message.errorMessage
+					: undefined;
+			active.adapter.currentRunErrorMessage = errorMessage;
 			active.lastRun = { ...active.activeRun, status, finishedAt: new Date().toISOString() };
 			active.activeRun = undefined;
 			active.activeResourceIds.clear();
@@ -1975,6 +1982,7 @@ export class RpcV2SessionManager {
 			active.adapter.currentRunId = undefined;
 			active.adapter.currentTurnId = undefined;
 			active.adapter.currentRunTerminalStatus = undefined;
+			active.adapter.currentRunErrorMessage = undefined;
 		}
 		await this.#persistState(active);
 		if (event.type === "agent_end") await this.#flushDeferredResourceReleases(active);
