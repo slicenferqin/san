@@ -10,6 +10,7 @@ export {
 	getDashboardStats,
 	getToolDashboardStats,
 	getTotalMessageCount,
+	getUsageAnalyticsStats,
 	type SyncOptions,
 	type SyncProgress,
 	smokeTestSyncWorker,
@@ -32,11 +33,17 @@ export type {
 	ModelPerformancePoint,
 	ModelStats,
 	ModelTimeSeriesPoint,
+	ProjectUsageStats,
+	ProviderUsageStats,
 	TimeSeriesPoint,
 	ToolDashboardStats,
 	ToolModelStats,
 	ToolTimeSeriesPoint,
 	ToolUsageStats,
+	UsageAggregate,
+	UsageAnalyticsStats,
+	UsageModelStats,
+	UsageTrendPoint,
 } from "./types";
 
 /**

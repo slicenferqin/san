@@ -45,14 +45,7 @@ export default function App() {
 		const isActive = target === active;
 		switch (target) {
 			case "overview":
-				return (
-					<OverviewRoute
-						active={isActive}
-						range={range}
-						refreshTrigger={refreshTrigger}
-						onRequestClick={setSelectedRequestId}
-					/>
-				);
+				return <OverviewRoute active={isActive} range={range} refreshTrigger={refreshTrigger} />;
 			case "requests":
 				return (
 					<RequestsRoute

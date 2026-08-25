@@ -10388,6 +10388,8 @@ export class AgentSession {
 	 * re-lay the plan out.
 	 */
 	#contextSteadyFrozenEpochPlan(): BuiltContextPlan | undefined {
+		// Pending semantic rebases must invalidate the frozen artifact first; otherwise a hard-pressure or resume boundary can be hidden by the previous epoch plan.
+		if (this.#contextSteadyPendingResumeRebase || this.#contextSteadyPendingBudgetPressureRebase) return undefined;
 		const candidate = this.#contextSteadyRequestPlan ?? this.#contextSteadyLastPlan;
 		if (candidate?.projectionMode !== "pinned") return undefined;
 		// A withdrawn plan ships nothing; freezing it would pin "no plan" for the

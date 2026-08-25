@@ -8,12 +8,12 @@
 # 与 `ds-pro` 两个字面量在 models.yml 里都不存在,导致 smol 角色长期解析失败。
 modelRoles:
   default: sol:xhigh
-  smol: cpa/opencode-go/mimo-v2.5
+  smol: opencode-go/mimo-v2.5
   slow: sol
-  vision: cpa/asxs-grok/grok-4.6
-  plan: cpa/agentrouter/claude-opus-5
-  advisor: cpa/asxs/gpt-5.6-sol
-  task: cpa/zhou/gpt-5.6-luna
+  vision: asxs-grok/grok-4.6
+  plan: agentrouter/claude-opus-5
+  advisor: asxs/gpt-5.6-sol
+  task: zhou/gpt-5.6-luna
 
 setupVersion: 1
 
@@ -36,7 +36,7 @@ san:
       llm:
         enabled: true
         # 全限定 id:摘要模型与 smol 角色解耦,调角色不会牵动摘要档位。
-        modelRole: cpa/opencode-go/mimo-v2.5
+        modelRole: model-proxy/deepseek-v4-flash
     # steady 200000 / control 216666 / burst 219300 on a 258000 window.
     # reserveRatio 0.25 put the reserve-derived hard ceiling at 193500, below the 240000
     # quality window, which clamped steady == control == burst: no elastic headroom, so every
@@ -66,6 +66,8 @@ san:
       maxTokens: 1000
       maxQueryChars: 2000
 
+  contractEcho:
+    firstTurn: false
   executionLoop:
     enabled: true
     defaultMode: solo

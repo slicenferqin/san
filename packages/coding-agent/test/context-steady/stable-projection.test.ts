@@ -188,6 +188,39 @@ describe("Context Steady stable projection", () => {
 		expect(audits[1]?.withdrawn).toBe(false);
 	});
 
+	it("rebuilds the stable plan after a hard-pressure refusal instead of freezing the refused plan", async () => {
+		authoritativeDigestSpy("pressure rebase");
+		const { session, sessionManager, mock } = await createSession({
+			...BASE_SETTINGS,
+			"san.contextSteady.qualityWindowTokens": 2_000,
+			"san.contextSteady.burstWindowTokens": 3_000,
+			"san.contextSteady.contextPlan.maxTokens": 500,
+		});
+
+		await session.prompt(`Warm up the stable plan ${RAW_BODY}`);
+		await session.waitForIdle();
+		await expect(session.prompt(`HARD_PRESSURE_PROMPT ${"x".repeat(40_000)}`)).rejects.toThrow(/hard pressure/i);
+
+		const refusedPlan = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).at(-1)?.data as
+			| { qualityGate?: { outcome?: string } }
+			| undefined;
+		expect(refusedPlan?.qualityGate?.outcome).toBe("hard_pressure");
+
+		// Make the persisted refused prompt fit so the next request can exercise
+		// the pending budget-pressure rebase instead of failing a second time.
+		session.settings.override("san.contextSteady.qualityWindowTokens", 240_000);
+		session.settings.override("san.contextSteady.burstWindowTokens", 320_000);
+		await session.prompt("Continue after the hard-pressure refusal");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(2);
+		const latestPlan = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).at(-1)?.data as
+			| { rebaseReason?: string; qualityGate?: { outcome?: string } }
+			| undefined;
+		expect(latestPlan?.rebaseReason).toBe("budget_pressure");
+		expect(latestPlan?.qualityGate?.outcome).not.toBe("hard_pressure");
+	});
+
 	it("re-lays the plan out when a new checkpoint opens a new epoch, then freezes again", async () => {
 		authoritativeDigestSpy("epoch flip");
 		const { session, sessionManager, mock } = await createSession({

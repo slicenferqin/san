@@ -20,6 +20,11 @@ import {
 	getToolStats,
 	getToolStatsByModel,
 	getToolTimeSeries,
+	getUsageAggregate,
+	getUsageByModel,
+	getUsageByProject,
+	getUsageByProvider,
+	getUsageTrend,
 	initDb,
 	insertMessageStats,
 	insertToolCalls,
@@ -34,7 +39,15 @@ import type { SyncWorkerRequest, SyncWorkerResponse } from "./sync-worker";
 // hidden argv mode, so the compiled binary and npm bundle only need one
 // JavaScript entry. Standalone source `san-stats` keeps using this package's
 // own sync-worker source file.
-import type { BehaviorDashboardStats, DashboardStats, MessageStats, RequestDetails, ToolDashboardStats } from "./types";
+import type {
+	BehaviorDashboardStats,
+	DashboardStats,
+	MessageStats,
+	RequestDetails,
+	ToolDashboardStats,
+	UsageAnalyticsFilter,
+	UsageAnalyticsStats,
+} from "./types";
 
 /**
  * Apply a freshly parsed result to the database. Runs entirely on the
@@ -414,6 +427,54 @@ export async function getOverviewStats(
 		overall: getOverallStats(cutoff ?? undefined),
 		byAgentType: getStatsByAgentType(cutoff ?? undefined),
 		timeSeries: getTimeSeries(timeSeriesHours, cutoff, timeSeriesBucketMs),
+	};
+}
+
+/**
+ * Get the unified consumption analytics payload used by the overview page.
+ * All dimensions share the same cutoff and token/cost calculation rules.
+ */
+export async function getUsageAnalyticsStats(
+	range?: string | null,
+	filter?: UsageAnalyticsFilter,
+): Promise<UsageAnalyticsStats> {
+	const normalizedRange = range?.trim().toLowerCase();
+	const effectiveRange =
+		normalizedRange === "1h" ||
+		normalizedRange === "24h" ||
+		normalizedRange === "7d" ||
+		normalizedRange === "30d" ||
+		normalizedRange === "90d" ||
+		normalizedRange === "all"
+			? normalizedRange
+			: DEFAULT_TIME_RANGE;
+
+	await initDb();
+	const { timeSeriesHours, timeSeriesBucketMs, cutoff } = getTimeRangeConfig(effectiveRange);
+	const appliedFilter: UsageAnalyticsFilter = {
+		provider: filter?.provider?.trim() || null,
+		model: filter?.model?.trim() || null,
+	};
+	const cutoffValue = cutoff ?? undefined;
+	const availableProviders = getUsageByProvider(cutoffValue);
+	const availableModels = getUsageByModel(cutoffValue);
+
+	return {
+		range: effectiveRange,
+		filters: appliedFilter,
+		options: {
+			providers: availableProviders.map(item => item.provider).sort((left, right) => left.localeCompare(right)),
+			models: availableModels
+				.map(item => ({ model: item.model, provider: item.provider }))
+				.sort((left, right) =>
+					`${left.provider}\u0000${left.model}`.localeCompare(`${right.provider}\u0000${right.model}`),
+				),
+		},
+		summary: getUsageAggregate(cutoffValue, appliedFilter),
+		byProvider: getUsageByProvider(cutoffValue, appliedFilter),
+		byModel: getUsageByModel(cutoffValue, appliedFilter),
+		byProject: getUsageByProject(cutoffValue, appliedFilter),
+		trend: getUsageTrend(timeSeriesHours, cutoff, timeSeriesBucketMs, appliedFilter),
 	};
 }
 

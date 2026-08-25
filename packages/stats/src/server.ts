@@ -17,6 +17,7 @@ import {
 	getRequestDetails,
 	getToolDashboardStats,
 	getTotalMessageCount,
+	getUsageAnalyticsStats,
 	syncAllSessions,
 } from "./aggregator";
 import { decodeEmbeddedClientArchive } from "./embedded-client";
@@ -206,6 +207,15 @@ export async function handleApi(req: Request): Promise<Response> {
 
 	if (path === "/api/stats/overview") {
 		const stats = await getOverviewStats(range);
+		return Response.json(stats);
+	}
+
+	if (path === "/api/stats/usage") {
+		const filter = {
+			provider: url.searchParams.get("provider"),
+			model: url.searchParams.get("model"),
+		};
+		const stats = await getUsageAnalyticsStats(range, filter);
 		return Response.json(stats);
 	}
 
@@ -403,6 +413,10 @@ type ProbeResult =
 	| { kind: "available" }
 	| { kind: "reusable"; foundHost: string }
 	| { kind: "different-host"; foundHost: string }
+	| { kind: "authentication-required"; foundHost: string }
+	| { kind: "authentication-mismatch"; foundHost: string }
+	| { kind: "authentication-unknown"; foundHost: string }
+	| { kind: "authentication-unavailable"; foundHost: string }
 	| { kind: "unidentified" };
 
 /**
@@ -410,7 +424,7 @@ type ProbeResult =
  * connections mean the port is free to bind; a responding service that does
  * not identify as San stats (or is bound to a different host) is left alone.
  */
-async function probeStatsServer(host: string, port: number): Promise<ProbeResult> {
+async function probeStatsServer(host: string, port: number, token: string): Promise<ProbeResult> {
 	const probeUrl = `${formatStatsUrl(probeHostFor(host), port)}/api/health`;
 	let response: Response;
 	try {
@@ -419,19 +433,48 @@ async function probeStatsServer(host: string, port: number): Promise<ProbeResult
 		return { kind: "available" };
 	}
 	if (!response.ok) return { kind: "unidentified" };
-	let health: { status?: unknown; name?: unknown; host?: unknown } | null = null;
+	let health: {
+		status?: unknown;
+		name?: unknown;
+		host?: unknown;
+		authRequired?: unknown;
+	} | null = null;
 	try {
-		health = (await response.json()) as { status?: unknown; name?: unknown; host?: unknown } | null;
+		health = (await response.json()) as {
+			status?: unknown;
+			name?: unknown;
+			host?: unknown;
+			authRequired?: unknown;
+		} | null;
 	} catch {
 		return { kind: "unidentified" };
 	}
 	if (health?.status !== "ok" || health?.name !== STATS_SERVER_NAME || typeof health?.host !== "string") {
 		return { kind: "unidentified" };
 	}
-	const compatible = await statsHostsCompatible(host, health.host);
-	return compatible
-		? { kind: "reusable", foundHost: health.host }
-		: { kind: "different-host", foundHost: health.host };
+	const foundHost = health.host;
+	const compatible = await statsHostsCompatible(host, foundHost);
+	if (!compatible) return { kind: "different-host", foundHost };
+	// A remote dashboard from an older build has no way to prove that it is
+	// protected. Do not silently reuse it as if the supplied token secured it.
+	if (!isLoopbackStatsHost(foundHost) && health.authRequired !== true) {
+		return { kind: "authentication-unknown", foundHost };
+	}
+	if (health.authRequired !== true) return { kind: "reusable", foundHost };
+	if (token === "") return { kind: "authentication-required", foundHost };
+
+	let authenticatedProbe: Response;
+	try {
+		authenticatedProbe = await fetch(probeUrl, {
+			headers: { Authorization: `Bearer ${token}` },
+			signal: AbortSignal.timeout(500),
+		});
+	} catch {
+		return { kind: "authentication-unavailable", foundHost };
+	}
+	if (authenticatedProbe.status === 401) return { kind: "authentication-mismatch", foundHost };
+	if (!authenticatedProbe.ok) return { kind: "authentication-unavailable", foundHost };
+	return { kind: "reusable", foundHost };
 }
 
 /**
@@ -476,10 +519,35 @@ export async function startServer(
 
 	// `port: 0` means "pick a free port" and has nothing to probe.
 	if (port > 0) {
-		const probe = await probeStatsServer(normalizedHost, port);
+		const probe = await probeStatsServer(normalizedHost, port, token);
 		if (probe.kind === "reusable") {
 			return { port, host: normalizedHost, reused: true, stop: () => {} };
 		}
+		if (probe.kind === "authentication-required") {
+			throw new Error(
+				`Port ${port} is already in use by an authenticated San stats dashboard bound to ${probe.foundHost}; ` +
+					"provide the same --token <secret> to reuse it.",
+			);
+		}
+		if (probe.kind === "authentication-mismatch") {
+			throw new Error(
+				`Port ${port} is already in use by a San stats dashboard bound to ${probe.foundHost}, ` +
+					"but the supplied authentication token does not match.",
+			);
+		}
+		if (probe.kind === "authentication-unknown") {
+			throw new Error(
+				`Port ${port} is already in use by a remote San stats dashboard bound to ${probe.foundHost} ` +
+					"without verifiable authentication; stop it before reusing this port.",
+			);
+		}
+		if (probe.kind === "authentication-unavailable") {
+			throw new Error(
+				`Could not verify authentication for the San stats dashboard bound to ${probe.foundHost}; ` +
+					"stop it or retry.",
+			);
+		}
+
 		if (probe.kind === "different-host") {
 			throw new Error(
 				`Port ${port} is already in use by a San stats dashboard bound to ${probe.foundHost}; ` +
@@ -508,7 +576,16 @@ export async function startServer(
 				// stats dashboard before reusing its host:port. Identity only —
 				// no data, so it stays reachable without a token.
 				if (path === "/api/health") {
-					return Response.json({ status: "ok", name: STATS_SERVER_NAME, host: normalizedHost });
+					const credentialPresented = req.headers.has("authorization") || url.searchParams.has("token");
+					if (!loopback && credentialPresented && !statsTokensMatch(requestStatsToken(req, url), token)) {
+						return new Response("Unauthorized", { status: 401 });
+					}
+					return Response.json({
+						status: "ok",
+						name: STATS_SERVER_NAME,
+						host: normalizedHost,
+						...(!loopback ? { authRequired: true } : {}),
+					});
 				}
 
 				// Loopback serves local development, so cross-origin tooling may

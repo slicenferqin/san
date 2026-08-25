@@ -41,6 +41,98 @@ export interface AggregatedStats {
 	firstTimestamp: number;
 	lastTimestamp: number;
 }
+/**
+ * Usage analytics aggregate with explicit token and cost breakdowns.
+ * `totalTokens` is the sum of the four displayed token categories.
+ */
+export interface UsageAggregate extends AggregatedStats {
+	/** Success rate (0-1) */
+	successRate: number;
+	/** Sum of input, output, cache-read, and cache-write tokens */
+	totalTokens: number;
+	/** Input token cost */
+	costInput: number;
+	/** Output token cost */
+	costOutput: number;
+	/** Cache-read token cost */
+	costCacheRead: number;
+	/** Cache-write token cost */
+	costCacheWrite: number;
+	/** Output tokens divided by total measured duration */
+	weightedTokensPerSecond: number | null;
+}
+
+/** Usage analytics grouped by provider. */
+export interface ProviderUsageStats extends UsageAggregate {
+	provider: string;
+}
+
+/** Usage analytics grouped by model and provider. */
+export interface UsageModelStats extends UsageAggregate {
+	model: string;
+	provider: string;
+}
+
+/** Usage analytics grouped by project folder. */
+export interface ProjectUsageStats extends UsageAggregate {
+	project: string;
+}
+
+/** Usage analytics trend point. */
+export interface UsageTrendPoint {
+	/** Bucket timestamp */
+	timestamp: number;
+	/** Request count */
+	requests: number;
+	/** Error count */
+	errors: number;
+	/** Success rate (0-1) */
+	successRate: number;
+	/** Token category totals */
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	/** Sum of the four token categories */
+	totalTokens: number;
+	/** Cost total and category breakdown */
+	cost: number;
+	costInput: number;
+	costOutput: number;
+	costCacheRead: number;
+	costCacheWrite: number;
+	/** Average time to first token */
+	avgTtft: number | null;
+	/** Output tokens divided by total measured duration */
+	weightedTokensPerSecond: number | null;
+}
+
+/** Unified usage analytics response for the consumption overview. */
+export interface UsageAnalyticsStats {
+	/** Effective preset range used by the server */
+	range: string;
+	/** Filters actually applied to this response */
+	filters: UsageAnalyticsFilter;
+	/** Choices available for the selected time range */
+	options: UsageAnalyticsDimensionOptions;
+	summary: UsageAggregate;
+	byProvider: ProviderUsageStats[];
+	byModel: UsageModelStats[];
+	byProject: ProjectUsageStats[];
+	trend: UsageTrendPoint[];
+}
+
+/** Filters applied consistently to every usage aggregate and trend point. */
+export interface UsageAnalyticsFilter {
+	provider: string | null;
+	model: string | null;
+}
+
+/** Provider/model choices available in the selected time range. */
+export interface UsageAnalyticsDimensionOptions {
+	providers: string[];
+	models: Array<{ model: string; provider: string }>;
+}
 
 /**
  * Stats grouped by model.

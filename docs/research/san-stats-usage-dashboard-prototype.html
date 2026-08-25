@@ -1,0 +1,693 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="San Stats 消耗概览页面视觉与交互原型">
+  <title>San Stats · 消耗概览原型</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #f4f6fa;
+      --surface: #ffffff;
+      --surface-soft: #f8f9fc;
+      --surface-muted: #eef1f6;
+      --ink: #172033;
+      --ink-soft: #536075;
+      --ink-faint: #8792a5;
+      --line: #e3e7ef;
+      --line-strong: #d4dae5;
+      --brand: #e34d9c;
+      --brand-strong: #c93683;
+      --brand-soft: #fbeaf4;
+      --cyan: #169bb0;
+      --cyan-soft: #e4f7fa;
+      --green: #238a62;
+      --green-soft: #e7f6ef;
+      --amber: #b46a13;
+      --amber-soft: #fff4df;
+      --red: #c84d59;
+      --red-soft: #fcebed;
+      --nav: #1f2230;
+      --nav-soft: #2a2e3f;
+      --nav-text: #d6d9e4;
+      --nav-muted: #8f95a8;
+      --shadow-sm: 0 1px 2px rgb(25 32 49 / 5%), 0 4px 14px rgb(25 32 49 / 3%);
+      --shadow-md: 0 14px 34px rgb(25 32 49 / 8%);
+      --radius-sm: 9px;
+      --radius-md: 14px;
+      --radius-lg: 20px;
+    }
+
+    [data-theme="dark"] {
+      color-scheme: dark;
+      --page: #141620;
+      --surface: #1d202c;
+      --surface-soft: #202432;
+      --surface-muted: #292e3d;
+      --ink: #f3f5fb;
+      --ink-soft: #b7becf;
+      --ink-faint: #828ba0;
+      --line: #303647;
+      --line-strong: #42495c;
+      --brand: #ec69af;
+      --brand-strong: #f18ac2;
+      --brand-soft: #44263a;
+      --cyan: #57d3e2;
+      --cyan-soft: #173b42;
+      --green: #6dd4a6;
+      --green-soft: #183b30;
+      --amber: #efb35e;
+      --amber-soft: #47361e;
+      --red: #ff8992;
+      --red-soft: #48262c;
+      --nav: #10121b;
+      --nav-soft: #242838;
+      --nav-text: #e4e7f0;
+      --nav-muted: #8b93a8;
+      --shadow-sm: 0 1px 2px rgb(0 0 0 / 20%), 0 5px 16px rgb(0 0 0 / 12%);
+      --shadow-md: 0 16px 38px rgb(0 0 0 / 24%);
+    }
+
+    * { box-sizing: border-box; }
+    html { min-width: 320px; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--page);
+      color: var(--ink);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, select { font: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, select:focus-visible { outline: 3px solid color-mix(in srgb, var(--cyan) 40%, transparent); outline-offset: 2px; }
+    svg { display: block; }
+
+    .prototype-banner {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      min-height: 30px;
+      padding: 6px 16px;
+      background: #252a3b;
+      color: #dfe4f2;
+      font-size: 12px;
+      letter-spacing: .01em;
+    }
+    .prototype-banner strong { color: #ff98c9; font-weight: 700; }
+    .prototype-dot { width: 6px; height: 6px; border-radius: 50%; background: #ff98c9; box-shadow: 0 0 0 4px rgb(255 152 201 / 14%); }
+
+    .app-shell { display: flex; min-height: calc(100vh - 30px); }
+    .sidebar {
+      width: 232px;
+      flex: 0 0 232px;
+      display: flex;
+      flex-direction: column;
+      background: var(--nav);
+      color: var(--nav-text);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      min-height: 76px;
+      padding: 20px 22px;
+      border-bottom: 1px solid rgb(255 255 255 / 8%);
+    }
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 11px;
+      background: linear-gradient(145deg, #f578ba, #c93683);
+      color: white;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      box-shadow: 0 5px 14px rgb(227 77 156 / 30%);
+    }
+    .brand-name { font-size: 14px; font-weight: 750; letter-spacing: .06em; }
+    .brand-sub { margin-top: 2px; color: var(--nav-muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    .workspace {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 18px 14px 12px;
+      padding: 10px 11px;
+      border: 1px solid rgb(255 255 255 / 9%);
+      border-radius: 10px;
+      background: rgb(255 255 255 / 4%);
+      color: var(--nav-text);
+      text-align: left;
+    }
+    .workspace-label { display: block; color: var(--nav-muted); font-size: 10px; margin-bottom: 2px; }
+    .workspace-value { display: block; max-width: 155px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
+    .workspace-chevron { color: var(--nav-muted); font-size: 14px; }
+    .nav-heading { margin: 10px 22px 7px; color: var(--nav-muted); font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+    .nav { display: flex; flex-direction: column; gap: 3px; padding: 0 11px; }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      width: 100%;
+      padding: 10px 12px;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--nav-muted);
+      text-align: left;
+      transition: .16s ease;
+    }
+    .nav-item:hover { background: rgb(255 255 255 / 6%); color: var(--nav-text); }
+    .nav-item.active { background: linear-gradient(90deg, rgb(227 77 156 / 22%), rgb(227 77 156 / 8%)); color: #ff9ccc; box-shadow: inset 3px 0 0 #ed6bad; }
+    .nav-icon { width: 16px; height: 16px; flex: 0 0 16px; }
+    .nav-label { font-size: 12px; font-weight: 650; }
+    .nav-hint { margin-left: auto; color: var(--nav-muted); font-size: 10px; }
+    .sidebar-bottom { margin-top: auto; padding: 16px 18px 20px; border-top: 1px solid rgb(255 255 255 / 8%); }
+    .sync-status { display: flex; align-items: center; gap: 8px; color: var(--nav-muted); font-size: 11px; }
+    .sync-dot { width: 7px; height: 7px; border-radius: 50%; background: #6dd4a6; box-shadow: 0 0 0 4px rgb(109 212 166 / 12%); }
+    .sidebar-caption { margin-top: 9px; color: #6f768b; font-size: 10px; line-height: 1.5; }
+
+    .main { min-width: 0; flex: 1; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      min-height: 76px;
+      padding: 15px 34px;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--surface) 94%, transparent);
+    }
+    .topbar-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+    .mobile-menu { display: none; width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--ink); }
+    .eyebrow { margin: 0 0 2px; color: var(--brand-strong); font-size: 11px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: 23px; line-height: 1.2; letter-spacing: -.025em; }
+    .topbar-actions { display: flex; align-items: center; gap: 8px; }
+    .icon-button, .outline-button, .primary-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      height: 36px;
+      padding: 0 12px;
+      border-radius: 9px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      color: var(--ink-soft);
+      font-size: 12px;
+      font-weight: 650;
+      transition: .16s ease;
+    }
+    .icon-button { width: 36px; padding: 0; }
+    .outline-button:hover, .icon-button:hover { border-color: var(--brand); color: var(--brand-strong); background: var(--brand-soft); }
+    .primary-button { border-color: var(--brand); background: var(--brand); color: white; box-shadow: 0 5px 13px rgb(227 77 156 / 20%); }
+    .primary-button:hover { background: var(--brand-strong); border-color: var(--brand-strong); }
+    .button-icon { width: 15px; height: 15px; }
+
+    .content { max-width: 1480px; margin: 0 auto; padding: 30px 34px 60px; }
+    .hero {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 25px 27px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background:
+        radial-gradient(circle at 82% 20%, rgb(227 77 156 / 12%), transparent 26%),
+        linear-gradient(120deg, var(--surface) 0%, color-mix(in srgb, var(--surface) 88%, var(--brand-soft)) 100%);
+      box-shadow: var(--shadow-sm);
+    }
+    .hero-kicker { display: flex; align-items: center; gap: 8px; color: var(--ink-faint); font-size: 11px; }
+    .live-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 999px; background: var(--green-soft); color: var(--green); font-size: 10px; font-weight: 750; }
+    .live-pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .hero h2 { margin: 13px 0 7px; font-size: clamp(24px, 3vw, 36px); line-height: 1.16; letter-spacing: -.045em; }
+    .hero h2 strong { color: var(--brand-strong); font-weight: 800; }
+    .hero-description { max-width: 680px; margin: 0; color: var(--ink-soft); font-size: 13px; }
+    .hero-description b { color: var(--ink); }
+    .range-box { min-width: 330px; padding: 13px; border: 1px solid var(--line); border-radius: 13px; background: color-mix(in srgb, var(--surface) 82%, transparent); }
+    .range-label { display: flex; justify-content: space-between; align-items: center; margin-bottom: 9px; color: var(--ink-faint); font-size: 11px; }
+    .range-label strong { color: var(--ink-soft); font-size: 11px; font-weight: 650; }
+    .range-buttons { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+    .range-button { height: 30px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--ink-soft); font-size: 11px; font-weight: 700; }
+    .range-button:hover { background: var(--surface-muted); color: var(--ink); }
+    .range-button.active { background: var(--ink); color: var(--surface); }
+    .custom-range { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: 10px; }
+    .custom-range button { border: 0; background: transparent; color: var(--brand-strong); font-size: 10px; font-weight: 700; }
+
+    .reading-guide { display: flex; align-items: center; gap: 12px; margin: 18px 0 14px; color: var(--ink-soft); font-size: 12px; }
+    .guide-title { color: var(--ink); font-weight: 750; }
+    .guide-step { display: inline-flex; align-items: center; gap: 6px; }
+    .guide-number { display: grid; place-items: center; width: 19px; height: 19px; border-radius: 50%; background: var(--brand-soft); color: var(--brand-strong); font-size: 10px; font-weight: 800; }
+    .guide-arrow { color: var(--ink-faint); }
+
+    .insight-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 18px; }
+    .insight-card { display: flex; align-items: center; gap: 12px; min-height: 72px; padding: 13px 15px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-sm); }
+    .insight-icon { display: grid; place-items: center; width: 33px; height: 33px; flex: 0 0 33px; border-radius: 10px; }
+    .insight-icon.cost { background: var(--brand-soft); color: var(--brand-strong); }
+    .insight-icon.use { background: var(--cyan-soft); color: var(--cyan); }
+    .insight-icon.speed { background: var(--green-soft); color: var(--green); }
+    .insight-icon svg { width: 17px; height: 17px; }
+    .insight-label { margin-bottom: 2px; color: var(--ink-faint); font-size: 10px; }
+    .insight-value { color: var(--ink); font-size: 13px; font-weight: 750; }
+    .insight-meta { margin-left: auto; color: var(--ink-soft); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; white-space: nowrap; }
+
+    .section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 27px 0 12px; }
+    .section-heading h2 { margin: 0; font-size: 17px; letter-spacing: -.02em; }
+    .section-heading p { margin: 4px 0 0; color: var(--ink-faint); font-size: 11px; }
+    .section-heading-actions { display: flex; align-items: center; gap: 8px; }
+    .select-control { height: 34px; padding: 0 29px 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); color: var(--ink-soft); font-size: 11px; font-weight: 650; }
+
+    .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .metric-card { position: relative; min-height: 134px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden; }
+    .metric-card::after { content: ""; position: absolute; right: -19px; bottom: -35px; width: 90px; height: 90px; border-radius: 50%; background: var(--metric-tint, var(--brand-soft)); opacity: .55; }
+    .metric-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .metric-label { color: var(--ink-soft); font-size: 11px; font-weight: 700; }
+    .metric-help { display: grid; place-items: center; width: 17px; height: 17px; border: 1px solid var(--line-strong); border-radius: 50%; background: var(--surface); color: var(--ink-faint); font-size: 10px; }
+    .metric-value { position: relative; z-index: 1; margin-top: 11px; color: var(--ink); font-size: 25px; font-weight: 800; letter-spacing: -.045em; }
+    .metric-sub { position: relative; z-index: 1; display: flex; align-items: center; gap: 6px; margin-top: 8px; color: var(--ink-faint); font-size: 10px; }
+    .metric-change { color: var(--green); font-weight: 750; }
+    .metric-change.down { color: var(--red); }
+    .metric-cyan { --metric-tint: var(--cyan-soft); }
+    .metric-green { --metric-tint: var(--green-soft); }
+    .metric-amber { --metric-tint: var(--amber-soft); }
+    .metric-pink { --metric-tint: var(--brand-soft); }
+
+    .two-column { display: grid; grid-template-columns: minmax(0, 1.52fr) minmax(320px, .88fr); gap: 14px; }
+    .card { border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-sm); }
+    .card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 17px 18px 13px; }
+    .card-title { margin: 0; color: var(--ink); font-size: 14px; font-weight: 780; letter-spacing: -.015em; }
+    .card-subtitle { margin: 4px 0 0; color: var(--ink-faint); font-size: 11px; }
+    .chart-legend { display: flex; align-items: center; gap: 13px; color: var(--ink-faint); font-size: 10px; }
+    .legend-item { display: inline-flex; align-items: center; gap: 5px; }
+    .legend-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--brand); }
+    .legend-dot.cyan { background: var(--cyan); }
+    .legend-dot.green { background: var(--green); }
+    .chart-wrap { padding: 0 12px 13px; }
+    .chart-svg { width: 100%; height: 260px; overflow: visible; }
+    .chart-grid-line { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 5; }
+    .chart-axis-label { fill: var(--ink-faint); font-size: 10px; }
+    .chart-area { fill: url(#areaGradient); }
+    .chart-line { fill: none; stroke: var(--brand); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    .chart-point { fill: var(--surface); stroke: var(--brand); stroke-width: 2.5; }
+    .chart-point:hover { fill: var(--brand); }
+    .chart-callout { fill: var(--ink); font-size: 10px; font-weight: 700; }
+    .chart-foot { display: flex; justify-content: space-between; margin: 3px 4px 0; color: var(--ink-faint); font-size: 10px; }
+
+    .token-body { padding: 3px 18px 18px; }
+    .donut-row { display: flex; align-items: center; gap: 24px; padding: 10px 0 18px; }
+    .donut { position: relative; width: 148px; height: 148px; flex: 0 0 148px; border-radius: 50%; background: conic-gradient(var(--cyan) 0 49%, var(--brand) 49% 71%, var(--amber) 71% 89%, #aeb7c8 89% 100%); }
+    .donut::after { content: ""; position: absolute; inset: 28px; border-radius: 50%; background: var(--surface); }
+    .donut-center { position: absolute; z-index: 1; inset: 0; display: grid; place-content: center; text-align: center; }
+    .donut-center strong { font-size: 21px; letter-spacing: -.04em; }
+    .donut-center span { margin-top: 1px; color: var(--ink-faint); font-size: 10px; }
+    .token-legend { display: grid; gap: 13px; flex: 1; }
+    .token-legend-row { display: grid; grid-template-columns: 9px 1fr auto; align-items: center; gap: 7px; font-size: 11px; }
+    .token-swatch { width: 8px; height: 8px; border-radius: 3px; }
+    .token-swatch.input { background: var(--cyan); }
+    .token-swatch.output { background: var(--brand); }
+    .token-swatch.cache { background: var(--amber); }
+    .token-swatch.write { background: #aeb7c8; }
+    .token-name { color: var(--ink-soft); }
+    .token-number { color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; font-weight: 700; }
+    .token-rate { display: block; margin-top: 2px; color: var(--ink-faint); font-size: 10px; }
+    .plain-note { padding: 10px 11px; border-radius: 9px; background: var(--surface-soft); color: var(--ink-soft); font-size: 11px; line-height: 1.55; }
+    .plain-note strong { color: var(--ink); }
+
+    .cost-breakdown { padding: 4px 18px 20px; }
+    .cost-total-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 0 15px; }
+    .cost-total-row strong { font-size: 27px; letter-spacing: -.04em; }
+    .cost-total-row span { color: var(--green); font-size: 11px; font-weight: 750; }
+    .cost-bars { display: grid; gap: 14px; }
+    .cost-bar-label { display: flex; justify-content: space-between; margin-bottom: 6px; color: var(--ink-soft); font-size: 11px; }
+    .cost-bar-label b { color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 750; }
+    .bar-track { height: 8px; overflow: hidden; border-radius: 999px; background: var(--surface-muted); }
+    .bar-fill { height: 100%; border-radius: inherit; background: var(--brand); }
+    .bar-fill.cyan { background: var(--cyan); }
+    .bar-fill.amber { background: var(--amber); }
+    .bar-fill.gray { background: #aeb7c8; }
+    .cost-caption { display: flex; justify-content: space-between; margin-top: 18px; padding-top: 13px; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: 10px; }
+
+    .ranking-card { margin-top: 14px; }
+    .ranking-header { align-items: center; padding-bottom: 0; }
+    .tabs { display: flex; align-items: center; gap: 3px; padding: 3px; border-radius: 9px; background: var(--surface-muted); }
+    .tab { min-width: 70px; height: 29px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: var(--ink-soft); font-size: 11px; font-weight: 700; }
+    .tab:hover { color: var(--ink); }
+    .tab.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); }
+    .ranking-controls { display: flex; align-items: center; gap: 8px; }
+    .table-scroll { overflow-x: auto; padding: 13px 18px 18px; }
+    table { width: 100%; min-width: 760px; border-collapse: collapse; }
+    th { padding: 8px 10px; border-bottom: 1px solid var(--line-strong); color: var(--ink-faint); font-size: 10px; font-weight: 700; text-align: right; white-space: nowrap; }
+    th:first-child, td:first-child { text-align: left; }
+    td { padding: 12px 10px; border-bottom: 1px solid var(--line); color: var(--ink-soft); font-size: 11px; text-align: right; white-space: nowrap; }
+    tr:last-child td { border-bottom: 0; }
+    .rank-name { display: flex; align-items: center; gap: 9px; min-width: 175px; }
+    .rank-number { display: grid; place-items: center; width: 21px; height: 21px; border-radius: 6px; background: var(--surface-muted); color: var(--ink-faint); font-size: 10px; font-weight: 800; }
+    tr:first-child .rank-number { background: var(--brand-soft); color: var(--brand-strong); }
+    .rank-main { color: var(--ink); font-weight: 750; }
+    .rank-sub { margin-top: 2px; color: var(--ink-faint); font-size: 10px; }
+    .rank-cost { color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 750; }
+    .rank-positive { color: var(--green); font-weight: 750; }
+    .rank-warning { color: var(--amber); font-weight: 750; }
+    .rank-bar { display: inline-block; width: 54px; height: 5px; margin-right: 6px; overflow: hidden; vertical-align: middle; border-radius: 999px; background: var(--surface-muted); }
+    .rank-bar i { display: block; height: 100%; border-radius: inherit; background: var(--brand); }
+    .rank-empty { padding: 30px; color: var(--ink-faint); text-align: center; }
+
+    .definition-card { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-top: 14px; padding: 15px 18px; border: 1px dashed var(--line-strong); border-radius: var(--radius-md); background: color-mix(in srgb, var(--surface) 74%, var(--surface-soft)); }
+    .definition { display: flex; gap: 9px; }
+    .definition-icon { display: grid; place-items: center; width: 23px; height: 23px; flex: 0 0 23px; border-radius: 7px; background: var(--surface-muted); color: var(--ink-soft); font-size: 11px; font-weight: 800; }
+    .definition strong { display: block; margin-bottom: 2px; color: var(--ink); font-size: 11px; }
+    .definition span { display: block; color: var(--ink-faint); font-size: 10px; line-height: 1.45; }
+
+    .toast { position: fixed; right: 22px; bottom: 22px; z-index: 10; max-width: 330px; padding: 11px 14px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--ink); color: var(--surface); box-shadow: var(--shadow-md); font-size: 12px; opacity: 0; transform: translateY(10px); pointer-events: none; transition: .2s ease; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+
+    @media (max-width: 1180px) {
+      .sidebar { width: 210px; flex-basis: 210px; }
+      .content { padding-left: 22px; padding-right: 22px; }
+      .topbar { padding-left: 22px; padding-right: 22px; }
+      .metric-grid { grid-template-columns: repeat(2, 1fr); }
+      .two-column { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 820px) {
+      .sidebar { display: none; }
+      .mobile-menu { display: grid; place-items: center; }
+      .topbar { align-items: flex-start; }
+      .topbar-actions .outline-button span { display: none; }
+      .hero { align-items: stretch; flex-direction: column; }
+      .range-box { min-width: 0; }
+      .insight-grid { grid-template-columns: 1fr; }
+      .definition-card { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 560px) {
+      .prototype-banner { justify-content: flex-start; overflow: hidden; white-space: nowrap; }
+      .topbar { padding: 13px 15px; }
+      .topbar-actions { gap: 5px; }
+      .topbar-actions .outline-button, .topbar-actions .primary-button { width: 36px; padding: 0; font-size: 0; }
+      .content { padding: 18px 15px 42px; }
+      .hero { padding: 19px; }
+      .hero h2 { font-size: 27px; }
+      .reading-guide { align-items: flex-start; flex-wrap: wrap; gap: 8px; }
+      .metric-grid { gap: 8px; }
+      .metric-card { min-height: 122px; padding: 13px; }
+      .metric-value { font-size: 21px; }
+      .section-heading { align-items: flex-start; flex-direction: column; gap: 9px; }
+      .donut-row { align-items: flex-start; flex-direction: column; }
+      .donut { align-self: center; }
+      .card-header { padding-left: 14px; padding-right: 14px; }
+      .ranking-header { align-items: flex-start; flex-direction: column; }
+      .ranking-controls { width: 100%; justify-content: space-between; }
+      .table-scroll { padding-left: 8px; padding-right: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="prototype-banner"><span class="prototype-dot"></span><strong>设计原型</strong><span>页面使用演示数据，不连接真实 San 数据；重点展示信息层级与交互方向。</span></div>
+
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="San Stats 导航">
+      <div class="brand">
+        <div class="brand-mark">SAN</div>
+        <div><div class="brand-name">SAN STATS</div><div class="brand-sub">usage analytics</div></div>
+      </div>
+      <button class="workspace" type="button" data-action="workspace" aria-label="切换工作区">
+        <span><span class="workspace-label">当前工作区</span><span class="workspace-value">san / coding-agent</span></span><span class="workspace-chevron">⌄</span>
+      </button>
+      <div class="nav-heading">分析</div>
+      <nav class="nav">
+        <button class="nav-item active" type="button" data-nav="消耗概览"><svg class="nav-icon"><use href="#i-chart"></use></svg><span class="nav-label">消耗概览</span><span class="nav-hint">当前</span></button>
+        <button class="nav-item" type="button" data-nav="账单明细"><svg class="nav-icon"><use href="#i-list"></use></svg><span class="nav-label">账单明细</span></button>
+        <button class="nav-item" type="button" data-nav="服务商与模型"><svg class="nav-icon"><use href="#i-cpu"></use></svg><span class="nav-label">服务商与模型</span></button>
+        <button class="nav-item" type="button" data-nav="项目消耗"><svg class="nav-icon"><use href="#i-folder"></use></svg><span class="nav-label">项目消耗</span></button>
+        <button class="nav-item" type="button" data-nav="性能表现"><svg class="nav-icon"><use href="#i-speed"></use></svg><span class="nav-label">性能表现</span></button>
+      </nav>
+      <div class="nav-heading">观测</div>
+      <nav class="nav">
+        <button class="nav-item" type="button" data-nav="错误记录"><svg class="nav-icon"><use href="#i-alert"></use></svg><span class="nav-label">错误记录</span></button>
+        <button class="nav-item" type="button" data-nav="工具使用"><svg class="nav-icon"><use href="#i-tool"></use></svg><span class="nav-label">工具使用</span></button>
+      </nav>
+      <div class="sidebar-bottom"><div class="sync-status"><span class="sync-dot"></span><span id="sidebarSync">数据已同步</span></div><div class="sidebar-caption">本地数据 · 最后更新<br>2026-08-24 08:00</div></div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="mobile-menu" type="button" data-action="menu" aria-label="打开导航"><svg class="button-icon"><use href="#i-menu"></use></svg></button>
+          <div><p class="eyebrow">San Stats / 使用分析</p><h1>消耗概览</h1></div>
+        </div>
+        <div class="topbar-actions">
+          <button class="icon-button" type="button" data-action="theme" aria-label="切换主题" title="切换主题"><svg class="button-icon"><use href="#i-sun"></use></svg></button>
+          <button class="outline-button" type="button" data-action="export"><svg class="button-icon"><use href="#i-download"></use></svg><span>导出报表</span></button>
+          <button class="primary-button" type="button" data-action="sync"><svg class="button-icon"><use href="#i-refresh"></use></svg><span>立即同步</span></button>
+        </div>
+      </header>
+
+      <div class="content">
+        <section class="hero" aria-labelledby="hero-title">
+          <div>
+            <div class="hero-kicker"><span class="live-pill">本地数据</span><span id="updatedLabel">已更新于今天 08:00</span></div>
+            <h2 id="hero-title">这段时间，San 花了 <strong id="heroCost">$42.86</strong></h2>
+            <p class="hero-description" id="heroDescription">比上个周期多花 <b>$6.71（+18.6%）</b>。主要消耗来自 <b>Anthropic</b>，占总成本 43%；缓存读取节省了约 <b>$8.24</b>。</p>
+          </div>
+          <div class="range-box" aria-label="选择统计时间范围">
+            <div class="range-label"><strong>统计时间</strong><span id="rangeLabel">2026/08/01 — 2026/08/24</span></div>
+            <div class="range-buttons" role="tablist">
+              <button class="range-button" type="button" data-range="today">今天</button>
+              <button class="range-button" type="button" data-range="7d">近 7 天</button>
+              <button class="range-button active" type="button" data-range="30d">近 30 天</button>
+              <button class="range-button" type="button" data-range="all">全部</button>
+            </div>
+            <div class="custom-range"><span>也可以查询自定义日期</span><button type="button" data-action="custom">选择日期范围 →</button></div>
+          </div>
+        </section>
+
+        <div class="reading-guide" aria-label="看板阅读顺序"><span class="guide-title">建议这样看：</span><span class="guide-step"><span class="guide-number">1</span>先看总消耗</span><span class="guide-arrow">→</span><span class="guide-step"><span class="guide-number">2</span>再看消耗构成</span><span class="guide-arrow">→</span><span class="guide-step"><span class="guide-number">3</span>最后看钱花在哪</span></div>
+
+        <section class="insight-grid" aria-label="关键发现">
+          <article class="insight-card"><div class="insight-icon cost"><svg><use href="#i-wallet"></use></svg></div><div><div class="insight-label">花费最多的服务商</div><div class="insight-value" id="insightProvider">Anthropic</div></div><div class="insight-meta" id="insightProviderCost">$18.42 · 43%</div></article>
+          <article class="insight-card"><div class="insight-icon use"><svg><use href="#i-folder"></use></svg></div><div><div class="insight-label">请求最多的项目</div><div class="insight-value" id="insightProject">san / coding-agent</div></div><div class="insight-meta" id="insightProjectReq">426 次 · 33%</div></article>
+          <article class="insight-card"><div class="insight-icon speed"><svg><use href="#i-speed"></use></svg></div><div><div class="insight-label">响应最快的模型</div><div class="insight-value" id="insightModel">gpt-5.4</div></div><div class="insight-meta" id="insightModelTps">78.2 tok/s</div></article>
+        </section>
+
+        <div class="section-heading"><div><h2>核心指标</h2><p>所有数字都只统计上面选定的时间范围</p></div><label class="small-filter">项目 <select class="select-control" id="projectFilter" aria-label="筛选项目"><option value="all">全部项目</option><option value="coding">san / coding-agent</option><option value="docs">docs / research</option><option value="lab">lab / experiments</option></select></label></div>
+        <section class="metric-grid" aria-label="核心指标">
+          <article class="metric-card metric-pink"><div class="metric-top"><span class="metric-label">总请求</span><span class="metric-help" title="向模型发起的请求次数">?</span></div><div class="metric-value" id="metricRequests">1,284</div><div class="metric-sub"><span class="metric-change">+12.4%</span><span>比上个周期</span></div></article>
+          <article class="metric-card metric-cyan"><div class="metric-top"><span class="metric-label">输入 Token</span><span class="metric-help" title="发送给模型的非缓存输入 Token">?</span></div><div class="metric-value" id="metricInput">18.4M</div><div class="metric-sub"><span>占处理量 51.1%</span></div></article>
+          <article class="metric-card metric-pink"><div class="metric-top"><span class="metric-label">输出 Token</span><span class="metric-help" title="模型生成的输出 Token">?</span></div><div class="metric-value" id="metricOutput">5.7M</div><div class="metric-sub"><span class="metric-change">+8.2%</span><span>比上个周期</span></div></article>
+          <article class="metric-card metric-amber"><div class="metric-top"><span class="metric-label">缓存读取</span><span class="metric-help" title="被缓存命中的输入 Token">?</span></div><div class="metric-value" id="metricCache">12.8M</div><div class="metric-sub"><span class="metric-change">缓存率 41.0%</span><span>节省约 $8.24</span></div></article>
+          <article class="metric-card metric-green"><div class="metric-top"><span class="metric-label">成功率</span><span class="metric-help" title="成功请求 ÷ 总请求">?</span></div><div class="metric-value" id="metricSuccess">98.8%</div><div class="metric-sub"><span class="metric-change">1,269 次成功</span><span>15 次失败</span></div></article>
+          <article class="metric-card metric-cyan"><div class="metric-top"><span class="metric-label">平均速度</span><span class="metric-help" title="输出 Token ÷ 产生响应的时间">?</span></div><div class="metric-value" id="metricTps">62.4 <small>tok/s</small></div><div class="metric-sub"><span class="metric-change">+5.6%</span><span>比上个周期更快</span></div></article>
+          <article class="metric-card metric-green"><div class="metric-top"><span class="metric-label">首字延迟 TTFT</span><span class="metric-help" title="从请求发出到收到第一个 Token 的时间">?</span></div><div class="metric-value" id="metricTtft">0.86s</div><div class="metric-sub"><span class="metric-change">-0.12s</span><span>比上个周期更快</span></div></article>
+          <article class="metric-card metric-amber"><div class="metric-top"><span class="metric-label">平均每次成本</span><span class="metric-help" title="总成本 ÷ 总请求">?</span></div><div class="metric-value" id="metricPerRequest">$0.033</div><div class="metric-sub"><span>每 1K 输出约 $7.52</span></div></article>
+        </section>
+
+        <div class="section-heading"><div><h2>消耗趋势</h2><p id="trendDescription">按天查看这段时间的成本变化，尖峰可以追到具体项目和模型</p></div><div class="section-heading-actions"><select class="select-control" id="trendMetric" aria-label="选择趋势指标"><option value="cost">花费</option><option value="tokens">处理 Token</option><option value="requests">请求次数</option></select></div></div>
+        <section class="card">
+          <div class="card-header"><div><h3 class="card-title" id="trendTitle">每天花费</h3><p class="card-subtitle" id="trendSubtitle">总计 $42.86 · 日均 $1.79</p></div><div class="chart-legend"><span class="legend-item"><i class="legend-dot"></i><span id="trendLegend">总花费</span></span><span class="legend-item"><i class="legend-dot cyan"></i>平均线</span></div></div>
+          <div class="chart-wrap"><svg class="chart-svg" id="trendChart" viewBox="0 0 900 260" role="img" aria-label="消耗趋势图"></svg><div class="chart-foot"><span id="chartStart">8/1</span><span>时间</span><span id="chartEnd">8/24</span></div></div>
+        </section>
+
+        <div class="section-heading"><div><h2>消耗构成</h2><p>把总量拆开看，知道 token 到底花在了哪里</p></div></div>
+        <div class="two-column">
+          <section class="card"><div class="card-header"><div><h3 class="card-title">Token 构成</h3><p class="card-subtitle">缓存读取不等于普通输入，单独列出更容易对账</p></div><span class="metric-help" title="四类 Token 加总为处理量">?</span></div><div class="token-body"><div class="donut-row"><div class="donut" id="tokenDonut"><div class="donut-center"><strong id="tokenTotal">37.7M</strong><span>处理 Token</span></div></div><div class="token-legend"><div class="token-legend-row"><i class="token-swatch input"></i><span class="token-name">输入 Token<span class="token-rate">未命中缓存</span></span><b class="token-number" id="tokenInputValue">18.4M · 49%</b></div><div class="token-legend-row"><i class="token-swatch output"></i><span class="token-name">输出 Token<span class="token-rate">模型生成</span></span><b class="token-number" id="tokenOutputValue">5.7M · 15%</b></div><div class="token-legend-row"><i class="token-swatch cache"></i><span class="token-name">缓存读取<span class="token-rate">命中缓存</span></span><b class="token-number" id="tokenCacheValue">12.8M · 34%</b></div><div class="token-legend-row"><i class="token-swatch write"></i><span class="token-name">缓存写入<span class="token-rate">写入缓存</span></span><b class="token-number" id="tokenWriteValue">0.8M · 2%</b></div></div></div><div class="plain-note"><strong>怎么看：</strong>输入 Token 是没有命中缓存的部分；缓存读取越高，重复上下文的成本通常越低。当前缓存读取率为 <strong id="cacheRateNote">41.0%</strong>。</div></div></section>
+          <section class="card"><div class="card-header"><div><h3 class="card-title">成本构成</h3><p class="card-subtitle">不同 Token 类型对应的费用</p></div><span class="metric-help" title="成本来自记录的 provider 价格或模型目录价格">?</span></div><div class="cost-breakdown"><div class="cost-total-row"><strong id="costBreakdownTotal">$42.86</strong><span>成本覆盖率 96.4%</span></div><div class="cost-bars"><div><div class="cost-bar-label"><span>输入成本</span><b id="costInput">$15.82</b></div><div class="bar-track"><div class="bar-fill cyan" style="width: 37%"></div></div></div><div><div class="cost-bar-label"><span>输出成本</span><b id="costOutput">$18.47</b></div><div class="bar-track"><div class="bar-fill" style="width: 43%"></div></div></div><div><div class="cost-bar-label"><span>缓存读取成本</span><b id="costCache">$7.91</b></div><div class="bar-track"><div class="bar-fill amber" style="width: 18%"></div></div></div><div><div class="cost-bar-label"><span>缓存写入成本</span><b id="costWrite">$0.66</b></div><div class="bar-track"><div class="bar-fill gray" style="width: 2%"></div></div></div></div><div class="cost-caption"><span>平均每天 <b id="dailyCost">$1.79</b></span><span>平均每次 <b id="costPerRequestCaption">$0.033</b></span></div></div></section>
+        </div>
+
+        <div class="section-heading"><div><h2>钱花在哪里</h2><p>按不同角度排行；点击列标题或下拉框可以换排序方式</p></div><select class="select-control" id="rankProjectFilter" aria-label="排行榜项目筛选"><option value="all">全部项目</option><option value="coding">san / coding-agent</option><option value="docs">docs / research</option><option value="lab">lab / experiments</option></select></div>
+        <section class="card ranking-card">
+          <div class="card-header ranking-header"><div class="tabs" role="tablist" aria-label="排行榜维度"><button class="tab active" type="button" data-tab="provider">服务商</button><button class="tab" type="button" data-tab="model">模型</button><button class="tab" type="button" data-tab="project">项目</button></div><div class="ranking-controls"><span class="small-filter">排行依据</span><select class="select-control" id="rankMetric" aria-label="选择排行榜依据"><option value="cost">总花费</option><option value="requests">请求次数</option><option value="tokens">处理 Token</option><option value="success">成功率</option><option value="tps">平均速度</option></select></div></div>
+          <div class="table-scroll"><table aria-label="消耗排行榜"><thead><tr id="rankHead"></tr></thead><tbody id="rankBody"></tbody></table></div>
+        </section>
+
+        <section class="definition-card" aria-label="指标说明"><div class="definition"><div class="definition-icon">$</div><div><strong>花费</strong><span>按已记录的模型价格计算；没有价格的请求会单独标记。</span></div></div><div class="definition"><div class="definition-icon">↗</div><div><strong>成功率</strong><span>成功请求 ÷ 总请求。失败次数也同时保留，不只展示一个百分比。</span></div></div><div class="definition"><div class="definition-icon">秒</div><div><strong>首字延迟</strong><span>从发出请求到收到第一个 Token 的时间，越低越快。</span></div></div></section>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute"><defs><linearGradient id="areaGradient" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#e34d9c" stop-opacity=".24"></stop><stop offset="100%" stop-color="#e34d9c" stop-opacity="0"></stop></linearGradient></defs><symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 19V5m0 14h16M7 15l3-4 3 2 4-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></symbol><symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h11M8 12h11M8 18h11M4 6h.01M4 12h.01M4 18h.01" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"></path></symbol><symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"></rect><path d="M9 1v3m6-3v3m-6 16v3m6-3v3M1 9h3m-3 6h3m16-6h3m-3 6h3M9 9h6v6H9z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path></symbol><symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2h9v9a2 2 0 0 1-2 2h-15z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path></symbol><symbol id="i-speed" viewBox="0 0 24 24"><path d="M4 16a8 8 0 1 1 16 0M12 12l4-4M6 19h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></symbol><symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 3.5 19h17zM12 9v4m0 3h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></symbol><symbol id="i-tool" viewBox="0 0 24 24"><path d="m14 6 4-4 4 4-4 4m-1-1L4 22l-3-3L14 6m-2 10 5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path></symbol><symbol id="i-wallet" viewBox="0 0 24 24"><path d="M4 6h15a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h13M16 13h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></symbol><symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path></symbol><symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"></circle><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4m0-14.2-1.4 1.4M6.3 17.7l-1.4 1.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path></symbol><symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 20h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></symbol><symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14-4L4 9m0-4v4h4M4 13a8 8 0 0 0 14 4l2-2m0 4v-4h-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path></symbol></svg>
+
+  <script>
+    const DATA = {
+      today: { label: "2026/08/24", cost: 3.84, previous: 3.12, requests: 126, input: 1.9, output: .62, cache: 1.4, write: .08, success: 99.2, tps: 65.8, ttft: .72, trendLabels: ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00"], trendCost: [.2, .4, .9, .7, 1.1, .54] },
+      "7d": { label: "2026/08/18 — 08/24", cost: 18.42, previous: 15.71, requests: 602, input: 7.8, output: 2.4, cache: 5.6, write: .33, success: 98.6, tps: 61.4, ttft: .81, trendLabels: ["8/18", "8/19", "8/20", "8/21", "8/22", "8/23", "8/24"], trendCost: [2.1, 2.7, 1.8, 3.4, 2.2, 3.1, 3.12] },
+      "30d": { label: "2026/08/01 — 08/24", cost: 42.86, previous: 36.15, requests: 1284, input: 18.4, output: 5.7, cache: 12.8, write: .76, success: 98.8, tps: 62.4, ttft: .86, trendLabels: ["8/1", "8/4", "8/7", "8/10", "8/13", "8/16", "8/19", "8/22", "8/24"], trendCost: [2.8, 3.5, 4.1, 3.2, 5.6, 4.8, 6.1, 5.2, 7.56] },
+      all: { label: "2026/05/01 — 08/24", cost: 128.74, previous: 109.22, requests: 4268, input: 58.2, output: 19.6, cache: 43.8, write: 2.7, success: 97.9, tps: 59.8, ttft: .93, trendLabels: ["5月", "6月", "7月", "8/1", "8/8", "8/15", "8/24"], trendCost: [12.4, 19.8, 26.7, 17.3, 15.2, 16.1, 21.24] }
+    };
+    const BASE_RANKINGS = {
+      provider: [
+        { name: "Anthropic", sub: "claude 系列", cost: 18.42, requests: 382, tokens: 8.1, success: 97.8, tps: 54.2, share: 43 },
+        { name: "OpenAI", sub: "gpt 系列", cost: 13.76, requests: 446, tokens: 7.4, success: 99.3, tps: 78.2, share: 32 },
+        { name: "Google", sub: "gemini 系列", cost: 7.92, requests: 318, tokens: 5.2, success: 99.1, tps: 69.5, share: 18 },
+        { name: "DeepSeek", sub: "deepseek 系列", cost: 2.76, requests: 138, tokens: 3.4, success: 98.5, tps: 49.8, share: 7 }
+      ],
+      model: [
+        { name: "gpt-5.4", sub: "OpenAI · 主力模型", cost: 9.84, requests: 284, tokens: 4.7, success: 99.6, tps: 78.2, share: 23 },
+        { name: "claude-sonnet-4", sub: "Anthropic · 复杂任务", cost: 12.26, requests: 224, tokens: 4.1, success: 98.2, tps: 54.2, share: 29 },
+        { name: "gemini-2.5-pro", sub: "Google · 长上下文", cost: 6.42, requests: 196, tokens: 3.5, success: 99.5, tps: 69.5, share: 15 },
+        { name: "gpt-5.4-mini", sub: "OpenAI · 快速任务", cost: 3.92, requests: 162, tokens: 2.7, success: 99.1, tps: 86.4, share: 9 }
+      ],
+      project: [
+        { name: "san / coding-agent", sub: "主项目", cost: 16.82, requests: 426, tokens: 9.8, success: 98.9, tps: 64.1, share: 39 },
+        { name: "docs / research", sub: "文档与调研", cost: 10.46, requests: 318, tokens: 7.1, success: 99.4, tps: 70.3, share: 24 },
+        { name: "lab / experiments", sub: "实验项目", cost: 8.74, requests: 204, tokens: 5.6, success: 96.8, tps: 52.8, share: 20 },
+        { name: "未归类项目", sub: "其他会话", cost: 6.84, requests: 336, tokens: 3.1, success: 99.1, tps: 61.5, share: 16 }
+      ]
+    };
+    const RANGE_FACTOR = { today: .09, "7d": .43, "30d": 1, all: 3.0 };
+    let activeRange = "30d";
+    let activeTab = "provider";
+    let activeProject = "all";
+    let activeRankMetric = "cost";
+    let toastTimer;
+
+    const $ = selector => document.querySelector(selector);
+    const $$ = selector => [...document.querySelectorAll(selector)];
+    const money = value => `$${value.toFixed(value < 1 ? 3 : 2)}`;
+    const compact = value => `${value >= 10 ? value.toFixed(1) : value.toFixed(2)}M`;
+    const number = value => Math.round(value).toLocaleString("en-US");
+    const percent = value => `${value.toFixed(1)}%`;
+    const current = () => DATA[activeRange];
+    const filteredFactor = () => ({ all: 1, coding: .72, docs: .54, lab: .38 }[activeProject] || 1);
+
+    function showToast(message) {
+      const el = $("#toast");
+      el.textContent = message;
+      el.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.remove("show"), 2400);
+    }
+
+    function setText(selector, value) { const el = $(selector.startsWith("#") ? selector : `#${selector}`); if (el) el.textContent = value; }
+
+    function updateSummary() {
+      const d = current();
+      const factor = filteredFactor();
+      const cost = d.cost * factor;
+      const requests = d.requests * factor;
+      const input = d.input * factor;
+      const output = d.output * factor;
+      const cache = d.cache * factor;
+      const write = d.write * factor;
+      const total = input + output + cache + write;
+      const cacheRate = input + cache > 0 ? cache / (input + cache) * 100 : 0;
+      const previous = d.previous * factor;
+      const delta = cost - previous;
+      const deltaPct = previous ? delta / previous * 100 : 0;
+      const successCount = Math.round(requests * d.success / 100);
+      const failed = Math.max(0, Math.round(requests) - successCount);
+      const daily = cost / Math.max(1, d.trendCost.length);
+
+      setText("heroCost", money(cost));
+      setText("rangeLabel", d.label);
+      setText("heroDescription", `比上个周期多花 ${money(delta)}（+${deltaPct.toFixed(1)}%）。主要消耗来自 Anthropic，占总成本 43%；缓存读取节省了约 ${money(cost * .192)}。`);
+      setText("metricRequests", number(requests));
+      setText("metricInput", compact(input));
+      setText("metricOutput", compact(output));
+      setText("metricCache", compact(cache));
+      setText("metricSuccess", percent(d.success));
+      setText("metricTps", `${d.tps.toFixed(1)} tok/s`);
+      setText("metricTtft", `${d.ttft.toFixed(2)}s`);
+      setText("metricPerRequest", money(cost / Math.max(1, requests)));
+      setText("costBreakdownTotal", money(cost));
+      setText("dailyCost", money(daily));
+      setText("costPerRequestCaption", money(cost / Math.max(1, requests)));
+      setText("cacheRateNote", percent(cacheRate));
+      setText("tokenTotal", compact(total));
+      setText("tokenInputValue", `${compact(input)} · ${Math.round(input / total * 100)}%`);
+      setText("tokenOutputValue", `${compact(output)} · ${Math.round(output / total * 100)}%`);
+      setText("tokenCacheValue", `${compact(cache)} · ${Math.round(cache / total * 100)}%`);
+      setText("tokenWriteValue", `${compact(write)} · ${Math.round(write / total * 100)}%`);
+      setText("costInput", money(cost * .369));
+      setText("costOutput", money(cost * .431));
+      setText("costCache", money(cost * .184));
+      setText("costWrite", money(cost * .016));
+      setText("trendSubtitle", `总计 ${money(cost)} · 日均 ${money(daily)}`);
+      setText("chartStart", d.trendLabels[0]);
+      setText("chartEnd", d.trendLabels[d.trendLabels.length - 1]);
+      setText("insightProviderCost", `${money(cost * .43)} · 43%`);
+      setText("insightProjectReq", `${number(requests * .332)} 次 · 33%`);
+      setText("updatedLabel", activeRange === "today" ? "已更新于今天 08:00" : "已更新于今天 08:00");
+      const donut = $("#tokenDonut");
+      donut.style.background = `conic-gradient(var(--cyan) 0 ${input / total * 100}%, var(--brand) ${input / total * 100}% ${(input + output) / total * 100}%, var(--amber) ${(input + output) / total * 100}% ${(input + output + cache) / total * 100}%, #aeb7c8 ${(input + output + cache) / total * 100}% 100%)`;
+      const bars = $$(".cost-bars .bar-fill");
+      const costs = [cost * .369, cost * .431, cost * .184, cost * .016];
+      costs.forEach((item, index) => bars[index].style.width = `${Math.max(2, item / cost * 100)}%`);
+      renderChart();
+      renderRanking();
+    }
+
+    function renderChart() {
+      const d = current();
+      const svg = $("#trendChart");
+      const metric = $("#trendMetric").value;
+      const factor = filteredFactor();
+      const values = metric === "cost" ? d.trendCost.map(v => v * factor) : metric === "requests" ? d.trendCost.map((v, i) => Math.round(v / d.cost * d.requests * factor * (0.78 + (i % 3) * .12))) : d.trendCost.map((v, i) => v / d.cost * (d.input + d.output + d.cache + d.write) * factor * (0.82 + (i % 4) * .08));
+      const label = metric === "cost" ? "总花费" : metric === "requests" ? "请求次数" : "处理 Token";
+      const title = metric === "cost" ? "每天花费" : metric === "requests" ? "每天请求次数" : "每天处理 Token";
+      const unit = metric === "cost" ? "$" : metric === "requests" ? "次" : "M";
+      const max = Math.max(...values, 1);
+      const avg = values.reduce((sum, v) => sum + v, 0) / values.length;
+      const left = 54, right = 874, top = 19, bottom = 220;
+      const width = right - left, height = bottom - top;
+      const x = index => left + (values.length === 1 ? width / 2 : index / (values.length - 1) * width);
+      const y = value => bottom - value / max * height;
+      const points = values.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ");
+      const area = `${left},${bottom} ${points} ${right},${bottom}`;
+      const grid = [0, .25, .5, .75, 1].map(level => `<line class="chart-grid-line" x1="${left}" y1="${(bottom - height * level).toFixed(1)}" x2="${right}" y2="${(bottom - height * level).toFixed(1)}"></line><text class="chart-axis-label" x="8" y="${(bottom - height * level + 4).toFixed(1)}">${metric === "cost" ? "$" + (max * level).toFixed(0) : metric === "requests" ? Math.round(max * level) : (max * level).toFixed(1) + "M"}</text>`).join("");
+      const xLabels = d.trendLabels.map((item, index) => `<text class="chart-axis-label" text-anchor="${index === 0 ? "start" : index === d.trendLabels.length - 1 ? "end" : "middle"}" x="${x(index)}" y="246">${item}</text>`).join("");
+      const pointNodes = values.map((value, index) => `<circle class="chart-point" cx="${x(index)}" cy="${y(value)}" r="4.2"><title>${d.trendLabels[index]} · ${metric === "cost" ? money(value) : metric === "requests" ? number(value) + " 次" : value.toFixed(1) + "M"}</title></circle>`).join("");
+      const peakIndex = values.indexOf(Math.max(...values));
+      const calloutX = Math.min(right - 66, Math.max(left + 10, x(peakIndex) - 24));
+      const calloutY = Math.max(10, y(values[peakIndex]) - 28);
+      svg.innerHTML = `<defs><linearGradient id="areaGradient" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#e34d9c" stop-opacity=".24"></stop><stop offset="100%" stop-color="#e34d9c" stop-opacity="0"></stop></linearGradient></defs>${grid}<path class="chart-area" d="M ${area}"></path><polyline class="chart-line" points="${points}"></polyline>${pointNodes}<g><rect x="${calloutX}" y="${calloutY}" width="66" height="20" rx="6" fill="var(--surface)" stroke="var(--line-strong)"></rect><text class="chart-callout" x="${calloutX + 33}" y="${calloutY + 13}" text-anchor="middle">${unit === "$" ? money(values[peakIndex]) : unit === "次" ? number(values[peakIndex]) + "次" : values[peakIndex].toFixed(1) + "M"}</text></g>${xLabels}`;
+      setText("trendTitle", title);
+      setText("trendLegend", label);
+      setText("trendDescription", metric === "cost" ? "按天查看这段时间的成本变化，尖峰可以追到具体项目和模型" : metric === "requests" ? "按天查看请求量，判断使用高峰和工作节奏" : "按天查看输入、输出和缓存 Token 的处理量");
+    }
+
+    function renderRanking() {
+      const metric = activeRankMetric;
+      const rows = BASE_RANKINGS[activeTab].map(row => ({ ...row, cost: row.cost * RANGE_FACTOR[activeRange] * filteredFactor(), requests: row.requests * RANGE_FACTOR[activeRange] * filteredFactor(), tokens: row.tokens * RANGE_FACTOR[activeRange] * filteredFactor() }));
+      const sorted = [...rows].sort((a, b) => metric === "cost" ? b.cost - a.cost : metric === "requests" ? b.requests - a.requests : metric === "tokens" ? b.tokens - a.tokens : metric === "success" ? b.success - a.success : b.tps - a.tps);
+      const metricLabel = { cost: "总花费", requests: "请求", tokens: "处理 Token", success: "成功率", tps: "平均速度" }[metric];
+      setText("rankHead", "");
+      $("#rankHead").innerHTML = `<th>排名对象</th><th>${metricLabel}</th><th>占总量</th><th>成功率</th><th>平均速度</th><th>缓存读取率</th>`;
+      $("#rankBody").innerHTML = sorted.map((row, index) => {
+        const main = activeTab === "project" ? row.name : row.name;
+        const primary = metric === "cost" ? money(row.cost) : metric === "requests" ? number(row.requests) + " 次" : metric === "tokens" ? compact(row.tokens) : metric === "success" ? percent(row.success) : row.tps.toFixed(1) + " tok/s";
+        const share = activeTab === "project" ? row.share : row.share;
+        const statusClass = row.success < 98 ? "rank-warning" : "rank-positive";
+        return `<tr><td><div class="rank-name"><span class="rank-number">${index + 1}</span><span><span class="rank-main">${main}</span><span class="rank-sub">${row.sub}</span></span></div></td><td class="rank-cost">${primary}</td><td><span class="rank-bar"><i style="width:${share}%"></i></span>${share}%</td><td class="${statusClass}">${percent(row.success)}</td><td>${row.tps.toFixed(1)} tok/s</td><td>${Math.max(0, row.success - 28).toFixed(1)}%</td></tr>`;
+      }).join("");
+    }
+
+    function setRange(range) {
+      activeRange = range;
+      $$(".range-button").forEach(button => button.classList.toggle("active", button.dataset.range === range));
+      updateSummary();
+      showToast(`已切换到：${range === "today" ? "今天" : range === "7d" ? "近 7 天" : range === "30d" ? "近 30 天" : "全部时间"}`);
+    }
+
+    $$(".range-button").forEach(button => button.addEventListener("click", () => setRange(button.dataset.range)));
+    $$(".tab").forEach(button => button.addEventListener("click", () => { activeTab = button.dataset.tab; $$(".tab").forEach(item => item.classList.toggle("active", item === button)); renderRanking(); }));
+    $("#rankMetric").addEventListener("change", event => { activeRankMetric = event.target.value; renderRanking(); });
+    $("#trendMetric").addEventListener("change", renderChart);
+    [$("#projectFilter"), $("#rankProjectFilter")].forEach(select => select.addEventListener("change", event => { activeProject = event.target.value; $("#projectFilter").value = activeProject; $("#rankProjectFilter").value = activeProject; updateSummary(); showToast(activeProject === "all" ? "已显示全部项目" : `已筛选项目：${event.target.options[event.target.selectedIndex].text}`); }));
+    $("[data-action='theme']").addEventListener("click", () => { const root = document.documentElement; const next = root.dataset.theme === "dark" ? "light" : "dark"; root.dataset.theme = next; showToast(next === "dark" ? "已切换为深色主题" : "已切换为浅色主题"); });
+    $("[data-action='sync']").addEventListener("click", event => { const button = event.currentTarget; const old = button.innerHTML; button.innerHTML = `<svg class="button-icon"><use href="#i-refresh"></use></svg><span>同步中…</span>`; $("#sidebarSync").textContent = "正在同步"; setTimeout(() => { button.innerHTML = old; $("#sidebarSync").textContent = "数据已同步"; showToast("同步完成，数据已更新"); }, 900); });
+    $("[data-action='export']").addEventListener("click", () => { const d = current(); const csv = `指标,数值\n总花费,${d.cost}\n总请求,${d.requests}\n输入Token,${d.input}M\n输出Token,${d.output}M\n缓存读取,${d.cache}M\n成功率,${d.success}%`; const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob(["\\ufeff" + csv], { type: "text/csv;charset=utf-8" })); link.download = `san-stats-${activeRange}.csv`; link.click(); URL.revokeObjectURL(link.href); showToast("报表已导出为 CSV"); });
+    $("[data-action='custom']").addEventListener("click", () => showToast("原型演示：这里打开自定义日期范围选择器"));
+    $("[data-action='workspace']").addEventListener("click", () => showToast("原型演示：这里切换工作区"));
+    $("[data-action='menu']").addEventListener("click", () => showToast("移动端原型：这里打开侧边导航"));
+    $$("[data-nav]").forEach(item => item.addEventListener("click", () => { $$("[data-nav]").forEach(nav => nav.classList.remove("active")); item.classList.add("active"); showToast(`原型暂展示“消耗概览”，已选择：${item.dataset.nav}`); }));
+    updateSummary();
+  </script>
+</body>
+</html>

@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San Stats 使用消耗分析报表增强方案</title>
+  <style>
+    :root { color-scheme: light; --bg: #f7f8fa; --card: #fff; --text: #172033; --muted: #5e687a; --line: #dfe4ec; --accent: #1769e0; --warn: #9a5b00; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { max-width: 1120px; margin: 0 auto; padding: 40px 24px 72px; }
+    h1, h2, h3 { line-height: 1.3; }
+    h1 { margin: 0 0 10px; font-size: 32px; }
+    h2 { margin: 36px 0 14px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+    h3 { margin: 24px 0 8px; }
+    p { margin: 8px 0 12px; }
+    .meta, .note, .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+    .meta { color: var(--muted); margin-bottom: 24px; }
+    .note { border-left: 4px solid var(--accent); }
+    .warn { border-left-color: #d58a00; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(245px, 1fr)); gap: 12px; }
+    .card h3 { margin-top: 0; font-size: 17px; }
+    table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); }
+    th, td { border-bottom: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }
+    th { background: #eef2f7; font-weight: 650; }
+    tr:last-child td { border-bottom: 0; }
+    code { background: #edf1f6; border-radius: 4px; padding: 1px 5px; font-size: .92em; }
+    pre { overflow-x: auto; background: #172033; color: #f4f7fb; border-radius: 8px; padding: 14px 16px; }
+    li { margin: 4px 0; }
+    .small { color: var(--muted); font-size: 13px; }
+    .status { font-weight: 700; color: var(--warn); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>San Stats 使用消耗分析报表增强方案</h1>
+  <div class="meta">
+    <div><strong>结论：</strong>当前 <code>san stats</code> 不是“做不到”，而是已经具备一套本地使用观测面板，但还不是完整的总消耗分析报表。输入/输出、缓存、错误、成本、模型、项目、TTFT、Tokens/s 的底层数据大多已经存在；缺的是统一的分析查询模型、服务商维度、任意时间范围、可选排名指标、分位延迟和可对账的报表页。</div>
+    <div class="small">调研范围：当前工作区 packages/coding-agent 与 packages/stats 源码、README、CHANGELOG、stats 测试。文档为设计建议，不改变现有代码。</div>
+  </div>
+
+  <h2>1. 当前 <code>san stats</code> 的作用</h2>
+  <p><code>san stats</code> 的主路径是：先扫描并增量解析 <code>~/.san/agent/sessions/</code> 下的 JSONL 会话日志，把 assistant 请求统计写入本地 <code>~/.san/stats.db</code>，再启动默认绑定 <code>127.0.0.1:3847</code> 的浏览器仪表盘。读取统计时只查 SQLite；显式点击同步或调用 <code>/api/sync</code> 才重新扫描会话文件。</p>
+  <p>当前命令入口是 coding-agent 的 <code>san stats</code>；stats 包还保留独立的 <code>san-stats</code> bin。常用参数包括：</p>
+  <ul>
+    <li><code>san stats</code>：同步后启动 dashboard 并打开浏览器。</li>
+    <li><code>san stats --summary</code>：同步后输出终端摘要。</li>
+    <li><code>san stats --json</code>：同步后输出聚合 JSON。</li>
+    <li><code>--port</code>、<code>--host</code>、<code>--token</code>：控制服务地址和非 loopback 访问认证。</li>
+  </ul>
+  <p>它解决的核心问题是“本机 San 请求发生了什么”：请求量、失败、成本、模型表现、项目分布、工具使用、行为信号和部分 token-saving，而不是“按任意时间、任意维度生成经营/预算式消耗报表”。</p>
+
+  <h2>2. 现在已经覆盖什么</h2>
+  <table>
+    <thead><tr><th>能力</th><th>当前实现</th><th>当前可见程度</th></tr></thead>
+    <tbody>
+      <tr><td>总请求与失败</td><td><code>COUNT(*)</code>、成功/失败数、错误率；失败以 <code>stop_reason = 'error'</code> 识别。</td><td>Overview 卡片显示请求数和错误率；成功率没有作为独立字段或卡片。</td></tr>
+      <tr><td>输入/输出/缓存 token</td><td><code>messages</code> 表保存 input、output、cache read、cache write、total tokens。</td><td>Overview 显示 input/output；cache rate 显示；cache read/write 总量没有独立卡片。</td></tr>
+      <tr><td>缓存命中率</td><td>当前定义为 <code>cache_read / (input + cache_read)</code>；分母只统计有输入或 cache-read 的 token。</td><td>Overview、模型、项目表可见。应在报表中明确名称为“缓存读取率/缓存命中率”并保留公式。</td></tr>
+      <tr><td>成本</td><td>保存 input/output/cache-read/cache-write 分项成本和总成本；缺失成本可用 catalog 价格回填。</td><td>Costs 页有总成本、日均成本、最高成本模型和按日趋势。</td></tr>
+      <tr><td>延迟与速度</td><td>保存 duration、TTFT；计算平均 duration、平均 TTFT、平均 <code>output_tokens / duration</code>。</td><td>Overview 与模型表显示平均值和趋势；没有 P50/P95，也没有正式的加权 Tokens/s。</td></tr>
+      <tr><td>模型与项目</td><td>按 <code>model + provider</code> 聚合；按 <code>folder</code> 聚合。</td><td>Models 页和 Projects 页已有表格。Projects 页已能做项目请求/成本/token/缓存/错误率排序，但不是统一的“项目消耗分析”页。</td></tr>
+      <tr><td>其他观测</td><td>Requests、Errors、Tools、Behavior、Gain 页面及请求详情。</td><td>这些是运维/行为观测，和总消耗报表的目标不同。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>3. 与目标需求的差距</h2>
+  <div class="note warn"><strong>判断：</strong>你列的指标中，基础数据大多已有，但“按时间范围可查的总输入、总输出、缓存命中、缓存命中率、服务商/模型排行榜、成功率、TTFT、Tokens/s、项目消耗排行榜”目前没有被组织成一个完整、可筛选、可对账的统一分析报表。</div>
+  <table>
+    <thead><tr><th>目标</th><th>当前状态</th><th>问题</th></tr></thead>
+    <tbody>
+      <tr><td>按时间范围查询所有 KPI</td><td>已有固定范围：1h、24h、7d、30d、90d、all；server 默认 24h。</td><td>没有任意起止日期、时区、上一周期对比。不同图表粒度不同；Costs 页按日，1h/24h 也不是小时成本趋势。</td></tr>
+      <tr><td>服务商排行榜</td><td>消息行有 provider，模型行携带 provider。</td><td>没有 first-class <code>byProvider</code> 聚合、provider 趋势、provider 独立成功率/成本/速度排行。</td></tr>
+      <tr><td>模型排行榜</td><td>Models 页已有请求、成本、token、TTFT、Tokens/s、缓存率、错误率。</td><td>默认表格按 input+output token 排序，不能选择按成本/请求/成功率/TTFT/TPS 排名；成功率没有直接展示。</td></tr>
+      <tr><td>服务商/模型成功率</td><td>模型聚合已有 errorRate，可以推导 <code>1 - errorRate</code>。</td><td>API 和 UI 没有显式 successRate；provider 级成功率缺失；没有最小样本数、失败数、失败原因分布。</td></tr>
+      <tr><td>缓存命中</td><td>已有 cacheRead、cacheWrite 和 cacheRate。</td><td>UI 缺少 cache read/write 总量；“命中率”语义需要固定并与 token/cost 分开，避免把 cache-read 当作总 input。</td></tr>
+      <tr><td>TTFT、Tokens/s</td><td>已有平均 TTFT 和平均逐请求 TPS。</td><td>平均值容易被慢请求和短请求误导；没有 P50/P95/P99、样本数、加权吞吐率或无效 duration 数。</td></tr>
+      <tr><td>项目消耗排行榜</td><td>Projects 页按 folder 展示 requests、cost、tokens、cache、error rate、平均 duration。</td><td>缺少 cost/token/request share、TTFT/TPS、按 provider/model 的项目内拆分、项目趋势和项目筛选。</td></tr>
+      <tr><td>完整趋势</td><td>Overview 有 requests/errors；Models 有模型请求偏好与性能趋势；Costs 有日成本趋势。</td><td>没有 input/output/cache/success/TTFT/TPS 的统一趋势，也没有 provider/project 趋势。</td></tr>
+      <tr><td>范围一致性</td><td>多数聚合接口接受 <code>range</code>；Errors 已按范围过滤。</td><td>Requests 页的最近请求接口没有传 range，展示的是全库最近 50 条；它是操作日志，不应被误认为选定范围的请求明细。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>4. 建议的产品形态</h2>
+  <h3>保留现有页面，新增一个“Usage Analytics”总报表页</h3>
+  <p>现有 Overview、Requests、Errors、Models、Tools、Costs、Projects、Behavior、Gain 继续服务运维和专项观察；新增一个面向“总消耗分析”的 Usage 页面，避免把所有内容继续堆到 Overview。</p>
+  <div class="grid">
+    <div class="card"><h3>统一筛选条</h3><p>预设范围 + 自定义开始/结束时间；默认本地时区；服务商、模型、项目、agent type 多选；一键清除筛选；可选“与上一周期比较”。</p></div>
+    <div class="card"><h3>核心 KPI</h3><p>请求数、成功率、总成本、输入 token、输出 token、cache read、cache write、缓存读取率、TTFT P50/P95、加权 Tokens/s。</p></div>
+    <div class="card"><h3>趋势分析</h3><p>按自动粒度绘制请求/成功率、token 构成、成本、TTFT、TPS；支持总计与按 provider/model 切换，避免每个页面各自定义一套趋势。</p></div>
+    <div class="card"><h3>排行榜</h3><p>Provider、Model、Project 三个 tab；统一支持按成本、请求、总 token、输出 token、成功率、缓存率、TTFT、TPS 排序；显示 share 和样本数。</p></div>
+    <div class="card"><h3>交叉分析</h3><p>Provider × Model、Project × Model 的矩阵或可展开表，快速回答“哪个项目用了哪个模型、在哪个服务商、花了多少”。</p></div>
+    <div class="card"><h3>可导出报表</h3><p>导出当前筛选结果为 CSV/JSON；导出内容使用当前范围、时区、筛选条件和指标定义，方便预算复盘。</p></div>
+  </div>
+
+  <h2>5. 指标口径先定死</h2>
+  <p>这是增强的关键。若先做 UI、后补口径，provider/model/project 的数字会互相对不上。</p>
+  <table>
+    <thead><tr><th>指标</th><th>建议口径</th></tr></thead>
+    <tbody>
+      <tr><td>请求数</td><td>去重后的 <code>messages</code> 行数；当前 fork/branch 去重规则继续沿用。所有排名的 request denominator 使用同一口径。</td></tr>
+      <tr><td>输入 token</td><td><code>SUM(input_tokens)</code>，保持与现有字段一致；不把 cache read 合并进 input card。</td></tr>
+      <tr><td>输出 token</td><td><code>SUM(output_tokens)</code>。</td></tr>
+      <tr><td>缓存读取/命中</td><td><code>SUM(cache_read_tokens)</code>；命中率沿用 <code>cache_read / (input + cache_read)</code>。UI 同时显示分子、分母，避免“0%”被误解为 provider 未提供缓存。</td></tr>
+      <tr><td>处理 token</td><td>另设 <code>input + output + cacheRead + cacheWrite</code>，不要用“总 token”含糊覆盖四种不同成本属性。</td></tr>
+      <tr><td>成功率</td><td><code>successfulRequests / totalRequests</code>，其中成功等价于当前规则中的 <code>stop_reason != 'error'</code>；同时返回 successCount 和 failedCount。</td></tr>
+      <tr><td>TTFT</td><td>返回平均值、P50、P95；只对非空 TTFT 样本计算，并返回 <code>ttftSampleCount</code>。</td></tr>
+      <tr><td>Tokens/s</td><td>主指标使用加权吞吐：<code>SUM(output_tokens) / SUM(duration_ms) × 1000</code>，仅纳入 duration &gt; 0 的样本；保留平均逐请求 TPS 作为次要指标，明确标签。</td></tr>
+      <tr><td>成本</td><td>返回总成本及 input/output/cache-read/cache-write 分项；补充 cost/request 和各维度 share。未知 catalog 价格的请求不能伪造为 0，应返回 costCoverage。</td></tr>
+      <tr><td>项目</td><td>第一版沿用现有 <code>folder</code>，同时提供展示名称与原始标识；后续再引入显式 project identity，避免路径变化导致同一项目拆成多项。</td></tr>
+      <tr><td>时间窗口</td><td>使用半开区间 <code>[from, to)</code>；所有聚合、趋势、排名、导出共用同一窗口。返回 resolvedFrom/resolvedTo 和 timezone。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>6. 后端/API 设计</h2>
+  <p>第一版不需要新数据采集链路：当前 <code>messages</code> 表已经包含 provider、model、folder、timestamp、usage、cost、stop reason、duration、TTFT、agent type。重点是将范围和聚合统一。</p>
+  <h3>推荐接口</h3>
+  <pre><code>GET /api/analytics/summary
+  ?from=2026-08-01T00:00:00Z&amp;to=2026-09-01T00:00:00Z
+  &amp;timezone=Asia/Shanghai
+  &amp;provider=...
+  &amp;model=...
+  &amp;project=...
+  &amp;agentType=main,subagent
+
+GET /api/analytics/trend?from=...&amp;to=...&amp;metric=tokens|cost|requests|success|ttft|tps
+GET /api/analytics/rankings?from=...&amp;to=...&amp;dimension=provider|model|project&amp;order=cost
+GET /api/analytics/matrix?from=...&amp;to=...&amp;rows=project&amp;columns=model</code></pre>
+  <p>也可以将 summary、rankings、trend 合并为一次 <code>/api/analytics</code> 请求，减少页面首屏请求数；建议响应内带 <code>query</code>（实际范围/筛选）、<code>summary</code>、<code>rankings</code>、<code>trend</code>、<code>quality</code>。现有 <code>/api/stats/*</code> 保持兼容，不要让新页面依赖前端把 model rows 再拼成 provider rows。</p>
+  <h3>数据库实现</h3>
+  <ul>
+    <li>使用固定维度白名单映射 SQL 的 <code>GROUP BY</code>，不要把用户输入直接拼进 SQL。</li>
+    <li>为 <code>timestamp</code> 与 provider/project 组合补必要索引；先用现有 messages 表查询，只有真实数据量证明查询过慢时再做按日预聚合表。</li>
+    <li>范围查询统一使用 <code>timestamp &gt;= from AND timestamp &lt; to</code>；预设范围只是前端快捷方式，最终都解析成绝对时间窗口。</li>
+    <li>分位数可先在 SQL 返回已过滤的 duration/ttft 样本，服务端排序求 P50/P95；若全量查询成本过高，再增加采样或日级分位摘要，不能用平均值冒充分位数。</li>
+    <li>所有新聚合返回样本数和 coverage，特别是 cost、TTFT、duration、TPS，避免空值和 0 混淆。</li>
+  </ul>
+
+  <h2>7. 分阶段落地顺序</h2>
+  <table>
+    <thead><tr><th>阶段</th><th>交付</th><th>验收重点</th></tr></thead>
+    <tbody>
+      <tr><td>Phase 1：口径与查询基础</td><td>统一 TimeWindow；支持 preset + custom from/to；新增 summary 和 provider/model/project 聚合；补 successRate、cache token totals、cost breakdown、加权 TPS。</td><td>同一窗口下总计等于各维度之和；边界采用 [from,to)；现有 stats 页面和接口不回归。</td></tr>
+      <tr><td>Phase 2：Usage 报表页</td><td>核心 KPI、token/cost/request 趋势、Provider/Model/Project 排行榜、统一筛选。</td><td>切换范围/筛选后所有卡片、图表、表格同步更新；页面零配置可用；空数据和部分成本数据有清楚提示。</td></tr>
+      <tr><td>Phase 3：性能与比较</td><td>TTFT/duration P50/P95、加权 TPS、上一周期对比、provider/model/project 交叉分析。</td><td>小样本、空 duration、无 TTFT 不产生伪造百分比；对比窗口严格等长且可解释。</td></tr>
+      <tr><td>Phase 4：报表输出与规模化</td><td>CSV/JSON 导出、固定报表链接或查询状态、按日预聚合（仅在测量证明需要时）。</td><td>导出与页面使用同一查询结果和口径；大数据量下响应时间可接受，且不影响同步。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>8. 最小可行版本建议</h2>
+  <p>如果目标是尽快得到可用的“整体消耗分析”，不要第一步重做整个 dashboard。优先实现以下闭环：</p>
+  <ol>
+    <li>增加自定义 <code>from/to</code>，并让所有新查询共享一个范围解析器。</li>
+    <li>新增一个聚合接口：返回 overall、byProvider、byModel、byProject，字段包含 input/output/cache read/cache write、cacheRate、successRate、TTFT avg、加权 TPS、cost breakdown。</li>
+    <li>新增 Usage 页面：顶部筛选 + KPI 卡 + 三个可排序排行榜 + 一张可切换指标趋势图。</li>
+    <li>为聚合口径、时间边界、provider 合并、成本缺失、TPS duration=0 写行为测试；用现有 db-range 测试风格覆盖。</li>
+  </ol>
+  <p>这个版本已经能直接回答：在某段时间花了多少钱、消耗多少输入/输出/缓存 token、哪个服务商/模型/项目花费最多、谁成功率最低、谁 TTFT 最慢、谁吞吐最高。P95、周期对比、矩阵和导出放在后续，不阻塞核心价值。</p>
+
+  <h2>9. 实施时需要特别避免的坑</h2>
+  <ul>
+    <li>不要把 <code>cacheRead</code> 直接加进 input token 后再展示成“输入 token”；这会破坏现有账目可比性。</li>
+    <li>不要把 <code>1 - errorRate</code> 只在前端临时计算后称为 provider 成功率；provider 必须先在后端按同一 request denominator 聚合。</li>
+    <li>不要用“平均每个请求 TPS”冒充总体吞吐；两者分别命名并同时返回。</li>
+    <li>不要把固定的 <code>all = 3650 天</code> 图表窗口当成真正的 all-time 明细；总计可以 all-time，趋势应根据数据跨度自动选择粒度。</li>
+    <li>不要把最近 50 条 requests 当作当前时间范围的请求总量；它只能作为 operational feed。</li>
+    <li>不要在没有成本数据时显示 $0 并让用户以为免费；显示成本覆盖率和“未计价”数量。</li>
+  </ul>
+
+  <h2>10. 最终判断</h2>
+  <p>当前 stats 的定位更接近“本地 AI 请求观测 dashboard”：数据采集和基础聚合已经够用，页面也已经覆盖模型、项目、成本、工具、错误等专项观察。你描述的是下一层的“Usage Analytics / 消耗分析报表”，需要补齐 provider 一等维度、任意时间窗口、统一筛选、显式成功率、缓存 token 明细、可靠的性能统计和可选排名指标。</p>
+  <p><strong>建议的第一刀：</strong>先做 Phase 1 + Phase 2 的最小闭环，不改现有采集格式，不先做预聚合，不先重做所有旧页面。这样风险最低，能最快把 stats 从“看发生了什么”提升到“解释整体消耗并支持决策”。</p>
+</main>
+</body>
+</html>

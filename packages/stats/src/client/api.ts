@@ -9,6 +9,8 @@ import type {
 	RequestDetails,
 	TimeRange,
 	ToolDashboardStats,
+	UsageAnalyticsFilter,
+	UsageAnalyticsStats,
 } from "./types";
 
 const API_BASE = "/api";
@@ -59,6 +61,17 @@ export async function getOverviewStats(range: TimeRange = "24h", signal?: AbortS
 	return fetchJson<OverviewStats>(`${API_BASE}/stats/overview?range=${encodeURIComponent(range)}`, {
 		signal,
 	});
+}
+
+export async function getUsageAnalyticsStats(
+	range: TimeRange = "24h",
+	filter?: UsageAnalyticsFilter,
+	signal?: AbortSignal,
+): Promise<UsageAnalyticsStats> {
+	const params = new URLSearchParams({ range });
+	if (filter?.provider) params.set("provider", filter.provider);
+	if (filter?.model) params.set("model", filter.model);
+	return fetchJson<UsageAnalyticsStats>(`${API_BASE}/stats/usage?${params}`, { signal });
 }
 
 export async function getModelDashboardStats(
