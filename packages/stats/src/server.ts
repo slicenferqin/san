@@ -369,7 +369,6 @@ function requestStatsToken(req: Request, url: URL): string {
 	const query = url.searchParams.get("token");
 	return query !== null ? query.trim() : "";
 }
-
 async function resolveHostAddresses(host: string): Promise<string[]> {
 	try {
 		const entries = await dnsLookup(host, { all: true });
@@ -547,7 +546,6 @@ export async function startServer(
 					"stop it or retry.",
 			);
 		}
-
 		if (probe.kind === "different-host") {
 			throw new Error(
 				`Port ${port} is already in use by a San stats dashboard bound to ${probe.foundHost}; ` +
@@ -613,7 +611,6 @@ export async function startServer(
 
 				try {
 					let response: Response;
-
 					if (path.startsWith("/api/")) {
 						response = await handleApi(req);
 					} else {

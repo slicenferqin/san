@@ -3144,6 +3144,8 @@ export const SETTINGS_SCHEMA = {
 	"san.sessionWatchdog.enabled": { type: "boolean", default: true },
 
 	"san.contractEcho.firstTurn": { type: "boolean", default: true },
+
+	"san.cacheProbe.enabled": { type: "boolean", default: true },
 	"san.executionLoop.maxRetries": { type: "number", default: 2 },
 	"san.executionLoop.maxWorkers": { type: "number", default: 3 },
 	"san.executionLoop.ledger.enabled": { type: "boolean", default: true },

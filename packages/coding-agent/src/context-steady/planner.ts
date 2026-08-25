@@ -14,6 +14,8 @@ import {
 	type ContextPlanCoverageAudit,
 	type ContextPlanDigestMaterial,
 	type ContextPlanDigestSource,
+	type ContextPlanGoalAnchorInput,
+	type ContextPlanGoalAnchorMaterial,
 	type ContextPlanMaterial,
 	type ContextPlanRecallMaterial,
 	type ContextPlanToolStubMaterial,
@@ -70,6 +72,8 @@ export interface BuildContextPlanOptions {
 	toolOutputOffload?: { minTokens: number };
 	/** M4 image offload: replace earlier-turn image blocks with a re-reference marker. */
 	offloadAgedImages?: boolean;
+	/** 目标锚事实(宿主注入);缺省或 objective 为空时不产生锚材料。 */
+	goalAnchor?: ContextPlanGoalAnchorInput;
 }
 
 function materialTokenEstimate(value: unknown): number {
@@ -131,6 +135,53 @@ function buildEvidenceStubAuditMaterials(sourceIndex: ContextSourceIndex): Conte
 
 /** Stub 替换文本很小且尺寸稳定;审计用固定估算,避免为它渲染真实模板。 */
 const TOOL_STUB_TOKEN_ESTIMATE = 40;
+
+/** 目标锚各字段的裁剪上限:锚必须恒小(几百 token 封顶),永不与内容材料争预算。 */
+const GOAL_ANCHOR_LIMITS = {
+	objectiveChars: 480,
+	todoLines: 8,
+	pendingGates: 4,
+	nextSteps: 3,
+	lineChars: 160,
+} as const;
+
+function clampAnchorLine(value: string): string {
+	return value.length <= GOAL_ANCHOR_LIMITS.lineChars ? value : `${value.slice(0, GOAL_ANCHOR_LIMITS.lineChars - 1)}…`;
+}
+
+/**
+ * 目标锚材料(goal-fidelity 方案 A):不可变契约目标 + 进度快照,每次请求
+ * 常驻 plan 消息。fit 只裁 recall/digest/checkpoint,锚天然不可裁;不授权
+ * coverage。objective 为空不建锚。
+ */
+function buildGoalAnchorMaterial(
+	input: ContextPlanGoalAnchorInput | undefined,
+	sourceIndex: ContextSourceIndex,
+): ContextPlanGoalAnchorMaterial | undefined {
+	const objective = input?.objective.trim();
+	if (!objective) return undefined;
+	const latestDigest = sourceIndex.digests.at(-1)?.digest;
+	const material: ContextPlanGoalAnchorMaterial = {
+		audit: {
+			materialId: `goal_anchor_${crypto.randomUUID().slice(-12)}`,
+			kind: "goal_anchor",
+			representation: "exact",
+			entryRefs: [],
+			tokenEstimate: 0,
+			reason: "host-pinned objective and progress anchor (immutable contract projection)",
+		},
+		objective:
+			objective.length <= GOAL_ANCHOR_LIMITS.objectiveChars
+				? objective
+				: `${objective.slice(0, GOAL_ANCHOR_LIMITS.objectiveChars - 1)}…`,
+		todoLines: (input?.todoLines ?? []).slice(0, GOAL_ANCHOR_LIMITS.todoLines).map(clampAnchorLine),
+		pendingGates: (input?.pendingGates ?? []).slice(0, GOAL_ANCHOR_LIMITS.pendingGates).map(clampAnchorLine),
+		nextSteps: (latestDigest?.nextSteps ?? []).slice(0, GOAL_ANCHOR_LIMITS.nextSteps).map(clampAnchorLine),
+		coveredEntryRefs: [],
+	};
+	material.audit.tokenEstimate = materialTokenEstimate(material);
+	return material;
+}
 
 /**
  * Superseded mutation 的表示降级材料(magic-context 研究 §4.4):同一文件
@@ -284,32 +335,42 @@ function buildMaterials(
 	sourceIndex: ContextSourceIndex,
 	maxDigestMaterials: number,
 	recall: ContextPacketRecallLayer | undefined,
+	planTokenBudget: number,
 	currentPromptText: string | undefined,
 	contextPressure: number,
 ): ContextPlanMaterial[] {
 	const materials: ContextPlanMaterial[] = [];
+	let remainingBudget = Math.max(0, Math.floor(planTokenBudget));
 	const latestCheckpoint = sourceIndex.checkpoints.at(-1);
 	const coveredDigestRefs = new Set(latestCheckpoint?.coveredDigestEntryRefs ?? []);
 	const promptText = currentPromptText?.trim() ?? "";
-	const requireRelevance = checkpointRelevanceRequired(promptText);
+	const topicShift = promptText.length > 0 && isTopicShiftPrompt(promptText);
+	const continuation = promptText.length > 0 && isContinuationPrompt(promptText);
+	// Non-continuation prompts use relevance to drop unrelated derived history.
+	// Explicit topic shift always drops; natural topic changes use soft relevance.
+	const requireRelevance = promptText.length > 0 && (topicShift || !continuation);
 	const includeCheckpoint =
 		!!latestCheckpoint &&
 		(!requireRelevance || isCheckpointRelevantToPrompt(promptText, latestCheckpoint.checkpoint));
 	if (latestCheckpoint && includeCheckpoint) {
-		materials.push({
-			audit: {
-				materialId: materialId("checkpoint", latestCheckpoint.entryId),
-				kind: "checkpoint",
-				representation: "checkpoint",
-				entryRefs: [latestCheckpoint.entryId],
-				tokenEstimate: latestCheckpoint.checkpoint.tokenEstimate,
-				reason: "latest stable checkpoint",
-			},
-			entryId: latestCheckpoint.entryId,
-			checkpoint: latestCheckpoint.checkpoint,
-			// Source-index already strips fallback-digest spans from coverage.
-			coveredEntryRefs: latestCheckpoint.coveredSourceEntryRefs,
-		});
+		const checkpointEstimate = latestCheckpoint.checkpoint.tokenEstimate;
+		if (checkpointEstimate <= remainingBudget) {
+			materials.push({
+				audit: {
+					materialId: materialId("checkpoint", latestCheckpoint.entryId),
+					kind: "checkpoint",
+					representation: "checkpoint",
+					entryRefs: [latestCheckpoint.entryId],
+					tokenEstimate: latestCheckpoint.checkpoint.tokenEstimate,
+					reason: "latest stable checkpoint",
+				},
+				entryId: latestCheckpoint.entryId,
+				checkpoint: latestCheckpoint.checkpoint,
+				// Source-index already strips fallback-digest spans from coverage.
+				coveredEntryRefs: latestCheckpoint.coveredSourceEntryRefs,
+			});
+			remainingBudget -= checkpointEstimate;
+		}
 	}
 
 	const selectedDigests = sourceIndex.digests
@@ -317,11 +378,34 @@ function buildMaterials(
 		.filter(source => !requireRelevance || isDigestRelevantToPrompt(promptText, source.digest))
 		.slice(-Math.max(0, Math.floor(maxDigestMaterials)));
 	for (const [index, source] of selectedDigests.entries()) {
-		materials.push(buildDigestMaterial(source, selectedDigests.length - 1 - index, contextPressure));
+		const canCoverSource = source.digest.fallback !== true;
+		// Decay 选级:selectedDigests 旧→新有序,ageRank 0 = 最新。渲染粒度
+		// 随年龄与预算压力确定性降级;coverage 授权与粒度无关(原文可经
+		// context_expand 取回)。
+		const ageRank = selectedDigests.length - 1 - index;
+		const tier = selectDigestTier(ageRank, contextPressure);
+		const estimate = materialTokenEstimate(projectDigestTier(source.digest, tier));
+		if (estimate > remainingBudget) continue;
+		const material: ContextPlanDigestMaterial = {
+			audit: {
+				materialId: materialId("digest", source.entryId),
+				kind: "turn_digest",
+				representation: "digest",
+				entryRefs: [source.entryId],
+				tokenEstimate: estimate,
+				reason: `${canCoverSource ? "recent settled turn digest" : "fallback digest for reference only"} (tier: ${tier})`,
+			},
+			entryId: source.entryId,
+			digest: source.digest,
+			coveredEntryRefs: canCoverSource ? source.sourceEntryRefs : [],
+			tier,
+		};
+		materials.push(material);
+		remainingBudget -= estimate;
 	}
 
 	const recallMaterial = buildRecallMaterial(recall);
-	if (recallMaterial) materials.push(recallMaterial);
+	if (recallMaterial && recallMaterial.audit.tokenEstimate <= remainingBudget) materials.push(recallMaterial);
 	return materials;
 }
 
@@ -549,9 +633,14 @@ export function buildContextPlan(options: BuildContextPlanOptions): BuiltContext
 				sourceIndex,
 				options.maxDigestMaterials ?? 5,
 				options.stableProjection === true ? undefined : options.recall,
+				budget.planTokenBudget,
 				options.currentPromptText,
 				contextPressure,
 			);
+	// 目标锚置于材料列表最前:渲染在 plan 消息头部,且 fit 裁剪(只认
+	// recall/digest/checkpoint 字段)永远碰不到它。
+	const goalAnchorMaterial = buildGoalAnchorMaterial(options.goalAnchor, sourceIndex);
+	if (goalAnchorMaterial) candidateMaterials.unshift(goalAnchorMaterial);
 	const promptText = options.currentPromptText?.trim() ?? "";
 	const topicShift = promptText.length > 0 && isTopicShiftPrompt(promptText);
 	const naturalTopicChange =

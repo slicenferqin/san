@@ -195,6 +195,88 @@ describe("createAgentSession registry corpse handling", () => {
 		await manager.close();
 	});
 
+	it("fresh construction over an abandoned quiescent main supersedes it", async () => {
+		const project = makeTempProject();
+		const id = `Abandoned-Main-${Snowflake.next()}`;
+		const managerA = SessionManager.create(project.cwd, project.sessionsDir);
+		const abandoned = await createAgentSession({
+			...commonSessionOptions(project, managerA, id),
+			parentTaskPrefix: undefined,
+		});
+		// Intentionally NOT disposed: the caller abandoned the session. The
+		// long-standing SDK contract lets a later same-id construction replace
+		// it instead of failing.
+
+		const managerB = SessionManager.create(project.cwd, project.sessionsDir);
+		const { session: successor } = await createAgentSession({
+			...commonSessionOptions(project, managerB, id),
+			parentTaskPrefix: undefined,
+		});
+
+		const ref = AgentRegistry.global().get(id);
+		expect(ref?.kind).toBe("main");
+		expect(ref?.session).toBe(successor);
+		expect(ref?.session).not.toBe(abandoned.session);
+
+		// Generation safety: a LATE dispose of the abandoned (superseded)
+		// generation must not unregister — or otherwise disturb — the
+		// successor generation's ref.
+		await abandoned.session.dispose();
+		const refAfterOldDispose = AgentRegistry.global().get(id);
+		expect(refAfterOldDispose).toBe(ref);
+		expect(refAfterOldDispose?.session).toBe(successor);
+
+		await successor.dispose();
+		expect(AgentRegistry.global().get(id)).toBeUndefined();
+	});
+
+	it("fresh construction over an in-flight main registration (no session attached yet) fails closed", async () => {
+		const project = makeTempProject();
+		const id = `InFlight-Main-${Snowflake.next()}`;
+		const inFlight = AgentRegistry.global().register({
+			id,
+			displayName: "Main",
+			kind: "main",
+			parentId: undefined,
+			session: null,
+			sessionFile: null,
+			status: "running",
+		});
+
+		const manager = SessionManager.create(project.cwd, project.sessionsDir);
+		await expect(
+			createAgentSession({ ...commonSessionOptions(project, manager, id), parentTaskPrefix: undefined }),
+		).rejects.toThrow(/already registered/);
+
+		// The collision is left intact for the in-flight construction to finish.
+		const ref = AgentRegistry.global().get(id);
+		expect(ref).toBe(inFlight);
+		expect(ref?.session).toBeNull();
+		await manager.close();
+	});
+
+	it("fresh construction over a main with in-flight work (streaming) fails closed", async () => {
+		const project = makeTempProject();
+		const id = `Streaming-Main-${Snowflake.next()}`;
+		const busy = AgentRegistry.global().register({
+			id,
+			displayName: "Main",
+			kind: "main",
+			parentId: undefined,
+			session: { isStreaming: true } as AgentSession,
+			sessionFile: "/tmp/Streaming-Main.jsonl",
+			status: "running",
+		});
+
+		const manager = SessionManager.create(project.cwd, project.sessionsDir);
+		await expect(
+			createAgentSession({ ...commonSessionOptions(project, manager, id), parentTaskPrefix: undefined }),
+		).rejects.toThrow(/already registered/);
+
+		const ref = AgentRegistry.global().get(id);
+		expect(ref).toBe(busy);
+		await manager.close();
+	});
 	it("fresh construction reuses an id freed by a previous release without ever colliding", async () => {
 		const project = makeTempProject();
 		const id = `Reuse-${Snowflake.next()}`;

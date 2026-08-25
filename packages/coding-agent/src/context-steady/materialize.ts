@@ -134,8 +134,17 @@ function materialViews(materials: readonly ContextPlanMaterial[]) {
 	const checkpoints = [];
 	const digests = [];
 	const recalls = [];
+	let goalAnchor: { objective: string; todoLines: string[]; pendingGates: string[]; nextSteps: string[] } | undefined;
 	for (const material of materials) {
-		if ("checkpoint" in material) {
+		if ("objective" in material) {
+			// 目标锚:最多一个,渲染在 plan 头部。
+			goalAnchor = {
+				objective: material.objective,
+				todoLines: material.todoLines,
+				pendingGates: material.pendingGates,
+				nextSteps: material.nextSteps,
+			};
+		} else if ("checkpoint" in material) {
 			const checkpoint = material.checkpoint;
 			checkpoints.push({
 				materialId: material.audit.materialId,
@@ -192,7 +201,7 @@ function materialViews(materials: readonly ContextPlanMaterial[]) {
 		// tool_stub materials act on payload projection only — never rendered
 		// into the plan message.
 	}
-	return { checkpoints, digests, recalls };
+	return { checkpoints, digests, recalls, goalAnchor };
 }
 
 export function renderContextPlanContent(plan: Pick<BuiltContextPlan, "audit" | "materials">): string {

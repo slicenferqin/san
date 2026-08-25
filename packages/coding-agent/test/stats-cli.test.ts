@@ -33,7 +33,6 @@ describe("parseStatsArgs host plumbing", () => {
 		});
 		expect(parseStatsArgs(["stats", "-t", "short-secret"])).toMatchObject({ token: "short-secret" });
 	});
-
 	it("parses --host=value and the -H short form", () => {
 		expect(parseStatsArgs(["stats", "--host=::1"])).toMatchObject({ host: "::1" });
 		expect(parseStatsArgs(["stats", "-H", "0.0.0.0"])).toMatchObject({ host: "0.0.0.0" });

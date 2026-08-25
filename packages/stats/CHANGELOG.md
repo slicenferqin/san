@@ -16,6 +16,10 @@
 - Fixed the dashboard binding to loopback by default, added explicit host selection for container or remote exposure, and refused to reuse unidentified or differently bound processes on the requested port.
 - Fixed stats dashboard port reuse to validate the existing remote instance's authentication before reusing it, preventing mismatched tokens and anonymous legacy binds from being treated as protected.
 
+### Fixed
+
+- Fixed the dashboard binding to loopback by default, added explicit host selection for container or remote exposure, and refused to reuse unidentified or differently bound processes on the requested port.
+
 ## [17.0.2] - 2026-07-17
 
 ### Fixed
