@@ -12,6 +12,7 @@ import {
 	type CellDimensions,
 	encodeKitty,
 	encodeKittyDeleteImage,
+	encodeKittyDeletePlacement,
 	encodeKittyPlacement,
 	encodeKittyTransmit,
 	getCellDimensions,
@@ -278,11 +279,40 @@ describe("ImageBudget", () => {
 		expect(after.reset).toBe(false);
 		expect(after.purge).toEqual([]);
 	});
+
+	it("advances placement epochs only after native history archives the attachment", () => {
+		const budget = new ImageBudget(3, () => {});
+		const imageId = budget.acquireId("placement");
+		budget.registerPlacementGeometry(imageId, 40, 40);
+
+		expect(budget.resolvePlacementEmit(imageId, 0, -1)?.placementId).toBe(1);
+		budget.observeCommitWatermark(0);
+		expect(budget.resolvePlacementEmit(imageId, 0, -1)?.placementId).toBe(1);
+
+		budget.observeCommitWatermark(1);
+		expect(budget.resolvePlacementEmit(imageId, 0, -1)?.placementId).toBe(2);
+		expect(budget.resolvePlacementEmit(imageId, 0, -1)?.placementId).toBe(2);
+	});
+
+	it("returns every historical placement when resetting epochs", () => {
+		const budget = new ImageBudget(3, () => {});
+		const imageId = budget.acquireId("reset");
+		budget.registerPlacementGeometry(imageId, 40, 40);
+		budget.resolvePlacementEmit(imageId, 0, -1);
+		budget.observeCommitWatermark(1);
+		expect(budget.resolvePlacementEmit(imageId, 0, -1)?.placementId).toBe(2);
+
+		expect(budget.resetPlacementEpochs()).toEqual([{ imageId, lastEpoch: 2 }]);
+		expect(budget.resolvePlacementEmit(imageId, 0, -1)?.placementId).toBe(1);
+	});
 });
 
 describe("encodeKittyDeleteImage", () => {
 	it("emits an APC delete-by-id that frees the image and suppresses the reply", () => {
 		expect(encodeKittyDeleteImage(42)).toBe("\x1b_Ga=d,d=I,i=42,q=2\x1b\\");
+	});
+	it("emits a placement-scoped delete without freeing image data", () => {
+		expect(encodeKittyDeletePlacement(42, 7)).toBe("\x1b_Ga=d,d=i,i=42,p=7,q=2\x1b\\");
 	});
 });
 
@@ -756,71 +786,6 @@ describe("TUI inline-image budget", () => {
 			const output = writes.join("");
 			expect(output).toContain("\x1b_Ga=t");
 			expect(output).toContain(BASE64_ONE_PIXEL_PNG);
-		} finally {
-			tui.stop();
-			terminal.id = originalId;
-			setKittyGraphics(originalGraphics);
-		}
-	});
-
-	it("keeps a deferred fullscreen exit until a Ghostty image repaint can emit it", () => {
-		const originalId = terminal.id;
-		const originalGraphics = { ...getKittyGraphics() };
-		const term = new VirtualTerminal(40, 12);
-		const writes: string[] = [];
-		const realWrite = term.write.bind(term);
-		vi.spyOn(term, "write").mockImplementation((data: string) => {
-			writes.push(data);
-			realWrite(data);
-		});
-		let now = 0;
-		const scheduled: Array<{ delayMs: number; callback: () => void; canceled: boolean }> = [];
-		const renderScheduler = {
-			now: () => now,
-			scheduleImmediate: (callback: () => void) => callback(),
-			scheduleRender: (callback: () => void, delayMs: number) => {
-				const entry = { delayMs, callback, canceled: false };
-				scheduled.push(entry);
-				return {
-					cancel: () => {
-						entry.canceled = true;
-					},
-				};
-			},
-		};
-
-		terminal.id = "ghostty";
-		terminal.imageProtocol = ImageProtocol.Kitty;
-		setKittyGraphics({ unicodePlaceholders: true });
-		const tui = new TUI(term, undefined, { renderScheduler });
-		tui.addChild(new Text("old session", 0, 0));
-
-		try {
-			tui.start();
-			const overlay = tui.showOverlay(new Text("session selector", 0, 0), {
-				width: "100%",
-				maxHeight: "100%",
-				fullscreen: true,
-			});
-			tui.addChild(makeImage(tui.imageBudget, "resumed-image"));
-			tui.requestRender(true, { clearScrollback: true });
-			overlay.hide();
-
-			const queued = scheduled.find(entry => !entry.canceled);
-			expect(queued).toBeDefined();
-			now = 40;
-			queued!.canceled = true;
-			queued!.callback();
-
-			const delayed = scheduled.find(entry => !entry.canceled);
-			expect(delayed).toBeDefined();
-			now = 100;
-			delayed!.canceled = true;
-			delayed!.callback();
-
-			const exitPaint = writes.find(write => write.includes("\x1b[?1049l"));
-			expect(exitPaint).toContain("\x1b[3J");
-			expect(exitPaint).toContain(BASE64_ONE_PIXEL_PNG);
 		} finally {
 			tui.stop();
 			terminal.id = originalId;

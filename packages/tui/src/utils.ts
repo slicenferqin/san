@@ -323,6 +323,25 @@ export function visibleWidth(str: string): number {
 	return correctHangulCompatibilityJamoWidth(width, str);
 }
 
+/** Whether a row contains an OSC 66 text-sizing span. */
+export function isOsc66Line(line: string): boolean {
+	return line.includes(OSC66_PREFIX);
+}
+
+/** Largest OSC 66 scale in a row; unscaled rows return 1. */
+export function osc66MaxScale(line: string): number {
+	if (!line.includes(OSC66_PREFIX)) return 1;
+	let max = 1;
+	OSC66_SPAN_REGEX.lastIndex = 0;
+	for (let match = OSC66_SPAN_REGEX.exec(line); match !== null; match = OSC66_SPAN_REGEX.exec(line)) {
+		for (const part of match[1].split(":")) {
+			if (part.length < 3 || part[1] !== "=" || part[0] !== "s") continue;
+			const scale = Number.parseInt(part.slice(2), 10);
+			if (Number.isFinite(scale) && scale > max && scale <= 7) max = scale;
+		}
+	}
+	return max;
+}
 const THAI_LAO_AM_GLOBAL_REGEX = /[\u0e33\u0eb3]/g;
 
 /**

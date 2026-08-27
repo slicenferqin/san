@@ -230,6 +230,10 @@ export class WelcomeComponent implements Component {
 		}
 		return lines;
 	}
+	/** True once the one-shot intro no longer changes rendered rows. */
+	isFrameStable(): boolean {
+		return this.#animStart === null;
+	}
 
 	#renderLines(termWidth: number): string[] {
 		// Box dimensions - responsive with max width and small-terminal support

@@ -5,7 +5,6 @@ import { initTheme, theme } from "@san/coding-agent/modes/theme/theme";
 import type { AgentSession } from "@san/coding-agent/session/agent-session";
 import { SessionManager } from "@san/coding-agent/session/session-manager";
 import * as sessionColor from "@san/coding-agent/utils/session-color";
-import type { Container, NativeScrollbackLiveRegion } from "@san/tui";
 import { TempDir } from "@san/utils";
 
 type Harness = {
@@ -79,16 +78,11 @@ afterEach(() => {
 });
 
 describe("InteractiveMode working-message session accent cache", () => {
-	it("reports a live seam only while status content is mounted", async () => {
+	it("keeps status rows in the mutable container while mounted", async () => {
 		const { mode } = await createHarness("Live status");
-		const statusContainer = mode.statusContainer as Container & NativeScrollbackLiveRegion;
-
-		// Empty: no seam — the engine may commit freely past the container.
-		expect(statusContainer.getNativeScrollbackLiveRegionStart()).toBeUndefined();
-		// Loader mounted: every row is live, so the seam sits at 0 and keeps
-		// the animating loader out of immutable native scrollback.
+		expect(mode.statusContainer.render(120)).toEqual([]);
 		startStableLoader(mode);
-		expect(statusContainer.getNativeScrollbackLiveRegionStart()).toBe(0);
+		expect(mode.statusContainer.render(120).length).toBeGreaterThan(0);
 	});
 
 	it("reuses one computed accent across loader spinner and message colorizers", async () => {

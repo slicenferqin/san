@@ -11,9 +11,14 @@
 - Added an `unlisted` flag to `SlashCommand`: unlisted commands are hidden from empty-prefix browse completion and never surface through description or fuzzy-subsequence matching, but exact name/alias prefixes still complete them.
 - Added optional masked rendering to the single-line `Input` component while preserving the submitted value.
 
+### Changed
+
+- Replaced component-owned native scrollback seams with an explicit `TerminalFrameProvider` / `HistoryBatch` frame contract; history is acknowledged exactly once, mutable viewport rows remain bounded, and resize supports append, rebuild, and preserve policies.
+
 ### Fixed
 
 - Fixed loader animations consuming excessive CPU on slow terminal writes by applying paint-cost-aware backpressure while preserving normal animation cadence.
+- Fixed frame-provider installation after fallback rendering so the provider's initial history batch cannot collide with an already accepted fallback batch ID or leave stale fallback rows on screen.
 
 ## [17.0.2] - 2026-07-17
 

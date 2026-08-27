@@ -909,6 +909,36 @@ export const SETTINGS_SCHEMA = {
 			"Maximum number of inline images kept as live terminal graphics (default 8). Older images fall back to a text placeholder via a full redraw once the limit is exceeded. Set to 0 to keep every image (no limit).",
 	},
 
+	"tui.resizeScrollback": {
+		type: "enum",
+		values: ["append", "rebuild", "preserve"] as const,
+		default: "rebuild",
+		ui: {
+			audience: "expert",
+			tab: "appearance",
+			group: "Display",
+			label: "Resize History",
+			description: "Choose how a settled terminal resize refreshes transcript rows",
+			options: [
+				{
+					value: "append",
+					label: "Append",
+					description: "Replay the transcript at the new width below retained rows",
+				},
+				{
+					value: "rebuild",
+					label: "Rebuild",
+					description: "Clear retained rows, then replay one current-width transcript",
+				},
+				{
+					value: "preserve",
+					label: "Preserve",
+					description: "Repaint only the viewport and keep existing rows unchanged",
+				},
+			],
+		},
+	},
+
 	"terminal.showProgress": {
 		type: "boolean",
 		default: false,
@@ -968,18 +998,6 @@ export const SETTINGS_SCHEMA = {
 			group: "Display",
 			label: "Tight Layout",
 			description: "Remove the 1-character horizontal padding from the left and right of the terminal output",
-		},
-	},
-	"tui.scrollbackRebuild": {
-		type: "boolean",
-		default: false,
-		ui: {
-			audience: "expert",
-			tab: "appearance",
-			group: "Display",
-			label: "Rewrite Scrollback",
-			description:
-				"Erase and replay terminal scrollback when a block's final form replaces its live preview. When off (default), stale preview copies remain in history and the final content is appended below.",
 		},
 	},
 

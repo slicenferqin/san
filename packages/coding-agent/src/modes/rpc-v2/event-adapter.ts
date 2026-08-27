@@ -21,7 +21,7 @@ import type {
 import type { ActiveStreamSnapshot } from "./dto/session";
 import type { EventSequencer } from "./event-sequencer";
 import type { MessageId, RunId, ToolCallId, TurnId } from "./protocol/ids";
-import { newMessageId, newTurnId } from "./protocol/ids";
+import { newMessageId, newRunId, newTurnId } from "./protocol/ids";
 import { sanitizeRpcText } from "./redaction";
 
 /**
@@ -33,6 +33,8 @@ export class AdapterContext {
 	currentTurnId: TurnId | undefined;
 	currentOperationId: string | undefined;
 	currentRunTerminalStatus: "completed" | "failed" | "aborted" | "interrupted" | undefined;
+	/** Error detail for the terminal `run.failed` event; set alongside currentRunTerminalStatus. */
+	currentRunErrorMessage: string | undefined;
 	/** Mirrors StreamPolicy.thinkingDeltas; kept in sync by SessionManager.configureStream. */
 	emitThinkingDeltas = false;
 	#currentMessageId: MessageId | undefined;
@@ -101,8 +103,14 @@ export function adaptSessionEvent(
 	event: AgentSessionEvent,
 	sequencer: EventSequencer,
 	ctx: AdapterContext,
+	options?: { durableOnly?: boolean },
 ): SessionEvent | undefined {
-	const runId = ctx.currentRunId;
+	const durableOnly = options?.durableOnly === true;
+	let runId = ctx.currentRunId;
+	if (event.type === "agent_start" && !runId) {
+		runId = newRunId();
+		ctx.currentRunId = runId;
+	}
 	const turnId = ctx.currentTurnId;
 
 	switch (event.type) {
@@ -126,9 +134,15 @@ export function adaptSessionEvent(
 						: status === "aborted"
 							? "run.aborted"
 							: "run.interrupted";
+			const errorMessage = status === "failed" ? ctx.currentRunErrorMessage : undefined;
 			return sequencer.emit(
 				eventType,
-				{ runId, status, finishedAt: new Date().toISOString() },
+				{
+					runId,
+					status,
+					finishedAt: new Date().toISOString(),
+					...(errorMessage ? { message: sanitizeRpcText(errorMessage) } : {}),
+				},
 				{ durability: "durable", runId },
 			);
 		}
@@ -162,18 +176,22 @@ export function adaptSessionEvent(
 			const delta = extractTextDelta(source);
 			if (delta) {
 				ctx.appendMessageDelta(delta);
-				return sequencer.emit("message.delta", { messageId, delta }, { durability: "transient", runId, turnId });
+				return durableOnly
+					? undefined
+					: sequencer.emit("message.delta", { messageId, delta }, { durability: "transient", runId, turnId });
 			}
 			// Thinking deltas are opt-in (stream.configure) and never enter the
 			// visible message buffer — they stream on a separate channel only.
 			if (ctx.emitThinkingDeltas) {
 				const thinking = extractThinkingDelta(source);
 				if (thinking) {
-					return sequencer.emit(
-						"message.delta",
-						{ messageId, delta: thinking, channel: "thinking" },
-						{ durability: "transient", runId, turnId },
-					);
+					return durableOnly
+						? undefined
+						: sequencer.emit(
+								"message.delta",
+								{ messageId, delta: thinking, channel: "thinking" },
+								{ durability: "transient", runId, turnId },
+							);
 				}
 			}
 			return undefined;
@@ -210,11 +228,13 @@ export function adaptSessionEvent(
 		}
 
 		case "tool_execution_update":
-			return sequencer.emit(
-				"tool.progress",
-				{ toolCallId: event.toolCallId, toolName: event.toolName },
-				{ durability: "transient", runId, turnId },
-			);
+			return durableOnly
+				? undefined
+				: sequencer.emit(
+						"tool.progress",
+						{ toolCallId: event.toolCallId, toolName: event.toolName },
+						{ durability: "transient", runId, turnId },
+					);
 
 		case "tool_execution_end": {
 			ctx.finishTool(event.toolCallId);
@@ -342,6 +362,7 @@ export function adaptSessionEvent(
 				message: sanitizeRpcText(event.message),
 				source: event.source,
 			} satisfies SessionNoticeData;
+			if (durableOnly && event.level === "info") return undefined;
 			return sequencer.emit("session.notice", data, {
 				durability: event.level === "info" ? "transient" : "durable",
 				runId,

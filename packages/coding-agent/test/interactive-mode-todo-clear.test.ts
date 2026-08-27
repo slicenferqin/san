@@ -11,7 +11,6 @@ import { SessionManager } from "@san/coding-agent/session/session-manager";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@san/coding-agent/task";
 import type { TodoPhase } from "@san/coding-agent/tools/todo";
 import { EventBus } from "@san/coding-agent/utils/event-bus";
-import type { NativeScrollbackLiveRegion } from "@san/tui";
 import { TempDir } from "@san/utils";
 
 function renderTodos(mode: InteractiveMode): string {
@@ -114,15 +113,14 @@ describe("InteractiveMode todo HUD persistence", () => {
 		expect(renderTodos(mode)).not.toContain("done task");
 	});
 
-	it("keeps the anchored todo panel in the live region while visible", async () => {
+	it("keeps visible todo rows in the mutable viewport", async () => {
 		await createMode(-1);
 
 		mode.setTodos([{ name: "Implementation", tasks: [{ content: "pending task", status: "pending" }] }]);
-		const liveRegion = mode.todoContainer as unknown as NativeScrollbackLiveRegion;
-		expect(liveRegion.getNativeScrollbackLiveRegionStart?.()).toBe(0);
+		expect(renderTodos(mode)).toContain("pending task");
 
 		mode.setTodos([]);
-		expect(liveRegion.getNativeScrollbackLiveRegionStart?.()).toBeUndefined();
+		expect(mode.todoContainer.render(120)).toEqual([]);
 	});
 
 	it("marks todos complete when subagent reconciliation reports a finished agent", async () => {
@@ -284,15 +282,11 @@ describe("InteractiveMode todo HUD anchor", () => {
 		expect(root).toContain("1/7");
 	});
 
-	it("anchors the todo HUD as a native-scrollback live region while populated", () => {
-		// The loader sits below this HUD, so the HUD must report its own seam or
-		// its rows commit to scrollback as stale duplicates on short terminals.
-		const seam = () =>
-			(mode.todoContainer as Partial<NativeScrollbackLiveRegion>).getNativeScrollbackLiveRegionStart?.();
-		expect(seam()).toBeUndefined();
+	it("renders the todo HUD only while it has content", () => {
+		expect(mode.todoContainer.render(80)).toEqual([]);
 		mode.setTodos([{ name: "Tasks", tasks: [{ content: "alpha", status: "pending" }] }]);
-		expect(seam()).toBe(0);
+		expect(mode.todoContainer.render(80).join("\n")).toContain("alpha");
 		mode.setTodos([]);
-		expect(seam()).toBeUndefined();
+		expect(mode.todoContainer.render(80)).toEqual([]);
 	});
 });

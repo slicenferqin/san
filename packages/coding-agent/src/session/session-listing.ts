@@ -55,7 +55,10 @@ export interface RecentSessionInfo {
 	timeAgo: string;
 }
 
-const SESSION_LIST_PREFIX_BYTES = 4096;
+// Brain/context-steady preamble records (san.brain.activation/recall ≈ 8 KB)
+// push the first message past a 4 KB window, making every such session list
+// as "(no messages)". 32 KB covers the preamble with margin.
+const SESSION_LIST_PREFIX_BYTES = 32768;
 /**
  * Tail window read to derive {@link SessionStatus}. Large enough to capture a
  * typical final assistant turn (thinking + text); when the final message exceeds
@@ -345,7 +348,7 @@ function getSessionListWorkerCount(fileCount: number): number {
 }
 
 /**
- * Scan a single session file into a {@link SessionInfo}. Always reads the 4 KB
+ * Scan a single session file into a {@link SessionInfo}. Always reads the 32 KB
  * header/first-message prefix; only reads the 32 KB tail window (and derives
  * {@link SessionStatus}) when `withStatus` is set — the recent/most-recent
  * lookups skip it.

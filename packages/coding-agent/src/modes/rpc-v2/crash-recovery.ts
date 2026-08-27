@@ -15,6 +15,25 @@ export interface LeaseRecord {
 	acquiredAt: string;
 	lastHeartbeat: string;
 	lastStableSequence: number;
+	heartbeatIntervalMs?: number;
+	eventStreamDegraded?: boolean;
+}
+
+export const DEFAULT_LEASE_HEARTBEAT_INTERVAL_MS = 10_000;
+export const LEASE_EXPIRY_MS = 30_000;
+
+export interface LeaseHeartbeatOptions {
+	sessionFile: string;
+	leaseId: string;
+	runtimeId: string;
+	getSequence: () => number;
+	getEventStreamDegraded?: () => boolean;
+	intervalMs?: number;
+	onError?: (error: unknown) => void;
+}
+
+export interface LeaseHeartbeatHandle {
+	stop(): Promise<void>;
 }
 
 interface StoredRecoveryDescriptor extends RecoveryDescriptor {
@@ -40,6 +59,76 @@ function processAlive(pid: number): boolean {
 	}
 }
 
+export function leaseIsFresh(record: LeaseRecord, now: number = Date.now()): boolean {
+	const heartbeatAt = Date.parse(record.lastHeartbeat);
+	if (!Number.isFinite(heartbeatAt)) return false;
+	const interval = record.heartbeatIntervalMs ?? DEFAULT_LEASE_HEARTBEAT_INTERVAL_MS;
+	return now - heartbeatAt < Math.max(LEASE_EXPIRY_MS, interval * 3);
+}
+
+function leaseIsActive(record: LeaseRecord): boolean {
+	// Old sidecars predate heartbeatIntervalMs; retain PID semantics for those
+	// records while all newly written records use the heartbeat freshness gate.
+	return record.heartbeatIntervalMs === undefined ? processAlive(record.pid) : leaseIsFresh(record);
+}
+
+export function startLeaseHeartbeat(options: LeaseHeartbeatOptions): LeaseHeartbeatHandle {
+	const intervalMs = options.intervalMs ?? DEFAULT_LEASE_HEARTBEAT_INTERVAL_MS;
+	let stopped = false;
+	let inFlight: Promise<void> | undefined;
+	const tick = (): void => {
+		if (stopped || inFlight) return;
+		const pending = updateLeaseHeartbeat(
+			options.sessionFile,
+			options.leaseId,
+			options.runtimeId,
+			options.getSequence(),
+			options.getEventStreamDegraded?.(),
+		).catch(error => {
+			try {
+				options.onError?.(error);
+			} catch {
+				// A heartbeat observer must never escape the timer callback.
+			}
+		});
+		inFlight = pending;
+		void pending.finally(() => {
+			if (inFlight === pending) inFlight = undefined;
+		});
+	};
+	const timer: NodeJS.Timeout = setInterval(tick, intervalMs);
+	return {
+		stop: async () => {
+			stopped = true;
+			clearInterval(timer);
+			await inFlight;
+		},
+	};
+}
+
+/**
+ * 判定"外部活跃会话"的 journal 新鲜度窗口：交互式 CLI 运行时（san 17+）不参与
+ * rpc-v2 lease/心跳协议，但活跃运行会持续追加 journal（sessionFile 本身）。
+ * mtime 落在窗口内即视为另一个进程持有该会话：此时抢 lease + mark_aborted 只会
+ * 制造一个与真实运行分叉的冻结镜像。进程真崩溃时 journal 停写，窗口过后自然解锁。
+ */
+export const FOREIGN_LIVE_JOURNAL_FRESH_MS = 5 * 60_000;
+
+/**
+ * journal mtime 处于新鲜窗口内时抛出 SESSION_LOCKED 语义的 Error。
+ * 调用方必须已排除"本 Runtime 持有活跃 lease"的情况（本函数不看 runtimeId）。
+ */
+export async function assertNoForeignLiveSession(sessionFile: string, now: number = Date.now()): Promise<void> {
+	let stat: Awaited<ReturnType<typeof fs.stat>>;
+	try {
+		stat = await fs.stat(sessionFile);
+	} catch (error: unknown) {
+		if (isEnoent(error)) return;
+		throw error;
+	}
+	if (now - stat.mtimeMs < FOREIGN_LIVE_JOURNAL_FRESH_MS) throw new Error("SESSION_LOCKED");
+}
+
 /** 原子创建 lease；已有活跃进程时返回 SESSION_LOCKED 语义的错误。 */
 export async function acquireLease(sessionFile: string, record: LeaseRecord, stealExpired = false): Promise<void> {
 	const leasePath = leasePathForSession(sessionFile);
@@ -47,9 +136,8 @@ export async function acquireLease(sessionFile: string, record: LeaseRecord, ste
 	await withFileLock(leasePath, async () => {
 		if (!(await Bun.file(sessionFile).exists())) throw new Error("SESSION_NOT_FOUND");
 		const existing = await readLeaseRecord(leasePath);
-		if (existing) {
-			if (processAlive(existing.pid) && existing.runtimeId !== record.runtimeId) throw new Error("SESSION_LOCKED");
-			if (!stealExpired && existing.runtimeId !== record.runtimeId) throw new Error("SESSION_LOCKED");
+		if (existing && existing.runtimeId !== record.runtimeId) {
+			if (leaseIsActive(existing) || !stealExpired) throw new Error("SESSION_LOCKED");
 		}
 		await writeJsonAtomically(leasePath, record);
 	});
@@ -67,6 +155,7 @@ export async function updateLeaseHeartbeat(
 	leaseId: string,
 	runtimeId: string,
 	sequence: number,
+	eventStreamDegraded?: boolean,
 ): Promise<void> {
 	const leasePath = leasePathForSession(sessionFile);
 	await withFileLock(leasePath, async () => {
@@ -74,6 +163,7 @@ export async function updateLeaseHeartbeat(
 		if (!record || record.leaseId !== leaseId || record.runtimeId !== runtimeId) throw new Error("SESSION_LOCKED");
 		record.lastHeartbeat = new Date().toISOString();
 		record.lastStableSequence = Math.max(record.lastStableSequence ?? 0, sequence);
+		if (eventStreamDegraded !== undefined) record.eventStreamDegraded = eventStreamDegraded;
 		await writeJsonAtomically(leasePath, record);
 	});
 }
@@ -123,7 +213,7 @@ export async function detectRecovery(
 	return await withFileLock(leasePath, async () => {
 		const record = await readLeaseRecord(leasePath);
 		if (!record || record.runtimeId === currentRuntimeId) return undefined;
-		if (processAlive(record.pid)) throw new Error("SESSION_LOCKED");
+		if (leaseIsActive(record)) throw new Error("SESSION_LOCKED");
 		const recovery: StoredRecoveryDescriptor = {
 			required: true,
 			reason: "runtime_crash" satisfies RecoveryReason,
@@ -160,7 +250,7 @@ export async function executeRecovery(
 		const ownsPreviousLease =
 			current.leaseId === recovery.previousLeaseId &&
 			current.runtimeId === recovery.previousRuntimeId &&
-			!processAlive(current.pid);
+			!leaseIsActive(current);
 		const ownsStolenLease = current.leaseId === leaseId && current.runtimeId === currentRuntimeId;
 		if (!ownsPreviousLease && !ownsStolenLease) throw new Error("SESSION_LOCKED");
 		const lastStableSequence = Math.max(0, recovery.lastStableSequence);
@@ -177,6 +267,8 @@ export async function executeRecovery(
 				acquiredAt: now,
 				lastHeartbeat: now,
 				lastStableSequence,
+				heartbeatIntervalMs: current.heartbeatIntervalMs,
+				eventStreamDegraded: current.eventStreamDegraded,
 			} satisfies LeaseRecord);
 		}
 		await fs.rm(recoveryPathForSession(sessionFile), { force: true });
@@ -223,6 +315,15 @@ function parseLeaseRecord(value: unknown): LeaseRecord {
 	}
 	if (!Number.isSafeInteger(value.lastStableSequence) || (value.lastStableSequence as number) < 0) {
 		throw new Error("lastStableSequence must be a non-negative safe integer");
+	}
+	if (
+		value.heartbeatIntervalMs !== undefined &&
+		(!Number.isSafeInteger(value.heartbeatIntervalMs) || (value.heartbeatIntervalMs as number) <= 0)
+	) {
+		throw new Error("heartbeatIntervalMs must be a positive integer");
+	}
+	if (value.eventStreamDegraded !== undefined && typeof value.eventStreamDegraded !== "boolean") {
+		throw new Error("eventStreamDegraded must be a boolean");
 	}
 	return value as unknown as LeaseRecord;
 }

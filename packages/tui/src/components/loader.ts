@@ -134,15 +134,9 @@ export class Loader extends Text {
 		const frame = this.#frames[this.#currentFrame];
 		const textChanged = this.setText(`${frame} ${this.message}`);
 		if ((textChanged || this.messageColorFn.animated === true) && this.#ui) {
-			// Direct write: a loader tick changes only this component, so the TUI
-			// can update the already-positioned rows without driving the full
-			// compose/prepare/diff pipeline. Lightweight test stubs may not carry
-			// the newer API; keep their legacy component-scoped path working.
-			if (typeof this.#ui.requestDirectWrite === "function") {
-				this.#ui.requestDirectWrite(this);
-			} else {
-				this.#ui.requestComponentRender(this);
-			}
+			// The frame provider keeps loader animation in the mutable viewport;
+			// request only the affected component so the next frame is coalesced.
+			this.#ui.requestComponentRender(this);
 		}
 	}
 }

@@ -891,6 +891,95 @@ describe("Settings", () => {
 			expect(reloaded.get("todo.reminders")).toBe(true);
 		});
 
+		it("migrates nested tui.scrollbackRebuild=true to tui.resizeScrollback=rebuild", async () => {
+			await writeSettings({ tui: { scrollbackRebuild: true } });
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.get("tui.resizeScrollback")).toBe("rebuild");
+		});
+
+		it("migrates nested tui.scrollbackRebuild=false to tui.resizeScrollback=preserve", async () => {
+			await writeSettings({ tui: { scrollbackRebuild: false } });
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			// `true` gated the destructive erase-and-replay rebuild; `false`
+			// kept rows untouched. `append` is new behavior with no legacy
+			// equivalent, so the off state maps to `preserve`.
+			expect(settings.get("tui.resizeScrollback")).toBe("preserve");
+		});
+
+		it("migrates flat tui.scrollbackRebuild to tui.resizeScrollback", async () => {
+			await writeSettings({ "tui.scrollbackRebuild": true });
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.get("tui.resizeScrollback")).toBe("rebuild");
+		});
+
+		it("lets an explicit nested tui.resizeScrollback win over the legacy boolean", async () => {
+			await writeSettings({
+				tui: { scrollbackRebuild: true, resizeScrollback: "append" },
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.get("tui.resizeScrollback")).toBe("append");
+		});
+
+		it("lets an explicit flat tui.resizeScrollback win over the legacy boolean", async () => {
+			await writeSettings({
+				tui: { scrollbackRebuild: true },
+				"tui.resizeScrollback": "preserve",
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.get("tui.resizeScrollback")).toBe("preserve");
+		});
+
+		it("drops legacy tui.scrollbackRebuild keys, preserves unrelated tui settings, and reloads cleanly", async () => {
+			await writeSettings({
+				tui: { tight: true, scrollbackRebuild: false, maxInlineImages: 4 },
+				"tui.scrollbackRebuild": true,
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(settings.get("tui.resizeScrollback")).toBe("preserve");
+			expect(settings.get("tui.tight")).toBe(true);
+			expect(settings.get("tui.maxInlineImages")).toBe(4);
+
+			// Touch an unrelated key so the migrated tree is written back.
+			settings.set("display.showTokenUsage", true);
+			await settings.flush();
+
+			const onDisk = await readSettings();
+			const tui = onDisk.tui as Record<string, unknown>;
+			expect(tui.resizeScrollback).toBe("preserve");
+			expect(tui.tight).toBe(true);
+			expect(tui.maxInlineImages).toBe(4);
+			expect(tui.scrollbackRebuild).toBeUndefined();
+			expect(onDisk["tui.scrollbackRebuild"]).toBeUndefined();
+			expect(onDisk["tui.resizeScrollback"]).toBeUndefined();
+
+			// Idempotent: a reload over the migrated file is unchanged.
+			const reloaded = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			expect(reloaded.get("tui.resizeScrollback")).toBe("preserve");
+			expect(reloaded.get("tui.tight")).toBe(true);
+			expect(reloaded.get("tui.maxInlineImages")).toBe(4);
+		});
+
+		it("migrates legacy booleans and explicit values idempotently through isolated overrides", () => {
+			const fromLegacy = Settings.isolated({
+				"tui.scrollbackRebuild": true,
+			} as Partial<Record<SettingPath, unknown>>);
+			expect(fromLegacy.get("tui.resizeScrollback")).toBe("rebuild");
+
+			const alreadyNew = Settings.isolated({ "tui.resizeScrollback": "append" });
+			expect(alreadyNew.get("tui.resizeScrollback")).toBe("append");
+		});
+
 		it("drops dead BM25-discovery keys and leaves tools.xdev at its default", async () => {
 			await writeSettings({
 				tools: { discoveryMode: "off", essentialOverride: ["read"] },

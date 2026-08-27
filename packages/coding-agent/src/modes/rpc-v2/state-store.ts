@@ -138,8 +138,35 @@ export class RpcV2StateStore {
 	}
 
 	async appendEvent(event: SessionEvent): Promise<void> {
+		await this.appendEvents([event]);
+	}
+
+	/** Append a durable/transient batch under the event-file lock. */
+	async appendEvents(events: readonly SessionEvent[]): Promise<void> {
+		if (events.length === 0) return;
 		await fs.mkdir(path.dirname(this.#eventsPath), { recursive: true });
-		await this.#appendEvent(event);
+		await withFileLock(this.#eventsPath, async () => {
+			await this.#repairEventTail();
+			const existing = await this.#loadEvents();
+			const byId = new Map(existing.map(event => [event.eventId, event]));
+			let tailSequence = existing.at(-1)?.sequence ?? 0;
+			const missing: SessionEvent[] = [];
+			for (const event of events) {
+				const matching = byId.get(event.eventId);
+				assertEventCompatible(event, matching, existing);
+				if (matching) continue;
+				if (event.sequence <= tailSequence) {
+					throw new Error(`RPC v2 event sequence ${event.sequence} does not follow ${tailSequence}`);
+				}
+				missing.push(event);
+				tailSequence = event.sequence;
+				byId.set(event.eventId, event);
+			}
+			if (missing.length > 0) {
+				const body = `${missing.map(event => JSON.stringify(event)).join("\n")}\n`;
+				await fs.appendFile(this.#eventsPath, body, "utf8");
+			}
+		});
 	}
 
 	async appendEventIdempotently(event: SessionEvent): Promise<void> {

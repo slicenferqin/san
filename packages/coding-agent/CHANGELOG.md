@@ -39,6 +39,7 @@
 - Added persistence-backed San RPC v2 settings for global, workspace, and session scopes, including source attribution, optimistic revision conflicts, and immediate runtime application.
 - Added RPC v2 provider catalog management (`provider.config.create`, `provider.model.add`) and `usage.stats` analytics with capability/schema exposure, secret-free provider listings, active-session aggregation, and persisted-session breakdowns.
 - Added RPC v2 `session.messages.list` for paginated persisted user/assistant transcript history, excluding synthetic, steering, tool-result, and empty-text messages while matching live `message.completed` text projection limits.
+- Added an interactive RPC v2 publisher for main sessions: durable lifecycle, tool, evidence, and todo events now persist with monotonic sequences and lease heartbeats, while expired-runtime recovery restores the active-run projection and persistence failures degrade without interrupting the agent.
 - Added a cost-tiered public Context Steady benchmark runner with randomized Native/Steady pairs, isolated runtime credentials, Agent/Digest/Compaction usage aggregation, external quality verifiers, reproducible artifacts, a 180-step controlled-stress task, and explicit guards for 30-run Release and 50-run Extended campaigns.
 - Added a sidecar Context Steady probe that records exact per-request usage, cache rate, active/raw context estimates, prefix changes, and the configured native-compaction baseline; `/context` now shows the session ID, session file, probe file, and cumulative cache-read rate.
 - Added San Context Steady Segment maintenance for long logical turns: token/time soft hints trigger mid-turn compaction without limiting execution, recursive Segment checkpoints bound final digest input, active/archive boundaries prevent stale journal refs from causing hard pressure, and maintenance recovery is persisted for audit.
@@ -62,6 +63,7 @@
 ### Changed
 
 - Reduced extension startup latency by importing extension modules concurrently while preserving deterministic factory binding order and per-extension rollback ([#7615](https://github.com/can1357/oh-my-pi/issues/7615)).
+- Changed interactive transcript rendering to own an `active` → `settled` → `committed` lifecycle and hand ordered history batches to the TUI provider; migrated legacy `tui.scrollbackRebuild` settings to `tui.resizeScrollback` without dropping nested or flat user configuration.
 - Changed task orchestration to deduplicate repeated work strategies, expose status and heartbeat cursors through Task and Hub, isolate root registries while sharing them with child sessions, preserve in-flight work during scheduler grace windows, and require explicit acknowledgement for mutating Todo operations.
 - Changed enabled San Brain sessions to default to `activation`; `review-only` remains a capture-only mode and never runs automatic decisions.
 - Changed San Context Steady to remain native-equivalent below a configurable activation threshold (240K input tokens by default), then latch activation for the session and restore it after resume.

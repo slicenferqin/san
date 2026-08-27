@@ -19,10 +19,13 @@ import type {
 	AutocompleteProvider,
 	Component,
 	EditorTheme,
+	HistoryBatch,
 	LoaderMessageColorFn,
-	NativeScrollbackLiveRegion,
 	OverlayHandle,
 	SlashCommand,
+	TerminalFramePlan,
+	TerminalFrameProvider,
+	ViewportSize,
 } from "@san/tui";
 import {
 	Container,
@@ -346,17 +349,135 @@ export interface InteractiveModeOptions {
 }
 
 /**
- * Anchored live-region container for the HUD/status rows between the transcript
- * and the editor (working loader, todo + subagent HUDs, transient notification
- * panels). While it has content every row is live: it reports a seam at 0 so the
- * engine never commits these anchored, rebuilt-in-place rows to native
- * scrollback — otherwise stale duplicates pile up above the live copy on short
- * terminals once the loader sits below a tall HUD. The transcript's own seam,
- * when present, sits higher and wins (topmost-seam merge in TUI.render).
+ * Composes the semantic root into one immutable transcript-history channel and
+ * one bounded mutable viewport. The TUI owns the physical write transaction;
+ * this provider owns only ordering and transcript retirement.
  */
-class AnchoredLiveContainer extends Container implements NativeScrollbackLiveRegion {
-	getNativeScrollbackLiveRegionStart(): number | undefined {
-		return this.children.length > 0 ? 0 : undefined;
+class InteractiveFrameProvider implements TerminalFrameProvider {
+	#nextHistoryId = 1;
+	#offeredHistory: { batch: HistoryBatch; source?: HistoryBatch; commitsPrefix: boolean } | undefined;
+	#prefixCommitted = false;
+	#committedPrefixRows: readonly string[] = [];
+	#flushMode = false;
+
+	constructor(
+		readonly ui: TUI,
+		readonly transcript: TranscriptContainer,
+	) {}
+
+	renderFrame(viewport: ViewportSize): TerminalFramePlan {
+		const width = Math.max(1, viewport.columns);
+		const height = Math.max(0, viewport.rows);
+		const split = this.#renderAroundTranscript(width);
+		if (this.#prefixCommitted && !this.#sameRows(this.#committedPrefixRows, split.prefixRows)) {
+			this.#offeredHistory = undefined;
+			this.#prefixCommitted = false;
+			this.#committedPrefixRows = [];
+			this.ui.requestRender(true, { clearScrollback: true });
+		}
+		let prefixRows = this.#prefixCommitted ? [] : split.prefixRows;
+		let capacity = Math.max(0, height - prefixRows.length - split.suffixRows.length);
+
+		if (this.#offeredHistory?.commitsPrefix === true) {
+			prefixRows = [];
+			capacity = Math.max(0, height - split.suffixRows.length);
+		} else if (
+			this.#offeredHistory === undefined &&
+			!this.#prefixCommitted &&
+			split.prefixRows.length > 0 &&
+			(split.prefixStable || this.#flushMode)
+		) {
+			const batch = this.#offerHistory(split.prefixRows, undefined);
+			this.#offeredHistory = { batch, commitsPrefix: true };
+			prefixRows = [];
+			capacity = Math.max(0, height - split.suffixRows.length);
+		}
+
+		if (this.#offeredHistory === undefined && (this.#prefixCommitted || split.prefixStable)) {
+			const source = this.transcript.peekFinalizedBatch(width, capacity);
+			if (source !== undefined) {
+				const batch = this.#offerHistory(source.rows, source);
+				this.#offeredHistory = { batch, source, commitsPrefix: false };
+			}
+		}
+
+		const transcriptRows = this.transcript.renderViewport(width, capacity);
+		const rows = [...prefixRows, ...transcriptRows, ...split.suffixRows];
+		return {
+			history: this.#offeredHistory?.batch,
+			viewport: rows.length > height ? rows.slice(rows.length - height) : rows,
+		};
+	}
+
+	acknowledgeHistory(id: number): void {
+		const offered = this.#offeredHistory;
+		if (offered === undefined || offered.batch.id !== id) return;
+		if (offered.source !== undefined) this.transcript.acknowledgeFinalizedBatch(offered.source.id);
+		if (offered.commitsPrefix) this.#prefixCommitted = true;
+		this.#offeredHistory = undefined;
+		if (offered.commitsPrefix) this.#committedPrefixRows = [...offered.batch.rows];
+	}
+
+	beginHistoryReplay(): void {
+		this.#offeredHistory = undefined;
+		this.#prefixCommitted = false;
+		this.#flushMode = false;
+		this.transcript.resetRetirement();
+		this.#committedPrefixRows = [];
+		this.transcript.beginReplay();
+	}
+
+	beginHistoryFlush(): void {
+		this.#flushMode = true;
+		this.transcript.beginFlush();
+	}
+
+	renderResizeFrame(viewport: ViewportSize): readonly string[] {
+		const width = Math.max(1, viewport.columns);
+		const height = Math.max(0, viewport.rows);
+		const split = this.#renderAroundTranscript(width);
+		const prefixRows = this.#prefixCommitted ? [] : split.prefixRows;
+		const capacity = Math.max(0, height - prefixRows.length - split.suffixRows.length);
+		const transcriptRows = this.transcript.renderViewport(width, capacity);
+		const rows = [...prefixRows, ...transcriptRows, ...split.suffixRows];
+		return rows.length > height ? rows.slice(rows.length - height) : rows;
+	}
+
+	#offerHistory(rows: readonly string[], source: HistoryBatch | undefined): HistoryBatch {
+		return {
+			id: this.#nextHistoryId++,
+			kind: source?.kind ?? "append",
+			rows: [...rows],
+		};
+	}
+
+	#sameRows(left: readonly string[], right: readonly string[]): boolean {
+		return left.length === right.length && left.every((row, index) => row === right[index]);
+	}
+	#renderAroundTranscript(width: number): {
+		prefixRows: string[];
+		suffixRows: string[];
+		prefixStable: boolean;
+	} {
+		const prefixRows: string[] = [];
+		const suffixRows: string[] = [];
+		let prefixStable = true;
+		let afterTranscript = false;
+		for (const child of this.ui.children) {
+			if (child === this.transcript) {
+				afterTranscript = true;
+				continue;
+			}
+			const rendered = child.render(width);
+			if (afterTranscript) {
+				suffixRows.push(...rendered);
+				continue;
+			}
+			prefixRows.push(...rendered);
+			const stability = (child as Component & { isFrameStable?: () => boolean }).isFrameStable;
+			if (stability !== undefined && !stability.call(child)) prefixStable = false;
+		}
+		return { prefixRows, suffixRows, prefixStable };
 	}
 }
 
@@ -678,20 +799,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		setMarkdownMermaidRendering(settings.get("tui.renderMermaid"));
 		this.ui = new TUI(new ProcessTerminal(), settings.get("showHardwareCursor"));
 		this.ui.setMaxInlineImages(settings.get("tui.maxInlineImages"));
-		this.ui.setScrollbackRebuild(settings.get("tui.scrollbackRebuild"));
+		this.ui.setResizeScrollback(settings.get("tui.resizeScrollback"));
 		// OSC 66 text-sizing is Kitty-only; resolve the setting against the terminal's
 		// capability (`TERMINAL.textSizing` defaults on for Kitty) so it stays off
 		// unless the user opts in, and never emits raw escapes on other terminals.
 		setTerminalTextSizing(settings.get("tui.textSizing") && TERMINAL.textSizing);
 		this.chatContainer = new TranscriptContainer();
-		this.pendingMessagesContainer = new AnchoredLiveContainer();
-		this.statusContainer = new AnchoredLiveContainer();
-		this.todoContainer = new AnchoredLiveContainer();
-		this.subagentContainer = new AnchoredLiveContainer();
-		this.btwContainer = new AnchoredLiveContainer();
-		this.omfgContainer = new AnchoredLiveContainer();
-		this.errorBannerContainer = new AnchoredLiveContainer();
-		this.modelCycleContainer = new AnchoredLiveContainer();
+		this.pendingMessagesContainer = new Container();
+		this.statusContainer = new Container();
+		this.todoContainer = new Container();
+		this.subagentContainer = new Container();
+		this.btwContainer = new Container();
+		this.omfgContainer = new Container();
+		this.errorBannerContainer = new Container();
+		this.modelCycleContainer = new Container();
 		this.editor = new CustomEditor(getEditorTheme());
 		this.editor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		this.editor.setImeSafeCursorLayout(settings.get("tui.imeSafeCursor"));
@@ -940,6 +1061,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.addChild(this.editorContainer);
 		this.ui.addChild(this.hookWidgetContainerBelow);
 		this.ui.setFocus(this.editor);
+		this.ui.setFrameProvider(new InteractiveFrameProvider(this.ui, this.chatContainer));
 
 		this.#inputController.setupKeyHandlers();
 		this.#inputController.setupEditorSubmitHandler();
