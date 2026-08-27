@@ -5,6 +5,7 @@ import * as path from "node:path";
 import {
 	abandonRecoveryLease,
 	acquireLease,
+	assertNoForeignLiveSession,
 	detectRecovery,
 	executeRecovery,
 	leasePathForSession,
@@ -21,11 +22,18 @@ afterEach(async () => {
 	for (const directory of tempDirectories.splice(0)) await removeWithRetries(directory);
 });
 
+async function backdate(sessionFile: string, ageMs: number): Promise<void> {
+	const atime = new Date(Date.now() - ageMs);
+	await fs.utimes(sessionFile, atime, atime);
+}
+
 async function staleSessionFile(): Promise<string> {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "san-rpc-v2-recovery-"));
 	tempDirectories.push(directory);
 	const sessionFile = path.join(directory, "session.jsonl");
 	await Bun.write(sessionFile, "");
+	// 先回溯 mtime 再拿 lease：新鲜的 journal 会被视为外部活跃会话而拒绝接管。
+	await backdate(sessionFile, 10 * 60_000);
 	await acquireLease(sessionFile, {
 		leaseId: "lease_old",
 		runtimeId: "runtime_old",
@@ -201,5 +209,33 @@ describe("RPC v2 crash recovery", () => {
 			}),
 		);
 		await expect(readRecovery(sessionFile)).rejects.toThrow("invalid recovery strategies");
+	});
+});
+
+describe("foreign live session detection", () => {
+	test("assertNoForeignLiveSession rejects a freshly written journal", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "san-rpc-v2-foreign-live-"));
+		tempDirectories.push(directory);
+		const sessionFile = path.join(directory, "session.jsonl");
+		// 交互式 CLI 运行时不写 rpc-v2 lease，但活跃运行会持续追加 journal。
+		await Bun.write(sessionFile, "");
+		await expect(assertNoForeignLiveSession(sessionFile)).rejects.toThrow("SESSION_LOCKED");
+	});
+
+	test("assertNoForeignLiveSession accepts stale or missing journals", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "san-rpc-v2-foreign-stale-"));
+		tempDirectories.push(directory);
+		const sessionFile = path.join(directory, "session.jsonl");
+		await Bun.write(sessionFile, "");
+		await backdate(sessionFile, 10 * 60_000);
+		await assertNoForeignLiveSession(sessionFile);
+		await assertNoForeignLiveSession(path.join(directory, "missing.jsonl"));
+	});
+
+	test("a crashed runtime unlocks after the freshness window", async () => {
+		const sessionFile = await staleSessionFile();
+		// journal 停写超过窗口（staleSessionFile 已回溯 10 分钟）：按崩溃恢复接管。
+		const recovery = await detectRecovery("ses_1", "runtime_new" as RuntimeId, sessionFile);
+		expect(recovery).toMatchObject({ required: true, reason: "runtime_crash" });
 	});
 });

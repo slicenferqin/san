@@ -4,7 +4,7 @@ import { latexToBlock } from "../latex-block";
 import { inlineMathSpanEnd, isBareMathEnvironment, latexToUnicode } from "../latex-to-unicode";
 import type { SymbolTheme } from "../symbols";
 import { TERMINAL } from "../terminal-capabilities";
-import type { Component, NativeScrollbackCommittedRows, NativeScrollbackReplay } from "../tui";
+import type { Component } from "../tui";
 import {
 	applyBackgroundToLine,
 	Ellipsis,
@@ -643,28 +643,17 @@ const RENDER_CACHE_MAX_SIZE = 512 * 1024;
 const RENDER_CACHE_MAX_ENTRY_SIZE = 32 * 1024;
 const EMPTY_RENDER_LINES: readonly string[] = [];
 
-interface RenderCacheEntry {
-	lines: readonly string[];
-	tables: readonly RenderedTableLayout[];
-}
-
-const renderCache = new LRUCache<string, RenderCacheEntry>({
+const renderCache = new LRUCache<string, readonly string[]>({
 	max: RENDER_CACHE_MAX,
 	maxSize: RENDER_CACHE_MAX_SIZE,
 	maxEntrySize: RENDER_CACHE_MAX_ENTRY_SIZE,
-	sizeCalculation: renderCacheEntrySize,
+	sizeCalculation: renderedLinesCacheSize,
 });
 
 function renderedLinesCacheSize(lines: readonly string[]): number {
 	let size = lines.length;
 	for (let i = 0; i < lines.length; i++) size += lines[i]!.length;
 	return Math.max(1, size);
-}
-
-function renderCacheEntrySize(entry: RenderCacheEntry): number {
-	let size = renderedLinesCacheSize(entry.lines);
-	for (const table of entry.tables) size += table.key.length + table.columnWidths.length + 4;
-	return size;
 }
 
 // A reference-link definition (`[label]: dest`) resolves across the whole
@@ -998,7 +987,6 @@ interface StreamPrefixLineCache extends RenderSignature {
 	text: string;
 	tokenCount: number;
 	lines: readonly string[];
-	tables: readonly TableRenderSpec[];
 }
 interface StreamingDiffLineCache extends RenderSignature {
 	lang: string | undefined;
@@ -1006,25 +994,7 @@ interface StreamingDiffLineCache extends RenderSignature {
 	lines: readonly string[];
 }
 
-interface TableLayoutLock {
-	availableWidth: number;
-	columnWidths: readonly number[];
-}
-
-interface TableRenderSpec extends TableLayoutLock {
-	key: string;
-	lineCount: number;
-	startRow: number;
-	endRow: number;
-}
-
-interface RenderedTableLayout extends TableLayoutLock {
-	key: string;
-	startRow: number;
-	endRow: number;
-}
-
-export class Markdown implements Component, NativeScrollbackCommittedRows, NativeScrollbackReplay {
+export class Markdown implements Component {
 	#text: string;
 	#paddingX: number; // Left/right padding
 	#paddingY: number; // Top/bottom padding
@@ -1052,16 +1022,6 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 	#streamPrefixText?: string;
 	#streamPrefixTokens?: Token[];
 	#streamPrefixLineCache?: StreamPrefixLineCache;
-	// Rows of the most recent render() that are settled — top padding plus the
-	// rendered frozen token prefix — exposed via getLastRenderSettledRows()
-	// for native-scrollback commit gating.
-	#lastRenderSettledRows = 0;
-	// Frozen-prefix text backing the last non-zero settled exposure. Settled
-	// rows are declared final downstream, so a render whose frozen text no
-	// longer extends this prefix (a rewind / wholesale rewrite) resets the
-	// exposure to 0 and re-earns it — the exposure is hard-monotone within a
-	// text lineage.
-	#settledExposedText?: string;
 	// True while #renderStreamingContentLines renders the frozen token range:
 	// frozen code blocks highlight even in transient mode so their bytes match
 	// the finalized render (they render once into the prefix line cache, so
@@ -1071,19 +1031,10 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 	#renderingFrozenPrefix = false;
 	#streamingDiffLineCache?: StreamingDiffLineCache;
 	#activeRenderSignature?: RenderSignature;
-	// Streaming tables may grow naturally while wholly repaintable. Once any
-	// physical row of a table enters native scrollback, its current column widths
-	// are locked for the rest of this append-only text lineage: future wider cells
-	// wrap inside those columns instead of reflowing immutable history above.
-	#tableLayoutWidth?: number;
-	#lockedTableLayouts = new Map<string, TableLayoutLock>();
-	#lastRenderedTableLayouts: RenderedTableLayout[] = [];
-	#activeTableRenderSpecs?: TableRenderSpec[];
 
 	#ignoreTight = false;
 
 	setIgnoreTight(ignore: boolean): this {
-		if (this.#ignoreTight !== ignore) this.#clearTableLayouts();
 		this.#ignoreTight = ignore;
 		this.invalidate();
 		return this;
@@ -1112,7 +1063,6 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		// full lex + wrap runs per re-emit — one of the top CPU hotspots during
 		// streaming (issue #4353). Mirrors `Text.setText`'s guard.
 		if (text === this.#text) return false;
-		if (!text.startsWith(this.#text)) this.#clearTableLayouts();
 		this.#text = text;
 		if (!text.trim()) {
 			// Blank replacement: render() early-returns before #lexTokens can see
@@ -1121,7 +1071,6 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 			this.#streamPrefixText = undefined;
 			this.#streamPrefixTokens = undefined;
 			this.#streamPrefixLineCache = undefined;
-			this.#settledExposedText = undefined;
 		}
 		this.invalidate();
 		return true;
@@ -1141,54 +1090,6 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		if (this.#transientRenderCache === next) return;
 		this.#transientRenderCache = next;
 		this.invalidate();
-	}
-
-	/**
-	 * Rows at the top of the most recent render() (top padding + rendered
-	 * frozen-token prefix) whose bytes are settled: byte-stable at this
-	 * width/theme for as long as the text keeps growing append-only. Hosts
-	 * feed this to transcript commit gating (see the coding agent's
-	 * `FinalizableBlock.getTranscriptBlockSettledRows`). 0 outside streaming
-	 * (`transientRenderCache`) mode, after a text rewind (re-earned on the new
-	 * lineage), and on cache-served non-streaming renders.
-	 */
-	getLastRenderSettledRows(): number {
-		return this.#lastRenderSettledRows;
-	}
-
-	/**
-	 * Freeze every table whose first physical row is already part of the native
-	 * scrollback prefix. The recorded widths came from the exact frame that was
-	 * just emitted, so the next streamed delta cannot retroactively widen it.
-	 */
-	setNativeScrollbackCommittedRows(rows: number): void {
-		const committed = Number.isFinite(rows) ? Math.max(0, Math.trunc(rows)) : 0;
-		let changed = false;
-		for (const table of this.#lastRenderedTableLayouts) {
-			if (table.startRow >= committed || this.#lockedTableLayouts.has(table.key)) continue;
-			this.#lockedTableLayouts.set(table.key, {
-				availableWidth: table.availableWidth,
-				columnWidths: table.columnWidths.slice(),
-			});
-			changed = true;
-		}
-		if (changed) this.invalidate();
-	}
-
-	/** A destructive replay removes the immutable tape this layout was guarding. */
-	prepareNativeScrollbackReplay(): void {
-		this.#clearTableLayouts();
-		this.#tableLayoutWidth = undefined;
-		this.invalidate();
-	}
-
-	#clearTableLayouts(): void {
-		this.#lockedTableLayouts.clear();
-		this.#lastRenderedTableLayouts = [];
-		this.#activeTableRenderSpecs = undefined;
-		// Same-width replay/non-append rewrites could otherwise reuse physical
-		// prefix lines rendered with the retired locked widths.
-		this.#streamPrefixLineCache = undefined;
 	}
 
 	// Lex `text` into block tokens, reusing the frozen stable prefix when the text
@@ -1270,11 +1171,6 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 	}
 
 	render(width: number): readonly string[] {
-		if (this.#tableLayoutWidth !== undefined && this.#tableLayoutWidth !== width) {
-			this.#clearTableLayouts();
-			this.invalidate();
-		}
-		this.#tableLayoutWidth = width;
 		// L1: per-instance cache — fastest path for repeated renders of the same
 		// instance at the same width (e.g. resize debounce, repeated redraws).
 		// Returning the cached reference is load-bearing: parents memoize their
@@ -1282,10 +1178,6 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		if (this.#cachedLines && this.#cachedText === this.#text && this.#cachedWidth === width) {
 			return this.#cachedLines;
 		}
-
-		// Recomputed below by the streaming path; every other path (cache-served,
-		// empty text, non-streaming full render) exposes no settled rows.
-		this.#lastRenderSettledRows = 0;
 
 		// Calculate available width for content (subtract horizontal padding)
 		const paddingX = this.#ignoreTight ? this.#paddingX : getPaddingX(this.#paddingX);
@@ -1316,40 +1208,29 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		// theme.heading is used as the representative theme probe — it's required
 		// by MarkdownTheme and is one of the most styling-sensitive entries.
 		let cacheKey: string | undefined;
-		if (!this.transientRenderCache && this.#lockedTableLayouts.size === 0) {
+		if (!this.transientRenderCache) {
 			cacheKey = this.#renderCacheKey(normalizedText, signature);
 			const cached = renderCache.get(cacheKey);
 			if (cached !== undefined) {
-				// Restore both the rendered rows and the geometry metadata that produced
-				// them. A later scrollback publication must never lock widths from an
-				// older transient frame against rows served from this cache entry.
-				this.#lastRenderedTableLayouts = cached.tables.map(table => ({
-					...table,
-					columnWidths: table.columnWidths.slice(),
-				}));
 				// Populate L1 so subsequent calls from this instance are O(1) map lookup.
 				this.#cachedText = this.#text;
 				this.#cachedWidth = width;
-				this.#cachedLines = cached.lines;
-				return cached.lines;
+				this.#cachedLines = cached;
+				return cached;
 			}
 		}
 
 		// Parse markdown to HTML-like tokens
 		const tokens = this.#lexTokens(normalizedText);
 		let contentLines: string[];
-		const tableRenderSpecs: TableRenderSpec[] = [];
-		this.#activeTableRenderSpecs = tableRenderSpecs;
 		this.#activeRenderSignature = signature;
 		try {
 			contentLines = this.transientRenderCache
 				? this.#renderStreamingContentLines(tokens, normalizedText, signature, contentWidth)
-				: this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature, 0, 0);
+				: this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature);
 		} finally {
 			this.#activeRenderSignature = undefined;
-			this.#activeTableRenderSpecs = undefined;
 		}
-		this.#lastRenderedTableLayouts = this.#resolveRenderedTableLayouts(tableRenderSpecs, signature.paddingY);
 		const emptyLines = this.#renderEmptyPaddingLines(signature);
 
 		// Combine top padding, content, and bottom padding
@@ -1366,13 +1247,7 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		// Update L2 module-level LRU so future instances with the same key skip
 		// the marked.lexer + highlightCode (Rust FFI) work entirely.
 		if (cacheKey !== undefined) {
-			renderCache.set(cacheKey, {
-				lines: result,
-				tables: this.#lastRenderedTableLayouts.map(table => ({
-					...table,
-					columnWidths: table.columnWidths.slice(),
-				})),
-			});
+			renderCache.set(cacheKey, result);
 		}
 
 		return result;
@@ -1409,18 +1284,15 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		const frozenText = this.#streamPrefixText;
 		const frozenTokenCount = this.#streamPrefixTokens?.length ?? 0;
 		if (frozenText === undefined || frozenTokenCount === 0 || !normalizedText.startsWith(frozenText)) {
-			return this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature, 0, 0);
+			return this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature);
 		}
 
 		const contentLines: string[] = [];
 		const reusablePrefix = this.#matchingStreamPrefixLineCache(normalizedText, frozenText, signature);
 		let renderedUntil = 0;
-		let renderedSourceOffset = 0;
 		if (reusablePrefix && reusablePrefix.tokenCount <= frozenTokenCount) {
 			contentLines.push(...reusablePrefix.lines);
-			this.#activeTableRenderSpecs?.push(...reusablePrefix.tables);
 			renderedUntil = reusablePrefix.tokenCount;
-			renderedSourceOffset = reusablePrefix.text.length;
 		}
 
 		if (renderedUntil < frozenTokenCount) {
@@ -1429,15 +1301,7 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 			this.#renderingFrozenPrefix = true;
 			try {
 				contentLines.push(
-					...this.#renderContentLines(
-						tokens,
-						renderedUntil,
-						frozenTokenCount,
-						contentWidth,
-						signature,
-						contentLines.length,
-						renderedSourceOffset,
-					),
+					...this.#renderContentLines(tokens, renderedUntil, frozenTokenCount, contentWidth, signature),
 				);
 			} finally {
 				this.#renderingFrozenPrefix = false;
@@ -1450,34 +1314,10 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 			text: frozenText,
 			tokenCount: frozenTokenCount,
 			lines: contentLines.slice(),
-			tables: this.#activeTableRenderSpecs?.slice() ?? [],
 		};
 
-		// Settled exposure (hard-monotone): these rows are declared final to
-		// the host, so expose them only while the frozen text still extends
-		// the previously exposed prefix; a rewind resets to 0 and re-earns on
-		// the rewritten lineage.
-		if (contentLines.length > 0) {
-			if (this.#settledExposedText === undefined || frozenText.startsWith(this.#settledExposedText)) {
-				this.#settledExposedText = frozenText;
-				this.#lastRenderSettledRows = signature.paddingY + contentLines.length;
-			} else {
-				this.#settledExposedText = undefined;
-			}
-		}
-
 		if (renderedUntil < tokens.length) {
-			contentLines.push(
-				...this.#renderContentLines(
-					tokens,
-					renderedUntil,
-					tokens.length,
-					contentWidth,
-					signature,
-					contentLines.length,
-					frozenText.length,
-				),
-			);
+			contentLines.push(...this.#renderContentLines(tokens, renderedUntil, tokens.length, contentWidth, signature));
 		}
 
 		return contentLines;
@@ -1511,57 +1351,19 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		end: number,
 		contentWidth: number,
 		signature: RenderSignature,
-		rowOffset: number,
-		startingSourceOffset: number,
 	): string[] {
 		const wrappedLines: string[] = [];
-		let sourceOffset = startingSourceOffset;
 		for (let i = start; i < end; i++) {
 			const token = tokens[i];
 			const nextToken = tokens[i + 1];
-			const tableSpecStart = this.#activeTableRenderSpecs?.length ?? 0;
-			const tokenWrappedRowStart = wrappedLines.length;
-			const tokenRowStart = rowOffset + tokenWrappedRowStart;
-			const renderedTokenLines = this.#renderToken(
-				token,
-				contentWidth,
-				nextToken?.type,
-				undefined,
-				`offset:${sourceOffset}`,
-			);
-			const tokenLineOffsets = [0];
+			const renderedTokenLines = this.#renderToken(token, contentWidth, nextToken?.type);
 			for (const line of renderedTokenLines) {
-				// Skip wrapping for image protocol lines and OSC 66 sized headings
-				// (would corrupt escape sequences / split the indivisible sized span).
 				if (TERMINAL.isImageLine(line) || isOsc66Line(line)) {
 					wrappedLines.push(line);
 				} else {
 					wrappedLines.push(...wrapTextWithAnsi(line, contentWidth));
 				}
-				tokenLineOffsets.push(wrappedLines.length - tokenWrappedRowStart);
 			}
-			const tableSpecs = this.#activeTableRenderSpecs;
-			if (tableSpecs !== undefined) {
-				for (let specIndex = tableSpecStart; specIndex < tableSpecs.length; specIndex++) {
-					const spec = tableSpecs[specIndex]!;
-					let relativeStart: number;
-					let relativeEnd: number;
-					if (token.type === "table") {
-						// Exclude the optional inter-block blank from a top-level table's span.
-						relativeStart = 0;
-						relativeEnd = Math.min(renderedTokenLines.length, spec.lineCount);
-					} else {
-						// Container renderers express nested table spans relative to their
-						// returned lines. Preserve that exact span through this final wrap.
-						if (spec.startRow < 0 || spec.endRow <= spec.startRow) continue;
-						relativeStart = Math.min(renderedTokenLines.length, spec.startRow);
-						relativeEnd = Math.min(renderedTokenLines.length, spec.endRow);
-					}
-					spec.startRow = tokenRowStart + tokenLineOffsets[relativeStart]!;
-					spec.endRow = tokenRowStart + tokenLineOffsets[relativeEnd]!;
-				}
-			}
-			sourceOffset += token.raw.length;
 		}
 
 		const leftMargin = padding(signature.paddingX);
@@ -1603,21 +1405,6 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		}
 
 		return contentLines;
-	}
-
-	#resolveRenderedTableLayouts(specs: readonly TableRenderSpec[], topPadding: number): RenderedTableLayout[] {
-		const layouts: RenderedTableLayout[] = [];
-		for (const spec of specs) {
-			if (spec.startRow < 0 || spec.endRow <= spec.startRow) continue;
-			layouts.push({
-				key: spec.key,
-				availableWidth: spec.availableWidth,
-				columnWidths: spec.columnWidths.slice(),
-				startRow: topPadding + spec.startRow,
-				endRow: topPadding + spec.endRow,
-			});
-		}
-		return layouts;
 	}
 
 	#renderCodeBodyLines(token: Token, codeIndent: string): string[] {
@@ -1830,13 +1617,7 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		};
 	}
 
-	#renderToken(
-		token: Token,
-		width: number,
-		nextTokenType?: string,
-		styleContext?: InlineStyleContext,
-		tokenKey = "root",
-	): string[] {
+	#renderToken(token: Token, width: number, nextTokenType?: string, styleContext?: InlineStyleContext): string[] {
 		const lines: string[] = [];
 
 		// Display math block (own-line `$$…$$` / `\[…\]`): stack `\frac` vertically
@@ -1938,7 +1719,7 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 			}
 
 			case "table": {
-				const tableLines = this.#renderTable(token as TableToken, width, nextTokenType, styleContext, tokenKey);
+				const tableLines = this.#renderTable(token as TableToken, width, nextTokenType, styleContext);
 				lines.push(...tableLines);
 				break;
 			}
@@ -1951,58 +1732,23 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 				const quoteContentWidth = Math.max(1, width - 2);
 				const quoteTokens = token.tokens || [];
 				const renderedQuoteLines: string[] = [];
-				const blockquoteSpecStart = this.#activeTableRenderSpecs?.length ?? 0;
 
 				for (let i = 0; i < quoteTokens.length; i++) {
 					const quoteToken = quoteTokens[i];
 					const nextQuoteToken = quoteTokens[i + 1];
-					const quoteTokenRowStart = renderedQuoteLines.length;
-					const quoteSpecStart = this.#activeTableRenderSpecs?.length ?? 0;
 					const quoteTokenLines = this.#renderToken(
 						quoteToken,
 						quoteContentWidth,
 						nextQuoteToken?.type,
 						quoteInlineStyleContext,
-						`${tokenKey}/quote:${i}`,
 					);
 					renderedQuoteLines.push(...quoteTokenLines);
-
-					const tableSpecs = this.#activeTableRenderSpecs;
-					if (tableSpecs !== undefined) {
-						for (let specIndex = quoteSpecStart; specIndex < tableSpecs.length; specIndex++) {
-							const spec = tableSpecs[specIndex]!;
-							if (spec.startRow < 0) {
-								// Direct child tables initially have no row coordinates. Their
-								// structural line count excludes any inter-block blank.
-								spec.startRow = quoteTokenRowStart;
-								spec.endRow = quoteTokenRowStart + Math.min(quoteTokenLines.length, spec.lineCount);
-							} else {
-								// A nested blockquote already mapped the table into its own
-								// returned rows; translate those rows into this quote's input.
-								spec.startRow += quoteTokenRowStart;
-								spec.endRow += quoteTokenRowStart;
-							}
-						}
-					}
 				}
-
 				while (renderedQuoteLines.length > 0 && renderedQuoteLines[renderedQuoteLines.length - 1] === "") {
 					renderedQuoteLines.pop();
 				}
 
-				const quoteRowOffsets: number[] = [];
-				const borderedQuoteLines = this.#applyQuoteBorder(renderedQuoteLines, width, quoteRowOffsets);
-				const tableSpecs = this.#activeTableRenderSpecs;
-				if (tableSpecs !== undefined) {
-					for (let specIndex = blockquoteSpecStart; specIndex < tableSpecs.length; specIndex++) {
-						const spec = tableSpecs[specIndex]!;
-						if (spec.startRow < 0 || spec.endRow <= spec.startRow) continue;
-						const relativeStart = Math.min(renderedQuoteLines.length, spec.startRow);
-						const relativeEnd = Math.min(renderedQuoteLines.length, spec.endRow);
-						spec.startRow = quoteRowOffsets[relativeStart]!;
-						spec.endRow = quoteRowOffsets[relativeEnd]!;
-					}
-				}
+				const borderedQuoteLines = this.#applyQuoteBorder(renderedQuoteLines, width);
 				lines.push(...borderedQuoteLines);
 				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(""); // Add spacing after blockquotes (unless space token follows)
@@ -2050,7 +1796,7 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 	 * Wrap already-rendered lines in the blockquote border and quote styling.
 	 * `width` is the full content width; the border reserves two cells.
 	 */
-	#applyQuoteBorder(renderedLines: string[], width: number, sourceRowOffsets?: number[]): string[] {
+	#applyQuoteBorder(renderedLines: string[], width: number): string[] {
 		const quoteStyle = (text: string) => this.#theme.quote(this.#theme.italic(text));
 		const quoteStylePrefix = this.#getStylePrefix(quoteStyle);
 		const applyQuoteStyle = (line: string): string => {
@@ -2062,13 +1808,11 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		};
 		const quoteContentWidth = Math.max(1, width - 2);
 		const lines: string[] = [];
-		sourceRowOffsets?.push(0);
 		for (const quoteLine of renderedLines) {
 			const styledLine = applyQuoteStyle(quoteLine);
 			for (const wrappedLine of wrapTextWithAnsi(styledLine, quoteContentWidth)) {
 				lines.push(this.#theme.quoteBorder(`${this.#theme.symbols.quoteBorder} `) + wrappedLine);
 			}
-			sourceRowOffsets?.push(lines.length);
 		}
 		return lines;
 	}
@@ -2400,7 +2144,6 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		availableWidth: number,
 		nextTokenType?: string,
 		styleContext?: InlineStyleContext,
-		tableKey = "table",
 	): string[] {
 		const lines: string[] = [];
 		const numCols = token.header.length;
@@ -2515,17 +2258,6 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 			}
 		}
 
-		const lockedLayout = this.#lockedTableLayouts.get(tableKey);
-		if (
-			lockedLayout !== undefined &&
-			lockedLayout.availableWidth === availableWidth &&
-			lockedLayout.columnWidths.length === numCols &&
-			lockedLayout.columnWidths.every(width => Number.isFinite(width) && width >= 1) &&
-			lockedLayout.columnWidths.reduce((total, width) => total + width, borderOverhead) <= availableWidth
-		) {
-			columnWidths = lockedLayout.columnWidths.slice();
-		}
-
 		const t = this.#theme.symbols.table;
 		const h = t.horizontal;
 		const v = t.vertical;
@@ -2581,14 +2313,6 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		const bottomBorderCells = columnWidths.map(w => h.repeat(w));
 		const bottomBorder = `${t.bottomLeft}${h}${bottomBorderCells.join(`${h}${t.teeUp}${h}`)}${h}${t.bottomRight}`;
 		lines.push(bottomBorder);
-		this.#activeTableRenderSpecs?.push({
-			key: tableKey,
-			availableWidth,
-			columnWidths: columnWidths.slice(),
-			lineCount: lines.length,
-			startRow: -1,
-			endRow: -1,
-		});
 
 		if (nextTokenType && nextTokenType !== "space") {
 			lines.push(""); // Add spacing after table

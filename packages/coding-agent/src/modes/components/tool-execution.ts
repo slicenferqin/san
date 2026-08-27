@@ -8,7 +8,6 @@ import {
 	Image,
 	ImageProtocol,
 	imageFallback,
-	type NativeScrollbackLiveRegion,
 	Spacer,
 	TERMINAL,
 	Text,
@@ -277,7 +276,7 @@ let toolExecutionInstanceSeq = 0;
 /**
  * Component that renders a tool call with its result (updateable)
  */
-export class ToolExecutionComponent extends Container implements NativeScrollbackLiveRegion {
+export class ToolExecutionComponent extends Container {
 	#contentBox: Box; // Used for custom tools and bash visual truncation
 	#contentText: WidthAwareText; // Generic fallback (no custom/built-in renderer)
 	#multiFileBoxes: (Box | Spacer)[] = []; // Extra boxes for multi-file edit results
@@ -771,17 +770,6 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			this.#spinnerFrame = undefined;
 			this.#renderState.spinnerFrame = undefined;
 		}
-	}
-
-	/**
-	 * Standalone harnesses may mount a tool component directly under `TUI`
-	 * instead of inside `TranscriptContainer`. In that shape the component must
-	 * report its own live-region seam while unfinalized, or the core renderer
-	 * treats it like shell output and commits still-mutating preview rows to
-	 * immutable native scrollback before the result replaces them.
-	 */
-	getNativeScrollbackLiveRegionStart(): number | undefined {
-		return this.isTranscriptBlockFinalized() ? undefined : 0;
 	}
 
 	/**

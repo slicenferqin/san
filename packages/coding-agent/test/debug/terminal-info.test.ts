@@ -36,16 +36,16 @@ describe("formatTerminalState", () => {
 		expect(out).toContain("Sync output:  no (DEC 2026)");
 	});
 
-	it("reports geometry, cell size, and the scrollback strategy", () => {
+	it("reports geometry, cell size, and the clear behavior", () => {
 		const out = formatTerminalState(sample);
 		expect(out).toContain("120x40 cells · cell 9x18px");
-		// supportsScreenToScrollback -> the non-destructive CSI 22 J clear.
-		expect(out).toContain("Screen->history clear: CSI 22 J");
+		// The capability selects the non-destructive CSI 22 J clear.
+		expect(out).toContain("Clear mode:    CSI 22 J");
 	});
 
-	it("renders the redraw fallback when screen-to-scrollback is unsupported", () => {
+	it("renders the redraw fallback when non-destructive clearing is unsupported", () => {
 		const out = formatTerminalState({ ...sample, screenToScrollback: false });
-		expect(out).toContain("Screen->history clear: CSI 2 J (redraw)");
+		expect(out).toContain("Clear mode:    CSI 2 J (redraw)");
 	});
 
 	it("drops the OSC-99-confirmed marker when the terminal never answered the probe", () => {

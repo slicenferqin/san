@@ -132,14 +132,10 @@ describe("InteractiveMode plan review rendering", () => {
 		resetSettingsForTest();
 	});
 
-	it("keeps queued-message rows in the live region instead of native scrollback", () => {
-		const liveRegion = mode.pendingMessagesContainer as {
-			getNativeScrollbackLiveRegionStart?: () => number | undefined;
-		};
-
-		expect(liveRegion.getNativeScrollbackLiveRegionStart?.()).toBeUndefined();
+	it("keeps queued-message rows in the mutable container while mounted", () => {
+		expect(mode.pendingMessagesContainer.render(120)).toEqual([]);
 		mode.pendingMessagesContainer.addChild(new Text("Queued: follow-up"));
-		expect(liveRegion.getNativeScrollbackLiveRegionStart?.()).toBe(0);
+		expect(mode.pendingMessagesContainer.render(120)).toContainEqual(expect.stringContaining("Queued: follow-up"));
 	});
 
 	it("exits empty plan mode without confirmation", async () => {

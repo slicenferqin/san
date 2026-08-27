@@ -214,6 +214,18 @@ function getForcedImageProtocol(): ImageProtocol | null | undefined {
 	if (raw === "off" || raw === "none" || raw === "0" || raw === "false") return null;
 	return null;
 }
+/** Whether `PI_FORCE_IMAGE_PROTOCOL` pins the image protocol, including off. */
+export function isImageProtocolForced(): boolean {
+	return getForcedImageProtocol() !== undefined;
+}
+
+/** Parsed shape of a frame line containing one direct Kitty placement. */
+export interface ParsedKittyPlacementLine {
+	imageId: number;
+	placementId: number | undefined;
+	columns: number;
+	rows: number;
+}
 
 function parseMajorMinorVersion(versionRaw?: string): { major: number; minor: number } | null {
 	if (!versionRaw) return null;
@@ -712,6 +724,49 @@ export function encodeKittyPlacement(options: {
 	if (options.rows) params.push(`r=${options.rows}`);
 	return wrapTmuxPassthroughIfNeeded(`\x1b_G${params.join(",")}\x1b\\`);
 }
+/** Parse a line consisting solely of a direct Kitty placement. */
+export function parseKittyDirectPlacementLine(line: string): ParsedKittyPlacementLine | null {
+	const match =
+		/^(?:\x1b7(?:\x1b\[(\d+)A)?)?\x1b_Ga=p,q=2,C=1,i=(\d+)(?:,p=(\d+))?(?:,c=(\d+))?(?:,r=(\d+))?\x1b\\(?:\x1b8)?$/u.exec(
+			line,
+		);
+	if (!match) return null;
+	const columns = match[4] !== undefined ? Number(match[4]) : 0;
+	const rows = match[5] !== undefined ? Number(match[5]) : 0;
+	if (columns <= 0 || rows <= 0) return null;
+	return {
+		imageId: Number(match[2]),
+		placementId: match[3] !== undefined ? Number(match[3]) : undefined,
+		columns,
+		rows,
+	};
+}
+
+/** Rebuild a direct Kitty placement clipped to the visible viewport slice. */
+export function encodeKittyPlacementLine(options: {
+	imageId: number;
+	placementId: number;
+	columns: number;
+	/** Total cell rows of the image block. */
+	rows: number;
+	/** Viewport row occupied by the block's last line. */
+	screenRow: number;
+	/** Source image height in pixels. */
+	imageHeightPx: number;
+}): string {
+	const clippable = options.imageHeightPx > 0;
+	const hiddenRows = clippable ? Math.max(0, options.rows - 1 - options.screenRow) : 0;
+	const visibleRows = options.rows - hiddenRows;
+	const params = ["a=p", "q=2", "C=1", `i=${options.imageId}`, `p=${options.placementId}`];
+	params.push(`c=${options.columns}`, `r=${visibleRows}`);
+	if (hiddenRows > 0) {
+		const sourceY = Math.floor((options.imageHeightPx * hiddenRows) / options.rows);
+		params.push(`y=${sourceY}`, `h=${Math.max(1, options.imageHeightPx - sourceY)}`);
+	}
+	const apc = `\x1b_G${params.join(",")}\x1b\\`;
+	const cuu = visibleRows - 1;
+	return cuu > 0 ? `\x1b7\x1b[${cuu}A${apc}\x1b8` : apc;
+}
 
 /**
  * Kitty graphics delete command for a single image id. Uses `d=I` (capital)
@@ -722,6 +777,10 @@ export function encodeKittyPlacement(options: {
  */
 export function encodeKittyDeleteImage(imageId: number): string {
 	return wrapTmuxPassthroughIfNeeded(`\x1b_Ga=d,d=I,i=${imageId},q=2\x1b\\`);
+}
+/** Delete one Kitty placement while retaining the transmitted image data. */
+export function encodeKittyDeletePlacement(imageId: number, placementId: number): string {
+	return wrapTmuxPassthroughIfNeeded(`\x1b_Ga=d,d=i,i=${imageId},p=${placementId},q=2\x1b\\`);
 }
 
 export function encodeITerm2(

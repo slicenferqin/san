@@ -245,14 +245,12 @@ describe("EventController IRC expiry", () => {
 		await controller.handleEvent({ type: "irc_message", message });
 		expect(chatContainer.children).toHaveLength(1);
 
-		// Render the container and commit its rows to simulate entering native scrollback
-		const lines = chatContainer.render(80);
-		chatContainer.setNativeScrollbackCommittedRows(lines.length);
+		// Offer and acknowledge the card as an immutable history batch.
+		const batch = chatContainer.peekFinalizedBatch(80, 0);
+		expect(batch).toBeDefined();
+		chatContainer.acknowledgeFinalizedBatch(batch!.id);
 
-		// Everything above the card is finalized, so its rows may already be in
-		// native scrollback. Removing it would be an interior deletion of the
-		// committed prefix — the engine repairs that by recommitting everything
-		// below the gap (the duplicated-block artifact). It must stay.
+		// Removing a committed card would create an interior deletion, so it stays.
 		vi.advanceTimersByTime(10_000);
 		expect(chatContainer.children).toHaveLength(1);
 	});

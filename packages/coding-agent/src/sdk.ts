@@ -108,6 +108,7 @@ import {
 import { MCP_CONNECTION_STATUS_EVENT_CHANNEL, type McpConnectionStatusEvent } from "./mcp/startup-events";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
 import type { MnemopiSessionState } from "./mnemopi/state";
+import { InteractiveSessionPublisher } from "./modes/rpc-v2/interactive-session-publisher";
 import { type CrossSessionClient, createCrossSessionClient } from "./peer";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
@@ -123,7 +124,7 @@ import {
 	type SecretEntry,
 	SecretObfuscator,
 } from "./secrets";
-import { AgentSession, type PlanYolo, type Prewalk } from "./session/agent-session";
+import { AgentSession, type AgentSessionDisposeOptions, type PlanYolo, type Prewalk } from "./session/agent-session";
 import { discoverAuthStorage as discoverAuthStorageFromConfig } from "./session/auth-broker-config";
 import type { AuthStorage } from "./session/auth-storage";
 import { createInterruptedTurnAbortMessage } from "./session/exit-diagnostics";
@@ -568,6 +569,8 @@ export interface CreateAgentSessionOptions {
 	sessionManager?: SessionManager;
 	/** RPC 历史浏览使用；禁止启动阶段修复或追加 Session journal。 */
 	sessionAccess?: "read_write" | "read_only";
+	/** Enable the interactive runtime's durable RPC v2 event projection. */
+	publishInteractiveRpcEvents?: boolean;
 
 	/** Override local:// protocol options for subagent local:// sharing. Default: uses the session's own artifacts dir and session ID. */
 	localProtocolOptions?: LocalProtocolOptions;
@@ -1711,6 +1714,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	let agent: Agent;
 	let session!: AgentSession;
+	let interactiveSessionPublisher: InteractiveSessionPublisher | undefined;
 	let hasSession = false;
 	let hasRegistered = false;
 	const enableLsp = options.enableLsp ?? true;
@@ -3426,6 +3430,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		});
 		registerWorkflowToolSession(session, toolSession);
 		hasSession = true;
+		if (options.publishInteractiveRpcEvents && agentKind === "main" && options.sessionAccess !== "read_only") {
+			interactiveSessionPublisher = new InteractiveSessionPublisher(session, {
+				recoverAfterLeaseTakeover: () => {
+					session.enableSessionWrites();
+					session.repairInterruptedTurnAfterRecovery();
+				},
+			});
+		}
 		if (asyncJobManager) {
 			session.yieldQueue.register<AsyncResultEntry>("async-result", {
 				isStale: entry => asyncJobManager.isDeliverySuppressed(entry.jobId),
@@ -3457,7 +3469,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		let unsubscribePeerActivity: (() => void) | undefined;
 		{
 			const originalDispose = session.dispose.bind(session);
-			session.dispose = async () => {
+			session.dispose = async (disposeOptions: AgentSessionDisposeOptions = {}) => {
 				try {
 					// Reject new session work (eval starts) the moment disposal
 					// begins — the lifecycle await below opens an async gap before
@@ -3493,13 +3505,19 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						// must NOT touch the global lifecycle.
 						await AgentLifecycleManager.global().dispose();
 					}
-					await originalDispose();
+					await originalDispose(disposeOptions);
 				} finally {
+					await interactiveSessionPublisher?.stop().catch(error => {
+						logger.warn("Failed to stop interactive RPC event publisher", {
+							error: error instanceof Error ? error.message : String(error),
+						});
+					});
 					unregisterUnlessParked();
 					unsubscribeCredentialDisabled?.();
 				}
 			};
 		}
+		if (interactiveSessionPublisher) await interactiveSessionPublisher.start();
 
 		// Same-machine cross-session hub: only a root main session registers with
 		// the peer broker. Interactive TUI sessions opt in by default; headless

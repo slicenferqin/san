@@ -22,6 +22,7 @@ import type { EventBus } from "../../utils/event-bus";
 import {
 	abandonRecoveryLease,
 	acquireLease,
+	assertNoForeignLiveSession,
 	detectRecovery,
 	executeRecovery,
 	type LeaseRecord,
@@ -761,6 +762,7 @@ export class RpcV2SessionManager {
 	}): Promise<{ result: Record<string, unknown>; subscriptionId: SubscriptionId }> {
 		const active = this.assertLease(params.sessionId, params.leaseId, false);
 		return await this.#enqueueWork(active, async () => {
+			await this.#refreshReadOnlyEvents(active);
 			active.stream = params.stream ?? {};
 			active.adapter.emitThinkingDeltas = active.stream.thinkingDeltas === true;
 			active.syncPending = true;
@@ -827,6 +829,7 @@ export class RpcV2SessionManager {
 	}): Promise<{ events: SessionEvent[]; nextCursor: string | null; firstSequence: number; lastSequence: number }> {
 		const active = this.assertSession(params.sessionId);
 		await active.eventTail;
+		await this.#refreshReadOnlyEvents(active);
 		const limit = Math.min(Math.max(params.limit ?? 100, 1), 100);
 		let events = active.events;
 		const afterSequence = params.afterSequence;
@@ -1663,6 +1666,24 @@ export class RpcV2SessionManager {
 		return this.#buildContinuitySnapshot(this.assertSession());
 	}
 
+	async #refreshReadOnlyEvents(active: ActiveSession): Promise<void> {
+		if (active.lease?.access !== "read_only" || !active.sessionFile) return;
+		const loaded = await new RpcV2StateStore(active.sessionFile, active.sessionId).load();
+		active.state = loaded.state;
+		active.events = loaded.events.slice(-this.#retention);
+		active.sequencer.advanceTo(Math.max(loaded.state.lastSequence, loaded.events.at(-1)?.sequence ?? 0));
+		active.queue = reviveQueue(loaded.state.queue, active.sessionId);
+		active.queueContent = reviveQueueContent(loaded.state.queue);
+		active.pendingApprovals = reviveApprovals(loaded.state.pendingApprovals, active.sessionId);
+		active.pendingInteractions = reviveInteractions(loaded.state.pendingInteractions, active.sessionId);
+		active.evidence.load(loaded.state.evidence);
+		active.activeRun = reviveRun(loaded.state.activeRun, active.session.sessionManager.getCwd());
+		active.lastRun = reviveRun(loaded.state.lastRun, active.session.sessionManager.getCwd());
+		active.activeResourceIds = new Set(loaded.state.activeResourceIds);
+		active.pendingResourceReleases = new Set(loaded.state.pendingResourceReleases);
+		active.maintenance = reviveMaintenance(loaded.state.maintenance, active.session.sessionManager.getCwd());
+	}
+
 	// -----------------------------------------------------------------------
 	// Attach / event persistence
 	// -----------------------------------------------------------------------
@@ -1829,6 +1850,27 @@ export class RpcV2SessionManager {
 		const leaseId = newLeaseId();
 		const acquiredAt = new Date().toISOString();
 		const held = !recovery || stealExpiredLease;
+		// 外部活跃会话识别：交互式 CLI（san 17+）不参与 rpc-v2 lease 协议，但活跃
+		// 运行会持续追加 journal。此时接管只会得到一个与真实运行分叉的冻结镜像，
+		// 因此按 SESSION_LOCKED 拒绝——steal 只解决 lease 竞态，不能也不该用于接管
+		// 活跃会话；查看请走 access="read_only"。仅 gate open() 路径：create()/attach
+		// 的第一方流程不经过这里。
+		if (held) {
+			try {
+				await assertNoForeignLiveSession(sessionFile);
+			} catch (error: unknown) {
+				if (error instanceof Error && error.message === "SESSION_LOCKED") {
+					failRpc({
+						reason: "SESSION_LOCKED",
+						category: "conflict",
+						message: `Session is actively written by another process: ${sessionId}`,
+						sessionId,
+						retryable: true,
+					});
+				}
+				throw error;
+			}
+		}
 		if (held) {
 			const loaded = await new RpcV2StateStore(sessionFile, sessionId).load();
 			const lastSequence = Math.max(
@@ -1848,7 +1890,8 @@ export class RpcV2SessionManager {
 						lastHeartbeat: acquiredAt,
 						lastStableSequence: lastSequence,
 					},
-					Boolean(recovery && stealExpiredLease),
+					// 外部活跃会话的强开逃生门：steal 语义不限于已有 recovery 的场景。
+					stealExpiredLease,
 				);
 			} catch (error: unknown) {
 				if (error instanceof Error && error.message === "SESSION_LOCKED") {

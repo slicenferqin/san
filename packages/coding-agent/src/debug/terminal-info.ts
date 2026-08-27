@@ -3,8 +3,8 @@
  *
  * Surfaces the detected terminal, the established subprotocols the renderer
  * negotiated (graphics, desktop notifications, hyperlinks, true color), the
- * scrollback/erase strategy, and the live geometry — the details that decide
- * which escape sequences the renderer emits.
+ * clear behavior, and the live geometry — the details that decide which escape
+ * sequences the renderer emits.
  */
 import { getCellDimensions, ImageProtocol, isOsc99Supported, NotifyProtocol, TERMINAL, TERMINAL_ID } from "@san/tui";
 
@@ -104,8 +104,8 @@ export function formatTerminalState(info: TerminalStateInfo): string {
 		`  DECCARA:      ${yesNo(info.deccara)} (rectangular-SGR background fills)`,
 		`  Sync output:  ${yesNo(info.synchronizedOutput)} (DEC 2026)`,
 		"",
-		"Scrollback",
-		`  Screen->history clear: ${info.screenToScrollback ? "CSI 22 J" : "CSI 2 J (redraw)"}`,
+		"Clear behavior",
+		`  Clear mode:    ${info.screenToScrollback ? "CSI 22 J" : "CSI 2 J (redraw)"}`,
 		"",
 		"Detection signals",
 		`  TERM:                 ${info.env.TERM ?? "(unset)"}`,

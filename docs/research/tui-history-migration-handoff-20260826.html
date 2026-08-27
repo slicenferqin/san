@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>San · 显式 TUI History 迁移交接 · 2026-08-26</title>
+<style>
+	:root {
+		--bg: #0f1115;
+		--panel: #171a21;
+		--panel2: #1d212b;
+		--text: #d7dce5;
+		--dim: #8b93a3;
+		--accent: #6cb6ff;
+		--good: #7ee2a8;
+		--warn: #f2c94c;
+		--bad: #ef8a8a;
+		--line: #2a2f3b;
+		--mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+	}
+	* { box-sizing: border-box; }
+	body {
+		margin: 0;
+		background: var(--bg);
+		color: var(--text);
+		font: 15px/1.75 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+	}
+	.wrap { max-width: 1060px; margin: 0 auto; padding: 46px 28px 96px; }
+	header { border-bottom: 1px solid var(--line); padding-bottom: 24px; margin-bottom: 32px; }
+	h1 { font-size: 27px; margin: 0 0 8px; }
+	.sub { color: var(--dim); font-size: 13px; }
+	h2 { font-size: 19px; margin: 44px 0 12px; padding-top: 18px; border-top: 1px solid var(--line); }
+	h3 { font-size: 16px; margin: 26px 0 8px; }
+	p { margin: 10px 0; }
+	ul, ol { margin: 10px 0; padding-left: 24px; }
+	li { margin: 5px 0; }
+	code, .mono { font-family: var(--mono); font-size: 12.5px; }
+	code { background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; color: var(--accent); }
+	pre { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; overflow-x: auto; color: var(--text); font: 12.5px/1.65 var(--mono); }
+	table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13.5px; }
+	th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+	th { background: var(--panel2); color: var(--dim); font-weight: 600; white-space: nowrap; }
+	.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 17px 20px; margin: 15px 0; }
+	.panel.good { border-left: 3px solid var(--good); }
+	.panel.warn { border-left: 3px solid var(--warn); }
+	.panel.bad { border-left: 3px solid var(--bad); }
+	.tag { display: inline-block; border-radius: 16px; padding: 0 9px; margin-left: 6px; font-size: 11.5px; vertical-align: 1px; }
+	.tag.good { background: rgba(126, 226, 168, .12); color: var(--good); }
+	.tag.warn { background: rgba(242, 201, 76, .12); color: var(--warn); }
+	.tag.bad { background: rgba(239, 138, 138, .12); color: var(--bad); }
+	.dim { color: var(--dim); }
+	.good-text { color: var(--good); }
+	.warn-text { color: var(--warn); }
+	.bad-text { color: var(--bad); }
+	.small { color: var(--dim); font-size: 12.5px; }
+	footer { margin-top: 60px; border-top: 1px solid var(--line); padding-top: 16px; color: var(--dim); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+	<h1>显式 TUI History 迁移交接</h1>
+	<div class="sub">San · 分支 <code>feat/san-explicit-tui-history</code> · 基线 <code>7c7b284d7c</code> · 2026-08-26 · 给下一位接手 agent</div>
+</header>
+
+<div class="panel good">
+	<p><strong>一句话状态：</strong>显式 <code>TerminalFrameProvider</code> + <code>HistoryBatch</code> 迁移已完成；TUI history 写入、transcript 生命周期、三种 resize 策略、设置迁移和 CLI smoke 均已验证。</p>
+	<p>本文件保留接手期间的决策和证据，已确认的问题已标注修复结果；源码中的旧 scrollback seam 已清理，历史 changelog 记录保留不动。</p>
+</div>
+
+<h2>0 · 接手前先读这几条</h2>
+<ol>
+	<li><strong>不要 reset、clean、checkout 或批量回滚。</strong> 当前改动属于交接时的工作树；本轮观察到 <strong>54 个已跟踪路径有变更</strong>，约 <code>+1698 / -18977</code>，暂存区为 0；另有一个未跟踪文件 <code>packages/tui/test/history-frame-plan.test.ts</code>。这些改动不能按“噪音”处理。</li>
+	<li>先保存当前状态，再做单文件、可回滚的修改。尤其不要覆盖 <code>packages/coding-agent/src/modes/components/transcript-container.ts</code>、<code>packages/tui/src/tui.ts</code> 或未跟踪测试。</li>
+	<li>不要重新跑全量多 agent 审查。已有审查覆盖了 TUI core、coding-agent integration 和设置迁移；下一步应直接做 focused reproduction 和 focused tests，以节省成本。</li>
+	<li>released changelog 段不可改。若最终交付，再向各受影响包的 <code>## [Unreleased]</code> 增加条目。</li>
+</ol>
+
+<h2>1 · 当前目标</h2>
+<p>完成一次干净的 TUI history contract 切换：</p>
+<ul>
+	<li>把 TUI 从组件通过 <code>NativeScrollbackLiveRegion</code> / <code>NativeScrollbackCommittedRows</code> / <code>NativeScrollbackReplay</code> 等隐式 seam，切换到 provider 显式返回 <code>TerminalFramePlan</code>。</li>
+	<li>让 coding-agent 的 transcript 自己维护 <code>active → settled → committed</code> 生命周期，并通过有序 <code>HistoryBatch</code> 交给 TUI；TUI 只负责物理写入、滚动、差分和 acknowledgement。</li>
+	<li>保住三种 settled resize 策略：<code>append</code>、<code>rebuild</code>、<code>preserve</code>。</li>
+	<li>删除旧接口、旧测试和旧调用点，不留下兼容别名或半迁移路径；但对用户配置必须做明确的 schema migration。</li>
+	<li>验证历史不丢失、不重复，live viewport 不被 history 写入破坏，resize drag 不出现全量重排造成的闪烁或不必要成本。</li>
+</ul>
+
+<h2>2 · 当前工作树进度</h2>
+<table>
+	<thead><tr><th>区域</th><th>当前观察</th><th>状态判断</th></tr></thead>
+	<tbody>
+		<tr>
+<td>TUI core contract</td>
+			<td><code>packages/tui/src/tui.ts</code> 使用 <code>HistoryBatch</code>、<code>TerminalFramePlan</code>、<code>TerminalFrameProvider</code> 和 <code>ResizeScrollbackMode</code>；history acknowledgement、resize replay、无 provider fallback 和重复确认保护均已接线。</td>
+			<td><span class="tag good">已验证</span></td>
+		</tr>
+		<tr>
+<td>coding-agent provider</td>
+			<td><code>packages/coding-agent/src/modes/interactive-mode.ts</code> 的 <code>InteractiveFrameProvider</code> 已挂到 <code>TUI</code>；prefix、transcript、suffix 分区和 bounded viewport 由 provider 组合。</td>
+			<td><span class="tag good">已验证</span></td>
+		</tr>
+		<tr>
+<td>transcript lifecycle</td>
+			<td><code>TranscriptContainer</code> 维护 <code>active → settled → committed</code>，提供 append/replay/flush batch 和 acknowledgement；删除、重排、reset 边界由测试覆盖。</td>
+			<td><span class="tag good">已验证</span></td>
+		</tr>
+		<tr>
+<td>旧组件适配</td>
+			<td>组件已改用显式 finalized/live 生命周期；源码和测试中不再引用旧的 native-scrollback seam。</td>
+			<td><span class="tag good">已验证</span></td>
+		</tr>
+<tr>
+			<td>设置 schema / runtime wiring</td>
+			<td><code>tui.resizeScrollback</code> 已接入；nested/flat <code>tui.scrollbackRebuild</code> 迁移、新键优先、无关字段保留和幂等重载均有断言。</td>
+			<td><span class="tag good">已验证</span></td>
+		</tr>
+		<tr>
+<td>focused tests</td>
+			<td><code>history-frame-plan.test.ts</code> 覆盖 append/replay、三种 resize、image placement、stop flush 和 stale acknowledgement；coding-agent transcript/settings 测试通过。</td>
+			<td><span class="tag good">已通过</span></td>
+		</tr>
+	</tbody>
+</table>
+
+<h3>当前 todo 记录</h3>
+<table>
+	<thead><tr><th>阶段</th><th>任务</th><th>记录状态</th></tr></thead>
+	<tbody>
+<tr><td>Migration</td><td>Port explicit TUI history contract</td><td>done</td></tr>
+<tr><td>Migration</td><td>Add San frame provider composition</td><td>done</td></tr>
+<tr><td>Migration</td><td>Migrate transcript lifecycle and components</td><td>done</td></tr>
+<tr><td>Migration</td><td>Remove legacy scrollback contract</td><td>done</td></tr>
+<tr><td>Verification</td><td>Run focused TUI migration checks</td><td>done</td></tr>
+<tr><td>Verification</td><td>Exercise real San TUI smoke path</td><td>done</td></tr>
+<tr><td>Handoff</td><td>Write migration handoff document</td><td>done</td></tr>
+	</tbody>
+</table>
+
+<h2>3 · 新契约的最小心智模型</h2>
+<pre>InteractiveFrameProvider.renderFrame(viewport)
+  ├─ history?: HistoryBatch
+  │    ├─ append  = 将已 settled 前缀追加进 native history
+  │    └─ replay  = destructive reset 后重新提供完整逻辑前缀
+  └─ viewport = 当前可重绘的 bounded rows
+
+TUI
+  ├─ 物理写 history + viewport
+  ├─ 只在接受 batch 后调用 provider.acknowledgeHistory(id)
+  ├─ resize settled 时选择 append / rebuild / preserve
+  └─ 无 provider 时只画 bounded children viewport，不写 history
+
+TranscriptContainer
+  active → settled → committed
+  ├─ settled: 仍由普通 viewport 渲染
+  ├─ offered: 固定一个 batch，等待 acknowledgement
+  └─ committed: 不再允许普通删除；replay 时重新开放并整体 re-offer</pre>
+<p>必须守住的外部行为：history 行有序且只接受一次；live 行仍可重绘；resize 时不丢内容、不把旧宽度内容误当新宽度内容；provider 返回的普通 viewport 不超过终端高度。</p>
+
+<h2>4 · 已处理的高优先级问题</h2>
+
+<div class="panel good">
+	<h3>设置迁移</h3>
+	<p><code>tui.scrollbackRebuild</code> 的 nested 和 flat 形式都迁移到 <code>tui.resizeScrollback</code>；<code>true → rebuild</code>、<code>false → preserve</code>，显式新键优先，旧键从内存和磁盘投影中移除，其他 <code>tui</code> 字段保留。</p>
+</div>
+
+<div class="panel good">
+	<h3>provider 顺序与 resize</h3>
+	<p><code>InteractiveFrameProvider</code> 将 prefix、transcript tail 和 suffix 组合成 bounded viewport；HistoryBatch 在 TUI 物理写入后才 acknowledgement。append、rebuild、preserve 三种 settled-resize 场景均由 <code>VirtualTerminal</code> 断言，resize drag 使用独立 resize frame。</p>
+</div>
+
+<div class="panel good">
+	<h3>stop / stale acknowledgement</h3>
+	<p>shutdown flush 对不推进的 provider 明确失败而不会无限循环；已接受的 stale batch 不再重复调用 acknowledgement，并有回归测试。resize probe 在 stop 时取消，flush 只处理尚未接受的批次。</p>
+</div>
+
+<h2>5 · 审查结论</h2>
+<table>
+	<thead><tr><th>检查项</th><th>结论</th></tr></thead>
+	<tbody>
+		<tr><td>history batch acknowledgement</td><td>已确认只在新 batch 物理接纳后调用；重复 offer 不会重复确认；shutdown non-advancing offer 会 fail-fast。</td></tr>
+		<tr><td>transcript 删除与重排</td><td>已核对真实调用点：已提交块不可撤回，active 块可移除；offered prefix 保持稳定时重排不破坏 acknowledgement。</td></tr>
+		<tr><td>standalone 默认策略</td><td>standalone/env fallback 保持 <code>preserve</code>，interactive 按设置覆盖；这是 host 级别的有意差异，不是隐式旧契约。</td></tr>
+		<tr><td>源码旧 seam</td><td>packages 的 src/test 中已无 <code>NativeScrollbackLiveRegion</code>、<code>NativeScrollbackCommittedRows</code>、<code>NativeScrollbackReplay</code>、<code>ViewportTailProvider</code>、<code>RenderStablePrefix</code> 引用；历史 changelog/docs 仅作历史记录保留。</td></tr>
+	</tbody>
+</table>
+
+<h2>6 · 验证记录</h2>
+<ol>
+	<li><code>bun test packages/tui/test/history-frame-plan.test.ts packages/tui/test/adaptive-render-backpressure.test.ts packages/tui/test/input-priority.test.ts</code>：18 pass, 0 fail。</li>
+	<li><code>bun test packages/coding-agent/test/modes/components/transcript-container.test.ts packages/coding-agent/test/settings-manager.test.ts packages/coding-agent/test/interactive-mode-lsp-startup.test.ts</code>：87 pass, 0 fail。</li>
+	<li><code>bun test packages/tui/test</code>：1116 pass, 0 fail。</li>
+	<li><code>bun run ci:test:coding-agent:ui</code>：239 个 UI/TUI 测试文件、48 个分块全部通过。</li>
+	<li><code>bun check</code>：全 workspace check 通过。</li>
+	<li><code>bun run ci:test:smoke</code>：CLI version/help、stats help、worker smoke 全部通过，输出 <code>smoke-test: ok</code>。</li>
+	<li>独立 sticky-provider 场景先复现重复 acknowledgement，再修复并复验为单次确认；provider 接管 fallback frame 时会重置 history ID 域并清除旧物理帧，新增回归测试固定这两个行为。</li>
+</ol>
+
+<h2>7 · 完成判定</h2>
+<div class="panel good">
+<ul>
+	<li>旧 nested/flat 配置迁移、新键优先、幂等行为已验证。</li>
+	<li>append/replay history 顺序、live viewport、image placement、resize 三策略和 stop/flush 已验证。</li>
+	<li>transcript active/settled/committed 生命周期及真实删除调用点已验证。</li>
+	<li>源码旧契约已清理，未跟踪的 history contract 测试已纳入工作树。</li>
+	<li>focused tests、TUI 全包测试、<code>bun check</code> 和真实 CLI smoke 均有通过输出。</li>
+</ul>
+</div>
+
+<h2>8 · 证据边界</h2>
+<p>以上结论基于当前工作树源码、迁移回归测试、TUI 全包测试、<code>bun check</code> 和 <code>bun run ci:test:smoke</code> 的实际输出。未提交、未推送、未创建 PR；本次交接只完成工作树内实现和验证，不代表远端集成状态。</p>
+
+<footer>
+	<p>交接文件：<code>docs/research/tui-history-migration-handoff-20260826.html</code></p>
+	<p>原则：先保护工作树，再验证最小契约；先修可复现问题，再处理性能和文档清理；不留下未经证实的兼容层。</p>
+</footer>
+</div>
+</body>
+</html>

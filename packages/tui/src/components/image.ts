@@ -29,6 +29,19 @@ export interface ImageOptions {
 
 const EMPTY_IDS: readonly number[] = [];
 const EMPTY_TRANSMITS: readonly string[] = [];
+const EMPTY_STALE_EPOCHS: ReadonlyArray<{ imageId: number; lastEpoch: number }> = [];
+
+/** Per-image direct-placement emit state tracked by {@link ImageBudget}. */
+interface PlacementEmitState {
+	widthPx: number;
+	heightPx: number;
+	/** Current placement-id (`p=`) generation. */
+	epoch: number;
+	/** First frame row the current epoch's last emit attached cells to. */
+	lastAttachTopFrameRow: number | undefined;
+	/** Whether the current epoch's attached cells entered native scrollback. */
+	cellsArchived: boolean;
+}
 const SAVE_CURSOR = "\x1b7";
 const RESTORE_CURSOR = "\x1b8";
 // Direct placements reserve height with leading zero-width rows. Keep them
@@ -96,6 +109,10 @@ export class ImageBudget {
 	// id so a partial pass reproduces the on-screen live/text split without a
 	// full, correctly-ordered walk.
 	#suppressedIds = new Set<number>();
+	/** Source geometry and placement-id epochs for direct Kitty placements. */
+	#placementState = new Map<number, PlacementEmitState>();
+	/** Placement states whose current attachment may enter scrollback. */
+	#watchedPlacements = new Set<PlacementEmitState>();
 
 	constructor(cap: number = DEFAULT_MAX_INLINE_IMAGES, requestRender: () => void = () => {}) {
 		this.#cap = normalizeCap(cap);
@@ -191,6 +208,7 @@ export class ImageBudget {
 				this.#purgeIds.push(id);
 				// d=I frees the data too, so the image must re-transmit if it returns.
 				this.#transmitted.delete(id);
+				this.#deletePlacementState(id);
 				this.#forgetKeyForId(id);
 			}
 			this.#onTerminal = this.#planned;
@@ -223,12 +241,93 @@ export class ImageBudget {
 		this.#pendingTransmits = [];
 		this.#keyToId.clear();
 		this.#idToKey.clear();
+		this.#placementState.clear();
+		this.#watchedPlacements.clear();
 		return ids;
 	}
 
 	/** Whether `imageId`'s data still needs to be transmitted to the terminal. */
 	shouldTransmit(imageId: number): boolean {
 		return !this.#transmitted.has(imageId);
+	}
+
+	/** Record source geometry for a direct-placement image. */
+	registerPlacementGeometry(imageId: number, widthPx: number, heightPx: number): void {
+		const state = this.#placementState.get(imageId);
+		if (state) {
+			state.widthPx = widthPx;
+			state.heightPx = heightPx;
+			return;
+		}
+		this.#placementState.set(imageId, {
+			widthPx,
+			heightPx,
+			epoch: 1,
+			lastAttachTopFrameRow: undefined,
+			cellsArchived: false,
+		});
+	}
+
+	/** Mark placement cells that have crossed the native-history watermark. */
+	observeCommitWatermark(committedTo: number): void {
+		if (committedTo < 0 || this.#watchedPlacements.size === 0) return;
+		for (const state of this.#watchedPlacements) {
+			if (state.lastAttachTopFrameRow !== undefined && committedTo > state.lastAttachTopFrameRow) {
+				state.cellsArchived = true;
+				this.#watchedPlacements.delete(state);
+			}
+		}
+	}
+
+	/** Start a new physical-row coordinate epoch after a resize/reflow. */
+	beginPlacementCoordinateEpoch(): void {
+		for (const state of this.#placementState.values()) state.lastAttachTopFrameRow = undefined;
+		this.#watchedPlacements.clear();
+	}
+
+	/** Resolve a safe placement id and source geometry for the next direct emit. */
+	resolvePlacementEmit(
+		imageId: number,
+		attachTopFrameRow: number,
+		committedTo: number,
+	): { placementId: number; widthPx: number; heightPx: number } | null {
+		const state = this.#placementState.get(imageId);
+		if (!state) return null;
+		if (committedTo >= 0 && state.lastAttachTopFrameRow !== undefined && committedTo > state.lastAttachTopFrameRow) {
+			state.cellsArchived = true;
+			this.#watchedPlacements.delete(state);
+		}
+		if (state.cellsArchived) {
+			state.epoch += 1;
+			state.cellsArchived = false;
+			state.lastAttachTopFrameRow = undefined;
+		}
+		if (attachTopFrameRow >= 0) {
+			state.lastAttachTopFrameRow = attachTopFrameRow;
+			this.#watchedPlacements.add(state);
+		}
+		return { placementId: state.epoch, widthPx: state.widthPx, heightPx: state.heightPx };
+	}
+
+	/** Reset placement epochs after a destructive history clear. */
+	resetPlacementEpochs(): ReadonlyArray<{ imageId: number; lastEpoch: number }> {
+		let stale: Array<{ imageId: number; lastEpoch: number }> | undefined;
+		for (const [imageId, state] of this.#placementState) {
+			stale ??= [];
+			stale.push({ imageId, lastEpoch: state.epoch });
+			state.epoch = 1;
+			state.lastAttachTopFrameRow = undefined;
+			state.cellsArchived = false;
+		}
+		this.#watchedPlacements.clear();
+		return stale ?? EMPTY_STALE_EPOCHS;
+	}
+
+	#deletePlacementState(imageId: number): void {
+		const state = this.#placementState.get(imageId);
+		if (!state) return;
+		this.#watchedPlacements.delete(state);
+		this.#placementState.delete(imageId);
 	}
 
 	/**
@@ -387,6 +486,9 @@ export class Image implements Component {
 		if (hasProtocol && !suppressed) {
 			// Transmit the data once (keyed by id); thereafter renderImage returns
 			// just the placement, so repaints never re-send the base64.
+			if (this.#imageId != null && this.#budget !== undefined) {
+				this.#budget.registerPlacementGeometry(this.#imageId, this.#dimensions.widthPx, this.#dimensions.heightPx);
+			}
 			const needsTransmit = this.#imageId != null && (this.#budget?.shouldTransmit(this.#imageId) ?? false);
 			const result = renderImage(this.#base64Data, this.#dimensions, {
 				maxWidthCells: maxWidth,

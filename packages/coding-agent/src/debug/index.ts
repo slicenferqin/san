@@ -44,7 +44,7 @@ const DEBUG_MENU_ITEMS: SelectItem[] = [
 	{ value: "memory", label: "Report: memory issue", description: "Heap snapshot + bundle" },
 	{ value: "logs", label: "View: recent logs", description: "Show last 50 log entries" },
 	{ value: "system", label: "View: system info", description: "Show environment details" },
-	{ value: "terminal", label: "View: terminal state", description: "Subprotocols, geometry, scrollback strategy" },
+	{ value: "terminal", label: "View: terminal state", description: "Subprotocols, geometry, clear behavior" },
 	{
 		value: "protocols",
 		label: "Test: terminal protocols",

@@ -4,7 +4,7 @@ import { PASTE_CODE_LOGIN_PROVIDERS } from "@san/ai";
 import { getOAuthProviders } from "@san/ai/oauth";
 import type { OAuthProvider } from "@san/ai/oauth/types";
 import { getSupportedEfforts } from "@san/catalog/model-thinking";
-import type { Component, OverlayHandle } from "@san/tui";
+import type { Component, OverlayHandle, ResizeScrollbackMode } from "@san/tui";
 import { Input, Loader, Spacer, setTuiTight, Text } from "@san/tui";
 import {
 	getAgentDbPath,
@@ -538,14 +538,13 @@ export class SelectorController {
 				this.ctx.rebuildChatFromMessages();
 				this.ctx.ui.resetDisplay();
 				break;
+			case "tui.resizeScrollback":
+				this.ctx.ui.setResizeScrollback(value as ResizeScrollbackMode);
+				break;
 			case "tui.tight":
 				setTuiTight(value as boolean);
 				this.ctx.ui.invalidate();
 				this.ctx.ui.requestRender();
-				break;
-
-			case "tui.scrollbackRebuild":
-				this.ctx.ui.setScrollbackRebuild(value as boolean);
 				break;
 
 			case "tui.renderMermaid":

@@ -336,9 +336,23 @@ export function emergencyTerminalRestore(): void {
 }
 /** Terminal-reported appearance (dark/light mode). */
 export type TerminalAppearance = "dark" | "light";
+/** Options controlling terminal ownership during startup. */
+export interface TerminalStartOptions {
+	/** Leave stdin in cooked mode until the TUI explicitly enables input. */
+	deferInput?: boolean;
+}
+
 export interface Terminal {
 	// Start the terminal with input and resize handlers
-	start(onInput: (data: string) => void, onResize: () => void): void;
+	start(
+		onInput: (data: string) => void,
+		onResize: () => void,
+		onDisconnect?: () => void,
+		options?: TerminalStartOptions,
+	): void;
+
+	/** Take ownership of stdin after a deferred start, when supported. */
+	enableInput?(): void;
 
 	// Stop the terminal and restore state
 	stop(): void;
@@ -357,6 +371,8 @@ export interface Terminal {
 	// Get terminal dimensions
 	get columns(): number;
 	get rows(): number;
+	/** Bytes accepted by stdout but not yet delivered, when measurable. */
+	readonly pendingOutputBytes?: number;
 
 	// Whether Kitty keyboard protocol is active
 	get kittyProtocolActive(): boolean;
@@ -577,7 +593,12 @@ export class ProcessTerminal implements Terminal {
 		this.#privateModeCallbacks.push(callback);
 	}
 
-	start(onInput: (data: string) => void, onResize: () => void): void {
+	start(
+		onInput: (data: string) => void,
+		onResize: () => void,
+		_onDisconnect?: () => void,
+		_options?: TerminalStartOptions,
+	): void {
 		this.#inputHandler = onInput;
 		this.#resizeHandler = onResize;
 
@@ -1512,6 +1533,10 @@ export class ProcessTerminal implements Terminal {
 	get rows(): number {
 		if (this.#inBandResizeActive && this.#reportedRows) return this.#reportedRows;
 		return process.stdout.rows || Number(Bun.env.LINES) || 24;
+	}
+
+	get pendingOutputBytes(): number {
+		return process.stdout.writableLength ?? 0;
 	}
 
 	moveBy(lines: number): void {

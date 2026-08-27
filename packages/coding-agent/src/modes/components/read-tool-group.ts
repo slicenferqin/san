@@ -296,13 +296,11 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#text: Text;
 	#expanded = false;
 	#showContentPreview: boolean;
-	// A read group accretes entries across multiple assistant completions for as
-	// long as the run of reads is uninterrupted. While it is the active group it
-	// must stay in the transcript's repaintable live region — its header line
-	// re-layouts from `Read <path>` to `Read (N)` + tree as entries arrive, so a
-	// frozen snapshot taken on a risk terminal would strand the single-entry form
-	// (see TranscriptContainer / NativeScrollbackLiveRegion). The controller calls
-	// `finalize()` once the run breaks so the block can commit to native scrollback.
+	// A read group accretes entries across uninterrupted read runs. While active,
+	// its header can re-layout from `Read <path>` to `Read (N)` + tree as entries
+	// arrive, so it must remain in the transcript's repaintable region. A frozen
+	// snapshot would strand the single-entry form; `finalize()` lets the block
+	// commit through the transcript provider once the run breaks.
 	#finalized = false;
 	// Forced terminal even with a still-pending entry: the turn ended (abort or
 	// completion) so no late result is coming. Set via `seal()`.

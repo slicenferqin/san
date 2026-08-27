@@ -1808,6 +1808,37 @@ export class Settings {
 		delete raw["mcp.discoveryMode"];
 		delete raw["mcp.discoveryDefaultServers"];
 
+		// tui.scrollbackRebuild (boolean) -> tui.resizeScrollback (enum).
+		// The legacy boolean gated the destructive erase-and-replay native
+		// scrollback rebuild: `true` maps to "rebuild" and `false` to
+		// "preserve" (`append` is a new behavior with no legacy equivalent).
+		// An explicit new key — nested or flat — always takes precedence and
+		// is materialized into the nested shape so get() resolves it (flat
+		// dotted keys are invisible to path lookup). Legacy keys are dropped
+		// in both forms while unrelated tui settings survive; once they are
+		// gone the block is a no-op, keeping the migration idempotent.
+		const tuiObj = isRecord(raw.tui) ? raw.tui : undefined;
+		const legacyScrollbackRebuild =
+			typeof tuiObj?.scrollbackRebuild === "boolean"
+				? tuiObj.scrollbackRebuild
+				: typeof raw["tui.scrollbackRebuild"] === "boolean"
+					? raw["tui.scrollbackRebuild"]
+					: undefined;
+		const explicitResizeScrollback = tuiObj?.resizeScrollback ?? raw["tui.resizeScrollback"];
+		if (explicitResizeScrollback !== undefined || legacyScrollbackRebuild !== undefined) {
+			const root = tuiObj ?? {};
+			if (explicitResizeScrollback === undefined) {
+				root.resizeScrollback = legacyScrollbackRebuild ? "rebuild" : "preserve";
+			} else {
+				root.resizeScrollback = explicitResizeScrollback;
+			}
+			raw.tui = root;
+			delete root.scrollbackRebuild;
+			delete raw["tui.scrollbackRebuild"];
+			delete raw["tui.resizeScrollback"];
+			if (Object.keys(root).length === 0) delete raw.tui;
+		}
+
 		return raw;
 	}
 
