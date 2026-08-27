@@ -17837,26 +17837,6 @@ export class AgentSession {
 			if (outcome !== "fallback") return outcome;
 			fallbackFromShake = true;
 		}
-		// A prior regular shake does not replace the stricter completed-result
-		// emergency selector used after native compaction reaches a dead end.
-		// Shake runs inline (cheap, no remote LLM). On overflow recovery, if shake
-		// reclaims nothing we fall through to the summary-compaction body below so
-		// the oversized input still gets resolved.
-		if (compactionSettings.strategy === "shake") {
-			const outcome = await this.#runAutoShake(
-				reason,
-				willRetry,
-				generation,
-				shouldAutoContinue,
-				trigger,
-				matchedTriggers,
-				terminalTextAnswer,
-				options.triggerContextTokens,
-				suppressContinuation,
-				detachMidTurnLifecycle,
-			);
-			if (outcome !== "fallback") return outcome;
-		}
 		// "overflow" and "incomplete" force inline execution because they are recovery
 		// paths the caller wants resolved before scheduling the next turn. "idle" is
 		// triggered by the idle loop and does its own scheduling.
