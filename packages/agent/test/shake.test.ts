@@ -7,6 +7,7 @@ import {
 	applyShakeRegions,
 	collectShakeRegions,
 	DEFAULT_SHAKE_CONFIG,
+	EMERGENCY_SHAKE_CONFIG,
 	estimateTokens,
 } from "@san/agent/compaction";
 import type { AssistantMessage, TextContent, ToolCall, ToolResultMessage } from "@san/ai";
@@ -234,5 +235,33 @@ describe("collectShakeRegions — useless results", () => {
 	test("an error result never bypasses the window even when flagged", () => {
 		const entry = messageEntry(toolResultMessage("search", "boom\n".repeat(50), { useless: true, isError: true }));
 		expect(collectShakeRegions([entry], cfg({ protectTokens: 1_000_000 }))).toHaveLength(0);
+	});
+});
+
+describe("emergency completed-result selection", () => {
+	test("selects only successful paired ordinary results, even inside the protected tail", () => {
+		const toolCall: ToolCall = { type: "toolCall", id: "tc-emergency", name: "bash", arguments: {} };
+		const callEntry = messageEntry(assistantMessage([toolCall]));
+		const success = messageEntry(
+			toolResultMessage("bash", "success output\n".repeat(100), { toolCallId: toolCall.id }),
+		);
+		const failed = messageEntry(
+			toolResultMessage("bash", "failed output\n".repeat(100), { toolCallId: toolCall.id, isError: true }),
+		);
+		const orphan = messageEntry(toolResultMessage("bash", "orphan output\n".repeat(100)));
+		const user = messageEntry({
+			role: "user",
+			content: [{ type: "text", text: `\`\`\`txt\n${"current task\n".repeat(100)}\`\`\`` }],
+			timestamp: Date.now(),
+		});
+
+		const regions = collectShakeRegions([callEntry, success, failed, orphan, user], {
+			...EMERGENCY_SHAKE_CONFIG,
+			fenceMinTokens: 20,
+		});
+
+		expect(regions).toHaveLength(1);
+		expect(regions[0].entry).toBe(success);
+		expect(regions[0].kind).toBe("toolResult");
 	});
 });

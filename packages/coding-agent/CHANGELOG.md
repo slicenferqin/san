@@ -10,6 +10,8 @@
 
 ### Added
 
+- Added hard-pressure recovery that rebuilds provider projections after artifact-backed emergency tool-result elision, plus shared token/byte budgets for every tool result, including `read`, across one logical turn.
+
 - Added a plain-language layer to assistant error rendering (move-in-ready principle): known failure families — credential rejections, quota exhaustion, rate limiting, context-window overflow, network failures, provider outages — now open with a one-line headline and an actionable next step (`/auth`, `/model`, `/compact`, retry), with the raw diagnostic preserved verbatim below; unclassified errors render byte-identically to before.
 - Added the north-star benchmark (`bun run bench:north-star`): ten fixed self-contained samples (five bug fixes with failing tests, three test-first features, one fuzzy-but-verifiable request, one mid-task steering correction) driven through real sessions, reporting goal fidelity (deterministic acceptance commands), steering efficiency, within-budget rate, and terminal explainability, with per-sample cost/tokens and a JSON report for cross-commit comparison.
 - Added a host-pinned goal anchor to context plans (goal-fidelity study plan A): when the session has an active execution scope, the immutable contract objective (verbatim user text), todo progress snapshot, unmet before-done evidence gates, and the latest digest's next steps render at the top of every plan message — the model sees the goal on every request, but nothing can rewrite it. The anchor never competes with content materials for plan budget and adds no coverage semantics.

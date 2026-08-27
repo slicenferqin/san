@@ -89,6 +89,8 @@ export interface CustomToolContext {
 	modelRegistry: ModelRegistry;
 	/** Current model (may be undefined if no model is selected yet) */
 	model: Model | undefined;
+	/** Stable execution scope for the current logical turn; undefined outside an active turn. */
+	executionScopeId?: string;
 	/** Whether the agent is idle (not streaming) */
 	isIdle(): boolean;
 	/** Whether there are queued messages waiting to be processed */

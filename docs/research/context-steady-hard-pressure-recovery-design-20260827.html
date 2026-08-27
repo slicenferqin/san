@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>San Context Steady：保持稳态、避免 /compact 的恢复设计</title>
+<style>
+:root{color-scheme:dark;--bg:#08111f;--panel:#101d31;--panel2:#142742;--text:#edf4ff;--muted:#aabbd3;--line:#2b4669;--blue:#79a9ff;--cyan:#65e5d5;--green:#8df0aa;--amber:#ffd166;--red:#ff8b9e;--purple:#c6a8ff}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 84% 0,#1b3864 0,transparent 34%),var(--bg);color:var(--text);font:15px/1.72 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1180px;margin:auto;padding:52px 26px 96px}header{border-bottom:1px solid var(--line);padding-bottom:30px;margin-bottom:36px}.eyebrow{color:var(--cyan);font-size:12px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}h1{font-size:43px;line-height:1.08;letter-spacing:-.035em;margin:11px 0 15px}h2{font-size:27px;line-height:1.2;margin:42px 0 13px}h3{font-size:18px;line-height:1.25;margin:8px 0 8px}p{margin:8px 0 12px}.lead{max-width:950px;font-size:18px;color:#d8e6fa}.muted{color:var(--muted)}code{color:#d9e7ff;background:#0b1729;border:1px solid #223a5d;border-radius:5px;padding:1px 5px;font-size:.92em}.pill,.tag{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:3px 9px;margin:4px 6px 0 0;font-size:12px;color:var(--blue)}.pill.good{color:var(--green);border-color:#276447}.pill.warn{color:var(--amber);border-color:#725c26}.pill.focus{color:var(--purple);border-color:#57478c}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.grid.two{grid-template-columns:repeat(2,1fr)}.card,.callout,.compare>div{background:linear-gradient(145deg,var(--panel),#0d192b);border:1px solid var(--line);border-radius:12px;padding:17px 18px}.card.wide{min-height:100%}.card p,.card li{color:#c8d6e9}.card ul,.card ol{margin:8px 0 0;padding-left:21px}.decision{border-top:3px solid var(--blue)}.good{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--amber)}.purple{color:var(--purple)}.callout{border-left:4px solid var(--cyan);background:#10263b}.callout.warn{border-left-color:var(--amber)}.callout.red{border-left-color:var(--red)}.flowbox{overflow:auto;background:#07101c;border:1px solid var(--line);border-radius:12px;padding:18px}.flowbox pre{margin:0;min-width:730px;color:#d6e4f7;font:14px/1.75 ui-monospace,SFMono-Regular,Menlo,monospace}svg{display:block;width:100%;min-width:850px;height:auto}.compare{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}.current{border-top:3px solid var(--red)!important}.target{border-top:3px solid var(--green)!important}table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:11px 12px}th{color:#dce9fb;background:var(--panel2);font-size:13px}td{color:#c8d6e9}tr:last-child td{border-bottom:0}.num{color:var(--cyan);font-weight:800}.rule{display:grid;grid-template-columns:155px 1fr;gap:14px;border-bottom:1px solid var(--line);padding:12px 0}.rule:last-child{border-bottom:0}.rule strong{color:#dce9fb}.small{font-size:13px;color:var(--muted)}details{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin:10px 0;padding:12px 15px}summary{cursor:pointer;font-weight:750;color:#dce9fb}details p{color:#c8d6e9;margin:10px 0 0}footer{border-top:1px solid var(--line);margin-top:46px;padding-top:18px;color:var(--muted);font-size:13px}@media(max-width:800px){main{padding:30px 16px 70px}h1{font-size:34px}.grid,.grid.two,.compare{grid-template-columns:1fr}.rule{grid-template-columns:1fr;gap:3px}th,td{padding:9px 8px;font-size:13px}}
+</style>
+</head>
+<body><main>
+<header>
+<div class="eyebrow">Design only · 2026-08-27 · Context Steady Recovery</div>
+<h1>把窗口压在稳态区间，尽量不触发 <code>/compact</code></h1>
+<p class="lead">本方案不是“超过阈值就摘要”，也不是“永远不停止”。目标是维护一个足够小、足够精确、细节可恢复的当前工作集：先在工具层控制增长，再用确定性投影释放空间；只有这些办法无法让 provider 请求 fit 时，才使用原生 compaction，最后才暂停。</p>
+<span class="pill good">设计优先：暂不改代码</span><span class="pill focus">保护语义，减少重写</span><span class="pill warn">等待评审后实现</span>
+</header>
+
+<section><h2>先看结论</h2>
+<div class="grid">
+<div class="card decision"><span class="tag">目标</span><h3>稳态优先</h3><p>把常态输入维持在 steady/control 区间。轻微超出先维护，不立即重写整段 session。</p></div>
+<div class="card decision"><span class="tag">第一手手段</span><h3>工具结果可恢复压缩</h3><p>完整结果写入 artifact，provider 只看到受限预览、状态和回读入口；这是解决大工具输出的主要办法。</p></div>
+<div class="card decision"><span class="tag">最后手段</span><h3>原生 compaction 后再救援</h3><p>跨 turn 压缩仍不 fit 时，允许处理最近 tail 中已经完成且可恢复的普通工具结果；确实无解才暂停。</p></div>
+</div>
+<div class="callout" style="margin-top:14px"><strong>一句话：</strong>digest 保存语义状态；工具 offload 释放正文；原生 <code>/compact</code> 只负责更大范围的历史重写；artifact 保证被释放的细节仍然可找回。</div>
+</section>
+
+<section><h2>一张图看懂完整控制流</h2>
+<p class="muted">蓝色是测量，黄色是确定性回收，紫色是原生 compaction，绿色是继续，红色是最终暂停。新增的关键不是再跑几次摘要，而是让 hard pressure 能处理“最近但已经完成的普通工具结果”。</p>
+<div class="flowbox">
+<svg viewBox="0 0 1120 690" role="img" aria-label="Context Steady control flow">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#8fa9cb"/></marker>
+<marker id="green" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#8df0aa"/></marker>
+<marker id="red" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#ff8b9e"/></marker>
+</defs>
+<style>.n{stroke-width:1.5}.t{font:700 15px ui-sans-serif;fill:#edf4ff}.s{font:12px ui-sans-serif;fill:#b9cbe1}.a{stroke:#8fa9cb;stroke-width:1.7;fill:none;marker-end:url(#arrow)}.ag{stroke:#8df0aa;stroke-width:1.7;fill:none;marker-end:url(#green)}.ar{stroke:#ff8b9e;stroke-width:1.7;fill:none;marker-end:url(#red)}.dash{stroke:#c6a8ff;stroke-width:1.7;stroke-dasharray:7 6;fill:none;marker-end:url(#arrow)}</style>
+<rect x="390" y="18" width="340" height="66" rx="12" fill="#142742" stroke="#79a9ff" class="n"/><text x="560" y="45" text-anchor="middle" class="t">构建 provider projection</text><text x="560" y="66" text-anchor="middle" class="s">system + tools + messages + reserve</text>
+<path d="M560 84 V112" class="a"/>
+<rect x="390" y="112" width="340" height="66" rx="12" fill="#142742" stroke="#65e5d5" class="n"/><text x="560" y="139" text-anchor="middle" class="t">测量当前输入</text><text x="560" y="160" text-anchor="middle" class="s">以 provider 实际可接受的输入为准</text>
+<path d="M390 145 H178 V210" class="a"/><path d="M730 145 H942 V210" class="a"/><path d="M560 178 V210" class="a"/>
+<rect x="35" y="210" width="286" height="72" rx="12" fill="#123126" stroke="#8df0aa" class="n"/><text x="178" y="239" text-anchor="middle" class="t">≤ control / steady</text><text x="178" y="261" text-anchor="middle" class="s">正常发送，不做历史重写</text>
+<rect x="417" y="210" width="286" height="72" rx="12" fill="#3b3014" stroke="#ffd166" class="n"/><text x="560" y="239" text-anchor="middle" class="t">control &lt; input ≤ burst</text><text x="560" y="261" text-anchor="middle" class="s">一次轻量维护或受控 burst</text>
+<rect x="799" y="210" width="286" height="72" rx="12" fill="#3b1b27" stroke="#ff8b9e" class="n"/><text x="942" y="239" text-anchor="middle" class="t">input &gt; burst</text><text x="942" y="261" text-anchor="middle" class="s">进入 hard-pressure recovery</text>
+<path d="M178 282 V650" class="ag"/><path d="M560 282 V326" class="a"/><path d="M942 282 V326" class="a"/>
+<rect x="417" y="326" width="286" height="72" rx="12" fill="#32284d" stroke="#c6a8ff" class="n"/><text x="560" y="355" text-anchor="middle" class="t">确定性维护</text><text x="560" y="377" text-anchor="middle" class="s">工具层预算 + aged offload + 重测</text>
+<path d="M560 398 V428" class="a"/><rect x="417" y="428" width="286" height="72" rx="12" fill="#10263b" stroke="#65e5d5" class="n"/><text x="560" y="457" text-anchor="middle" class="t">重建 projection</text><text x="560" y="479" text-anchor="middle" class="s">fit → 继续；不 fit → hard pressure</text>
+<path d="M703 464 H942 V326" class="a"/><path d="M942 398 V428" class="dash"/>
+<rect x="799" y="428" width="286" height="72" rx="12" fill="#32284d" stroke="#c6a8ff" class="n"/><text x="942" y="457" text-anchor="middle" class="t">原生 compaction 一次</text><text x="942" y="479" text-anchor="middle" class="s">按 turn boundary 重写旧历史</text>
+<path d="M942 500 V530" class="a"/>
+<rect x="799" y="530" width="286" height="72" rx="12" fill="#10263b" stroke="#c6a8ff" class="n"/><text x="942" y="559" text-anchor="middle" class="t">emergency artifact elide</text><text x="942" y="581" text-anchor="middle" class="s">最近 tail 的已完成普通 tool result</text>
+<path d="M799 566 H742 V650" class="ag"/><path d="M1085 602 V650" class="ar"/>
+<rect x="390" y="650" width="340" height="26" rx="10" fill="#123126" stroke="#8df0aa" class="n"/><text x="560" y="668" text-anchor="middle" class="t">fit：继续原请求</text>
+<rect x="799" y="650" width="286" height="26" rx="10" fill="#3b1b27" stroke="#ff8b9e" class="n"/><text x="942" y="668" text-anchor="middle" class="t">仍不 fit：安全暂停 / handoff</text>
+</svg>
+</div>
+</section>
+
+<section><h2>先把三种“压缩”分开</h2>
+<table><thead><tr><th>机制</th><th>处理对象</th><th>是否改写语义</th><th>正确职责</th></tr></thead><tbody>
+<tr><td>Context Steady digest</td><td>旧历史的任务状态</td><td>有损</td><td>保存目标、决策、已完成事项、未决问题和下一步；不能冒充精确代码证据。</td></tr>
+<tr><td>工具输出 offload / shake</td><td>工具结果正文</td><td>确定性投影</td><td>完整原文保留在 artifact，当前 payload 只保留状态、关键片段和回读入口。</td></tr>
+<tr><td>native compaction / <code>/compact</code></td><td>完整历史 turn</td><td>有损重写</td><td>跨 turn 释放空间；按 boundary 工作，不能保证切开最近 turn 的单个结果。</td></tr>
+<tr><td><strong>emergency artifact elide</strong></td><td>最近 tail 内已完成普通工具结果</td><td>当前视图替换，原文不丢</td><td>补上 native compaction 的盲区，避免“最近窗口保护”把整个请求锁死。</td></tr>
+</tbody></table>
+<div class="callout warn" style="margin-top:14px"><strong>关键判断：</strong>保护的是“当前任务仍依赖的 exact working set”，不是“最近出现过的所有原文”。如果一个普通工具结果已经完成、有完整配对、有 artifact 且 placeholder 可回读，就不应因为它在最近窗口内而永远不可释放。</div>
+</section>
+
+<section><h2>上下文应维护两个视图</h2>
+<div class="compare"><div class="current"><span class="tag bad">完整历史</span><h3>不删除、不丢证据</h3><p>session journal 和 artifact 保留完整调用、结果和原始细节。它是恢复来源，不等于每次 provider 请求都要携带全部内容。</p></div><div class="target"><span class="tag good">当前工作集</span><h3>小而精确、可以继续工作</h3><p>只放当前 prompt、未完成链路、任务约束、正在编辑所需内容、未解决错误和仍有依赖的事实。其他正文通过确定性投影释放。</p></div></div>
+<div class="grid two" style="margin-top:14px"><div class="card"><h3 class="good">必须精确保留</h3><ul><li>当前 user prompt 和明确验收条件。</li><li>未完成的 tool call、半截流式结果和调用/结果配对。</li><li>正在编辑文件的必要内容。</li><li>最近且尚未被覆盖的关键错误。</li><li>计划、规则以及当前仍依赖的决策。</li></ul></div><div class="card"><h3 class="purple">允许可恢复压缩</h3><ul><li>已完成的 stdout、搜索结果和文件预览。</li><li>已完成测试的普通输出。</li><li>旧网页文本、旧 diff 和旧图片。</li><li>有 artifact 来源的最近普通工具正文。</li><li>已经被后续事实覆盖的重复内容。</li></ul></div></div>
+</section>
+
+<section><h2>为什么现有路径会暂停</h2>
+<div class="compare"><div class="current"><span class="tag" style="color:var(--red)">现有死角</span><h3>四个机制叠在一起</h3><ol><li>provider projection 超过 burst ceiling。</li><li>native compaction 只能在 turn boundary 压缩旧历史。</li><li>普通 shake 保护最近窗口，最近大结果因此无法入选。</li><li>恢复 pass 用尽，重测仍不 fit，为避免 compact/retry 活锁而暂停。</li></ol></div><div class="target"><span class="tag" style="color:var(--green)">设计修正</span><h3>把最近大结果拆成两部分处理</h3><ol><li>任务状态和未完成链路继续保护。</li><li>已完成普通正文进入 artifact-backed placeholder。</li><li>重建 projection 并再次验证，而不是只看存储 token 是否下降。</li><li>只有不可安全处理的 exact working set 仍超限时才暂停。</li></ol></div></div>
+<div class="callout" style="margin-top:14px"><strong>因此，主动暂停是安全阀，不应被删除。</strong>不合理的是把“最近窗口不能动”当成绝对规则，导致本来可以恢复的请求直接进入安全阀。</div>
+</section>
+
+<section><h2>约束“模型一直读、一直输出”的完整方案</h2>
+<p>提示词只能软引导；真正的增长约束必须在工具返回层和 context projection 层执行。</p>
+<div class="grid">
+<div class="card"><span class="tag">工具层</span><h3>单结果双预算</h3><p>每个工具同时受 token 和 bytes 限制。完整结果落 artifact，provider 只拿受限预览；不能让异常 payload 绕过预算。</p></div>
+<div class="card"><span class="tag">回合层</span><h3>共享 logical-turn budget</h3><p>同一回合的多个工具共享总输出预算，避免每个结果单独合规、叠加后整体超过 burst。</p></div>
+<div class="card"><span class="tag">工具策略</span><h3>按工具保留不同信息</h3><p>read 按范围分页；grep 按匹配数和行宽；bash 保留退出码、错误和头尾；browser、diff、图片使用独立预览策略。</p></div>
+<div class="card"><span class="tag">模型层</span><h3>提示先分页、先搜索</h3><p>提示模型避免全量日志和重复读取，但即使模型忽略提示，wrapper 也必须限制最终可见正文。</p></div>
+</div>
+<div class="callout" style="margin-top:14px"><strong>read 的特殊点：</strong>read 已有自己的固定截断和 output-meta spill 路径。设计实现时要把 read 纳入当前回合预算；不能假设普通 wrapper 的 artifact threshold 会自动覆盖 read 的所有返回路径。</div>
+</section>
+
+<section><h2>预算模型：以真实 provider input 为准</h2>
+<div class="flowbox"><pre>projectedProviderInput
+  = system prompt
+  + tool definitions / schemas
+  + 当前 conversation messages
+  + 当前 tool calls / results
+  + reserve
+
+可用窗口不是 model.contextWindow 的裸值
+steady target 是维护目标，不是 provider 保证的硬容量
+burst ceiling 也不能超过 provider 实际可接受的输入</pre></div>
+<p>这段对话中出现过 <code>256K</code> 模型窗口、<code>200K</code> quality window、<code>320K</code> burst 等配置讨论；这些数字不能直接相减得出真实可用消息预算。实现时必须把 system、工具 schema、reserve、当前请求和实际序列化结果一起计算，且每次恢复后重新测量。</p>
+<div class="callout warn"><strong>不要用摘要模型扩大主模型窗口。</strong>摘要模型可以帮助生成 digest，但不能让主 provider 的 256K 请求容纳更多内容；也不能用“本地估算已下降”替代真实 provider projection 的 fit 判断。</div>
+</section>
+
+<section><h2>emergency artifact elide 的安全边界</h2>
+<div class="grid two"><div class="card"><h3 class="good">可以处理</h3><ul><li>已经完成且有明确 call/result 配对的普通工具结果。</li><li>stdout、搜索结果、文件预览、网页文本、旧 diff。</li><li>已写入 artifact、可以重新读取的完整原文。</li><li>能保留工具名、状态、关键片段和回读入口的结果。</li></ul></div><div class="card"><h3 class="bad">不能处理</h3><ul><li>未完成的调用、半截流式结果。</li><li>当前 user prompt 和明确任务约束。</li><li>没有 artifact、无法重建来源的唯一事实。</li><li>当前仍依赖的 plan、skill、错误和 exact working set。</li></ul></div></div>
+<div class="flowbox" style="margin-top:14px"><pre>原始 tool result（journal / artifact）保持不变
+        ↓ emergency elide
+provider 看到：
+  [tool_result elided]
+  tool = read · status = success · original_tokens = 38,400
+  artifact = artifact://... · reread = artifact://...:201-400</pre></div>
+</section>
+
+<section><h2>状态机的防活锁规则</h2>
+<div class="rule"><strong class="good">PASS</strong><span>projection 在 control band 内，直接发送；不做 compaction。</span></div>
+<div class="rule"><strong class="warn">MAINTENANCE</strong><span>轻微超过 control 时，先做 aged tool offload、当前回合预算收缩和一次重测；只有超过滞回条件才升级。</span></div>
+<div class="rule"><strong class="purple">HARD PRESSURE</strong><span>超过 burst 时，执行一次 native compaction；不能因为多跑 pass 就期待同一大结果自动消失。</span></div>
+<div class="rule"><strong class="purple">EMERGENCY</strong><span>compact 后仍不 fit，选择可恢复的最近普通工具正文做 artifact elide；每次动作后重新构建 projection。</span></div>
+<div class="rule"><strong class="red">FAIL-CLOSED</strong><span>仍然不 fit 时，不重复发送同一个 oversized request；转 handoff / 新 context epoch，或暂停并说明是“保留内容超过当前可用上下文”。</span></div>
+<div class="callout red" style="margin-top:14px"><strong>硬规则：</strong>每个 recovery pass 必须产生可验证的 projection 变化或明确结束；禁止 <code>compact → retry → compact → retry</code> 无限循环，也不能只依据 stored token 下降判断成功。</div>
+</section>
+
+<section><h2>建议的第一版实现边界</h2>
+<table><thead><tr><th>区域</th><th>第一版责任</th><th>不做什么</th></tr></thead><tbody>
+<tr><td><code>agent-session.ts</code></td><td>在 native compaction dead-end 后接 emergency elide；以重建后的 provider projection 判断 fit。</td><td>不增加无限 recovery pass，不删除最终暂停。</td></tr>
+<tr><td><code>packages/agent/src/compaction/shake.ts</code></td><td>提供“只选择已完成普通 tool result”的 emergency 策略；保留 call/result 关联和 artifact 入口。</td><td>不触碰未完成调用、当前 prompt 或受保护任务材料。</td></tr>
+<tr><td><code>context-steady/planner.ts</code></td><td>继续负责 steady-state 的 aged offload；明确维护后重新规划的状态。</td><td>不把 digest 当作精确工具正文的替代物。</td></tr>
+<tr><td><code>tools/read.ts</code>、<code>tools/output-meta.ts</code></td><td>统一 read 与其他工具的 token/byte 可见预算，保留分页和回读入口。</td><td>不修改模型请求的原始命令或读取语义。</td></tr>
+<tr><td><code>packages/coding-agent/test/</code></td><td>覆盖 hard pressure、最近大结果 rescue、不可恢复状态暂停、防重复 oversized request。</td><td>不测试源代码文本，不用 mock.module 污染全局模块注册表。</td></tr>
+</tbody></table>
+</section>
+
+<section><h2>验收标准</h2>
+<div class="grid two"><div class="card"><h3 class="good">恢复成功</h3><ul><li>最近 turn 含超大但已完成的普通 tool result。</li><li>native compaction 后仍超过 burst ceiling。</li><li>emergency elide 生成 placeholder 和 artifact 回读入口。</li><li>重建 projection 回到 provider 可接受范围。</li><li>原始结果可重新读取。</li><li>原请求继续执行，不需要用户手动输入 <code>/compact</code>。</li></ul></div><div class="card"><h3 class="bad">必须暂停</h3><ul><li>user prompt、未完成调用或不可恢复 exact working set 本身超过可用窗口。</li><li>所有可安全回收内容都已处理，projection 仍不 fit。</li><li>恢复动作没有可验证的输入下降。</li><li>系统不会重复发送同一 oversized provider request。</li><li>暂停原因明确说明“保留内容超过可用上下文”。</li></ul></div></div>
+</section>
+
+<section><h2>实现前需要确认的三个产品决策</h2>
+<details open><summary>A：允许压缩最近窗口内已完成的普通工具结果吗？（建议：允许）</summary><p>允许。保护任务状态、未完成链路和可恢复性；只要原文已经落 artifact、调用/结果关联完整、placeholder 可回读，就不应把整段正文永久留在 provider payload。</p></details>
+<details><summary>B：emergency elide 默认开启吗？（建议：开启，但只在 hard pressure 触发）</summary><p>建议默认开启 emergency 策略，同时保留普通 aged tool-output offload 的配置开关。这样正常路径不改变，只有 native compaction 无法 fit 时才启用更激进的最近结果释放。</p></details>
+<details><summary>C：统一工具预算按 bytes 还是 tokens？（建议：tokens 主限额，bytes 硬底线）</summary><p>tokens 更接近 provider 成本和上下文占用；bytes 用于防止异常大 payload。read 的实际分页仍可按行和字节执行，但最终必须受 token/byte 双预算共同约束。</p></details>
+</section>
+
+<section><h2>本文交付边界</h2><div class="callout"><strong>当前仍是设计阶段。</strong>本文补全了本次对话中讨论的目标、摘要与 <code>/compact</code> 的区别、工具层预算、logical-turn 预算、artifact offload、最近工具结果救援、真实 provider projection、状态机和防活锁边界。实现和测试应在控制流确认后进行。</div></section>
+<footer>范围：本次对话中的 Context Steady hard-pressure 问题与恢复设计。配置数值仅作讨论背景，最终实现必须以当前代码和 provider 实际输入测量为准。</footer>
+</main></body></html>
