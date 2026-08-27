@@ -31,6 +31,8 @@ export interface ShakeConfig {
 	protectedTools: ProtectedToolMatcher[];
 	/** Minimum token size for a fenced/XML block to be eligible. */
 	fenceMinTokens: number;
+	/** Eligible content class. Emergency recovery may elide only completed, paired, successful tool results. */
+	selection?: "all" | "completedToolResults";
 	/**
 	 * Compaction boundary (`firstKeptEntryId` of the latest compaction). Entries
 	 * before it are summarized away and never sent, so they are skipped — shaking
@@ -55,6 +57,15 @@ export const AGGRESSIVE_SHAKE_CONFIG: ShakeConfig = {
 	minSavings: 0,
 	protectedTools: ["skill", isSkillReadToolResult],
 	fenceMinTokens: 400,
+};
+
+/** Hard-pressure recovery: pierces the live-tail guard, but only for recoverable completed tool results. */
+export const EMERGENCY_SHAKE_CONFIG: ShakeConfig = {
+	protectTokens: 0,
+	minSavings: 0,
+	protectedTools: ["skill", isSkillReadToolResult],
+	fenceMinTokens: 400,
+	selection: "completedToolResults",
 };
 
 /** Rough token cost of a placeholder line; used only for the savings gate. */
@@ -272,12 +283,14 @@ function scanContentBlocks(
 /**
  * Pure detection: locate every eligible shake region on a branch.
  *
- * Walks the protect-recent window (most recent `protectTokens` of context is
- * kept intact), collects whole tool-result messages (honoring `protectedTools`
- * and skipping already-pruned results) and large fenced/XML blocks inside
- * user/developer/assistant/custom messages. Tool results flagged contextually
- * useless by their tool bypass the protect window — there is nothing recent
- * worth keeping in them. Returns regions in document order.
+ * The general selector scans oldest → newest and protects the newest
+ * `protectTokens`. The emergency selector deliberately pierces that live-tail
+ * guard, but admits only successful tool results with a matching assistant
+ * tool call. It never selects user/developer prose, unmatched or failed tool
+ * results, tool calls, skill/plan payloads, or image-only content.
+ *
+ * All regions stay within one message. `applyShakeRegions` is therefore safe
+ * even when multiple regions are selected from the same entry.
  *
  * `toolCall` blocks are never touched (tool-call/result pairing is preserved)
  * and regions never span a message boundary. When the combined estimated
@@ -287,15 +300,16 @@ export function collectShakeRegions(entries: SessionEntry[], config: ShakeConfig
 	const n = entries.length;
 	if (n === 0) return [];
 
+	const completedToolResultsOnly = config.selection === "completedToolResults";
+	const toolCallsById = collectToolCallsById(entries);
+	const entryTokenCounts = entries.map(entryTokens);
 	// Tokens of all entries strictly more recent than index i.
 	const accumulatedAfter = new Array<number>(n);
-	let acc = 0;
+	let accumulated = 0;
 	for (let i = n - 1; i >= 0; i--) {
-		accumulatedAfter[i] = acc;
-		acc += entryTokens(entries[i]);
+		accumulatedAfter[i] = accumulated;
+		accumulated += entryTokenCounts[i];
 	}
-
-	const toolCallsById = collectToolCallsById(entries);
 
 	// Entries before the compaction boundary are summarized away and never sent —
 	// shaking them only churns persisted history (no prompt/cache effect).
@@ -311,30 +325,34 @@ export function collectShakeRegions(entries: SessionEntry[], config: ShakeConfig
 	for (let i = 0; i < n; i++) {
 		const entry = entries[i];
 		if (i < boundaryIndex) continue;
-		const toolResult = getToolResultMessage(entry);
-		// Useless-flagged results carry no information once consumed; they are
-		// eligible even inside the protect-recent window.
-		const uselessResult = toolResult !== undefined && toolResult.useless === true && toolResult.isError !== true;
-		if (!uselessResult && accumulatedAfter[i] < config.protectTokens) continue;
-		if (toolResult) {
+		const messageEntry = entry.type === "message" ? entry : undefined;
+		const toolResult = messageEntry ? getToolResultMessage(messageEntry) : undefined;
+		const pairedToolCall = toolResult ? toolCallsById.get(toolResult.toolCallId) : undefined;
+		const uselessResult =
+			!completedToolResultsOnly &&
+			toolResult?.useless === true &&
+			!toolResult.isError &&
+			toolResult.prunedAt === undefined;
+		if (!completedToolResultsOnly && !uselessResult && accumulatedAfter[i] < config.protectTokens) continue;
+
+		if (toolResult && messageEntry) {
 			if (toolResult.prunedAt !== undefined) continue;
-			if (isProtectedToolResult(toolResult, toolCallsById.get(toolResult.toolCallId), config.protectedTools))
-				continue;
+			if (completedToolResultsOnly && (toolResult.isError || !pairedToolCall)) continue;
+			if (isProtectedToolResult(toolResult, pairedToolCall, config.protectedTools)) continue;
 			const text = toolResultText(toolResult);
-			if (text.length === 0) continue;
+			if (!text) continue;
 			regions.push({
 				kind: "toolResult",
-				entry: entry as SessionMessageEntry,
-				tokens: estimateTokens(toolResult as AgentMessage),
+				entry: messageEntry,
+				tokens: countTokens(text),
 				originalText: text,
 				label: toolResult.toolName,
 			});
 			continue;
 		}
 
-		if (entry.type === "message" || entry.type === "custom_message") {
-			collectBlockRegions(entry as SessionMessageEntry | CustomMessageEntry, config, regions);
-		}
+		if (completedToolResultsOnly) continue;
+		if (entry.type === "message" || entry.type === "custom_message") collectBlockRegions(entry, config, regions);
 	}
 
 	let savings = 0;

@@ -56,6 +56,7 @@ import {
 	compactionContextTokens,
 	createCompactionSummaryMessage,
 	DEFAULT_SHAKE_CONFIG,
+	EMERGENCY_SHAKE_CONFIG,
 	effectiveReserveTokens,
 	estimateTokens,
 	generateBranchSummary,
@@ -14146,7 +14147,12 @@ export class AgentSession {
 		}
 
 		const artifactId = await this.#saveShakeArtifact(regions);
-		const replacements = regions.map((region, index) => this.#shakeElidePlaceholder(region, index, artifactId));
+		if (!artifactId && config.selection === "completedToolResults") {
+			return { mode, toolResultsDropped: 0, blocksDropped: 0, tokensFreed: 0 };
+		}
+		const replacements = regions.map((region, index) =>
+			this.#shakeElidePlaceholder(region, index, artifactId, config.selection),
+		);
 
 		let toolResultsDropped = 0;
 		let blocksDropped = 0;
@@ -14178,7 +14184,15 @@ export class AgentSession {
 		};
 	}
 
-	#shakeElidePlaceholder(region: ShakeRegion, index: number, artifactId: string | undefined): string {
+	#shakeElidePlaceholder(
+		region: ShakeRegion,
+		index: number,
+		artifactId: string | undefined,
+		selection: ShakeConfig["selection"],
+	): string {
+		if (artifactId && selection === "completedToolResults" && region.kind === "toolResult") {
+			return `[tool_result elided]\ntool = ${region.label} · status = success · original_tokens = ${region.tokens}\nartifact = artifact://${artifactId} · recover = artifact://${artifactId} (region ${index + 1})`;
+		}
 		if (artifactId) {
 			return `[shaken ~${region.tokens} tokens — recover: artifact://${artifactId} (region ${index + 1})]`;
 		}
@@ -14188,8 +14202,8 @@ export class AgentSession {
 	/**
 	 * Concatenate the original region contents into one session artifact so the
 	 * agent can read them back via `artifact://<id>`. Returns `undefined` when
-	 * the session is not persisted or the write fails — callers degrade to a
-	 * bare placeholder.
+	 * the session is not persisted or the write fails. Emergency recovery treats
+	 * that as a no-op because its completed tool results must remain recoverable.
 	 */
 	async #saveShakeArtifact(regions: ShakeRegion[]): Promise<string | undefined> {
 		const parts: string[] = [];
@@ -17663,32 +17677,51 @@ export class AgentSession {
 		return residualTokens <= fitBudget;
 	}
 
+	/** Format the regular shake rescue notice without exposing internal records. */
+	#describeElideRescue(elided: number, tokensFreed: number, sink: string): string {
+		return `elided ${elided} heavy block${elided === 1 ? "" : "s"} (~${tokensFreed.toLocaleString()} tokens) to ${sink}`;
+	}
 	/**
-	 * Last-resort tiered reducer when {@link #runAutoCompaction} would otherwise
-	 * dead-end. The summarizer cut at the only available turn boundary, but the
-	 * kept tail is still over the recovery band because a single recent turn (a
-	 * large tool-result, a heavy fenced/XML block, attached images) is itself
-	 * bigger than the band and `findCutPoint` cannot cut inside one message.
+	 * Last-resort tiered reducer when native compaction would otherwise dead-end.
 	 *
-	 * Tier 1 — `shake("elide")` reaches INSIDE that tail: heavy tool-result /
-	 * block content is offloaded to one `artifact://` blob behind a recoverable
-	 * placeholder. Skipped when this pass already ran a shake (`skipElide`).
-	 * Tier 2 — `dropImages()`: the manual `/shake images` remedy, automated.
-	 * Image blocks are stripped from the branch; unlike elided text they are NOT
-	 * artifact-recoverable, so this tier only runs once elide has failed the
-	 * progress re-test.
-	 *
-	 * Each tier that rewrote history re-anchors the in-flight context snapshot,
-	 * then the caller's progress predicate is re-tested; the first tier that
-	 * restores progress emits one info notice describing everything freed and
-	 * stops. Returns whether progress was restored — `false` falls through to
-	 * the dead-end warning.
+	 * Normal overflow/threshold recovery keeps the existing two tiers: regular
+	 * shake, then attached-image removal. Hard pressure uses a separate emergency
+	 * selector that pierces the recent-tail guard only for successful, paired,
+	 * artifact-backed ordinary tool results. It never falls through to image
+	 * removal or touches user prompts, unfinished calls, protected materials, or
+	 * failed/unmatched results.
 	 */
 	async #rescueCompactionDeadEnd(
 		signal: AbortSignal,
-		options: { skipElide: boolean; hasProgress: () => boolean },
+		options: {
+			skipElide: boolean;
+			hasProgress: () => boolean;
+			emergency?: boolean;
+		},
 	): Promise<boolean> {
 		if (signal.aborted) return false;
+
+		if (options.emergency) {
+			try {
+				const result = await this.shake("elide", { config: EMERGENCY_SHAKE_CONFIG, signal });
+				const elided = result.toolResultsDropped;
+				if (elided > 0 && result.artifactId) {
+					this.#rebasePendingContextSnapshotAfterCompaction();
+					this.emitNotice(
+						"info",
+						`Compaction dead-end recovery: elided ${elided} completed tool result${elided === 1 ? "" : "s"} (~${result.tokensFreed.toLocaleString()} tokens) to an artifact so the provider projection can be rebuilt.`,
+						"compaction",
+					);
+					return true;
+				}
+			} catch (error) {
+				logger.warn("Dead-end completed-result rescue failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+			return false;
+		}
+
 		let elided = 0;
 		let elidedTokens = 0;
 		let elideSink = "placeholders";
@@ -17698,12 +17731,7 @@ export class AgentSession {
 				elided = result.toolResultsDropped + result.blocksDropped;
 				elidedTokens = result.tokensFreed;
 				if (result.artifactId) elideSink = "an artifact";
-				if (elided > 0) {
-					// The elide pass rewrote history; re-anchor the in-flight snapshot
-					// so the caller's headroom/retry-fit re-test measures the shaken
-					// context.
-					this.#rebasePendingContextSnapshotAfterCompaction();
-				}
+				if (elided > 0) this.#rebasePendingContextSnapshotAfterCompaction();
 			} catch (error) {
 				logger.warn("Dead-end shake rescue failed", {
 					error: error instanceof Error ? error.message : String(error),
@@ -17738,11 +17766,6 @@ export class AgentSession {
 			return true;
 		}
 		return false;
-	}
-
-	/** Notice fragment for a dead-end elide tier: what was freed and where it went. */
-	#describeElideRescue(elided: number, tokensFreed: number, sink: string): string {
-		return `elided ${elided} heavy block${elided === 1 ? "" : "s"} (~${tokensFreed.toLocaleString()} tokens) to ${sink}`;
 	}
 
 	/**
@@ -17798,6 +17821,24 @@ export class AgentSession {
 			!suppressContinuation && options.autoContinue !== false && compactionSettings.autoContinue !== false;
 		const suppressHandoff = options.suppressHandoff === true;
 		let fallbackFromShake = false;
+		if (compactionSettings.strategy === "shake") {
+			const outcome = await this.#runAutoShake(
+				reason,
+				willRetry,
+				generation,
+				shouldAutoContinue,
+				trigger,
+				matchedTriggers,
+				terminalTextAnswer,
+				options.triggerContextTokens,
+				suppressContinuation,
+				detachMidTurnLifecycle,
+			);
+			if (outcome !== "fallback") return outcome;
+			fallbackFromShake = true;
+		}
+		// A prior regular shake does not replace the stricter completed-result
+		// emergency selector used after native compaction reaches a dead end.
 		// Shake runs inline (cheap, no remote LLM). On overflow recovery, if shake
 		// reclaims nothing we fall through to the summary-compaction body below so
 		// the oversized input still gets resolved.
@@ -17815,7 +17856,6 @@ export class AgentSession {
 				detachMidTurnLifecycle,
 			);
 			if (outcome !== "fallback") return outcome;
-			fallbackFromShake = true;
 		}
 		// "overflow" and "incomplete" force inline execution because they are recovery
 		// paths the caller wants resolved before scheduling the next turn. "idle" is
@@ -18632,6 +18672,7 @@ export class AgentSession {
 					retryFits = await this.#rescueCompactionDeadEnd(autoCompactionSignal, {
 						skipElide: fallbackFromShake,
 						hasProgress: () => this.#compactionCreatedRetryFit(),
+						emergency: trigger === "hard_pressure",
 					});
 				}
 				if (!retryFits) {
@@ -18650,6 +18691,7 @@ export class AgentSession {
 					hasHeadroom = await this.#rescueCompactionDeadEnd(autoCompactionSignal, {
 						skipElide: fallbackFromShake,
 						hasProgress: () => this.#compactionCreatedHeadroom(),
+						emergency: trigger === "hard_pressure",
 					});
 				}
 				if (!hasHeadroom) {

@@ -708,6 +708,44 @@ export const SETTINGS_SCHEMA = {
 				"Show the thinking level as a single icon on the model name instead of a separate ` · <level>` suffix.",
 		},
 	},
+	"tools.outputPreviewTokens": {
+		type: "number",
+		default: 10_000,
+		ui: {
+			audience: "expert",
+			tab: "tools",
+			group: "Output Limits",
+			label: "Tool Result Preview Tokens",
+			description:
+				"Maximum provider-visible tokens from one tool result before the full result moves to an artifact",
+			options: [
+				{ value: "2000", label: "2K", description: "Tight" },
+				{ value: "5000", label: "5K" },
+				{ value: "10000", label: "10K", description: "Default" },
+				{ value: "20000", label: "20K" },
+				{ value: "40000", label: "40K", description: "Loose" },
+			],
+		},
+	},
+	"tools.logicalTurnOutputTokens": {
+		type: "number",
+		default: 32_000,
+		ui: {
+			audience: "expert",
+			tab: "tools",
+			group: "Output Limits",
+			label: "Logical Turn Tool Output Tokens",
+			description:
+				"Shared provider-visible token budget across tool results in one logical turn; also capped at 20% of the model context window",
+			options: [
+				{ value: "0", label: "Off", description: "Disable the shared turn cap" },
+				{ value: "8000", label: "8K", description: "Tight" },
+				{ value: "16000", label: "16K" },
+				{ value: "32000", label: "32K", description: "Default" },
+				{ value: "64000", label: "64K", description: "Loose" },
+			],
+		},
+	},
 	"tools.artifactSpillThreshold": {
 		type: "number",
 		default: 50,

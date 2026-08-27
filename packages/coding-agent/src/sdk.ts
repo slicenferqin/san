@@ -2592,6 +2592,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			sessionManager,
 			modelRegistry,
 			model: agent.state.model,
+			executionScopeId: executionScopeId ?? session.getActiveExecutionScopeId(),
 			isIdle: () => !session.isStreaming,
 			hasQueuedMessages: () => session.queuedMessageCount > 0,
 			abort: () => {

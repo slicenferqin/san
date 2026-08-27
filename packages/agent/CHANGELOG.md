@@ -10,6 +10,8 @@
 
 - Added agent thinking selectors for the `max` and `ultra` reasoning effort tiers.
 
+- Added a fail-closed emergency compaction selector that can replace only successful, paired ordinary tool results with artifact-backed placeholders while preserving the recent task working set.
+
 ### Fixed
 
 - Fixed compaction summaries being rendered as active task authority. Local, remote, snapcompact, and update-summary paths now frame summaries and quoted tool content as non-authoritative historical evidence without an active `Goal` field.

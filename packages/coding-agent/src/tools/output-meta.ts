@@ -4,18 +4,20 @@
  * Tools populate details.meta using the fluent OutputMetaBuilder.
  * The tool wrapper automatically formats and appends notices at message boundary.
  */
-import type {
-	AgentTool,
-	AgentToolContext,
-	AgentToolExecFn,
-	AgentToolResult,
-	AgentToolUpdateCallback,
+import {
+	type AgentTool,
+	type AgentToolContext,
+	type AgentToolExecFn,
+	type AgentToolResult,
+	type AgentToolUpdateCallback,
+	countTokens,
 } from "@san/agent";
 import type { ImageContent, TextContent } from "@san/ai";
 import { logger } from "@san/utils";
 import { getDefault, type Settings } from "../config/settings";
 import { formatGroupedDiagnosticMessages } from "../lsp/utils";
 import type { Theme } from "../modes/theme/theme";
+import type { ReadonlySessionManager } from "../session/session-manager";
 import { type OutputSummary, type TruncationResult, truncateMiddle, truncateTail } from "../session/streaming-output";
 import { formatBytes, wrapBrackets } from "./render-utils";
 import { renderError } from "./tool-errors";
@@ -606,19 +608,23 @@ const kUnwrappedExecute = Symbol("OutputMeta.UnwrappedExecute");
 // Centralized artifact spill for large tool results
 // =============================================================================
 
-/** Resolved artifact spill config sourced from the session settings (or schema defaults). */
+/** Resolved artifact and provider-visible output budgets. */
 function getSpillConfig(s: Settings | undefined) {
 	type Path =
 		| "tools.artifactSpillThreshold"
 		| "tools.artifactTailBytes"
 		| "tools.artifactTailLines"
-		| "tools.artifactHeadBytes";
+		| "tools.artifactHeadBytes"
+		| "tools.outputPreviewTokens"
+		| "tools.logicalTurnOutputTokens";
 	const get = <P extends Path>(path: P) => s?.get(path) ?? getDefault(path);
 	return {
 		threshold: get("tools.artifactSpillThreshold") * 1024,
 		tailBytes: get("tools.artifactTailBytes") * 1024,
 		tailLines: get("tools.artifactTailLines"),
 		headBytes: get("tools.artifactHeadBytes") * 1024,
+		previewTokens: Math.max(1, Math.floor(get("tools.outputPreviewTokens"))),
+		logicalTurnTokens: Math.max(0, Math.floor(get("tools.logicalTurnOutputTokens"))),
 	};
 }
 
@@ -640,12 +646,92 @@ export function resolveOutputMaxColumns(s: Settings | undefined): number {
 	return s?.get("tools.outputMaxColumns") ?? getDefault("tools.outputMaxColumns");
 }
 
+interface LogicalTurnOutputState {
+	scopeId: string;
+	spentTokens: number;
+}
+
+interface VisibleTruncation {
+	result: TruncationResult;
+	maxBytes: number;
+}
+
+const logicalTurnOutput = new WeakMap<ReadonlySessionManager, LogicalTurnOutputState>();
+
+function logicalTurnRemainingTokens(
+	context: AgentToolContext | undefined,
+	configuredLimit: number,
+): number | undefined {
+	const sessionManager = context?.sessionManager;
+	const scopeId = context?.executionScopeId;
+	if (!sessionManager || !scopeId || configuredLimit === 0) return undefined;
+	const contextWindow = context.model?.contextWindow ?? undefined;
+	const windowLimit = contextWindow === undefined ? configuredLimit : Math.max(1, Math.floor(contextWindow * 0.2));
+	const limit = Math.min(configuredLimit, windowLimit);
+	let state = logicalTurnOutput.get(sessionManager);
+	if (!state || state.scopeId !== scopeId) {
+		state = { scopeId, spentTokens: 0 };
+		logicalTurnOutput.set(sessionManager, state);
+	}
+	return Math.max(0, limit - state.spentTokens);
+}
+
+function reserveLogicalTurnTokens(context: AgentToolContext | undefined, tokens: number): void {
+	const sessionManager = context?.sessionManager;
+	const scopeId = context?.executionScopeId;
+	if (!sessionManager || !scopeId || tokens <= 0) return;
+	let state = logicalTurnOutput.get(sessionManager);
+	if (!state || state.scopeId !== scopeId) {
+		state = { scopeId, spentTokens: 0 };
+		logicalTurnOutput.set(sessionManager, state);
+	}
+	state.spentTokens += tokens;
+}
+
+function truncateResultToVisibleBudget(
+	text: string,
+	options: { maxBytes: number; maxTokens: number; headRatio: number; tailLines: number },
+): VisibleTruncation {
+	const makeCandidate = (maxBytes: number): TruncationResult => {
+		if (options.headRatio <= 0) {
+			return truncateTail(text, { maxBytes, maxLines: options.tailLines });
+		}
+		const headRatio = Math.min(1, options.headRatio);
+		return truncateMiddle(text, {
+			maxBytes,
+			maxLines: options.tailLines * 2,
+			maxHeadBytes: Math.floor(maxBytes * headRatio),
+			maxHeadLines: options.tailLines,
+		});
+	};
+
+	const byteLimit = Math.max(0, Math.floor(options.maxBytes));
+	let candidate = makeCandidate(byteLimit);
+	if (countTokens(candidate.content) <= options.maxTokens) return { result: candidate, maxBytes: byteLimit };
+
+	let low = 0;
+	let high = byteLimit;
+	let best = makeCandidate(0);
+	let bestBytes = 0;
+	while (low <= high) {
+		const midpoint = Math.floor((low + high) / 2);
+		candidate = makeCandidate(midpoint);
+		if (countTokens(candidate.content) <= options.maxTokens) {
+			best = candidate;
+			bestBytes = midpoint;
+			low = midpoint + 1;
+		} else {
+			high = midpoint - 1;
+		}
+	}
+	return { result: best, maxBytes: bestBytes };
+}
+
 /**
- * If the tool result text exceeds the spill threshold, save the full output
- * as a session artifact and replace the content with a head+tail (middle
- * elision) view plus an artifact reference. When `tools.artifactHeadBytes`
- * is 0, falls back to tail-only truncation. Skips when the tool already
- * saved its own artifact (e.g. bash/python via OutputSink).
+ * Enforce the provider-visible token and byte budgets for every tool. Full text
+ * is saved before its preview is reduced; an existing tool-created artifact is
+ * reused. The logical-turn reservation happens before the first await so
+ * concurrently completing tools cannot consume the same remaining allowance.
  */
 async function spillLargeResultToArtifact(
 	result: AgentToolResult,
@@ -654,74 +740,83 @@ async function spillLargeResultToArtifact(
 ): Promise<AgentToolResult> {
 	const sessionManager = context?.sessionManager;
 	if (!sessionManager) return result;
-	if (toolName === "read") return result;
-	const { threshold, tailBytes, tailLines, headBytes } = getSpillConfig(context?.settings);
-
-	// Skip if tool already saved an artifact
+	const config = getSpillConfig(context.settings);
 	const existingMeta: OutputMeta | undefined = result.details?.meta;
-	if (existingMeta?.truncation?.artifactId) return result;
+	const existingArtifactId = existingMeta?.truncation?.artifactId;
 
-	// Measure total text content
 	const textParts: string[] = [];
 	for (const block of result.content) {
-		if (block.type === "text" && block.text) {
-			textParts.push(block.text);
-		}
+		if (block.type === "text" && block.text) textParts.push(block.text);
 	}
 	if (textParts.length === 0) return result;
 
 	const fullText = textParts.length === 1 ? textParts[0] : textParts.join("\n");
 	const totalBytes = Buffer.byteLength(fullText, "utf-8");
-	if (totalBytes <= threshold) return result;
-
-	// Save the full output as an artifact so the elided bytes stay recoverable.
-	// In a persistent session this hits `Bun.write`, which can throw (disk full,
-	// permissions). The spill wraps arbitrary tools (built-in, MCP, extension,
-	// RPC-host); a save failure must never convert a successful call into an
-	// error, nor re-expose the full (possibly context-blowing) output. Mirror
-	// `enforceInlineByteCap`: always truncate past the threshold, and only
-	// attach the `artifact://` recovery link when the save actually succeeded.
-	let artifactId: string | undefined;
-	try {
-		artifactId = await sessionManager.saveArtifact(fullText, toolName);
-	} catch (error) {
-		logger.warn("Failed to spill large tool result to artifact", {
-			tool: toolName,
-			error: error instanceof Error ? error.message : String(error),
-		});
+	const totalTokens = countTokens(fullText);
+	const turnRemaining = logicalTurnRemainingTokens(context, config.logicalTurnTokens);
+	const visibleTokenLimit = Math.min(config.previewTokens, turnRemaining ?? config.previewTokens);
+	const exceedsBudget = totalBytes > config.threshold || totalTokens > visibleTokenLimit;
+	if (!exceedsBudget) {
+		reserveLogicalTurnTokens(context, totalTokens);
+		return result;
 	}
 
-	// Truncate: middle elision when a head budget is configured, otherwise tail-only.
-	const useMiddle = headBytes > 0;
-	const truncated = useMiddle
-		? truncateMiddle(fullText, {
-				maxBytes: headBytes + tailBytes,
-				maxLines: tailLines * 2,
-				maxHeadBytes: headBytes,
-				maxHeadLines: tailLines,
-			})
-		: truncateTail(fullText, {
-				maxBytes: tailBytes,
-				maxLines: tailLines,
-			});
+	const configuredPreviewBytes = config.headBytes > 0 ? config.headBytes + config.tailBytes : config.tailBytes;
+	const visible = truncateResultToVisibleBudget(fullText, {
+		maxBytes: Math.min(config.threshold, configuredPreviewBytes),
+		maxTokens: visibleTokenLimit,
+		headRatio: configuredPreviewBytes === 0 ? 0 : config.headBytes / configuredPreviewBytes,
+		tailLines: config.tailLines,
+	});
+	const truncated = visible.result;
+	reserveLogicalTurnTokens(context, countTokens(truncated.content));
 
-	// Replace text blocks with single truncated block, keep images
+	let artifactId = existingArtifactId;
+	if (!artifactId) {
+		try {
+			artifactId = await sessionManager.saveArtifact(fullText, toolName);
+		} catch (error) {
+			logger.warn("Failed to spill large tool result to artifact", {
+				tool: toolName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
 	const newContent: (TextContent | ImageContent)[] = [];
+	let insertedPreview = false;
 	for (const block of result.content) {
-		if (block.type !== "text") {
+		if (block.type === "text") {
+			if (!insertedPreview) {
+				newContent.push({ type: "text", text: truncated.content });
+				insertedPreview = true;
+			}
+		} else {
 			newContent.push(block);
 		}
 	}
-	newContent.push({ type: "text", text: truncated.content });
 
-	// Build truncation meta
 	const outputLines = truncated.outputLines ?? truncated.totalLines;
 	const outputBytes = truncated.outputBytes ?? truncated.totalBytes;
+	const priorTruncation = existingMeta?.truncation;
 	let truncationMeta: TruncationMeta;
-	if (truncated.truncatedBy === "middle") {
+	if (priorTruncation) {
+		truncationMeta = {
+			direction: "middle",
+			truncatedBy: "middle",
+			totalLines: priorTruncation.totalLines,
+			totalBytes: priorTruncation.totalBytes,
+			outputLines,
+			outputBytes,
+			elidedLines: Math.max(0, priorTruncation.totalLines - outputLines),
+			elidedBytes: Math.max(0, priorTruncation.totalBytes - outputBytes),
+			artifactId,
+			nextOffset: priorTruncation.nextOffset,
+		};
+	} else if (truncated.truncatedBy === "middle") {
 		const elidedLines = truncated.elidedLines ?? Math.max(0, truncated.totalLines - outputLines);
 		const elidedBytes = truncated.elidedBytes ?? Math.max(0, truncated.totalBytes - outputBytes);
-		const keptLines = Math.max(0, outputLines - 1); // -1 for marker line
+		const keptLines = Math.max(0, outputLines - 1);
 		const headLines = Math.ceil(keptLines / 2);
 		const tailLineCount = keptLines - headLines;
 		truncationMeta = {
@@ -731,7 +826,7 @@ async function spillLargeResultToArtifact(
 			totalBytes: truncated.totalBytes,
 			outputLines,
 			outputBytes,
-			maxBytes: headBytes + tailBytes,
+			maxBytes: visible.maxBytes,
 			headRange: headLines > 0 ? { start: 1, end: headLines } : undefined,
 			tailRange:
 				tailLineCount > 0
@@ -742,7 +837,7 @@ async function spillLargeResultToArtifact(
 			artifactId,
 		};
 	} else {
-		const shownStart = truncated.totalLines - outputLines + 1;
+		const shownStart = Math.max(1, truncated.totalLines - outputLines + 1);
 		truncationMeta = {
 			direction: "tail",
 			truncatedBy: truncated.truncatedBy ?? "bytes",
@@ -750,15 +845,14 @@ async function spillLargeResultToArtifact(
 			totalBytes: truncated.totalBytes,
 			outputLines,
 			outputBytes,
-			maxBytes: tailBytes,
-			shownRange: { start: shownStart, end: truncated.totalLines },
+			maxBytes: visible.maxBytes,
+			shownRange: outputLines > 0 ? { start: shownStart, end: truncated.totalLines } : undefined,
 			artifactId,
 		};
 	}
 
 	const newMeta: OutputMeta = { ...(existingMeta ?? {}), truncation: truncationMeta };
 	const newDetails = { ...(result.details ?? {}), meta: newMeta };
-
 	return { ...result, content: newContent, details: newDetails };
 }
 
