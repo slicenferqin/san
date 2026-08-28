@@ -61,6 +61,7 @@
 - Added host-owned runaway recovery for San execution with append-only scope state, typed acceptance evidence, provider circuit health, deterministic watchdog scheduling, semantic task contracts, and CAS-bound supervisor decisions.
 
 ### Changed
+- Consolidated session model restoration fallback ordering and moved message-end persistence sequencing into a dedicated queue while preserving session journal ordering.
 
 - Reduced extension startup latency by importing extension modules concurrently while preserving deterministic factory binding order and per-extension rollback ([#7615](https://github.com/can1357/oh-my-pi/issues/7615)).
 - Changed interactive transcript rendering to own an `active` → `settled` → `committed` lifecycle and hand ordered history batches to the TUI provider; migrated legacy `tui.scrollbackRebuild` settings to `tui.resizeScrollback` without dropping nested or flat user configuration.

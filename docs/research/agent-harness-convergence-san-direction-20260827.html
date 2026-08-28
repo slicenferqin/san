@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Harness 的收敛方向：OMP、Pi、Maka 与 San</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7fb;
+      --paper: #ffffff;
+      --ink: #172033;
+      --muted: #5f6b80;
+      --line: #dfe4ee;
+      --accent: #315cf5;
+      --accent-soft: #edf1ff;
+      --green: #087f5b;
+      --green-soft: #e8f7f1;
+      --amber: #9a5b00;
+      --amber-soft: #fff4df;
+      --red: #a52a3a;
+      --red-soft: #fff0f2;
+      --code: #f0f2f7;
+      --shadow: 0 12px 36px rgba(30, 44, 80, .08);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --bg: #11151d;
+        --paper: #191f2a;
+        --ink: #edf1f8;
+        --muted: #a6b0c2;
+        --line: #303a4b;
+        --accent: #89a5ff;
+        --accent-soft: #202b4e;
+        --green: #67d8b0;
+        --green-soft: #12382f;
+        --amber: #ffca73;
+        --amber-soft: #3b2d15;
+        --red: #ff9ba8;
+        --red-soft: #3d1e27;
+        --code: #242b38;
+        --shadow: 0 12px 36px rgba(0, 0, 0, .18);
+      }
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 16px/1.75 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 32px 22px 80px; }
+    .hero {
+      background: linear-gradient(135deg, #172752 0%, #263f91 55%, #3d5bd0 100%);
+      color: #fff;
+      border-radius: 22px;
+      padding: 46px 48px 42px;
+      box-shadow: var(--shadow);
+      margin-bottom: 24px;
+    }
+    .eyebrow { margin: 0 0 8px; color: #cbd7ff; font-size: 13px; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(30px, 5vw, 48px); line-height: 1.18; letter-spacing: -.03em; }
+    .subtitle { max-width: 820px; margin: 18px 0 0; color: #e2e8ff; font-size: 18px; }
+    .meta { margin-top: 22px; color: #cbd7ff; font-size: 14px; }
+    .card, section {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+    }
+    .card { padding: 24px; }
+    section { padding: 30px 32px; margin-top: 22px; }
+    h2 { margin: 0 0 16px; font-size: 27px; line-height: 1.3; letter-spacing: -.02em; }
+    h3 { margin: 26px 0 9px; font-size: 20px; line-height: 1.35; }
+    h4 { margin: 20px 0 5px; font-size: 17px; }
+    p { margin: 10px 0; }
+    ul, ol { margin: 10px 0 12px; padding-left: 1.45em; }
+    li + li { margin-top: 5px; }
+    .lead { font-size: 18px; }
+    .small { color: var(--muted); font-size: 14px; }
+    .grid { display: grid; gap: 16px; }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    @media (max-width: 760px) {
+      .wrap { padding: 14px 12px 50px; }
+      .hero { padding: 32px 24px; border-radius: 16px; }
+      section { padding: 24px 20px; }
+      .grid-3, .grid-2 { grid-template-columns: 1fr; }
+    }
+    .finding { border-left: 4px solid var(--accent); background: var(--accent-soft); border-radius: 10px; padding: 15px 17px; }
+    .finding strong { display: block; margin-bottom: 3px; }
+    .finding.green { border-left-color: var(--green); background: var(--green-soft); }
+    .finding.amber { border-left-color: var(--amber); background: var(--amber-soft); }
+    .finding.red { border-left-color: var(--red); background: var(--red-soft); }
+    .label { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 650; }
+    .label.fact { background: var(--green-soft); color: var(--green); }
+    .label.inference { background: var(--amber-soft); color: var(--amber); }
+    .toc { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+    .toc a { padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); font-size: 14px; }
+    table { width: 100%; border-collapse: collapse; margin: 16px 0 8px; font-size: 14px; }
+    th, td { padding: 11px 12px; border: 1px solid var(--line); vertical-align: top; text-align: left; }
+    th { background: var(--code); font-weight: 700; }
+    tr:nth-child(even) td { background: color-mix(in srgb, var(--paper) 92%, var(--code)); }
+    code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+    code { padding: 1px 5px; border-radius: 5px; background: var(--code); font-size: .92em; }
+    pre {
+      overflow-x: auto;
+      margin: 15px 0;
+      padding: 17px 19px;
+      background: var(--code);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      line-height: 1.55;
+      font-size: 13px;
+    }
+    .timeline { position: relative; margin: 18px 0 8px; padding-left: 25px; }
+    .timeline::before { content: ""; position: absolute; left: 6px; top: 6px; bottom: 6px; width: 2px; background: var(--line); }
+    .event { position: relative; padding: 0 0 18px; }
+    .event::before { content: ""; position: absolute; left: -23px; top: 9px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+    .event time { display: block; color: var(--accent); font-weight: 700; font-size: 14px; }
+    .event strong { display: block; margin: 2px 0; }
+    .architecture { display: grid; gap: 10px; margin: 18px 0; }
+    .arch-row { display: flex; align-items: center; justify-content: center; gap: 9px; flex-wrap: wrap; }
+    .arch-box { min-width: 145px; padding: 11px 14px; border: 1px solid #9facd9; border-radius: 9px; background: var(--accent-soft); text-align: center; font-size: 14px; }
+    .arch-box.authority { border-color: #53ab8c; background: var(--green-soft); }
+    .arch-box.effect { border-color: #dfaa54; background: var(--amber-soft); }
+    .arrow { color: var(--muted); font-size: 20px; }
+    .roadmap { counter-reset: step; list-style: none; padding: 0; }
+    .roadmap li { counter-increment: step; position: relative; padding: 14px 15px 14px 55px; border: 1px solid var(--line); border-radius: 10px; margin: 9px 0; }
+    .roadmap li::before { content: counter(step); position: absolute; left: 15px; top: 15px; width: 25px; height: 25px; border-radius: 50%; background: var(--accent); color: #fff; text-align: center; line-height: 25px; font-weight: 700; }
+    .roadmap strong { display: block; }
+    .source-list li { margin: 8px 0; }
+    .footer { margin-top: 24px; color: var(--muted); font-size: 13px; text-align: center; }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header class="hero">
+      <p class="eyebrow">Research note · San</p>
+      <h1>Agent Harness 的收敛方向</h1>
+      <p class="subtitle">OMP 的 Rust 迁移、Pi Harness v2/v3、Maka Runtime Host，以及 San 的下一阶段边界</p>
+      <p class="meta">2026-08-27 · 面向后续架构决策的内部研究记录</p>
+    </header>
+
+    <div class="card">
+      <p class="lead"><strong>核心判断：</strong>oh-my-pi 以性能为入口进行 Rust 化，但会同时改变底层架构；Pi 的 harness-v2 没有被废弃，而是经过 effects variant 和 v3 收敛后并入当前 <code>harness.md</code>；Pi、Maka、San 最终靠近数据库和操作系统的 durable execution 原则，是长时间运行 agent 在崩溃、并发、外部副作用和上下文限制下的约束趋同。</p>
+      <div class="toc">
+        <a href="#scope">证据范围</a>
+        <a href="#omp">OMP 重写</a>
+        <a href="#pi">Pi Harness 演进</a>
+        <a href="#db">数据库原则</a>
+        <a href="#maka">Maka 对照</a>
+        <a href="#distribution">扩展与二开</a>
+        <a href="#rewind">Rewind 边界</a>
+        <a href="#san">San 路线</a>
+      </div>
+    </div>
+
+    <section id="scope">
+      <h2>1. 证据范围与结论等级</h2>
+      <p>本记录优先采用仓库、提交、官方架构文档和当前本地源码。社区讨论用于发现问题，不作为架构事实的唯一依据。</p>
+      <table>
+        <thead><tr><th>等级</th><th>含义</th><th>本记录中的典型内容</th></tr></thead>
+        <tbody>
+          <tr><td><span class="label fact">已观察</span></td><td>可由官方仓库、提交或本地源码直接确认。</td><td>OMP 主仓库同时包含 TypeScript 与 Rust；Pi 的 v2 文档被提交删除并由当前规格取代；Maka Runtime Host 的单写者和 State Root。</td></tr>
+          <tr><td><span class="label inference">推断</span></td><td>基于事实和工程约束作出的方向判断，不伪装成维护者公开承诺。</td><td>OMP2 的深层目标会进一步形成 Rust runtime/core；三个项目的架构相似主要来自约束趋同；San 应先稳定 durable semantics，再选择性 Rust 化。</td></tr>
+          <tr><td><span class="label">建议</span></td><td>面向 San 的设计选择。</td><td>采用“不可变事实 + 当前状态寄存器 + 外部效果边界 + 上下文/UI 投影”的混合模型。</td></tr>
+        </tbody>
+      </table>
+      <div class="finding amber"><strong>不应混淆的三条线</strong>Pi upstream 的 Rust issue #4609 是已关闭的玩笑 issue；oh-my-pi 的 <code>omp2</code> 是现实中的 TypeScript-to-Rust 迁移线；Pi 当前真正明确推进的是 durable harness/storage/recovery 规格。</div>
+    </section>
+
+    <section id="omp">
+      <h2>2. OMP 的 Rust 重写：性能入口，架构结果</h2>
+      <p>oh-my-pi 官方 README 仍把自己定位为 Pi 的 fork，但已公开展示约 80k 行 Rust core，并列出 Rust 侧的 shell、AST、walker、隔离等基础能力。主仓库的顶层产品仍不是纯 Rust 应用，而是 TypeScript 产品层与 Rust native core 的组合。</p>
+      <p><span class="label fact">已观察</span> 本地 San 仓库也已经存在相近的 native 基础设施：<code>crates/pi-walker</code> 提供带缓存和 heartbeat 的目录扫描，<code>crates/pi-natives</code> 提供 N-API AST 查询，<code>crates/pi-iso</code> 提供 APFS、overlay、reflink、ProjFS、git worktree 和递归复制等隔离后端，另有 <code>pi-shell</code> 与 vendored shell utilities。</p>
+      <table>
+        <thead><tr><th>重写层次</th><th>被替换的成本</th><th>带来的能力</th></tr></thead>
+        <tbody>
+          <tr><td>文件与代码热点</td><td>JS 对象、字符串复制、GC、逐文件调用和部分 fork/exec</td><td>更低的 grep/glob/AST/walker 延迟，更稳定的内存行为</td></tr>
+          <tr><td>执行基础设施</td><td>外部 shell、PTY、隔离和路径处理的多层胶水</td><td>进程内 shell、统一资源生命周期、更细的并发控制</td></tr>
+          <tr><td>runtime 边界</td><td>产品逻辑和系统能力互相穿透</td><td>Rust core 负责机制，TypeScript 负责产品、策略和扩展</td></tr>
+        </tbody>
+      </table>
+      <div class="grid grid-2">
+        <div class="finding green"><strong>Rust 适合解决</strong>大仓库扫描、AST、shell/PTY、路径和字节处理、快照/哈希、隔离、并发本地任务。</div>
+        <div class="finding red"><strong>Rust 不会自动解决</strong>模型延迟、上下文膨胀、compaction 质量、agent 语义循环、provider 错误恢复和不可回滚的外部副作用。</div>
+      </div>
+      <p><span class="label inference">推断</span> OMP2 的深层目标不是把 TypeScript 文件机械翻译成 Rust，而是把原先由 Bun/TypeScript 承担的系统级热路径和资源生命周期下沉到 native runtime。它会让 OMP 与 Pi 在源代码组织和内部 API 上越来越远，但不必然改变 prompt → model → tools → continuation 这层用户可理解的基本模型。</p>
+      <div class="finding">性能重写的边界：如果瓶颈是模型规划或 prompt token 数，换 Rust 不会改变账单和上下文上限；如果瓶颈是本地工具链和大仓库扫描，Rust 才有直接收益。必须按阶段测量，而不是把“Rust”当作端到端性能保证。</div>
+    </section>
+
+    <section id="pi">
+      <h2>3. Pi Harness v2 没有消失，而是被收敛</h2>
+      <p>你找不到当前 <code>main</code> 上的 <code>harness-v2.md</code>，原因是它已经被后续规格吸收并删除。历史演进如下：</p>
+      <div class="timeline">
+        <div class="event"><time>2026-07-29 · 4f0437e</time><strong>加入 Durable AgentHarness design v2</strong><span>建立 session tree、lanes、operation logs、global facts，以及“intent → effect → result”的耐久执行模型。</span></div>
+        <div class="event"><time>2026-08-03 · a0014c1</time><strong>选择 effects variant 并完成 v2 设计收敛</strong><span>补充 deferred provider、usage ledger、overflow、abort、hook durability 和恢复规则。</span></div>
+        <div class="event"><time>2026-08-11 · 85a2060</time><strong>删除旧 v2 文档，harness-v3.md 重命名为 harness.md</strong><span>文件名去掉版本号，当前主线规格继续承载前面验证过的核心不变量。</span></div>
+      </div>
+      <h3>从 v2 operation log 到当前 hybrid state model</h3>
+      <div class="grid grid-2">
+        <div class="card">
+          <h4>早期 v2 的重点</h4>
+          <p>每条 lane 有独立 operation log，记录：</p>
+          <pre>operation_started
+  → task_attempt
+  → tool_started (provisioned result id)
+  → external effect
+  → result entry
+  → operation_finished</pre>
+          <p>恢复逻辑读取未完成的 intent，决定重试、安全 replay、生成 interrupted result 或等待 deferred handle。</p>
+        </div>
+        <div class="card">
+          <h4>当前 harness.md 的重点</h4>
+          <p>持久化分成三类：</p>
+          <pre>entries       不可变 conversation tree
+registers     当前可变状态
+usage ledger  成本和 token 账本</pre>
+          <p>操作的完整当前状态写入类似 <code>op.state/{operationId}</code> 的 register；context 和 UI 从 canonical state 重新投影。</p>
+        </div>
+      </div>
+      <div class="finding green"><strong>保留下来的核心</strong>接受操作必须先 durable；外部效果前先写意图；结果必须可结算；每条 lane 至多一个未完成 operation；UI stream 不是恢复权威；context 只在尾部增长，compaction 是显式例外。</div>
+      <div class="finding amber"><strong>发生变化的实现模型</strong> 当前规格不是纯 event sourcing。对话和 usage 适合 append-only；operation current state 适合 materialized register。恢复不是无条件重放所有历史副作用，而是读取状态并从明确的 effect boundary 继续收敛。</div>
+    </section>
+
+    <section id="db">
+      <h2>4. “答案在数据库论文里”：方向正确，但要保留边界</h2>
+      <p class="lead">Agent harness 本质上是一个带外部副作用的 durable state machine。它不是普通聊天循环，也不是把所有东西塞进 event log。</p>
+      <div class="architecture" aria-label="San 建议的 durable agent 架构">
+        <div class="arch-row"><div class="arch-box authority">Canonical facts<br><small>entries · facts · usage · op state</small></div></div>
+        <div class="arch-row"><span class="arrow">↓ atomic commit</span></div>
+        <div class="arch-row"><div class="arch-box authority">Reducer / recovery state</div><span class="arrow">→</span><div class="arch-box">Context projection</div><span class="arrow">→</span><div class="arch-box">UI snapshot/events</div></div>
+        <div class="arch-row"><span class="arrow">↓ intent</span></div>
+        <div class="arch-row"><div class="arch-box effect">LLM / tools / deferred effects</div></div>
+        <div class="arch-row"><span class="arrow">↓ settlement</span></div>
+        <div class="arch-row"><div class="arch-box authority">Canonical facts updated</div></div>
+      </div>
+      <table>
+        <thead><tr><th>Agent 概念</th><th>数据库/OS 类比</th><th>必须避免的误读</th></tr></thead>
+        <tbody>
+          <tr><td>accepted prompt</td><td>事务接受边界</td><td>接受成功不代表模型已经执行。</td></tr>
+          <tr><td>tool intent</td><td>类似 WAL / prepare</td><td>它记录 harness 对外部效果的预期，不是外部世界的事务锁。</td></tr>
+          <tr><td>immutable entries</td><td>append-only facts / event history</td><td>不是所有运行时状态都要永久 append。</td></tr>
+          <tr><td>op.state</td><td>materialized state / durable program counter</td><td>当前状态必须自洽，不应依赖“从某条缺失记录猜位置”。</td></tr>
+          <tr><td>context / UI</td><td>materialized view / CQRS read model</td><td>stream 丢失时重新读 canonical snapshot，不能把通知当事实。</td></tr>
+          <tr><td>recovery</td><td>状态机恢复</td><td>不是把所有工具重新跑一遍。</td></tr>
+        </tbody>
+      </table>
+      <h3>外部副作用是 durable harness 最难的地方</h3>
+      <p>以下流程仍然存在不确定窗口：</p>
+      <pre>commit: “准备调用工具 X，结果使用 R”
+        ↓
+execute X
+        ↓ 进程可能在此处崩溃；X 可能已经成功
+commit: “R 的结果为 Y，operation 进入下一状态”</pre>
+      <p>因此工具需要明确 replay policy：</p>
+      <ul>
+        <li><strong>safe：</strong>恢复时可以用持久化参数重新执行，例如只读查询。</li>
+        <li><strong>never：</strong>不能安全重复执行，例如删除文件、发送消息、写入外部系统；恢复时可以写入合成的 interrupted result。</li>
+        <li><strong>idempotent：</strong>外部系统以 operation id 或幂等键去重，但这依赖外部系统配合。</li>
+      </ul>
+      <div class="finding red"><strong>没有 XA 事务银弹</strong> 数据库可以保证自己的 commit 一致，但不能让模型 provider、邮件服务、shell、文件系统和数据库写入共享同一个可回滚事务。正确目标是“可识别、可恢复、可结算”，不是虚假的 exactly-once。</div>
+    </section>
+
+    <section id="maka">
+      <h2>5. Maka：同一组不变量，重点不同</h2>
+      <p>Maka 官方的 Runtime Host 架构把 Host 作为长期运行的唯一执行权威：一个 State Root 只有一个写者；Desktop、TUI、CLI、bots 是 Clients；客户端断开不会取消已接受的 work；Durable Stores 是恢复依据；provider 调用前先持久化 Run Composition；Session Continuity 向客户端提供 snapshot 和有界 live updates。</p>
+      <table>
+        <thead><tr><th>维度</th><th>Pi 当前 Harness</th><th>Maka Runtime Host</th><th>San 可吸收的部分</th></tr></thead>
+        <tbody>
+          <tr><td>执行权威</td><td>一个 harness 管理一个 session，lane 内串行、lane 间并行</td><td>一个 Host 拥有 State Root 和 Runtime</td><td>single writer + 明确 ownership</td></tr>
+          <tr><td>持久化</td><td>entries、registers、usage、operation state</td><td>Durable Stores + Runtime facts</td><td>canonical facts 与派生投影分离</td></tr>
+          <tr><td>客户端</td><td>snapshot + event observation，偏 agent library</td><td>Desktop/WebSocket/TUI/CLI/bots，共享 Host</td><td>UI 不拥有 runtime；断线后重新取 snapshot</td></tr>
+          <tr><td>模型边界</td><td>context projection、compaction、deferred provider</td><td>Run Composer 冻结模型可见 basis</td><td>provider 前冻结 prompt/tool basis</td></tr>
+          <tr><td>多任务</td><td>lanes 和 operation</td><td>Session、Turn、Run、root execution</td><td>把 operation admission、cleanup、settlement 分开</td></tr>
+        </tbody>
+      </table>
+      <p><span class="label inference">推断</span> “Pi 和 Maka 几乎相同”在不变量层面成立，在实现和产品重点层面不成立：Pi 更关注 coding agent 的 conversation tree、lane、context 和 compaction；Maka 更关注 Runtime Host、State Root、多客户端、远程连接和生命周期 ownership。两者可以互相验证，但不应直接复制对方的全部 API。</p>
+      <p>“Maka 的核心作者来自数据库背景”没有从官方仓库和架构文档中核实到，因此不作为本记录的事实依据。相似架构本身已经足以说明问题。</p>
+    </section>
+
+    <section id="distribution">
+      <h2>6. 扩展系统与源码二开：两条互补的分发路径</h2>
+      <p>社区对 Pi Package Catalog 扩展“大而全、难组合”的批评有现实基础，但它说明的是扩展颗粒度和接口设计问题，不是“插件系统没有价值”。</p>
+      <table>
+        <thead><tr><th>变化类型</th><th>最合适的路径</th><th>原因</th></tr></thead>
+        <tbody>
+          <tr><td>新增外部能力或 API</td><td>MCP Tool</td><td>能力边界清晰，独立进程和协议适合组合。</td></tr>
+          <tr><td>新增工作规约和知识</td><td>Skill</td><td>低耦合、可项目级或用户级覆盖。</td></tr>
+          <tr><td>新增稳定命令或局部 UI</td><td>可选 Plugin</td><td>不需要 fork 核心即可复用。</td></tr>
+          <tr><td>改变调度、持久化、恢复、上下文、权限</td><td>源码二开 / fork</td><td>这些是架构边界，插件 API 无法完整表达。</td></tr>
+          <tr><td>改变 grep、AST、shell、snapshot 等基础设施</td><td>native core / Rust</td><td>需要控制资源、内存和系统调用，而不是增加 hook。</td></tr>
+        </tbody>
+      </table>
+      <div class="grid grid-2">
+        <div class="finding green"><strong>源码二开的优势</strong>模型可以直接处理上下游合并、删除重复实现、裁剪冗余文件、迁移调用者和新增跨边界能力。用户拥有最终源码，而不是被预设 API 限制。</div>
+        <div class="finding amber"><strong>源码二开的代价</strong>模型可以解决文本冲突，却不能保证语义冲突已经正确解决。需要类型检查、行为测试、恢复测试和持续的 upstream rebase。</div>
+      </div>
+      <h3>shadcn/ui 类比的适用范围</h3>
+      <p>shadcn/ui 适合被复制和拥有，是因为组件是相对独立的 leaf。durable harness 核心不是 leaf：它包含 session schema、operation state、effect settlement、usage ledger、migration 和恢复不变量。</p>
+      <p><span class="label inference">推断</span> Agent 软件更可能形成三层分发：</p>
+      <pre>核心运行时：源码拥有 / fork / patch queue
+能力模块：Skills / MCP / optional extensions
+产品表面：可复制 UI、模板、preset</pre>
+      <p>你给出的 <code>rerere</code>、<code>zdiff3</code>、<code>fetch.prune</code> 等配置非常适合作为源码所有权工作流的基础设施。它们降低维护成本，但不替代测试和人工审查。</p>
+    </section>
+
+    <section id="rewind">
+      <h2>7. Pi-rewind：工作区回滚和 harness 恢复要分开</h2>
+      <p>全仓库 checkpoint 在大型 monorepo 上带来扫描、复制和磁盘成本；只备份 Edit/Write 触碰的文件把成本从“整个仓库”降低到“本次修改集合”，更适合交互式 coding agent。</p>
+      <table>
+        <thead><tr><th>机制</th><th>负责什么</th><th>不负责什么</th></tr></thead>
+        <tbody>
+          <tr><td>Edit/Write preimage snapshot</td><td>撤销模型通过编辑工具产生的文件变化</td><td>Bash、生成器、chmod、symlink、数据库和网络副作用</td></tr>
+          <tr><td>Full workspace snapshot</td><td>更完整的工作区回滚</td><td>成本、空间和大仓库性能问题</td></tr>
+          <tr><td>Durable harness</td><td>恢复 operation、tool result、session 和上下文状态</td><td>让外部副作用自动回滚</td></tr>
+        </tbody>
+      </table>
+      <p>建议把产品语义拆成三档，而不是让一个 <code>/checkpoint</code> 同时承担全部责任：</p>
+      <ol>
+        <li><strong>Edit-safe checkpoint：</strong>默认保护 Edit/Write 触碰的文件，快且适合日常。</li>
+        <li><strong>Full workspace checkpoint：</strong>通过 overlay、工作树或全量快照保护更大范围，作为专家模式。</li>
+        <li><strong>Durable run recovery：</strong>保证 session 和 operation 不损坏，工具按 replay policy 恢复，不虚假承诺文件回滚。</li>
+      </ol>
+    </section>
+
+    <section id="san">
+      <h2>8. San 的未来方向</h2>
+      <p>San 不需要在“跟随 OMP Rust rewrite”和“坚持自己的方向”之间二选一。两者位于不同轴线上：</p>
+      <ul>
+        <li>OMP 的优势轴：native toolchain、系统调用、扫描、shell、AST、隔离和本地并发。</li>
+        <li>San 的优势轴：Context Steady、compaction、continuation、execution-control、brain/memory、模型路由和长期任务可靠性。</li>
+      </ul>
+      <p><span class="label inference">推断</span> 从本地源码形态看，San 当前真正需要降低的风险是语义边界集中在 <code>AgentSession</code> 周围，而不是缺少 Rust。<code>packages/agent/src/agent-loop.ts</code>、<code>append-only-context.ts</code>、<code>replay-policy.ts</code>、compaction 目录，以及 <code>packages/coding-agent/src/session</code>、<code>context-steady</code>、<code>execution-control</code>、<code>task</code>、<code>brain</code> 之间已经形成丰富能力；下一步应把这些能力的 ownership 和 durable boundary 变得清晰。</p>
+      <h3>建议的目标边界</h3>
+      <div class="architecture">
+        <div class="arch-row"><div class="arch-box">TUI / CLI / Web / RPC</div></div>
+        <div class="arch-row"><span class="arrow">↓ prompt · steer · abort · config</span></div>
+        <div class="arch-row"><div class="arch-box">Harness / admission / lanes</div></div>
+        <div class="arch-row"><span class="arrow">↓ atomic transition</span></div>
+        <div class="arch-row"><div class="arch-box authority">DurableSession</div><span class="arrow">→</span><div class="arch-box authority">OperationReducer</div></div>
+        <div class="arch-row"><span class="arrow">↙</span><span class="arrow">↓</span><span class="arrow">↘</span></div>
+        <div class="arch-row"><div class="arch-box">ContextProjector</div><div class="arch-box">UIProjector</div><div class="arch-box effect">EffectExecutor</div></div>
+        <div class="arch-row"><span class="arrow">EffectExecutor → LLM / tools / MCP / Skills</span></div>
+      </div>
+      <h3>建议推进顺序</h3>
+      <ol class="roadmap">
+        <li><strong>先固定 durable semantics</strong>明确 canonical facts、operation state、effect intent、settlement、abort、replay policy 和 deferred provider 的行为契约。</li>
+        <li><strong>再拆 AgentSession 的 ownership</strong>让 session persistence、operation reduction、context projection、UI events 和 effect execution 不再互相持有隐式状态。</li>
+        <li><strong>把 Context Steady 接到 durable operation 边界</strong>在 provider 前做 bounded context plan；overflow、compaction、discard 和 retry 必须有明确的收敛终点。</li>
+        <li><strong>把 Skills/MCP/Plugin 限定为能力适配层</strong>允许扩展工具和知识，不让扩展通过大量全局 hook 重新接管核心状态机。</li>
+        <li><strong>按 profile 选择性 Rust 化</strong>先测量 walker、grep、AST、shell、PTY、snapshot/hashing 等热点；只有 profiling 证明收益时才扩大 Rust 边界。</li>
+        <li><strong>最后建立源码分发维护流</strong>官方基线、个人 fork、patch queue、rerere、语义迁移检查和恢复 smoke test 一起构成可持续工作流。</li>
+      </ol>
+      <div class="finding green"><strong>最终路线</strong>San 自己定义 durable semantics；吸收 Pi/Maka 的恢复不变量；吸收 OMP 的 native hot paths；保留 Skills/MCP/Plugin 作为可选能力层；允许用户通过源码 fork 拥有自己的 agent。</div>
+    </section>
+
+    <section id="sources">
+      <h2>9. 主要来源</h2>
+      <ol class="source-list">
+        <li><a href="https://github.com/can1357/oh-my-pi" target="_blank" rel="noreferrer">oh-my-pi 官方仓库</a>：Pi fork、TypeScript + Rust core、工具与 native 能力说明。</li>
+        <li><a href="https://github.com/can1357/oh-my-pi/discussions/9300" target="_blank" rel="noreferrer">oh-my-pi Discussion #9300 — omp2 roadmap</a>：社区确认 <code>omp2</code> 迁移线存在，但没有维护者公开 ETA。</li>
+        <li><a href="https://github.com/earendil-works/pi/commit/4f0437e2d58d651dd934119ecabea2893975f62f" target="_blank" rel="noreferrer">Pi commit 4f0437e — harness design v2</a>：v2 初始 durable harness 设计。</li>
+        <li><a href="https://github.com/earendil-works/pi/commit/a0014c1a83ea0b6fd98762a9bdaa90f517a73cbf" target="_blank" rel="noreferrer">Pi commit a0014c1 — finalize harness v2 on effects variant</a>：v2 effects variant 收敛。</li>
+        <li><a href="https://github.com/earendil-works/pi/commit/85a2060811a23f1580c13ab59a210b1409092837" target="_blank" rel="noreferrer">Pi commit 85a2060 — consolidate harness spec into harness.md</a>：删除旧 v2 文档，当前规格承接 v3。</li>
+        <li><a href="https://github.com/earendil-works/pi/blob/main/packages/agent/docs/harness.md" target="_blank" rel="noreferrer">Pi 当前 harness.md</a>：entries、registers、usage ledger、operation state 和恢复规格。</li>
+        <li><a href="https://github.com/earendil-works/pi/issues/4609" target="_blank" rel="noreferrer">Pi issue #4609 — Rewrite pi in Rust</a>：已关闭的 issue，作者标注为 joke，不作为正式 Rust 路线证据。</li>
+        <li><a href="https://github.com/apache/maka/blob/main/docs/architecture/runtime-host-architecture.md" target="_blank" rel="noreferrer">Apache Maka Runtime Host Architecture</a>：State Root、single writer、Hosted Execution、Run Composer 和 Session Continuity。</li>
+        <li><a href="https://github.com/apache/maka" target="_blank" rel="noreferrer">Apache Maka 官方仓库</a>：local-first agent workspace、durable execution record 和多客户端产品定位。</li>
+        <li><a href="https://github.com/can1357/oh-my-pi/discussions/8039" target="_blank" rel="noreferrer">oh-my-pi Discussion #8039 — 大项目性能讨论</a>：区分模型规划、context assembly 和搜索执行的端到端性能来源。</li>
+      </ol>
+    </section>
+
+    <p class="footer">这是一份面向架构决策的研究记录，不是 Pi、OMP 或 Maka 的官方路线图。</p>
+  </main>
+</body>
+</html>

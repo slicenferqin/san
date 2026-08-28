@@ -18,6 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { isPromise } from "node:util/types";
+import { MessageEndPersistenceQueue } from "./message-end-persistence";
 import {
 	type AfterToolCallContext,
 	type AfterToolCallResult,
@@ -2369,8 +2370,7 @@ export class AgentSession {
 	 */
 	#fallbackExtensionTimers: ManagedTimers | undefined = undefined;
 	#turnIndex = 0;
-	#messageEndPersistenceTail: Promise<void> = Promise.resolve();
-	#pendingMessageEndPersistence = new Map<string, Promise<void>>();
+	#messageEndPersistenceQueue = new MessageEndPersistenceQueue();
 	#persistedMessageKeys: { anchor: string; keys: Set<string> } | undefined;
 
 	#skills: Skill[];
@@ -4724,33 +4724,15 @@ export class AgentSession {
 	};
 
 	#createMessageEndPersistenceSlot(message: AgentMessage): MessageEndPersistenceSlot | undefined {
-		const key = sessionMessagePersistenceKey(message);
-		if (!key) return undefined;
-		const previous = this.#messageEndPersistenceTail;
-		const { promise, resolve } = Promise.withResolvers<void>();
-		const clear = () => {
-			if (this.#pendingMessageEndPersistence.get(key) === promise) {
-				this.#pendingMessageEndPersistence.delete(key);
-			}
-		};
-		this.#pendingMessageEndPersistence.set(key, promise);
-		this.#messageEndPersistenceTail = promise.catch(() => {});
-		return {
-			promise,
-			persist: async persistMessage => {
-				await previous;
-				try {
-					persistMessage();
-				} finally {
-					resolve();
-					clear();
-				}
-			},
-			release: () => {
-				resolve();
-				clear();
-			},
-		};
+		return this.#messageEndPersistenceQueue.create(message);
+	}
+SWAP.BLK 4756:
+	async #waitForSessionMessagePersistence(message: AgentMessage): Promise<void> {
+		await this.#messageEndPersistenceQueue.waitFor(message);
+	}
+SWAP.BLK 4762:
+	async #waitForMessageEndPersistence(): Promise<void> {
+		await this.#messageEndPersistenceQueue.waitForAll();
 	}
 
 	async #waitForSessionMessagePersistence(message: AgentMessage): Promise<void> {
