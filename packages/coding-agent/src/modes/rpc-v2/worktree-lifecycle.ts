@@ -258,7 +258,7 @@ async function readJsonIfExists<T>(path: string): Promise<T | undefined> {
 	}
 }
 
-interface SpawnResult {
+export interface SpawnResult {
 	exitCode: number;
 	stdout: string;
 	stderr: string;
@@ -285,7 +285,7 @@ async function spawnGit(argv: string[], cwd?: string): Promise<SpawnResult> {
 }
 
 /** 不 trim stdout：保留 porcelain -z / 行尾空格语义。 */
-async function spawnGitRaw(argv: string[], cwd?: string): Promise<SpawnResult> {
+export async function spawnGitRaw(argv: string[], cwd?: string): Promise<SpawnResult> {
 	try {
 		const proc = Bun.spawn(["git", ...argv], {
 			cwd,

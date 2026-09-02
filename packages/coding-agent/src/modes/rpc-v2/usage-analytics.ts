@@ -356,6 +356,8 @@ export async function buildUsageAnalytics(options?: {
 	activeSession?: ActiveUsageSession;
 	days?: number;
 	sessionLimit?: number;
+	/** 只聚合内存中的活跃会话，跳过全盘 Session 文件扫描（指标条等高频刷新场景）。 */
+	currentOnly?: boolean;
 	now?: Date;
 }): Promise<UsageAnalytics> {
 	const days = Math.min(MAX_DAYS, Math.max(1, Math.trunc(options?.days ?? DEFAULT_DAYS)));
@@ -371,8 +373,10 @@ export async function buildUsageAnalytics(options?: {
 		upstreamProviders: new Map(),
 		days: buildDayMap(days, now),
 	};
-	const infos = await SessionManager.listAll();
-	const persisted = await loadPersistedSessions(infos, context, options?.activeSession?.sessionId);
+	const infos = options?.currentOnly ? [] : await SessionManager.listAll();
+	const persisted = options?.currentOnly
+		? []
+		: await loadPersistedSessions(infos, context, options?.activeSession?.sessionId);
 	let currentSession: UsageSessionSummary | undefined;
 	if (options?.activeSession) {
 		const accumulator = accumulateMessages(options.activeSession.messages, context);

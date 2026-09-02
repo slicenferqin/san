@@ -58,6 +58,8 @@ export type SessionEventType =
 	| "session.closed"
 	| "session.deleted"
 	| "session.title.changed"
+	| "session.summary.changed"
+	| "session.diff.changed"
 	| "session.recovery.available"
 	| "session.recovered"
 	| "session.corrupt"

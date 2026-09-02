@@ -18,7 +18,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { isPromise } from "node:util/types";
-import { MessageEndPersistenceQueue } from "./message-end-persistence";
 import {
 	type AfterToolCallContext,
 	type AfterToolCallResult,
@@ -513,6 +512,7 @@ import {
 	TOOL_EXECUTION_START_CUSTOM_TYPE,
 	type ToolExecutionStartData,
 } from "./exit-diagnostics";
+import { MessageEndPersistenceQueue } from "./message-end-persistence";
 import {
 	type BashExecutionMessage,
 	CONTRACT_ECHO_MESSAGE_TYPE,
@@ -4726,23 +4726,12 @@ export class AgentSession {
 	#createMessageEndPersistenceSlot(message: AgentMessage): MessageEndPersistenceSlot | undefined {
 		return this.#messageEndPersistenceQueue.create(message);
 	}
-SWAP.BLK 4756:
 	async #waitForSessionMessagePersistence(message: AgentMessage): Promise<void> {
 		await this.#messageEndPersistenceQueue.waitFor(message);
 	}
-SWAP.BLK 4762:
+
 	async #waitForMessageEndPersistence(): Promise<void> {
 		await this.#messageEndPersistenceQueue.waitForAll();
-	}
-
-	async #waitForSessionMessagePersistence(message: AgentMessage): Promise<void> {
-		const key = sessionMessagePersistenceKey(message);
-		if (!key) return;
-		await this.#pendingMessageEndPersistence.get(key);
-	}
-
-	async #waitForMessageEndPersistence(): Promise<void> {
-		await this.#messageEndPersistenceTail;
 	}
 
 	#latestAssistantMessage(messages: readonly AgentMessage[]): AssistantMessage | undefined {

@@ -8,7 +8,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { Api, ImageContent, Model } from "@san/ai";
-import { logger } from "@san/utils";
+import { $env, logger } from "@san/utils";
 import { collectContextCheckpoints } from "../../context-steady/checkpoint";
 import { listTurnDigests } from "../../context-steady/session";
 import type { ContextCheckpoint } from "../../context-steady/types";
@@ -22,7 +22,7 @@ import type { EventBus } from "../../utils/event-bus";
 import {
 	abandonRecoveryLease,
 	acquireLease,
-	assertNoForeignLiveSession,
+	assertNoForeignLiveSessionSettled,
 	detectRecovery,
 	executeRecovery,
 	type LeaseRecord,
@@ -63,6 +63,8 @@ import {
 	RpcV2RuntimeSettingsStore,
 	type StoredRpcRuntimeSettings,
 } from "./runtime-settings-store";
+import { diffStats, listSessionChanges } from "./session-changes";
+import { resolveSessionProjectMeta, type SessionProjectMeta } from "./session-project-meta";
 import { type PersistedRpcState, RpcV2StateStore, rpcV2StatePaths } from "./state-store";
 import { TransientEventLimiter } from "./transient-event-limiter";
 
@@ -70,7 +72,7 @@ export interface RpcV2CustomProviderInput {
 	providerId: string;
 	baseUrl: string;
 	api?: Api;
-	auth: "apiKey" | "none";
+	auth?: "apiKey" | "none";
 	discovery?: { type: "openai-models-list" | "proxy" | "litellm" | "ollama" | "llama.cpp" | "lm-studio" };
 	apiKey?: string;
 }
@@ -135,7 +137,12 @@ export interface RpcV2SessionFactory {
 	refreshModels(): Promise<void>;
 	listCustomProviders(): Promise<RpcV2ProviderConfiguration[]>;
 	createCustomProvider(input: RpcV2CustomProviderInput): Promise<RpcV2CatalogMutationResult>;
+	updateCustomProvider(input: RpcV2CustomProviderInput): Promise<RpcV2CatalogMutationResult>;
+	removeCustomProvider(providerId: string): Promise<{ removed: boolean }>;
 	addCustomModel(input: RpcV2CustomModelInput): Promise<RpcV2CatalogMutationResult>;
+	updateCustomModel(input: RpcV2CustomModelInput): Promise<RpcV2CatalogMutationResult>;
+	removeCustomModel(providerId: string, modelId: string): Promise<{ removed: boolean }>;
+	refreshProviderModels(providerId: string): Promise<{ providerId: string; modelCount: number }>;
 }
 
 export interface RpcV2RuntimeCatalog {
@@ -155,7 +162,12 @@ export interface RpcV2RuntimeCatalog {
 	refreshModels(): Promise<void>;
 	listCustomProviders(): Promise<RpcV2ProviderConfiguration[]>;
 	createCustomProvider(input: RpcV2CustomProviderInput): Promise<RpcV2CatalogMutationResult>;
+	updateCustomProvider(input: RpcV2CustomProviderInput): Promise<RpcV2CatalogMutationResult>;
+	removeCustomProvider(providerId: string): Promise<{ removed: boolean }>;
 	addCustomModel(input: RpcV2CustomModelInput): Promise<RpcV2CatalogMutationResult>;
+	updateCustomModel(input: RpcV2CustomModelInput): Promise<RpcV2CatalogMutationResult>;
+	removeCustomModel(providerId: string, modelId: string): Promise<{ removed: boolean }>;
+	refreshProviderModels(providerId: string): Promise<{ providerId: string; modelCount: number }>;
 }
 
 interface ActiveLease {
@@ -243,6 +255,10 @@ type ContentResolver = (params: {
 }) => Promise<ResolvedRunContent>;
 
 const DEFAULT_RETENTION = 100_000;
+const PROJECT_META_CACHE_TTL_MS = 30_000;
+const DIFF_CHANGED_DEBOUNCE_MS = 500;
+/** 写文件类内建工具：完成后触发 diff 统计刷新（G2 pill 数据源）。 */
+const DIFF_TRACKED_TOOLS = new Set(["edit", "write", "apply_patch"]);
 
 export class RpcV2SessionManager {
 	readonly #runtimeId: string;
@@ -257,6 +273,11 @@ export class RpcV2SessionManager {
 	#resourceReleaseHandler?: (resourceIds: readonly string[], sessionId: SessionId) => Promise<void>;
 	#subagentSnapshotProvider: () => SubagentSnapshot[] = () => [];
 	#commandCatalogRevisionProvider?: (session: AgentSession) => Promise<number>;
+	#projectMetaCache = new Map<string, { at: number; meta?: SessionProjectMeta }>();
+	#diffRefreshTimer?: Timer;
+	#diffRefreshRunning = false;
+	#diffRefreshActive?: ActiveSession;
+	#diffSignatures = new Map<string, string>();
 
 	constructor(options: {
 		runtimeId: string;
@@ -270,6 +291,61 @@ export class RpcV2SessionManager {
 		this.#retention = options.retention ?? DEFAULT_RETENTION;
 	}
 
+	/** P-3 项目元数据：同步磁盘解析 + 30s TTL 缓存，避免 session.list 每行重复探测。 */
+	#projectMeta(cwd: string): SessionProjectMeta | undefined {
+		const key = path.resolve(cwd);
+		const cached = this.#projectMetaCache.get(key);
+		const now = Date.now();
+		if (cached && now - cached.at < PROJECT_META_CACHE_TTL_MS) return cached.meta;
+		const meta = resolveSessionProjectMeta(key);
+		if (this.#projectMetaCache.size > 200) this.#projectMetaCache.clear();
+		this.#projectMetaCache.set(key, { at: now, meta });
+		return meta;
+	}
+
+	/** 合并写入突发：500ms 防抖后重算 diff 统计，签名变化才推 session.diff.changed。 */
+	#scheduleDiffRefresh(active: ActiveSession): void {
+		this.#diffRefreshActive = active;
+		if (this.#diffRefreshTimer) return;
+		this.#diffRefreshTimer = setTimeout(() => {
+			this.#diffRefreshTimer = undefined;
+			void this.#runDiffRefresh();
+		}, DIFF_CHANGED_DEBOUNCE_MS);
+	}
+
+	async #runDiffRefresh(): Promise<void> {
+		if (this.#diffRefreshRunning) return;
+		const active = this.#diffRefreshActive;
+		if (!active || this.#active !== active) return;
+		this.#diffRefreshRunning = true;
+		try {
+			const cwd = active.session.sessionManager.getCwd();
+			const listed = await listSessionChanges(cwd);
+			const stats = diffStats(listed);
+			const signature = `${listed.revision}:${stats.totalAdds}:${stats.totalDels}:${stats.files.length}`;
+			if (this.#diffSignatures.get(active.sessionId) === signature) return;
+			this.#diffSignatures.set(active.sessionId, signature);
+			await this.emitCustom(
+				active,
+				"session.diff.changed",
+				{
+					revision: listed.revision,
+					baseRef: stats.baseRef,
+					source: listed.source,
+					files: stats.files,
+					totalAdds: stats.totalAdds,
+					totalDels: stats.totalDels,
+				},
+				{ durability: "transient" },
+			);
+		} catch (error) {
+			logger.warn("rpc-v2 session.diff.changed refresh failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		} finally {
+			this.#diffRefreshRunning = false;
+		}
+	}
 	setOutput(output: OutputFn): void {
 		this.#output = output;
 	}
@@ -859,31 +935,35 @@ export class RpcV2SessionManager {
 	}> {
 		const active = this.assertSession(params.sessionId);
 		const limit = Math.min(Math.max(params.limit ?? 100, 1), 100);
+		const branch = active.session.sessionManager.getBranch();
+		const toolErrors = new Map<string, boolean>();
+		for (const entry of branch) if (entry.type === "message" && entry.message.role === "toolResult") toolErrors.set(entry.message.toolCallId, entry.message.isError === true);
 		const projected: SessionMessage[] = [];
-		for (const message of active.session.messages) {
-			if (!("role" in message)) continue;
-			const role = message.role;
-			if (role !== "user" && role !== "assistant") continue;
-			// 合成注入与 steering 包装不是用户可见的对话轮次，投影里必须剔除，
-			// 否则客户端会把 auto-continue 之类的内部消息渲染成用户发言。
-			if (role === "user" && ("synthetic" in message ? message.synthetic : false)) continue;
-			if (role === "user" && ("steering" in message ? message.steering : false)) continue;
+		for (const entry of branch) {
+			if (entry.type !== "message") continue;
+			const message = entry.message;
+			if (message.role !== "user" && message.role !== "assistant") continue;
+			if (message.role === "user" && (message.synthetic === true || message.steering === true)) continue;
 			const visible = visibleMessageText(message);
 			if (!visible.value) continue;
-			const timestamp = "timestamp" in message && typeof message.timestamp === "number" ? message.timestamp : 0;
-			projected.push({
-				role,
-				timestamp: new Date(timestamp).toISOString(),
-				content: sanitizeRpcText(visible.value),
-				...(visible.truncated ? { truncated: true } : {}),
-			});
+			const content: unknown[] = Array.isArray(message.content) ? message.content : [];
+			const thinking = message.role === "assistant" ? content.filter(part => typeof part === "object" && part !== null && "type" in part && part.type === "thinking" && "thinking" in part && typeof part.thinking === "string").map(part => (part as { thinking: string }).thinking).join("") : "";
+			const toolCalls = message.role === "assistant" ? content.filter(part => typeof part === "object" && part !== null && "type" in part && part.type === "toolCall" && "id" in part && typeof part.id === "string" && "name" in part && typeof part.name === "string").map(part => { const tool = part as { id: string; name: string; intent?: string; summary?: string }; const intent = tool.intent ?? tool.summary; return { toolCallId: tool.id, toolName: tool.name, isError: toolErrors.get(tool.id) ?? false, ...(intent ? { intent: sanitizeRpcText(intent) } : {}) }; }) : [];
+			const timestamp = typeof message.timestamp === "number" ? message.timestamp : 0;
+			// stopReason/errorMessage 让客户端区分“正常结束”与“进程崩溃/中止留下
+			// 的半截消息”——后者正文不完整是数据事实，必须可视化而不是默默渲染。
+			const stopReason =
+				message.role === "assistant" && "stopReason" in message && typeof message.stopReason === "string"
+					? message.stopReason
+					: undefined;
+			const errorMessage =
+				message.role === "assistant" && "errorMessage" in message && typeof message.errorMessage === "string"
+					? message.errorMessage
+					: undefined;
+			projected.push({ role: message.role, timestamp: new Date(timestamp).toISOString(), content: sanitizeRpcText(visible.value), entryId: entry.id, ...(visible.truncated ? { truncated: true } : {}), ...(thinking ? { thinking: sanitizeRpcText(thinking) } : {}), ...(toolCalls.length ? { toolCalls } : {}), ...(stopReason ? { stopReason } : {}), ...(errorMessage ? { errorMessage: sanitizeRpcText(errorMessage) } : {}) });
 		}
 		const offset = decodeCursor(params.cursor);
-		return {
-			messages: projected.slice(offset, offset + limit),
-			nextCursor: offset + limit < projected.length ? encodeCursor(offset + limit) : null,
-			total: projected.length,
-		};
+		return { messages: projected.slice(offset, offset + limit), nextCursor: offset + limit < projected.length ? encodeCursor(offset + limit) : null, total: projected.length };
 	}
 
 	assertSession(sessionId?: string): ActiveSession {
@@ -1011,6 +1091,19 @@ export class RpcV2SessionManager {
 		receipt?: SessionMutationReceipt,
 	): Promise<{ runId: RunId; operationId: OperationId; userMessageId: string; acceptedAt: string }> {
 		const accepted = await this.acceptRun(active, operationId, resolved.resourceIds, receipt);
+		// 桌面端侧栏以标题为主要检索线索，"未命名会话"比一个不完美的标题更糟，
+		// 所以 rpc-v2 不做 TUI 的 low-signal 过滤：任何首条消息都触发命名。
+		if (!active.session.sessionManager.getSessionName() && !$env.PI_NO_TITLE) {
+			active.session
+				.generateTitle(resolved.text)
+				.then(async title => {
+					if (title && !active.session.sessionManager.getSessionName()) {
+						await active.session.setSessionName(title, "auto");
+						await this.emitCustom(active, "session.title.changed", { title }, { operationId: accepted.operationId });
+					}
+				})
+				.catch(error => logger.warn("title-generator: uncaught auto-title error", { sessionId: active.session.sessionId, error: error instanceof Error ? error.message : String(error) }));
+		}
 		this.#launchPrompt(active, accepted.runId, resolved);
 		return accepted;
 	}
@@ -1192,6 +1285,7 @@ export class RpcV2SessionManager {
 		leaseId: LeaseId;
 		summary: SessionSummary;
 		sourceSessionId: SessionId;
+		selectedText: string;
 	}> {
 		if (active.activeRun || active.session.isStreaming) {
 			failRpc({
@@ -1218,6 +1312,7 @@ export class RpcV2SessionManager {
 			leaseId: next.lease?.leaseId as LeaseId,
 			summary: this.#summaryFromActive(next),
 			sourceSessionId,
+			selectedText: result.selectedText,
 		};
 	}
 
@@ -1857,7 +1952,7 @@ export class RpcV2SessionManager {
 		// 的第一方流程不经过这里。
 		if (held) {
 			try {
-				await assertNoForeignLiveSession(sessionFile);
+				await assertNoForeignLiveSessionSettled(sessionFile);
 			} catch (error: unknown) {
 				if (error instanceof Error && error.message === "SESSION_LOCKED") {
 					failRpc({
@@ -2018,6 +2113,7 @@ export class RpcV2SessionManager {
 					await this.#persistAndPublish(active, todoEvent);
 				}
 			}
+			if (event.isError !== true && DIFF_TRACKED_TOOLS.has(event.toolName)) this.#scheduleDiffRefresh(active);
 		} else {
 			await this.#persistAndPublish(active, adapted);
 		}
@@ -2376,6 +2472,7 @@ export class RpcV2SessionManager {
 			sessionId: active.sessionId,
 			title: session.sessionName,
 			cwd: session.sessionManager.getCwd(),
+			...this.#projectMeta(session.sessionManager.getCwd()),
 			createdAt: header?.timestamp ?? active.state.updatedAt,
 			updatedAt: latestEntry?.timestamp ?? active.state.updatedAt,
 			persistedStatus:
@@ -2385,6 +2482,7 @@ export class RpcV2SessionManager {
 				...(active.pendingApprovals.length > 0 ? ["approval" as const] : []),
 				...(active.pendingInteractions.length > 0 ? ["input" as const] : []),
 				...(active.lastRun?.status === "interrupted" ? ["recovery" as const] : []),
+				...(active.lastRun?.status === "failed" ? ["failure" as const] : []),
 			],
 			messageCount: session.messages.length,
 			sizeBytes: file ? safeFileSize(file) : 0,
@@ -2409,8 +2507,9 @@ export class RpcV2SessionManager {
 		return {
 			schemaVersion: 1,
 			sessionId: info.id as SessionId,
-			title: info.title,
 			cwd: info.cwd,
+			...(info.title ? { title: info.title } : {}),
+			...this.#projectMeta(info.cwd),
 			createdAt: info.created.toISOString(),
 			updatedAt: info.modified.toISOString(),
 			persistedStatus: info.status ?? "unknown",

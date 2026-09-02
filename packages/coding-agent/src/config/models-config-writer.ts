@@ -202,6 +202,33 @@ export async function validateCustomProviderConfigDestination(
 	});
 }
 
+/** 更新已有自定义服务商的基础字段（baseUrl/api/auth/discovery），保留 models 与密钥。 */
+export async function updateCustomProviderConfig(
+	providerId: string,
+	patch: { baseUrl?: string; api?: Api; auth?: ProviderAuthMode; discovery?: ProviderDiscovery },
+	options?: { modelsPath?: string },
+): Promise<ModelsConfigWriteResult> {
+	validateProviderId(providerId);
+	const patches: YamlPathPatch[] = [];
+	if (patch.baseUrl !== undefined) {
+		if (!patch.baseUrl.trim()) throw new Error("baseUrl must be a non-empty string");
+		patches.push({ op: "set", path: ["providers", providerId, "baseUrl"], value: patch.baseUrl.trim() });
+	}
+	if (patch.api !== undefined) patches.push({ op: "set", path: ["providers", providerId, "api"], value: patch.api });
+	if (patch.auth !== undefined) patches.push({ op: "set", path: ["providers", providerId, "auth"], value: patch.auth });
+	if (patch.discovery !== undefined)
+		patches.push({ op: "set", path: ["providers", providerId, "discovery"], value: patch.discovery });
+	const configPath = modelsConfigPath(options?.modelsPath);
+	if (patches.length === 0) return { path: configPath, changed: false, persisted: true };
+	const result = await withFileLock(configPath, () =>
+		patchYamlFile(configPath, patches, {
+			validateSource: source => assertProviderExists(source, providerId),
+		}),
+	);
+	return { path: configPath, changed: result.changed, persisted: true };
+}
+
+
 export async function removeCustomProviderConfig(
 	providerId: string,
 	options?: { modelsPath?: string },
@@ -313,6 +340,85 @@ export async function addCustomModelConfig(
 			validateSource: current => {
 				const currentModels = readProviderModels(current, input.provider);
 				if (currentModels.length !== models.length) throw new Error("models.yml changed while adding the model");
+			},
+		});
+	});
+	return { path: configPath, changed: result.changed, persisted: true };
+}
+
+/** 从已有自定义服务商删除单个显式模型。 */
+export async function removeCustomModelConfig(
+	providerId: string,
+	modelId: string,
+	options?: { modelsPath?: string },
+): Promise<{ path: string; changed: boolean; removed: boolean }> {
+	validateProviderId(providerId);
+	const id = modelId.trim();
+	if (!id) throw new Error("Model id must be a non-empty string");
+	const configPath = modelsConfigPath(options?.modelsPath);
+	const result = await withFileLock(configPath, async () => {
+		let source: string;
+		try {
+			source = await Bun.file(configPath).text();
+		} catch (error) {
+			if (isEnoent(error)) throw new Error(`Provider id "${providerId}" does not exist in models.yml`);
+			throw error;
+		}
+		const models = readProviderModels(source, providerId);
+		const index = models.findIndex(candidate => {
+			return Boolean(
+				candidate &&
+					typeof candidate === "object" &&
+					!Array.isArray(candidate) &&
+					(candidate as Record<string, unknown>).id === id,
+			);
+		});
+		if (index < 0) throw new Error(`Model id "${id}" does not exist for provider "${providerId}"`);
+		return patchYamlFile(configPath, [{ op: "delete", path: ["providers", providerId, "models", index] }], {
+			validateSource: current => {
+				const currentModels = readProviderModels(current, providerId);
+				if (currentModels.length !== models.length) throw new Error("models.yml changed while removing the model");
+			},
+		});
+	});
+	return { path: configPath, changed: result.changed, removed: result.changed };
+}
+
+/** 更新自定义服务商下的显式模型：按 id 定位并整体替换该条目（id 不可改）。 */
+export async function updateCustomModelConfig(
+	providerId: string,
+	modelId: string,
+	input: Omit<CustomModelWriteInput, "provider" | "id">,
+	options?: { modelsPath?: string },
+): Promise<ModelsConfigWriteResult> {
+	validateProviderId(providerId);
+	const id = modelId.trim();
+	if (!id) throw new Error("Model id must be a non-empty string");
+	validateCustomModelConfigInput({ ...input, provider: providerId, id });
+	const configPath = modelsConfigPath(options?.modelsPath);
+	const modelValue = buildModelValue({ ...input, id });
+	const result = await withFileLock(configPath, async () => {
+		let source: string;
+		try {
+			source = await Bun.file(configPath).text();
+		} catch (error) {
+			if (isEnoent(error)) throw new Error(`Provider id "${providerId}" does not exist in models.yml`);
+			throw error;
+		}
+		const models = readProviderModels(source, providerId);
+		const index = models.findIndex(candidate => {
+			return Boolean(
+				candidate &&
+					typeof candidate === "object" &&
+					!Array.isArray(candidate) &&
+					(candidate as Record<string, unknown>).id === id,
+			);
+		});
+		if (index < 0) throw new Error(`Model id "${id}" does not exist for provider "${providerId}"`);
+		return patchYamlFile(configPath, [{ op: "set", path: ["providers", providerId, "models", index], value: modelValue }], {
+			validateSource: current => {
+				const currentModels = readProviderModels(current, providerId);
+				if (currentModels.length !== models.length) throw new Error("models.yml changed while updating the model");
 			},
 		});
 	});

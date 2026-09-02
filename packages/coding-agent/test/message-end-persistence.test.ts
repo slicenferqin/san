@@ -20,10 +20,7 @@ describe("MessageEndPersistenceQueue", () => {
 		if (!first || !second) throw new Error("expected persistent message slots");
 
 		const order: string[] = [];
-		await Promise.all([
-			first.persist(() => order.push("first")),
-			second.persist(() => order.push("second")),
-		]);
+		await Promise.all([first.persist(() => order.push("first")), second.persist(() => order.push("second"))]);
 
 		expect(order).toEqual(["first", "second"]);
 		await queue.waitForAll();

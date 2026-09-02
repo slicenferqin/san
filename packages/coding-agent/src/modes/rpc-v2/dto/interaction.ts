@@ -37,7 +37,8 @@ export type InteractionRequestUnion =
 	| InteractionConfirmRequest
 	| InteractionInputRequest
 	| InteractionEditorRequest
-	| InteractionOpenUrlRequest;
+	| InteractionOpenUrlRequest
+	| InteractionPlanRequest;
 
 export interface InteractionSelectRequest {
 	kind: "select";
@@ -74,6 +75,19 @@ export interface InteractionOpenUrlRequest {
 	url: string;
 	launchUrl?: string;
 	instructions?: string;
+}
+
+/** Plan-mode proposal review: the agent's finalized plan, presented for an
+ *  approve/refine/exit decision. `options` carries the decision affordances
+ *  (e.g. approve / refine / exit); a refine decision may carry free-text
+ *  feedback in the response. */
+export interface InteractionPlanRequest {
+	kind: "plan";
+	planFilePath: string;
+	title: string;
+	content: string;
+	truncated?: boolean;
+	options: InteractionOption[];
 }
 
 export interface InteractionOption {
@@ -115,4 +129,5 @@ export type InteractionResponseUnion =
 	| { kind: "selected"; optionIds: string[] }
 	| { kind: "confirmed"; value: boolean }
 	| { kind: "submitted"; value: string }
-	| { kind: "url_handled"; outcome: "opened" | "copied" | "cancelled" };
+	| { kind: "url_handled"; outcome: "opened" | "copied" | "cancelled" }
+	| { kind: "plan_decision"; optionId: string; feedback?: string };

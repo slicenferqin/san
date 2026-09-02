@@ -47,8 +47,23 @@ export interface ServerCapabilities {
 	"host.tools": CapabilityDescriptor;
 	"host.uri": CapabilityDescriptor;
 	"artifact.read": CapabilityDescriptor;
+	"agent.capabilities": CapabilityDescriptor;
+
 	"worktree.lifecycle": CapabilityDescriptor;
 }
+
+// Agent capability management methods are available when an active session exists.
+export const AGENT_CAPABILITY_METHODS = [
+	"mcp.list",
+	"mcp.add",
+	"mcp.remove",
+	"skill.list",
+	"skill.enable",
+	"hook.list",
+	"hook.enable",
+	"memory.list",
+	"memory.delete",
+] as const;
 
 /** Capability keys that Desktop 0.2 requires for startup. */
 export const REQUIRED_CAPABILITIES: ReadonlyArray<keyof ServerCapabilities> = [
@@ -142,6 +157,7 @@ export function buildServerCapabilities(overrides?: Partial<ServerCapabilities>)
 		"host.tools": available(),
 		"host.uri": available(),
 		"artifact.read": available(),
+		"agent.capabilities": available({ methods: AGENT_CAPABILITY_METHODS }),
 		// 默认 unavailable；仅当 mode 确认 core recovery ready 且 create/get/list/archive
 		// 为真实实现后覆盖为 available。details.setupAvailable/applyAvailable 必须为 false
 		// 直到真实 ProcessHost / Git mutation bridge 接入（不可 silent available）。

@@ -1,5 +1,6 @@
 import * as os from "node:os";
 import { sanitizeText } from "@san/utils";
+import { registerWorkflowManager, unregisterWorkflowManager } from "../../coordination/workflow-registry";
 import { getWorkflowToolSession } from "../../session/workflow-host";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
 import {
@@ -42,6 +43,46 @@ function workflowTaskRef(runtime: SlashCommandRuntime): string {
 		: `${runtime.sessionManager.getSessionId()}:root`;
 }
 
+export function handoffApprovedPlan(
+	runtime: TuiSlashCommandRuntime,
+	planContent: string,
+	title: string,
+	model?: string,
+): WorkflowRunHandle {
+	const ctx = runtime.ctx;
+	const state = workflowSession({
+		session: ctx.session,
+		sessionManager: ctx.sessionManager,
+		settings: ctx.settings,
+		cwd: ctx.sessionManager.getCwd(),
+		output: text => {
+			ctx.showStatus(text, { dim: false });
+		},
+		refreshCommands: () => ctx.refreshSlashCommandState(),
+		reloadPlugins: async () => ctx.refreshSlashCommandState(),
+	});
+	return state.service.startApprovedPlanHandoff(planContent, title, {
+		cwd: ctx.sessionManager.getCwd(),
+		taskRef: workflowTaskRef({
+			session: ctx.session,
+			sessionManager: ctx.sessionManager,
+			settings: ctx.settings,
+			cwd: ctx.sessionManager.getCwd(),
+			output: () => {},
+			refreshCommands: () => {},
+			reloadPlugins: async () => {},
+		}),
+		allowIsolatedWrite: ctx.settings.get("san.workflows.allowIsolatedWrite"),
+		allowAdHoc: ctx.settings.get("san.workflows.adHocEnabled"),
+		model,
+		observeRun: handle =>
+			observeRun(handle, state.service, text => {
+				ctx.showStatus(text, { dim: false });
+				ctx.refreshCoordinationActivities?.();
+			}),
+	});
+}
+
 function workflowSession(runtime: SlashCommandRuntime): WorkflowSessionRuntime {
 	const key = runtime.sessionManager;
 	const existing = WORKFLOW_SESSIONS.get(key);
@@ -50,6 +91,7 @@ function workflowSession(runtime: SlashCommandRuntime): WorkflowSessionRuntime {
 	if (existing) {
 		existing.manager.suspendLiveRuns("Workflow suspended because the user switched sessions");
 		existing.unregisterIdentityListener();
+		unregisterWorkflowManager(key, existing.manager);
 		WORKFLOW_SESSIONS.delete(key);
 		void existing.manager.waitForLiveRunsToSettle().then(() => existing.store.close());
 	}
@@ -71,6 +113,7 @@ function workflowSession(runtime: SlashCommandRuntime): WorkflowSessionRuntime {
 				allowIsolatedWrite: policy.allowIsolatedWrite,
 			}),
 	});
+	registerWorkflowManager(key, manager);
 	const state: WorkflowSessionRuntime = {
 		sessionId,
 		service: new WorkflowCommandService({ store, manager }),
@@ -83,6 +126,7 @@ function workflowSession(runtime: SlashCommandRuntime): WorkflowSessionRuntime {
 		if (change.previousSessionId !== state.sessionId) return;
 		state.manager.suspendLiveRuns("Workflow suspended because the user switched sessions");
 		WORKFLOW_SESSIONS.delete(key);
+		unregisterWorkflowManager(key, state.manager);
 		state.unregisterIdentityListener();
 		void state.manager.waitForLiveRunsToSettle().then(() => state.store.close());
 	});
@@ -151,5 +195,6 @@ export async function handleWorkflowTuiCommand(
 		refreshCommands: () => ctx.refreshSlashCommandState(),
 		reloadPlugins: async () => ctx.refreshSlashCommandState(),
 	});
+	ctx.refreshCoordinationActivities?.();
 	ctx.editor.setText("");
 }

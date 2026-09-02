@@ -27,6 +27,26 @@ describe("RPC v2 schema contract", () => {
 		});
 	});
 
+	test("session.changes.revert accepts its write-lease fields", () => {
+		const validParams = {
+			sessionId: "ses_1",
+			leaseId: "lease_1",
+			paths: ["src/app.ts"],
+			meta: { idempotencyKey: "revert-1" },
+		};
+		expect(validateRpcV2Params("session.changes.revert", validParams)).toEqual([]);
+		const missingLeaseParams = {
+			sessionId: validParams.sessionId,
+			paths: validParams.paths,
+			meta: validParams.meta,
+		};
+		expect(validateRpcV2Params("session.changes.revert", missingLeaseParams)).toContainEqual({
+			path: "params.leaseId",
+			reason: "required",
+			message: "Required field is missing",
+		});
+	});
+
 	test("accepts auth interaction responses without a Session lease", () => {
 		expect(
 			validateRpcV2Params("interaction.respond", {

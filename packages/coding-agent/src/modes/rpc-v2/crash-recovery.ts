@@ -1,4 +1,5 @@
 /** RPC v2 lease 与崩溃恢复。Lease 文件跟随 Session 文件，不写入源码目录。 */
+import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@san/utils";
@@ -127,6 +128,41 @@ export async function assertNoForeignLiveSession(sessionFile: string, now: numbe
 		throw error;
 	}
 	if (now - stat.mtimeMs < FOREIGN_LIVE_JOURNAL_FRESH_MS) throw new Error("SESSION_LOCKED");
+}
+
+/**
+ * mtime 一次性检查无法区分"另一个进程正在写入"与"刚被正常关闭/写入了最终状态"
+ * ——后者在 rpc-v2 里极其常见（session.close 会 flush 并删除 lease，随后立刻
+ * 重开），造成长达 5 分钟的 SESSION_LOCKED 误报。这里做两次采样：mtime 在观察
+ * 窗口内继续前进才判定外部活跃；静止的新鲜 mtime 视为已停写，放行交给 lease
+ * 协议裁决。活跃运行期间 journal 持续追加（delta/tool 事件均为 durable），
+ * 1.5s 无追加意味着此刻没有写入流；真正持有 lease 的写入方在 detectRecovery
+ * 阶段就已被拦截，不依赖本检查。
+ */
+export const FOREIGN_LIVE_SETTLE_MS = 1500;
+
+export async function assertNoForeignLiveSessionSettled(
+	sessionFile: string,
+	settleMs: number = FOREIGN_LIVE_SETTLE_MS,
+): Promise<void> {
+	const statJournal = async (): Promise<Stats | undefined> => {
+		try {
+			return await fs.stat(sessionFile);
+		} catch (error: unknown) {
+			if (isEnoent(error)) return undefined;
+			throw error;
+		}
+	};
+	const first = await statJournal();
+	if (!first || Date.now() - first.mtimeMs >= FOREIGN_LIVE_JOURNAL_FRESH_MS) return;
+	const { promise, resolve } = Promise.withResolvers<void>();
+	setTimeout(resolve, settleMs);
+	await promise;
+	const second = await statJournal();
+	if (!second) return;
+	if (second.mtimeMs !== first.mtimeMs || Date.now() - second.mtimeMs < settleMs) {
+		throw new Error("SESSION_LOCKED");
+	}
 }
 
 /** 原子创建 lease；已有活跃进程时返回 SESSION_LOCKED 语义的错误。 */

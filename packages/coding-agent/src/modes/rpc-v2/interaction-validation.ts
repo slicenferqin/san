@@ -83,6 +83,24 @@ export function validateInteractionResponse(
 			validateInput(interaction.interactionId, value.value, request.validation);
 			return { kind: "submitted", value: value.value };
 		}
+		case "plan": {
+			if (value.kind !== "plan_decision" || typeof value.optionId !== "string") {
+				return invalidResponse(
+					interaction.interactionId,
+					"response",
+					"Plan Interaction requires a plan_decision with optionId",
+				);
+			}
+			const option = request.options.find(item => item.id === value.optionId);
+			if (!option) {
+				return invalidResponse(interaction.interactionId, "response.optionId", `Unknown option ID: ${value.optionId}`);
+			}
+			if (option.disabled) {
+				return invalidResponse(interaction.interactionId, "response.optionId", `Option is disabled: ${value.optionId}`);
+			}
+			const feedback = "feedback" in value && typeof value.feedback === "string" ? value.feedback : undefined;
+			return { kind: "plan_decision", optionId: value.optionId, ...(feedback ? { feedback } : {}) };
+		}
 		case "open_url":
 			if (
 				value.kind !== "url_handled" ||

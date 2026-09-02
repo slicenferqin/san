@@ -463,6 +463,9 @@
             "name": {
               "type": "string"
             },
+            "title": {
+              "type": "string"
+            },
             "meta": {
               "type": "object",
               "additionalProperties": true
@@ -471,7 +474,6 @@
           "required": [
             "sessionId",
             "leaseId",
-            "name",
             "meta"
           ],
           "additionalProperties": false
@@ -575,6 +577,88 @@
           ],
           "additionalProperties": false
         },
+        "session.changes.list": {
+          "type": "object",
+          "additionalProperties": false
+        },
+        "session.changes.revert": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "leaseId": {
+              "type": "string"
+            },
+            "paths": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              }
+            },
+            "expectedHashes": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "expectedRevision": {
+              "type": "string"
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "sessionId",
+            "leaseId",
+            "paths",
+            "meta"
+          ],
+          "additionalProperties": false
+        },
+        "session.diff.stats": {
+          "type": "object",
+          "additionalProperties": false
+        },
+        "session.diff.file": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "session.update": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "pinned": {
+              "type": "boolean"
+            },
+            "archived": {
+              "type": "boolean"
+            },
+            "unread": {
+              "type": "boolean"
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "sessionId",
+            "meta"
+          ],
+          "additionalProperties": false
+        },
         "usage.stats": {
           "type": "object",
           "properties": {
@@ -587,6 +671,9 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 500
+            },
+            "currentOnly": {
+              "type": "boolean"
             }
           },
           "additionalProperties": false
@@ -670,6 +757,31 @@
           "required": [
             "sessionId",
             "leaseId",
+            "meta"
+          ],
+          "additionalProperties": false
+        },
+        "session.planMode.set": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "leaseId": {
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "sessionId",
+            "leaseId",
+            "enabled",
             "meta"
           ],
           "additionalProperties": false
@@ -1322,6 +1434,162 @@
           ],
           "additionalProperties": false
         },
+        "mcp.list": {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "enum": [
+                "user",
+                "project"
+              ]
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "mcp.add": {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "enum": [
+                "user",
+                "project"
+              ]
+            },
+            "name": {
+              "type": "string"
+            },
+            "config": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "name",
+            "config"
+          ],
+          "additionalProperties": false
+        },
+        "mcp.remove": {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "enum": [
+                "user",
+                "project"
+              ]
+            },
+            "name": {
+              "type": "string"
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "additionalProperties": false
+        },
+        "skill.list": {
+          "type": "object",
+          "properties": {
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "skill.enable": {
+          "type": "object",
+          "properties": {
+            "providerId": {
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "providerId",
+            "enabled"
+          ],
+          "additionalProperties": false
+        },
+        "hook.list": {
+          "type": "object",
+          "properties": {
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "hook.enable": {
+          "type": "object",
+          "properties": {
+            "providerId": {
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "providerId",
+            "enabled"
+          ],
+          "additionalProperties": false
+        },
+        "memory.list": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "memory.delete": {
+          "type": "object",
+          "properties": {
+            "memoryId": {
+              "type": "string"
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "memoryId"
+          ],
+          "additionalProperties": false
+        },
         "approval.list": {
           "type": "object",
           "properties": {
@@ -1480,6 +1748,40 @@
           "required": [
             "scope",
             "patch",
+            "meta"
+          ],
+          "additionalProperties": false
+        },
+        "approval.preset.list": {
+          "type": "object",
+          "additionalProperties": false
+        },
+        "approval.preset.apply": {
+          "type": "object",
+          "properties": {
+            "presetId": {
+              "type": "string"
+            },
+            "scope": {
+              "type": "string"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "expectedRevision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "presetId",
             "meta"
           ],
           "additionalProperties": false
@@ -2404,6 +2706,8 @@
             "session.closed",
             "session.deleted",
             "session.title.changed",
+            "session.summary.changed",
+            "session.diff.changed",
             "session.recovery.available",
             "session.recovered",
             "session.corrupt",
@@ -2548,10 +2852,16 @@
       "session.handoff",
       "session.export",
       "session.stats",
+      "session.changes.list",
+      "session.changes.revert",
+      "session.diff.stats",
+      "session.diff.file",
+      "session.update",
       "usage.stats",
       "session.recover",
       "session.delete",
       "session.close",
+      "session.planMode.set",
       "run.start",
       "run.steer",
       "run.followUp",
@@ -2577,12 +2887,23 @@
       "integration.get",
       "integration.setEnabled",
       "integration.refresh",
+      "mcp.list",
+      "mcp.add",
+      "mcp.remove",
+      "skill.list",
+      "skill.enable",
+      "hook.list",
+      "hook.enable",
+      "memory.list",
+      "memory.delete",
       "approval.list",
       "approval.decide",
       "approval.rules.list",
       "approval.rules.revoke",
       "approval.policy.get",
       "approval.policy.update",
+      "approval.preset.list",
+      "approval.preset.apply",
       "interaction.list",
       "interaction.respond",
       "interaction.cancel",
@@ -2618,6 +2939,8 @@
       "session.closed",
       "session.deleted",
       "session.title.changed",
+      "session.summary.changed",
+      "session.diff.changed",
       "session.recovery.available",
       "session.recovered",
       "session.corrupt",

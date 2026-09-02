@@ -5,9 +5,11 @@ import { SessionManager } from "@san/coding-agent";
 import {
 	type DiscoveredWorkflowSource,
 	type WorkflowAgentBridge,
+	type WorkflowAgentRequest,
 	type WorkflowCommandContext,
 	WorkflowCommandService,
 	WorkflowManager,
+	type WorkflowRun,
 	type WorkflowRunHandle,
 	WorkflowStore,
 	workflowSourceHash,
@@ -90,7 +92,9 @@ interface Harness {
 	service: WorkflowCommandService;
 	context: WorkflowCommandContext;
 	getCalls(): number;
+	getRun(runId: string): WorkflowRun | undefined;
 	getObserved(): WorkflowRunHandle | undefined;
+	getRequest(): WorkflowAgentRequest | undefined;
 	setNow(value: string): void;
 }
 
@@ -110,10 +114,12 @@ function createHarness(sourceText = managedSource()): Harness {
 	const session = SessionManager.inMemory(root);
 	let calls = 0;
 	let observed: WorkflowRunHandle | undefined;
+	let latestRequest: WorkflowAgentRequest | undefined;
 	let nowValue: string = "2026-07-11T00:10:00.000Z";
 	let id = 0;
 	const bridge: WorkflowAgentBridge = {
 		run: async request => {
+			latestRequest = request;
 			calls++;
 			return {
 				agentId: `agent-${calls}`,
@@ -151,7 +157,9 @@ function createHarness(sourceText = managedSource()): Harness {
 		service,
 		context,
 		getCalls: () => calls,
+		getRun: runId => manager.getRun(runId),
 		getObserved: () => observed,
+		getRequest: () => latestRequest,
 		setNow: value => {
 			nowValue = value;
 		},
@@ -490,6 +498,46 @@ describe("Workflow command service", () => {
 		await expect(harness.service.execute("draft linked.json", harness.context)).rejects.toThrow(
 			"must resolve inside the current project scope",
 		);
+		expect(harness.getCalls()).toBe(0);
+	});
+
+	it("hands off the exact approved plan snapshot through one bounded Ad-hoc run", async () => {
+		const harness = createHarness();
+		const plan = "# Release plan\n\nInspect the release, then report the result.";
+		harness.context.model = "anthropic/claude-sonnet-4-5:high";
+
+		const handle = harness.service.startApprovedPlanHandoff(plan, "Release plan", harness.context);
+
+		expect(harness.getObserved()).toBe(handle);
+		expect(requiredStore().listAdHocDrafts()).toEqual([]);
+		expect(requiredStore().listApprovals({ workflowKind: "ad_hoc" })).toEqual([]);
+		expect((await handle.completion).status).toBe("completed");
+		expect(harness.getCalls()).toBe(1);
+		const request = harness.getRequest();
+		expect(request?.prompt).toBe(plan);
+		expect(request?.allowedTools).toContain("yield");
+		expect(request?.writeMode).toBe("read_only");
+		expect(request?.remainingTokenBudget).toBe(120000);
+		expect(request?.model).toBe("anthropic/claude-sonnet-4-5:high");
+		const run = harness.getRun(handle.runId);
+		expect(run?.workflowKind).toBe("ad_hoc");
+		expect(run?.workflowName).toBe("plan-release-plan");
+		expect(run?.budget.limits).toMatchObject({
+			agentLimit: 1,
+			concurrency: 1,
+			tokenLimit: 120000,
+			durationMs: 1800000,
+		});
+	});
+
+	it("rejects plan handoff when Ad-hoc Workflows are disabled", () => {
+		const harness = createHarness();
+		harness.context.allowAdHoc = false;
+
+		expect(() => harness.service.startApprovedPlanHandoff("# Plan\n\nDo it.", "Plan", harness.context)).toThrow(
+			"san.workflows.adHocEnabled",
+		);
+		expect(requiredStore().listAdHocDrafts()).toEqual([]);
 		expect(harness.getCalls()).toBe(0);
 	});
 

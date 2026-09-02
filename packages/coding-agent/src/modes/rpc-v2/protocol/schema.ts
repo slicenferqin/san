@@ -19,6 +19,8 @@ const sessionEventTypes = [
 	"session.closed",
 	"session.deleted",
 	"session.title.changed",
+	"session.summary.changed",
+	"session.diff.changed",
 	"session.recovery.available",
 	"session.recovered",
 	"session.corrupt",
@@ -121,6 +123,82 @@ const errorReasons = [
 ] as const;
 
 const paramsByMethod: Record<string, JsonSchema> = {
+	"mcp.list": {
+		type: "object",
+		properties: {
+			scope: { enum: ["user", "project"] },
+			meta: objectSchema,
+		},
+		additionalProperties: false,
+	},
+	"mcp.add": {
+		type: "object",
+		properties: {
+			scope: { enum: ["user", "project"] },
+			name: stringSchema,
+			config: objectSchema,
+			meta: objectSchema,
+		},
+		required: ["name", "config"],
+		additionalProperties: false,
+	},
+	"mcp.remove": {
+		type: "object",
+		properties: {
+			scope: { enum: ["user", "project"] },
+			name: stringSchema,
+			meta: objectSchema,
+		},
+		required: ["name"],
+		additionalProperties: false,
+	},
+	"skill.list": {
+		type: "object",
+		properties: { meta: objectSchema },
+		additionalProperties: false,
+	},
+	"skill.enable": {
+		type: "object",
+		properties: {
+			providerId: stringSchema,
+			enabled: { type: "boolean" },
+			meta: objectSchema,
+		},
+		required: ["providerId", "enabled"],
+		additionalProperties: false,
+	},
+	"hook.list": {
+		type: "object",
+		properties: { meta: objectSchema },
+		additionalProperties: false,
+	},
+	"hook.enable": {
+		type: "object",
+		properties: {
+			providerId: stringSchema,
+			enabled: { type: "boolean" },
+			meta: objectSchema,
+		},
+		required: ["providerId", "enabled"],
+		additionalProperties: false,
+	},
+	"memory.list": {
+		type: "object",
+		properties: {
+			limit: { type: "integer", minimum: 1, maximum: 1000 },
+			meta: objectSchema,
+		},
+		additionalProperties: false,
+	},
+	"memory.delete": {
+		type: "object",
+		properties: {
+			memoryId: stringSchema,
+			meta: objectSchema,
+		},
+		required: ["memoryId"],
+		additionalProperties: false,
+	},
 	initialize: {
 		type: "object",
 		properties: {
@@ -250,10 +328,44 @@ const paramsByMethod: Record<string, JsonSchema> = {
 	},
 	"session.rename": {
 		type: "object",
-		properties: { sessionId: stringSchema, leaseId: stringSchema, name: stringSchema, meta: objectSchema },
-		required: ["sessionId", "leaseId", "name", "meta"],
+		properties: { sessionId: stringSchema, leaseId: stringSchema, name: stringSchema, title: stringSchema, meta: objectSchema },
+		required: ["sessionId", "leaseId", "meta"],
 		additionalProperties: false,
 	},
+	"session.changes.list": { type: "object", additionalProperties: false },
+	"session.changes.revert": {
+		type: "object",
+		properties: {
+			sessionId: stringSchema,
+			leaseId: stringSchema,
+			paths: { type: "array", minItems: 1, items: stringSchema },
+			expectedHashes: objectSchema,
+			expectedRevision: stringSchema,
+			meta: objectSchema,
+		},
+		required: ["sessionId", "leaseId", "paths", "meta"],
+		additionalProperties: false,
+	},
+	"session.diff.stats": { type: "object", additionalProperties: false },
+	"session.diff.file": {
+		type: "object",
+		properties: { path: stringSchema },
+		required: ["path"],
+		additionalProperties: false,
+	},
+	"session.update": {
+		type: "object",
+		properties: {
+			sessionId: stringSchema,
+			pinned: { type: "boolean" },
+			archived: { type: "boolean" },
+			unread: { type: "boolean" },
+			meta: objectSchema,
+		},
+		required: ["sessionId", "meta"],
+		additionalProperties: false,
+	},
+
 	"session.branch": {
 		type: "object",
 		properties: {
@@ -295,6 +407,7 @@ const paramsByMethod: Record<string, JsonSchema> = {
 		properties: {
 			days: { type: "integer", minimum: 1, maximum: 90 },
 			sessionLimit: { type: "integer", minimum: 1, maximum: 500 },
+			currentOnly: { type: "boolean" },
 		},
 		additionalProperties: false,
 	},
@@ -329,6 +442,17 @@ const paramsByMethod: Record<string, JsonSchema> = {
 			meta: objectSchema,
 		},
 		required: ["sessionId", "leaseId", "meta"],
+		additionalProperties: false,
+	},
+	"session.planMode.set": {
+		type: "object",
+		properties: {
+			sessionId: stringSchema,
+			leaseId: stringSchema,
+			enabled: { type: "boolean" },
+			meta: objectSchema,
+		},
+		required: ["sessionId", "leaseId", "enabled", "meta"],
 		additionalProperties: false,
 	},
 	"run.start": {
@@ -654,6 +778,21 @@ const paramsByMethod: Record<string, JsonSchema> = {
 		required: ["scope", "patch", "meta"],
 		additionalProperties: false,
 	},
+	"approval.preset.list": { type: "object", additionalProperties: false },
+	"approval.preset.apply": {
+		type: "object",
+		properties: {
+			presetId: stringSchema,
+			scope: stringSchema,
+			sessionId: stringSchema,
+			cwd: stringSchema,
+			expectedRevision: { type: "integer", minimum: 0 },
+			meta: objectSchema,
+		},
+		required: ["presetId", "meta"],
+		additionalProperties: false,
+	},
+
 	"interaction.list": {
 		type: "object",
 		properties: { sessionId: stringSchema, status: stringSchema },

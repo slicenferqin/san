@@ -18,7 +18,7 @@ import type { Theme } from "../../modes/theme/theme";
 import type { ApprovalPolicyResolution } from "./approval-rules";
 import { generateFingerprint } from "./approval-rules";
 import type { ApprovalPolicySnapshot, ApprovalRequest, ApprovalScope, ApprovalTarget, JsonValue } from "./dto/approval";
-import type { InteractionRequest } from "./dto/interaction";
+import type { InteractionOption, InteractionRequest } from "./dto/interaction";
 import type { ApprovalId, InteractionId, RunId, SessionId, ToolCallId } from "./protocol/ids";
 import { newApprovalId, newInteractionId, newRunId } from "./protocol/ids";
 import { sanitizeRpcText } from "./redaction";
@@ -194,6 +194,39 @@ export class RpcV2UIContext implements ExtensionUIContext {
 			if (typeof result === "object" && result !== null && "optionIds" in result) {
 				const ids = (result as { optionIds: string[] }).optionIds;
 				return ids.length > 0 ? labels[Number.parseInt(ids[0], 10)] : undefined;
+			}
+			return undefined;
+		});
+	}
+
+	/** Plan-mode proposal review (rpc-v2 plan mode): presents the plan document
+	 *  and awaits an approve/refine/exit decision. Returns undefined when the
+	 *  review was dismissed or the session closed while pending. */
+	requestPlanDecision(params: {
+		title: string;
+		planFilePath: string;
+		planTitle: string;
+		content: string;
+		truncated?: boolean;
+		options: InteractionOption[];
+	}): Promise<{ optionId: string; feedback?: string } | undefined> {
+		if (this.#closedError) return Promise.reject(this.#closedError);
+		return this.#handleInteraction(
+			{
+				kind: "plan",
+				planFilePath: params.planFilePath,
+				title: params.planTitle,
+				content: params.content,
+				...(params.truncated ? { truncated: true } : {}),
+				options: params.options,
+			},
+			params.title,
+		).then(result => {
+			if (typeof result === "object" && result !== null && "kind" in result && result.kind === "plan_decision") {
+				const decision = result as Record<string, unknown>;
+				if (typeof decision.optionId !== "string") return undefined;
+				const feedback = typeof decision.feedback === "string" ? decision.feedback : undefined;
+				return { optionId: decision.optionId, ...(feedback ? { feedback } : {}) };
 			}
 			return undefined;
 		});

@@ -16,6 +16,7 @@ import { getAgentDir, logger, prompt, readLines, VERSION } from "@san/utils";
 import { collectContextCheckpoints } from "../../context-steady/checkpoint";
 import { listTurnDigests } from "../../context-steady/session";
 import type { ContextCheckpoint, TurnDigest } from "../../context-steady/types";
+import type { MCPServerConfig } from "../../mcp/types";
 import resourceInputTemplate from "../../prompts/rpc-v2/resource-input.md" with { type: "text" };
 import { normalizeSanLoopMode } from "../../san-loop/types";
 import type { AgentSession } from "../../session/agent-session";
@@ -25,6 +26,18 @@ import { parseConfiguredThinkingLevel } from "../../thinking";
 import type { TodoPhase, TodoStatus } from "../../tools/todo";
 import type { EventBus } from "../../utils/event-bus";
 import {
+	addMcpCapability,
+	deleteMemory,
+	listHookCapabilities,
+	listMcpCapabilities,
+	listMemories,
+	listSkillCapabilities,
+	removeMcpCapability,
+	setHookProviderEnabled,
+	setSkillProviderEnabled,
+} from "./agent-capabilities";
+import {
+	APPROVAL_PRESETS,
 	type ApprovalPolicyContext,
 	ApprovalPolicyRevisionError,
 	type ApprovalPolicyScope,
@@ -98,6 +111,7 @@ import { validateRpcV2Params } from "./protocol/validate";
 import { sanitizeRpcError } from "./redaction";
 import { ResourceUploadError, ResourceUploadManager } from "./resource-upload";
 import { RuntimeSettingsRevisionError } from "./runtime-settings-store";
+import { diffStats, listSessionChanges, readChangeFile, revertSessionChanges } from "./session-changes";
 import {
 	type ResolvedRunContent,
 	type RpcV2CustomModelInput,
@@ -106,10 +120,13 @@ import {
 	RpcV2SessionManager,
 	type SessionMutationReceipt,
 } from "./session-manager";
+import { SessionMetadataStore } from "./session-metadata";
 import { DesktopActionSetupHost } from "./setup-host-bridge";
 import { RpcV2SubagentController } from "./subagent-controller";
 import { RpcV2UIContext } from "./ui-context";
+import { PlanModeController } from "./plan-mode-controller";
 import { buildUsageAnalytics } from "./usage-analytics";
+import { GitWorktreeApplyPort } from "./worktree-apply-port";
 import { WorktreeError, WorktreeLifecycleService } from "./worktree-lifecycle";
 
 // ============================================================================
@@ -117,7 +134,7 @@ import { WorktreeError, WorktreeLifecycleService } from "./worktree-lifecycle";
 // ============================================================================
 const IDEMPOTENCY_EXEMPT_METHODS = new Set(["server.shutdown", "stream.configure", "host.capabilities.update"]);
 const ATOMIC_SESSION_RECEIPT_METHODS = new Set(["run.start", "approval.decide", "queue.cancel"]);
-const RUNTIME_ONLY_IDEMPOTENCY_METHODS = new Set(["provider.config.create", "provider.model.add"]);
+const RUNTIME_ONLY_IDEMPOTENCY_METHODS = new Set(["provider.config.create", "provider.config.update", "provider.config.delete", "provider.model.add", "provider.model.update", "provider.model.remove"]);
 /** Durable receipts owned by WorktreeLifecycleService — skip outer IdempotencyStore. */
 const WORKTREE_SERVICE_IDEMPOTENCY_METHODS = new Set([
 	"worktree.create",
@@ -502,12 +519,14 @@ interface DispatchContext {
 		droppedTransientEvents: number;
 	};
 	getUIContext: () => RpcV2UIContext | undefined;
+	planController: PlanModeController;
 	hostToolBridge: RpcV2HostToolBridge;
 	idempotency: IdempotencyStore;
 	sessionCreateReceipts: SessionCreateReceiptStore;
 	resources: ResourceUploadManager;
 	artifacts: RpcArtifactStore;
 	approvalRules: ApprovalRuleStore;
+	sessionMetadata: SessionMetadataStore;
 	auth: AuthLoginManager;
 	subagents: RpcV2SubagentController;
 	integrations: RpcV2IntegrationCatalog;
@@ -999,6 +1018,19 @@ async function dispatchMethod(ctx: DispatchContext, method: string, params: unkn
 	}
 }
 
+function applySessionMetadata(
+	store: SessionMetadataStore,
+	summaries: Array<{ sessionId: string; pinned?: boolean; archived?: boolean; unread?: boolean }>,
+): void {
+	for (const summary of summaries) {
+		const entry = store.get(summary.sessionId);
+		if (!entry) continue;
+		if (entry.pinned !== undefined) summary.pinned = entry.pinned;
+		if (entry.archived !== undefined) summary.archived = entry.archived;
+		if (entry.unread !== undefined) summary.unread = entry.unread;
+	}
+}
+
 async function dispatchKnownMethod(
 	ctx: DispatchContext,
 	method: string,
@@ -1029,12 +1061,20 @@ async function dispatchKnownMethod(
 		"auth.login.start",
 		"auth.login.cancel",
 		"provider.config.create",
+		"provider.config.update",
+		"provider.config.delete",
 		"provider.model.add",
+		"provider.model.update",
+		"provider.model.remove",
+		"provider.models.refresh",
 		"usage.stats",
 		"approval.rules.list",
 		"approval.rules.revoke",
 		"approval.policy.get",
 		"approval.policy.update",
+		"approval.preset.list",
+		"approval.preset.apply",
+		"session.update",
 		"interaction.respond",
 		"interaction.cancel",
 		"host.capabilities.update",
@@ -1057,6 +1097,64 @@ async function dispatchKnownMethod(
 	const activeSession = session as AgentSession;
 
 	switch (method) {
+		// MCP capabilities
+		case "mcp.list": {
+			const p = params as { scope?: "user" | "project" } | undefined;
+			return await listMcpCapabilities(sessionManager.assertSession().session.sessionManager.getCwd(), p?.scope);
+		}
+		case "mcp.add": {
+			const p = params as { scope?: "user" | "project"; name?: string; config?: MCPServerConfig } | undefined;
+			if (!p?.name || !p.config) return invalidParamsError("mcp.add requires name and config");
+			return await addMcpCapability(
+				sessionManager.assertSession().session.sessionManager.getCwd(),
+				p.name,
+				p.config,
+				p.scope,
+			);
+		}
+		case "mcp.remove": {
+			const p = params as { scope?: "user" | "project"; name?: string } | undefined;
+			if (!p?.name) return invalidParamsError("mcp.remove requires name");
+			return await removeMcpCapability(
+				sessionManager.assertSession().session.sessionManager.getCwd(),
+				p.name,
+				p.scope,
+			);
+		}
+		// Skill capabilities
+		case "skill.list":
+			return await listSkillCapabilities(sessionManager.assertSession().session.sessionManager.getCwd());
+		case "skill.enable": {
+			const p = params as { providerId?: string; enabled?: boolean } | undefined;
+			if (!p?.providerId || typeof p.enabled !== "boolean")
+				return invalidParamsError("skill.enable requires providerId and enabled");
+			return setSkillProviderEnabled(p.providerId, p.enabled);
+		}
+		// Hook capabilities
+		case "hook.list":
+			return await listHookCapabilities(sessionManager.assertSession().session.sessionManager.getCwd());
+		case "hook.enable": {
+			const p = params as { providerId?: string; enabled?: boolean } | undefined;
+			if (!p?.providerId || typeof p.enabled !== "boolean")
+				return invalidParamsError("hook.enable requires providerId and enabled");
+			return setHookProviderEnabled(p.providerId, p.enabled);
+		}
+		// Memory
+		case "memory.list": {
+			const p = params as { limit?: number } | undefined;
+			return await listMemories(p?.limit ?? 50);
+		}
+		case "memory.delete": {
+			const p = params as { memoryId?: string } | undefined;
+			if (!p?.memoryId) return invalidParamsError("memory.delete requires memoryId");
+			if (!(await deleteMemory(p.memoryId)))
+				return createRpcError({
+					reason: "RESOURCE_NOT_FOUND",
+					category: "not_found",
+					message: `Memory not found: ${p.memoryId}`,
+				});
+			return { deleted: true, memoryId: p.memoryId };
+		}
 		// Server methods
 		case "initialize":
 			return handleInitialize(state, ctx.hostToolBridge, ctx.worktrees, ctx.setupHost, params);
@@ -1068,8 +1166,8 @@ async function dispatchKnownMethod(
 			return handleShutdown(state, params);
 
 		// Session methods
-		case "session.list":
-			return sessionManager.listSessions(
+		case "session.list": {
+			const result = await sessionManager.listSessions(
 				params as {
 					query?: string;
 					cwd?: string;
@@ -1079,6 +1177,9 @@ async function dispatchKnownMethod(
 					cursor?: string;
 				},
 			);
+			applySessionMetadata(ctx.sessionMetadata, result.sessions);
+			return result;
+		}
 		case "session.get": {
 			const p = params as { sessionId?: string } | undefined;
 			if (!p?.sessionId) {
@@ -1088,7 +1189,9 @@ async function dispatchKnownMethod(
 					message: "session.get requires sessionId",
 				});
 			}
-			return sessionManager.getSession(p.sessionId);
+			const summary = await sessionManager.getSession(p.sessionId);
+			applySessionMetadata(ctx.sessionMetadata, [summary]);
+			return summary;
 		}
 		case "session.create": {
 			const p = params as
@@ -1172,6 +1275,26 @@ async function dispatchKnownMethod(
 				types: p.types,
 			});
 		}
+		case "session.changes.list":
+			return await listSessionChanges(sessionManager.assertSession().session.sessionManager.getCwd());
+		case "session.changes.revert": {
+			const p = params as { paths?: string[]; expectedHashes?: Record<string, string>; expectedRevision?: string };
+			if (!p?.paths) return invalidParamsError("session.changes.revert requires paths", "paths");
+			return await revertSessionChanges(
+				sessionManager.assertSession().session.sessionManager.getCwd(),
+				p.paths,
+				p.expectedHashes,
+				p.expectedRevision,
+			);
+		}
+		case "session.diff.file": {
+			const p = params as { path?: string };
+			if (!p?.path) return invalidParamsError("session.diff.file requires path", "path");
+			return await readChangeFile(sessionManager.assertSession().session.sessionManager.getCwd(), p.path);
+		}
+		case "session.diff.stats":
+			return diffStats(await listSessionChanges(sessionManager.assertSession().session.sessionManager.getCwd()));
+
 		case "session.messages.list": {
 			const p = params as { sessionId?: string; cursor?: string; limit?: number } | undefined;
 			if (!p?.sessionId) return invalidParamsError("session.messages.list requires sessionId", "sessionId");
@@ -1196,6 +1319,15 @@ async function dispatchKnownMethod(
 				abortRunning: (params as { runningBehavior?: string } | undefined)?.runningBehavior === "abort",
 			});
 			return { closed: true };
+		case "session.planMode.set": {
+			const p = params as { sessionId?: string; enabled?: boolean } | undefined;
+			if (typeof p?.enabled !== "boolean")
+				return invalidParamsError("session.planMode.set requires enabled: boolean", "enabled");
+			const active = sessionManager.assertSession(p.sessionId);
+			if (p.enabled) await ctx.planController.enter(active.sessionId, active.session);
+			else await ctx.planController.exit(active.sessionId, active.session);
+			return { enabled: ctx.planController.isEnabled(active.session) };
+		}
 
 		// Run methods
 		case "run.start": {
@@ -1311,6 +1443,7 @@ async function dispatchKnownMethod(
 					modelId: m.id,
 					displayName: m.name,
 					contextWindow: m.contextWindow,
+					maxTokens: m.maxTokens,
 					input: m.input,
 					reasoning: m.reasoning,
 					available: availableKeys.has(`${m.provider}\0${m.id}`),
@@ -1747,10 +1880,11 @@ async function dispatchKnownMethod(
 		case "session.stats":
 			return activeSession.getSessionStats();
 		case "usage.stats": {
-			const p = params as { days?: number; sessionLimit?: number } | undefined;
+			const p = params as { days?: number; sessionLimit?: number; currentOnly?: boolean } | undefined;
 			return await buildUsageAnalytics({
 				...(p?.days !== undefined ? { days: p.days } : {}),
 				...(p?.sessionLimit !== undefined ? { sessionLimit: p.sessionLimit } : {}),
+				...(p?.currentOnly !== undefined ? { currentOnly: p.currentOnly } : {}),
 				...(session
 					? {
 							activeSession: {
@@ -1764,15 +1898,37 @@ async function dispatchKnownMethod(
 			});
 		}
 		case "session.rename": {
-			const p = params as { name?: string } | undefined;
-			if (!p?.name?.trim()) {
+			const p = params as { name?: string; title?: string } | undefined;
+			const name = p?.name ?? p?.title;
+			if (!name?.trim()) {
 				return createRpcError({
 					reason: "INVALID_PARAMS",
 					category: "validation",
-					message: "session.rename requires non-empty name",
+					message: "session.rename requires non-empty name or title",
 				});
 			}
-			return await sessionManager.rename(sessionManager.assertSession(), p.name);
+			return await sessionManager.rename(sessionManager.assertSession(), name);
+		}
+
+		case "session.update": {
+			const p = params as { sessionId?: string; pinned?: boolean; archived?: boolean; unread?: boolean } | undefined;
+			if (!p?.sessionId) return invalidParamsError("session.update requires sessionId", "sessionId");
+			if (p.pinned === undefined && p.archived === undefined && p.unread === undefined) {
+				return invalidParamsError("session.update requires at least one of pinned, archived, or unread");
+			}
+			const summary = await sessionManager.getSession(p.sessionId);
+			const entry = await ctx.sessionMetadata.update(p.sessionId, {
+				pinned: p.pinned,
+				archived: p.archived,
+				unread: p.unread,
+			});
+			applySessionMetadata(ctx.sessionMetadata, [summary]);
+			if (sessionManager.currentSessionId === p.sessionId) {
+				await sessionManager.emitCustom(sessionManager.assertSession(p.sessionId), "session.summary.changed", {
+					summary,
+				});
+			}
+			return { summary, updatedAt: entry.updatedAt };
 		}
 		case "session.branch": {
 			const p = params as { entryId?: string; title?: string } | undefined;
@@ -2035,6 +2191,27 @@ async function dispatchKnownMethod(
 			});
 		}
 
+		case "approval.preset.list":
+			return { presets: APPROVAL_PRESETS };
+
+		case "approval.preset.apply": {
+			const p = params as
+				| { presetId?: string; scope?: string; sessionId?: string; cwd?: string; expectedRevision?: number }
+				| undefined;
+			const preset = APPROVAL_PRESETS.find(item => item.presetId === p?.presetId);
+			if (!preset) return invalidParamsError(`approval.preset.apply requires a known presetId`, "presetId");
+			const scope = parseApprovalPolicyScope(p?.scope ?? "session");
+			if (!scope)
+				return invalidParamsError("approval.preset.apply scope must be session, workspace, or global", "scope");
+			const policy = await ctx.approvalRules.updateDefaults({
+				scope,
+				context: approvalPolicyContextFromParams(sessionManager, p),
+				patch: preset.defaults,
+				expectedRevision: p?.expectedRevision,
+			});
+			return { presetId: preset.presetId, policy };
+		}
+
 		// Integration catalog
 		case "integration.list": {
 			const p = params as { kinds?: string[]; statuses?: string[]; cursor?: string; limit?: number } | undefined;
@@ -2233,6 +2410,87 @@ async function dispatchKnownMethod(
 				});
 			}
 		}
+		case "provider.config.update": {
+			const catalog = sessionManager.runtimeCatalog;
+			if (!catalog) return invalidParamsError("Runtime model catalog is unavailable");
+			const p = params as
+				| {
+						providerId?: string;
+						baseUrl?: string;
+						api?: Api;
+						auth?: RpcV2CustomProviderInput["auth"];
+						discovery?: RpcV2CustomProviderInput["discovery"];
+						apiKey?: string;
+				  }
+				| undefined;
+			if (!p?.providerId?.trim())
+				return invalidParamsError("provider.config.update requires providerId", "providerId");
+			if (!p.baseUrl?.trim()) return invalidParamsError("provider.config.update requires baseUrl", "baseUrl");
+			try {
+				return await catalog.updateCustomProvider({
+					providerId: p.providerId,
+					baseUrl: p.baseUrl,
+					...(p.auth ? { auth: p.auth } : {}),
+					...(p.api ? { api: p.api } : {}),
+					...(p.discovery ? { discovery: p.discovery } : {}),
+					...(p.apiKey !== undefined ? { apiKey: p.apiKey } : {}),
+				});
+			} catch (error: unknown) {
+				return createRpcError({
+					reason: "INVALID_PARAMS",
+					category: "validation",
+					message: sanitizeRpcError(error, { maxChars: 500 }),
+				});
+			}
+		}
+		case "provider.config.delete": {
+			const catalog = sessionManager.runtimeCatalog;
+			if (!catalog) return invalidParamsError("Runtime model catalog is unavailable");
+			const p = params as { providerId?: string } | undefined;
+			if (!p?.providerId?.trim()) {
+				return invalidParamsError("provider.config.delete requires providerId", "providerId");
+			}
+			try {
+				return await catalog.removeCustomProvider(p.providerId);
+			} catch (error: unknown) {
+				return createRpcError({
+					reason: "INVALID_PARAMS",
+					category: "validation",
+					message: sanitizeRpcError(error, { maxChars: 500 }),
+				});
+			}
+		}
+		case "provider.model.remove": {
+			const catalog = sessionManager.runtimeCatalog;
+			if (!catalog) return invalidParamsError("Runtime model catalog is unavailable");
+			const p = params as { providerId?: string; modelId?: string } | undefined;
+			if (!p?.providerId?.trim()) return invalidParamsError("provider.model.remove requires providerId", "providerId");
+			if (!p.modelId?.trim()) return invalidParamsError("provider.model.remove requires modelId", "modelId");
+			try {
+				return await catalog.removeCustomModel(p.providerId, p.modelId);
+			} catch (error: unknown) {
+				return createRpcError({
+					reason: "INVALID_PARAMS",
+					category: "validation",
+					message: sanitizeRpcError(error, { maxChars: 500 }),
+				});
+			}
+		}
+		case "provider.models.refresh": {
+			const catalog = sessionManager.runtimeCatalog;
+			if (!catalog) return invalidParamsError("Runtime model catalog is unavailable");
+			const p = params as { providerId?: string } | undefined;
+			if (!p?.providerId?.trim()) return invalidParamsError("provider.models.refresh requires providerId", "providerId");
+			try {
+				return await catalog.refreshProviderModels(p.providerId);
+			} catch (error: unknown) {
+				return createRpcError({
+					reason: "INVALID_PARAMS",
+					category: "validation",
+					message: sanitizeRpcError(error, { maxChars: 500 }),
+				});
+			}
+		}
 		case "provider.model.add": {
 			const catalog = sessionManager.runtimeCatalog;
 			if (!catalog) return invalidParamsError("Runtime model catalog is unavailable");
@@ -2264,6 +2522,46 @@ async function dispatchKnownMethod(
 			};
 			try {
 				return await catalog.addCustomModel(input);
+			} catch (error: unknown) {
+				return createRpcError({
+					reason: "INVALID_PARAMS",
+					category: "validation",
+					message: sanitizeRpcError(error, { maxChars: 500 }),
+				});
+			}
+		}
+		case "provider.model.update": {
+			const catalog = sessionManager.runtimeCatalog;
+			if (!catalog) return invalidParamsError("Runtime model catalog is unavailable");
+			const p = params as
+				| {
+						providerId?: string;
+						modelId?: string;
+						displayName?: string;
+						api?: Api;
+						contextWindow?: number;
+						maxTokens?: number;
+						reasoning?: boolean;
+						supportsImage?: boolean;
+						supportsTools?: boolean;
+				  }
+				| undefined;
+			if (!p?.providerId?.trim())
+				return invalidParamsError("provider.model.update requires providerId", "providerId");
+			if (!p.modelId?.trim()) return invalidParamsError("provider.model.update requires modelId", "modelId");
+			const input: RpcV2CustomModelInput = {
+				providerId: p.providerId,
+				modelId: p.modelId,
+				...(p.displayName !== undefined ? { displayName: p.displayName } : {}),
+				...(p.api ? { api: p.api } : {}),
+				...(p.contextWindow !== undefined ? { contextWindow: p.contextWindow } : {}),
+				...(p.maxTokens !== undefined ? { maxTokens: p.maxTokens } : {}),
+				...(p.reasoning !== undefined ? { reasoning: p.reasoning } : {}),
+				...(p.supportsImage !== undefined ? { supportsImage: p.supportsImage } : {}),
+				...(p.supportsTools !== undefined ? { supportsTools: p.supportsTools } : {}),
+			};
+			try {
+				return await catalog.updateCustomModel(input);
 			} catch (error: unknown) {
 				return createRpcError({
 					reason: "INVALID_PARAMS",
@@ -2598,6 +2896,10 @@ export async function runRpcV2Mode(factory: RpcV2SessionFactory, _eventBus?: Eve
 	// recoveryReady 初始 false，仅 ensureLoaded 成功后从 service.capabilityDescriptor 读取
 	let worktreeRecoveryReady = false;
 	let uiContext: RpcV2UIContext | undefined;
+	const planController = new PlanModeController({
+		getUIContext: () => uiContext,
+		emit: data => sessionManager.enqueueExternalEvent("planMode.changed", data, "durable"),
+	});
 	const setupHost = new DesktopActionSetupHost({
 		hostToolBridge,
 		getUIContext: () => uiContext,
@@ -2619,6 +2921,7 @@ export async function runRpcV2Mode(factory: RpcV2SessionFactory, _eventBus?: Eve
 		emit: worktreeEmit,
 		emitEvent: worktreeEmit,
 		setupPort: setupHost,
+		applyPort: new GitWorktreeApplyPort(),
 	});
 	await worktrees.ensureLoaded();
 	worktreeRecoveryReady = worktrees.capabilityDescriptor().recoveryReady === true;
@@ -2629,6 +2932,8 @@ export async function runRpcV2Mode(factory: RpcV2SessionFactory, _eventBus?: Eve
 
 	const approvalRules = new ApprovalRuleStore();
 	await approvalRules.load();
+	const sessionMetadata = new SessionMetadataStore();
+	await sessionMetadata.load();
 	const runtimeCatalog = sessionManager.runtimeCatalog;
 	if (!runtimeCatalog) throw new Error("RPC v2 requires a runtime model and provider catalog");
 	const auth = new AuthLoginManager({ runtimeId: state.runtimeId, catalog: runtimeCatalog, output: enqueueOutput });
@@ -2686,12 +2991,14 @@ export async function runRpcV2Mode(factory: RpcV2SessionFactory, _eventBus?: Eve
 			droppedTransientEvents: sessionManager.droppedTransientEventCount,
 		}),
 		getUIContext: () => uiContext,
+		planController,
 		hostToolBridge,
 		idempotency,
 		sessionCreateReceipts,
 		resources,
 		artifacts,
 		approvalRules,
+		sessionMetadata,
 		auth,
 		subagents,
 		integrations,

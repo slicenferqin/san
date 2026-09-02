@@ -2,7 +2,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir, isEnoent, Snowflake } from "@san/utils";
 import { withFileLock } from "../../config/file-lock";
-import type { ApprovalPolicySnapshot, ApprovalScope, PermissionPolicySnapshot, PermissionRule } from "./dto/approval";
+import type {
+	ApprovalPolicySnapshot,
+	ApprovalPreset,
+	ApprovalScope,
+	PermissionPolicySnapshot,
+	PermissionRule,
+} from "./dto/approval";
 import type { ApprovalId } from "./protocol/ids";
 
 export type ApprovalPolicyScope = "session" | "workspace" | "global";
@@ -30,6 +36,34 @@ export interface ApprovalPolicyResolution {
 }
 
 const BUILTIN_DEFAULTS: ApprovalPolicyDefaults = { read: "allow", write: "ask", exec: "ask" };
+
+/** 服务端持有的权限预设；桌面端按 presetId 渲染，不得自行猜测 policy 映射。 */
+export const APPROVAL_PRESETS: readonly ApprovalPreset[] = [
+	{
+		presetId: "confirm_changes",
+		label: "Confirm before change",
+		description: "Reads are allowed; edits and commands ask before running.",
+		defaults: { read: "allow", write: "ask", exec: "ask" },
+	},
+	{
+		presetId: "automatic_edits",
+		label: "Automatic edits",
+		description: "Reads and file edits are allowed; commands still ask.",
+		defaults: { read: "allow", write: "allow", exec: "ask" },
+	},
+	{
+		presetId: "plan_only",
+		label: "Plan only",
+		description: "Reads are allowed; edits and commands are denied.",
+		defaults: { read: "allow", write: "deny", exec: "deny" },
+	},
+	{
+		presetId: "full_access",
+		label: "Full access",
+		description: "Reads, edits, and commands all run without asking.",
+		defaults: { read: "allow", write: "allow", exec: "allow" },
+	},
+];
 
 /** Generate a canonical fingerprint for an approval request. */
 export function generateFingerprint(params: {

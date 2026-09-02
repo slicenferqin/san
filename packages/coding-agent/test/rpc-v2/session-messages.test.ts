@@ -88,19 +88,24 @@ describe("RPC v2 session.messages.list", () => {
 	test("projects visible user and assistant turns in transcript order", async () => {
 		const { manager, session, sessionId } = await createMessagesFixture();
 		try {
-			session.agent.state.messages.push(
-				{ role: "user", content: "第一个请求", timestamp: 1_700_000_000_000 },
-				assistantMessage("第一个回答", 1_700_000_001_000),
-			);
+			session.sessionManager.appendMessage({ role: "user", content: "第一个请求", timestamp: 1_700_000_000_000 });
+			session.sessionManager.appendMessage(assistantMessage("第一个回答", 1_700_000_001_000));
 
 			const result = await manager.listMessages({ sessionId });
 
 			expect(result.total).toBe(2);
 			expect(result.nextCursor).toBeNull();
-			expect(result.messages).toEqual([
+			expect(
+				result.messages.map(message => ({
+					role: message.role,
+					timestamp: message.timestamp,
+					content: message.content,
+				})),
+			).toEqual([
 				{ role: "user", timestamp: new Date(1_700_000_000_000).toISOString(), content: "第一个请求" },
 				{ role: "assistant", timestamp: new Date(1_700_000_001_000).toISOString(), content: "第一个回答" },
 			]);
+			for (const message of result.messages) expect(message.entryId).toBeString();
 		} finally {
 			await manager.close({ abortRunning: true });
 			await session.dispose();
@@ -110,26 +115,32 @@ describe("RPC v2 session.messages.list", () => {
 	test("drops synthetic, steering, tool-result, and empty-text messages", async () => {
 		const { manager, session, sessionId } = await createMessagesFixture();
 		try {
-			session.agent.state.messages.push(
-				{ role: "user", content: "真实请求", timestamp: 1_700_000_000_000 },
-				{ role: "user", content: "auto-continue", timestamp: 1_700_000_000_100, synthetic: true },
-				{ role: "user", content: "插话", timestamp: 1_700_000_000_200, steering: true },
-				{ role: "user", content: [], timestamp: 1_700_000_000_300 },
-				{
-					role: "toolResult",
-					toolCallId: "call_1",
-					toolName: "bash",
-					content: [{ type: "text", text: "工具输出" }],
-					isError: false,
-					timestamp: 1_700_000_000_400,
-				},
-			);
+			session.sessionManager.appendMessage({ role: "user", content: "真实请求", timestamp: 1_700_000_000_000 });
+			session.sessionManager.appendMessage({
+				role: "user",
+				content: "auto-continue",
+				timestamp: 1_700_000_000_100,
+				synthetic: true,
+			});
+			session.sessionManager.appendMessage({
+				role: "user",
+				content: "插话",
+				timestamp: 1_700_000_000_200,
+				steering: true,
+			});
+			session.sessionManager.appendMessage({ role: "user", content: [], timestamp: 1_700_000_000_300 });
+			session.sessionManager.appendMessage({
+				role: "toolResult",
+				toolCallId: "call_1",
+				toolName: "bash",
+				content: [{ type: "text", text: "工具输出" }],
+				isError: false,
+				timestamp: 1_700_000_000_400,
+			});
 
 			const result = await manager.listMessages({ sessionId });
 
-			expect(result.messages).toEqual([
-				{ role: "user", timestamp: new Date(1_700_000_000_000).toISOString(), content: "真实请求" },
-			]);
+			expect(result.messages.map(message => message.content)).toEqual(["真实请求"]);
 			expect(result.total).toBe(1);
 		} finally {
 			await manager.close({ abortRunning: true });
@@ -141,7 +152,7 @@ describe("RPC v2 session.messages.list", () => {
 		const { manager, session, sessionId } = await createMessagesFixture();
 		try {
 			for (let index = 0; index < 5; index++) {
-				session.agent.state.messages.push({
+				session.sessionManager.appendMessage({
 					role: "user",
 					content: `请求 ${index}`,
 					timestamp: 1_700_000_000_000 + index,
