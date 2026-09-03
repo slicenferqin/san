@@ -7,7 +7,7 @@
  * provider-facing compatibility wrapper and model/provider gating.
  */
 
-import { isDeepseekModelIdOrName } from "@san/catalog/identity";
+import { isDeepseekModelIdOrName, isMimoModelIdOrName } from "@san/catalog/identity";
 
 import { createInbandScanner } from "../dialect/factory";
 import { ThinkingInbandScanner } from "../dialect/thinking";
@@ -23,7 +23,7 @@ export interface HealedToolCall {
 	readonly arguments: string;
 }
 
-export type StreamMarkupHealingPattern = "kimi" | "dsml" | "thinking";
+export type StreamMarkupHealingPattern = "kimi" | "dsml" | "qwenxml" | "thinking";
 
 export interface StreamMarkupHealingOptions {
 	readonly pattern: StreamMarkupHealingPattern;
@@ -64,7 +64,9 @@ export class StreamMarkupHealing {
 				? createInbandScanner("kimi")
 				: options.pattern === "dsml"
 					? createInbandScanner("xml", { xmlTagset: "dsml" })
-					: undefined;
+					: options.pattern === "qwenxml"
+						? createInbandScanner("xml", { xmlTagset: "qwen" })
+						: undefined;
 	}
 
 	get pattern(): StreamMarkupHealingPattern {
@@ -212,6 +214,11 @@ function generateHealedToolCallId(): string {
 	return `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
 }
 
+/** Cheap model/provider gate for MiMo Qwen-XML tool-call mirrors. */
+export function modelMayLeakQwenXmlToolCalls(_provider: string, modelId: string): boolean {
+	return isMimoModelIdOrName(modelId);
+}
+
 /** Cheap model/provider gate for Kimi-K2 chat-template token leaks. */
 export function modelMayLeakKimiToolCalls(provider: string, modelId: string): boolean {
 	if (provider === "kimi-code" || provider === "moonshot") return true;
@@ -241,6 +248,7 @@ export function modelMayLeakDsmlToolCalls(provider: string, modelId: string): bo
  * idioms (e.g. a Gemini ` ```thinking ` fence on OpenRouter) are always healed.
  */
 export function getStreamMarkupHealingPattern(provider: string, modelId: string): StreamMarkupHealingPattern {
+	if (modelMayLeakQwenXmlToolCalls(provider, modelId)) return "qwenxml";
 	if (modelMayLeakKimiToolCalls(provider, modelId)) return "kimi";
 	if (modelMayLeakDsmlToolCalls(provider, modelId)) return "dsml";
 	return "thinking";

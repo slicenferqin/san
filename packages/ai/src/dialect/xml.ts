@@ -2,6 +2,7 @@ import type { Message, ToolCall } from "../types";
 import { AnthropicInbandScanner } from "./anthropic";
 import { buildArgShapes, type ToolArgShape } from "./coercion";
 import { DeepSeekInbandScanner } from "./deepseek";
+import { QwenXmlInbandScanner } from "./qwenxml";
 import {
 	escapeXmlAttr,
 	renderDelimitedThinking,
@@ -24,7 +25,11 @@ export class XmlInbandScanner implements InbandScanner {
 
 	constructor(options: InbandScannerOptions = {}) {
 		this.#inner =
-			options.xmlTagset === "dsml" ? new DeepSeekInbandScanner(options) : new AnthropicInbandScanner(options);
+			options.xmlTagset === "dsml"
+				? new DeepSeekInbandScanner(options)
+				: options.xmlTagset === "qwen"
+					? new QwenXmlInbandScanner()
+					: new AnthropicInbandScanner(options);
 	}
 
 	feed(text: string): InbandScanEvent[] {

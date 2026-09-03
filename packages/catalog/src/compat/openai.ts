@@ -111,6 +111,11 @@ function detectStreamMarkupHealingPattern(
 	modelId: string,
 	baseUrl: string,
 ): OpenAIStreamMarkupHealingPattern | undefined {
+	// MiMo（opencode-go 等 OpenAI 兼容网关上的 mimo-v2.x）会把结构化 tool_calls
+	// 镜像成 Qwen 风格 `<tool_call><function=…>` XML 文本副本，需要专属语法剥离。
+	if (isMimoModelIdOrName(modelId)) {
+		return "qwenxml";
+	}
 	if (provider === "kimi-code" || provider === "moonshot" || /kimi[-/_.]?k2/i.test(modelId)) {
 		return "kimi";
 	}

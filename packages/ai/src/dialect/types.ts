@@ -48,8 +48,8 @@ export interface InbandScannerOptions {
 	stringArgs?: (toolName: string) => ReadonlySet<string>;
 	/** Full tool schemas for schema-driven dialects such as GLM XML and pi-native. */
 	tools?: readonly InbandTool[];
-	/** XML only: parse pipe-wrapped DeepSeek DSML tags vs plain Anthropic invoke/parameter tags. */
-	xmlTagset?: "anthropic" | "dsml";
+	/** XML only: parse pipe-wrapped DeepSeek DSML tags, plain Anthropic invoke/parameter tags, or Qwen `<function=>` call blocks. */
+	xmlTagset?: "anthropic" | "dsml" | "qwen";
 	/** Emit thinking markers as thinking events instead of visible text when the dialect defines them. */
 	parseThinking?: boolean;
 }
