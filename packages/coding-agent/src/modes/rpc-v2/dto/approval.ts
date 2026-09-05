@@ -120,6 +120,18 @@ export interface PermissionRule {
 }
 
 // ============================================================================
+// Approval Preset
+// ============================================================================
+
+/** Server-owned permission preset; clients render these instead of guessing policy mappings. */
+export interface ApprovalPreset {
+	presetId: string;
+	label: string;
+	description: string;
+	defaults: Record<"read" | "write" | "exec", "ask" | "allow" | "deny">;
+}
+
+// ============================================================================
 // JSON value helper
 // ============================================================================
 

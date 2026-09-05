@@ -255,6 +255,57 @@ function buildToolStubMaterials(
 			});
 		}
 	}
+	// 完全相同的 read 源身份只保留一份 provider 原文。若 quality gate
+	// 保护了多个相同副本，保留最新受保护副本并把其余替换为可重读 stub：
+	// 内容快照一致，所以这是表示去重而不是语义省略。journal/tool pair 不变。
+	if (agedOffload) {
+		const duplicateGroups = new Map<string, typeof sourceIndex.toolPairs>();
+		for (const pair of sourceIndex.toolPairs) {
+			const identity = pair.readIdentity;
+			if (pair.toolName !== "read" || !pair.complete || pair.resultEntryId === undefined || identity === undefined)
+				continue;
+			const key = `${identity.path}\0${identity.selector}\0${identity.snapshot}`;
+			const group = duplicateGroups.get(key);
+			if (group) group.push(pair);
+			else duplicateGroups.set(key, [pair]);
+		}
+		for (const group of duplicateGroups.values()) {
+			if (group.length < 2) continue;
+			const retainedPair =
+				group.findLast(
+					pair =>
+						pair.resultEntryId !== undefined &&
+						(protectedRefs.has(pair.resultEntryId) ||
+							(pair.assistantEntryId !== undefined && protectedRefs.has(pair.assistantEntryId))),
+				) ?? group.at(-1);
+			const retainedResultEntryId = retainedPair?.resultEntryId;
+			if (!retainedResultEntryId) continue;
+			for (const pair of group) {
+				if (pair.resultEntryId === undefined || pair.resultEntryId === retainedResultEntryId) continue;
+				if (stubbedResultRefs.has(pair.resultEntryId)) continue;
+				const identity = pair.readIdentity;
+				if (!identity) continue;
+				stubbedResultRefs.add(pair.resultEntryId);
+				materials.push({
+					audit: {
+						materialId: materialId("tool_stub", pair.resultEntryId),
+						kind: "tool_pair",
+						representation: "evidence_stub",
+						entryRefs: [pair.resultEntryId],
+						tokenEstimate: TOOL_STUB_TOKEN_ESTIMATE,
+						reason: `duplicate read output for ${identity.path}`,
+					},
+					toolCallId: pair.toolCallId,
+					resultEntryId: pair.resultEntryId,
+					toolName: "read",
+					path: identity.path,
+					stubKind: "duplicate",
+					coveredEntryRefs: [],
+				});
+			}
+		}
+	}
+
 	// 常规年龄卸载档(M4):保护集之外、超出最小体积的旧完整工具输出
 	// oldest-first 换成可重读引用 stub,直到预算耗尽。消息保留、仅内容
 	// 降级;原文永在 journal。live tail 已在保护集内,近期结果不受影响。

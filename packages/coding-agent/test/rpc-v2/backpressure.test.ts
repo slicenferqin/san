@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { BackpressureWriter, type RpcWritable } from "@san/coding-agent/modes/rpc-v2/backpressure-writer";
+import {
+	BackpressureWriter,
+	isClientDisconnectError,
+	type RpcWritable,
+} from "@san/coding-agent/modes/rpc-v2/backpressure-writer";
 
 class ControlledWritable implements RpcWritable {
 	readonly lines: string[] = [];
@@ -23,6 +27,20 @@ class ControlledWritable implements RpcWritable {
 		if (!drain) throw new Error("Writer did not wait for drain");
 		drain();
 	}
+}
+
+/** 底层 stream 可模拟断管：write 抛 EPIPE，或正常写入后回压等待 drain。 */
+class BrokenPipeWritable implements RpcWritable {
+	readonly lines: string[] = [];
+	writeCount = 0;
+	broken = false;
+	write(chunk: string): boolean {
+		this.writeCount++;
+		if (this.broken) throw Object.assign(new Error("broken pipe"), { code: "EPIPE" });
+		this.lines.push(chunk);
+		return false;
+	}
+	once(_event: "drain", _listener: () => void): void {}
 }
 
 class TwoStageWritable implements RpcWritable {
@@ -146,5 +164,88 @@ describe("RPC v2 backpressure writer", () => {
 			{ id: "progress-3" },
 		]);
 		expect(writer.droppedCoalescedCount).toBe(1);
+	});
+
+	test("treats a synchronous EPIPE as client disconnect and heals the write chain", async () => {
+		const stream = new BrokenPipeWritable();
+		stream.broken = true;
+		const writer = new BackpressureWriter({ stream });
+
+		// 断管写失败被内部治愈：调用方拿到的 promise 收敛，而不是 rejected 扩散成 unhandled rejection。
+		await expect(writer.write({ id: "frame-1" })).resolves.toBeUndefined();
+		expect(writer.state).toBe("disconnected");
+		expect(writer.disconnectError).toBeInstanceOf(Error);
+		expect((writer.disconnectError as NodeJS.ErrnoException).code).toBe("EPIPE");
+
+		// 后续写入是 no-op，不再触碰底层 stream。
+		const writeCountAfter = stream.writeCount;
+		await expect(writer.write({ id: "frame-2" })).resolves.toBeUndefined();
+		expect(stream.writeCount).toBe(writeCountAfter);
+
+		// close 幂等且不再抛 EPIPE。
+		await writer.close();
+		await writer.close();
+		expect(writer.pendingCount).toBe(0);
+	});
+
+	test("disconnect() from an async stdout error releases a blocked write and drops queued transient frames", async () => {
+		const stream = new BrokenPipeWritable();
+		const writer = new BackpressureWriter({ stream, maxQueueSize: 1 });
+		const durable = writer.write({ id: "durable" });
+		await Promise.resolve();
+		const transient = writer.write({ id: "progress" }, { durability: "transient", coalesceKey: "run:1" });
+		expect(writer.pendingCount).toBe(1);
+		expect(writer.queuedTransientCount).toBe(1);
+
+		const epipe = Object.assign(new Error("broken pipe"), { code: "EPIPE" });
+		writer.disconnect(epipe);
+
+		expect(writer.state).toBe("disconnected");
+		expect(writer.disconnectError).toBe(epipe);
+		// drain 等待者被释放：不死等 drain，也不 flush transient 队列。
+		await Promise.all([durable, transient]);
+		expect(writer.pendingCount).toBe(0);
+		expect(writer.queuedTransientCount).toBe(0);
+		// 只有 durable 曾触达底层 stream。
+		expect(stream.lines.map(line => JSON.parse(line))).toEqual([{ id: "durable" }]);
+
+		await writer.close();
+		await writer.close();
+		expect(writer.state).toBe("disconnected");
+	});
+
+	test("non-disconnect write failures stay observable and poison the writer", async () => {
+		const stream: RpcWritable = {
+			write: () => {
+				throw new Error("unexpected serialization failure");
+			},
+			once: () => undefined,
+		};
+		const writer = new BackpressureWriter({ stream });
+
+		await expect(writer.write({ id: "x" })).rejects.toThrow("unexpected serialization failure");
+		expect(writer.state).toBe("failed");
+		// 后续写入以相同错误拒绝，而不是被吞掉。
+		await expect(writer.write({ id: "y" })).rejects.toThrow("unexpected serialization failure");
+		expect(writer.pendingCount).toBe(0);
+		// close 同样保留失败语义。
+		await expect(writer.close()).rejects.toThrow("unexpected serialization failure");
+	});
+
+	test("classifies transport-close errors by code with string fallback", () => {
+		const cases: Array<[unknown, boolean]> = [
+			[Object.assign(new Error("broken pipe"), { code: "EPIPE" }), true],
+			[Object.assign(new Error("conn reset"), { code: "ECONNRESET" }), true],
+			[Object.assign(new Error("x"), { code: "ERR_STREAM_DESTROYED" }), true],
+			[Object.assign(new Error("x"), { code: "ERR_STREAM_WRITE_AFTER_END" }), true],
+			[new Error("some broken pipe elsewhere"), true],
+			[new Error("stream destroyed during read"), true],
+			[new Error("write after end"), true],
+			[new Error("unexpected serialization failure"), false],
+			["EPIPE string, not an Error", false],
+		];
+		for (const [error, expected] of cases) {
+			expect(isClientDisconnectError(error)).toBe(expected);
+		}
 	});
 });

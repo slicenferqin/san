@@ -58,6 +58,8 @@ export type SessionEventType =
 	| "session.closed"
 	| "session.deleted"
 	| "session.title.changed"
+	| "session.summary.changed"
+	| "session.diff.changed"
 	| "session.recovery.available"
 	| "session.recovered"
 	| "session.corrupt"
@@ -123,6 +125,7 @@ export type SessionEventType =
 	| "retry.completed"
 	| "retry.fallback.applied"
 	| "retry.fallback.succeeded"
+	| "thinking.changed"
 	// 逻辑模型路由生命周期是增量事件；现有具体模型重试事件继续保留。
 	| "model.route.resolved"
 	| "model.route.changed"
@@ -138,6 +141,10 @@ export type SessionEventType =
 // ============================================================================
 // Event Data Types (selected key events)
 // ============================================================================
+export interface ThinkingChangedData {
+	configured: string | null;
+	effective: string | null;
+}
 
 export interface RunAcceptedData {
 	runId: RunId;
@@ -191,6 +198,8 @@ export interface ToolStartedData {
 	toolName: string;
 	category?: string;
 	intent?: string;
+	/** Compact command/path projection of the call arguments (display label). */
+	args?: { command?: string; path?: string };
 }
 
 export interface ToolCompletedData {

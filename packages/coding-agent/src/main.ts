@@ -43,7 +43,10 @@ import { ModelsConfigFile } from "./config/models-config";
 import {
 	addCustomModelConfig,
 	listCustomProviderConfigSummaries,
+	removeCustomModelConfig,
 	removeCustomProviderConfig,
+	updateCustomModelConfig,
+	updateCustomProviderConfig,
 	validateCustomProviderConfigDestination,
 	writeCustomProviderConfig,
 } from "./config/models-config-writer";
@@ -445,7 +448,9 @@ export function createRpcV2SessionFactory(args: RpcV2SessionFactoryOptions): Rpc
 			authStorage: args.authStorage,
 			modelRegistry: args.modelRegistry,
 			eventBus: new EventBus(),
-			hasUI: false,
+			// rpc-v2 客户端是交互式 UI（审批/Interaction 齐备）：开启 hasUI 以注册
+			// ask 等交互工具；其 UI 调用经 setToolUIContext 桥接为 interaction.requested。
+			hasUI: true,
 			titleSystemPrompt,
 		};
 	};
@@ -472,14 +477,15 @@ export function createRpcV2SessionFactory(args: RpcV2SessionFactoryOptions): Rpc
 			const apiKey = input.apiKey?.trim() ?? "";
 			if (input.auth === "apiKey" && !apiKey) throw new Error("API-key providers require a non-empty API key");
 			if (input.auth === "none" && apiKey) throw new Error("Keyless providers must not include an API key");
+			const auth = input.auth ?? "apiKey";
 			if (args.authStorage.listStoredCredentials(providerId).length > 0) {
 				throw new Error(`Credentials already exist for provider id "${providerId}"`);
 			}
 			const providerConfig = {
 				name: providerId,
 				baseUrl: input.baseUrl.trim(),
-				...(input.api ? { api: input.api } : {}),
-				auth: input.auth,
+				api: input.api ?? "openai-completions",
+				auth,
 				...(input.discovery ? { discovery: input.discovery } : {}),
 			};
 			await validateCustomProviderConfigDestination(providerConfig);
@@ -517,6 +523,33 @@ export function createRpcV2SessionFactory(args: RpcV2SessionFactoryOptions): Rpc
 				throw error;
 			}
 		},
+		updateCustomProvider: async input => {
+			const providerId = input.providerId.trim().toLowerCase();
+			const apiKey = input.apiKey?.trim() ?? "";
+			if (apiKey && input.auth === "none") throw new Error("Keyless providers must not include an API key");
+			const result = await updateCustomProviderConfig(providerId, {
+				baseUrl: input.baseUrl,
+				...(input.api ? { api: input.api } : {}),
+				...(input.auth ? { auth: input.auth } : {}),
+				...(input.discovery ? { discovery: input.discovery } : {}),
+			});
+			if (apiKey) await args.authStorage.upsertLoginApiKey(providerId, apiKey);
+			await args.modelRegistry.refresh("offline");
+			if (input.discovery) await args.modelRegistry.refreshProvider(providerId, "online");
+			const modelCount = args.modelRegistry.getAll().filter(model => model.provider === providerId).length;
+			return { providerId, path: result.path, changed: result.changed, modelCount };
+		},
+		removeCustomProvider: async providerId => {
+			const id = providerId.trim().toLowerCase();
+			await removeCustomProviderConfig(id);
+			try {
+				if (args.authStorage.listStoredCredentials(id).length > 0) await args.authStorage.remove(id);
+			} catch (error) {
+				logger.warn("RPC provider credential removal failed", { providerId: id, error: String(error) });
+			}
+			await args.modelRegistry.refresh("offline");
+			return { removed: true };
+		},
 		addCustomModel: async input => {
 			const providerId = input.providerId.trim().toLowerCase();
 			const modelId = input.modelId.trim();
@@ -524,7 +557,7 @@ export function createRpcV2SessionFactory(args: RpcV2SessionFactoryOptions): Rpc
 				provider: providerId,
 				id: modelId,
 				...(input.displayName?.trim() ? { name: input.displayName.trim() } : {}),
-				...(input.api ? { api: input.api } : {}),
+				...(input.api ? { api: input.api } : { api: "openai-completions" as const }),
 				...(input.contextWindow !== undefined ? { contextWindow: input.contextWindow } : {}),
 				...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
 				...(input.reasoning !== undefined ? { reasoning: input.reasoning } : {}),
@@ -534,6 +567,34 @@ export function createRpcV2SessionFactory(args: RpcV2SessionFactoryOptions): Rpc
 			await args.modelRegistry.refresh("offline");
 			const modelCount = args.modelRegistry.getAll().filter(model => model.provider === providerId).length;
 			return { providerId, modelId, path: result.path, changed: result.changed, modelCount };
+		},
+		updateCustomModel: async input => {
+			const providerId = input.providerId.trim().toLowerCase();
+			const modelId = input.modelId.trim();
+			const result = await updateCustomModelConfig(providerId, modelId, {
+				...(input.displayName !== undefined ? { name: input.displayName.trim() } : {}),
+				...(input.api ? { api: input.api } : { api: "openai-completions" as const }),
+				...(input.contextWindow !== undefined ? { contextWindow: input.contextWindow } : {}),
+				...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
+				...(input.reasoning !== undefined ? { reasoning: input.reasoning } : {}),
+				input: input.supportsImage ? ["text", "image"] : ["text"],
+				...(input.supportsTools !== undefined ? { supportsTools: input.supportsTools } : {}),
+			});
+			await args.modelRegistry.refresh("offline");
+			const modelCount = args.modelRegistry.getAll().filter(model => model.provider === providerId).length;
+			return { providerId, modelId, path: result.path, changed: result.changed, modelCount };
+		},
+		removeCustomModel: async (providerId, modelId) => {
+			const id = providerId.trim().toLowerCase();
+			await removeCustomModelConfig(id, modelId);
+			await args.modelRegistry.refresh("offline");
+			return { removed: true };
+		},
+		refreshProviderModels: async providerId => {
+			const id = providerId.trim().toLowerCase();
+			await args.modelRegistry.refreshProvider(id, "online");
+			const modelCount = args.modelRegistry.getAll().filter(model => model.provider === id).length;
+			return { providerId: id, modelCount };
 		},
 		create: async params => {
 			const sessionManager = SessionManager.create(params.cwd, args.sessionDir);
@@ -1340,7 +1401,16 @@ export async function runRootCommand(
 		Bun.env.SAN_NO_PTY = "1";
 		Bun.env.PI_NO_PTY = "1";
 	}
-	if (parsedArgs.noTitle || parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui" || parsedArgs.mode === "acp") {
+	// rpc v1 / rpc-ui / acp clients historically managed their own session
+	// naming, so protocol modes suppressed auto-titling. rpc-v2 owns naming
+	// server-side (session.title.changed + session.rename), and its desktop
+	// client depends on server-generated titles — don't force PI_NO_TITLE
+	// there. An explicit user-set PI_NO_TITLE is still honored everywhere.
+	const isRpcV2 = (parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui") && parsedArgs.rpcProtocol === "2";
+	if (
+		parsedArgs.noTitle ||
+		((parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui" || parsedArgs.mode === "acp") && !isRpcV2)
+	) {
 		Bun.env.PI_NO_TITLE = "1";
 	}
 	const mode = parsedArgs.mode || "text";

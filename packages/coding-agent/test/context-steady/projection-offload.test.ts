@@ -163,6 +163,47 @@ describe("M4 projection offload", () => {
 		);
 	});
 
+	test("stubs the older exact duplicate read while preserving journal entries", () => {
+		const duplicateText = "same source snapshot ".repeat(500);
+		const entries = asEntries([
+			toolCallAssistant("a1", "c1", "read", "src/app.ts"),
+			toolResultEntry("r1", "c1", "read", duplicateText, 1),
+			toolCallAssistant("a2", "c2", "read", "src/app.ts"),
+			toolResultEntry("r2", "c2", "read", duplicateText, 2),
+			messageEntry("u1", { role: "user", content: "Continue", timestamp: 3, provider: "x", model: "x" }),
+		]);
+		const messages = asMessages(entries.map(messageOf));
+		const plan = buildContextPlan({
+			entries,
+			sessionId: "s1",
+			requestKey: "r1",
+			epochId: "e1",
+			promptGeneration: 2,
+			settings: SETTINGS,
+			contextWindow: 500_000,
+			nonMessageTokens: 20_000,
+			currentPromptEntryRefs: ["u1"],
+			// Every pair is quality-protected; identical snapshots still retain one exact representative.
+			baseRequiredEntryRefs: ["a1", "r1", "a2", "r2"],
+			tokenEstimateByEntryRef: new Map([
+				["r1", 1_000],
+				["r2", 1_000],
+			]),
+			toolOutputOffload: { minTokens: 2_000 },
+		});
+
+		expect(
+			plan.materials.filter(material => "stubKind" in material && material.stubKind === "duplicate"),
+		).toHaveLength(1);
+		const projected = materializeContextPlanMessages(messages, entries, plan);
+		const body = JSON.stringify(projected);
+		expect(body.split(duplicateText).length - 1).toBe(1);
+		expect(body).toContain("src/app.ts");
+		// Projection-only rewrite must not alter the append-only journal.
+		expect(JSON.stringify(entries)).toContain(duplicateText);
+		expect(auditProjectionCoverage(projected, entries, plan).missingProjectableRefs).toEqual([]);
+	});
+
 	test("respects the aged-offload reclaim budget", () => {
 		const entries = asEntries([
 			toolCallAssistant("a1", "c1", "read", "one.txt"),

@@ -291,5 +291,7 @@ function cancelledResponse(interaction: InteractionRequest): InteractionResponse
 			return { kind: "submitted", value: "" };
 		case "open_url":
 			return { kind: "url_handled", outcome: "cancelled" };
+		case "plan":
+			return { kind: "plan_decision", optionId: "exit" };
 	}
 }

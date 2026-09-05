@@ -6,6 +6,7 @@ import {
 	abandonRecoveryLease,
 	acquireLease,
 	assertNoForeignLiveSession,
+	assertNoForeignLiveSessionSettled,
 	detectRecovery,
 	executeRecovery,
 	leasePathForSession,
@@ -230,6 +231,28 @@ describe("foreign live session detection", () => {
 		await backdate(sessionFile, 10 * 60_000);
 		await assertNoForeignLiveSession(sessionFile);
 		await assertNoForeignLiveSession(path.join(directory, "missing.jsonl"));
+	});
+
+	test("settled check accepts a fresh but static journal (clean close then reopen)", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "san-rpc-v2-foreign-settled-"));
+		tempDirectories.push(directory);
+		const sessionFile = path.join(directory, "session.jsonl");
+		// session.close flush 后 mtime 新鲜但不再推进：一次性检查会误锁 5 分钟，
+		// settled 检查观察窗口内 mtime 静止即放行。
+		await Bun.write(sessionFile, "");
+		await assertNoForeignLiveSessionSettled(sessionFile, 50);
+	});
+
+	test("settled check rejects a journal that keeps advancing", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "san-rpc-v2-foreign-advancing-"));
+		tempDirectories.push(directory);
+		const sessionFile = path.join(directory, "session.jsonl");
+		await Bun.write(sessionFile, "");
+		// 观察窗口内推进 journal：等待真实 I/O 完成而非定时器，保证第二次
+		// 采样落在窗口内且文件已被追加（mtime 前进或仍处新鲜期均判锁定）。
+		const pending = assertNoForeignLiveSessionSettled(sessionFile, 200);
+		await fs.appendFile(sessionFile, "{}\n");
+		await expect(pending).rejects.toThrow("SESSION_LOCKED");
 	});
 
 	test("a crashed runtime unlocks after the freshness window", async () => {

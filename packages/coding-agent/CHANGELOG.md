@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added RPC v2 session change listing, diff statistics, structured file diffs, and revision/hash-guarded revert support for desktop review workflows.
+- Added RPC v2 agent capability management surface under the `agent.capabilities` capability: `mcp.list`/`mcp.add`/`mcp.remove` (user/project scoped MCP server config CRUD), `skill.list`/`skill.enable`, `hook.list`/`hook.enable` (capability provider enumeration and persisted enable/disable), and `memory.list`/`memory.delete` backed by Mnemopi.
+- Added RPC v2 worktree apply support: a git-backed apply port (`patch` and `merge_commit` strategies with expected-target-snapshot CAS and merge-conflict abort semantics) wired into the worktree lifecycle service, plus session metadata updates (`session.update` for pinned/archived/unread with `session.summary.changed` emission), approval policy presets (`approval.preset.list`/`approval.preset.apply`), project grouping metadata on session summaries (`projectRoot`/`gitCommonDir`/`branch`), and a debounced `session.diff.changed` event emitted after file-mutating tool calls.
+
+
+### Fixed
+
+- Fixed model switches and automatic route failover resetting a supported thinking selection to the target model's default; RPC v2 now returns configured/effective thinking with model selection and publishes durable thinking changes so desktop controls stay synchronized without another click.
+- Fixed RPC v2 provider/model updates, removals, and model refresh rejecting the mutation metadata required by the dispatcher, preventing desktop model management from reaching the configuration writer.
+- Fixed repeated large `read` results growing model input indefinitely: identical snapshots now share one provider-visible body without altering saved session history or destabilizing the prompt prefix.
+- Fixed long tool loops repeatedly compacting the same residual context and writing a second turn summary after compaction; maintenance now rearms only after recovery, a new turn, or a new segment.
+
 ### Breaking Changes
 
 - Changed TUI `/model`, `/models`, Alt+M, and `/switch` so session model select opens an effort step for reasoning models before closing. Non-reasoning models still select immediately. Status notes mention `/effort` and Shift+Tab. Role assignment remains `/model roles`.
@@ -62,7 +76,10 @@
 
 - Added host-owned runaway recovery for San execution with append-only scope state, typed acceptance evidence, provider circuit health, deterministic watchdog scheduling, semantic task contracts, and CAS-bound supervisor decisions.
 
+- Added an internal read-only coordination activity projector for Task contracts, Workflow runs, and San Loop snapshots, plus an admission-only TaskDispatchService seam and an explicit plan-review handoff that creates a bounded, approved Ad-hoc Workflow in the current session branch. Existing Task execution remains unchanged.
+
 ### Changed
+- Consolidated session model restoration fallback ordering and moved message-end persistence sequencing into a dedicated queue while preserving session journal ordering.
 
 - Reduced extension startup latency by importing extension modules concurrently while preserving deterministic factory binding order and per-extension rollback ([#7615](https://github.com/can1357/oh-my-pi/issues/7615)).
 - Changed interactive transcript rendering to own an `active` → `settled` → `committed` lifecycle and hand ordered history batches to the TUI provider; migrated legacy `tui.scrollbackRebuild` settings to `tui.resizeScrollback` without dropping nested or flat user configuration.
@@ -132,6 +149,7 @@
 
 - Fixed Context Steady tool-loop budget recovery rebuilding the plan and provider payload from a stale pre-compaction snapshot: auto-compaction rewrote history via `replaceMessages`, but the recovery path reused the frozen `commonOptions`/`messages` captured before compaction, so the post-compaction rebuild re-projected the oversized tail and paused the turn even though compaction had succeeded. Recovery now re-derives planning entries from the live post-compaction state, re-runs the ordinary provider projection, and rebases the agent loop's local message array so later tool calls cannot resurrect discarded history.
 - Fixed authenticated `/stats` launches using `SAN_STATS_TOKEN`: the resolved server credential now stays attached to the active dashboard and is included in every reopened bootstrap URL, so remote dashboards no longer load with all API requests unauthorized when the token came from the environment.
+- Fixed `session.changes.revert` being unreachable through RPC v2: its write-lease metadata (`sessionId` and `leaseId`) is now accepted and required by the shared params schema, matching the `sessionWrite` guard.
 - Fixed Context Steady emergency tool-output stubbing rejecting an exactly sufficient reclaim and selecting extra outputs after reaching the burst ceiling; equality now resolves pressure and stops oldest-first selection at the first sufficient set.
 - Fixed `san stats` and `/stats` help and flag plumbing so the required remote-bind `--token` option is accepted and passed through to the authenticated dashboard server.
 - Fixed the context probe's wire-prefix retention signal: per-message digests now cover the actual shipped content so same-length rewrites of an already-sent message are detected, and side requests (`/btw`, handoff) or `/dump` conversions can no longer overwrite or fake the main turn's retention reading.

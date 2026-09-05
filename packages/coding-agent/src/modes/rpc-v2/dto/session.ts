@@ -25,6 +25,14 @@ export interface SessionSummary {
 	updatedAt: Timestamp;
 	persistedStatus: SessionPersistedStatus;
 	access?: "closed" | "read_only" | "read_write" | "locked";
+	/** Cross-client user flags owned by the San runtime; absent when never set. */
+	pinned?: boolean;
+	archived?: boolean;
+	unread?: boolean;
+	/** 项目分组元数据（server 侧 git 探测）；非 git cwd 或探测失败时省略。 */
+	projectRoot?: string;
+	gitCommonDir?: string;
+	branch?: string;
 	attention: SessionAttention[];
 	messageCount: number;
 	sizeBytes: number;
@@ -130,6 +138,20 @@ export interface SessionMessage {
 	timestamp: Timestamp;
 	content: string;
 	truncated?: boolean;
+	entryId?: string;
+	thinking?: string;
+	/** 助手消息的结束方式；"aborted"/"error" 意味着正文可能是中断的半截。 */
+	stopReason?: string;
+	/** stopReason 为 "error" 时的失败归因（如进程退出前未完成本轮）。 */
+	errorMessage?: string;
+	toolCalls?: Array<{
+		toolCallId: string;
+		toolName: string;
+		isError: boolean;
+		intent?: string;
+		/** Compact command/path projection of the call arguments (display label). */
+		args?: { command?: string; path?: string };
+	}>;
 }
 
 // ============================================================================

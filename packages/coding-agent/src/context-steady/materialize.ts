@@ -326,7 +326,7 @@ function substituteToolStub(message: AgentMessage, stub: ContextPlanToolStubMate
 	const template =
 		stub.stubKind === "emergency"
 			? emergencyStubTemplate
-			: stub.stubKind === "aged"
+			: stub.stubKind === "aged" || stub.stubKind === "duplicate"
 				? agedOutputStubTemplate
 				: supersededEditStubTemplate;
 	const text = prompt.render(template, { tool: stub.toolName, path: stub.path }).trim();

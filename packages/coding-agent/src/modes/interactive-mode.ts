@@ -58,7 +58,11 @@ import { reset as resetCapabilities } from "../capability";
 import type { CollabGuestLink } from "../collab/guest";
 import type { CollabHost } from "../collab/host";
 import { KeybindingsManager } from "../config/keybindings";
-import type { ResolvedModelRoleValue } from "../config/model-resolver";
+import {
+	formatModelSelectorValue,
+	formatModelStringWithRouting,
+	type ResolvedModelRoleValue,
+} from "../config/model-resolver";
 import { applyProviderGlobalsFromSettings } from "../config/provider-globals";
 import {
 	isSettingsInitialized,
@@ -67,6 +71,11 @@ import {
 	Settings,
 	settings,
 } from "../config/settings";
+import {
+	getCoordinationActivitySources,
+	projectCoordinationActivities,
+	renderCoordinationActivityLine,
+} from "../coordination";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
 	AutocompleteProviderFactory,
@@ -117,6 +126,7 @@ import type { SessionManager } from "../session/session-manager";
 import type { ShakeMode } from "../session/shake-types";
 import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, buildTuiBuiltinSlashCommands } from "../slash-commands/builtin-registry";
 import { formatDuration } from "../slash-commands/helpers/format";
+import { handoffApprovedPlan } from "../slash-commands/helpers/workflows";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
 import { formatTaskId } from "../task/render";
 import type { ConfiguredThinkingLevel } from "../thinking";
@@ -315,7 +325,6 @@ function formatHudNoteMarker(count: number): string {
 type GoalSubcommand = "set" | "show" | "pause" | "resume" | "drop" | "budget";
 
 const GOAL_SUBCOMMANDS = new Set<GoalSubcommand>(["set", "show", "pause", "resume", "drop", "budget"]);
-const PLAN_KEEP_CONTEXT_OPTION_INDEX = 2;
 const PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT = 95;
 
 function parseGoalSubcommand(args: string): { sub: GoalSubcommand | undefined; rest: string } {
@@ -747,6 +756,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	#eventBus?: EventBus;
 	#eventBusUnsubscribers: Array<() => void> = [];
 	#observerUiSyncTimer?: NodeJS.Timeout;
+	#coordinationContainer: Container;
+	#coordinationContractUnsubscribe?: () => void;
+	#coordinationClearTimer?: NodeJS.Timeout;
+	#coordinationPollTimer?: NodeJS.Timeout;
+	#coordinationHasRendered = false;
 	#observerUiSyncNeedsTodoReconcile = false;
 	#agentRegistryUnsubscribe?: () => void;
 	#agentRegistrySubscriptionTarget?: AgentRegistry;
@@ -809,6 +823,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.statusContainer = new Container();
 		this.todoContainer = new Container();
 		this.subagentContainer = new Container();
+		this.#coordinationContainer = new Container();
 		this.btwContainer = new Container();
 		this.omfgContainer = new Container();
 		this.errorBannerContainer = new Container();
@@ -1048,6 +1063,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.addChild(this.pendingMessagesContainer);
 		this.ui.addChild(this.todoContainer);
 		this.ui.addChild(this.subagentContainer);
+		this.ui.addChild(this.#coordinationContainer);
 		this.ui.addChild(this.btwContainer);
 		this.ui.addChild(this.omfgContainer);
 		this.ui.addChild(this.errorBannerContainer);
@@ -1075,9 +1091,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#observerRegistry.onChange(kind => {
 			this.#scheduleObserverUiSync(kind);
 		});
+		this.#coordinationContractUnsubscribe = this.session.getTaskContractRegistry()?.subscribe(() => {
+			this.#scheduleObserverUiSync("lifecycle");
+		});
 
 		// Load initial todos
 		await this.#loadTodoList();
+		this.#renderCoordinationStatus();
 
 		// Start the UI. Cold `san` launch opts into clearing on the first paint so
 		// the initial welcome frame does not append over the previous run's scrollback.
@@ -1749,6 +1769,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (options.requestRender !== false) this.ui.requestRender();
 	}
 
+	/** Rebuild the novice-facing coordination status from current authority snapshots. */
+	refreshCoordinationActivities(): void {
+		this.#renderCoordinationStatus();
+		this.ui.requestRender();
+	}
+
 	rebuildChatFromMessages(): void {
 		// Mid-stream rebuilds (e.g. `/shake`, theme/setting changes that touch the
 		// transcript) replay only committed `state.messages`. The agent's in-flight
@@ -1991,6 +2017,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#syncTodoAutoClearTimer();
 		this.#renderTodoList();
 		this.#renderSubagentList();
+		this.#renderCoordinationStatus();
 		this.ui.requestRender();
 	}
 
@@ -2000,6 +2027,52 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#observerUiSyncTimer = undefined;
 		}
 		this.#observerUiSyncNeedsTodoReconcile = false;
+	}
+
+	#scheduleCoordinationPoll(): void {
+		if (this.#coordinationPollTimer) return;
+		this.#coordinationPollTimer = setTimeout(() => {
+			this.#coordinationPollTimer = undefined;
+			this.#renderCoordinationStatus();
+			this.ui.requestRender();
+		}, 1000);
+		this.#coordinationPollTimer.unref?.();
+	}
+
+	#renderCoordinationStatus(): void {
+		const activities = projectCoordinationActivities(getCoordinationActivitySources(this.session));
+		const visible = this.#coordinationHasRendered
+			? activities
+			: activities.filter(activity => activity.userState !== "done");
+		this.#coordinationHasRendered = true;
+		this.#coordinationContainer.clear();
+		const line = renderCoordinationActivityLine(visible);
+		if (!line) {
+			if (this.#coordinationClearTimer) {
+				clearTimeout(this.#coordinationClearTimer);
+				this.#coordinationClearTimer = undefined;
+			}
+			return;
+		}
+		const blocked = visible.some(activity => activity.userState === "blocked");
+		const working = visible.some(activity => activity.userState === "working");
+		const color = blocked ? "error" : working ? "accent" : "success";
+		this.#coordinationContainer.addChild(new Text(theme.fg(color, line), 1, 0));
+		if (working) {
+			this.#scheduleCoordinationPoll();
+		} else if (this.#coordinationPollTimer) {
+			clearTimeout(this.#coordinationPollTimer);
+			this.#coordinationPollTimer = undefined;
+		}
+		if (!working && !blocked) {
+			clearTimeout(this.#coordinationClearTimer);
+			this.#coordinationClearTimer = setTimeout(() => {
+				this.#coordinationClearTimer = undefined;
+				this.#coordinationContainer.clear();
+				this.ui.requestRender();
+			}, 8000);
+			this.#coordinationClearTimer.unref?.();
+		}
 	}
 
 	#renderTodoList(): void {
@@ -2990,6 +3063,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			preserveContext?: boolean;
 			compactBeforeExecute?: boolean;
 			executionModel?: ResolvedRoleModel;
+			handoffModel?: string;
+			handoff?: boolean;
 		},
 	): Promise<void> {
 		const previousTools = this.#planModePreviousTools ?? this.session.getEnabledToolNames();
@@ -3090,6 +3165,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showWarning(
 				"Plan approved, but compaction was cancelled — execution not dispatched. Submit a turn to continue.",
 			);
+			return;
+		}
+		if (options.handoff) {
+			const handle = handoffApprovedPlan({ ctx: this }, planContent, options.title, options.handoffModel);
+			this.showStatus(`Approved plan handed off to Workflow ${handle.runId}.`);
+			this.#hidePlanReview();
+			this.ui.requestRender();
 			return;
 		}
 
@@ -3658,19 +3740,24 @@ export class InteractiveMode implements InteractiveModeContext {
 						},
 					}
 				: undefined;
-		// The overlay now owns the dynamic, focus-aware help line; the caller only
-		// supplies the trailing cancel hint.
+		// The overlay owns the dynamic, focus-aware help line; the caller only supplies the trailing cancel hint.
 		const helpText = "esc cancel";
-		// In-overlay edits (section deletes/undo) and section annotations. Deletes
-		// update `editedContent` (and mirror to disk); annotations build `feedback`
-		// that the Refine branch re-prompts the model with.
 		let editedContent: string | undefined;
 		let feedback = "";
+		const workflowHandoffEnabled =
+			this.session.settings.get("san.workflows.enabled") && this.session.settings.get("san.workflows.adHocEnabled");
+		const planReviewOptions = [
+			"Approve and execute",
+			...(workflowHandoffEnabled ? ["Approve and hand off to Workflow"] : []),
+			"Approve and compact context",
+			keepContextLabel,
+			"Refine plan",
+		];
 
 		const choice = await this.showPlanReview(
 			planContent,
 			"Plan mode - next step",
-			["Approve and execute", "Approve and compact context", keepContextLabel, "Refine plan"],
+			planReviewOptions,
 			{
 				helpText,
 				onExternalEditor: () => void this.#openPlanInExternalEditor(planFilePath),
@@ -3681,7 +3768,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				onFeedbackChange: value => {
 					feedback = value;
 				},
-				disabledIndices: keepContextDisabled ? [PLAN_KEEP_CONTEXT_OPTION_INDEX] : undefined,
+				disabledIndices: keepContextDisabled ? [planReviewOptions.indexOf(keepContextLabel)] : undefined,
 			},
 			{ slider },
 		);
@@ -3690,55 +3777,50 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender();
 		};
 
-		if (choice === "Approve and execute" || choice === "Approve and compact context" || choice === keepContextLabel) {
+		const restoredState = this.#planModePreviousModelState;
+		const restoredIndex =
+			cycle && restoredState
+				? cycle.models.findIndex(entry => {
+						if (!modelsAreEqual(entry.model, restoredState.model)) return false;
+						if (!entry.explicitThinkingLevel) return true;
+						return entry.thinkingLevel === restoredState.thinkingLevel;
+					})
+				: -1;
+		const executionModel =
+			slider && cycle && selectedTierIndex !== restoredIndex ? cycle.models[selectedTierIndex] : undefined;
+		const executionModelSelector = executionModel
+			? formatModelSelectorValue(formatModelStringWithRouting(executionModel.model), executionModel.thinkingLevel)
+			: undefined;
+		if (
+			choice === "Approve and execute" ||
+			choice === "Approve and hand off to Workflow" ||
+			choice === "Approve and compact context" ||
+			choice === keepContextLabel
+		) {
 			try {
-				// Prefer in-overlay edits (already in memory) over a disk re-read. The
-				// overlay mirrors edits as they happen, and approval awaits one final
-				// write so the durable plan file and synthetic prompt carry the same text.
 				const latestPlanContent = editedContent ?? (await this.#readPlanFile(planFilePath));
-				if (editedContent !== undefined) {
-					await Bun.write(this.#resolvePlanFilePath(planFilePath), editedContent);
-				}
+				if (editedContent !== undefined) await Bun.write(this.#resolvePlanFilePath(planFilePath), editedContent);
 				if (!latestPlanContent) {
 					this.showError(`Plan file not found at ${planFilePath}`);
 					closePlanReview();
 					return;
 				}
-				// Capture the operator's tier choice and hand it to #approvePlan, which
-				// applies it AFTER #exitPlanMode. #exitPlanMode normally restores
-				// #planModePreviousModelState (the model from before plan mode), so
-				// applying the slider choice any earlier would be silently reverted.
-				// Pass executionModel only when the slider was actually shown — a
-				// singleton cycle (e.g. only modelRoles.plan is configured, so
-				// getRoleModelCycle synthesizes a lone `default` entry from the
-				// currently active plan model) hides the slider, the operator made
-				// no selection, and the pre-plan model is not in the cycle. Pinning
-				// that singleton would silently switch the session back to the plan
-				// model after #exitPlanMode restored the pre-plan model.
-				// Treat the choice as implicit only when applying the selected role
-				// would land on the same end state as the restore — same model AND
-				// the same effective thinking level. A role with an explicit thinking
-				// suffix that differs from the restored thinking level must still go
-				// through applyRoleModel, otherwise approving on the same model with a
-				// different configured thinking level silently keeps the pre-plan level.
-				const restoredState = this.#planModePreviousModelState;
-				const restoredIndex =
-					cycle && restoredState
-						? cycle.models.findIndex(entry => {
-								if (!modelsAreEqual(entry.model, restoredState.model)) return false;
-								if (!entry.explicitThinkingLevel) return true;
-								return entry.thinkingLevel === restoredState.thinkingLevel;
-							})
-						: -1;
-				const executionModel =
-					slider && cycle && selectedTierIndex !== restoredIndex ? cycle.models[selectedTierIndex] : undefined;
-				await this.#approvePlan(latestPlanContent, {
-					planFilePath,
-					title: details.title,
-					preserveContext: choice !== "Approve and execute",
-					compactBeforeExecute: choice === "Approve and compact context",
-					executionModel,
-				});
+				if (choice === "Approve and hand off to Workflow") {
+					await this.#approvePlan(latestPlanContent, {
+						planFilePath,
+						title: details.title,
+						handoff: true,
+						handoffModel: executionModelSelector,
+					});
+				} else {
+					await this.#approvePlan(latestPlanContent, {
+						planFilePath,
+						title: details.title,
+						preserveContext: choice !== "Approve and execute",
+						compactBeforeExecute: choice === "Approve and compact context",
+						executionModel,
+					});
+				}
 			} catch (error) {
 				this.showError(
 					`Failed to finalize approved plan: ${error instanceof Error ? error.message : String(error)}`,
@@ -3839,6 +3921,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#eventBusUnsubscribers = [];
 		this.#observerRegistry.dispose();
+		this.#coordinationContractUnsubscribe?.();
+		this.#coordinationContractUnsubscribe = undefined;
+		if (this.#coordinationClearTimer) clearTimeout(this.#coordinationClearTimer);
+		if (this.#coordinationPollTimer) clearTimeout(this.#coordinationPollTimer);
 		this.#agentRegistryUnsubscribe?.();
 		this.#agentRegistryUnsubscribe = undefined;
 		this.#agentRegistrySubscriptionTarget = undefined;
@@ -4372,6 +4458,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	resetObserverRegistry(): void {
 		this.#observerRegistry.resetSessions();
 		this.#observerRegistry.setMainSession(this.sessionManager.getSessionFile() ?? undefined);
+		this.#coordinationHasRendered = false;
+		this.#renderCoordinationStatus();
 	}
 
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void> {

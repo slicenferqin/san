@@ -557,6 +557,25 @@ describe("InteractiveMode plan review rendering", () => {
 		);
 	});
 
+	it("offers approved-plan Workflow handoff only when both Workflow switches are enabled", async () => {
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nHand off this approved plan.");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		session.settings.set("san.workflows.enabled", true);
+		session.settings.set("san.workflows.adHocEnabled", true);
+		const selector = vi.spyOn(mode, "showPlanReview").mockResolvedValue("Refine plan");
+
+		await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+
+		expect(selector.mock.calls[0]?.[2]).toContain("Approve and hand off to Workflow");
+	});
+
 	it("ignores aborted zero-usage assistant messages when estimating context usage", () => {
 		session.agent.appendMessage(assistantWithUsage({ usage: usageWithInput(7320), stopReason: "stop" }));
 		session.agent.appendMessage(assistantWithUsage({ usage: usageWithInput(0), stopReason: "aborted" }));

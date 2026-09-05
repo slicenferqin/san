@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>San 通用 Agent Host 可行性与难度评估</title>
+<style>
+:root{--ink:#172033;--muted:#667287;--paper:#f5f7fb;--card:#fff;--navy:#173b63;--blue:#2c6fa8;--blue-soft:#eaf3fb;--green:#17745b;--green-soft:#e8f6f1;--amber:#996014;--amber-soft:#fff5e1;--red:#a23b3b;--red-soft:#fff0ef;--line:#dbe3ed;--shadow:0 12px 36px rgba(24,48,78,.08)}
+*{box-sizing:border-box}body{margin:0;color:var(--ink);background:var(--paper);font:16px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--blue);text-underline-offset:3px}.wrap{width:min(1080px,calc(100% - 40px));margin:0 auto}.hero{padding:68px 0 52px;color:#fff;background:radial-gradient(circle at 82% 12%,rgba(91,170,226,.28),transparent 34%),linear-gradient(135deg,#102b49 0%,#183f68 58%,#235a83 100%)}.eyebrow{margin-bottom:12px;color:#add7f1;font-size:13px;font-weight:750;letter-spacing:.12em;text-transform:uppercase}h1{max-width:900px;margin:0;font-size:clamp(34px,5vw,56px);line-height:1.14;letter-spacing:-.035em}.hero p{max-width:850px;margin:22px 0 0;color:#dceaf5;font-size:19px}.meta{display:flex;flex-wrap:wrap;gap:10px 24px;margin-top:24px;color:#bdd5e7;font-size:14px}.verdict{position:relative;z-index:2;margin-top:-24px;padding:28px 32px;border:1px solid rgba(23,59,99,.1);border-radius:18px;background:var(--card);box-shadow:var(--shadow)}.verdict strong{display:block;margin-bottom:8px;color:var(--navy);font-size:25px;line-height:1.45}main{padding:22px 0 80px}section{padding-top:38px}h2{margin:0 0 18px;color:var(--navy);font-size:30px;line-height:1.35;letter-spacing:-.02em}h3{margin:24px 0 9px;color:var(--navy);font-size:20px}p{margin:10px 0}ul,ol{margin:10px 0;padding-left:24px}li{margin:6px 0}.small{color:var(--muted);font-size:14px}.grid{display:grid;gap:16px}.grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}.grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.card{padding:22px;border:1px solid var(--line);border-radius:14px;background:var(--card);box-shadow:0 5px 18px rgba(24,48,78,.04)}.card h3{margin-top:0}.metric{margin-bottom:4px;color:var(--blue);font-size:28px;font-weight:800;line-height:1.2}.label{color:var(--muted);font-size:13px;font-weight:750;letter-spacing:.06em;text-transform:uppercase}.badge{display:inline-block;margin-right:6px;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:750;vertical-align:1px}.badge.now{color:var(--green);background:var(--green-soft)}.badge.risk{color:var(--amber);background:var(--amber-soft)}.badge.no{color:var(--red);background:var(--red-soft)}.callout{margin:18px 0;padding:18px 22px;border-left:4px solid var(--blue);border-radius:0 12px 12px 0;background:var(--blue-soft)}.callout.green{border-color:var(--green);background:var(--green-soft)}.callout.amber{border-color:var(--amber);background:var(--amber-soft)}.table-wrap{overflow-x:auto;margin:16px 0;border:1px solid var(--line);border-radius:14px;background:var(--card)}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:14px 16px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}tr:last-child td{border-bottom:0}th{color:var(--navy);background:#edf3f8;font-weight:750;white-space:nowrap}code{padding:2px 6px;color:#244b6d;border-radius:5px;background:#edf3f8;font:.9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.phase{margin:18px 0;padding:24px;border:1px solid var(--line);border-radius:16px;background:var(--card)}.phase-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px 20px;margin-bottom:8px}.phase-head h3{margin:0}.priority{color:var(--red);font-size:13px;font-weight:800;letter-spacing:.08em}.accept{margin-top:14px;padding:14px 16px;border-radius:10px;color:#154f42;background:var(--green-soft)}.sources{color:var(--muted);font-size:14px}.sources li{margin:8px 0}footer{padding:30px 0 50px;color:var(--muted);border-top:1px solid var(--line);font-size:13px}@media(max-width:900px){.grid.three{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.wrap{width:min(100% - 26px,1080px)}.hero{padding-top:48px}.hero p{font-size:17px}.verdict{padding:22px}.grid.two,.grid.three{grid-template-columns:1fr}h2{font-size:25px}th,td{min-width:150px}}@media print{body{background:#fff}.hero{padding:38px 0;background:#173b63!important;print-color-adjust:exact;-webkit-print-color-adjust:exact}.verdict{margin-top:16px;box-shadow:none}.card,.phase{box-shadow:none;break-inside:avoid}a{color:inherit;text-decoration:none}}
+</style>
+</head>
+<body>
+<header class="hero"><div class="wrap">
+<div class="eyebrow">Architecture Decision Brief · 2026-08-25</div>
+<h1>San 通用 Agent Host<br />可行性与难度评估</h1>
+<p>判断目标：让 Coding 从 San 的默认身份降为一个领域能力包，同时复用现有 Agent Loop、Harness 和 Skill，不重写已经工作的执行底座。</p>
+<div class="meta"><span>结论：可行</span><span>建议：增量抽象，不做一次性搬家</span><span>范围：packages/agent 与 packages/coding-agent</span></div>
+</div></header>
+<div class="wrap"><div class="verdict">
+<strong>结论：可行，但“做一个通用入口”和“把整个 Harness 抽成独立包”不是同一个难度。</strong>
+<p><span class="badge now">可行</span>第一种是中等难度：在现有会话外壳上增加可注入的领域配置，再用第二个非 Coding profile 验证边界。<span class="badge risk">高难度</span>第二种是高难度：当前会话层和 SDK 仍然把上下文、工具、提示、持久化、模型路由、UI、子 Agent 生命周期及 Coding 能力交织在一起。直接搬文件或改包名，风险明显高于收益。</p>
+</div></div>
+<main class="wrap">
+<section>
+<h2>一、为什么不是从零开始</h2>
+<div class="grid three">
+<div class="card"><div class="label">Agent 内核</div><div class="metric">已有</div><p><code>@san/agent</code> 已提供 <code>Agent</code>、<code>agentLoop</code>、<code>agentLoopContinue</code>、工具调用、流式传输和状态管理。它不要求工作对象必须是代码仓库。</p></div>
+<div class="card"><div class="label">执行控制</div><div class="metric">已有骨架</div><p><code>execution-control</code> 已有运行时、任务合同、账本、持久调度、进展分类、Provider 健康和完成状态等边界。它已经被普通 task 与 San Loop 使用。</p></div>
+<div class="card"><div class="label">Skill</div><div class="metric">已有接线</div><p>Skill 能被发现、加载，并把声明式流程/检查编译进会话级状态；这正是领域方法进入通用运行时的入口。</p></div>
+</div>
+<div class="callout green"><strong>关键判断：</strong>要补的是“宿主边界”，不是再造一个 Agent Loop，也不是再造一套长任务账本。</div>
+</section>
+<section>
+<h2>二、为什么完整拆分仍然不轻</h2>
+<p>当前代码已经证明能力存在，但还没有证明包边界已经干净。</p>
+<div class="table-wrap"><table><thead><tr><th>观察事实</th><th>来源</th><th>对拆分的含义</th></tr></thead><tbody>
+<tr><td><strong>会话类约 23,249 行</strong></td><td><code>packages/coding-agent/src/session/agent-session.ts</code></td><td>它不是薄薄的适配器，而是模型、压缩、分支、工具、顾问、记忆、目标、工作流、提示、持久化和生命周期的汇合点。</td></tr>
+<tr><td><strong>SDK 约 3,854 行</strong></td><td><code>packages/coding-agent/src/sdk.ts</code></td><td>会话创建同时负责工具发现、MCP、扩展、Skill、模型路由、执行运行时、工作区和 Provider 管道；需要先分层再移动。</td></tr>
+<tr><td><strong>公共入口导出面很宽</strong></td><td><code>packages/coding-agent/src/index.ts</code></td><td>当前包同时导出 SDK、会话、执行控制、Skill、San Loop、任务、工具、LSP、Git 和 UI。改名或迁移会产生大范围调用方迁移。</td></tr>
+<tr><td><strong>会话导入了大量领域模块</strong></td><td><code>agent-session.ts</code> 导入 edit、eval、LSP、Git/路径、代码智能、工作区、工具和 Coding 提示</td><td>不能把整个 <code>AgentSession</code> 原样放进所谓的通用包；必须先把领域依赖变成显式能力接口。</td></tr>
+</tbody></table></div>
+<div class="callout amber"><strong>[INFERENCE] 难度分级：</strong>“新增通用 profile 并复用现有底座”约为中等难度；“一次性把 Harness 迁出 <code>coding-agent</code> 并保持所有行为兼容”约为高难度。后者的主要成本不是代码行数，而是状态、事件、持久化和调用关系的迁移。</div>
+</section>
+<section>
+<h2>三、应该拆什么，暂时不要拆什么</h2>
+<div class="grid two">
+<div class="card"><h3>优先视为通用层</h3><ul><li><code>@san/agent</code> 的循环、工具协议、流式事件和状态管理。</li><li>执行运行时、任务合同、预算/调度、进展和终态规则。</li><li>Skill 的发现、加载、覆盖和声明式检查编译。</li><li>会话生命周期、上下文维护、压缩、恢复、Telemetry 和 Agent 注册。</li><li>扩展、MCP、记忆和 Provider 管道的抽象接口。</li></ul></div>
+<div class="card"><h3>保留在 Coding profile</h3><ul><li>仓库/工作区上下文、Git、LSP、代码图谱和代码专用提示。</li><li>read/edit/grep/bash 等 Coding 默认工具组合及路径安全策略。</li><li>代码领域的默认 Skill、修复流程和测试/构建检查。</li><li>Hashline、补丁、编译器/内核、代码浏览等强领域实现。</li><li>Coding CLI 的 TUI、命令和默认设置。</li></ul></div>
+</div>
+<p><strong>混合区域：</strong>当前 <code>AgentSession</code>、<code>sdk.ts</code>、Settings、扩展运行器、MCP 和任务执行器既包含通用机制又包含 Coding 默认值。它们应先变成“通用核心 + profile 注入”，不应先按目录机械移动。</p>
+</section>
+<section>
+<h2>四、推荐路线：先证明第二个 profile，再抽包</h2>
+<div class="phase"><div class="phase-head"><h3>阶段 1：定义领域能力边界</h3><span class="priority">P0</span></div><p>在现有包内引入一个明确的 Host/Profile 配置对象，描述工具工厂、上下文提供者、系统提示片段、持久化适配、验收提供者和 UI 能力。默认实现继续是 Coding，不改变用户路径。</p><div class="accept"><strong>通过条件：</strong>新接口能表达“无 Coding 工具”的 profile；不新增第二套 Loop、账本或完成状态。</div></div>
+<div class="phase"><div class="phase-head"><h3>阶段 2：做一个非 Coding 的最小 profile</h3><span class="priority">P0</span></div><p>选择研究/网页助手这类不依赖仓库编辑的 profile，使用同一个 Agent Loop、会话生命周期、Skill 加载和执行控制。它只提供 web/search/browser 等能力，默认不挂载代码工具。</p><div class="accept"><strong>通过条件：</strong>真实跑通一条“提出问题 → 使用 Skill → 调用工具 → 得到可验证结果 → 正常结束”的路径；Coding 现有路径不回归。</div></div>
+<div class="phase"><div class="phase-head"><h3>阶段 3：按依赖方向移动纯模块</h3><span class="priority">P1</span></div><p>先移动没有 Coding 导入的模块：Skill loader/compiler、执行控制纯类型与运行时、通用会话协议、工具/扩展接口。每移动一块就更新所有调用方和测试，不保留长期双真相。</p><div class="accept"><strong>通过条件：</strong>通用包不反向依赖 <code>@san/coding-agent</code>；Coding 只作为 profile/适配层依赖通用包。</div></div>
+<div class="phase"><div class="phase-head"><h3>阶段 4：最后处理公共包名和 CLI</h3><span class="priority">P2</span></div><p>只有第二个 profile 稳定、依赖图清晰后，才考虑新包名、CLI 默认身份和公共导出迁移。先迁移仓库内调用方，再删除旧路径；不要用兼容别名掩盖未完成的边界。</p><div class="accept"><strong>通过条件：</strong>源码、测试、构建、Worker 入口、SDK 使用者和文档都只依赖最终方向。</div></div>
+</section>
+<section>
+<h2>五、最容易踩的三个坑</h2>
+<div class="grid three">
+<div class="card"><h3>把“可选”做成满屏 undefined</h3><p>[INFERENCE] 如果每个 Coding 子系统都变成可选字段，通用层会得到大量组合状态，故障只会从编译期推迟到运行期。应按能力组注入 profile，而不是把所有参数都变成可空。</p></div>
+<div class="card"><h3>先拆包，后找第二个用户</h3><p>[INFERENCE] 没有第二个真实 profile，抽象只会围绕当前 Coding 需求重新命名，最后得到一个“换了名字的 coding-agent”。先做第二个消费者，边界才有压力测试。</p></div>
+<div class="card"><h3>同时重做状态模型</h3><p>执行控制、Context Steady、Goal、Workflow、Todo 和 San Loop 已经各有状态。通用化阶段不应同时重写它们；先复用现有事实来源，避免两项高风险迁移叠加。</p></div>
+</div>
+</section>
+<section>
+<h2>六、最终决策</h2>
+<div class="callout green"><strong>建议继续，采用“内核不动、宿主分层、第二 profile 验证、最后抽包”的路线。</strong></div>
+<ul>
+<li><strong>可行性：</strong>高。现有 Agent Loop、Skill 和执行控制已经提供了足够的落点。</li>
+<li><strong>短期风险：</strong>可控。先在 <code>coding-agent</code> 内做 profile 注入，不触碰公共包名和默认 CLI。</li>
+<li><strong>完整拆分难度：</strong>高。核心难点是 <code>AgentSession</code>/<code>sdk.ts</code> 的交织状态和宽公共导出，而不是底层模型调用。</li>
+<li><strong>不建议：</strong>一次性把 23k 行会话类搬到新包、同时改默认提示、工具集、持久化和 CLI 身份。</li>
+<li><strong>下一步：</strong>先画出 Host/Profile 的最小接口，并从一个不需要代码仓库的真实场景开始验证。</li>
+</ul>
+</section>
+<section>
+<h2>依据</h2>
+<ul class="sources">
+<li><code>packages/agent/package.json</code>：通用 Agent 包的职责描述与独立依赖边界。</li>
+<li><code>packages/agent/README.md</code>：<code>Agent</code>、工具、低层 Loop 和运行级遥测的公开接口。</li>
+<li><code>packages/coding-agent/src/sdk.ts</code>：会话创建时同时组装 Skill、工具、扩展、MCP、模型和执行运行时。</li>
+<li><code>packages/coding-agent/src/session/agent-session.ts</code>：会话生命周期、上下文、工具、目标、工作流、Skill、执行控制和 Coding 模块的汇合点。</li>
+<li><code>packages/coding-agent/src/execution-control/</code>：运行时、账本、任务合同、调度、看门狗和 Skill 检查边界。</li>
+<li><code>packages/coding-agent/src/extensibility/skills.ts</code> 与 <code>skill-gate-compiler.ts</code>：Skill 发现/加载及声明式检查编译。</li>
+</ul>
+</section>
+</main>
+<footer><div class="wrap">内部架构评估 · 观察事实与推断已分开标注 · 2026-08-25</div></footer>
+</body>
+</html>

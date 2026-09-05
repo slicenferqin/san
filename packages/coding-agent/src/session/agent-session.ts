@@ -513,6 +513,7 @@ import {
 	TOOL_EXECUTION_START_CUSTOM_TYPE,
 	type ToolExecutionStartData,
 } from "./exit-diagnostics";
+import { MessageEndPersistenceQueue } from "./message-end-persistence";
 import {
 	type BashExecutionMessage,
 	CONTRACT_ECHO_MESSAGE_TYPE,
@@ -1052,6 +1053,8 @@ const RETRY_BACKOFF_JITTER_RATIO = 0.25;
  * most-recent kept turn already exceeds the threshold (the snapcompact thrash).
  */
 const COMPACTION_RECOVERY_BAND = 0.8;
+/** Context Steady re-arms protective maintenance only after falling below this fraction of its steady target. */
+const CONTEXT_STEADY_MAINTENANCE_RECOVERY_BAND = 0.85;
 
 function calculateRetryBackoffDelayMs(baseDelayMs: number, attempt: number): number {
 	const cappedDelayMs = Math.min(Math.max(0, baseDelayMs) * 2 ** Math.max(0, attempt - 1), RETRY_BACKOFF_MAX_DELAY_MS);
@@ -2370,8 +2373,7 @@ export class AgentSession {
 	 */
 	#fallbackExtensionTimers: ManagedTimers | undefined = undefined;
 	#turnIndex = 0;
-	#messageEndPersistenceTail: Promise<void> = Promise.resolve();
-	#pendingMessageEndPersistence = new Map<string, Promise<void>>();
+	#messageEndPersistenceQueue = new MessageEndPersistenceQueue();
 	#persistedMessageKeys: { anchor: string; keys: Set<string> } | undefined;
 
 	#skills: Skill[];
@@ -2543,6 +2545,12 @@ export class AgentSession {
 	#contextSteadyPendingBudgetPressureRebase = false;
 	#contextSteadyMaintenanceId: string | undefined;
 	#contextSteadyRecoveryAttempt = 0;
+	#contextSteadyMaintenanceHysteresis:
+		| { sessionId: string; contextWindow: number; blockedUntilRecovery: boolean }
+		| undefined;
+	#contextSteadyCompactionDigestCoverage:
+		| { sessionId: string; boundaryEntryId: string | null; throughEntryId: string }
+		| undefined;
 	#contextProbeWrite: Promise<void> = Promise.resolve();
 	#contextProbeLastPrefixFingerprint: { promptCacheKey: string; value: string } | undefined;
 	/**
@@ -2596,6 +2604,7 @@ export class AgentSession {
 		this.#unexpectedStopRetryCount = 0;
 		this.#yieldTerminationPending = false;
 		this.#acceptTerminalEmptyStopForPrompt = false;
+		this.#contextSteadyMaintenanceHysteresis = undefined;
 	}
 
 	#acquirePowerAssertion(): void {
@@ -4725,43 +4734,14 @@ export class AgentSession {
 	};
 
 	#createMessageEndPersistenceSlot(message: AgentMessage): MessageEndPersistenceSlot | undefined {
-		const key = sessionMessagePersistenceKey(message);
-		if (!key) return undefined;
-		const previous = this.#messageEndPersistenceTail;
-		const { promise, resolve } = Promise.withResolvers<void>();
-		const clear = () => {
-			if (this.#pendingMessageEndPersistence.get(key) === promise) {
-				this.#pendingMessageEndPersistence.delete(key);
-			}
-		};
-		this.#pendingMessageEndPersistence.set(key, promise);
-		this.#messageEndPersistenceTail = promise.catch(() => {});
-		return {
-			promise,
-			persist: async persistMessage => {
-				await previous;
-				try {
-					persistMessage();
-				} finally {
-					resolve();
-					clear();
-				}
-			},
-			release: () => {
-				resolve();
-				clear();
-			},
-		};
+		return this.#messageEndPersistenceQueue.create(message);
 	}
-
 	async #waitForSessionMessagePersistence(message: AgentMessage): Promise<void> {
-		const key = sessionMessagePersistenceKey(message);
-		if (!key) return;
-		await this.#pendingMessageEndPersistence.get(key);
+		await this.#messageEndPersistenceQueue.waitFor(message);
 	}
 
 	async #waitForMessageEndPersistence(): Promise<void> {
-		await this.#messageEndPersistenceTail;
+		await this.#messageEndPersistenceQueue.waitForAll();
 	}
 
 	#latestAssistantMessage(messages: readonly AgentMessage[]): AssistantMessage | undefined {
@@ -5714,6 +5694,24 @@ export class AgentSession {
 		}
 	}
 
+	#contextSteadyCompactionCoversSettledDigest(
+		branch: readonly SessionEntry[],
+		boundaryEntryId: string | null,
+		fromEntryId: string,
+		toEntryId: string,
+	): boolean {
+		const coverage = this.#contextSteadyCompactionDigestCoverage;
+		if (!coverage || coverage.sessionId !== this.sessionId || coverage.boundaryEntryId !== boundaryEntryId) {
+			return false;
+		}
+		const fromIndex = branch.findIndex(entry => entry.id === fromEntryId);
+		const toIndex = branch.findIndex(entry => entry.id === toEntryId);
+		const coveredThroughIndex = branch.findIndex(entry => entry.id === coverage.throughEntryId);
+		if (fromIndex < 0 || toIndex < 0 || coveredThroughIndex < fromIndex) return false;
+		if (coveredThroughIndex >= toIndex) return true;
+		return !branch.slice(coveredThroughIndex + 1, toIndex + 1).some(entry => entry.type === "message");
+	}
+
 	/**
 	 * Generate and persist a TurnDigest for the just-settled turn.
 	 * Fire-and-forget — failures are logged but never propagate.
@@ -5737,10 +5735,14 @@ export class AgentSession {
 			: this.#contextSteadyOriginalPreTurnLeafCaptured
 				? this.#contextSteadyOriginalPreTurnLeafId
 				: this.#contextSteadyPreTurnLeafId;
+		const digestCoverage = this.#contextSteadyCompactionDigestCoverage;
 
 		const scheduleCleanup = () => {
 			this.#contextSteadyOriginalPreTurnLeafId = null;
 			this.#contextSteadyOriginalPreTurnLeafCaptured = false;
+			if (this.#contextSteadyCompactionDigestCoverage === digestCoverage) {
+				this.#contextSteadyCompactionDigestCoverage = undefined;
+			}
 		};
 
 		return (async () => {
@@ -5779,6 +5781,18 @@ export class AgentSession {
 				}
 				const toEntryId = span.toEntryId;
 				const fromEntryId = skipContextPacketPreludeInDigestSource(branch, span.fromEntryId, toEntryId);
+				if (
+					contextSteadyEnabled &&
+					!brainCaptureEnabled &&
+					this.#contextSteadyCompactionCoversSettledDigest(branch, preTurnLeafId, fromEntryId, toEntryId)
+				) {
+					logger.debug("Skipping TurnDigest because the settled span is already covered by compaction", {
+						sessionId: this.sessionId,
+						fromEntryId,
+						toEntryId,
+					});
+					return;
+				}
 				const segmentEnabled = settings.get("san.contextSteady.segment.enabled") as boolean;
 				const segmentInput = segmentEnabled
 					? buildContextSegmentDigestInput(
@@ -10479,11 +10493,26 @@ export class AgentSession {
 		return plan.audit.budget.nonMessageTokens !== computeNonMessageTokens(this);
 	}
 
+	#contextSteadyPlanHasNewCompletedToolResult(
+		plan: BuiltContextPlan,
+		messages: readonly AgentMessage[] = [],
+	): boolean {
+		const knownEntryIds = new Set(plan.sourceIndex.entryIds);
+		const knownToolCallIds = new Set(
+			plan.sourceIndex.toolPairs.filter(pair => pair.complete).map(pair => pair.toolCallId),
+		);
+		for (const entry of this.sessionManager.getBranch()) {
+			if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
+			if (!knownEntryIds.has(entry.id) && !knownToolCallIds.has(entry.message.toolCallId)) return true;
+		}
+		return messages.some(message => message.role === "toolResult" && !knownToolCallIds.has(message.toolCallId));
+	}
+
 	/**
 	 * Stable-projection epoch reuse: within one epoch the plan artifact —
 	 * material set, tiers, rendered bytes — is frozen and reused verbatim
-	 * across turns. Gate dynamics are re-checked on every provider call by the
-	 * refresh path; only epoch-boundary events (see #contextSteadyStableEpochKey)
+	 * across turns. Gate dynamics are re-checked on every provider call by
+	 * the refresh path; only epoch-boundary events (see #contextSteadyStableEpochKey)
 	 * re-lay the plan out.
 	 */
 	#contextSteadyFrozenEpochPlan(): BuiltContextPlan | undefined {
@@ -10496,6 +10525,9 @@ export class AgentSession {
 		if (candidate.withdrawn === true) return undefined;
 		if (candidate.epochKey === undefined) return undefined;
 		if (candidate.epochKey !== this.#contextSteadyStableEpochKey()) return undefined;
+		// Keep the wire artifact available here. The provider-call refresh detects
+		// both journaled and live tool results, then rebuilds source metadata while
+		// retaining these epoch-frozen bytes when the rebuilt projection still fits.
 		if (this.#contextSteadyPlanInputsChanged(candidate, { relaxed: true })) return undefined;
 		return candidate;
 	}
@@ -10845,14 +10877,16 @@ export class AgentSession {
 		const projected = this.#estimateMaterializedProjectedInputTokens(messages, branchEntries, existing, "full");
 		const controlMax = existing.audit.budget.controlMax;
 		const stable = existing.projectionMode === "pinned";
-		if (!this.#contextSteadyPlanInputsChanged(existing, { relaxed: stable }) && projected <= controlMax) {
-			// 同一逻辑 turn 内冻结 ContextPlan 字节。每次工具调用都重写投影值会让
-			// plan 之后的整条 turn 前缀失效，实际会把 provider cache read 压到仅剩
-			// system/tools。实时 projected 只用于门控；跨过 controlMax 时才重建。
+		const inputsChanged = this.#contextSteadyPlanInputsChanged(existing, { relaxed: stable });
+		const hasNewCompletedToolResult = stable && this.#contextSteadyPlanHasNewCompletedToolResult(existing, messages);
+		if (!inputsChanged && !hasNewCompletedToolResult && projected <= controlMax) {
+			// The source set is unchanged and still inside the control band, so the
+			// epoch-frozen projection remains valid verbatim.
 			return { plan: existing };
 		}
-		// Crossed control band, or a model/history/non-message input changed: rebuild
-		// with the live tail for an accurate gate and material selection.
+		// Rebuild with the live tail when pressure or inputs change, and whenever a
+		// completed result lands so duplicate and aged stubs refresh before raw read
+		// output accumulates.
 		const { commonOptions, planningEntries } = this.#buildToolLoopPlanCommonOptions(messages, existing);
 		const commonOptionsWithGoalAnchor = {
 			...commonOptions,
@@ -10865,6 +10899,31 @@ export class AgentSession {
 			"full",
 		);
 		if (stable) plan.epochKey = existing.epochKey;
+		const rebuiltProjected = plan.audit.qualityGate.projectedInputTokens;
+		if (
+			stable &&
+			existing.withdrawn !== true &&
+			!inputsChanged &&
+			hasNewCompletedToolResult &&
+			rebuiltProjected !== undefined &&
+			rebuiltProjected <= controlMax &&
+			plan.audit.qualityGate.outcome !== "hard_pressure"
+		) {
+			// Stub/source metadata may evolve inside an epoch, but the injected plan
+			// bytes are the provider-cache prefix contract. Preserve that artifact.
+			plan = {
+				...plan,
+				audit: {
+					...plan.audit,
+					planId: existing.audit.planId,
+					epochId: existing.audit.epochId,
+					createdAt: existing.audit.createdAt,
+				},
+				renderedContent: existing.renderedContent,
+				message: existing.message,
+				tokenEstimate: existing.tokenEstimate,
+			};
+		}
 		this.#contextSteadyRequestPlan = plan;
 		this.#contextSteadyLastPlan = plan;
 		if (plan.audit.qualityGate.outcome === "hard_pressure") {
@@ -13444,8 +13503,8 @@ export class AgentSession {
 		}
 		this.settings.getStorage()?.recordModelUsage(`${targetModel.provider}/${targetModel.id}`);
 
-		// Re-apply thinking for the newly selected model. Prefer the model's
-		// configured defaultLevel; otherwise preserve the current level (or auto).
+		// Preserve a supported current selection; the model default is only a
+		// fallback when the selection is absent or unsupported on the new model.
 		this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
 		await this.#syncAfterModelChange(previousEditMode);
 		return { switched: true };
@@ -13480,8 +13539,8 @@ export class AgentSession {
 		);
 		this.settings.getStorage()?.recordModelUsage(`${targetModel.provider}/${targetModel.id}`);
 
-		// Apply explicit thinking level if given; otherwise prefer the model's
-		// configured defaultLevel; otherwise re-clamp the current level (or auto).
+		// An explicit selection wins; otherwise preserve the current level (or auto)
+		// and use the model default only when that level is absent or unsupported.
 		if (thinkingLevel !== undefined) {
 			this.setThinkingLevel(thinkingLevel);
 		} else {
@@ -13716,6 +13775,7 @@ export class AgentSession {
 		if (level === AUTO_THINKING) {
 			const provisional = resolveProvisionalAutoLevel(this.model);
 			const wasAuto = this.#autoThinking;
+			const previousLevel = this.#thinkingLevel;
 			this.#autoThinking = true;
 			this.#autoResolvedLevel = undefined;
 			this.#thinkingLevel = provisional;
@@ -13726,7 +13786,7 @@ export class AgentSession {
 			if (persist) {
 				this.settings.set("defaultThinkingLevel", AUTO_THINKING);
 			}
-			if (!wasAuto || this.#thinkingLevel !== provisional) {
+			if (!wasAuto || previousLevel !== provisional) {
 				this.#emit({ type: "thinking_level_changed", thinkingLevel: provisional, configured: AUTO_THINKING });
 			}
 			return;
@@ -13756,11 +13816,13 @@ export class AgentSession {
 
 	/**
 	 * Re-apply the active thinking selection after a model change. Preserves `auto`
-	 * (re-clamping the provisional level to the new model); otherwise re-applies the
-	 * preferred default or the current effective level.
+	 * and supported concrete selections (including `off`); only absent or unsupported
+	 * selections fall back to the model default, then the normal effort clamp.
 	 */
-	#reapplyThinkingLevel(preferredDefault?: ThinkingLevel): void {
-		this.setThinkingLevel(this.#autoThinking ? AUTO_THINKING : (preferredDefault ?? this.#thinkingLevel));
+	#reapplyThinkingLevel(fallbackDefault?: ThinkingLevel): void {
+		const current = this.#thinkingLevel;
+		const supported = current !== undefined && resolveThinkingLevelForModel(this.model, current) === current;
+		this.setThinkingLevel(this.#autoThinking ? AUTO_THINKING : supported ? current : (fallbackDefault ?? current));
 	}
 
 	/**
@@ -15192,22 +15254,19 @@ export class AgentSession {
 	}
 
 	/**
-	 * Physical-maintenance ceiling shared by the pre-prompt and mid-turn gates.
+	 * Physical-maintenance hysteresis shared by the pre-prompt and mid-turn gates.
 	 *
-	 * `steadyTarget` is what the planner aims for; `controlMax` is what the plan is actually
-	 * allowed to fill (`selectedInputLimit` in steady mode, and the plan-reuse gate at
-	 * {@link #contextSteadyReusablePlan}). Compacting the instant the aim is missed throws the
-	 * whole elastic band away: a 754-token overshoot bought a full history rewrite plus a cold
-	 * prefill (session 019ffe1d, 2026-08-21T02:15Z). Trigger on the band's ceiling instead, so
-	 * maintenance fires exactly where the plan gate would refuse rather than well before it.
-	 *
-	 * Both gates read this one number. When they disagreed, the pre-prompt gate let a turn be
-	 * billed at full size and the mid-turn gate compacted it away seconds later — the prefill
-	 * was paid for a history that no longer existed.
-	 *
-	 * Returns `undefined` when context steady is inactive or compaction cannot rewrite history.
+	 * The trigger line is the plan's elastic ceiling (`controlMax`), not its lower
+	 * steady aim. After a committed rewrite, steady-only maintenance stays blocked
+	 * until the projected context falls to 85% of `steadyTarget`. This Schmitt-trigger
+	 * shape prevents a large indivisible tail from crossing the same line and forcing
+	 * another summary on every provider step. Native threshold and overflow recovery
+	 * bypass this latch, so hard safety limits remain authoritative.
 	 */
-	#contextSteadyPhysicalMaintenanceCeiling(contextWindow: number, contextSteadyActive: boolean): number | undefined {
+	#contextSteadyPhysicalMaintenanceBand(
+		contextWindow: number,
+		contextSteadyActive: boolean,
+	): { triggerTokens: number; recoveryTokens: number } | undefined {
 		if (!contextSteadyActive || contextWindow <= 0) return undefined;
 		const compactionSettings = this.settings.getGroup("compaction");
 		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return undefined;
@@ -15221,7 +15280,39 @@ export class AgentSession {
 			contextWindow,
 			nonMessageTokens: computeNonMessageTokens(this),
 		});
-		return Math.max(1, budget.controlMax);
+		const triggerTokens = Math.max(1, budget.controlMax);
+		const recoveryTokens = Math.max(
+			0,
+			Math.min(triggerTokens - 1, Math.floor(budget.steadyTarget * CONTEXT_STEADY_MAINTENANCE_RECOVERY_BAND)),
+		);
+		return { triggerTokens, recoveryTokens };
+	}
+
+	#contextSteadyMaintenanceRequired(
+		contextTokens: number,
+		contextWindow: number,
+		band: { triggerTokens: number; recoveryTokens: number },
+	): boolean {
+		let state = this.#contextSteadyMaintenanceHysteresis;
+		if (state?.sessionId !== this.sessionId || state.contextWindow !== contextWindow) {
+			state = { sessionId: this.sessionId, contextWindow, blockedUntilRecovery: false };
+			this.#contextSteadyMaintenanceHysteresis = state;
+		}
+		if (state.blockedUntilRecovery) {
+			if (contextTokens > band.recoveryTokens) return false;
+			state.blockedUntilRecovery = false;
+		}
+		return contextTokens > band.triggerTokens;
+	}
+
+	#markContextSteadyMaintenanceCommitted(contextWindow: number): void {
+		const band = this.#contextSteadyPhysicalMaintenanceBand(contextWindow, this.#contextSteadyIsActive());
+		if (!band) return;
+		this.#contextSteadyMaintenanceHysteresis = {
+			sessionId: this.sessionId,
+			contextWindow,
+			blockedUntilRecovery: true,
+		};
 	}
 
 	async #runPrePromptCompactionIfNeeded(messages: AgentMessage[]): Promise<void> {
@@ -15232,14 +15323,12 @@ export class AgentSession {
 		const compactionSettings = this.settings.getGroup("compaction");
 		const contextTokens = this.#estimatePrePromptContextTokens(messages, contextWindow);
 		const contextSteadyActive = this.#contextSteadyIsActive(contextTokens);
-		// Steady maintenance must be decided here too, not only after the response returns.
-		// The mid-turn gate uses the steady budget while this gate used the native threshold
-		// alone, so a context parked between the two (e.g. right after switching to a
-		// smaller-window model) was sent at full size, billed as a cold prefill, and then
-		// compacted on arrival — paying for a history that was about to be discarded.
-		const steadyCeiling = this.#contextSteadyPhysicalMaintenanceCeiling(contextWindow, contextSteadyActive);
+		// Use the same hysteresis controller as the mid-turn boundary. A native
+		// threshold still bypasses the steady-only latch below.
+		const steadyBand = this.#contextSteadyPhysicalMaintenanceBand(contextWindow, contextSteadyActive);
 		const nativeMaintenanceRequired = shouldCompact(contextTokens, contextWindow, compactionSettings);
-		const steadyMaintenanceRequired = steadyCeiling !== undefined && contextTokens > steadyCeiling;
+		const steadyMaintenanceRequired =
+			steadyBand !== undefined && this.#contextSteadyMaintenanceRequired(contextTokens, contextWindow, steadyBand);
 		if (!nativeMaintenanceRequired && !steadyMaintenanceRequired) return;
 
 		// Auto-promote first: switching to a larger-context model avoids compacting
@@ -15258,7 +15347,7 @@ export class AgentSession {
 		logger.debug("Pre-prompt context maintenance triggered by pending prompt size", {
 			contextTokens,
 			contextWindow,
-			steadyCeiling,
+			steadyBand,
 			nativeMaintenanceRequired,
 			steadyMaintenanceRequired,
 			model: `${model.provider}/${model.id}`,
@@ -15467,14 +15556,16 @@ export class AgentSession {
 		const contextSteadyActive = this.#contextSteadyIsActive(
 			Math.max(calculatePromptTokens(lastAssistant.usage), storedContextTokens),
 		);
-		// One shared ceiling with the pre-prompt gate (#contextSteadyPhysicalMaintenanceCeiling):
-		// the plan's control band, not its steady aim. Keeps maintenance aligned with the point
-		// the ContextPlan gate refuses, and keeps the two gates from disagreeing about whether
-		// this turn should have been compacted before it was billed.
-		const contextSteadyTarget =
-			this.#contextSteadyPhysicalMaintenanceCeiling(contextWindow, contextSteadyActive) ?? Number.POSITIVE_INFINITY;
-		const steadyMaintenanceRequired = physicalMaintenanceEnabled && contextTokens > contextSteadyTarget;
+		// One shared Schmitt-trigger band with the pre-prompt gate. A completed
+		// Segment starts a new maintenance interval; native threshold pressure
+		// remains independent and can always force recovery.
 		const segmentHint = this.#contextSteadySegmentMaintenanceHint();
+		if (segmentHint.required) this.#contextSteadyMaintenanceHysteresis = undefined;
+		const steadyBand = this.#contextSteadyPhysicalMaintenanceBand(contextWindow, contextSteadyActive);
+		const steadyMaintenanceRequired =
+			physicalMaintenanceEnabled &&
+			steadyBand !== undefined &&
+			this.#contextSteadyMaintenanceRequired(contextTokens, contextWindow, steadyBand);
 		const nativeMaintenanceRequired =
 			physicalMaintenanceEnabled && shouldCompact(contextTokens, contextWindow, compactionSettings);
 		if (!steadyMaintenanceRequired && !segmentHint.required && !nativeMaintenanceRequired) return;
@@ -15541,7 +15632,7 @@ export class AgentSession {
 			matchedTriggers,
 			contextTokens,
 			contextWindow,
-			contextSteadyTarget,
+			steadyBand,
 			steadyMaintenanceRequired,
 			segmentHint,
 			strategy: compactionSettings.strategy,
@@ -18536,6 +18627,17 @@ export class AgentSession {
 			const sessionContext = this.buildDisplaySessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
 			const tokensAfter = this.#estimateStoredContextTokens();
+			this.#markContextSteadyMaintenanceCommitted(this.model?.contextWindow ?? 0);
+			const compactedThroughEntryId = pathEntries.at(-1)?.id;
+			if (contextSteadyCompaction && compactedThroughEntryId) {
+				this.#contextSteadyCompactionDigestCoverage = {
+					sessionId: this.sessionId,
+					boundaryEntryId: this.#contextSteadyOriginalPreTurnLeafCaptured
+						? this.#contextSteadyOriginalPreTurnLeafId
+						: this.#contextSteadyPreTurnLeafId,
+					throughEntryId: compactedThroughEntryId,
+				};
+			}
 			if (physicalSegment) {
 				appendContextSegment(this.sessionManager, {
 					...physicalSegment,
@@ -18869,6 +18971,7 @@ export class AgentSession {
 			// without that pre-shake savings, shake can fall through to context-full
 			// even though the post-prune history is already inside the recovery band.
 			const contextWindow = this.model?.contextWindow ?? 0;
+			if (reclaimed) this.#markContextSteadyMaintenanceCommitted(contextWindow);
 			const compactionSettings = this.settings.getGroup("compaction");
 			let stillOverThreshold = false;
 			if (contextWindow > 0) {

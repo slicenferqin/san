@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OMP RPC v3 与近期更新核查</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #fff; --fg: #1f2328; --muted: #656d76; --line: #d0d7de; --panel: #f6f8fa; --accent: #0969da; --good: #1a7f37; --warn: #9a6700; --bad: #cf222e; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --line: #30363d; --panel: #161b22; --accent: #58a6ff; --good: #3fb950; --warn: #d29922; --bad: #f85149; } }
+    body { max-width: 1060px; margin: 0 auto; padding: 32px 22px 64px; background: var(--bg); color: var(--fg); font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    h1, h2, h3 { line-height: 1.25; }
+    h1 { margin-bottom: .2em; }
+    h2 { margin-top: 2em; border-bottom: 1px solid var(--line); padding-bottom: .35em; }
+    h3 { margin-top: 1.35em; }
+    a { color: var(--accent); }
+    .meta, .note { color: var(--muted); }
+    .summary { background: var(--panel); border-left: 4px solid var(--accent); padding: 14px 18px; margin: 18px 0; }
+    .status-good { color: var(--good); font-weight: 650; }
+    .status-warn { color: var(--warn); font-weight: 650; }
+    .status-bad { color: var(--bad); font-weight: 650; }
+    table { border-collapse: collapse; width: 100%; margin: 12px 0 20px; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; vertical-align: top; text-align: left; }
+    th { background: var(--panel); }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+    ul { padding-left: 1.4em; }
+    li { margin: .25em 0; }
+    .small { font-size: .9em; }
+  </style>
+</head>
+<body>
+  <h1>OMP RPC v3 与近期更新核查</h1>
+  <p class="meta">核查日期：2026-08-25　|　对象：<a href="https://github.com/can1357/oh-my-pi">can1357/oh-my-pi</a> 与本地 San RPC v2</p>
+
+  <div class="summary">
+    <strong>结论：</strong>社区的 RPC v3 不是已经合入 OMP 的现成版本。主线仍公开为 RPC v1/v2；#8196 和它所依赖/重叠的 #7439 都没有合并，且分支已经严重落后主线。对 San 不应整包移植；应从现有 RPC v2 上选择性吸收“可验证的协议契约”，优先做命令能力清单、跨命令操作生命周期与外部 Host 重连一致性。
+  </div>
+
+  <h2>1. RPC v3 PR 当前状态</h2>
+  <p>用户记忆中的主 PR 是 <a href="https://github.com/can1357/oh-my-pi/pull/8196">#8196 feat(rpc): add v3 session protocol and native UI parity</a>。另有更早、重叠度很高的 <a href="https://github.com/can1357/oh-my-pi/pull/7439">#7439 feat(rpc): expose complete headless control surface</a>。</p>
+
+  <table>
+    <thead><tr><th>PR</th><th>当前状态</th><th>规模与新鲜度</th><th>判断</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><a href="https://github.com/can1357/oh-my-pi/pull/8196">#8196</a></td>
+        <td><span class="status-warn">open，未合并</span><br>非 Draft；GitHub API：<code>mergeable=false</code>、<code>mergeable_state=dirty</code>；没有 requested reviewers。</td>
+        <td>最后更新 2026-08-12；34 commits；226 files；+52,815 / −3,692；28 条行级 review comments。PR head 是 <code>3cbb13d</code>。</td>
+        <td>不是接近合入的增量 PR，而是一套大型协议迁移。PR 描述声称已处理 review finding，但没有后续合并或 maintainer approval 证据。</td>
+      </tr>
+      <tr>
+        <td><a href="https://github.com/can1357/oh-my-pi/pull/7439">#7439</a></td>
+        <td><span class="status-warn">open，Draft，未合并</span><br>GitHub API 同样为 <code>mergeable=false</code>、<code>dirty</code>。</td>
+        <td>最后更新 2026-08-10；37 commits；116 files；+20,175 / −1,659。</td>
+        <td>更像 headless-control 基础系列；#8196 的 review 明确要求与它拆分/排序，而不是继续堆叠。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>分支新鲜度是最明确的阻塞信号：以当前主线 <code>969a94c</code> 比较 #8196，GitHub 返回 <code>diverged</code>，PR 分支虽然 ahead 34，但 behind <strong>2,104</strong> commits。PR head 的 commit status 当前为 <code>pending</code>，但 API 返回 0 个 status、0 个 check runs。不能把 PR 描述中的本地测试数字当成主线可合入证明。</p>
+
+  <h3>Review 暴露的真实风险</h3>
+  <ul>
+    <li>维护者的 P3 review 将其定性为约 50,401 行、215 文件的协议 rollout，并指出它聚合了仍开放的 #7439，建议先拆分/排序。</li>
+    <li>行级 review 曾指出：空闲时插入 queue item 可能不触发 drain；<code>expectedRevision</code> 没有覆盖所有权威 mutation；provider auth 的 method 参数没有真正选择 OAuth/paste flow；协作快照使用固定 30 秒 deadline，持续进展的快照也可能被误判失败。</li>
+    <li>PR 描述后续声称这些问题已解决，但 PR 仍 open、dirty、长期没有主线同步；因此最多说明作者分支上的实现意图，不能说明上游已经接受。</li>
+  </ul>
+
+  <h2>2. OMP 最近更新</h2>
+  <p>最新稳定发布是 <a href="https://github.com/can1357/oh-my-pi/releases/tag/v18.0.4">v18.0.4</a>，发布于 2026-08-24。发布后主线又新增 24 commits；因此应区分“稳定版已发布”和“main 正在快速变化”。</p>
+
+  <h3>v18.0.4 最值得关注</h3>
+  <ul>
+    <li><strong><code>omp git</code>：</strong>全屏 Git TUI，split/inline/hunk diff、minimap、语法高亮、侧边栏 staging、行级 staging、commit/amend、鼠标和 revision pinning。</li>
+    <li><strong><code>/extensions</code> Control Center：</strong>全屏扩展控制中心、统一 inspector、MCP live connection 管理、鼠标和可展开详情。</li>
+    <li><strong>流式与启动体验：</strong>流式 Markdown 代码块实时高亮；启动期间即可编辑 composer 并保留草稿。</li>
+    <li><strong>长会话稳定性：</strong>批量化 streaming markdown/thinking 更新；优化 edit verification 和 session restore；修复 transcript layout、scrollback、resize、孤儿 tool card、快速 tool completion 等问题。</li>
+    <li><strong>错误分类：</strong>HTTP 413 区分 token context overflow 与 provider byte/media budget，避免错误 compaction，并允许正确的 fallback-chain model switching。</li>
+  </ul>
+
+  <h3>v18.0.0–v18.0.3 的方向</h3>
+  <ul>
+    <li>新增 <code>omp render</code>、<code>omp bench</code>、instruction-following benchmark、编辑器 typo/Tab completion/autocorrect，以及更强的 edit payload recovery。</li>
+    <li>新增 edit auto-repair：AST 破坏后由 smol model 修复并重新 parse，失败则回滚并把差异呈现给用户。</li>
+    <li>新增 stable/canary update channel；Unexpected Stops 增加 None、Mechanical、Smart 三种策略。</li>
+    <li>大幅重做 transcript retirement、terminal scrollback、resize replay、启动预加载和 context-file containment dedup；这些比单纯 UI 功能更值得 San 关注。</li>
+  </ul>
+
+  <p>主线当前的 unreleased 方向继续集中在三件事：把 TUI 大型内容处理移出首帧和主线程、让 transcript 在 streaming/resize/shutdown 下保持可退休且不重放、以及把错误恢复从“字符串判断”升级为结构化分类。</p>
+
+  <h2>3. 对 San 的可吸收内容</h2>
+  <p>San 当前不是 OMP 旧 RPC 的空白实现。本地 <code>packages/coding-agent/src/modes/rpc-v2</code> 已有：中心化 method registry、capability negotiation、session lease/revision、session sync/recovery、sequence event、run/queue lifecycle、idempotency、approval/interaction、context continuity、subagent、model/provider auth/config、resource/artifact、host tool/URI 和 worktree lifecycle。故正确策略是“契约吸收”，不是“代码移植”。</p>
+
+  <table>
+    <thead><tr><th>上游想法</th><th>San 已有基础</th><th>建议</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>命令级能力 manifest</strong><br>每个 command 暴露 schema、alias、并发类别、confirmation 要求、可用性和 disabled reason。</td>
+        <td>San 已有 <code>server.getCapabilities</code>、<code>buildServerCapabilities</code> 和 <code>RPC_V2_METHOD_DEFINITIONS</code>；但能力主要按 capability group 暴露，不等于完整 command manifest。</td>
+        <td><span class="status-good">高价值，优先吸收。</span>从现有 registry/validator 生成，不另建一份手写目录。桌面端可 feature-detect，避免按版本号猜行为。</td>
+      </tr>
+      <tr>
+        <td><strong>server-owned operation lifecycle</strong><br>accepted/started/completed/failed/cancelled、operation snapshot、cancel/reconcile、准确 idle settlement。</td>
+        <td>San 已有 <code>RunSnapshot</code>、run lifecycle events、<code>OperationId</code> causation、idempotency、lease 和 sequence；但 method registry 没有独立的 operation list/reconcile/cancel surface。</td>
+        <td><span class="status-good">高价值，增量吸收。</span>先覆盖 bash、auth、compaction、worktree、subagent 等非 run 长操作；重点验证断线重连、重复请求、steer/follow-up 后不被旧的 agent_end 误判 idle。</td>
+      </tr>
+      <tr>
+        <td><strong>session/workspace catalog</strong><br>分页、workspace roots、session info、生命周期投影、resume/fork/delete/rename。</td>
+        <td>San 已有 session list/get/create/open/rename/branch/delete 和 recovery snapshot。</td>
+        <td><span class="status-warn">中等价值。</span>如果 Desktop 要做 session browser，再补 workspace-root 和 resumable/recoverable/reconnectable 投影；不要重写现有 session manager。</td>
+      </tr>
+      <tr>
+        <td><strong>schema-driven settings UI</strong><br>安全披露 schema、redaction、事务更新、逐字段结果和 revision。</td>
+        <td>San 已有 typed settings schema、<code>settings.get/update</code>，以及带 revision/file lock 的 RPC runtime settings store。</td>
+        <td><span class="status-good">值得吸收。</span>先限制在明确标记可读的字段；凭据必须 fail-closed；返回 authoritative post-write snapshot，不泄露“密钥是否存在”。</td>
+      </tr>
+      <tr>
+        <td><strong>headless plan/Ask/extension parity</strong><br>外部 UI 不靠 slash command 模拟 TUI 状态机。</td>
+        <td>San 已有 structured approval/interaction、host tool/URI、资源上传和 plan snapshot 类型；完整 plan control 仍不是现有 method registry 的独立表面。</td>
+        <td><span class="status-good">按产品需求吸收。</span>若 San Desktop 要无损复刻 plan review，移植状态机契约；不要先引入完整 <code>rpc-ui</code> 双模式和大型 UI projection。</td>
+      </tr>
+      <tr>
+        <td><strong>TS/Python client resilience</strong><br>raw frame observer、listener isolation、重启状态清理、分页和 lossless transport。</td>
+        <td>San 已有 TS/Python client、协议 v2 frame limits、sequence/replay、资源/URI/host-tool frame。</td>
+        <td><span class="status-good">持续吸收。</span>把“坏通知不杀 reader”“终态一定 settle 本地 pending operation”“分页 cursor stale/busy 有 machine-readable code”作为 conformance contract。</td>
+      </tr>
+      <tr>
+        <td><strong>collaboration snapshot/guest projection</strong><br>多人协作、媒体、lossy projection、authority transfer。</td>
+        <td>San RPC v2 当前重点是单 Host/session authority；已有 lease/recovery 边界。</td>
+        <td><span class="status-bad">暂不吸收。</span>这是独立产品面和高风险传输系统；上游 review 已暴露 snapshot deadline 等边界问题。除非明确要多人协作，否则投入产出比低。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>4. 建议的 San 路线</h2>
+  <ol>
+    <li><strong>不引入 RPC v3 大版本。</strong>在现有 v2 上做 additive capability；当前协议已经有 lease、revision、sequence、recovery 和结构化错误，贸然换协议会丢掉已有收敛。</li>
+    <li><strong>先做 command manifest。</strong>让外部 Host 能知道“能不能调用、参数是什么、是否需要确认、是否会并发、当前为什么不可用”。这是 #8196/#7439 最通用且最容易独立验证的部分。</li>
+    <li><strong>再补统一 operation reconciliation。</strong>沿用 San 已有 Run/Session/Event DTO，避免另造第二套状态机；用断线、重启、重复 idempotency key、stale revision、steer 后 idle 五类场景做 conformance。</li>
+    <li><strong>最后才做 settings/plan/catalog UI parity。</strong>这些是外部 UI 的产品能力，不是 RPC 核心；按 Desktop 的真实缺口逐项加。</li>
+  </ol>
+
+  <h2>5. 参考资料</h2>
+  <ul class="small">
+    <li><a href="https://github.com/can1357/oh-my-pi/pull/8196">OMP #8196</a>：RPC v3 + native UI parity PR。</li>
+    <li><a href="https://github.com/can1357/oh-my-pi/pull/7439">OMP #7439</a>：complete headless control surface draft。</li>
+    <li><a href="https://github.com/can1357/oh-my-pi/blob/main/docs/rpc.md">OMP RPC 文档（main）</a>：当前公开协议为 v1/v2，含 lossless chunk negotiation 和分页消息 API。</li>
+    <li><a href="https://github.com/can1357/oh-my-pi/releases/tag/v18.0.4">OMP v18.0.4 release</a>：2026-08-24 稳定版说明。</li>
+    <li><a href="https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/CHANGELOG.md">OMP coding-agent CHANGELOG</a>：unreleased 与历史版本变更。</li>
+    <li><a href="https://github.com/can1357/oh-my-pi/compare/v18.0.4...main">v18.0.4...main</a>：发布后主线提交比较。</li>
+  </ul>
+</body>
+</html>

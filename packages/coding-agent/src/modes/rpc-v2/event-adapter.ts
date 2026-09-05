@@ -7,7 +7,9 @@
  * Internal events do not carry stable IDs for messages/turns, so the adapter
  * generates and tracks them as events flow through.
  */
+
 import type { AgentSessionEvent } from "../../session/agent-session";
+import { summarizeToolArguments } from "../../session/exit-diagnostics";
 import type {
 	ContextMaintenanceCompletedData,
 	MessageCompletedData,
@@ -106,6 +108,9 @@ export function adaptSessionEvent(
 	options?: { durableOnly?: boolean },
 ): SessionEvent | undefined {
 	const durableOnly = options?.durableOnly === true;
+	// 判别值先落到 string：switch 穷尽 union 后 default 分支里 event 收窄为 never，
+	// 诊断通知需要不受收窄影响的原始 type。
+	const eventType: string = event.type;
 	let runId = ctx.currentRunId;
 	if (event.type === "agent_start" && !runId) {
 		runId = newRunId();
@@ -163,6 +168,14 @@ export function adaptSessionEvent(
 		// =================================================================
 		case "message_start": {
 			const role = "role" in event.message ? event.message.role : "assistant";
+			// toolResult messages are already covered by tool.started/tool.completed —
+			// emitting them as messages double-renders raw tool output in the
+			// transcript. Hidden custom messages (display:false — xdev mount notices,
+			// plan-mode steers, …) are model-facing context, never UI content.
+			// Skipping allocation here makes any later message_update/message_end
+			// for the same message a no-op (no currentMessageId).
+			if (role === "toolResult") return undefined;
+			if (role === "custom" && "display" in event.message && event.message.display === false) return undefined;
 			const messageId = ctx.allocateMessage(role);
 			return sequencer.emit("message.started", { messageId, role }, { durability: "durable", runId, turnId });
 		}
@@ -201,6 +214,8 @@ export function adaptSessionEvent(
 			const messageId = ctx.currentMessageId;
 			if (!messageId) return undefined;
 			const role = "role" in event.message ? event.message.role : "assistant";
+			if (role === "toolResult") return undefined;
+			if (role === "custom" && "display" in event.message && event.message.display === false) return undefined;
 			const visibleText = visibleMessageText(event.message);
 			const data = {
 				messageId,
@@ -219,10 +234,21 @@ export function adaptSessionEvent(
 		// =================================================================
 		case "tool_execution_start": {
 			ctx.startTool(event.toolCallId, event.toolName);
+			const argsSummary = summarizeToolArguments(event.args);
 			const data = {
 				toolCallId: event.toolCallId as ToolCallId,
 				toolName: event.toolName,
 				intent: sanitizeOptionalText(event.intent),
+				...(argsSummary
+					? {
+							args: {
+								...(argsSummary.command
+									? { command: sanitizeRpcText(argsSummary.command, { maxChars: 500 }) }
+									: {}),
+								...(argsSummary.path ? { path: sanitizeRpcText(argsSummary.path, { maxChars: 500 }) } : {}),
+							},
+						}
+					: {}),
 			} satisfies ToolStartedData;
 			return sequencer.emit("tool.started", data, { durability: "durable", runId, turnId });
 		}
@@ -369,21 +395,45 @@ export function adaptSessionEvent(
 			});
 		}
 
+		// Thinking configuration is durable session state, not a transient stream update.
+		// Preserve explicit null when no controllable setting is available so clients clear stale UI.
+		case "thinking_level_changed":
+			return sequencer.emit(
+				"thinking.changed",
+				{
+					configured: event.configured ?? event.thinkingLevel ?? null,
+					effective: event.thinkingLevel ?? null,
+				},
+				{ durability: "durable", runId },
+			);
+
+		// =================================================================
+		// TUI-only 事件：RPC 客户端（Desktop）没有对应 UI 语义，显式忽略。
+		// 真正未知的事件仍走 default 的 UNKNOWN_INTERNAL_EVENT 诊断通知。
+		// =================================================================
+		case "ttsr_triggered":
+		case "todo_auto_clear":
+		case "irc_message":
+			return undefined;
+
 		// =================================================================
 		// 未知事件必须进入可诊断的协议事件，不能静默丢弃。
 		// =================================================================
-		default:
+		default: {
+			// switch 已穷尽当前 union，event 在 default 收窄为 never；用收窄前捕获的 eventType。
+			const unknownType = eventType;
 			return sequencer.emit(
 				"session.notice",
 				{
 					level: "warning",
 					code: "UNKNOWN_INTERNAL_EVENT",
-					message: `Unknown AgentSessionEvent: ${event.type}`,
+					message: `Unknown AgentSessionEvent: ${unknownType}`,
 					source: "rpc-v2.event-adapter",
-					details: { eventType: event.type },
+					details: { eventType: unknownType },
 				},
 				{ durability: "durable", runId },
 			);
+		}
 	}
 }
 

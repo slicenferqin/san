@@ -1,0 +1,804 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>San 统一编排技术设计：一条默认路径，三条语义通道</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f6fa;
+      --paper: #ffffff;
+      --paper-soft: #f8faff;
+      --ink: #172033;
+      --muted: #657188;
+      --line: #dce2ec;
+      --blue: #315cf5;
+      --blue-soft: #edf1ff;
+      --green: #087f5b;
+      --green-soft: #e8f7f1;
+      --amber: #9a5b00;
+      --amber-soft: #fff4df;
+      --red: #a52a3a;
+      --red-soft: #fff0f2;
+      --purple: #6545a4;
+      --purple-soft: #f2edff;
+      --code: #eef1f6;
+      --shadow: 0 12px 34px rgba(28, 44, 84, .07);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --bg: #11151d;
+        --paper: #191f2a;
+        --paper-soft: #1d2430;
+        --ink: #edf1f8;
+        --muted: #a6b0c2;
+        --line: #303a4b;
+        --blue: #89a5ff;
+        --blue-soft: #202b4e;
+        --green: #67d8b0;
+        --green-soft: #12382f;
+        --amber: #ffca73;
+        --amber-soft: #3b2d15;
+        --red: #ff9ba8;
+        --red-soft: #3d1e27;
+        --purple: #c3a8ff;
+        --purple-soft: #30254b;
+        --code: #242b38;
+        --shadow: 0 12px 34px rgba(0, 0, 0, .2);
+      }
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 16px/1.76 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap { max-width: 1160px; margin: 0 auto; padding: 28px 20px 80px; }
+    .hero {
+      padding: 46px 48px 42px;
+      border-radius: 24px;
+      color: #fff;
+      background: linear-gradient(135deg, #172752 0%, #263f91 55%, #3d5bd0 100%);
+      box-shadow: var(--shadow);
+    }
+    .eyebrow { margin: 0 0 8px; color: #cbd7ff; font-size: 13px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 0; max-width: 900px; font-size: clamp(32px, 5vw, 52px); line-height: 1.12; letter-spacing: -.035em; }
+    .subtitle { max-width: 900px; margin: 18px 0 0; color: #e2e8ff; font-size: 18px; }
+    .meta { margin-top: 20px; color: #cbd7ff; font-size: 14px; }
+    section, nav, .card {
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+    }
+    section { margin-top: 22px; padding: 30px 32px; }
+    nav { margin-top: 22px; padding: 18px 22px; }
+    nav ul { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+    nav a { display: inline-block; padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper-soft); font-size: 14px; }
+    h2 { margin: 0 0 16px; font-size: 28px; line-height: 1.28; letter-spacing: -.025em; }
+    h3 { margin: 27px 0 9px; font-size: 20px; line-height: 1.35; }
+    h4 { margin: 20px 0 6px; font-size: 17px; }
+    p { margin: 10px 0; }
+    ul, ol { margin: 10px 0 13px; padding-left: 1.45em; }
+    li + li { margin-top: 6px; }
+    .lead { font-size: 19px; }
+    .small { color: var(--muted); font-size: 14px; }
+    .hero-answer {
+      margin-top: 22px;
+      padding: 20px 22px;
+      border-left: 6px solid var(--green);
+      border-radius: 11px;
+      background: var(--green-soft);
+      color: var(--ink);
+    }
+    .hero-answer strong { color: var(--green); }
+    .callout { margin: 17px 0; padding: 16px 18px; border-left: 5px solid var(--blue); border-radius: 10px; background: var(--blue-soft); }
+    .callout.green { border-left-color: var(--green); background: var(--green-soft); }
+    .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    .callout.red { border-left-color: var(--red); background: var(--red-soft); }
+    .callout.purple { border-left-color: var(--purple); background: var(--purple-soft); }
+    .label { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--blue-soft); color: var(--blue); font-size: 12px; font-weight: 750; }
+    .label.fact { background: var(--green-soft); color: var(--green); }
+    .label.inference { background: var(--amber-soft); color: var(--amber); }
+    .label.decision { background: var(--purple-soft); color: var(--purple); }
+    .grid { display: grid; gap: 15px; }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card { padding: 20px; background: var(--paper-soft); box-shadow: none; }
+    .card h3 { margin-top: 0; }
+    .card.blue { border-top: 5px solid var(--blue); }
+    .card.green { border-top: 5px solid var(--green); }
+    .card.amber { border-top: 5px solid var(--amber); }
+    .card.red { border-top: 5px solid var(--red); }
+    .card.purple { border-top: 5px solid var(--purple); }
+    .metric strong { display: block; margin-bottom: 4px; font-size: 24px; }
+    .metric span { color: var(--muted); font-size: 14px; }
+    table { width: 100%; margin: 16px 0 9px; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 11px 12px; border: 1px solid var(--line); vertical-align: top; text-align: left; }
+    th { background: var(--code); font-weight: 750; }
+    tr:nth-child(even) td { background: color-mix(in srgb, var(--paper) 94%, var(--code)); }
+    code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+    code { padding: 1px 5px; border-radius: 5px; background: var(--code); font-size: .91em; }
+    pre { overflow-x: auto; margin: 15px 0; padding: 17px 19px; border: 1px solid var(--line); border-radius: 10px; background: var(--code); line-height: 1.58; font-size: 13px; white-space: pre-wrap; }
+    .architecture { display: grid; gap: 10px; margin: 18px 0; }
+    .arch-row { display: flex; align-items: center; justify-content: center; gap: 9px; flex-wrap: wrap; }
+    .arch-box { min-width: 165px; padding: 12px 14px; border: 1px solid #9facd9; border-radius: 9px; background: var(--blue-soft); text-align: center; font-size: 14px; }
+    .arch-box.authority { border-color: #53ab8c; background: var(--green-soft); }
+    .arch-box.effect { border-color: #dfaa54; background: var(--amber-soft); }
+    .arch-box.read { border-color: #b58de6; background: var(--purple-soft); }
+    .arrow { color: var(--muted); font-size: 20px; }
+    .timeline { position: relative; margin: 18px 0 8px; padding-left: 26px; }
+    .timeline::before { content: ""; position: absolute; top: 6px; bottom: 6px; left: 7px; width: 2px; background: var(--line); }
+    .event { position: relative; padding: 0 0 19px; }
+    .event::before { content: ""; position: absolute; top: 9px; left: -24px; width: 10px; height: 10px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 4px var(--blue-soft); }
+    .event time { display: block; color: var(--blue); font-size: 14px; font-weight: 750; }
+    .event strong { display: block; margin: 2px 0; }
+    .roadmap { counter-reset: step; margin: 16px 0 0; padding: 0; list-style: none; }
+    .roadmap li { counter-increment: step; position: relative; margin: 10px 0; padding: 14px 16px 14px 58px; border: 1px solid var(--line); border-radius: 10px; }
+    .roadmap li::before { content: counter(step); position: absolute; top: 14px; left: 16px; width: 26px; height: 26px; border-radius: 50%; background: var(--blue); color: #fff; line-height: 26px; text-align: center; font-weight: 750; }
+    .roadmap strong { display: block; }
+    .status-good { color: var(--green); font-weight: 750; }
+    .status-warn { color: var(--amber); font-weight: 750; }
+    .status-bad { color: var(--red); font-weight: 750; }
+    details { margin: 13px 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-soft); }
+    summary { cursor: pointer; color: var(--blue); font-weight: 750; }
+    .source-list li { margin: 8px 0; }
+    .footer { margin-top: 24px; color: var(--muted); font-size: 13px; text-align: center; }
+    @media (max-width: 780px) {
+      .wrap { padding: 14px 12px 50px; }
+      .hero { padding: 32px 24px; border-radius: 17px; }
+      section { padding: 24px 20px; }
+      .grid.two, .grid.three { grid-template-columns: 1fr; }
+      table { display: block; overflow-x: auto; }
+      .arch-box { min-width: 135px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header class="hero">
+      <p class="eyebrow">San architecture design · 2026-09-01</p>
+      <h1>统一编排：一条默认路径，三条语义通道</h1>
+      <p class="subtitle">在不合并现有状态机的前提下，统一 Task、Hub、San Loop 与 Workflow 的入口决策、活动读模型、运行身份和恢复边界。</p>
+      <p class="meta">范围：<code>packages/coding-agent</code> · 性质：技术设计与迁移方案 · 依据：当前源码、既有 San 设计稿、oh-my-pi 官方 issue 与评论 · 不是已实施功能</p>
+      <div class="hero-answer">
+        <strong>核心决定：</strong>
+        San 不再让模型先学习“该调用哪套编排系统”。默认把普通可拆工作交给 <code>task</code>，把对已知执行者的追问交给 <code>hub</code>，只有用户明确要求验收、复核、重试或持续到终态时才升级到 Workflow / San Loop。统一的是入口、主句柄和只读活动视图；Task contract、Agent Registry、AsyncJobManager、IrcBus、Workflow ledger 继续各自拥有写入权。
+      </div>
+    </header>
+
+    <nav aria-label="文档目录">
+      <ul>
+        <li><a href="#decision">决策摘要</a></li>
+        <li><a href="#problem">问题与边界</a></li>
+        <li><a href="#taxonomy">语义分类</a></li>
+        <li><a href="#architecture">目标架构</a></li>
+        <li><a href="#lifecycle">运行与恢复</a></li>
+        <li><a href="#ux">入口与模型协议</a></li>
+        <li><a href="#handoff">批准后交接</a></li>
+        <li><a href="#migration">迁移路线</a></li>
+        <li><a href="#verification">验证标准</a></li>
+        <li><a href="#sources">证据索引</a></li>
+      </ul>
+    </nav>
+
+    <section id="decision">
+      <h2>1. 决策摘要</h2>
+      <p class="lead">[建议] 以“一个逻辑协调对象、多个内部 authority、一个用户活动投影”作为统一编排的最小设计。</p>
+      <div class="grid three">
+        <article class="card green metric">
+          <strong>默认解决问题</strong>
+          <span>普通工作先走 Task；不让用户先选择控制平面。</span>
+        </article>
+        <article class="card blue metric">
+          <strong>只保留三条语义通道</strong>
+          <span>Dispatch、Message、Workflow，分别对应派发、联络、闭环。</span>
+        </article>
+        <article class="card purple metric">
+          <strong>内部状态不强行合并</strong>
+          <span>读模型统一，写入边界和取消权保持分离。</span>
+        </article>
+      </div>
+
+      <h3>1.1 事实、推断、设计决定</h3>
+      <table>
+        <thead><tr><th>等级</th><th>结论</th><th>依据或限制</th></tr></thead>
+        <tbody>
+          <tr><td><span class="label fact">已观察</span></td><td><code>TaskTool.execute</code> 已经承担参数修复、contract admission、同步/异步选择、并发限制、结果整形和后台注册。</td><td>当前源码：<a href="../../packages/coding-agent/src/task/index.ts">task/index.ts</a>。</td></tr>
+          <tr><td><span class="label fact">已观察</span></td><td>Hub 同时承载消息、后台 job 和受管进程；<code>wait</code> 在不同参数形状下有不同语义。</td><td>当前类型：<a href="../../packages/coding-agent/src/tools/hub/types.ts">hub/types.ts</a>；该多域设计不等于三个 authority 已合并。</td></tr>
+          <tr><td><span class="label fact">已观察</span></td><td>San Loop 有独立 pipeline、角色工具白名单、预算、重试、blocked/pass 等终态；WorkflowManager 有批准、暂停、恢复、取消和写入交付状态。</td><td>当前源码：<a href="../../packages/coding-agent/src/san-loop/runner.ts">san-loop/runner.ts</a>、<a href="../../packages/coding-agent/src/workflows/manager.ts">workflows/manager.ts</a>。</td></tr>
+          <tr><td><span class="label inference">推断</span></td><td>主要摩擦不是单独的 Context Steady，而是模型被迫在多个控制平面之间反复做协议选择。</td><td>压缩、provider 失败和长运行会放大循环；即使上下文稳定，入口仍有选择成本。</td></tr>
+          <tr><td><span class="label decision">设计决定</span></td><td>不创建一个越权的“万能 orchestrator”。先抽出共享派发边界，再建立可重建的活动投影。</td><td>避免重复生命周期、双重重试、双重预算和 owner 隔离泄漏。</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout green">
+        <strong>一句话验收：</strong>模型面对普通工作时只需要知道“派发给 Task”；需要补充信息时只需要知道“联系已有 agent”；用户明确要求质量闭环时才需要知道“启动 Workflow”。运行中的技术 ID 和内部记录不进入默认主路径。
+      </div>
+
+      <h3>1.2 目标与非目标</h3>
+      <div class="grid two">
+        <article class="card green">
+          <h3>本设计解决</h3>
+          <ul>
+            <li>统一入口选择与模型可见的语义边界。</li>
+            <li>统一普通 Task、Workflow 节点、San Loop assignment 的活动读模型。</li>
+            <li>让 Workflow 复用 Task 的真实调度边界，而不是调用工具包装层或复制一份 executor。</li>
+            <li>定义批准、依赖、取消、重试、恢复和结果交付的可验证语义。</li>
+            <li>提供从现有实现渐进迁移、可回滚的阶段路线。</li>
+          </ul>
+        </article>
+        <article class="card red">
+          <h3>本设计不解决</h3>
+          <ul>
+            <li>不把所有普通 Task 自动升级为 San Loop。</li>
+            <li>不引入无需用户意图的自治触发、定时运行或自动批准。</li>
+            <li>不把本地 agent、远端 session、job、message 和 workflow node 伪装成同一个实体。</li>
+            <li>不承诺外部 shell、provider、文件系统具备 exactly-once 或可回滚事务。</li>
+            <li>不在第一阶段构建跨 session 的统一状态库或新的 UI 大面板。</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section id="problem">
+      <h2>2. 问题与现有边界</h2>
+      <p>当前系统的底层能力并不缺。问题在于同一个协作过程被拆成多个入口，每个入口返回一部分状态，模型需要自行把它们拼成一张运行图。</p>
+
+      <h3>2.1 当前调用图</h3>
+      <div class="architecture" aria-label="当前编排调用图">
+        <div class="arch-row"><div class="arch-box">模型 / 用户意图</div></div>
+        <div class="arch-row"><span class="arrow">↓</span></div>
+        <div class="arch-row">
+          <div class="arch-box">task<br><small>创建执行</small></div>
+          <div class="arch-box">hub<br><small>联系 / 等待 / 控制</small></div>
+          <div class="arch-box">San Loop / Workflow<br><small>闭环 / 批准 / 恢复</small></div>
+        </div>
+        <div class="arch-row"><span class="arrow">↓</span></div>
+        <div class="arch-row">
+          <div class="arch-box authority">Task contract<br><small>admission / 去重</small></div>
+          <div class="arch-box authority">AsyncJobManager<br><small>job / owner / 交付</small></div>
+          <div class="arch-box authority">Agent Registry + Lifecycle<br><small>running / idle / parked</small></div>
+          <div class="arch-box authority">IrcBus / CrossSession<br><small>消息传输</small></div>
+          <div class="arch-box authority">Loop ledger / Workflow store<br><small>运行状态</small></div>
+        </div>
+      </div>
+
+      <h3>2.2 “完成”不是一个事件</h3>
+      <table>
+        <thead><tr><th>内部事实</th><th>不能直接推导出的结论</th><th>统一读模型应显示</th></tr></thead>
+        <tbody>
+          <tr><td>Task job 已完成并自动交付结果。</td><td>Agent 一定已经从 Registry 移除。</td><td>“已完成；如需补充，可继续联系。”</td></tr>
+          <tr><td>Agent 状态为 <code>idle</code> 或 <code>parked</code>。</td><td>Agent 仍在主动执行，或已经丢失。</td><td>“当前没有执行；可以继续追问”或“暂时休眠，可唤醒”。</td></tr>
+          <tr><td>消息已投递、唤醒或 revive。</td><td>被联系的 agent 已完成工作。</td><td>“消息已送达；等待它继续处理。”</td></tr>
+          <tr><td>Workflow run 暂停。</td><td>所有节点都应该停止或已经失败。</td><td>“流程暂停；恢复后继续未完成的可运行节点。”</td></tr>
+          <tr><td>节点遇到未知外部副作用。</td><td>可以安全地自动重跑。</td><td>“无法确认上一动作结果；需要处理，不盲目重跑。”</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout warn">
+        <strong>设计约束：</strong>活动投影可以把多个内部状态翻译成用户语言，但不能改变事实。它不能替 Registry 改生命周期，不能替 JobManager 放开 owner 权限，也不能替 Workflow ledger 宣布一个未被批准的运行已经成立。
+      </div>
+
+      <h3>2.3 社区证据指向同一个缺口</h3>
+      <div class="timeline">
+        <div class="event"><time>OMP #2413 · 2026-06-12</time><strong>问题被描述为 orchestration enhancement，而不是小型 <code>task()</code> 修改。</strong><span>维护者评论列出现有的批量 spawn、共享 context、background jobs、lifecycle transcripts 和 bounded concurrency，并指出缺少一层显式 graph/state、持久依赖、取消/恢复和整体可见性。</span></div>
+        <div class="event"><time>OMP #6947 · 2026-07-29</time><strong>DAG 设计的边界是 runtime contract，不是薄工具包装。</strong><span>评论建议抽出共享 Task dispatch service；Workflow scheduler 应在首次调度前完成完整 preflight，并保留节点 ID 与 agent/job ID 的区别。</span></div>
+        <div class="event"><time>OMP #7962 · 2026-08-07</time><strong>计划批准后进入持久 Workflow 是明确的产品需求形状。</strong><span>评论把激活点限定在 plan approval 成功之后，而不是普通的 plan exit 或暂停路径。</span></div>
+        <div class="event"><time>OMP #7963 · 2026-08-07</time><strong>“三种模式”并非三个同类状态机。</strong><span><code>orchestrate</code> 与 <code>workflowz</code> 是相近的单回合提示机制；<code>vibe</code> 是改变工具面和生命周期的持久 director mode。应统一分类，不应机械合并。</span></div>
+        <div class="event"><time>OMP #5334 · 2026-07-13</time><strong>模型专属委派提示可能压制 fan-out。</strong><span>这说明委派策略必须用行为数据验证，不能依靠一条模型特定规则把“是否派发”变成隐式禁令。</span></div>
+      </div>
+    </section>
+
+    <section id="taxonomy">
+      <h2>3. 统一分类：三条语义通道</h2>
+      <p class="lead">统一编排不是增加第四个入口，而是让每个入口只回答一个问题。</p>
+      <table>
+        <thead><tr><th>通道</th><th>唯一问题</th><th>主要入口</th><th>完成语义</th><th>明确不承担</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Dispatch</strong><br><span class="small">派发</span></td><td>谁来执行一次工作？</td><td><code>task</code> / 内部 TaskDispatchService</td><td>assignment 产出结果；普通路径自动交付。</td><td>不负责 peer 对话；不自建 review/retry ledger。</td></tr>
+          <tr><td><strong>Message</strong><br><span class="small">联络</span></td><td>如何联系已知执行者？</td><td><code>hub.send</code>、<code>hub.inbox</code>、message wait</td><td>消息已投递、等待、超时或无法送达。</td><td>不创建新 agent；不冒充 job 完成状态。</td></tr>
+          <tr><td><strong>Workflow</strong><br><span class="small">闭环</span></td><td>目标如何经过依赖、验收、复核后才算完成？</td><td>Workflow manager、San Loop mode、未来 workflow tool</td><td>completed、blocked、failed、cancelled 或需要用户。</td><td>不把每个角色调用重复登记成普通 Task；不绕过批准。</td></tr>
+        </tbody>
+      </table>
+
+      <h3>3.1 普通 Task、批量 Task、Workflow 的选择</h3>
+      <table>
+        <thead><tr><th>意图形状</th><th>默认路径</th><th>何时升级</th><th>主句柄</th></tr></thead>
+        <tbody>
+          <tr><td>一个明确、可独立交付的工作项。</td><td>单项 <code>task</code>。</td><td>不升级；结果交付后按需追问。</td><td><code>agentId</code></td></tr>
+          <tr><td>多个互相独立的调查或实现项。</td><td>一次 batch <code>task</code>。</td><td>只有出现依赖、质量门或持续恢复要求才转 Workflow。</td><td>每项一个 <code>agentId</code>，父级看聚合活动。</td></tr>
+          <tr><td>存在明确依赖、验收、复核、失败重试或“直到终态”的要求。</td><td>Workflow / San Loop。</td><td>不再额外包一层普通 Task。</td><td>用户看活动摘要；详情保留 <code>runId</code> / <code>nodeId</code>。</td></tr>
+          <tr><td>已经知道某个 agent，需要补充信息或继续追问。</td><td><code>hub.send(agentId)</code>。</td><td>只有需要新执行才重新 Dispatch；不能因 agent idle/parked 就自动重建。</td><td><code>agentId</code> 或显式远端地址。</td></tr>
+        </tbody>
+      </table>
+
+      <h3>3.2 模式与提示词的分类</h3>
+      <div class="grid three">
+        <article class="card blue">
+          <h3>单回合编排提示</h3>
+          <p><code>orchestrate</code> / <code>workflowz</code> 这类机制只改变当前回合的指导，不创建持久运行对象。</p>
+          <p class="small">建议：在模型说明中统一称为“一回合编排提示”，保留现有兼容入口，不把它们误写成持久 mode。</p>
+        </article>
+        <article class="card purple">
+          <h3>持久 director mode</h3>
+          <p><code>vibe</code> 会保存 mode 状态、替换父级工具面并拥有独立 worker backend。</p>
+          <p class="small">建议：继续作为独立 authority/runtime，不把它伪装成普通 Workflow run。</p>
+        </article>
+        <article class="card green">
+          <h3>持久 Workflow run</h3>
+          <p>在明确批准后创建有依赖、预算和终态的运行；跨后续回合继续，但第一阶段限于当前 session branch。</p>
+          <p class="small">建议：Workflow 是执行合同，不是另一个 magic keyword。</p>
+        </article>
+      </div>
+
+      <div class="callout purple">
+        <strong>不做的合并：</strong>不把 <code>orchestrate</code>、<code>workflowz</code>、<code>vibe</code> 和 Workflow run 粗暴压成一个枚举。应统一它们的说明、入口决策和活动投影；保留会影响工具权限、持久化和取消语义的真实差异。
+      </div>
+
+      <h3>3.3 一个逻辑对象，多个内部引用</h3>
+      <pre>CoordinationObjective
+  ├─ objectiveId                 用户可理解的工作目标
+  ├─ mode: direct | batch | workflow
+  ├─ summary                     主路径的一句话状态
+  └─ assignments[]
+       ├─ assignmentId            逻辑工作项
+       ├─ agentId                  后续联系的主句柄
+       ├─ jobId                    后台执行句柄（详情层）
+       ├─ contractId / scopeId     去重与作用域（详情层）
+       ├─ runId / nodeId           Workflow 专用引用（详情层）
+       ├─ messageIds[]             协调事件，不代表完成
+       ├─ userState                working | done | blocked
+       ├─ result                   可交付结果引用
+       └─ nextAction               下一步或需要用户处理的原因</pre>
+      <p>统一的关键不是制造一个万能 ID，而是规定引用优先级：普通 follow-up 使用 <code>agentId</code>；详情和恢复使用精确的 job、contract、run、node 引用。投影器负责映射，不改变任何 authority 的身份。</p>
+    </section>
+
+    <section id="architecture">
+      <h2>4. 目标架构</h2>
+      <p>目标架构由一个共享派发边界、一个 Workflow controller、一个消息适配层和一个只读活动投影组成；现有 Registry、JobManager、contract registry、IrcBus 与 ledger 不互相夺权。</p>
+
+      <div class="architecture" aria-label="目标统一编排架构">
+        <div class="arch-row"><div class="arch-box">用户 / 模型意图</div></div>
+        <div class="arch-row"><span class="arrow">↓ 选择语义通道</span></div>
+        <div class="arch-row">
+          <div class="arch-box">TaskTool<br><small>模型适配器</small></div>
+          <div class="arch-box">HubTool<br><small>消息 / job / process 适配器</small></div>
+          <div class="arch-box">WorkflowManager / SanLoop<br><small>闭环控制器</small></div>
+        </div>
+        <div class="arch-row"><span class="arrow">↘</span><span class="arrow">↓</span><span class="arrow">↙</span></div>
+        <div class="arch-row"><div class="arch-box read">CoordinationActivityProjector<br><small>只读、可重建、统一用户状态</small></div></div>
+        <div class="arch-row"><span class="arrow">↑ 订阅 / 快照</span></div>
+        <div class="arch-row">
+          <div class="arch-box authority">Task contract registry</div>
+          <div class="arch-box authority">AsyncJobManager</div>
+          <div class="arch-box authority">Agent Registry / Lifecycle</div>
+          <div class="arch-box authority">IrcBus / CrossSession</div>
+          <div class="arch-box authority">Workflow / Loop store</div>
+        </div>
+        <div class="arch-row"><span class="arrow">↓ 外部效果</span></div>
+        <div class="arch-row"><div class="arch-box effect">Provider、工具、文件和受管进程</div></div>
+      </div>
+
+      <h3>4.1 组件职责</h3>
+      <table>
+        <thead><tr><th>组件</th><th>拥有的职责</th><th>禁止越权</th><th>迁移策略</th></tr></thead>
+        <tbody>
+          <tr><td><strong>TaskDispatchService</strong><br><span class="small">新增内部边界</span></td><td>参数规范化后的 preflight、contract admission、并发、同步/后台调度、隔离、结果结算。</td><td>不渲染模型工具文本；不拥有 Workflow 依赖图。</td><td>从 <code>TaskTool.execute</code> 提取；TaskTool 变为薄适配器。</td></tr>
+          <tr><td><strong>TaskContractRegistry</strong></td><td>按 scope/work/strategy 进行 admission、去重、heartbeat 和状态快照。</td><td>不判断 agent 是否 parked；不代替 Workflow node 状态。</td><td>保持现有 identity 和首个 admission 的 scheduler 初始化顺序。</td></tr>
+          <tr><td><strong>AsyncJobManager</strong></td><td>后台 job、owner-scoped 可见性、取消权、进度和结果交付重试。</td><td>不成为持久 Workflow 状态权威；不跨 owner cancel。</td><td>Workflow node 直接绑定一次 Task attempt，不重复生成同一执行的第二个 job。</td></tr>
+          <tr><td><strong>AgentLifecycleManager</strong></td><td>finished agent 的 idle、parked、revive 和冷恢复生命周期。</td><td>Hub、JobManager、Projection 不直接写 lifecycle status。</td><td>所有 send/focus/revive 继续调用 lifecycle API。</td></tr>
+          <tr><td><strong>MessageGateway</strong></td><td>把本地 IrcBus 和跨 session client 归入同一 Message 语义。</td><td>不创建新 agent；不把远端 session 当本地 job。</td><td>沿用显式 <code>san:&lt;12 hex&gt;</code> 地址；先统一说明，再做只读远端投影。</td></tr>
+          <tr><td><strong>WorkflowController</strong></td><td>图验证、依赖就绪、批准、暂停、恢复、取消、重试、blocked 和最终交付。</td><td>不调用 <code>TaskTool.execute()</code> 作为内部 API；不包裹 San Loop 的每个角色。</td><td>复用现有 <code>WorkflowManager</code>；其 bridge 改用共享派发边界。</td></tr>
+          <tr><td><strong>SanLoop orchestrator</strong></td><td>solo/team/council pipeline、角色选择、预算、验收和 Loop 专属 ledger。</td><td>不把角色调用重复登记为普通用户 Task。</td><td>保留 executor；增加 activity adapter 和统一终态映射。</td></tr>
+          <tr><td><strong>CoordinationActivityProjector</strong></td><td>从各 authority 读取快照，生成活动行、三种用户状态和 nextAction。</td><td>不写回 authority；不把推断状态伪装成已确认事实。</td><td>先只读、内存重建；稳定后再接 TUI/ACP/SDK。</td></tr>
+        </tbody>
+      </table>
+
+      <h3>4.2 共享派发服务的最小接口</h3>
+      <p>以下是设计接口，不是要求立即新增的公开 SDK。它的目的，是让模型工具和 Workflow scheduler 共享同一套执行语义。</p>
+      <pre>interface TaskDispatchService {
+  preflight(request: TaskDispatchRequest): TaskDispatchPlan;
+  dispatch(
+    plan: TaskDispatchPlan,
+    options?: TaskDispatchOptions,
+  ): Promise&lt;TaskDispatchHandle&gt;;
+  cancel(handle: TaskDispatchHandle, reason?: string): CancelOutcome;
+  snapshot(handle: TaskDispatchHandle): TaskDispatchSnapshot;
+}
+
+interface TaskDispatchRequest {
+  ownerId: string;
+  rootSessionId?: string;
+  assignment: string;
+  agent: string;
+  contract?: TaskContractInput;
+  isolation?: IsolationRequest;
+  execution: "sync" | "background";
+}
+
+interface TaskDispatchHandle {
+  agentId: string;
+  jobId?: string;
+  contract?: TaskContractSnapshot;
+  completion: Promise&lt;TaskDispatchResult&gt;;
+}</pre>
+      <div class="callout warn">
+        <strong>接口边界：</strong>Workflow scheduler 只负责“哪个 node 现在可运行、哪个 node 等依赖、哪个 node 被阻塞”。具体 agent 如何启动、如何获得 semaphore、如何进入 Registry、如何生成结果，必须只经过 TaskDispatchService。这样才能避免 TaskTool、Workflow 和 San Loop 各自维护一份近似但不相同的生命周期。
+      </div>
+
+      <h3>4.3 统一活动投影</h3>
+      <p>投影是读模型，不是新的状态权威。每个活动行至少包含以下语义字段：</p>
+      <table>
+        <thead><tr><th>字段</th><th>含义</th><th>来源</th><th>默认显示</th></tr></thead>
+        <tbody>
+          <tr><td><code>activityId</code></td><td>投影行稳定引用。</td><td>assignment 或 node 映射。</td><td>否；详情层。</td></tr>
+          <tr><td><code>label</code></td><td>人话工作描述。</td><td>assignment 摘要或 Workflow phase。</td><td>是。</td></tr>
+          <tr><td><code>userState</code></td><td><code>working</code>、<code>done</code>、<code>blocked</code>。</td><td>多个 authority 的保守归并。</td><td>是。</td></tr>
+          <tr><td><code>progress</code></td><td>可解释的最新进展，不伪造百分比。</td><td>job progress、agent activity、node phase。</td><td>是；一行。</td></tr>
+          <tr><td><code>nextAction</code></td><td>系统下一步或用户需要处理的动作。</td><td>状态转换和错误分类。</td><td>是；一行。</td></tr>
+          <tr><td><code>primaryHandle</code></td><td>后续追问使用的 <code>agentId</code> 或明确远端地址。</td><td>Registry / MessageGateway。</td><td>需要时显示。</td></tr>
+          <tr><td><code>technicalRefs</code></td><td>job、contract、run、node、message 等完整映射。</td><td>各 authority。</td><td>折叠详情或 stats。</td></tr>
+        </tbody>
+      </table>
+      <p>投影冲突时采用保守规则：已确认的终态优先于瞬时 progress；<code>blocked</code> 优先于“看起来仍在运行”；无法确认外部副作用时显示需要处理，不自动降级为 completed。</p>
+    </section>
+
+    <section id="lifecycle">
+      <h2>5. 运行、取消与恢复语义</h2>
+
+      <h3>5.1 Direct / Batch Task</h3>
+      <pre>意图
+  ↓ normalize + shape validation
+contract admission
+  ├─ reused → 返回已有活动引用，不重复 spawn
+  └─ admitted
+       ↓ TaskDispatchService preflight
+       ├─ sync → 当前回合等待结算
+       └─ background → AsyncJobManager 注册一次 job
+                    ↓
+              Agent Registry: running
+                    ↓
+          completed / failed / cancelled
+                    ↓
+       自动交付结果 + 更新 contract + 投影活动行
+                    ↓
+       AgentLifecycleManager 接管 idle → parked / revive</pre>
+      <ul>
+        <li>同一批次可以混合 blocking 与 background，但投影必须把每项的等待语义说清楚；不要把整个 batch 误称为同一种执行。</li>
+        <li>后台结果自动交付，模型不应为了“拿结果”反复调用 <code>jobs</code> 或裸 <code>wait</code>。</li>
+        <li>取消只取消调用和 job；不声称已经回滚外部文件、shell 或 provider 副作用。</li>
+        <li>完成后的 agent 仍可能 idle/parked；follow-up 使用原 <code>agentId</code>，不是重新 spawn。</li>
+      </ul>
+
+      <h3>5.2 Workflow DAG</h3>
+      <pre>draft
+  ↓ validate complete graph + permissions + limits + all pending preflights
+approved
+  ↓ durable run_approved
+running
+  ├─ schedule dependency-ready nodes through TaskDispatchService
+  ├─ node completed → unlock dependents
+  ├─ node failed/interrupted → block descendant closure
+  ├─ pause → stop scheduling at safe checkpoints
+  ├─ cancel → stop scheduling + abort active Task calls
+  └─ unknown external effect → blocked; never blind retry
+       ↓
+completed | failed | cancelled | blocked
+       ↓
+result delivery (at most one visible delivery per run)</pre>
+      <p>第一版 Workflow 采用静态图和明确依赖。完整定义必须在第一个节点启动前通过验证；运行过程中不允许模型无审批地追加节点或扩大权限。</p>
+
+      <h3>5.3 建议固定的五个语义决定</h3>
+      <table>
+        <thead><tr><th>问题</th><th>建议答案</th><th>理由</th></tr></thead>
+        <tbody>
+          <tr><td>取消是否影响运行中 Task？</td><td><span class="status-good">停止未来调度，并向 active Task 发送正常 abort signal。</span></td><td>用户停止应能尽快生效；但状态只能标为 cancelled/unknown，不能声称外部效果回滚。</td></tr>
+          <tr><td>Workflow ID 的作用域？</td><td><span class="status-good">当前 session branch 唯一。</span></td><td>满足跨回合恢复，同时不提前合并多个 session 的 Registry 和权限边界。</td></tr>
+          <tr><td>定义能否原地替换？</td><td><span class="status-good">创建后不可变；新定义使用新 ID 或新版本。</span></td><td>避免批准键与运行时内容漂移。</td></tr>
+          <tr><td>恢复遇到失败节点怎么办？</td><td><span class="status-good">继续独立 ready 分支；失败节点及其后代保持 blocked。</span></td><td>成功节点不重复执行；显式 retry 才能重置失败节点及受影响后代。</td></tr>
+          <tr><td>Workflow node ID 与 Task agent ID 是否相同？</td><td><span class="status-good">不同。</span> 每次 attempt 仍分配一个确定的 Task agent ID，并保留 one-to-one Registry / Hub 身份。</td><td>节点是声明性状态；agent 是执行者；混合会导致恢复和追问语义不清。</td></tr>
+        </tbody>
+      </table>
+
+      <h3>5.4 持久化与崩溃恢复</h3>
+      <div class="grid two">
+        <article class="card green">
+          <h3>权威事实</h3>
+          <ul>
+            <li>对话和关键运行事件采用 append-only 记录。</li>
+            <li>Workflow 当前状态采用可重建的 materialized snapshot / register。</li>
+            <li>usage、预算和交付状态必须有明确结算点。</li>
+            <li>UI stream 只是一种观察，不是恢复依据。</li>
+          </ul>
+        </article>
+        <article class="card amber">
+          <h3>外部效果边界</h3>
+          <ul>
+            <li>provider、shell、文件系统不与 session commit 共享 XA 事务。</li>
+            <li>调用前记录 intent；返回后记录 result 或 unknown。</li>
+            <li>只读操作可 safe replay；有幂等键的操作依赖外部系统去重；不可安全重复的操作恢复为 interrupted/blocked。</li>
+            <li>不要用“重放历史”替代副作用策略。</li>
+          </ul>
+        </article>
+      </div>
+      <p>第一阶段可沿用现有 Workflow store 和 session custom entries 的持久化能力；不新增一套平行 journal。新增字段必须带 schema version，旧快照只能通过显式迁移读取，不能靠猜测缺失字段。</p>
+    </section>
+
+    <section id="ux">
+      <h2>6. 入口、工具与模型可见协议</h2>
+
+      <h3>6.1 默认决策树</h3>
+      <pre>用户提出普通可拆工作
+  └─ Dispatch: task
+       ├─ 一个工作项 → 一个 agent
+       ├─ 明确独立的多个工作项 → 一次 batch
+       └─ 需要补充信息 → Message: hub.send(agentId)
+
+用户明确说“验证 / 复核 / 失败重试 / 直到完成 / 需要终态”
+  └─ Workflow: Workflow 或 San Loop
+       ├─ 单一闭环 → solo / 单 Workflow
+       ├─ 有并行角色 → team / 并行节点
+       └─ 高风险或有争议 → council / 复核节点
+
+用户给出远端地址 san:&lt;12 hex&gt;
+  └─ Message: CrossSession adapter
+       └─ 远端不是本地 job，也不是本地 Registry ref</pre>
+
+      <h3>6.2 模型说明的五条硬边界</h3>
+      <ol>
+        <li><strong><code>task</code> 创建新执行。</strong> 没有新工作时，不要为了追问再次 spawn。</li>
+        <li><strong><code>hub.send</code> 联系已有执行者。</strong> 它不会创建新的 agent，也不代表工作已经完成。</li>
+        <li><strong>普通 Task 结果会自动交付。</strong> 不为取结果连续轮询；只有明确需要等待消息、job 或进程时才使用对应参数。</li>
+        <li><strong>Workflow 只在闭环目标明确时使用。</strong> 不把普通 Task 和 Workflow 双重包裹。</li>
+        <li><strong>默认只暴露一个后续句柄。</strong> 主路径使用 <code>agentId</code>；job、contract、run、node 只在详情层出现。</li>
+      </ol>
+
+      <h3>6.3 Hub 的参数分域</h3>
+      <table>
+        <thead><tr><th>域</th><th>参数特征</th><th>语义</th><th>错误用法</th></tr></thead>
+        <tbody>
+          <tr><td>Messaging</td><td><code>send</code> / <code>inbox</code> / <code>wait(from)</code> / <code>list</code></td><td>读写 peer mailbox、等待消息、查看 agent。</td><td>用 message wait 等 job 完成；把 remote peer 当本地 agent。</td></tr>
+          <tr><td>Jobs</td><td><code>jobs</code> / <code>wait(ids)</code> / <code>cancel(ids)</code></td><td>查看或控制当前 owner 可见的后台 job。</td><td>跨 owner 查询或取消；在结果自动交付后重复轮询。</td></tr>
+          <tr><td>Processes</td><td><code>start</code> / <code>ps</code> / <code>logs</code> / <code>stop</code> 等</td><td>受管长进程生命周期。</td><td>把进程 readiness 当作 agent 工作完成。</td></tr>
+        </tbody>
+      </table>
+      <p>Hub 可以继续是一个工具名，但 schema、prompt 和 renderer 必须显式分域。减少工具数量不应以隐藏参数路由为代价。</p>
+
+      <h3>6.4 默认主路径的三种用户状态</h3>
+      <div class="grid three">
+        <article class="card blue">
+          <h3>正在做什么</h3>
+          <p>“正在检查支付模块的类型错误，已启动 2 个独立检查。”</p>
+          <p class="small">不显示内部调度记录，不让用户理解 scheduler 才能继续。</p>
+        </article>
+        <article class="card green">
+          <h3>做完了什么</h3>
+          <p>“已完成依赖升级检查；发现 3 个需要处理的兼容问题。”</p>
+          <p class="small">结果先给结论，技术引用和完整过程放展开层。</p>
+        </article>
+        <article class="card red">
+          <h3>卡在哪里</h3>
+          <p>“无法确认上一个写入动作是否成功；请查看变化后决定重试或继续。”</p>
+          <p class="small">不要用模糊的“仍在运行”掩盖 blocked/unknown。</p>
+        </article>
+      </div>
+
+      <div class="callout red">
+        <strong>不要把内部机制搬到主 UI：</strong>contract、scope、ledger、receipt、gate、owner 等词可以留在技术详情和 <code>san stats</code>，不应成为 novice 用户继续任务的前置知识。
+      </div>
+    </section>
+
+    <section id="handoff">
+      <h2>7. 计划批准后的持久交接</h2>
+      <p>“计划批准后把实现阶段交给持久编排”是一个有价值的产品入口，但它必须绑定到成功的批准事件，而不是普通退出计划模式。</p>
+
+      <h3>7.1 建议流程</h3>
+      <pre>Plan review
+  ↓ 用户批准计划，并选择执行配置（可选）
+成功完成 plan approval
+  ↓ 退出 plan mode、恢复工具面
+创建并 durable 记录 workflow handoff
+  ↓ 只在批准内容对应的边界内启动
+Workflow run / San Loop execution
+  ↓ 后续回合通过同一活动投影观察、暂停、恢复或处理
+终态：completed / blocked / failed / cancelled</pre>
+      <ul>
+        <li>激活 hook 放在成功的 <code>approvePlan</code> 执行 dispatch 之后，不放在通用 <code>exitPlanMode</code>；后者也覆盖暂停、拒绝和普通切换。</li>
+        <li>handoff 默认 opt-in，优先采用 plan-review 选择，而不是立刻增加一个会影响所有后续会话的全局开关。</li>
+        <li>持久运行保持到显式终态或用户退出，不根据单回合 magic keyword 猜测何时自动结束。</li>
+        <li>ACP、print、非交互会话没有对应 UI 时，必须使用明确的配置或拒绝 handoff；不能静默进入用户无法观察的持久 mode。</li>
+        <li>handoff 只能复用批准计划的权限、模型和预算边界；改变任一边界就需要新的批准。</li>
+      </ul>
+
+      <h3>7.2 与现有 <code>vibe</code>、<code>orchestrate</code>、<code>workflowz</code> 的关系</h3>
+      <table>
+        <thead><tr><th>机制</th><th>是否作为 handoff 目标</th><th>处理方式</th></tr></thead>
+        <tbody>
+          <tr><td><code>orchestrate</code> / <code>workflowz</code></td><td>不直接持久化为 mode。</td><td>保留为单回合指导；如果批准后要持续运行，创建真正的 Workflow run，而不是重复注入 notice。</td></tr>
+          <tr><td><code>vibe</code></td><td>不作为普通 Workflow 的别名。</td><td>它改变 parent tool surface 和 worker authority；若未来支持批准后进入，必须单独定义工具恢复、session fork、ACP 和退出语义。</td></tr>
+          <tr><td>Managed Workflow</td><td>可以。</td><td>使用已批准且版本固定的定义；运行参数和边界必须匹配批准键。</td></tr>
+          <tr><td>Ad-hoc Workflow</td><td>可以，但仍需逐次批准。</td><td>草稿、参数、权限和过期时间绑定当前任务；不得因名称相同而复用批准。</td></tr>
+          <tr><td>San Loop team/council</td><td>可以作为显式质量闭环。</td><td>保留其角色预算、review 和 ledger；只接入统一活动投影，不再包一层普通 Task。</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout warn">
+        <strong>边界：</strong>批准后交接解决的是“单回合执行与持久运行之间的断层”，不是把所有编排方式都变成一个 mode。持久性属于 Workflow run；父级工具权限改变属于 vibe；单回合提示属于 magic keyword。
+      </div>
+    </section>
+
+    <section id="migration">
+      <h2>8. 迁移路线</h2>
+      <p>迁移顺序先改读模型和内部边界，再改变产品入口。每一步都保留旧工具行为，避免一次重写同时改变调度、提示、持久化和 UI。</p>
+
+      <ol class="roadmap">
+        <li><strong>P0 · 统一提示和入口说明，不改运行时。</strong>明确 Task / Hub / Workflow 的三条语义边界；把 Hub wait 按 from、ids、name 分域；普通结果说明自动交付；保留所有现有命令和关键词。</li>
+        <li><strong>P1 · 抽出 TaskDispatchService。</strong>把 <code>TaskTool.execute</code> 中的 preflight、admission、semaphore、sync/background、isolation、settlement 抽为内部服务；TaskTool 只负责 schema、模型文本和结果渲染；现有行为必须保持。</li>
+        <li><strong>P2 · 建立只读 CoordinationActivityProjector。</strong>订阅 contract、job、Registry、message 和 Workflow / Loop snapshot；为每项生成 userState、nextAction 和主句柄；先接测试和内部诊断，不改变主 UI。</li>
+        <li><strong>P3 · 让 Workflow 复用共享派发边界。</strong>WorkflowManager 的 bridge 调用 TaskDispatchService；静态 DAG 完整 preflight 后再调度；node ID 与 agent ID 分离；取消、重试、blocked 和结果交付遵循本设计。</li>
+        <li><strong>P4 · 接入 San Loop 活动适配器。</strong>保留 solo/team/council 的 role executor、预算和 ledger；映射 run/assignment 到活动行；禁止角色调用产生普通 Task 的第二次交付。</li>
+        <li><strong>P5 · 批准后 handoff opt-in。</strong>在 plan approval 成功边界创建持久 Workflow run；先只支持当前 session branch；非交互入口没有观察能力时 fail closed。</li>
+        <li><strong>P6 · 以 dogfood 数据决定默认值。</strong>采集控制面切换、无效等待、重复派发、终态解释率和预算内完成率；没有基线前不全局开启持久编排，也不删除旧入口。</li>
+      </ol>
+
+      <h3>8.1 迁移映射</h3>
+      <table>
+        <thead><tr><th>现有位置</th><th>迁移后角色</th><th>必须保持</th></tr></thead>
+        <tbody>
+          <tr><td><code>task/index.ts</code></td><td>TaskTool adapter + TaskDispatchService 实现来源。</td><td>参数兼容、batch、blocking、async、contract、isolation 和结果形状。</td></tr>
+          <tr><td><code>async/job-manager.ts</code></td><td>后台执行和交付 authority。</td><td>owner 过滤、取消权、delivery retry、retention。</td></tr>
+          <tr><td><code>registry/agent-lifecycle.ts</code></td><td>idle/parked/revive authority。</td><td>只有 lifecycle manager 改变 parked ↔ idle。</td></tr>
+          <tr><td><code>tools/hub/*</code></td><td>Message / Jobs / Processes 的统一适配器。</td><td>参数语义、远端地址显式性、不可越权查询/取消。</td></tr>
+          <tr><td><code>san-loop/*</code></td><td>质量闭环和角色 pipeline。</td><td>严格工具白名单、预算、retry、blocked/pass 和 ledger。</td></tr>
+          <tr><td><code>workflows/*</code></td><td>批准、静态图、持久 run 和交付 authority。</td><td>Managed / Ad-hoc 两种 product kind、批准键、写入冲突 blocked。</td></tr>
+          <tr><td>Task / Hub / Loop prompts</td><td>统一模型协议。</td><td>不把内部技术词汇变成默认用户前置知识；不再用模型特例压制可证明的 fan-out。</td></tr>
+        </tbody>
+      </table>
+
+      <h3>8.2 兼容和回滚</h3>
+      <ul>
+        <li>旧的 <code>task</code>、<code>hub</code>、San Loop 命令和 Workflow 命令继续工作；新服务先作为内部实现替换，不改变公开 schema。</li>
+        <li>旧 session 中的 agent、job、contract 和 Workflow snapshot 通过 adapter 生成活动行；缺少映射时显示有限状态，不猜测隐含关系。</li>
+        <li>新持久记录带 schema version；读取失败时保留原始记录并进入 blocked/needs-user，而不是删除或自动修复成 completed。</li>
+        <li>Projection、handoff 和新的 Workflow tool 分别受独立 feature flag 控制；任一阶段出现重复执行、owner 泄漏或未批准启动即可关闭新层，旧路径仍可运行。</li>
+        <li>不添加 deprecated alias 来掩盖语义冲突；兼容入口只在迁移窗口保留，并记录明确的移除条件。</li>
+      </ul>
+    </section>
+
+    <section id="verification">
+      <h2>9. 验证标准</h2>
+      <p>设计必须用行为验证，而不是只验证类型能编译。重点观察模型是否少做了错误的控制面切换，以及运行是否在预算和终态边界内收敛。</p>
+
+      <h3>9.1 必须通过的场景</h3>
+      <table>
+        <thead><tr><th>场景</th><th>期望行为</th><th>失败信号</th></tr></thead>
+        <tbody>
+          <tr><td>普通单项委派</td><td>一次 Task；结果自动交付；需要追问时一次 Message。</td><td>Task 后连续裸 wait，或结果到达后重复 spawn 相同 assignment。</td></tr>
+          <tr><td>独立 batch</td><td>一次 batch；每项有明确 agentId；父会话看聚合结果。</td><td>被拆成串行调用；item/job/agent 混淆；首项被错误判为 duplicate。</td></tr>
+          <tr><td>完成后追问</td><td>使用原 agentId；idle/parked 经 lifecycle API 唤醒或 revive。</td><td>把 parked 当丢失并创建替代 agent；直接改 Registry status。</td></tr>
+          <tr><td>Workflow DAG</td><td>所有节点先通过验证；只调度 dependency-ready 节点；成功节点不重跑。</td><td>运行中追加未批准节点；TaskTool 被程序化调用造成重复渲染或第二个 job。</td></tr>
+          <tr><td>Workflow 取消</td><td>停止未来调度；active Task 收到 abort；最终显示 cancelled/unknown 而非 completed。</td><td>取消只改 UI；活动节点继续运行且投影报告已完成。</td></tr>
+          <tr><td>失败恢复</td><td>独立 ready 分支继续；失败节点后代 blocked；显式 retry 才重置闭包。</td><td>自动重跑可能有副作用的节点；成功节点重复执行。</td></tr>
+          <tr><td>计划批准 handoff</td><td>只有批准成功路径创建运行；拒绝、暂停、普通退出不创建。</td><td>exitPlanMode 触发持久运行；未批准 agent 启动数大于 0。</td></tr>
+          <tr><td>跨 session 消息</td><td>使用精确 <code>san:&lt;12 hex&gt;</code> 地址；只执行 Message 语义。</td><td>把远端地址送给本地 cancel/jobs；依赖猜测的 session ID。</td></tr>
+          <tr><td>外部效果未知</td><td>进入 blocked/unknown，要求用户处理。</td><td>崩溃后无条件重跑删除、写入或发送操作。</td></tr>
+        </tbody>
+      </table>
+
+      <h3>9.2 指标</h3>
+      <div class="grid two">
+        <article class="card blue">
+          <h3>入口质量</h3>
+          <ul>
+            <li>控制面切换次数：Task ↔ Hub ↔ Workflow。</li>
+            <li>无效等待次数：没有可等待对象时的 jobs/wait。</li>
+            <li>重复 admission 比例和重复 spawn 率。</li>
+            <li>一次 dispatch 到终态的回合数。</li>
+          </ul>
+        </article>
+        <article class="card green">
+          <h3>运行质量</h3>
+          <ul>
+            <li>无人值守终态率、终态可解释率。</li>
+            <li>预算内完成率、取消响应时间、恢复后重复节点数。</li>
+            <li>自动交付次数与重复交付次数。</li>
+            <li>主会话 token 增长和总 token 的对照。</li>
+          </ul>
+        </article>
+      </div>
+      <p class="small">上述指标用于内部 dogfood 和 <code>san stats</code>，不直接出现在主 UI。当前没有入口摩擦基线；先采样，再决定阈值和默认开关。</p>
+
+      <h3>9.3 验证层级</h3>
+      <ol>
+        <li><strong>契约测试：</strong>Task admission 去重、owner 过滤、lifecycle revive、Workflow dependency 和状态转换。</li>
+        <li><strong>集成测试：</strong>TaskDispatchService 到真实 Task runner 的 sync/background 两条路径；Workflow node 到同一 semaphore、Registry 和 delivery。</li>
+        <li><strong>恢复测试：</strong>在 intent、provider 返回、结果结算和 delivery 各边界模拟中断，确认不盲目重跑。</li>
+        <li><strong>交互 smoke：</strong>普通 Task、batch、follow-up、复杂闭环、计划批准 handoff、跨 session message 六类真实操作。</li>
+        <li><strong>过夜 dogfood：</strong>观察是否出现少量新证据驱动的语义活锁；设置硬 max turns、tokens、cost、duration、provider requests 和 workers，达到上限必须进入明确终态。</li>
+      </ol>
+    </section>
+
+    <section id="risks">
+      <h2>10. 风险与防护</h2>
+      <table>
+        <thead><tr><th>风险</th><th>表现</th><th>防护</th></tr></thead>
+        <tbody>
+          <tr><td>跨压缩边界的语义活锁</td><td>每一回合都有少量新输出，但反复重新选择 Task、Hub、Workflow。</td><td>父级硬预算、终止状态、活动快照和“下一步”字段；不要仅依靠 prompt 记忆。</td></tr>
+          <tr><td>双重执行层</td><td>Workflow 包 TaskTool，TaskTool 又注册后台 job，结果被交付两次。</td><td>共享 TaskDispatchService；一次 attempt 只有一个 agent/job 绑定。</td></tr>
+          <tr><td>状态 authority 越权</td><td>Hub 或 Projection 直接修正 Registry；JobManager 代替 Workflow 宣布完成。</td><td>职责矩阵、封装 API、跨模块行为测试。</td></tr>
+          <tr><td>模型特定委派抑制</td><td>某模型因为系统提示不再 fan-out，性能和完成率下降。</td><td>把策略和模型能力分开；对每个 model/provider 做真实行为采样，不把单个 issue 的 workaround 当永久规则。</td></tr>
+          <tr><td>外部副作用重复</td><td>进程崩溃后不确定操作被自动重跑。</td><td>intent/result/unknown 三段式结算；safe、idempotent、never replay policy。</td></tr>
+          <tr><td>持久 handoff 越过用户意图</td><td>普通 plan exit 或非交互会话静默启动长期运行。</td><td>只挂在成功 approval；opt-in；无观察能力时 fail closed。</td></tr>
+          <tr><td>跨 session 过早合并</td><td>把两个 Registry、job owner 和 lifecycle 混成一个总表。</td><td>第一阶段只做本 session branch；远端继续是 Message peer。</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout green">
+        <strong>推荐的停线条件：</strong>出现未批准启动、重复外部写入、跨 owner 取消/泄露、成功节点重复运行、取消后显示 completed、或无法解释的无界回合增长时，停止扩大 rollout，回退到旧 Task / Hub / Workflow 路径。
+      </div>
+    </section>
+
+    <section id="open">
+      <h2>11. 仍需维护者明确的产品决策</h2>
+      <p>以下不是运行时无法解决的技术问题，而是需要产品口径固定的选择。本文给出保守默认值，避免实现过程中把偶然行为写进持久格式。</p>
+      <table>
+        <thead><tr><th>决策点</th><th>保守默认</th><th>代价</th></tr></thead>
+        <tbody>
+          <tr><td>持久 Workflow 的范围</td><td>当前 session branch，跨回合可恢复；暂不承诺跨 session 总体编排。</td><td>远端协作需要继续用 Message；后续可增加只读聚合。</td></tr>
+          <tr><td>用户如何启用 handoff</td><td>plan-review 中明确选择，默认关闭。</td><td>多一个选择，但不会让全局会话意外进入持久 mode。</td></tr>
+          <tr><td>Workflow 定义版本</td><td>创建后不可变；任何脚本、权限、预算和参数边界变化生成新版本。</td><td>需要管理版本，但恢复和批准可证明。</td></tr>
+          <tr><td>是否允许自治追加节点</td><td>第一版禁止；图在首次调度前完整验证。</td><td>复杂动态任务需要重新生成并重新批准草稿。</td></tr>
+          <tr><td>是否把 vibe 纳入统一入口</td><td>统一分类和活动投影，不把它作为普通 Workflow 别名。</td><td>短期保留两套持久 authority；换取工具权限语义不被掩盖。</td></tr>
+          <tr><td>何时改变默认值</td><td>等控制面切换、无效等待和过夜终态率有基线后再决定。</td><td>功能不会一上线就覆盖所有会话。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="sources">
+      <h2>12. 证据索引</h2>
+      <p>外部材料均优先采用 oh-my-pi 官方 GitHub 仓库的 issue/comment；本地判断直接链接当前源码或已有设计文档。日期按本设计撰写时的读取结果记录。</p>
+
+      <h3>12.1 本地源码</h3>
+      <ul class="source-list">
+        <li><a href="../../packages/coding-agent/src/task/index.ts"><code>task/index.ts</code></a>：<code>TaskTool.execute</code> 的 shape validation、contract admission、blocking/async 分流、后台注册、结果交付和 agent/job 映射。</li>
+        <li><a href="../../packages/coding-agent/src/execution-control/task-contract.ts"><code>execution-control/task-contract.ts</code></a>：TaskContractIdentity、admit/reused、job binding、heartbeat、monotonic cursor。</li>
+        <li><a href="../../packages/coding-agent/src/execution-control/execution-runtime.ts"><code>execution-control/execution-runtime.ts</code></a>：按 scope 建立独立 DurableScheduler 的运行时边界。</li>
+        <li><a href="../../packages/coding-agent/src/async/job-manager.ts"><code>async/job-manager.ts</code></a>：后台 job、owner-scoped filter、取消、进度、delivery retry 和 retention。</li>
+        <li><a href="../../packages/coding-agent/src/registry/agent-lifecycle.ts"><code>registry/agent-lifecycle.ts</code></a>：idle、parked、revive 的唯一生命周期 owner。</li>
+        <li><a href="../../packages/coding-agent/src/tools/hub/types.ts"><code>tools/hub/types.ts</code></a>：Hub 的 messaging/jobs/process 三域和本地/远端 peer 类型。</li>
+        <li><a href="../../packages/coding-agent/src/workflows/types.ts"><code>workflows/types.ts</code></a>：Managed/Ad-hoc、WorkflowRunStatus、node status、budget、delivery 和 write artifact。</li>
+        <li><a href="../../packages/coding-agent/src/workflows/manager.ts"><code>workflows/manager.ts</code></a>：批准后启动、pause/resume/cancel、run 状态和写入交付。</li>
+        <li><a href="../../packages/coding-agent/src/workflows/runtime/control.ts"><code>workflows/runtime/control.ts</code></a>：running/paused/cancelled 控制与 checkpoint。</li>
+        <li><a href="../../packages/coding-agent/src/workflows/runtime/interpreter.ts"><code>workflows/runtime/interpreter.ts</code></a>：Workflow runtime 的 signal、per-node controller、并发和限制。</li>
+        <li><a href="../../packages/coding-agent/src/san-loop/runner.ts"><code>san-loop/runner.ts</code></a>：San Loop 角色调用、预算、run snapshot、transition 和终态。</li>
+        <li><a href="../../packages/coding-agent/src/san-loop/orchestrator.ts"><code>san-loop/orchestrator.ts</code></a>：solo/team/council mode policy。</li>
+        <li><a href="san-subagent-orchestration-ergonomics-20260901.html">San 子 agent 编排体验诊断</a>：三条语义通道、三种用户状态和 P0/P1/P2 优先级。</li>
+        <li><a href="san-v0.4-dynamic-workflows-proposal-20260711.html">San v0.4 Managed SOP 与 Ad-hoc Workflows 产品提案</a>：批准、版本、预算、写入冲突、恢复和 rollout 底线。</li>
+      </ul>
+
+      <h3>12.2 OMP 官方 issue 与评论</h3>
+      <ul class="source-list">
+        <li><a href="https://github.com/can1357/oh-my-pi/issues/2413">#2413 · Multi-agent orchestration support (like OMO)</a>；维护者评论：<a href="https://github.com/can1357/oh-my-pi/issues/2413#issuecomment-4694453426">现有能力与缺失的 workflow controller</a>。</li>
+        <li><a href="https://github.com/can1357/oh-my-pi/issues/5334">#5334 · GPT-5.6-specific delegation prompt suppresses subagent fan-out</a>：模型特定委派提示导致 fan-out 与性能回退的报告。</li>
+        <li><a href="https://github.com/can1357/oh-my-pi/issues/6947">#6947 · session-local static DAG</a>；评论：<a href="https://github.com/can1357/oh-my-pi/issues/6947#issuecomment-5112460581">DAG 是 runtime contract</a>、<a href="https://github.com/can1357/oh-my-pi/issues/6947#issuecomment-5113004551">共享 Task dispatch service 与恢复语义</a>。</li>
+        <li><a href="https://github.com/can1357/oh-my-pi/issues/7962">#7962 · persistent orchestration after plan approval</a>；评论：<a href="https://github.com/can1357/oh-my-pi/issues/7962#issuecomment-5223132890">只在 plan approval 成功后 handoff</a>。</li>
+        <li><a href="https://github.com/can1357/oh-my-pi/issues/7963">#7963 · orchestration taxonomy</a>；评论：<a href="https://github.com/can1357/oh-my-pi/issues/7963#issuecomment-5223141368">orchestrate/workflowz 与 vibe 的架构差异</a>。</li>
+      </ul>
+
+      <details>
+        <summary>结论等级说明</summary>
+        <p><span class="label fact">已观察</span> 表示可以由链接的源码或官方 issue/comment 直接核对；<span class="label inference">推断</span> 表示基于这些事实和运行约束得出的判断；<span class="label decision">设计决定</span> 表示面向 San 的建议，不代表上游维护者已承诺实现。</p>
+      </details>
+    </section>
+
+    <p class="footer">文档状态：统一编排技术设计稿。当前结论是“统一读模型与入口，不合并 authority”；实现应从 P0/P1 开始，并以行为验证决定是否扩大持久 Workflow handoff。</p>
+  </main>
+</body>
+</html>

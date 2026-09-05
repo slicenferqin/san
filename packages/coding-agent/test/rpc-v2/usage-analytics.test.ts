@@ -93,4 +93,56 @@ describe("RPC v2 usage analytics", () => {
 			expect.objectContaining({ sessionId: "session-active", requests: 1, totalTokens: 180 }),
 		]);
 	});
+	test("excludes out-of-window usage from totals and breakdowns but keeps it in the session summary", async () => {
+		vi.spyOn(SessionManager, "listAll").mockResolvedValue([]);
+		const now = new Date("2026-07-24T12:00:00.000Z");
+		const base = createAssistantMessage("done");
+		const recent: AssistantMessage = {
+			...base,
+			provider: "anthropic",
+			model: "claude-sonnet",
+			timestamp: now.getTime(),
+			usage: {
+				input: 10,
+				output: 5,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 15,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+		};
+		const stale: AssistantMessage = {
+			...base,
+			provider: "openai",
+			model: "gpt-x",
+			timestamp: now.getTime() - 30 * 86_400_000,
+			usage: {
+				input: 1000,
+				output: 500,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 1500,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+		};
+
+		const analytics = await buildUsageAnalytics({
+			activeSession: {
+				sessionId: "session-active",
+				cwd: "/workspace",
+				messages: [stale, recent],
+			},
+			days: 7,
+			now,
+		});
+
+		// 窗口外（30 天前）的 1500 token 不得计入任何全局聚合。
+		expect(analytics.totals.totalTokens).toBe(15);
+		expect(analytics.totals.requests).toBe(1);
+		expect(analytics.byProvider).toEqual([expect.objectContaining({ key: "anthropic", totalTokens: 15 })]);
+		expect(analytics.byModel).toEqual([expect.objectContaining({ key: "anthropic/claude-sonnet", totalTokens: 15 })]);
+		expect(analytics.daily.reduce((sum, d) => sum + d.totalTokens, 0)).toBe(15);
+		// 会话级 summary 仍是全时段口径。
+		expect(analytics.sessions[0]).toMatchObject({ requests: 2, totalTokens: 1515 });
+	});
 });

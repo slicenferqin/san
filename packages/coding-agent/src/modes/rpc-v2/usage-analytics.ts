@@ -225,18 +225,19 @@ function accumulateMessages(messages: readonly AgentMessage[], context: Aggregat
 		const assistant = message as AssistantMessage;
 		const metric = messageMetric(assistant);
 		addMetrics(session.metrics, metric);
-		addMetrics(context.totals, metric);
 		session.provider = assistant.provider;
 		session.model = assistant.model;
+		// 全局聚合（totals/byProvider/byModel/byUpstream/daily）全部按 days 窗口
+		// 过滤——否则切换统计周期时只有热力图变化，总量卡毫无反应。
+		// 会话级 summary 保持全时段（sessions 表自带 updatedAt 语义）。
+		const timestamp = finiteNonNegative(assistant.timestamp);
+		const daily = timestamp > 0 ? context.days.get(utcDate(timestamp)) : undefined;
+		if (!daily) continue;
+		addMetrics(context.totals, metric);
 		groupMetric(context.providers, assistant.provider || "unknown", metric);
 		groupMetric(context.models, `${assistant.provider || "unknown"}\0${assistant.model || "unknown"}`, metric);
 		if (assistant.upstreamProvider) groupMetric(context.upstreamProviders, assistant.upstreamProvider, metric);
-		const timestamp = finiteNonNegative(assistant.timestamp);
-		if (timestamp > 0) {
-			const date = utcDate(timestamp);
-			const daily = context.days.get(date);
-			if (daily) addMetrics(daily, metric);
-		}
+		addMetrics(daily, metric);
 	}
 	return session;
 }
@@ -356,6 +357,8 @@ export async function buildUsageAnalytics(options?: {
 	activeSession?: ActiveUsageSession;
 	days?: number;
 	sessionLimit?: number;
+	/** 只聚合内存中的活跃会话，跳过全盘 Session 文件扫描（指标条等高频刷新场景）。 */
+	currentOnly?: boolean;
 	now?: Date;
 }): Promise<UsageAnalytics> {
 	const days = Math.min(MAX_DAYS, Math.max(1, Math.trunc(options?.days ?? DEFAULT_DAYS)));
@@ -371,8 +374,10 @@ export async function buildUsageAnalytics(options?: {
 		upstreamProviders: new Map(),
 		days: buildDayMap(days, now),
 	};
-	const infos = await SessionManager.listAll();
-	const persisted = await loadPersistedSessions(infos, context, options?.activeSession?.sessionId);
+	const infos = options?.currentOnly ? [] : await SessionManager.listAll();
+	const persisted = options?.currentOnly
+		? []
+		: await loadPersistedSessions(infos, context, options?.activeSession?.sessionId);
 	let currentSession: UsageSessionSummary | undefined;
 	if (options?.activeSession) {
 		const accumulator = accumulateMessages(options.activeSession.messages, context);
@@ -389,10 +394,12 @@ export async function buildUsageAnalytics(options?: {
 	}
 	const allSessions = currentSession ? [currentSession, ...persisted] : persisted;
 	allSessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+	const windowStart = context.days.keys().next().value ?? "";
+	const windowedCount = allSessions.filter(s => s.updatedAt.slice(0, 10) >= windowStart).length;
 	return {
 		generatedAt: now.toISOString(),
 		days,
-		sessionCount: allSessions.length,
+		sessionCount: windowedCount,
 		persistedSessionCount: infos.length,
 		activeSessionIncluded: currentSession !== undefined,
 		sessionsTruncated: allSessions.length > sessionLimit,

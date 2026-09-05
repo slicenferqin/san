@@ -36,6 +36,53 @@ const AD_HOC_DRAFT_ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/;
 const AD_HOC_SUMMARY_SECTION =
 	/(?:^|\n)\s*(?:purpose|stages?|steps?|limits?|tools?|permissions?|stop(?:\s+conditions?)?|expected(?:\s+final)?\s+(?:output|result))\s*:/gim;
 
+const PLAN_HANDOFF_READ_ONLY_TOOLS = ["read", "grep", "glob", "ast_grep", "inspect_image", "web_search", "yield"];
+const PLAN_HANDOFF_WRITE_TOOLS = [...PLAN_HANDOFF_READ_ONLY_TOOLS, "edit", "write"];
+
+function planHandoffDescriptor(
+	planContent: string,
+	title: string,
+	allowIsolatedWrite: boolean,
+	model: string | undefined,
+): AdHocDraftDescriptor {
+	const normalizedTitle = title.trim().replace(/\s+/gu, " ").slice(0, 120) || "approved-plan";
+	const slug = normalizedTitle
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/gu, "-")
+		.replace(/^-+|-+$/gu, "")
+		.slice(0, 80);
+	const name = `plan-${slug || "handoff"}`;
+	const agentCall = model
+		? `return await agent(${JSON.stringify(planContent)}, { model: ${JSON.stringify(model)} });`
+		: `return await agent(${JSON.stringify(planContent)});`;
+	const sourceText = [
+		"export const meta = {",
+		`\tname: ${JSON.stringify(name)},`,
+		`\tdescription: ${JSON.stringify(`Execute approved plan: ${normalizedTitle}`)},`,
+		"\tversion: 1,",
+		`\tpermissions: { writeMode: ${JSON.stringify(allowIsolatedWrite ? "isolated_write" : "read_only")}, tools: ${JSON.stringify(allowIsolatedWrite ? PLAN_HANDOFF_WRITE_TOOLS : PLAN_HANDOFF_READ_ONLY_TOOLS)} },`,
+		"\tlimits: { concurrency: 1, agentLimit: 1, tokenLimit: 120000, durationMs: 1800000 },",
+		"};",
+		'phase("approved-plan");',
+		agentCall,
+	].join("\n");
+	return {
+		humanSummary: [
+			`Purpose: execute the approved plan “${normalizedTitle}”.`,
+			"Stages: one bounded approved-plan Agent stage.",
+			"Maximum Agents: 1; concurrency: 1.",
+			`Tools: ${allowIsolatedWrite ? PLAN_HANDOFF_WRITE_TOOLS.join(", ") : PLAN_HANDOFF_READ_ONLY_TOOLS.join(", ")}.`,
+			`Write mode: ${allowIsolatedWrite ? "isolated_write" : "read_only"}.`,
+			`Model: ${model ?? "session default"}.`,
+			"Budget: 120000 tokens, 1800000 milliseconds.",
+			"Stop conditions: completion, cancellation, or any Workflow limit.",
+			"Expected result: the Agent's structured execution report.",
+		].join("\n"),
+		sourceText,
+		args: null,
+	};
+}
+
 export const WORKFLOW_COMMAND_USAGE = [
 	"Usage: /workflow <subcommand>",
 	"  list",
@@ -84,6 +131,7 @@ export interface WorkflowCommandContext {
 	taskRef: string;
 	allowIsolatedWrite: boolean;
 	allowAdHoc: boolean;
+	model?: string;
 	observeRun?: (handle: WorkflowRunHandle) => void;
 	generateAdHocDescriptor?: (objective: string) => Promise<string>;
 	generateManagedDescriptor?: (sop: string) => Promise<string>;
@@ -250,6 +298,29 @@ export class WorkflowCommandService {
 		const deliveryReceipts: WorkflowDeliveryReceipt[] = [];
 		const text = await this.#deliveryReceipts.run(deliveryReceipts, () => this.#executeCommand(input, context));
 		return { text, deliveryReceipts };
+	}
+
+	/** Create, approve and start the exact plan snapshot as one explicit handoff. */
+	startApprovedPlanHandoff(planContent: string, title: string, context: WorkflowCommandContext): WorkflowRunHandle {
+		if (!context.allowAdHoc) throw new Error("Plan handoff is disabled by san.workflows.adHocEnabled.");
+		const approvedPlan = planContent;
+		if (!approvedPlan.trim()) throw new Error("Approved plan cannot be empty.");
+		if (approvedPlan.length > 100_000) throw new Error("Approved plan is too long for Workflow handoff.");
+		const saved = this.#manager.saveAdHocDraft(
+			this.#buildAdHocDraft(
+				planHandoffDescriptor(approvedPlan, title, context.allowIsolatedWrite, context.model),
+				context,
+			),
+		);
+		const approval = this.#manager.approveAdHocDraft(saved);
+		const handle = this.#manager.startAdHoc({
+			draftId: saved.draftId,
+			approvalId: approval.approvalId,
+			taskRef: context.taskRef,
+			scopeKey: path.resolve(context.cwd),
+		});
+		context.observeRun?.(handle);
+		return handle;
 	}
 
 	async #executeCommand(input: string, context: WorkflowCommandContext): Promise<string> {

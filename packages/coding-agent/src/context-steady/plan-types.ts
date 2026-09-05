@@ -97,6 +97,14 @@ export interface ContextPlanTurnBundleSource {
 	userEntryId?: string;
 }
 
+export interface ContextPlanReadIdentity {
+	/** 调用 read 时使用的源路径与选择器；仅用于 provider projection。 */
+	path: string;
+	selector: string;
+	/** 同一读取结果内容的稳定快照指纹。 */
+	snapshot: string;
+}
+
 export interface ContextPlanToolPairSource {
 	kind: "tool_pair";
 	entryIds: string[];
@@ -109,6 +117,8 @@ export interface ContextPlanToolPairSource {
 	path?: string;
 	/** 同一路径后续又有完整 mutation 时,指向取代它的那次调用。 */
 	supersededByToolCallId?: string;
+	/** 完全相同 read 结果的源身份,仅用于 provider projection 去重。 */
+	readIdentity?: ContextPlanReadIdentity;
 }
 
 export interface ContextPlanFileEvidenceSource {
@@ -191,8 +201,8 @@ export interface ContextPlanToolStubMaterial {
 	resultEntryId: string;
 	toolName?: string;
 	path?: string;
-	/** 降级来源:superseded(同文件后续 mutation)、emergency(压力应急档)或 aged(旧大输出常规卸载)。 */
-	stubKind?: "superseded" | "emergency" | "aged";
+	/** 降级来源:superseded、emergency、aged 或 duplicate(完全相同 read identity)。 */
+	stubKind?: "superseded" | "emergency" | "aged" | "duplicate";
 	coveredEntryRefs: string[];
 }
 

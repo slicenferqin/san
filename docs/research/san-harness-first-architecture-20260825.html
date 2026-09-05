@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>San Harness-first 架构决策</title>
+<style>
+:root{--ink:#172033;--muted:#667287;--paper:#f5f7fb;--card:#fff;--navy:#173b63;--blue:#2c6fa8;--blue-soft:#eaf3fb;--green:#17745b;--green-soft:#e8f6f1;--amber:#996014;--amber-soft:#fff5e1;--red:#a23b3b;--red-soft:#fff0ef;--line:#dbe3ed;--shadow:0 12px 36px rgba(24,48,78,.08)}
+*{box-sizing:border-box}body{margin:0;color:var(--ink);background:var(--paper);font:16px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--blue);text-underline-offset:3px}.wrap{width:min(1080px,calc(100% - 40px));margin:0 auto}.hero{padding:68px 0 52px;color:#fff;background:radial-gradient(circle at 82% 12%,rgba(91,170,226,.28),transparent 34%),linear-gradient(135deg,#102b49 0%,#183f68 58%,#235a83 100%)}.eyebrow{margin-bottom:12px;color:#add7f1;font-size:13px;font-weight:750;letter-spacing:.12em;text-transform:uppercase}h1{max-width:900px;margin:0;font-size:clamp(34px,5vw,56px);line-height:1.14;letter-spacing:-.035em}.hero p{max-width:850px;margin:22px 0 0;color:#dceaf5;font-size:19px}.meta{display:flex;flex-wrap:wrap;gap:10px 24px;margin-top:24px;color:#bdd5e7;font-size:14px}.verdict{position:relative;z-index:2;margin-top:-24px;padding:28px 32px;border:1px solid rgba(23,59,99,.1);border-radius:18px;background:var(--card);box-shadow:var(--shadow)}.verdict strong{display:block;margin-bottom:8px;color:var(--navy);font-size:25px;line-height:1.45}main{padding:22px 0 80px}section{padding-top:38px}h2{margin:0 0 18px;color:var(--navy);font-size:30px;line-height:1.35;letter-spacing:-.02em}h3{margin:24px 0 9px;color:var(--navy);font-size:20px}h4{margin:0 0 7px;color:var(--navy);font-size:17px}p{margin:10px 0}ul,ol{margin:10px 0;padding-left:24px}li{margin:6px 0}.grid{display:grid;gap:16px}.grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}.grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.card{padding:22px;border:1px solid var(--line);border-radius:14px;background:var(--card);box-shadow:0 5px 18px rgba(24,48,78,.04)}.card h3{margin-top:0}.metric{margin-bottom:4px;color:var(--blue);font-size:28px;font-weight:800;line-height:1.2}.label{color:var(--muted);font-size:13px;font-weight:750;letter-spacing:.06em;text-transform:uppercase}.badge{display:inline-block;margin-right:6px;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:750;vertical-align:1px}.badge.ok{color:var(--green);background:var(--green-soft)}.badge.warn{color:var(--amber);background:var(--amber-soft)}.badge.stop{color:var(--red);background:var(--red-soft)}.callout{margin:18px 0;padding:18px 22px;border-left:4px solid var(--blue);border-radius:0 12px 12px 0;background:var(--blue-soft)}.callout.green{border-color:var(--green);background:var(--green-soft)}.callout.amber{border-color:var(--amber);background:var(--amber-soft)}.table-wrap{overflow-x:auto;margin:16px 0;border:1px solid var(--line);border-radius:14px;background:var(--card)}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:14px 16px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}tr:last-child td{border-bottom:0}th{color:var(--navy);background:#edf3f8;font-weight:750;white-space:nowrap}code{padding:2px 6px;color:#244b6d;border-radius:5px;background:#edf3f8;font:.9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.diagram{margin:18px 0;padding:22px;border-radius:14px;color:#dbeeff;background:#132c49;font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap}.phase{margin:18px 0;padding:24px;border:1px solid var(--line);border-radius:16px;background:var(--card)}.phase-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px 20px;margin-bottom:8px}.phase-head h3{margin:0}.priority{color:var(--red);font-size:13px;font-weight:800;letter-spacing:.08em}.accept{margin-top:14px;padding:14px 16px;border-radius:10px;color:#154f42;background:var(--green-soft)}.sources{color:var(--muted);font-size:14px}footer{padding:30px 0 50px;color:var(--muted);border-top:1px solid var(--line);font-size:13px}@media(max-width:900px){.grid.three{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.wrap{width:min(100% - 26px,1080px)}.hero{padding-top:48px}.hero p{font-size:17px}.verdict{padding:22px}.grid.two,.grid.three{grid-template-columns:1fr}h2{font-size:25px}th,td{min-width:150px}}@media print{body{background:#fff}.hero{padding:38px 0;background:#173b63!important;print-color-adjust:exact;-webkit-print-color-adjust:exact}.verdict{margin-top:16px;box-shadow:none}.card,.phase{box-shadow:none;break-inside:avoid}a{color:inherit;text-decoration:none}}
+</style>
+</head>
+<body>
+<header class="hero"><div class="wrap">
+<div class="eyebrow">Architecture Decision Record · 2026-08-25</div>
+<h1>San 应采用 Harness-first<br />不是 Prompt-first Profile</h1>
+<p>领域身份必须由一套有状态、可执行、可恢复、可验收的 Harness 决定。系统提示只是这套 Harness 向模型投影当前事实和行动边界的一个输出，不是能力、状态或完成权威。</p>
+<div class="meta"><span>决策：Harness 是一等运行时对象</span><span>系统提示：只读投影</span><span>Coding：首个领域 Harness</span></div>
+</div></header>
+<div class="wrap"><div class="verdict">
+<strong>决定：不设计“Profile → 一段系统提示词”的通用化路径。</strong>
+<p>SanRuntime 负责通用循环与事实账本；每个领域由一套 <strong>Harness Suite</strong> 接入能力、上下文、工具观察、验证、恢复和显示。模型只在 Harness 给出的当前可行动作空间中工作。Prompt 只能解释这个空间，不能创建或改变它。</p>
+</div></div>
+<main class="wrap">
+<section>
+<h2>一、先消除术语冲突</h2>
+<div class="callout amber"><strong>已观察到的命名冲突：</strong><code>model-route-registry.ts</code> 的 <code>harnessProfile</code> 是逻辑模型路由字段；<code>sdk.ts</code> 取它作为模型相关 Prompt 输入；<code>agent-session.ts</code> 的注释也明确称它为“行为 profile”。它不是运行时 Harness。</div>
+<p>新设计不能复用这个名字。否则“Harness”会被错误地降格为模型提示词配置。第一轮实际代码改动前，应将现有模型路由字段改名为 <code>promptProfile</code> 或 <code>modelBehaviorProfile</code>；该迁移只改术语，不改变模型路由行为。</p>
+</section>
+<section>
+<h2>二、职责边界</h2>
+<div class="diagram">用户请求 / 外部事件
+        │
+        ▼
+SanRuntime ── Agent Loop · 会话日志 · ExecutionScope · 调度 · Provider · 生命周期
+        │
+        ▼
+Harness Suite ── 领域状态 · 能力/权限 · 世界观察 · 证据 · 验证 · 恢复 · 用户投影
+        │                              │
+        ├──────────────────────────────┼── 工具执行与真实结果
+        │                              │
+        ▼                              ▼
+模型投影（System Prompt / Aside）     ExecutionLedger（权威事实）</div>
+<div class="table-wrap"><table><thead><tr><th>层</th><th>拥有的权力</th><th>明确不拥有</th></tr></thead><tbody>
+<tr><td><strong>SanRuntime</strong></td><td>Agent Loop、会话与 journal、Context Steady、执行作用域、共享预算、调度、Provider 生命周期、通用工具调度。</td><td>不猜测“代码修好了”或“研究结论足够”。</td></tr>
+<tr><td><strong>Harness Suite</strong></td><td>领域工具集及权限、领域上下文、工具结果的结构化观察、验收标准、恢复策略、最小用户状态投影。</td><td>不通过模型文字伪造结果，不绕过通用预算/终态规则。</td></tr>
+<tr><td><strong>Skill</strong></td><td>提供领域方法、可读操作说明和声明式证据要求。</td><td>不直接授予工具、不直接写完成状态、不取代 Harness。</td></tr>
+<tr><td><strong>System Prompt</strong></td><td>向模型投影已存在的工具、约束、当前阶段、Skill 指引和事实摘要。</td><td>不能授予权限、改变账本、接受证据、完成任务、选择 Harness。</td></tr>
+</tbody></table></div>
+</section>
+<section>
+<h2>三、Harness 不是一个大类，是一组受同一生命周期驱动的控制器</h2>
+<p>避免再造一个 2 万行总管类。一个领域 Harness 应由小而明确的控制器组成，并由一个 <code>HarnessRun</code> 聚合其当前状态：</p>
+<div class="grid three">
+<div class="card"><div class="label">能力 Harness</div><h4>能做什么</h4><p>创建并缩减工具集合；定义路径、网络、浏览器、凭据和子 Agent 的权限边界；工具注册表而非 Prompt 才是能力事实。</p></div>
+<div class="card"><div class="label">上下文 Harness</div><h4>模型该看什么</h4><p>从工作区、浏览器、文档、任务账本等收集结构化事实，生成可压缩的模型投影，而不是在 Prompt builder 内直接猜测世界状态。</p></div>
+<div class="card"><div class="label">观察 Harness</div><h4>真实发生了什么</h4><p>把工具结果规范化为 HostObservation、产物引用或 EvidenceReceipt；例如命令退出码、浏览器交互、API 响应或文件修改。</p></div>
+<div class="card"><div class="label">验证 Harness</div><h4>什么时候能收口</h4><p>按领域合同声明并更新 Acceptance Gate；最终完成仍由 <code>ExecutionRuntime.finishScope()</code> 校验真实 Host evidence。</p></div>
+<div class="card"><div class="label">恢复 Harness</div><h4>断线后怎么继续</h4><p>把领域状态写成可恢复快照和产物引用；重启后根据账本/外部状态恢复，不让模型凭记忆重放副作用。</p></div>
+<div class="card"><div class="label">投影 Harness</div><h4>模型和用户各看到什么</h4><p>把已确认的 Harness 状态投影成模型提示和“正在做 / 已完成 / 卡在哪里”三种用户表述；它没有反向写状态的权限。</p></div>
+</div>
+</section>
+<section>
+<h2>四、最小运行时协议</h2>
+<p>以下是边界草图，不是立即落地的完整 API。关键是事件先到 Harness，Harness 产生受类型约束的效果，最后才渲染 Prompt。</p>
+<div class="table-wrap"><table><thead><tr><th>事件</th><th>Harness 可产生的确定性效果</th><th>不能用字符串替代的原因</th></tr></thead><tbody>
+<tr><td><code>task_started</code></td><td>固定 Harness id/version，建立领域合同、默认验证门、初始能力集和恢复状态。</td><td>根任务重启、子 Agent 继承和审计必须使用稳定身份。</td></tr>
+<tr><td><code>before_tool_call</code></td><td>允许、拒绝或收窄调用；附加路径/权限范围；记录不可变的调用意图。</td><td>Prompt 中说“不要做”不能阻止一个已经发出的工具调用。</td></tr>
+<tr><td><code>tool_result</code></td><td>提取 HostObservation、EvidenceReceipt、产物引用、状态变化和下一步可行动作。</td><td>只有真实工具结果可以成为完成事实。</td></tr>
+<tr><td><code>completion_requested</code></td><td>检查领域门是否完整，将证据交给通用 Execution Runtime；给出继续、阻塞或完成申请。</td><td>模型的“done”文本不应改变终态。</td></tr>
+<tr><td><code>session_restored</code></td><td>恢复领域快照，检查外部副作用是否仍在，决定继续、等待或转为需用户输入。</td><td>恢复不是重新发送旧 Prompt。</td></tr>
+</tbody></table></div>
+<p>概念上可表达为：</p>
+<div class="diagram">HarnessDefinition
+  └─ createRun(runtimeContext) → HarnessRun
+
+HarnessRun
+  ├─ capabilities()                 // 工具与权限的权威集合
+  ├─ onEvent(event) → effects       // 状态、准入、观察、证据、调度决定
+  ├─ modelProjection()              // 只读、可重建的模型上下文
+  ├─ userProjection()               // 三种产品状态的最小投影
+  ├─ snapshot() / restore(snapshot) // 可恢复领域事实
+  └─ dispose()</div>
+<p><strong>效果必须是结构化的：</strong>能力变更、调用拒绝、Host observation、evidence receipt、任务准入、状态快照、模型投影。禁止用“附加一段提醒”替代任何会影响权限、进展或完成的决定。</p>
+</section>
+<section>
+<h2>五、现有代码的接缝</h2>
+<div class="table-wrap"><table><thead><tr><th>现有位置</th><th>现在承担的职责</th><th>Harness-first 后的归属</th></tr></thead><tbody>
+<tr><td><code>sdk.ts#createAgentSession</code></td><td>一次性组装工具、MCP、Skill、模型、工作区、执行运行时和 Prompt。</td><td>成为 Runtime 装配器；调用 <code>HarnessDefinition.createRun()</code>，再把其能力与投影接入通用会话。</td></tr>
+<tr><td><code>tools/index.ts#ToolSession</code></td><td>向 Coding 工具传入巨大、混合的会话依赖包。</td><td>第一阶段由 Coding Harness 包住并继续复用；后续按能力切出工具上下文，不把所有字段做成可选项。</td></tr>
+<tr><td><code>AgentSession</code> 的 <code>afterToolCall</code>、<code>setOnTurnEnd</code>、<code>transformContext</code></td><td>当前工具后处理、循环制动、上下文维护和提示重建的实际接缝。</td><td>统一派发 Harness 事件；现有 Coding 行为先通过 <code>CodingHarness</code> 适配，不搬迁、不重写。</td></tr>
+<tr><td><code>ExecutionRuntime.recordHostObservation()</code></td><td>把真实观察写入账本，并由 scheduler 进行进展判断。</td><td>保持为通用权威写入路径；Harness 是 observation/receipt 的领域解释者，不是第二本账。</td></tr>
+<tr><td><code>buildSystemPrompt()</code></td><td>直接收集工具、Skill、项目上下文和工作区信息并渲染文字。</td><td>退为 renderer：消费 <code>HarnessRun.modelProjection()</code>，不再承载能力判断或世界状态采集。</td></tr>
+<tr><td><code>SessionSkillGateState</code></td><td>Skill evidence 与命令/文件工具结果之间的会话级接线。</td><td>演变为 Harness 的验证控制器输入；Skill 仍提供声明，Harness 用真实观察满足或拒绝证据。</td></tr>
+</tbody></table></div>
+</section>
+<section>
+<h2>六、选择与继承规则</h2>
+<ul>
+<li>根任务开始时由确定性选择器选择一个 <strong>Domain Harness</strong>；选择结果、版本和能力范围写入任务账本。</li>
+<li>子 Agent 继承父任务的 Harness 身份与更窄能力范围；不能由子 Agent 仅凭 Prompt 自己换成更高权限的领域。</li>
+<li>一个任务可使用多个 Skill，但 Skill 只能增强当前 Harness 的方法和验证声明；它不能把研究任务悄悄变成有写文件权限的 Coding 任务。</li>
+<li>需要切换领域 Harness 时，必须是显式、可恢复的账本状态转移；不是模型输出一行“现在进入浏览器模式”。</li>
+<li>用户默认不选择 Harness。产品仍按“正在做 / 已完成 / 卡在哪里”呈现，内部选择和证据细节不进入主界面。</li>
+</ul>
+</section>
+<section>
+<h2>七、增量实施顺序</h2>
+<div class="phase"><div class="phase-head"><h3>0. 术语隔离</h3><span class="priority">先做</span></div><p>把现有模型路由 <code>harnessProfile</code> 改为 <code>promptProfile</code> 或 <code>modelBehaviorProfile</code>。这是无行为变化的安全改名，防止新运行时概念被旧 Prompt 概念污染。</p><div class="accept"><strong>通过条件：</strong>模型选择、缓存键和 Prompt 刷新行为不变；新术语不再暗示它是领域执行 Harness。</div></div>
+<div class="phase"><div class="phase-head"><h3>1. 在现有包内建立 Harness 协议</h3><span class="priority">P0</span></div><p>先在 <code>packages/coding-agent</code> 内定义 <code>HarnessDefinition</code>/<code>HarnessRun</code> 及结构化事件效果；实现 <code>CodingHarness</code> 适配器，默认用户路径完全不变。</p><div class="accept"><strong>通过条件：</strong>同一 Coding 会话的工具、Skill gate、执行账本、恢复和 UI 行为与当前一致，且代码不依赖 Prompt 来决定权限/终态。</div></div>
+<div class="phase"><div class="phase-head"><h3>2. 让 Prompt 成为投影</h3><span class="priority">P0</span></div><p>由 Harness 收集/保存结构化上下文，<code>buildSystemPrompt()</code> 只渲染。保留静态系统模板和 Skill 正文，但不让模板承担能力、准入、验证或状态变迁。</p><div class="accept"><strong>通过条件：</strong>删除或压缩模型提示不改变工具权限、账本事实和完成判定。</div></div>
+<div class="phase"><div class="phase-head"><h3>3. 跑通第二套 Harness</h3><span class="priority">P1</span></div><p>实现一个不依赖代码仓库的研究/网页 Harness。它复用相同 Runtime、会话、Skill、ExecutionScope 和恢复机制，但使用不同能力、观察和验证适配器。</p><div class="accept"><strong>通过条件：</strong>真实非 Coding 任务可以无仓库运行、产出 Host evidence、在验收后结束；不需要注入 Coding Prompt 或工具。</div></div>
+<div class="phase"><div class="phase-head"><h3>4. 最后才抽包与改 CLI 身份</h3><span class="priority">P2</span></div><p>只有两个 Harness 都稳定后，才移动纯通用模块、迁移公共调用方和决定新包/CLI 名称。依赖方向必须是领域 Harness 依赖通用 Runtime，而非 Runtime 反向依赖 Coding。</p><div class="accept"><strong>通过条件：</strong>没有双账本、长期别名或依赖反转；源代码、Worker 入口和 SDK 全部使用最终边界。</div></div>
+</section>
+<section>
+<h2>八、验证不是 Prompt 快照</h2>
+<div class="grid two">
+<div class="card"><h3>必须证明的行为</h3><ul><li>Harness 拒绝的工具调用无法执行，即使模型提示要求执行。</li><li>真实工具结果被正确映射为 observation/evidence；模型文字不能充当证据。</li><li>缺少领域验收门时，完成请求被 <code>ExecutionRuntime</code> 拒绝。</li><li>重启后恢复相同 Harness id/version/state，不重复已经发生的副作用。</li><li>Coding Harness 保持现有 Skill evidence、工具和会话行为。</li><li>第二 Harness 不依赖仓库、LSP、Git 或 Coding 默认 Prompt 也能完成真实任务。</li></ul></div>
+<div class="card"><h3>不应测试的东西</h3><ul><li>某段系统提示是否恰好包含某行文字。</li><li>Harness 类是否调用了某个内部 helper。</li><li>工具列表是否因 Prompt 描述出现而“看起来可用”。</li><li>模型写出“已完成”后是否被视为终态。</li></ul><p>这些都不是对 Harness 权力边界的行为证明。</p></div>
+</div>
+</section>
+<section>
+<h2>结论</h2>
+<div class="callout green"><strong>对：Profile 最终必须落成 Harness，而且应当从第一天就是 Harness。</strong></div>
+<p>更精确地说，San 不应选择一个“提示词风格”；它应为任务选择一个有身份、有状态、有权限、有观察和有验收权责的 Harness Suite。系统提示是其中一个可丢弃、可重建的投影。这样 Context Steady 可以压缩 Prompt，模型可以更换，子 Agent 可以重启，而任务的能力边界和完成事实仍然不变。</p>
+</section>
+<section><h2>依据</h2><ul class="sources"><li><code>packages/coding-agent/src/config/model-route-registry.ts</code>、<code>sdk.ts</code>、<code>session/agent-session.ts</code>：现有 <code>harnessProfile</code> 是模型路由/Prompt 行为字段。</li><li><code>packages/coding-agent/src/sdk.ts</code>：当前会话装配同时处理工具、Skill、MCP、Provider 与执行运行时。</li><li><code>packages/coding-agent/src/session/agent-session.ts</code>：已有 <code>afterToolCall</code>、turn-end、上下文变换和 Prompt 重建接缝。</li><li><code>packages/coding-agent/src/execution-control/execution-runtime.ts</code>：Host observation、Host evidence 和完成门已由通用执行运行时校验。</li><li><code>packages/coding-agent/src/execution-control/skill-gate-session.ts</code>：Skill 声明已可通过真实命令/文件动作进入会话级验证状态。</li></ul></section>
+</main>
+<footer><div class="wrap">San Harness-first 架构决策 · 2026-08-25</div></footer>
+</body>
+</html>

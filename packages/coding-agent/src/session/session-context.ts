@@ -83,8 +83,8 @@ export interface SessionContext {
 	cacheMissExplainedAt?: boolean[];
 }
 
-/** Lists session model strings to try when restoring, in fallback order. */
-export function getRestorableSessionModels(
+/** Lists model values to try when restoring, preserving the active-role fallback order. */
+function getRestorableModelValues(
 	models: Readonly<Record<string, string>>,
 	lastModelChangeRole: string | undefined,
 ): string[] {
@@ -103,24 +103,20 @@ export function getRestorableSessionModels(
 	return [roleModel, defaultModel];
 }
 
+/** Lists session model strings to try when restoring, in fallback order. */
+export function getRestorableSessionModels(
+	models: Readonly<Record<string, string>>,
+	lastModelChangeRole: string | undefined,
+): string[] {
+	return getRestorableModelValues(models, lastModelChangeRole);
+}
+
 /** 按具体模型恢复时相同的角色顺序，列出可恢复的逻辑模型意图。 */
 export function getRestorableSessionLogicalModels(
 	logicalModels: Readonly<Record<string, string>>,
 	lastModelChangeRole: string | undefined,
 ): string[] {
-	const defaultModel = logicalModels.default;
-	if (
-		!lastModelChangeRole ||
-		lastModelChangeRole === "default" ||
-		lastModelChangeRole === EPHEMERAL_MODEL_CHANGE_ROLE
-	) {
-		return defaultModel ? [defaultModel] : [];
-	}
-
-	const roleModel = logicalModels[lastModelChangeRole];
-	if (!roleModel) return defaultModel ? [defaultModel] : [];
-	if (!defaultModel || roleModel === defaultModel) return [roleModel];
-	return [roleModel, defaultModel];
+	return getRestorableModelValues(logicalModels, lastModelChangeRole);
 }
 
 export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEntry | null {

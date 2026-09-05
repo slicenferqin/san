@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>San Harness 补强方案｜从“零件齐全”走向“整机可信”</title>
+<style>
+	:root {
+		--ink: #172033;
+		--muted: #647086;
+		--paper: #f4f7fb;
+		--card: #ffffff;
+		--navy: #173b63;
+		--blue: #2b6ea6;
+		--blue-soft: #eaf3fb;
+		--green: #17745b;
+		--green-soft: #e8f6f1;
+		--amber: #9a6114;
+		--amber-soft: #fff6e4;
+		--red: #a13b3b;
+		--red-soft: #fff0ef;
+		--line: #dbe3ee;
+		--shadow: 0 12px 36px rgba(24, 48, 78, 0.08);
+	}
+	* { box-sizing: border-box; }
+	html { scroll-behavior: smooth; }
+	body {
+		margin: 0;
+		color: var(--ink);
+		background: var(--paper);
+		font: 16px/1.8 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+	}
+	a { color: var(--blue); text-underline-offset: 3px; }
+	.wrap { width: min(1120px, calc(100% - 40px)); margin: 0 auto; }
+	.hero {
+		padding: 72px 0 52px;
+		color: #fff;
+		background:
+			radial-gradient(circle at 80% 10%, rgba(91, 170, 226, 0.28), transparent 34%),
+			linear-gradient(135deg, #102b49 0%, #183f68 58%, #235a83 100%);
+	}
+	.eyebrow { margin-bottom: 12px; color: #a8d6f3; font-size: 13px; font-weight: 750; letter-spacing: 0.12em; text-transform: uppercase; }
+	h1 { max-width: 920px; margin: 0; font-size: clamp(34px, 5vw, 58px); line-height: 1.14; letter-spacing: -0.035em; }
+	.hero .lead { max-width: 850px; margin: 24px 0 0; color: #dceaf5; font-size: 20px; line-height: 1.7; }
+	.hero-meta { display: flex; flex-wrap: wrap; gap: 12px 24px; margin-top: 30px; color: #bcd4e7; font-size: 14px; }
+	.verdict {
+		position: relative;
+		z-index: 2;
+		margin-top: -26px;
+		padding: 28px 32px;
+		border: 1px solid rgba(23, 59, 99, 0.1);
+		border-radius: 18px;
+		background: var(--card);
+		box-shadow: var(--shadow);
+	}
+	.verdict strong { display: block; margin-bottom: 8px; color: var(--navy); font-size: 24px; line-height: 1.45; }
+	main { padding: 18px 0 80px; }
+	section { padding-top: 38px; }
+	h2 { margin: 0 0 18px; color: var(--navy); font-size: 30px; line-height: 1.35; letter-spacing: -0.02em; }
+	h3 { margin: 26px 0 10px; color: var(--navy); font-size: 20px; line-height: 1.45; }
+	h4 { margin: 0 0 8px; color: var(--navy); font-size: 17px; }
+	p { margin: 10px 0; }
+	ul, ol { margin: 10px 0; padding-left: 23px; }
+	li { margin: 6px 0; }
+	.small { color: var(--muted); font-size: 14px; }
+	.grid { display: grid; gap: 16px; }
+	.grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+	.grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+	.grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+	.card { padding: 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); box-shadow: 0 5px 18px rgba(24, 48, 78, 0.04); }
+	.card p:last-child, .card ul:last-child { margin-bottom: 0; }
+	.metric { margin-bottom: 4px; color: var(--blue); font-size: 29px; font-weight: 800; line-height: 1.2; }
+	.label { color: var(--muted); font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+	.badge { display: inline-block; margin-right: 6px; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 750; vertical-align: 1px; }
+	.badge.observed { color: var(--green); background: var(--green-soft); }
+	.badge.gap { color: var(--amber); background: var(--amber-soft); }
+	.badge.proposal { color: var(--blue); background: var(--blue-soft); }
+	.badge.risk { color: var(--red); background: var(--red-soft); }
+	.callout { margin: 18px 0; padding: 18px 22px; border-left: 4px solid var(--blue); border-radius: 0 12px 12px 0; background: var(--blue-soft); }
+	.callout.green { border-color: var(--green); background: var(--green-soft); }
+	.callout.amber { border-color: var(--amber); background: var(--amber-soft); }
+	.callout.red { border-color: var(--red); background: var(--red-soft); }
+	.table-wrap { overflow-x: auto; margin: 16px 0; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+	table { width: 100%; border-collapse: collapse; font-size: 14px; }
+	th, td { padding: 14px 16px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+	tr:last-child td { border-bottom: 0; }
+	th { color: var(--navy); background: #edf3f8; font-weight: 750; white-space: nowrap; }
+	.flow { display: grid; grid-template-columns: repeat(7, minmax(96px, 1fr)); gap: 8px; align-items: stretch; margin: 20px 0; }
+	.flow .box { display: grid; place-items: center; min-height: 104px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); text-align: center; }
+	.flow .box strong { display: block; color: var(--navy); }
+	.flow .arrow { display: grid; place-items: center; color: var(--blue); font-size: 24px; font-weight: 800; }
+	.layers { display: grid; gap: 12px; margin: 18px 0; }
+	.layer { display: grid; grid-template-columns: 160px 1fr; gap: 22px; padding: 20px 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+	.layer .name { color: var(--navy); font-size: 19px; font-weight: 800; }
+	.rule { display: grid; grid-template-columns: 46px 1fr; gap: 14px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+	.rule:last-child { border-bottom: 0; }
+	.rule .n { display: grid; place-items: center; width: 38px; height: 38px; color: #fff; border-radius: 50%; background: var(--navy); font-weight: 800; }
+	.milestone { margin: 18px 0; padding: 24px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
+	.milestone-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 20px; margin-bottom: 8px; }
+	.milestone-head h3 { margin: 0; }
+	.priority { color: var(--red); font-size: 13px; font-weight: 800; letter-spacing: 0.08em; }
+	.accept { margin-top: 14px; padding: 14px 16px; border-radius: 10px; color: #154f42; background: var(--green-soft); }
+	details { margin: 14px 0; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+	summary { padding: 14px 18px; color: var(--navy); font-weight: 750; cursor: pointer; }
+	details > div { padding: 0 18px 18px; }
+	code { padding: 2px 6px; color: #244b6d; border-radius: 5px; background: #edf3f8; font: 0.9em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+	.sources { color: var(--muted); font-size: 14px; }
+	.sources li { margin: 8px 0; }
+	footer { padding: 30px 0 50px; color: var(--muted); border-top: 1px solid var(--line); font-size: 13px; }
+	@media (max-width: 900px) {
+		.grid.three, .grid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+		.flow { grid-template-columns: 1fr; }
+		.flow .arrow { min-height: 26px; transform: rotate(90deg); }
+	}
+	@media (max-width: 650px) {
+		.wrap { width: min(100% - 26px, 1120px); }
+		.hero { padding-top: 48px; }
+		.hero .lead { font-size: 17px; }
+		.verdict { padding: 22px; }
+		.grid.two, .grid.three, .grid.four { grid-template-columns: 1fr; }
+		.layer { grid-template-columns: 1fr; gap: 6px; }
+		h2 { font-size: 25px; }
+		th, td { min-width: 150px; }
+	}
+	@media print {
+		body { background: #fff; }
+		.hero { padding: 38px 0; background: #173b63 !important; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+		.verdict { margin-top: 16px; box-shadow: none; }
+		.card, .milestone { box-shadow: none; break-inside: avoid; }
+		a { color: inherit; text-decoration: none; }
+	}
+</style>
+</head>
+<body>
+<header class="hero">
+	<div class="wrap">
+		<div class="eyebrow">Management Brief · 2026-08-25</div>
+		<h1>San Harness 补强方案<br />从“零件齐全”走向“整机可信”</h1>
+		<p class="lead">这份报告回答三个问题：我们现在做到哪了，接下来该抽象什么，以及怎样让 San 真正做到“任务挂一晚上，早上要么完成，要么清楚地停在一个能解释的位置”。</p>
+		<div class="hero-meta">
+			<span>面向：产品与研发决策</span>
+			<span>性质：架构收口建议，不是完成声明</span>
+			<span>范围：coding-agent 的长任务与多 Agent 执行底座</span>
+		</div>
+	</div>
+</header>
+
+<div class="wrap">
+	<div class="verdict">
+		<strong>结论：不要再造一套 Harness。把现有的执行控制内核扶正为唯一总控，再把 Goal、Workflow、Todo、San Loop、普通 task 全部接到它上面。</strong>
+		<p>San 缺的已经不是“更多 Agent、更多工具、更多模式”，而是一个从接单、派工、验收、暂停到恢复都说了算的总账本。关键零件大部分已经在代码里；下一步应当以收口、制动、恢复和实战证明为主。</p>
+	</div>
+</div>
+
+<main class="wrap">
+<section id="summary">
+	<h2>一、先看结论</h2>
+	<div class="grid four">
+		<div class="card"><div class="label">保留</div><div class="metric">Context Steady</div><p>继续负责“给模型看什么”，但不再承担“任务做到哪”的职责。</p></div>
+		<div class="card"><div class="label">扶正</div><div class="metric">ExecutionScope</div><p>现有执行作用域升级为每个顶层任务唯一、持久的事实来源。</p></div>
+		<div class="card"><div class="label">补齐</div><div class="metric">常驻运行者</div><p>终端断开后任务仍有主人；进程重启后能恢复，不靠模型回忆。</p></div>
+		<div class="card"><div class="label">推迟</div><div class="metric">新模式扩张</div><p>新的角色、插件市场、TUI 重写、自修改 Harness 都先不做。</p></div>
+	</div>
+	<div class="callout green">
+		<strong>一句话架构：</strong>一个任务只有一张任务单、一套完成标准、一个共享预算和一个最终状态；Agent、工具、工作流只是完成这张任务单的不同手段。
+	</div>
+</section>
+
+<section id="progress">
+	<h2>二、当前进度：机器已经造了大半，主要差总装和路试</h2>
+	<p class="small"><span class="badge observed">代码已确认</span>下表来自当前源码与仓库文档核对；“待收口”不等于没有实现，而是已有机制还不是所有入口共同遵守的唯一规则。</p>
+	<div class="table-wrap">
+		<table>
+			<thead><tr><th>能力</th><th>目前已经有的</th><th>还没有闭环的</th></tr></thead>
+			<tbody>
+				<tr><td><strong>上下文控制</strong></td><td>Context Steady 已证明能把长会话送给模型的上下文压到稳定范围；仓库基准中第 10 轮为 598 token，对照为 198,340。</td><td>上下文压缩只能降低单次调用成本，不能判断团队是否在重复同一种失败。它是“视野管理”，不是“任务管理”。</td></tr>
+				<tr><td><strong>执行控制内核</strong></td><td><code>execution-control</code> 已包含任务合同、执行账本、验收凭证、进展分类、看门狗、Provider 健康、持久化调度与恢复状态。</td><td>它虽然已经进入根会话、普通 task 与 San Loop，但尚未成为 Goal、Workflow 等所有路径的唯一完成权威。</td></tr>
+				<tr><td><strong>根会话与子 Agent</strong></td><td>每个真实顶层用户请求会创建根执行作用域；子 Agent 继承同一个 runtime、scope 和任务准入表。迟到请求、陈旧结果、非宿主凭证已有拒绝规则。</td><td>根会话看门狗当前仍以一次性提醒为主，不会在无人值守时真正制动；后台断线后的长期所有权也未统一。</td></tr>
+				<tr><td><strong>San Loop</strong></td><td>已与执行作用域、任务合同和验收门深度接线；Supervisor 的一句“通过”不能直接宣布完成。</td><td>这是显式团队模式的强闭环，尚不能代表普通交互、Goal 和 Workflow 都具有同等闭环。</td></tr>
+				<tr><td><strong>Goal / Workflow / Todo</strong></td><td>Goal 有持续目标与 token 预算；Workflow 有并发、Agent、token、时长硬限制和暂停恢复；Todo 有分阶段状态与 reconcile。</td><td>三者仍各自保存一套状态或预算。Goal 工具可直接把自身标为完成；Workflow 也有独立运行状态。局部都合理，合在一起却容易出现“谁说了算”的问题。</td></tr>
+				<tr><td><strong>验收</strong></td><td>类型层已经支持命令、浏览器、API、产物、审查、外部依赖六类宿主凭证；根任务没有真实凭证时不会被账本记为完成。</td><td>普通任务还不能稳定、自动地产生合适的完成标准；六类凭证的实际接线覆盖不均，很多一般任务会一直缺少可完成的验收门。</td></tr>
+				<tr><td><strong>度量</strong></td><td><code>bun run bench:north-star</code> 与 10 条固定小样本已经存在，覆盖修 bug、小功能、模糊需求和一次中途纠偏。</td><td>样本以单 Agent、短任务、确定性命令为主；尚未覆盖整夜、多 Agent、Provider 抖动、压缩、进程崩溃与恢复等真正高风险组合。</td></tr>
+			</tbody>
+		</table>
+	</div>
+	<div class="callout amber">
+		<strong>对之前方案的更新：</strong>8 月 5 日事故修复方案里规划的很多“新机制”，今天已经成为代码。问题已经从“要不要做账本、看门狗、验收门”变成“怎样让它们覆盖所有入口，并在真实故障下证明有效”。
+	</div>
+</section>
+
+<section id="problem">
+	<h2>三、根问题：不是能力不足，而是局部闭环太多</h2>
+	<div class="grid three">
+		<div class="card"><h4>记忆不等于状态</h4><p>模型记得“我做到哪”只能算线索。压缩、重启、换模型之后仍然成立的任务状态，必须由宿主保存。</p></div>
+		<div class="card"><h4>活动不等于进展</h4><p>多开一个 Agent、多写一个文件、多查一次状态，都可能只是忙。只有让完成标准、依赖或可交付产物发生变化，才算前进。</p></div>
+		<div class="card"><h4>复核不等于验收</h4><p>Supervisor、Oracle 或多数模型都说“好了”仍然只是意见。测试、浏览器、API 或产物检查通过，才是完成事实。</p></div>
+	</div>
+	<h3>为什么会出现“一晚上一直转”</h3>
+	<div class="flow" aria-label="失控路径">
+		<div class="box"><span><strong>目标仍未完成</strong>模型决定继续</span></div><div class="arrow">→</div>
+		<div class="box"><span><strong>派出新任务</strong>名字不同，工作相同</span></div><div class="arrow">→</div>
+		<div class="box"><span><strong>产生新活动</strong>轮询、错误、文件、消息</span></div><div class="arrow">→</div>
+		<div class="box"><span><strong>被误认成进展</strong>租期再次刷新</span></div>
+	</div>
+	<p>2026-08-05 的事故就是这一链条的极端版本：约 6.99 亿累计 Prompt Token、187 个子 Agent、1,972 个子 Agent 错误回合。Context Steady 让每一轮更便宜，却没有权力阻止团队重复同一失败路径。正确修法不是关闭压缩，也不是单纯把并发调小，而是让宿主识别“这次工作有没有让任务更接近完成”。</p>
+</section>
+
+<section id="abstraction">
+	<h2>四、建议抽象：一个任务实例，三层职责，五类事实</h2>
+	<div class="callout">
+		<strong>代码层不建议再新建一个 <code>Run</code> 大对象。</strong>直接把现有 <code>ExecutionScope</code> 扶正。对产品和管理层可把它叫“任务实例”；对代码继续沿用现名，避免第二套概念。
+	</div>
+
+	<h3>4.1 三层职责</h3>
+	<div class="layers">
+		<div class="layer"><div class="name">第一层：任务账本</div><div><strong>只记事实，不做猜测。</strong>保存用户目标、版本、工作项、完成标准、共享预算、依赖、进展回执和最终原因。它是唯一能回答“任务现在是什么状态”的地方。</div></div>
+		<div class="layer"><div class="name">第二层：调度总控</div><div><strong>根据账本决定下一步。</strong>负责能否派工、是否重复、Provider 是否健康、是否换策略、是否等待、是否恢复、是否必须停下。确定性规则常驻，模型只处理规则无法判断的语义问题。</div></div>
+		<div class="layer"><div class="name">第三层：不同视图</div><div><strong>同一份事实，不同人看不同切片。</strong>模型得到精简上下文，用户只看到“正在做 / 已完成 / 卡在哪里”，Stats 得到成本和效率明细。任何视图都不能反过来改写事实。</div></div>
+	</div>
+
+	<h3>4.2 账本只需要五类核心记录</h3>
+	<div class="grid two">
+		<div class="card"><h4>1. 任务合同</h4><p>用户到底要什么、哪些要求不能丢、什么叫完成。新要求不是覆盖旧目标，而是产生新版本。</p></div>
+		<div class="card"><h4>2. 工作项</h4><p>谁在做哪一块、依赖谁、采用什么办法、是第几次尝试。身份按“工作 + 方法”确定，不按 V2、Final、Repair 之类名字确定。</p></div>
+		<div class="card"><h4>3. 宿主回执</h4><p>工具真实做了什么：测试结果、浏览器检查、API 响应、文件产物、Provider 错误、后台任务状态。模型文字不能伪造。</p></div>
+		<div class="card"><h4>4. 控制决定</h4><p>继续、换办法、换人、等待、恢复、请用户补信息或安全停机。每个决定绑定当时的任务版本，过期即作废。</p></div>
+		<div class="card"><h4>5. 资源账</h4><p>根任务剩多少预算、每个子任务已预留多少、实际用了多少、结束后退回多少。所有子 Agent 共用同一上限。</p></div>
+	</div>
+
+	<details>
+		<summary>展开：与现有代码的对应关系</summary>
+		<div>
+			<ul>
+				<li>任务账本：<code>execution-control/types.ts</code>、<code>execution-ledger.ts</code>、<code>persistence.ts</code>。</li>
+				<li>工作项：<code>task-contract.ts</code> 与 San Loop assignments。</li>
+				<li>宿主回执：<code>evidence-gates.ts</code> 与 <code>recordHostObservation()</code>。</li>
+				<li>控制决定：<code>watchdog.ts</code>、<code>durable-scheduler.ts</code>、<code>provider-health.ts</code>。</li>
+				<li>不同视图：Context Steady、TUI、Stats、Todo、Plan、Goal 都改为读取投影，不再拥有平行真相。</li>
+			</ul>
+		</div>
+	</details>
+</section>
+
+<section id="logic">
+	<h2>五、核心逻辑：从接单到收尾，宿主必须走完八步</h2>
+	<div class="card">
+		<div class="rule"><div class="n">1</div><div><h4>接单</h4><p>每个顶层用户请求创建一个任务实例；目标、限制和用户原话被固定下来。后续 steering 只生成新版本，不重新发明目标。</p></div></div>
+		<div class="rule"><div class="n">2</div><div><h4>先写完成标准</h4><p>按任务类型自动生成最低验收：Bug 要先复现再确认消失；网页要从浏览器走一遍；API 要验证请求和响应；研究要交付带来源的产物。不能验收的要求明确标为人工判断项。</p></div></div>
+		<div class="rule"><div class="n">3</div><div><h4>拆工与准入</h4><p>派出任何 Agent 前先检查依赖、重复工作、Provider 健康、权限和根预算。条件不满足时不发起模型请求，直接等待、复用已有工作或拒绝重复派发。</p></div></div>
+		<div class="rule"><div class="n">4</div><div><h4>统一执行管道</h4><p>所有工具都按同一顺序经过：权限检查 → 执行 → 结果规范化 → 保存产物 → 判断是活动还是进展 → 写入账本 → 给用户展示。工具可以插件化，执行秩序不能插件化。</p></div></div>
+		<div class="rule"><div class="n">5</div><div><h4>双制动：进展租期 + 安全上限</h4><p>有真实进展就续租；只有活动没有进展则不续。与此同时，每个无人值守任务都有不可自动突破的成本/时长安全上限。进展回答“值不值得继续”，预算回答“最多能花多少”。</p></div></div>
+		<div class="rule"><div class="n">6</div><div><h4>无进展时收敛，而不是重试</h4><p>同一工作、同一办法、同一失败连续出现后，先抑制重复，再做一次诊断；只允许采用实质不同的新办法。没有新办法就等待或清楚地停下，不能换个名字再派一个 Agent。</p></div></div>
+		<div class="rule"><div class="n">7</div><div><h4>完成只认回执</h4><p>所有必需验收项都通过、没有未处理的必做工作、回执属于最新任务版本，才能完成。Agent、Supervisor、Goal 工具都只能提出完成申请，不能直接改最终状态。</p></div></div>
+		<div class="rule"><div class="n">8</div><div><h4>断线与重启后恢复</h4><p>后台运行者从账本恢复任务，核对仍在运行的进程与子 Agent，已执行的副作用不重复。无法安全判断时暂停并说明原因，绝不靠猜测重放。</p></div></div>
+	</div>
+
+	<div class="callout amber">
+		<strong>对“有效进展无限续期”的修正：</strong>工程上仍然按进展续租，避免用固定回合数误杀长任务；产品上必须保留一个默认安全上限，避免任何错误路径拥有无限账单。上限可以由用户明确提高，但系统不能自行突破。
+	</div>
+</section>
+
+<section id="roles">
+	<h2>六、现有功能以后各司其职</h2>
+	<div class="table-wrap">
+		<table>
+			<thead><tr><th>现有模块</th><th>以后负责什么</th><th>不再负责什么</th></tr></thead>
+			<tbody>
+				<tr><td><strong>ExecutionScope / Ledger</strong></td><td>顶层任务唯一真相；记录合同、回执、预算和终态。</td><td>不负责展示，不直接写提示词。</td></tr>
+				<tr><td><strong>Task / Hub</strong></td><td>派工、通信、后台任务控制；所有子项继承根任务。</td><td>不能私自创建无限预算，也不能把聊天消息当进展。</td></tr>
+				<tr><td><strong>San Loop</strong></td><td>复杂任务的多角色调度策略。</td><td>不再拥有一套平行的“最终完成”定义。</td></tr>
+				<tr><td><strong>Workflow</strong></td><td>把重复做法固化成可执行模板，例如并行调研、发布检查。</td><td>不再是另一套独立运行时；状态和预算写回根任务。</td></tr>
+				<tr><td><strong>Goal</strong></td><td>长任务的自动续行策略和用户意图锚点。</td><td>Goal 工具不能直接宣布最终完成。</td></tr>
+				<tr><td><strong>Todo / Plan</strong></td><td>任务账本的可读计划视图，帮助人和模型理解下一步。</td><td>不作为真实执行状态；压缩后不能整表覆盖。</td></tr>
+				<tr><td><strong>Context Steady / Checkpoint</strong></td><td>控制模型当前看到什么、必要时回退对话上下文。</td><td>不能重置合同、预算、工作项或验收状态。</td></tr>
+				<tr><td><strong>Skills</strong></td><td>提供默认方法和默认完成标准，例如 fix-bug、build-web。</td><td>高频安全规则不能永远只写在提示词里。</td></tr>
+				<tr><td><strong>Stats</strong></td><td>从任务账本生成效率、成本、浪费和恢复报告。</td><td>不再主要依赖事后猜测 transcript。</td></tr>
+			</tbody>
+		</table>
+	</div>
+</section>
+
+<section id="roadmap">
+	<h2>七、实施优先级：先收口，再制动，再常驻，最后证明</h2>
+
+	<div class="milestone">
+		<div class="milestone-head"><h3>里程碑 A：一个任务只有一个总账本</h3><span class="priority">P0 · 先做</span></div>
+		<p><span class="badge proposal">建议</span>把现有 <code>ExecutionScope</code> 定为架构中心，不重写内核。</p>
+		<ul>
+			<li>Goal、Workflow、San Loop、普通 task、hub、auto-continue 都必须携带同一个根任务标识。</li>
+			<li>把各模块自己的状态明确分成“局部运行状态”和“根任务最终状态”；只有后者能对用户宣告完成。</li>
+			<li>把分散的 token、时长、Agent 数预算合并为根预算树；子项先预留、后结算。</li>
+			<li>Todo、Plan、TUI、Stats 改为读取账本投影，不再保存另一份权威状态。</li>
+		</ul>
+		<div class="accept"><strong>验收：</strong>同一任务无论从普通聊天、Goal、Workflow 还是 San Loop 进入，都显示同一个状态、同一份剩余预算和同一个终止原因。</div>
+	</div>
+
+	<div class="milestone">
+		<div class="milestone-head"><h3>里程碑 B：无人值守时真正会刹车、会验收</h3><span class="priority">P0 · 紧随其后</span></div>
+		<ul>
+			<li>交互模式仍以提醒为主；无人值守模式消费看门狗决定，对确定的重复派发、无变化轮询和陈旧结果直接制动。</li>
+			<li>模型监督先保持建议权；只有“换计划、换人、等待”这类可逆动作可逐步自动化。模型永远没有直接完成权。</li>
+			<li>把六类验收回执接入真实工具路径；由 Skill、任务类型和变更影响自动生成默认验收。</li>
+			<li>Provider 出错时只暂停受影响路径；断路期间不继续烧模型请求，健康恢复后自动续行。</li>
+		</ul>
+		<div class="accept"><strong>验收：</strong>相同工作换名字不能绕过去重；Provider 故障期间零重复模型调用；没有宿主回执时零错误完成。</div>
+	</div>
+
+	<div class="milestone">
+		<div class="milestone-head"><h3>里程碑 C：让任务脱离终端仍有主人</h3><span class="priority">P1 · 可靠性闭环</span></div>
+		<ul>
+			<li>增加一个常驻后台运行者，持有执行 runtime、调度器、Provider 健康和子任务登记；TUI 只是连接它的客户端。</li>
+			<li>支持 detach / reattach；终端退出不等于任务失去控制。</li>
+			<li>进程重启后通过日志回放恢复，再与实际进程、子 Agent、文件副作用对账。</li>
+			<li>对不可安全重放的动作采用幂等键或明确暂停，不假装“应该没执行过”。</li>
+		</ul>
+		<div class="accept"><strong>验收：</strong>强制关闭前台终端或后台进程后，任务可恢复到原任务版本；已完成的副作用不重复，状态不倒退。</div>
+	</div>
+
+	<div class="milestone">
+		<div class="milestone-head"><h3>里程碑 D：把“敢挂一晚上”变成发布门槛</h3><span class="priority">P1 · 证明后默认开启</span></div>
+		<ul>
+			<li>保留现有 10 条北极星小样本，另建压力样本，不把两者混成一个平均分。</li>
+			<li>固定复现六类风险：多 Agent 重复派发、Provider 抖动、频繁压缩、进程崩溃恢复、迟到结果、用户中途改目标。</li>
+			<li>加入 2026-08-05 事故的缩小可重复版本，确保同类循环会收敛到完成、等待、需用户或安全停机。</li>
+			<li>参数只能由回放和长期 dogfood 数据调整，不能继续靠拍脑袋。</li>
+		</ul>
+		<div class="accept"><strong>验收：</strong>每次涉及执行控制的发布，都必须同时通过短任务正确性和长任务故障恢复；任何一次错误完成都阻断发布。</div>
+	</div>
+</section>
+
+<section id="metrics">
+	<h2>八、怎样判断补强真的有效</h2>
+	<p>管理层不需要看内部账本和哈希。只看四个问题，再加三条红线。</p>
+	<div class="grid four">
+		<div class="card"><div class="metric">完成率</div><p>无人值守任务最终真正完成的比例。</p></div>
+		<div class="card"><div class="metric">说清率</div><p>没完成时，能否明确说明卡点和下一步。</p></div>
+		<div class="card"><div class="metric">预算内</div><p>在默认安全上限内完成的比例。</p></div>
+		<div class="card"><div class="metric">可恢复</div><p>断线、崩溃、Provider 恢复后能否继续且不重复副作用。</p></div>
+	</div>
+	<div class="table-wrap">
+		<table>
+			<thead><tr><th>红线</th><th>发布要求</th><th>为什么</th></tr></thead>
+			<tbody>
+				<tr><td><strong>错误完成</strong></td><td>必须为 0</td><td>“说做完但实际没做完”直接破坏产品信任。</td></tr>
+				<tr><td><strong>有效任务被误停</strong></td><td>高影响误停必须为 0</td><td>看门狗只能先执行可证明的动作；不确定就继续观察。</td></tr>
+				<tr><td><strong>恢复后重复副作用</strong></td><td>必须为 0</td><td>重复发布、重复写数据、重复扣费比停住更危险。</td></tr>
+			</tbody>
+		</table>
+	</div>
+	<p class="small">建议增加一个内部效率指标：<strong>最后一次真实进展之后继续消耗的 token 占比</strong>。它比总 token 更能直接反映“是否在打转”。</p>
+</section>
+
+<section id="method">
+	<h2>九、以后什么该写进 Harness，什么不该</h2>
+	<p>不是每条经验都值得做成新机制。建议采用四级升级规则：</p>
+	<div class="grid two">
+		<div class="card"><h4>一次性做法 → 对话或计划</h4><p>只对当前任务有用，不进入全局系统。</p></div>
+		<div class="card"><h4>重复方法 → Skill / Workflow</h4><p>例如“修 Bug 先复现”“发布前并行检查”，做成模板即可。</p></div>
+		<div class="card"><h4>反复造成损失 → 宿主硬规则</h4><p>例如重复派发、陈旧结果、越过预算、无凭证完成，必须由代码拦住，不能只提醒模型。</p></div>
+		<div class="card"><h4>对外承诺 → Benchmark / 发布门</h4><p>凡是我们要向用户宣传的能力，都必须有可重复的场景证明。</p></div>
+	</div>
+	<div class="callout">
+		<strong>判断标准：</strong>模型偶尔忘记一次，写提示词；模型反复忘记且代价高，写宿主规则；系统声称已经做到，写验收和基准。
+	</div>
+</section>
+
+<section id="external">
+	<h2>十、外部方法论：吸收原则，不照搬产品</h2>
+	<div class="table-wrap">
+		<table>
+			<thead><tr><th>来源</th><th>值得吸收</th><th>不建议照搬</th></tr></thead>
+			<tbody>
+				<tr><td><strong>Anthropic</strong></td><td>长任务需要持久进度、明确功能清单和真正的端到端验证；浏览器验证能发现单测看不到的问题。</td><td>不要把模型维护的 progress 文件当最终真相；San 已有宿主账本，应比文本文件更可靠。</td></tr>
+				<tr><td><strong>OpenAI</strong></td><td>把知识、计划和架构规则放进仓库，并用 lint / CI 机械执行；不要依赖聊天和人的脑内知识。</td><td>不照搬其具体仓库组织。San 应吸收“规则逐步升格为代码”的方法。</td></tr>
+				<tr><td><strong>Prime Agent</strong></td><td>后台常驻、断线重连、持续目标、心跳、受预算约束的自动续行，正好补 San 的进程生命周期。</td><td>当前不需要复制持久 Python REPL、自修改 Harness 或完整 RLM 路线；先补运行所有权。</td></tr>
+				<tr><td><strong>DeepSeek Harness</strong></td><td>稳定接口和插件边界有利于让 CLI、Web、工具共享一套能力。</td><td>不做“万物插件化”重写。只把工具执行管道和宿主回执接口做成稳定接缝。</td></tr>
+				<tr><td><strong>San 自身</strong></td><td>Context Steady 解决“看多少”，Execution Loop 解决“怎么协作”，执行账本解决“凭什么继续和结束”。</td><td>不能让三套能力各自长成完整产品；必须围绕一个根任务收口。</td></tr>
+			</tbody>
+		</table>
+	</div>
+</section>
+
+<section id="non-goals">
+	<h2>十一、明确不做</h2>
+	<div class="grid two">
+		<div class="card"><span class="badge risk">不做</span><h4>再造一套运行状态机</h4><p>现有 ExecutionScope 足够承载收口，新增 Run/Job 内核只会制造第三份真相。</p></div>
+		<div class="card"><span class="badge risk">不做</span><h4>常驻第二个 LLM 当监工</h4><p>监工也会循环。常驻的是确定性规则，模型监督只在疑难处被调用一次。</p></div>
+		<div class="card"><span class="badge risk">不做</span><h4>用并发和重试上限冒充收敛</h4><p>它们只能减慢事故，不能识别 187 个 Agent 是否在做同一件事。</p></div>
+		<div class="card"><span class="badge risk">不做</span><h4>关闭 Context Steady 冒充修复</h4><p>关闭后单次请求可能更贵，语义活锁依旧存在。</p></div>
+		<div class="card"><span class="badge risk">不做</span><h4>把内部机制铺到用户面前</h4><p>用户只看三种状态。账本、版本、回执、指纹都留在内部和 Stats 详情里。</p></div>
+		<div class="card"><span class="badge risk">不做</span><h4>在闭环前扩张新模式</h4><p>更多角色、更多自治入口、桌面端大改、插件市场都推迟到统一总控之后。</p></div>
+	</div>
+</section>
+
+<section id="decision">
+	<h2>十二、建议现在拍板的四件事</h2>
+	<ol>
+		<li><strong>架构拍板：</strong><code>ExecutionScope</code> 是唯一根任务真相；新入口没有接入它就不能成为默认能力。</li>
+		<li><strong>产品拍板：</strong>无人值守默认采用“进展续租 + 安全上限”，不允许无限预算，也不靠固定回合粗暴终止。</li>
+		<li><strong>研发拍板：</strong>下一阶段暂停新增编排模式，优先完成 Goal / Workflow / 普通任务的状态、预算和验收收口。</li>
+		<li><strong>发布拍板：</strong>“敢挂一晚上”必须由压力回放和恢复场景证明；没有证据，不进入默认开启。</li>
+	</ol>
+	<div class="callout green">
+		<strong>最终判断：</strong>San 已经具备成为可靠 Harness 的核心零件。现在最有价值的工作不是继续展示“我们还能做什么”，而是让所有能力服从同一张任务单，并用事故回放证明它会完成、会停、会恢复。
+	</div>
+</section>
+
+<section id="sources">
+	<h2>附：证据与参考</h2>
+	<p class="small">现状事实来自当前源码；架构取舍为本文建议。外部项目均以官方仓库或官方工程文章为准。</p>
+	<ul class="sources">
+		<li>San 当前执行内核：<a href="../../packages/coding-agent/src/execution-control/">packages/coding-agent/src/execution-control/</a></li>
+		<li>根会话接线：<a href="../../packages/coding-agent/src/session/agent-session.ts">packages/coding-agent/src/session/agent-session.ts</a></li>
+		<li>San Loop 接线：<a href="../../packages/coding-agent/src/san-loop/runner.ts">packages/coding-agent/src/san-loop/runner.ts</a></li>
+		<li>Goal 与 Workflow：<a href="../../packages/coding-agent/src/goals/runtime.ts">goals/runtime.ts</a>、<a href="../../packages/coding-agent/src/workflows/runtime/interpreter.ts">workflows/runtime/interpreter.ts</a></li>
+		<li>当前北极星样本：<a href="../../packages/coding-agent/scripts/north-star-samples.ts">packages/coding-agent/scripts/north-star-samples.ts</a></li>
+		<li>San 历史事故方案：<a href="session-019fca60-multi-agent-runaway-repair-plan-20260805.html">多 Agent 语义活锁故障修复方案</a></li>
+		<li>此前管理与架构研究：<a href="san-harness-session-retrospective-20260715.html">Harness 会话复盘</a>、<a href="san-novice-first-harness-plan-20260812.html">Novice-first 计划</a>、<a href="prime-agent-vs-san-20260821.html">Prime Agent 对比</a>、<a href="deepseek-harness-architecture-assessment-20260814.html">DeepSeek Harness 评估</a></li>
+		<li>Anthropic：<a href="https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents">Effective harnesses for long-running agents</a>、<a href="https://www.anthropic.com/engineering/building-effective-agents">Building effective agents</a>、<a href="https://www.anthropic.com/engineering/code-execution-with-mcp">Code execution with MCP</a></li>
+		<li>OpenAI：<a href="https://openai.com/index/harness-engineering/">Harness engineering: leveraging Codex in an agent-first world</a></li>
+		<li>Prime Intellect：<a href="https://github.com/PrimeIntellect-ai/prime-agent">Prime Agent 官方仓库</a></li>
+		<li>DeepSeek：<a href="https://github.com/deepseek-ai/DeepSeek-Harness">DeepSeek Harness 官方仓库</a></li>
+	</ul>
+</section>
+</main>
+
+<footer>
+	<div class="wrap">San Harness 补强方案 · 2026-08-25 · 管理层汇报稿</div>
+</footer>
+</body>
+</html>

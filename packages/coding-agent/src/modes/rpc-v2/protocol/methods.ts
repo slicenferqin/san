@@ -25,7 +25,8 @@ export type RpcV2CapabilityKey =
 	| "host.tools"
 	| "host.uri"
 	| "artifact.read"
-	| "worktree.lifecycle";
+	| "worktree.lifecycle"
+	| "agent.capabilities";
 
 export interface RpcV2MethodDefinition {
 	method: string;
@@ -82,6 +83,11 @@ export const RPC_V2_METHOD_DEFINITIONS: readonly RpcV2MethodDefinition[] = [
 	method("session.handoff", sessionWrite),
 	method("session.export", sessionWrite),
 	method("session.stats", sessionRead),
+	method("session.changes.list", sessionRead),
+	method("session.changes.revert", sessionWrite),
+	method("session.diff.stats", sessionRead),
+	method("session.diff.file", sessionRead),
+	method("session.update", { capability: "session.index", mutation: true }),
 	method("usage.stats", { capability: "usage.analytics" }),
 	method("session.recover", {
 		capability: "session.recovery",
@@ -90,6 +96,7 @@ export const RPC_V2_METHOD_DEFINITIONS: readonly RpcV2MethodDefinition[] = [
 	}),
 	method("session.delete", { capability: "session.index", mutation: true }),
 	method("session.close", sessionWrite),
+	method("session.planMode.set", sessionWrite),
 
 	method("run.start", runWrite),
 	method("run.steer", runWrite),
@@ -115,7 +122,12 @@ export const RPC_V2_METHOD_DEFINITIONS: readonly RpcV2MethodDefinition[] = [
 	method("auth.login.start", { capability: "provider.auth", mutation: true }),
 	method("auth.login.cancel", { capability: "provider.auth", mutation: true }),
 	method("provider.config.create", { capability: "provider.config", mutation: true }),
+	method("provider.config.update", { capability: "provider.config", mutation: true }),
+	method("provider.config.delete", { capability: "provider.config", mutation: true }),
 	method("provider.model.add", { capability: "provider.config", mutation: true }),
+	method("provider.model.update", { capability: "provider.config", mutation: true }),
+	method("provider.model.remove", { capability: "provider.config", mutation: true }),
+	method("provider.models.refresh", { capability: "provider.config", mutation: true }),
 	method("command.list", { requiresSession: true }),
 	method("todo.set", sessionWrite),
 
@@ -123,6 +135,15 @@ export const RPC_V2_METHOD_DEFINITIONS: readonly RpcV2MethodDefinition[] = [
 	method("integration.get", { capability: "integration.catalog" }),
 	method("integration.setEnabled", { capability: "integration.catalog", mutation: true }),
 	method("integration.refresh", { capability: "integration.catalog", mutation: true }),
+	method("mcp.list", { capability: "agent.capabilities", requiresSession: true }),
+	method("mcp.add", { capability: "agent.capabilities", mutation: true, requiresSession: true }),
+	method("mcp.remove", { capability: "agent.capabilities", mutation: true, requiresSession: true }),
+	method("skill.list", { capability: "agent.capabilities", requiresSession: true }),
+	method("skill.enable", { capability: "agent.capabilities", mutation: true, requiresSession: true }),
+	method("hook.list", { capability: "agent.capabilities", requiresSession: true }),
+	method("hook.enable", { capability: "agent.capabilities", mutation: true, requiresSession: true }),
+	method("memory.list", { capability: "agent.capabilities", requiresSession: true }),
+	method("memory.delete", { capability: "agent.capabilities", mutation: true, requiresSession: true }),
 
 	method("approval.list", { capability: "approval.structured", requiresSession: true }),
 	method("approval.decide", {
@@ -135,6 +156,8 @@ export const RPC_V2_METHOD_DEFINITIONS: readonly RpcV2MethodDefinition[] = [
 	method("approval.rules.revoke", { capability: "approval.structured", mutation: true }),
 	method("approval.policy.get", { capability: "approval.structured" }),
 	method("approval.policy.update", { capability: "approval.structured", mutation: true }),
+	method("approval.preset.list", { capability: "approval.structured" }),
+	method("approval.preset.apply", { capability: "approval.structured", mutation: true }),
 
 	method("interaction.list", { capability: "interaction.structured", requiresSession: true }),
 	method("interaction.respond", {
