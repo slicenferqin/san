@@ -149,6 +149,8 @@ export interface SessionMessage {
 		toolName: string;
 		isError: boolean;
 		intent?: string;
+		/** Compact command/path projection of the call arguments (display label). */
+		args?: { command?: string; path?: string };
 	}>;
 }
 

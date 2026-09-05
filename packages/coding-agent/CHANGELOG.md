@@ -8,6 +8,14 @@
 - Added RPC v2 agent capability management surface under the `agent.capabilities` capability: `mcp.list`/`mcp.add`/`mcp.remove` (user/project scoped MCP server config CRUD), `skill.list`/`skill.enable`, `hook.list`/`hook.enable` (capability provider enumeration and persisted enable/disable), and `memory.list`/`memory.delete` backed by Mnemopi.
 - Added RPC v2 worktree apply support: a git-backed apply port (`patch` and `merge_commit` strategies with expected-target-snapshot CAS and merge-conflict abort semantics) wired into the worktree lifecycle service, plus session metadata updates (`session.update` for pinned/archived/unread with `session.summary.changed` emission), approval policy presets (`approval.preset.list`/`approval.preset.apply`), project grouping metadata on session summaries (`projectRoot`/`gitCommonDir`/`branch`), and a debounced `session.diff.changed` event emitted after file-mutating tool calls.
 
+
+### Fixed
+
+- Fixed model switches and automatic route failover resetting a supported thinking selection to the target model's default; RPC v2 now returns configured/effective thinking with model selection and publishes durable thinking changes so desktop controls stay synchronized without another click.
+- Fixed RPC v2 provider/model updates, removals, and model refresh rejecting the mutation metadata required by the dispatcher, preventing desktop model management from reaching the configuration writer.
+- Fixed repeated large `read` results growing model input indefinitely: identical snapshots now share one provider-visible body without altering saved session history or destabilizing the prompt prefix.
+- Fixed long tool loops repeatedly compacting the same residual context and writing a second turn summary after compaction; maintenance now rearms only after recovery, a new turn, or a new segment.
+
 ### Breaking Changes
 
 - Changed TUI `/model`, `/models`, Alt+M, and `/switch` so session model select opens an effort step for reasoning models before closing. Non-reasoning models still select immediately. Status notes mention `/effort` and Shift+Tab. Role assignment remains `/model roles`.

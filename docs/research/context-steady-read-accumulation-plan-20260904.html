@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>San · 连续 read 与 Context Steady 触发治理方案 · 2026-09-04</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f4f6f8;
+    --paper: #ffffff;
+    --ink: #1d2733;
+    --muted: #697586;
+    --line: #d9e0e7;
+    --soft: #eef3f7;
+    --blue: #1e5a87;
+    --green: #176b4d;
+    --amber: #8b5b08;
+    --red: #9b3434;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.75 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 44px 28px 88px; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 25px; margin-bottom: 28px; }
+  h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: -.02em; }
+  h2 { margin: 46px 0 12px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 20px; }
+  h3 { margin: 27px 0 8px; font-size: 16px; }
+  p { margin: 10px 0; }
+  ul, ol { margin: 10px 0; padding-left: 23px; }
+  li { margin: 5px 0; }
+  code, .mono { font-family: var(--mono); font-size: 12.5px; }
+  code { padding: 1px 5px; border: 1px solid var(--line); border-radius: 4px; background: var(--soft); color: var(--blue); }
+  pre { margin: 14px 0; padding: 15px 17px; overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: #f8fafc; font: 12.5px/1.75 var(--mono); }
+  .sub { color: var(--muted); font-size: 13px; }
+  .lead { color: #384858; font-size: 16px; }
+  .verdict { padding: 18px 20px; border: 1px solid #b9d2e5; border-left: 4px solid var(--blue); border-radius: 9px; background: #f4f9fd; }
+  .verdict strong { color: var(--blue); }
+  .panel { margin: 15px 0; padding: 17px 19px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); }
+  .panel.good { border-left: 4px solid var(--green); }
+  .panel.warn { border-left: 4px solid var(--amber); }
+  .panel.risk { border-left: 4px solid var(--red); }
+  .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; margin: 16px 0; }
+  .card { padding: 15px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+  .card h3 { margin-top: 0; }
+  .card p:last-child { margin-bottom: 0; }
+  .tag { display: inline-block; margin-left: 7px; padding: 1px 7px; border-radius: 4px; background: var(--soft); color: var(--muted); font-size: 11px; font-weight: normal; vertical-align: 2px; }
+  .fact { color: var(--green); }
+  .decision { color: var(--blue); }
+  .risk-text { color: var(--red); }
+  table { width: 100%; margin: 14px 0; border-collapse: collapse; font-size: 13.5px; }
+  th, td { padding: 8px 10px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+  th { background: var(--soft); color: #526273; font-weight: 650; }
+  .flow { padding: 17px; overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: #17222d; color: #cdd8e3; white-space: pre; font: 12.5px/1.9 var(--mono); }
+  .flow .blue { color: #8ecbff; }
+  .flow .green { color: #8de0b6; }
+  .flow .amber { color: #f5cf70; }
+  .checklist { list-style: none; padding-left: 0; }
+  .checklist li { padding-left: 27px; position: relative; }
+  .checklist li::before { content: "□"; position: absolute; left: 0; color: var(--blue); font-size: 18px; line-height: 1.45; }
+  .small { color: var(--muted); font-size: 12.5px; }
+  footer { margin-top: 60px; padding-top: 15px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+  @media (max-width: 760px) { .wrap { padding: 28px 17px 60px; } .grid { grid-template-columns: 1fr; } h1 { font-size: 24px; } table { display: block; overflow-x: auto; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>连续 <code>read</code> 与 Context Steady 触发治理方案</h1>
+  <div class="sub">San · packages/coding-agent · 方案稿 · 2026-09-04 · 静态 HTML，无外部依赖 · 供评审，不含实现改动</div>
+</header>
+
+<div class="verdict">
+  <p><strong>先给结论：</strong>不应通过关闭稳态摘要或无限提高触发阈值来掩盖连续读取。正确的治理顺序是：<b>先在 provider projection 层卸载旧的大型 read 结果，再用一次性、带滞回的维护作为兜底</b>。</p>
+  <p>原始 session journal 保留完整事实；当前 provider 请求只携带当前任务需要的精确内容、可恢复引用和小型摘要。这样连续读取仍可继续，但不会把每一次 read 的全文永久带入后续请求。</p>
+</div>
+
+<h2>0 · 本次评审需要拍板的事项</h2>
+<table>
+  <thead><tr><th>事项</th><th>本方案建议</th><th>需要评审的取舍</th></tr></thead>
+  <tbody>
+    <tr><td>D1：旧工具结果何时降级</td><td><b>按“年龄 + 大小 + 保护状态”降级</b>。当前 logical turn 和最近窗口保留原文，更早且较大的已完成 tool result 换成可重读 stub。</td><td>越早卸载越省 token，但模型回看历史时需要主动 re-read。</td></tr>
+    <tr><td>D2：默认开关</td><td><code>toolOutputOffload=true</code>、<code>stableProjection=true</code>作为推荐配置先启用；先观察，再考虑修改全局默认值。</td><td>默认开启可直接解决大部分累计增长；关闭则保留当前兼容行为，但连续 read 仍容易增长。</td></tr>
+    <tr><td>D3：维护触发方式</td><td>触发线与回落线分离；同一 maintenance cycle 不重复生成摘要。优先卸载，仍超过硬线才 compaction/recovery。</td><td>更保守的回落目标会增加一次维护规模，但能避免“摘要后马上再次摘要”。</td></tr>
+    <tr><td>D4：读取重叠去重</td><td>第一阶段只做 provider projection 层的安全去重，不改 journal，不合并用户可见的 read 记录。</td><td>不改变持久记录，风险最低；区间级智能合并可留作后续优化。</td></tr>
+  </tbody>
+</table>
+
+<h2>1 · 已观察事实与问题边界</h2>
+<p class="lead">问题不是单次 <code>read</code> 输出是否有 50 KB 上限，而是多次结果在后续 provider 请求中是否继续以原文存在。</p>
+
+<div class="grid">
+  <article class="card">
+    <h3>代码事实 <span class="tag">当前分支</span></h3>
+    <p><code>read.defaultLimit</code> 默认为 300 行，单次采集最多 3000 行；普通文件基础字节上限为 50 KiB，预算按约 512 bytes/line 放大。</p>
+    <p class="small"><code>packages/coding-agent/src/tools/read.ts:906-917, 2585-2601</code><br><code>packages/coding-agent/src/session/streaming-output.ts:10-22</code></p>
+  </article>
+  <article class="card">
+    <h3>代码事实 <span class="tag">当前分支</span></h3>
+    <p>Context Steady 在每次 provider call 前重算 projected input；tool-loop 超过控制带时会刷新 plan，并可能进入 recovery。</p>
+    <p class="small"><code>packages/coding-agent/src/session/agent-session.ts:9178-9232</code><br><code>packages/coding-agent/src/session/agent-session.ts:10810-11010</code></p>
+  </article>
+  <article class="card">
+    <h3>配置事实 <span class="tag">默认值</span></h3>
+    <p>ContextPlan 的 <code>stableProjection</code> 和 <code>toolOutputOffload</code> 当前默认均为 false。planner/materialize 已经具备 aged tool-output stub 的结构，但默认未启用。</p>
+    <p class="small"><code>packages/coding-agent/src/config/settings-schema.ts:2967-2987</code><br><code>packages/coding-agent/src/context-steady/planner.ts:192-293</code></p>
+  </article>
+</div>
+
+<div class="panel">
+  <p><b>本次复核到的目标会话文件大小：</b></p>
+  <table>
+    <thead><tr><th>文件</th><th>字节数</th><th>约 MiB</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td><code>session.jsonl</code></td><td>4,633,445</td><td>4.42</td><td>主会话原始 journal</td></tr>
+      <tr><td><code>.rpc-v2.state.json</code></td><td>134,019</td><td>0.13</td><td>RPC 状态文件</td></tr>
+      <tr><td><code>.context-probe.jsonl</code></td><td>429,246</td><td>0.41</td><td>上下文探针 sidecar</td></tr>
+      <tr><td><b>合计</b></td><td><b>5,196,710</b></td><td><b>4.96</b></td><td>持久文件总量；不等于每次 provider payload</td></tr>
+    </tbody>
+  </table>
+  <p class="small">这组大小证明“历史文件很大”，不单独证明一次 read 会把全部字节送入 provider。真正需要治理的是 raw journal、active message context、provider-bound projection 三者之间的边界。</p>
+</div>
+
+<h2>2 · 根因模型：三层数据不能混为一谈</h2>
+<div class="flow"><span class="blue">raw journal</span>（完整、追加写入、用于恢复）
+        │
+        │ 生成 / 恢复 active messages
+        ▼
+<span class="amber">active session context</span>（可含多次 read 原文，随工具循环增长）
+        │
+        │ transform + ContextPlan materialization
+        ▼
+<span class="green">provider-bound projection</span>（真正发给模型；应受 steady/burst ceiling 约束）
+
+目标：journal 可增长；active context 可有原文；<span class="green">provider projection 不因旧 read 结果线性增长</span>。</div>
+
+<div class="panel warn">
+  <p><b>触发机制：</b>Context Steady 关注的是完整 provider input 的估算，而不是某个文件大小。以 500K context、20% reserve、240K steady target 为例：</p>
+  <pre>hardInputCeiling = 500K × (1 - 20%) = 400K
+steadyTarget     = 240K
+controlMax       = min(burstCeiling, floor(240K × 13 / 12)) ≈ 260K</pre>
+  <p>连续 read 结果若持续留在 provider projection，就会把输入从 steady target 推向 controlMax。维护本身是保护机制；应修的是旧结果没有在 projection 层及时降级，而不是简单取消保护机制。</p>
+</div>
+
+<h2>3 · 目标行为与不变量</h2>
+<ol class="checklist">
+  <li><b>journal 不丢：</b>完整 read/tool result 继续写入原有 session journal 或 artifact；本方案不删除历史。</li>
+  <li><b>provider 有界：</b>旧的大型 read 结果不因“仍在 journal”而每次原文重发。</li>
+  <li><b>当前工作优先：</b>当前 logical turn、未完成 tool pair、最近精确窗口和当前 prompt 不被年龄卸载。</li>
+  <li><b>可恢复：</b>每个降级结果保留 tool/path/artifact/range 级引用，模型可以通过 read 或 artifact 分页取回。</li>
+  <li><b>维护不抖动：</b>一次卸载/维护后，在同一 cycle 内不重复生成摘要；只有新增长越过重新开放线才允许下一 cycle。</li>
+  <li><b>缓存不被无谓打穿：</b>同一 epoch 内 ContextPlan 字节和材料集合保持稳定；动态 gate 重算不等于重排整个 plan。</li>
+  <li><b>持久记录与投影分离：</b>projection 的 stub、去重和卸载均为发送前转换，不修改 journal 中的原始消息。</li>
+</ol>
+
+<h2>4 · 方案总览</h2>
+<div class="flow"><span class="blue">每次 provider call</span>
+  1. 构造 transformed messages
+  2. 估算 raw projected input
+  3. 若未进入 Context Steady：按现有路径发送
+  4. 若已进入 Context Steady：
+     <span class="green">4.1 保护当前 turn / live tail / 未完成 tool pair</span>
+     <span class="green">4.2 对旧的大型 completed tool result 生成 aged stub</span>
+     <span class="green">4.3 对相同 source/range 的旧重复 read 只保留一份有效原文</span>
+     <span class="green">4.4 重新估算最终 provider projection</span>
+  5. 若仍超过 control band：只重算 gate，不立即重写稳定 plan
+  6. 若仍超过硬 burst ceiling：执行一次有边界的 recovery/compaction
+  7. provider 发送；probe 记录最终 wire projection
+
+<span class="amber">logical turn 结束</span> → 生成一次 turn digest / checkpoint（若满足现有条件）
+<span class="amber">不是</span>每个 read 结果都单独触发一次摘要。</div>
+
+<h2>5 · 具体设计</h2>
+<h3>5.1 先用已有 aged tool-output offload，不另起一套 read 特判</h3>
+<div class="panel good">
+  <p>当前 planner 已有 <code>buildToolStubMaterials()</code>：它可以跳过 protected refs，把较老、已完成且超过最小 token 数的 tool result 替换为 <code>aged</code> stub；materialize 再将消息内容替换成短引用。优先复用这条链路。</p>
+  <p>连续 <code>read</code> 应首先作为普通 completed tool result 进入这套机制，而不是在 <code>read.ts</code> 中再写一套只针对 session 文件的全局删除逻辑。</p>
+  <p class="small">相关代码：<code>packages/coding-agent/src/context-steady/planner.ts:192-293</code>、<code>packages/coding-agent/src/context-steady/materialize.ts:309-342</code>、<code>packages/coding-agent/src/prompts/context-steady/aged-output-stub.md</code>。</p>
+</div>
+
+<table>
+  <thead><tr><th>消息类别</th><th>默认投影策略</th><th>不可卸载条件</th></tr></thead>
+  <tbody>
+    <tr><td>当前 user prompt</td><td>原文</td><td>始终保留</td></tr>
+    <tr><td>当前 assistant tool call</td><td>原文</td><td>tool 未完成时保留</td></tr>
+    <tr><td>当前 tool result</td><td>原文</td><td>当前 logical turn 内保留</td></tr>
+    <tr><td>最近 exact window 内的结果</td><td>原文</td><td>由 <code>recentExactTokens</code> 保护</td></tr>
+    <tr><td>live tail 内的结果</td><td>原文</td><td>由 <code>liveTailTokens</code> 保护</td></tr>
+    <tr><td>较老的大型 completed read/bash/search 结果</td><td>短 stub + path/artifact/range 引用</td><td>受保护集、未完成 pair、当前任务必须的 exact entry</td></tr>
+    <tr><td>已被后续 mutation supersede 的旧结果</td><td>superseded stub</td><td>现有 coverage/保护规则优先</td></tr>
+  </tbody>
+</table>
+
+<h3>5.2 read 重复与重叠：先做安全去重，后做区间合并</h3>
+<p>同一文件连续读取常见三种重复：</p>
+<pre>read foo.ts
+read foo.ts:1-300
+read foo.ts:250-400</pre>
+<p>第一阶段不需要推断源代码语义，也不需要修改 session 记录。只在 provider projection 中建立一个“本轮已发出的 source identity”：</p>
+<pre>source identity = normalized source path / artifact id
+                 + file snapshot identity（若可用）
+                 + requested line range
+                 + message role/tool call id</pre>
+<ul>
+  <li>完全相同的 path/range、且旧结果不在保护集：旧消息降为 stub。</li>
+  <li>有重叠但不完全相同的 range：第一阶段不合并，只按年龄卸载旧结果；避免错误拼接行号、hashline 或上下文。</li>
+  <li>文件发生 mutation 或 snapshot identity 改变：不去重，保留新旧关系由现有 superseded/coverage 规则处理。</li>
+  <li>journal 仍保留每次调用；用户审计、恢复和 tool-call/result 配对不改变。</li>
+</ul>
+<p class="small">现有 <code>ContextSourceIndex</code> 已能识别 tool pair、tool name、mutation path 和 resultEntryId，但当前路径识别主要服务于 mutation supersede。read range identity 需要新增为内部 projection 元数据，不应依赖展示文本解析。</p>
+
+<h3>5.3 维护触发增加滞回与 cycle 粘滞</h3>
+<div class="panel warn">
+  <p><b>触发线和回落线不能相同。</b>建议：</p>
+  <pre>open line：projectedInputTokens &gt; controlMax
+reclaim phase：先执行 aged offload / projection-only downgrade
+close line：维护后 projectedInputTokens ≤ 0.85 × steadyTarget
+same-cycle rule：maintenance cycle 未完成有效回收时，不再次生成摘要
+hard line：仍超过 burstCeiling，才进入 hard_pressure / recovery</pre>
+  <p>这里的 0.85 是初始方案参数，不是当前代码事实；实现时应配置化或先用常量验证。若实际数据表明 0.85 过于激进，可改为 0.9，但不能取消“回落线低于触发线”的关系。</p>
+</div>
+<p>维护结果需要区分：</p>
+<table>
+  <thead><tr><th>结果</th><th>下一步</th><th>是否允许立刻再摘要</th></tr></thead>
+  <tbody>
+    <tr><td>卸载后明显低于 steady target</td><td>发送当前请求，cycle 关闭</td><td>否；等待新增长</td></tr>
+    <tr><td>卸载有回收但仍在 control band 内</td><td>继续 gate 计算，保持稳定材料</td><td>否；不因同一原因重复摘要</td></tr>
+    <tr><td>卸载几乎无回收</td><td>记录压力状态；若未超 burst ceiling，不重复调用摘要模型</td><td>否；避免摘要抖动</td></tr>
+    <tr><td>超过 burst ceiling</td><td>进入现有 hard-pressure recovery；失败则暂停/报明白原因</td><td>只按 recovery pass 上限执行</td></tr>
+  </tbody>
+</table>
+
+<h3>5.4 logical turn 内不做多次 digest</h3>
+<p>连续工具循环中，read 结果会不断追加，但这不代表每个结果都已经形成一个可总结的完整用户意图。建议保持以下边界：</p>
+<ul>
+  <li>tool-loop 中只做 projection refresh、年龄卸载和最终 payload 估算。</li>
+  <li>正常 logical turn settle 后，再沿用当前 <code>#generateTurnDigest()</code> 生成一次 consolidated digest。</li>
+  <li>session-stop continuation 链结束后，仍使用现有“覆盖整个 logical turn”的 boundary 规则。</li>
+  <li>不要为了阻止连续 read 而把每个 tool result 写成新的 digest；这会增加 journal 和 provider 的派生消息数量。</li>
+</ul>
+<p class="small">现有 digest 生成位于 <code>packages/coding-agent/src/session/agent-session.ts:5687-5922</code>；当前代码已在 continuation chain 结束后生成 consolidated digest。</p>
+
+<h3>5.5 stable projection 的职责</h3>
+<p><code>stableProjection</code>不是负责释放所有 token，它负责避免同一 epoch 内因为每次 read 增长而反复重排 ContextPlan、破坏 provider cache prefix。两者要分开：</p>
+<table>
+  <thead><tr><th>动作</th><th>允许频率</th><th>触发条件</th></tr></thead>
+  <tbody>
+    <tr><td>重新估算 projected input / gate</td><td>每次 provider call</td><td>必须实时反映 live tail 增长</td></tr>
+    <tr><td>替换旧 tool result 为 stub</td><td>需要时</td><td>超出 offload 门槛且不在保护集</td></tr>
+    <tr><td>重渲染 ContextPlan bytes</td><td>epoch 边界</td><td>checkpoint、physical compaction、topic shift、model/window change 或明确 rebase</td></tr>
+    <tr><td>生成 digest/checkpoint</td><td>logical turn / 既有 checkpoint 周期</td><td>沿用当前生命周期，不按每次 read 触发</td></tr>
+  </tbody>
+</table>
+
+<h2>6 · 配置建议</h2>
+<p>第一阶段建议通过项目设置验证，不立即修改全局 schema 默认值。推荐的扁平配置：</p>
+<pre>san.contextSteady.enabled: true
+san.contextSteady.contextPlan.enabled: true
+san.contextSteady.contextPlan.toolOutputOffload: true
+san.contextSteady.contextPlan.toolOutputOffloadMinTokens: 1000
+san.contextSteady.contextPlan.stableProjection: true
+san.contextSteady.contextPlan.recentExactTokens: 8000
+san.contextSteady.contextPlan.liveTailTokens: 12000
+san.contextSteady.contextPlan.maxTokens: 2000
+san.contextSteady.qualityWindowTokens: 180000
+san.contextSteady.reserveRatio: 0.25</pre>
+<p>这些值是试运行起点，不是最终默认值。尤其是 <code>qualityWindowTokens</code> 不应在没有 provider contextWindow、工具集大小和实际 probe 数据的情况下硬编码成所有模型通用值。</p>
+<div class="panel risk">
+  <p><b>不建议：</b></p>
+  <ul>
+    <li>直接把 <code>san.contextSteady.enabled</code> 关闭后宣称问题解决。</li>
+    <li>把 <code>activationThresholdTokens</code> 无限提高，让维护永远不触发。</li>
+    <li>把 <code>read.defaultLimit</code> 降到极低作为唯一方案；这会增加分页调用次数，且连续分页仍会累计上下文。</li>
+    <li>在 read tool 中删除历史消息或改写 journal；这会破坏恢复、编辑和证据链。</li>
+  </ul>
+</div>
+
+<h2>7 · 实现拆分与影响面</h2>
+<table>
+  <thead><tr><th>批次</th><th>目标</th><th>主要文件/符号</th><th>非目标</th></tr></thead>
+  <tbody>
+    <tr><td>P0：基线</td><td>用连续 read replay 对齐 raw / active / provider 三层 token 曲线。</td><td><code>agent-session.ts</code> provider transform；现有 context probe；生产路径测试 harness。</td><td>不改 read 行数默认值；不改摘要语义。</td></tr>
+    <tr><td>P1：启用已有卸载</td><td>让旧 completed read 结果进入 aged offload，保护当前 turn 和 live tail。</td><td><code>planner.ts</code>、<code>materialize.ts</code>、<code>settings-schema.ts</code>、existing stub templates。</td><td>不删除 journal；不新建第二套工具结果存储。</td></tr>
+    <tr><td>P2：source identity</td><td>增加内部 read path/range identity，支持完全重复结果的 projection 去重。</td><td><code>source-index.ts</code>、<code>plan-types.ts</code>、planner/materialize。</td><td>第一阶段不合并部分重叠区间；不解析展示文本推断范围。</td></tr>
+    <tr><td>P3：维护滞回</td><td>加入 cycle 状态、有效回收判断和 close line，阻止同因重复摘要。</td><td><code>agent-session.ts</code>、<code>budget.ts</code>、maintenance audit/probe types。</td><td>不改变硬 burst ceiling 的安全含义；不屏蔽真实 hard pressure。</td></tr>
+    <tr><td>P4：验证后收口</td><td>根据 replay 数据决定是否把两个开关写入推荐 overlay 或 schema 默认。</td><td>推荐配置、CHANGELOG、production-path tests。</td><td>不在验证前修改用户默认体验。</td></tr>
+  </tbody>
+</table>
+
+<h2>8 · 验收标准</h2>
+<h3>8.1 必须通过的行为场景</h3>
+<ul class="checklist">
+  <li>连续读取同一个大型文本文件 10～20 次后，raw journal 继续增长，但 provider payload 不随所有旧 read 原文线性增长。</li>
+  <li>当前 read 结果和未完成 tool pair 始终以可用原文存在；不能被 aged stub 错误替换。</li>
+  <li>模型根据旧结果中的 path/range/artifact 引用再次读取时，能取回原始内容。</li>
+  <li>相同 path/range 的重复 read 在 provider projection 中不会重复携带两份大正文；journal 仍保留两次调用。</li>
+  <li>部分重叠 range 不发生错误合并；行号、hashline 和编辑所需的原文边界保持正确。</li>
+  <li>一次 offload 后若已回落，后续 provider call 不会仅因同一批 read 再次生成 maintenance/digest。</li>
+  <li>offload 无法回收且 projected input 继续超过 burst ceiling 时，现有 hard-pressure recovery 仍能接管；失败路径不静默丢消息。</li>
+  <li>开启 stable projection 后，同一 epoch 内 plan message bytes 稳定；动态 projected token 变化仍能参与 gate。</li>
+</ul>
+
+<h3>8.2 建议的测试合同</h3>
+<table>
+  <thead><tr><th>测试</th><th>观察对象</th><th>失败时说明</th></tr></thead>
+  <tbody>
+    <tr><td>连续 read production replay</td><td>每次 provider call 的真实 payload token、旧 read marker 数量、maintenance 次数。</td><td>projection 没有卸载，或卸载后又被 active array 恢复。</td></tr>
+    <tr><td>保护集边界</td><td>当前 turn、live tail、未完成 pair 的消息内容。</td><td>年龄策略覆盖了正在工作的上下文。</td></tr>
+    <tr><td>完全重复 range</td><td>最终 payload 中旧结果是否变为 stub，journal entry 数量是否不变。</td><td>把持久记录和 projection 混为一谈。</td></tr>
+    <tr><td>部分重叠 range</td><td>两段 source 的完整性和行号边界。</td><td>第一阶段错误做了区间合并。</td></tr>
+    <tr><td>maintenance hysteresis</td><td>open line、reclaim 后值、close line、同 cycle maintenance count。</td><td>触发线/回落线相同，或 maintenance 重复抖动。</td></tr>
+    <tr><td>resume / compaction</td><td>journal 恢复、source refs、stub 后 re-read、ContextPlan coverage。</td><td>projection-only 替换污染了恢复状态。</td></tr>
+  </tbody>
+</table>
+
+<h2>9 · 观测指标与判断门槛</h2>
+<p>不把内部机制展示给普通用户；指标只用于开发诊断和 <code>san stats</code> 详情。建议增加或复用以下统计：</p>
+<table>
+  <thead><tr><th>指标</th><th>目标信号</th><th>判定方式</th></tr></thead>
+  <tbody>
+    <tr><td>raw stored tokens / provider projected tokens</td><td>两者允许分离，provider 曲线趋稳。</td><td>连续 read replay 中 provider 增长显著低于 raw journal 增长。</td></tr>
+    <tr><td>aged offload reclaim tokens</td><td>每次真正有回收。</td><td>按场景统计中位数和 p95，不要求每次都大于 0。</td></tr>
+    <tr><td>duplicate projection drops</td><td>重复范围被安全降级。</td><td>只统计完全 identity 命中；部分重叠不计入。</td></tr>
+    <tr><td>maintenance per logical turn</td><td>连续 read 不产生维护风暴。</td><td>正常场景应接近 0；真实超硬线场景按 recovery 上限工作。</td></tr>
+    <tr><td>post-maintenance projected tokens</td><td>维护后回落并保持一段时间。</td><td>检查是否低于 close line；否则进入压力诊断，不重复摘要。</td></tr>
+    <tr><td>wire prefix retained</td><td>stable epoch 内前缀不被旧结果重写。</td><td>使用现有 wire sequence probe 做跨 provider call 对比。</td></tr>
+  </tbody>
+</table>
+
+<h2>10 · 风险与回滚</h2>
+<div class="grid">
+  <article class="card">
+    <h3>风险：模型需要旧正文</h3>
+    <p>stub 可能使模型多发一次 read。缓解：stub 必须包含 path、artifact 或精确 range；当前任务和最近窗口不卸载。</p>
+  </article>
+  <article class="card">
+    <h3>风险：coverage 误判</h3>
+    <p>不改现有 coverage 授权规则；projection stub 不作为 digest coverage。保留最终 payload orphan audit。</p>
+  </article>
+  <article class="card">
+    <h3>风险：provider cache 变冷</h3>
+    <p>stable projection 只在 epoch 边界重排；同一 epoch 的 gate 重算不重选材料，继续使用 wire prefix probe 验证。</p>
+  </article>
+</div>
+<div class="panel good">
+  <p><b>回滚方式：</b>关闭 <code>san.contextSteady.contextPlan.toolOutputOffload</code> 和 <code>stableProjection</code> 即可恢复当前 projection 行为；journal 不需要迁移或修复。若滞回逻辑出现异常，先关闭该逻辑开关或回退代码，不触碰原始 session 文件。</p>
+</div>
+
+<h2>11 · 本稿的明确结论</h2>
+<ol>
+  <li><b>连续 read 的第一解不是减少 read，而是减少旧 read 在 provider projection 中的寿命。</b></li>
+  <li><b>已有 aged tool-output offload 是最小改动起点。</b>先打开并通过生产路径 replay，再决定是否扩展 read 专属 identity。</li>
+  <li><b>稳态摘要保留，但后置为兜底。</b>先 projection offload；只有仍超过 hard ceiling 才进入 recovery。</li>
+  <li><b>触发线必须和回落线分离。</b>否则维护、摘要、恢复消息会形成自己的增长和重复触发。</li>
+  <li><b>journal、active context、provider projection 三层必须分别验收。</b>不能用“文件仍在”证明模型每轮都应该携带全文，也不能用“provider 变短”证明历史被安全保留。</li>
+</ol>
+
+<footer>
+  证据边界：文中标为“代码事实”的内容来自当前工作区源码读取；文件大小来自本轮对目标 session artifacts 的直接测量；阈值、年龄策略、close line、配置值和批次均为本方案建议，不代表已经实现或验证。相关源码：<code>packages/coding-agent/src/tools/read.ts</code>、<code>packages/coding-agent/src/session/streaming-output.ts</code>、<code>packages/coding-agent/src/session/agent-session.ts</code>、<code>packages/coding-agent/src/context-steady/{planner,materialize,source-index,prune}.ts</code>。
+</footer>
+</div>
+</body>
+</html>

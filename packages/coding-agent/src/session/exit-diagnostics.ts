@@ -193,6 +193,11 @@ export function summarizeToolArguments(args: unknown): ToolArgumentSummary | und
 	if (typeof args.path === "string" && args.path.length > 0) {
 		summary.path = truncateSummaryField(args.path);
 	}
+	// 编辑工具的参数是补丁语言（`{i, input}`），目标文件在首个 `[PATH#TAG]` 头里。
+	if (summary.path === undefined && typeof args.input === "string") {
+		const header = args.input.match(/^\s*\[([^\][#]+?)(?:#[0-9A-Fa-f]{4})?\]/);
+		if (header?.[1]) summary.path = truncateSummaryField(header[1].trim());
+	}
 	return summary.command !== undefined || summary.path !== undefined ? summary : undefined;
 }
 

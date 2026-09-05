@@ -102,14 +102,28 @@ describe("RPC v2 usage analytics", () => {
 			provider: "anthropic",
 			model: "claude-sonnet",
 			timestamp: now.getTime(),
-			usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+			usage: {
+				input: 10,
+				output: 5,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 15,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
 		};
 		const stale: AssistantMessage = {
 			...base,
 			provider: "openai",
 			model: "gpt-x",
 			timestamp: now.getTime() - 30 * 86_400_000,
-			usage: { input: 1000, output: 500, cacheRead: 0, cacheWrite: 0, totalTokens: 1500, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+			usage: {
+				input: 1000,
+				output: 500,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 1500,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
 		};
 
 		const analytics = await buildUsageAnalytics({
@@ -131,5 +145,4 @@ describe("RPC v2 usage analytics", () => {
 		// 会话级 summary 仍是全时段口径。
 		expect(analytics.sessions[0]).toMatchObject({ requests: 2, totalTokens: 1515 });
 	});
-
 });

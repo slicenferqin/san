@@ -8,7 +8,7 @@
 # 与 `ds-pro` 两个字面量在 models.yml 里都不存在,导致 smol 角色长期解析失败。
 modelRoles:
   default: sol:xhigh
-  smol: opencode-go/mimo-v2.5
+  smol: model-proxy/deepseek-v4-flash
   slow: sol
   vision: asxs-grok/grok-4.6
   plan: agentrouter/claude-opus-5

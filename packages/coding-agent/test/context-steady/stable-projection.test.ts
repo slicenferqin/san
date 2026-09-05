@@ -346,6 +346,55 @@ describe("Context Steady stable projection", () => {
 		expect(stable.distinctPlanBytes).toBe(1);
 		expect(legacy.distinctPlanBytes).toBeGreaterThan(1);
 	});
+	it("rebuilds the frozen epoch when a completed tool result arrives", async () => {
+		authoritativeDigestSpy("tool refresh");
+		const { session, sessionManager, mock } = await createSession({
+			...BASE_SETTINGS,
+			"san.contextSteady.contextPlan.toolOutputOffload": true,
+			"san.contextSteady.contextPlan.toolOutputOffloadMinTokens": 100,
+		});
+
+		await session.prompt(`Continue tool refresh turn one ${RAW_BODY}`);
+		await session.waitForIdle();
+		const before = sessionManager.getBranch();
+		const oldPlan = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).at(-1);
+		expect(oldPlan).toBeDefined();
+
+		const toolCall = {
+			role: "assistant",
+			content: [{ type: "toolCall", id: "read_refresh", name: "read", arguments: { path: "large.txt" } }],
+			timestamp: Date.now(),
+			provider: "x",
+			model: "x",
+			usage: {
+				input: 10,
+				output: 5,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 15,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+		} as never;
+		const toolResult = {
+			role: "toolResult",
+			toolCallId: "read_refresh",
+			toolName: "read",
+			content: [{ type: "text", text: "old read output ".repeat(500) }],
+			timestamp: Date.now(),
+		} as never;
+		await session.agent.appendMessage(toolCall);
+		await session.agent.appendMessage(toolResult);
+		await session.prompt("Process the newly read file");
+		await session.waitForIdle();
+
+		const latestPlan = customEntries(sessionManager, CONTEXT_PLAN_CUSTOM_TYPE).at(-1);
+		expect(latestPlan).toBeDefined();
+		expect(JSON.stringify(latestPlan!.data)).not.toBe(JSON.stringify(oldPlan!.data));
+		expect(mock.calls.length).toBeGreaterThanOrEqual(2);
+		expect(JSON.stringify(mock.calls.at(-1)!.context.messages)).toContain("old read output");
+		expect(sessionManager.getBranch().length).toBeGreaterThan(before.length);
+	});
 
 	it("keeps recall out of the rendered plan and ships it as an independent volatile message", () => {
 		const recall = {

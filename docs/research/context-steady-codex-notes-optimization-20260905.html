@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>San 上下文稳态：从 Codex 跨窗口笔记吸收什么</title>
+<style>
+:root{color-scheme:light;--bg:#f4f7fa;--paper:#fff;--ink:#182735;--muted:#566879;--accent:#075985;--line:#d7e1e9}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.8 system-ui,-apple-system,"PingFang SC",sans-serif}main{max-width:1120px;margin:auto;padding:40px 28px 68px}h1{font-size:30px;line-height:1.4;margin:8px 0 18px}h2{font-size:23px;margin:36px 0 12px}h3{font-size:18px;margin:24px 0 8px}p{margin:10px 0}a{color:var(--accent);text-underline-offset:3px}code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.87em}code{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#eaf1f6;border-radius:10px;padding:18px;line-height:1.6}.meta,.small{font-size:14px;color:var(--muted)}.lead{background:var(--paper);border-left:5px solid var(--accent);border-radius:4px 12px 12px 4px;padding:18px 22px;margin:22px 0}.note{background:#fff8e8;border:1px solid #ead8a8;border-radius:10px;padding:14px 18px}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;background:var(--paper);font-size:14px;margin:16px 0}th,td{text-align:left;vertical-align:top;padding:12px 14px;border-bottom:1px solid var(--line)}th{background:#e7f0f6;color:#16445f}td:first-child{min-width:130px}ul,ol{padding-left:25px}li{margin:6px 0}.sources li{font-size:14px;overflow-wrap:anywhere}footer{margin-top:36px;border-top:1px solid var(--line);padding-top:16px;color:var(--muted);font-size:13px}@media(max-width:720px){main{padding:24px 16px 44px}h1{font-size:25px}th,td{padding:10px;font-size:13px}}@media print{body{background:white}main{padding:0;max-width:none}a{color:inherit}tr{break-inside:avoid}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<p class="meta">2026-09-05 · 官方资料与当前 San 源码核验 · 研究建议，未修改运行时代码或配置</p>
+<h1>San 上下文稳态：从 Codex 跨窗口笔记吸收什么</h1>
+<div class="lead"><strong>[INFERENCE] 有，而且优先级很明确：</strong>先补“摘要没记到，也能找到原文”的搜索与精确读取闭环；再让工作记忆按问题增量更新，而不是不断合并成一个越来越短的总摘要。保留 San 已有的输入规模控制、原始历史与真实用户请求保护，不另造一套上下文运行时。</div>
+<p>前置对比：<a href="gpt6-astra-vs-san-context-steady-20260905.html">GPT-6 Astra / Codex 与 San：同一方向，不同层次</a>。本报告重新核验所用结论；不沿用前文的执行或效果声明作为本次验证。</p>
+</header>
+<section id="external">
+<h2>一、可以确认的外部机制</h2>
+<ol>
+<li><strong>跨窗口笔记，不反复压成唯一总摘要。</strong>OpenAI 发布页明确写的是 <em>In Codex</em>，并称其为实验功能：笔记跨窗口保存，避免反复压成一个摘要。<a href="#s1">[1]</a></li>
+<li><strong>笔记漏记，不代表原文不可找。</strong>官方明确说明，之前窗口的消息与工具输出仍可搜索，包括未写入笔记的需求和测试结果。<a href="#s1">[1]</a></li>
+<li><strong>窗口切换前给保存笔记留空间。</strong>Codex 主分支 schema 包含 <code>reminder_threshold_tokens</code>、<code>auto_compact_fallback_buffer_tokens</code>、窗口 rollover 前采样的 <code>auto_compact_fallback_prompt</code>，以及 <code>use_history_notes_extension</code>。这是可核验的配置设计，不是已复现的完整运行流程。<a href="#s2">[2]</a></li>
+<li><strong>当前窗口与独立保留状态分开。</strong>Codex 的 <code>ContextManager</code> 同时持有模型历史 <code>items</code> 和独立的 <code>retained_context</code>，并分别记录历史重写版本与用户输入修订。用户消息保留受开关控制；不能把这部分代码直接等同于 notes 搜索实现。<a href="#s3">[3]</a></li>
+</ol>
+<p class="note"><strong>边界：</strong>官方发布页描述的是 Astra 与 Codex 的组合能力，不是调用 Astra API 就自带笔记数据库。本次没有核验到 notes 扩展的完整检索、排序和笔记编辑算法，也没有进行 Codex 实机长任务对跑；因此下面是 San 的设计建议，不是照搬一份已知的 Codex 实现。旧 <code>core/src/config/types.rs</code> 地址本次返回 404，配置结论以成功读取的官方 schema 为准。</p>
+</section>
+<section id="baseline">
+<h2>二、San 已有的基础，不应重复建设</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>当前机制</th><th>已核验事实</th><th>真正需要补的部分</th></tr></thead>
+<tbody>
+<tr><td>原始记录与请求视图</td><td><code>materializeContextPlanMessages</code> 生成投影视图，替换旧工具输出、卸载旧图像的路径不改 journal。<a href="#c1">[C1]</a></td><td>不是重新建设历史保存层，而是让已有历史更容易定位与读取。</td></tr>
+<tr><td>已知摘要引用展开</td><td><code>context_expand</code> 参数只有 <code>ref</code>；<code>expandDigestSpan</code> 默认 30,000 字符，超长截头留尾。<a href="#c2">[C2]</a></td><td>未知引用搜索、按命中消息读取、分页与续读。内部 helper 可增大上限，不等于工具端已有分页。</td></tr>
+<tr><td>会话历史入口</td><td><code>history://</code> 可读取存活、停放及磁盘上的 agent transcript，但渲染为简洁转录；成功工具结果通常仅显示状态与行数。<a href="#c3">[C3]</a></td><td>简洁转录不能直接当完整工具输出的搜索语料。需要回到源条目，而不是只搜索展示文本。</td></tr>
+<tr><td>已有搜索与 recall</td><td><code>HistoryStorage</code> 的 FTS5 索引列是用户 <code>prompt</code>；稳态 recall 以当前请求和近期 digest 生成查询，再调用已配置的 memory backend。<a href="#c4">[C4]</a></td><td>两者都不能据此宣称已经覆盖所有旧窗口的原始消息与工具输出。复用接口和 SQLite 使用模式，不混淆输入历史与原始会话索引。</td></tr>
+<tr><td>结构化摘要</td><td><code>TurnDigest</code> 已有 <code>factsLearned/openQuestions/risks/nextSteps</code>、文件与工具引用；不应再提“从零增加风险与下一步”。<a href="#c5">[C5]</a></td><td>缺的是跨回合、按问题修订的工作笔记生命周期，以及方法失败原因与适用条件的稳定表示。</td></tr>
+<tr><td>检查点</td><td><code>ContextCheckpoint</code> 合并有条数上限的 intents、decisions、files、risks、nextSteps；预算不足继续裁剪。其摘要没有逐项承接所有 <code>factsLearned/openQuestions</code>，但保留源引用。<a href="#c6">[C6]</a></td><td>引用可回查不等于每个事实都被当前摘要保留。应按需取回，不无限扩张 checkpoint。</td></tr>
+<tr><td>输入控制与缓存稳定</td><td>预算计算已有 steady/control/burst；planner 已有相关性筛选、受保护条目和目标锚；stable projection 将变化的 recall 与稳定前缀分离。<a href="#c1">[C1]</a><a href="#c7">[C7]</a></td><td>把新的检索结果纳入现有预算与失效规则，不再叠加一个独立的输入控制器。</td></tr>
+<tr><td>中途维护与任务来源</td><td>mid-turn 路径已先保存消息，区分 checkpoint-only 与物理压缩；排队中的用户输入优先。手动压缩路径从 journal 构造 continuation 状态并约束摘要。<a href="#c8">[C8]</a></td><td>新增笔记可接到既有边界；不另建切窗循环，不让笔记覆盖真实用户任务或自行证明工作完成。</td></tr>
+</tbody></table></div>
+<p class="small">源码默认值：稳态总开关 false、激活阈值 240K；LLM digest、recall、stable projection、旧工具输出/图像 offload 均默认 false。功能存在与默认生效是两回事。本次没有读取或修改个人配置。<a href="#c9">[C9]</a></p>
+</section>
+<section id="priorities">
+<h2>三、建议按这个顺序吸收</h2>
+<p>本节所有方案与收益判断均为 <strong>[INFERENCE / 建议]</strong>，尚未实现或测得效果。</p>
+<h3>P0：先打通“搜索原文 → 定位命中 → 精确读取”</h3>
+<p><strong>用户可感知的结果：</strong>即使只问“上次这个修法为什么失败”，不知道 digest ID，且摘要没记原因，也能找回当时的工具输出。</p>
+<ul>
+<li>语料来自当前会话分支的源消息与工具结果，而不只来自摘要、Mnemopi 等长期记忆或 <code>history://</code> 的展示文本。原始 journal 仍是唯一来源；索引是可重建的派生数据，按新增条目更新，不每轮全量扫描。</li>
+<li>优先使用明确路径、符号、错误码、工具名与关键词定位；复用现有 SQLite 模式。自然语言改述、中文和代码标识符需要单独验证召回效果，不能把“有 FTS”称为“已经实现语义检索”。混合检索或 reranker 留到失败样本证明需要时。</li>
+<li>搜索先返回短命中片段和稳定的源定位信息；读取再按消息/区间有界展开，提供续读位置。复用、扩展现有读取与 <code>context_expand</code> 能力，避免同时建设互不兼容的读取接口。</li>
+<li>读取目标不再必须是一个完整 digest span；结果明确是否截断。源图像、附件、溢出输出保留可解析的原始引用，不声称文本展开能逐字节恢复多模态输入。</li>
+<li>默认只查当前允许访问的分支；跨会话、子 agent 历史沿用已有可见性与授权边界。源记录删除或过期时明确不可用，不用相似摘要冒充原文。</li>
+</ul>
+<p><strong>首个验收：</strong>原文里有、摘要里没有、模型不知道 ref 的失败原因，能定位到正确源结果并读到完整原因；超过 30K 的区间首部也能取回，不需要无上限增加返回量。</p>
+<h3>P1：把工作记忆升级成“按问题维护的增量笔记”</h3>
+<p><strong>不是再写一份总总结。</strong>在现有 journal/custom entry 与工作记忆投影上增加可修订、可失效的笔记表示；复用 TurnDigest 提供的事实与引用。回合摘要继续承担时间线，不强迫它同时承担全部当前状态。</p>
+<div class="table-wrap"><table>
+<thead><tr><th>笔记保留什么</th><th>避免什么失真</th></tr></thead>
+<tbody>
+<tr><td>方法、运行条件、观测到的结果及源引用</td><td>只记“试过了”，却忘记为何失败；把失败永久归因于方法本身，忽略代码或环境已经变化。</td></tr>
+<tr><td>假设与未解决问题</td><td>把猜测写成已验证事实；下一轮重新发明同一个假设。</td></tr>
+<tr><td>有来源的决策、当前阻塞点和下一项验证</td><td>只记宏观计划，恢复后无法接着做具体工作。</td></tr>
+<tr><td>适用的源版本/条件、替代或失效关系</td><td>代码已更新，旧测试成功或旧失败结论仍被当作当前状态。</td></tr>
+</tbody></table></div>
+<ul>
+<li>按问题/对象更新增量；旧记录保留，当前视图取有效版本。不每轮重写所有笔记，不把整本笔记灌回上下文。</li>
+<li>文件读写、工具成功/失败来自实际执行记录；模型可以整理原因和假设，但不能仅凭笔记文字把测试改成“通过”。</li>
+<li>用户请求、约束来源继续走既有目标锚与 continuation 机制。历史用户消息可用于理解未撤销约束，但检索到的旧任务或生成笔记不得自动替代当前请求。</li>
+<li>会话笔记不默认写入全局长期记忆；需要长期保存的内容继续走既有候选记忆流程，避免临时假设污染后续项目。</li>
+</ul>
+<p><strong>首个验收：</strong>连续多个窗口之后，仍能区分“这个方法在旧条件下失败”“现在改了条件，需要重新验证”“这个原因只是猜测”；不是仅检查笔记文件还在。</p>
+<h3>P1：切换前保存必要增量，而不是临界时被迫补写</h3>
+<p>吸收 Codex schema 的“提前提醒 + 给记录笔记留空间”，但挂在 San 已有 checkpoint/physical maintenance 边界上：</p>
+<ul>
+<li>重要试验结论形成时就能保存小增量；接近实际切换边界、仍有未保存的工作状态时，再做一次有界补写。不要每个工具调用都额外调用摘要模型。</li>
+<li>先保证源消息持久化，再关联笔记与来源；读取/查询索引可恢复构建，不能反过来成为继续工作的前提。</li>
+<li>笔记补写失败时保留源记录、引用和既有确定性恢复状态，不能凭空生成成功结论，也不能进入反复补写—压缩循环。正在排队的真实用户补充继续优先。</li>
+<li>现有 digest 输入在 18,000 字符处截尾；其结构化字段会与 fallback 合并，但不保证长工具轮次尾部的全部语义都被摘要模型读到。补写应选“本次新增且尚未记录”的结果与未闭合问题，而不是单纯扩大截断常量。<a href="#c10">[C10]</a></li>
+</ul>
+<p><strong>首个验收：</strong>窗口切换后接着完成下一项具体动作；不会重试已经证伪的方法，不把未完成工作改写成已完成，记录失败也不让任务停在维护环节。</p>
+<h3>P2：让找回的内容真正进入合适的工作集</h3>
+<ul>
+<li>先接入模型按需搜索；再针对“引用缺失、恢复后具体信息不足、用户提及旧结果”等可观察场景，复用现有 recall 入口做有限的自动查找。不要新建每轮必跑的 LLM 检索规划器。</li>
+<li>稳定层放当前任务来源与必要工作状态，临时层放当前命中的少量原文；沿用 stable projection 的分层，避免一次检索把整个稳定前缀改写。</li>
+<li>检索文本计入 system/tools/messages 的总输入限制；去重并依据源版本失效。与当前动作无关的历史保留在存储层，不因曾命中过就一直占用上下文。</li>
+<li>先保留已有目标值；通过效果和成本对比决定是否调整窗口。百万模型窗口不是扩大日常工作集的充分理由。</li>
+</ul>
+<p><strong>首个验收：</strong>相同模型与任务下，重复失败和遗忘约束减少；任务完成率不下降，总成本、延迟和输入峰值可接受。没有测量前，不声称“更少 token 必然更聪明”。</p>
+</section>
+<section id="architecture">
+<h2>四、保持一条链路，不增加第二套系统</h2>
+<pre>真实用户请求与未撤销约束 ──→ 现有目标锚 / continuation
+                                  ↓
+源消息、工具结果 ──→ 既有 journal ──→ 搜索定位 ──→ 分页读原文
+                          ↓                       ↓
+                 增量工作笔记 / digest       少量临时命中
+                          └─────────┬─────────────┘
+                                    ↓
+                      现有 ContextPlan + 输入预算
+                                    ↓
+                              当前模型请求</pre>
+<p><strong>[INFERENCE]</strong>第一批只做“搜索 + 精确读取”闭环；第二批做有来源的增量笔记及切换前保存；第三批按实际失败样本加入自动召回与默认启用策略。每批都需要独立证明用户受益，而不是先把所有开关打开。</p>
+<p>不建议照搬：关闭所有 compaction、无限注入笔记、让模型自由决定物理窗口切换、另建一个全局记忆库、只换 Astra 模型 ID、把原生 WebSocket steering 或模型内部循环混入这一改造。它们不是当前最明确缺口的解决方案。</p>
+<p>最终产品应默认可用、无需用户理解摘要 ID 或手工管理笔记。上线前的实验开关留给开发验证；机制细节留在日志或 <code>san stats</code>，不增加主界面的记录面板。</p>
+</section>
+<section id="probes">
+<h2>五、本次实际运行的验证</h2>
+<p>直接调用仓库现有 <code>expandDigestSpan</code> 与 <code>resolveContextPlanBudget</code>；使用内存里的构造历史，没有调用真实模型、没有修改 journal 或运行时、没有新增测试文件。</p>
+<div class="table-wrap"><table>
+<thead><tr><th>场景</th><th>观测结果</th><th>能证明什么</th></tr></thead>
+<tbody>
+<tr><td>摘要刻意不记录失败原因，已知 ref，三条源消息</td><td><code>digestContainsMarker=false</code>；<code>recovered=true</code>；<code>messageCount=3</code>；<code>truncated=false</code>；原输入未变。</td><td>已知引用能取回摘要没有记录的源细节，不必重做这一基础。</td></tr>
+<tr><td>相同失败原因在前，后接约 40K 字符输出</td><td>源记录仍有原因；默认展开 <code>recovered=false</code>、<code>truncated=true</code>；结果 30,067 字符，含截断提示。helper 显式设 60,000 上限后 <code>recovered=true</code>；原输入未变。</td><td>默认读取窗口会遗漏首部细节；不是数据被删除。应做定位与分页，而非只把上限调大。</td></tr>
+<tr><td>1,050,000 模型窗口；源码默认稳态预算；system/tools 估算 10,000</td><td><code>steadyTarget=240000</code>；<code>controlMax=260000</code>；<code>burstCeiling=320000</code>；<code>messageBudget=250000</code>；模式 <code>steady</code>。</td><td>San 已有独立于模型最大容量的全输入控制策略，不必推倒重建。</td></tr>
+</tbody></table></div>
+<p class="note"><strong>不能据此声称：</strong>新搜索/笔记已经实现、模型会主动正确查找、长期任务成功率已经提升，或 San 的效果优于 Codex。这里验证的是现有函数行为与具体边界。</p>
+</section>
+<section id="evaluation">
+<h2>六、未来实现的验收，不只量 token</h2>
+<p>以下是建议的对比评估，<strong>本次未执行</strong>。同一模型、同一任务集合、相同初始仓库与工具条件，对比当前稳态、加入搜索/读取、再加入增量笔记三组；模型执行重复采样，不能从单次结果下质量结论。</p>
+<div class="table-wrap"><table>
+<thead><tr><th>行为场景</th><th>判定标准</th></tr></thead>
+<tbody>
+<tr><td>旧测试原因不在任何摘要中</td><td>找到正确原始结果；返回可解析源定位；无需重新执行当时已完成的探索。</td></tr>
+<tr><td>大区间首部、中文改述、相近错误码</td><td>正确命中并可续读；不能用相似但不相关结果充数，查不到明确表示未知。</td></tr>
+<tr><td>连续多窗口、多次失败方案</td><td>保留方法、条件、失败原因；条件未变时不重复无效尝试，条件已变时允许有理由地重试。</td></tr>
+<tr><td>任务补充、取消、切换分支</td><td>新要求生效；未撤销约束保持；被取消的旧任务不复活；其他分支内容不自动混入。</td></tr>
+<tr><td>代码改动、旧测试通过记录、笔记注入</td><td>旧结果不证明新代码已通过；历史内容中的指令不变成当前指令；无源成功声明不能升级任务状态。</td></tr>
+<tr><td>恢复、补写失败、索引缺失</td><td>源记录仍可读；可恢复定位；继续执行状态真实，不进入维护循环。</td></tr>
+</tbody></table></div>
+<p><strong>指标：</strong>任务成功率、约束违反次数、无意义重复尝试、旧原文检索召回率/定位正确率、分页完整性、全部模型调用的总 token/成本、P95 输入与端到端延迟、缓存命中与切换次数。确定性场景要求来源和状态转换正确；模型效果是否达到默认启用标准，依据对照结果决定，不预写一个未经测量的提升百分比。</p>
+</section>
+<section id="sources">
+<h2>来源与实现接点</h2>
+<h3>官方资料</h3>
+<ol class="sources">
+<li id="s1"><a href="https://openai.com/index/gpt-6-astra/">OpenAI：GPT-6 Astra</a>，Coding 节关于 notes、searchable earlier windows 与实验状态。</li>
+<li id="s2"><a href="https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json">Codex config.schema.json</a>，<code>ContextManagementConfigToml</code> 与 <code>TokenBudgetConfigToml</code>；本次读取对应行约 1163–1172、3659–3697。主分支会变化，未固定发布版本。</li>
+<li id="s3"><a href="https://github.com/openai/codex/blob/main/codex-rs/core/src/context_manager/history.rs">Codex ContextManager</a>，<code>items/retained_context/history_version/user_message_revision</code> 与保留开关、快照逻辑。</li>
+</ol>
+<h3>San 源码（本次读取时行号）</h3>
+<ul class="sources">
+<li id="c1">[C1] <a href="../../packages/coding-agent/src/context-steady/materialize.ts">materialize.ts</a> 325–399；<a href="../../packages/coding-agent/src/context-steady/planner.ts">planner.ts</a> 622–730：投影、稳定/临时层、相关性与目标锚。</li>
+<li id="c2">[C2] <a href="../../packages/coding-agent/src/context-steady/expand.ts">expand.ts</a> 37–38、88–142；<a href="../../packages/coding-agent/src/tools/context-expand.ts">context-expand.ts</a> 10–12、52–80：已知 ref、默认截头、工具参数。</li>
+<li id="c3">[C3] <a href="../../packages/coding-agent/src/internal-urls/history-protocol.ts">history-protocol.ts</a> 54–146；<a href="../../packages/coding-agent/src/session/session-history-format.ts">session-history-format.ts</a> 173–209：历史入口与简洁工具结果。</li>
+<li id="c4">[C4] <a href="../../packages/coding-agent/src/session/history-storage.ts">history-storage.ts</a> 61–70、172–203；<a href="../../packages/coding-agent/src/context-steady/recall.ts">recall.ts</a> 39–134；<a href="../../packages/coding-agent/src/session/agent-session.ts">agent-session.ts</a> 11676–11777：prompt 索引、查询生成、memory backend 调用及条目筛选。</li>
+<li id="c5">[C5] <a href="../../packages/coding-agent/src/context-steady/types.ts">types.ts</a> 34–129、222–267、337–365：TurnDigest、Segment checkpoint 与 ContextCheckpoint。</li>
+<li id="c6">[C6] <a href="../../packages/coding-agent/src/context-steady/checkpoint.ts">checkpoint.ts</a> 147–195、198–310：字段选取、合并上限、源引用、预算裁剪。</li>
+<li id="c7">[C7] <a href="../../packages/coding-agent/src/context-steady/budget.ts">budget.ts</a> 21–55：全输入目标、预留量、控制上沿、弹性上限。</li>
+<li id="c8">[C8] <a href="../../packages/coding-agent/src/session/agent-session.ts">agent-session.ts</a> 14597–14656、15527–15605：压缩前 continuation 来源、摘要约束、checkpoint-only 与物理维护分流、用户输入优先。</li>
+<li id="c9">[C9] <a href="../../packages/coding-agent/src/config/settings-schema.ts">settings-schema.ts</a> 2924–3022：开关、默认值、激活与 stable projection 策略。</li>
+<li id="c10">[C10] <a href="../../packages/coding-agent/src/context-steady/digest.ts">digest.ts</a> 39–49、165–224、425–461、513–553：settled-turn digest、18K 输入截断、fallback 字段合并。</li>
+</ul>
+</section>
+<footer>结论：优先补“能找到并读到遗漏的历史”，其次补“按问题持续维护且可失效的工作笔记”。不以更大的窗口、更密集的摘要调用或更多机制面板代替实际任务效果。</footer>
+</main>
+</body>
+</html>

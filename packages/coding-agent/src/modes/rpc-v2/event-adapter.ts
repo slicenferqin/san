@@ -7,7 +7,9 @@
  * Internal events do not carry stable IDs for messages/turns, so the adapter
  * generates and tracks them as events flow through.
  */
+
 import type { AgentSessionEvent } from "../../session/agent-session";
+import { summarizeToolArguments } from "../../session/exit-diagnostics";
 import type {
 	ContextMaintenanceCompletedData,
 	MessageCompletedData,
@@ -232,10 +234,21 @@ export function adaptSessionEvent(
 		// =================================================================
 		case "tool_execution_start": {
 			ctx.startTool(event.toolCallId, event.toolName);
+			const argsSummary = summarizeToolArguments(event.args);
 			const data = {
 				toolCallId: event.toolCallId as ToolCallId,
 				toolName: event.toolName,
 				intent: sanitizeOptionalText(event.intent),
+				...(argsSummary
+					? {
+							args: {
+								...(argsSummary.command
+									? { command: sanitizeRpcText(argsSummary.command, { maxChars: 500 }) }
+									: {}),
+								...(argsSummary.path ? { path: sanitizeRpcText(argsSummary.path, { maxChars: 500 }) } : {}),
+							},
+						}
+					: {}),
 			} satisfies ToolStartedData;
 			return sequencer.emit("tool.started", data, { durability: "durable", runId, turnId });
 		}
@@ -382,6 +395,18 @@ export function adaptSessionEvent(
 			});
 		}
 
+		// Thinking configuration is durable session state, not a transient stream update.
+		// Preserve explicit null when no controllable setting is available so clients clear stale UI.
+		case "thinking_level_changed":
+			return sequencer.emit(
+				"thinking.changed",
+				{
+					configured: event.configured ?? event.thinkingLevel ?? null,
+					effective: event.thinkingLevel ?? null,
+				},
+				{ durability: "durable", runId },
+			);
+
 		// =================================================================
 		// TUI-only 事件：RPC 客户端（Desktop）没有对应 UI 语义，显式忽略。
 		// 真正未知的事件仍走 default 的 UNKNOWN_INTERNAL_EVENT 诊断通知。
@@ -389,7 +414,6 @@ export function adaptSessionEvent(
 		case "ttsr_triggered":
 		case "todo_auto_clear":
 		case "irc_message":
-		case "thinking_level_changed":
 			return undefined;
 
 		// =================================================================

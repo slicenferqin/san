@@ -13,6 +13,7 @@
 import * as path from "node:path";
 import type { Api, ImageContent } from "@san/ai";
 import { getAgentDir, logger, prompt, readLines, VERSION } from "@san/utils";
+import { AbortError } from "@san/utils/abortable";
 import { collectContextCheckpoints } from "../../context-steady/checkpoint";
 import { listTurnDigests } from "../../context-steady/session";
 import type { ContextCheckpoint, TurnDigest } from "../../context-steady/types";
@@ -48,6 +49,7 @@ import { AuthLoginManager } from "./auth-login-manager";
 import {
 	BackpressureWriter,
 	installStdoutPurityGuard,
+	isClientDisconnectError,
 	type RpcWritable,
 	type WriteFrameOptions,
 } from "./backpressure-writer";
@@ -78,6 +80,7 @@ import {
 } from "./idempotency";
 import { IntegrationRevisionError, RpcV2IntegrationCatalog } from "./integration-catalog";
 import { validateInteractionResponse } from "./interaction-validation";
+import { PlanModeController } from "./plan-mode-controller";
 import type { CapabilityDescriptor, ClientCapabilities } from "./protocol/capabilities";
 import {
 	buildServerCapabilities,
@@ -124,7 +127,6 @@ import { SessionMetadataStore } from "./session-metadata";
 import { DesktopActionSetupHost } from "./setup-host-bridge";
 import { RpcV2SubagentController } from "./subagent-controller";
 import { RpcV2UIContext } from "./ui-context";
-import { PlanModeController } from "./plan-mode-controller";
 import { buildUsageAnalytics } from "./usage-analytics";
 import { GitWorktreeApplyPort } from "./worktree-apply-port";
 import { WorktreeError, WorktreeLifecycleService } from "./worktree-lifecycle";
@@ -134,7 +136,14 @@ import { WorktreeError, WorktreeLifecycleService } from "./worktree-lifecycle";
 // ============================================================================
 const IDEMPOTENCY_EXEMPT_METHODS = new Set(["server.shutdown", "stream.configure", "host.capabilities.update"]);
 const ATOMIC_SESSION_RECEIPT_METHODS = new Set(["run.start", "approval.decide", "queue.cancel"]);
-const RUNTIME_ONLY_IDEMPOTENCY_METHODS = new Set(["provider.config.create", "provider.config.update", "provider.config.delete", "provider.model.add", "provider.model.update", "provider.model.remove"]);
+const RUNTIME_ONLY_IDEMPOTENCY_METHODS = new Set([
+	"provider.config.create",
+	"provider.config.update",
+	"provider.config.delete",
+	"provider.model.add",
+	"provider.model.update",
+	"provider.model.remove",
+]);
 /** Durable receipts owned by WorktreeLifecycleService — skip outer IdempotencyStore. */
 const WORKTREE_SERVICE_IDEMPOTENCY_METHODS = new Set([
 	"worktree.create",
@@ -828,6 +837,10 @@ async function selectModel(
 		contextWindow: model.contextWindow,
 		input: model.input,
 		thinking: session.thinkingLevel,
+		thinkingState: {
+			configured: session.configuredThinkingLevel() ?? null,
+			effective: session.thinkingLevel ?? null,
+		},
 	};
 }
 
@@ -2464,7 +2477,8 @@ async function dispatchKnownMethod(
 			const catalog = sessionManager.runtimeCatalog;
 			if (!catalog) return invalidParamsError("Runtime model catalog is unavailable");
 			const p = params as { providerId?: string; modelId?: string } | undefined;
-			if (!p?.providerId?.trim()) return invalidParamsError("provider.model.remove requires providerId", "providerId");
+			if (!p?.providerId?.trim())
+				return invalidParamsError("provider.model.remove requires providerId", "providerId");
 			if (!p.modelId?.trim()) return invalidParamsError("provider.model.remove requires modelId", "modelId");
 			try {
 				return await catalog.removeCustomModel(p.providerId, p.modelId);
@@ -2480,7 +2494,8 @@ async function dispatchKnownMethod(
 			const catalog = sessionManager.runtimeCatalog;
 			if (!catalog) return invalidParamsError("Runtime model catalog is unavailable");
 			const p = params as { providerId?: string } | undefined;
-			if (!p?.providerId?.trim()) return invalidParamsError("provider.models.refresh requires providerId", "providerId");
+			if (!p?.providerId?.trim())
+				return invalidParamsError("provider.models.refresh requires providerId", "providerId");
 			try {
 				return await catalog.refreshProviderModels(p.providerId);
 			} catch (error: unknown) {
@@ -2832,6 +2847,20 @@ export async function runRpcV2Mode(factory: RpcV2SessionFactory, _eventBus?: Eve
 			asynchronousOutputError = error instanceof Error ? error : new Error(String(error));
 		});
 	};
+	// stdout 的异步 error 事件（EPIPE 等）无法被 write() 的同步路径捕获；生命周期内
+	// 监听，断开类错误走 writer.disconnect 正常收尾，未知 I/O 错误保留 fatal 诊断。
+	// 无论哪种情况都解除 stdin 读取阻塞，让主循环进入统一清理路径。
+	const stdinAbort = new AbortController();
+	const onStdoutError = (error: unknown): void => {
+		logger.warn("RPC v2 stdout error", { error: sanitizeRpcError(error, { maxChars: 500 }) });
+		if (isClientDisconnectError(error)) {
+			writer.disconnect(error);
+		} else {
+			asynchronousOutputError = error instanceof Error ? error : new Error(String(error));
+		}
+		stdinAbort.abort();
+	};
+	process.stdout.on("error", onStdoutError);
 
 	const state: ServerState = {
 		initialized: false,
@@ -3039,75 +3068,101 @@ export async function runRpcV2Mode(factory: RpcV2SessionFactory, _eventBus?: Eve
 			);
 			return task;
 		};
-		for await (const line of readLines(Bun.stdin.stream())) {
-			if (state.shutdownRequested) break;
-			if (asynchronousOutputError) throw asynchronousOutputError;
-			if (line.byteLength === 0 || isWhitespaceOnly(line)) continue;
-			if (line.byteLength > state.limits.maxFrameBytes) {
-				const error = createRpcError({
-					reason: "PAYLOAD_TOO_LARGE",
-					category: "validation",
-					message: `RPC frame exceeds ${state.limits.maxFrameBytes} bytes`,
-				});
-				recordRpcError(state, error);
-				await sendError(output, null, error);
-				break;
-			}
-
-			let parsed: unknown;
-			try {
-				parsed = JSON.parse(decoder.decode(line));
-			} catch (error: unknown) {
-				const rpcError = createRpcError({
-					reason: "PARSE_ERROR",
-					category: "protocol",
-					message: "Invalid UTF-8 or JSON in RPC frame",
-				});
-				recordRpcError(state, rpcError);
-				await sendError(output, null, rpcError);
-				logger.warn("RPC v2 frame parse failed", { error: sanitizeRpcError(error, { maxChars: 500 }) });
-				break;
-			}
-
-			if (isClientResult(parsed)) {
-				hostToolBridge.handleResult(parsed.id, parsed.result);
-				continue;
-			}
-			if (isClientErrorResponse(parsed) && typeof parsed.id === "string") {
-				hostToolBridge.handleError(parsed.id, parsed.error);
-				continue;
-			}
-			if (isNotification(parsed)) {
-				if (parsed.method === "host.tool.progress" && isRecord(parsed.params)) {
-					const requestId = parsed.params.requestId;
-					const message = parsed.params.message;
-					if (typeof requestId === "string" && typeof message === "string") {
-						hostToolBridge.handleProgress(requestId, message);
-					}
+		try {
+			for await (const line of readLines(Bun.stdin.stream(), stdinAbort.signal)) {
+				if (state.shutdownRequested) break;
+				if (asynchronousOutputError) throw asynchronousOutputError;
+				// 客户端 transport 已断开：停止继续读取和发送 RPC 帧，走正常清理路径。
+				if (writer.disconnectError) break;
+				if (line.byteLength === 0 || isWhitespaceOnly(line)) continue;
+				if (line.byteLength > state.limits.maxFrameBytes) {
+					const error = createRpcError({
+						reason: "PAYLOAD_TOO_LARGE",
+						category: "validation",
+						message: `RPC frame exceeds ${state.limits.maxFrameBytes} bytes`,
+					});
+					recordRpcError(state, error);
+					await sendError(output, null, error);
+					break;
 				}
-				continue;
-			}
-			if (!isValidClientRequest(parsed)) {
-				const rpcError = createRpcError({
-					reason: "INVALID_REQUEST",
-					category: "protocol",
-					message: "Expected a JSON-RPC 2.0 request with non-empty string id, method, and params",
-				});
-				recordRpcError(state, rpcError);
-				await sendError(output, requestIdOrNull(parsed), rpcError);
-				continue;
-			}
 
-			const request: ClientRequest = parsed;
-			const task = scheduleRequest(request);
-			if (request.method === "initialize" || request.method === "server.shutdown") await task;
-			if (request.method === "server.shutdown" && state.shutdownRequested) break;
+				let parsed: unknown;
+				try {
+					parsed = JSON.parse(decoder.decode(line));
+				} catch (error: unknown) {
+					const rpcError = createRpcError({
+						reason: "PARSE_ERROR",
+						category: "protocol",
+						message: "Invalid UTF-8 or JSON in RPC frame",
+					});
+					recordRpcError(state, rpcError);
+					await sendError(output, null, rpcError);
+					logger.warn("RPC v2 frame parse failed", { error: sanitizeRpcError(error, { maxChars: 500 }) });
+					break;
+				}
+
+				if (isClientResult(parsed)) {
+					hostToolBridge.handleResult(parsed.id, parsed.result);
+					continue;
+				}
+				if (isClientErrorResponse(parsed) && typeof parsed.id === "string") {
+					hostToolBridge.handleError(parsed.id, parsed.error);
+					continue;
+				}
+				if (isNotification(parsed)) {
+					if (parsed.method === "host.tool.progress" && isRecord(parsed.params)) {
+						const requestId = parsed.params.requestId;
+						const message = parsed.params.message;
+						if (typeof requestId === "string" && typeof message === "string") {
+							hostToolBridge.handleProgress(requestId, message);
+						}
+					}
+					continue;
+				}
+				if (!isValidClientRequest(parsed)) {
+					const rpcError = createRpcError({
+						reason: "INVALID_REQUEST",
+						category: "protocol",
+						message: "Expected a JSON-RPC 2.0 request with non-empty string id, method, and params",
+					});
+					recordRpcError(state, rpcError);
+					await sendError(output, requestIdOrNull(parsed), rpcError);
+					continue;
+				}
+
+				const request: ClientRequest = parsed;
+				const task = scheduleRequest(request);
+				if (request.method === "initialize" || request.method === "server.shutdown") await task;
+				if (request.method === "server.shutdown" && state.shutdownRequested) break;
+			}
+		} catch (error) {
+			// stdout 错误触发 stdinAbort：终态由下方 disconnected / asynchronousOutputError 判定。
+			if (!(error instanceof AbortError)) throw error;
+		}
+		// 客户端断连是正常终止路径：先取消等待中的 UI/Host 请求，让 in-flight 请求
+		// 快速收敛（否则 allSettled 会被悬挂的审批/交互卡住），随后按现有逻辑释放
+		// session lease。断连引起的请求拒绝不再升级为 fatal；真实错误仍保留。
+		const disconnected = writer.disconnectError !== undefined;
+		if (disconnected) {
+			uiContext?.rejectAll("RPC client disconnected");
+			hostToolBridge.close("RPC client disconnected");
 		}
 		const settled = await Promise.allSettled([...pendingRequests]);
 		const rejected = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
-		if (rejected) throw rejected.reason;
-		if (asynchronousOutputError) throw asynchronousOutputError;
+		if (rejected && !disconnected) throw rejected.reason;
+		if (rejected && disconnected) {
+			logger.warn("RPC v2 request failed during client disconnect", {
+				error: sanitizeRpcError(rejected.reason, { maxChars: 500 }),
+			});
+		}
+		if (asynchronousOutputError && !disconnected) throw asynchronousOutputError;
+		if (asynchronousOutputError && disconnected) {
+			logger.error("RPC v2 output error during client disconnect", {
+				error: sanitizeRpcError(asynchronousOutputError, { maxChars: 500 }),
+			});
+		}
 	} finally {
+		process.stdout.off("error", onStdoutError);
 		uiContext?.rejectAll("RPC client disconnected");
 		hostToolBridge.close("RPC client disconnected");
 		try {

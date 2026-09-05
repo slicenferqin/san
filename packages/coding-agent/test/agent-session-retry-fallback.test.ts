@@ -903,6 +903,78 @@ describe("AgentSession retry fallback", () => {
 		expect(getLastAssistantMessage(session).stopReason).toBe("stop");
 	});
 
+	it("preserves the selected effort across logical failover despite a different route default", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const bundledFallback = getBundledModel("anthropic", "claude-opus-4-5");
+		if (!primaryModel || !bundledFallback) throw new Error("Expected bundled reasoning models");
+		const fallbackModel: Model = {
+			...bundledFallback,
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				defaultLevel: Effort.XHigh,
+			},
+		};
+		const routeRegistry = compileModelRouteRegistry(
+			{
+				logical: {
+					routes: [
+						{
+							id: "primary",
+							model: `${primaryModel.provider}/${primaryModel.id}`,
+							priority: 0,
+							equivalence: "exact",
+						},
+						{
+							id: "fallback",
+							model: `${fallbackModel.provider}/${fallbackModel.id}`,
+							priority: 1,
+							equivalence: "exact",
+						},
+					],
+				},
+			},
+			[primaryModel, fallbackModel],
+		);
+		vi.spyOn(modelRegistry, "getModelRouteRegistry").mockReturnValue(routeRegistry);
+		const requests: Array<{ model: string; effort: Effort | undefined }> = [];
+		const mock = createMockModel();
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (model, context, options) => {
+				requests.push({ model: model.id, effort: options?.reasoning });
+				mock.push(
+					model.id === primaryModel.id
+						? { throw: "HTTP 404: model unavailable on this route" }
+						: { content: ["Recovered"] },
+				);
+				return mock.stream(model, context, options);
+			},
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				"routing.enabled": true,
+				"routing.routeFallback": true,
+			}),
+			modelRegistry,
+		});
+		session.setThinkingLevel(Effort.Low);
+		await session.selectLogicalModel("logical");
+		await session.prompt("Recover on the alternate reasoning route");
+		await session.waitForIdle();
+		expect(requests).toEqual([
+			{ model: primaryModel.id, effort: Effort.Low },
+			{ model: fallbackModel.id, effort: Effort.Low },
+		]);
+		expect(session.configuredThinkingLevel()).toBe(Effort.Low);
+		expect(session.thinkingLevel).toBe(Effort.Low);
+	});
+
 	it("resets the logical route retry budget after a successful same-route retry", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");

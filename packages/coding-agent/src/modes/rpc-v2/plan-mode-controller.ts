@@ -20,9 +20,9 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { resolveApprovedPlan } from "../../plan-mode/approved-plan";
 import type { AgentToolResult } from "@san/agent";
 import { resolveLocalUrlToPath } from "../../internal-urls";
+import { resolveApprovedPlan } from "../../plan-mode/approved-plan";
 import { normalizeLocalScheme } from "../../tools/path-utils";
 import { ToolError } from "../../tools/tool-errors";
 import type { RpcV2UIContext } from "./ui-context";

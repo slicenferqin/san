@@ -39,6 +39,30 @@ function makeContext(): { ctx: AdapterContext; sequencer: EventSequencer } {
 	return { ctx, sequencer: new EventSequencer("sess_test" as SessionId) };
 }
 
+describe("event-adapter thinking_level_changed", () => {
+	it("emits durable configured and effective values, including explicit null", () => {
+		const { ctx, sequencer } = makeContext();
+		const emitted = adaptSessionEvent(
+			{ type: "thinking_level_changed", thinkingLevel: undefined } as AgentSessionEvent,
+			sequencer,
+			ctx,
+		);
+		expect(emitted?.type).toBe("thinking.changed");
+		expect(emitted?.durability).toBe("durable");
+		expect(emitted?.data).toEqual({ configured: null, effective: null });
+	});
+
+	it("prefers configured selector while exposing effective level", () => {
+		const { ctx, sequencer } = makeContext();
+		const emitted = adaptSessionEvent(
+			{ type: "thinking_level_changed", thinkingLevel: "high", configured: "auto" } as AgentSessionEvent,
+			sequencer,
+			ctx,
+		);
+		expect(emitted?.data).toEqual({ configured: "auto", effective: "high" });
+	});
+});
+
 describe("event-adapter message_update", () => {
 	it("emits text deltas and appends them to the visible buffer", () => {
 		const { ctx, sequencer } = makeContext();

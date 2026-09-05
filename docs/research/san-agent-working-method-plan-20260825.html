@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>San Agent 工作章法方案｜不让用户写 Spec，也不让 Agent 随意发挥</title>
+<style>
+	:root {
+		--ink:#172033; --muted:#667287; --paper:#f5f7fb; --card:#fff;
+		--navy:#173b63; --blue:#2c6fa8; --blue-soft:#eaf3fb;
+		--green:#17745b; --green-soft:#e8f6f1; --amber:#996014;
+		--amber-soft:#fff5e1; --red:#a23b3b; --red-soft:#fff0ef; --line:#dbe3ed;
+		--shadow:0 12px 36px rgba(24,48,78,.08);
+	}
+	* { box-sizing:border-box; }
+	body { margin:0; color:var(--ink); background:var(--paper); font:16px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+	a { color:var(--blue); text-underline-offset:3px; }
+	.wrap { width:min(1080px,calc(100% - 40px)); margin:0 auto; }
+	.hero { padding:70px 0 54px; color:#fff; background:radial-gradient(circle at 82% 12%,rgba(91,170,226,.28),transparent 34%),linear-gradient(135deg,#102b49 0%,#183f68 58%,#235a83 100%); }
+	.eyebrow { margin-bottom:12px; color:#add7f1; font-size:13px; font-weight:750; letter-spacing:.12em; text-transform:uppercase; }
+	h1 { max-width:940px; margin:0; font-size:clamp(34px,5vw,58px); line-height:1.14; letter-spacing:-.035em; }
+	.hero .lead { max-width:850px; margin:24px 0 0; color:#dceaf5; font-size:20px; line-height:1.7; }
+	.meta { display:flex; flex-wrap:wrap; gap:10px 24px; margin-top:28px; color:#bdd5e7; font-size:14px; }
+	.verdict { position:relative; z-index:2; margin-top:-26px; padding:28px 32px; border:1px solid rgba(23,59,99,.1); border-radius:18px; background:var(--card); box-shadow:var(--shadow); }
+	.verdict strong { display:block; margin-bottom:8px; color:var(--navy); font-size:25px; line-height:1.45; }
+	main { padding:22px 0 80px; }
+	section { padding-top:38px; }
+	h2 { margin:0 0 18px; color:var(--navy); font-size:30px; line-height:1.35; letter-spacing:-.02em; }
+	h3 { margin:26px 0 10px; color:var(--navy); font-size:20px; line-height:1.45; }
+	h4 { margin:0 0 8px; color:var(--navy); font-size:17px; }
+	p { margin:10px 0; }
+	ul,ol { margin:10px 0; padding-left:24px; }
+	li { margin:6px 0; }
+	.small { color:var(--muted); font-size:14px; }
+	.grid { display:grid; gap:16px; }
+	.grid.two { grid-template-columns:repeat(2,minmax(0,1fr)); }
+	.grid.three { grid-template-columns:repeat(3,minmax(0,1fr)); }
+	.card { padding:22px; border:1px solid var(--line); border-radius:14px; background:var(--card); box-shadow:0 5px 18px rgba(24,48,78,.04); }
+	.card p:last-child,.card ul:last-child { margin-bottom:0; }
+	.metric { margin-bottom:4px; color:var(--blue); font-size:28px; font-weight:800; line-height:1.2; }
+	.label { color:var(--muted); font-size:13px; font-weight:750; letter-spacing:.06em; text-transform:uppercase; }
+	.badge { display:inline-block; margin-right:6px; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:750; vertical-align:1px; }
+	.badge.now { color:var(--green); background:var(--green-soft); }
+	.badge.gap { color:var(--amber); background:var(--amber-soft); }
+	.badge.plan { color:var(--blue); background:var(--blue-soft); }
+	.badge.no { color:var(--red); background:var(--red-soft); }
+	.callout { margin:18px 0; padding:18px 22px; border-left:4px solid var(--blue); border-radius:0 12px 12px 0; background:var(--blue-soft); }
+	.callout.green { border-color:var(--green); background:var(--green-soft); }
+	.callout.amber { border-color:var(--amber); background:var(--amber-soft); }
+	.callout.red { border-color:var(--red); background:var(--red-soft); }
+	.table-wrap { overflow-x:auto; margin:16px 0; border:1px solid var(--line); border-radius:14px; background:var(--card); }
+	table { width:100%; border-collapse:collapse; font-size:14px; }
+	th,td { padding:14px 16px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+	tr:last-child td { border-bottom:0; }
+	th { color:var(--navy); background:#edf3f8; font-weight:750; white-space:nowrap; }
+	.loop { display:grid; grid-template-columns:repeat(7,minmax(90px,1fr)); gap:8px; align-items:stretch; margin:20px 0; }
+	.loop .box { display:grid; place-items:center; min-height:116px; padding:12px; border:1px solid var(--line); border-radius:12px; background:var(--card); text-align:center; }
+	.loop .box strong { display:block; color:var(--navy); font-size:18px; }
+	.loop .arrow { display:grid; place-items:center; color:var(--blue); font-size:24px; font-weight:800; }
+	.rhythm { display:grid; gap:12px; margin:18px 0; }
+	.rhythm-step { display:grid; grid-template-columns:84px 1fr; gap:20px; padding:20px 22px; border:1px solid var(--line); border-radius:14px; background:var(--card); }
+	.rhythm-step .number { color:var(--blue); font-size:28px; font-weight:850; line-height:1.2; }
+	.rhythm-step h4 { margin:0 0 5px; }
+	.work-card { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin:18px 0; }
+	.work-card > div { padding:18px; border-radius:12px; background:#f0f6fb; }
+	.work-card strong { display:block; margin-bottom:5px; color:var(--navy); }
+	.milestone { margin:18px 0; padding:24px; border:1px solid var(--line); border-radius:16px; background:var(--card); }
+	.milestone-head { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:8px 20px; margin-bottom:8px; }
+	.milestone-head h3 { margin:0; }
+	.priority { color:var(--red); font-size:13px; font-weight:800; letter-spacing:.08em; }
+	.accept { margin-top:14px; padding:14px 16px; border-radius:10px; color:#154f42; background:var(--green-soft); }
+	details { margin:14px 0; border:1px solid var(--line); border-radius:12px; background:var(--card); }
+	summary { padding:14px 18px; color:var(--navy); font-weight:750; cursor:pointer; }
+	details > div { padding:0 18px 18px; }
+	code { padding:2px 6px; color:#244b6d; border-radius:5px; background:#edf3f8; font:0.9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+	footer { padding:30px 0 50px; color:var(--muted); border-top:1px solid var(--line); font-size:13px; }
+	@media (max-width:900px) { .grid.three { grid-template-columns:repeat(2,minmax(0,1fr)); } .loop { grid-template-columns:1fr; } .loop .arrow { min-height:25px; transform:rotate(90deg); } }
+	@media (max-width:650px) { .wrap { width:min(100% - 26px,1080px); } .hero { padding-top:48px; } .hero .lead { font-size:17px; } .verdict { padding:22px; } .grid.two,.grid.three { grid-template-columns:1fr; } .work-card { grid-template-columns:1fr; } .rhythm-step { grid-template-columns:1fr; gap:5px; } h2 { font-size:25px; } th,td { min-width:150px; } }
+	@media print { body { background:#fff; } .hero { padding:38px 0; background:#173b63 !important; print-color-adjust:exact; -webkit-print-color-adjust:exact; } .verdict { margin-top:16px; box-shadow:none; } .card,.milestone { box-shadow:none; break-inside:avoid; } a { color:inherit; text-decoration:none; } }
+</style>
+</head>
+<body>
+<header class="hero">
+	<div class="wrap">
+		<div class="eyebrow">Revised Management Brief · 2026-08-25</div>
+		<h1>San Agent 工作章法方案<br />不让用户写 Spec，也不让 Agent 随意发挥</h1>
+		<p class="lead">这不是一份要求用户先填完整需求的规范，也不是再造一个更复杂的长任务系统。它要解决的是更基础的问题：Agent 每次接到事情，都应该知道先看什么、这一轮做什么、做完怎么确认、什么时候停下来。</p>
+		<div class="meta"><span>面向：产品与研发决策</span><span>性质：工作方法与落地建议</span><span>原则：用户只说人话，系统负责把事情做得有顺序</span></div>
+	</div>
+</header>
+
+<div class="wrap">
+	<div class="verdict">
+		<strong>结论：我们要造的不是“让用户填写 Spec 的表单”，而是一个藏在 Harness 里的“隐形带班人”。</strong>
+		<p>用户只需要说“修一下这个问题”“把这个页面做好”“查一下为什么慢”。Harness 在后台自动给 Agent 一条很短的工作节拍：先看清、只做下一小步、马上验一下、确认后再走下一步。它不要求用户提前想完整，也不要求 Agent 一开始写一篇大计划。</p>
+	</div>
+</div>
+
+<main class="wrap">
+<section id="correction">
+	<h2>一、先纠正方向：长任务不是第一问题</h2>
+	<div class="grid three">
+		<div class="card"><div class="label">用户真正感受到的</div><div class="metric">没章法</div><p>Agent 一会儿查这里、一会儿改那里，做了很多动作，却说不清当前这一步为什么做。</p></div>
+		<div class="card"><div class="label">容易走偏的解法</div><div class="metric">大 Spec</div><p>把整理目标、拆任务、写验收的压力提前推给用户。系统变得规范了，用户却更累。</p></div>
+		<div class="card"><div class="label">应该解决的</div><div class="metric">工作节拍</div><p>不要求一次想完，只要求当前这一小步有理由、有结果、有收尾。</p></div>
+	</div>
+	<div class="callout green">
+		<strong>核心判断：</strong>用户没有义务充当项目经理。Agent 的“做事方法”应该是产品默认值，就像好的装修队不会让业主先写施工管理规范。
+	</div>
+	<p>长任务当然重要，但长任务只是“这套方法能不能持续很多轮”的结果。眼下要先解决每一轮是否像一个靠谱的人在做事：有没有先了解情况，是否一次只处理一个问题，改完是否马上验证，做完是否知道停。</p>
+</section>
+
+<section id="problem">
+	<h2>二、问题到底是什么</h2>
+	<p>“没有章法”不是 Agent 不会调用工具，也不是它缺少更多角色。它主要表现为四种失序：</p>
+	<div class="grid two">
+		<div class="card"><h4>1. 先动手，后理解</h4><p>还没确认文件、入口、现状和失败方式，就开始改代码或批量搜索。后面只能不断返工。</p></div>
+		<div class="card"><h4>2. 做了很多，没形成一小段闭环</h4><p>一次改太多地方，结果出了问题也不知道是哪一步导致的；或者只观察不行动，工具调用越来越多。</p></div>
+		<div class="card"><h4>3. 改完不验，靠感觉宣布完成</h4><p>测试、页面、接口或实际使用路径没有走一遍，最终结论只是“看起来应该可以”。</p></div>
+		<div class="card"><h4>4. 已经够了还继续扩张</h4><p>目标已经满足，却继续重构、加功能、换方案；或者遇到失败，只是换个名字重复原来的办法。</p></div>
+	</div>
+	<div class="callout amber">
+		<strong>所以我们要约束的不是 Agent 的“想法”，而是工作的先后关系。</strong> Agent 可以自由选择具体命令和代码写法，但不能自由跳过“了解—行动—确认—收口”这条基本顺序。
+	</div>
+</section>
+
+<section id="current">
+	<h2>三、现有能力为什么还没有解决它</h2>
+	<div class="table-wrap">
+		<table>
+			<thead><tr><th>现有能力</th><th>它已经解决的事</th><th>它还没有解决的事</th></tr></thead>
+			<tbody>
+				<tr><td><strong>契约回显</strong></td><td>让 Agent 记住用户大致要什么，并承诺最后说明做了什么、验证了什么。</td><td>没有规定现在先做什么；它是目标提醒，不是工作方法。</td></tr>
+				<tr><td><strong>目标复诵</strong></td><td>长回合中把目标重新推回注意力范围，减少跑题。</td><td>只能提醒“别忘了目标”，不能告诉 Agent 应该如何把目标拆成下一小步。</td></tr>
+				<tr><td><strong>进展看门狗</strong></td><td>发现重复调用、无变化轮询和没有新结果的循环。</td><td>它在失序已经发生后才提醒，不能在第一次改动前建立节拍。</td></tr>
+				<tr><td><strong>Todo</strong></td><td>适合记录明确的多项任务和阶段进度。</td><td>对普通小任务太重；而且让模型维护列表，不等于模型真的按顺序做事。</td></tr>
+				<tr><td><strong>Plan Mode</strong></td><td>适合用户明确要求先规划，或确实需要大范围并行协作的任务。</td><td>不应该成为所有任务的默认入口；计划文件会把心智负担前置。</td></tr>
+				<tr><td><strong>San Loop</strong></td><td>给复杂团队任务提供 Commander、Worker、Supervisor、Oracle 等角色分工。</td><td>角色分工解决“谁做”，不自动解决“每个 Agent 这一轮先做什么、怎么验”。</td></tr>
+			</tbody>
+		</table>
+	</div>
+	<p>这说明此前把重点放在“统一任务账本、长任务恢复和最终状态”上是必要但不够准确。那是安全底座；用户现在痛的，是 Agent 的方向盘和脚下的节拍器。</p>
+</section>
+
+<section id="principle">
+	<h2>四、核心抽象：轻量工作循环</h2>
+	<div class="callout">
+		<strong>不叫 Spec，也不叫 Plan。</strong>它是一种每轮都能重复的默认工作方式。用户不用写，Agent 不用先交一份长文，Harness 只在必要时给出三行内部提示。
+	</div>
+	<div class="loop" aria-label="轻量工作循环">
+		<div class="box"><span><strong>看清</strong>先了解现状</span></div><div class="arrow">→</div>
+		<div class="box"><span><strong>做一小步</strong>只处理当前问题</span></div><div class="arrow">→</div>
+		<div class="box"><span><strong>验一下</strong>确认这步有效</span></div><div class="arrow">→</div>
+		<div class="box"><span><strong>收口</strong>完成就停，未完成再取下一步</span></div>
+	</div>
+	<div class="rhythm">
+		<div class="rhythm-step"><div class="number">01</div><div><h4>看清：先拿到足够信息，不追求一次看完</h4><p>找到相关文件、复现入口、当前错误或运行页面。达到“可以决定下一步”就停，不允许无目的扩展搜索。</p></div></div>
+		<div class="rhythm-step"><div class="number">02</div><div><h4>做一小步：一次只改变一个连贯的问题</h4><p>改动要能说清“它是为了解决刚才看到的什么”。不要求一次完成整件大事，但要求这一步是可回看的。</p></div></div>
+		<div class="rhythm-step"><div class="number">03</div><div><h4>验一下：紧跟改动安排检查</h4><p>优先跑最贴近刚才改动的测试、页面操作、接口请求或对比检查。没有合适的自动检查，就明确说明当前只能做到哪一步。</p></div></div>
+		<div class="rhythm-step"><div class="number">04</div><div><h4>收口：判断继续、调整还是结束</h4><p>验证通过就回到用户目标，不自动扩张；验证失败就根据新结果换下一步，而不是重复原动作。</p></div></div>
+	</div>
+	<p><strong>长任务只是把这个循环重复很多次。</strong> 每次循环留下很短的“已经知道什么、刚做了什么、下一步是什么”，压缩或换 Agent 后也能接着走，但不需要维护一份面面俱到的 Spec。</p>
+</section>
+
+<section id="work-card">
+	<h2>五、Harness 只生成一张“三行工作卡”</h2>
+	<p>这是整个方案最小的内部单元。它不是交给用户填写的表单，也不是要 Agent 展示给用户看的长计划。</p>
+	<div class="work-card">
+		<div><strong>现在要解决什么</strong><span>从用户原话和已经看到的事实中提取一句当前目标。</span></div>
+		<div><strong>这一轮先做什么</strong><span>只放一个下一动作，例如“先跑失败测试确认入口”。</span></div>
+		<div><strong>做到什么算这一轮完成</strong><span>放一个近处的完成信号，例如“失败测试转绿”或“页面按钮能提交”。</span></div>
+	</div>
+	<div class="grid two">
+		<div class="card"><h4>它和 Spec 的区别</h4><ul><li>Spec 试图提前描述整件事；工作卡只描述当前一小步。</li><li>Spec 往往需要用户提供；工作卡由 Harness 根据任务和观察自动产生。</li><li>Spec 是相对稳定的文档；工作卡随着每次验证结果即时更新。</li></ul></div>
+		<div class="card"><h4>它和 Todo 的区别</h4><ul><li>Todo 记录“还有哪些事情”；工作卡决定“此刻先做哪一件”。</li><li>Todo 可以由用户查看和维护；工作卡默认隐藏，只在 Agent 上下文中占很少空间。</li><li>简单任务可以只有一张工作卡，不创建 Todo，不写计划文件。</li></ul></div>
+	</div>
+	<div class="callout green"><strong>用户体验：</strong>用户仍然只说一句话。系统不追问“请补充目标、范围、验收标准”，除非在实际执行后确实遇到无法继续的关键缺口。</div>
+</section>
+
+<section id="modes">
+	<h2>六、不同任务自动采用不同节拍</h2>
+	<p>不能用一套僵硬流程处理所有请求。Harness 根据用户表达、已有文件和工具结果，自动选最短的合适节拍。</p>
+	<div class="table-wrap">
+		<table>
+			<thead><tr><th>任务样子</th><th>默认节拍</th><th>用户不需要提供什么</th></tr></thead>
+			<tbody>
+				<tr><td><strong>查问题 / 问原因</strong></td><td>看清 → 给结论 → 说明依据</td><td>不用写研究计划。</td></tr>
+				<tr><td><strong>明确修 Bug</strong></td><td>复现 → 定位 → 最小修改 → 回归检查</td><td>不用先写完整修复方案。</td></tr>
+				<tr><td><strong>加一个小功能</strong></td><td>看现有写法 → 明确一个行为 → 修改 → 运行相关检查</td><td>不用先写 Spec 文档；测试或现有代码提供的约束优先。</td></tr>
+				<tr><td><strong>页面 / 交互任务</strong></td><td>启动并观察 → 做一个界面变化 → 用真实操作确认</td><td>不用懂前端验收术语；用户只需描述想要的效果。</td></tr>
+				<tr><td><strong>重构 / 大范围改动</strong></td><td>先找边界 → 选一个连贯切片 → 改后检查 → 再取下一切片</td><td>不用把整个仓库拆成几十项；系统只要求每次拿一个可收口切片。</td></tr>
+				<tr><td><strong>目标明显不清</strong></td><td>先观察能观察的内容 → 只问一个阻塞问题</td><td>不在开始时进行“需求访谈”；先用现有信息减少问题。</td></tr>
+			</tbody>
+		</table>
+	</div>
+</section>
+
+<section id="guardrails">
+	<h2>七、不要靠提示词祈祷，要在几个关键转折点扶一下</h2>
+	<p>完全靠提示词，Agent 仍然可能忘记；完全靠硬规则，又会变成僵硬的审批流。建议只在四个转折点做轻量干预：</p>
+	<div class="grid two">
+  <div class="card"><span class="badge plan">转折一</span><h4>第一次要改东西前</h4><p>如果当前还没有任何相关观察，提醒一次“先确认入口和现状”。小任务、用户明确给出文件和改法时可以直接通过。</p></div>
+		<div class="card"><span class="badge plan">转折二</span><h4>发生改动后</h4><p>把工作卡切到“检查优先”。下一步默认推荐最贴近的测试、运行或对比，不让模型马上继续扩大改动。</p></div>
+		<div class="card"><span class="badge plan">转折三</span><h4>检查通过后</h4><p>提醒回看用户原话：目标满足就收口；只有还有明确未完成部分，才生成下一张小工作卡。</p></div>
+		<div class="card"><span class="badge plan">转折四</span><h4>同一办法再次失败</h4><p>不再重复同一动作。要求换方法、缩小问题或说明缺什么；连续失败时才进入暂停或求助。</p></div>
+	</div>
+	<div class="callout amber"><strong>原则：</strong>正常路径尽量不拦，只给方向；只有重复副作用、危险操作、明显无效循环和完成前缺少必要检查时，才升级为硬限制。</div>
+</section>
+
+<section id="examples">
+	<h2>八、两个例子：用户不用变专业，Agent 变得有顺序</h2>
+	<div class="milestone">
+		<h3>例子 A：修一个超时问题</h3>
+		<p><strong>用户：</strong>“这个 API 最近经常超时，帮我修一下。”</p>
+		<div class="table-wrap"><table><thead><tr><th>步骤</th><th>Agent 实际工作</th><th>Harness 只给的内部提示</th></tr></thead><tbody>
+			<tr><td>看清</td><td>找到请求入口，运行一次或查看已有日志，确认超时发生在哪一段。</td><td>当前一步：确认失败入口。完成信号：拿到可复现错误或明确日志位置。</td></tr>
+			<tr><td>做一小步</td><td>只修改导致超时的那一处配置、等待逻辑或调用方式。</td><td>当前一步：修复刚才确认的原因。完成信号：改动范围与原因对应。</td></tr>
+			<tr><td>验一下</td><td>运行针对该 API 的测试或真实请求，观察超时是否消失。</td><td>当前一步：回归同一条路径。完成信号：请求在预期时间内完成。</td></tr>
+			<tr><td>收口</td><td>回看用户目标；如果问题已解决，报告改了什么、怎么确认的，不继续顺手重构。</td><td>目标已满足，停止。</td></tr>
+		</tbody></table></div>
+	</div>
+	<div class="milestone">
+		<h3>例子 B：把页面做得更好</h3>
+		<p><strong>用户：</strong>“这个页面帮我优化一下，感觉太乱了。”</p>
+		<ul><li>系统不会要求用户先写视觉 Spec；先启动页面、看真实界面，找出最明显的层级和操作问题。</li><li>Agent 先处理一个最影响使用的区域，例如标题、主按钮和信息层级。</li><li>改完用浏览器重新走一遍主要操作，再决定是否继续处理第二个区域。</li><li>如果“更好”涉及完全不同的审美方向，系统在看到页面后只问一个选择题，而不是开场进行长访谈。</li></ul>
+	</div>
+</section>
+
+<section id="implementation">
+	<h2>九、落地方案：先做一个小控制器，不重做 Harness</h2>
+	<div class="milestone">
+		<div class="milestone-head"><h3>第一步：新增“工作节拍”运行状态</h3><span class="priority">P0</span></div>
+		<p>在现有 <code>AgentSession</code> 中增加轻量、可丢弃的状态，不创建用户必须维护的新文件：</p>
+		<ul><li>任务类型：查问题、修复、功能、页面、重构、模糊任务等。</li><li>当前阶段：看清、改动、检查、收口。</li><li>当前一步：一句短描述。</li><li>完成信号：一个近处的检查方式。</li><li>最近一次改动和最近一次检查：用于判断是否跳步或重复。</li></ul>
+		<div class="accept"><strong>关键边界：</strong>它不是新的最终状态机，不替代现有长任务账本；它只负责把当前回合带入正确节拍。</div>
+	</div>
+	<div class="milestone">
+		<div class="milestone-head"><h3>第二步：复用现有工具结果，自动更新节拍</h3><span class="priority">P0</span></div>
+		<ul><li>现有 <code>ToolProgressGuard</code> 已经能区分观察、改动和检查，直接复用这层分类。</li><li>现有 Goal 复诵只负责目标提醒；新增的工作节拍提示负责“当前一步”，两者不要混成一段长提示。</li><li>现有 watchdog 继续负责发现重复和无变化；工作节拍在更早位置提醒先看、改后验。</li><li>提示使用静态模板，动态内容只有任务类型、当前一步和完成信号，不在代码里拼长 Prompt。</li></ul>
+		<div class="accept"><strong>关键边界：</strong>默认提示不展示给用户、不要求用户确认；只有真正卡住时才转换成一句人话。</div>
+	</div>
+	<div class="milestone">
+		<div class="milestone-head"><h3>第三步：为常见任务补“默认检查方式”</h3><span class="priority">P1</span></div>
+		<ul><li>修 Bug 默认优先复现和回归原测试。</li><li>小功能默认优先运行新增行为的检查。</li><li>页面任务默认优先浏览器真实操作。</li><li>重构默认优先改前后同一组检查。</li><li>研究任务默认优先留下可追溯的结论来源。</li></ul>
+		<p>这些是 San 的默认工作方法，不是要求用户提交的 Spec。已有 Skill 可以提供更具体的检查偏好，但没有 Skill 时也必须有通用节拍。</p>
+	</div>
+	<div class="milestone">
+		<div class="milestone-head"><h3>第四步：给子 Agent 同样的“小步闭环”</h3><span class="priority">P1</span></div>
+		<ul><li>父 Agent 派出的不是一句宽泛的“去看看”，而是一个有边界的当前小问题。</li><li>子 Agent 返回三件事：处理了什么、怎么检查、还缺什么。</li><li>父 Agent 只根据检查结果决定合并、换方法还是重新派工，不能仅根据一段漂亮总结继续扩大任务。</li></ul>
+	</div>
+</section>
+
+<section id="metrics">
+	<h2>十、验证标准：先测“像不像一个有章法的人”</h2>
+	<p>不要一上来只看整夜跑了多少小时。先看每个任务的基本动作是否变好了：</p>
+	<div class="grid three">
+		<div class="card"><div class="metric">先看后改</div><p>需要理解现状的任务，是否在第一次改动前拿到相关信息。</p></div>
+		<div class="card"><div class="metric">改后必验</div><p>发生改动后，是否在继续扩大范围前做了贴近的检查。</p></div>
+		<div class="card"><div class="metric">做完会停</div><p>检查通过后，是否回到用户目标并停止无关扩张。</p></div>
+		<div class="card"><div class="metric">失败会换法</div><p>同一失败出现后，是否真正改变策略，而不是换名字重试。</p></div>
+		<div class="card"><div class="metric">少问问题</div><p>系统是否先利用可获得的信息，只在确实阻塞时问用户一个必要问题。</p></div>
+		<div class="card"><div class="metric">用户零负担</div><p>普通任务是否不要求用户填写 Spec、Plan、Todo 或验收表。</p></div>
+	</div>
+	<div class="callout green"><strong>第一批验收样本：</strong>用现有北极星 benchmark 的修 Bug、小功能、模糊需求和中途纠偏样本，增加“首次改动前是否观察”“改动后是否验证”“通过后是否收口”三组行为指标。先证明短任务变得有章法，再把同样循环带到长任务。</div>
+</section>
+
+<section id="non-goals">
+	<h2>十一、明确不做什么</h2>
+	<div class="grid two">
+		<div class="card"><span class="badge no">不做</span><h4>让用户先写完整 Spec</h4><p>用户说清意图就够了；系统负责把它变成当前可执行的一步。</p></div>
+		<div class="card"><span class="badge no">不做</span><h4>所有任务强制进入 Plan Mode</h4><p>计划是解决复杂度的工具，不应成为使用 San 的入场费。</p></div>
+		<div class="card"><span class="badge no">不做</span><h4>让 Todo 变成每轮必填表</h4><p>Todo 适合多项工作，不适合作为 Agent 每一步的方向盘。</p></div>
+		<div class="card"><span class="badge no">不做</span><h4>增加一个常驻 LLM 监督员</h4><p>先用节拍和工具事实解决大部分问题；模型监督只在规则无法判断时介入。</p></div>
+		<div class="card"><span class="badge no">不做</span><h4>用一套固定流程限制所有任务</h4><p>查询、修复、设计、重构的最短路径不同；统一的是顺序，不是每一步的具体工具。</p></div>
+		<div class="card"><span class="badge no">不做</span><h4>把内部过程全展示给用户</h4><p>用户只需要看到正在做什么、做成了什么、卡在哪里；内部节拍默认隐藏。</p></div>
+	</div>
+</section>
+
+<section id="decision">
+	<h2>十二、建议现在拍板的三件事</h2>
+	<ol>
+		<li><strong>把“工作章法”定为下一阶段主线。</strong>长任务、恢复和总账本继续做，但不再作为用户体验的第一叙事。</li>
+		<li><strong>默认采用“看、做、验、收”的小步循环。</strong>它是 San 的默认行为，不是用户可选的高级配置。</li>
+		<li><strong>先做无感控制器和短任务行为基准。</strong>不先增加用户表单，不先扩张新 Agent 模式；证明 Agent 的基本动作变稳后，再谈更长时间的自治。</li>
+	</ol>
+	<div class="callout green"><strong>一句话：</strong>不是让用户把事情想得更完整，才配使用 Agent；而是让 Agent 在用户只说半句话时，也能用正确的顺序把事情往前推进。</div>
+</section>
+
+<section id="sources">
+	<h2>附：当前代码依据</h2>
+	<p class="small">本文的判断基于当前 coding-agent 源码与既有研究文档；方案部分是建议，不代表已经落地。</p>
+	<ul>
+		<li>目标提醒模板：<a href="../../packages/coding-agent/src/prompts/execution/goal-recitation.md">prompts/execution/goal-recitation.md</a></li>
+		<li>当前一次性重复提醒：<a href="../../packages/coding-agent/src/prompts/execution/watchdog-redirect.md">prompts/execution/watchdog-redirect.md</a></li>
+		<li>当前通用契约回显：<a href="../../packages/coding-agent/src/prompts/execution/contract-echo-general.md">prompts/execution/contract-echo-general.md</a></li>
+		<li>工具动作分类与重复检测：<a href="../../packages/coding-agent/src/context-steady/tool-progress-guard.ts">context-steady/tool-progress-guard.ts</a></li>
+		<li>根会话提示、工具回合和完成处理：<a href="../../packages/coding-agent/src/session/agent-session.ts">session/agent-session.ts</a></li>
+		<li>显式计划状态：<a href="../../packages/coding-agent/src/plan-mode/state.ts">plan-mode/state.ts</a></li>
+		<li>Todo 状态与多阶段维护：<a href="../../packages/coding-agent/src/tools/todo.ts">tools/todo.ts</a></li>
+		<li>北极星样本：<a href="../../packages/coding-agent/scripts/north-star-samples.ts">scripts/north-star-samples.ts</a></li>
+		<li>此前方向（本稿对其作了修正）：<a href="san-harness-strengthening-plan-20260825.html">San Harness 补强方案</a></li>
+	</ul>
+</section>
+</main>
+
+<footer><div class="wrap">San Agent 工作章法方案 · 2026-08-25 · 修订汇报稿</div></footer>
+</body>
+</html>

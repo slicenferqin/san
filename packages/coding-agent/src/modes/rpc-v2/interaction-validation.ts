@@ -93,10 +93,18 @@ export function validateInteractionResponse(
 			}
 			const option = request.options.find(item => item.id === value.optionId);
 			if (!option) {
-				return invalidResponse(interaction.interactionId, "response.optionId", `Unknown option ID: ${value.optionId}`);
+				return invalidResponse(
+					interaction.interactionId,
+					"response.optionId",
+					`Unknown option ID: ${value.optionId}`,
+				);
 			}
 			if (option.disabled) {
-				return invalidResponse(interaction.interactionId, "response.optionId", `Option is disabled: ${value.optionId}`);
+				return invalidResponse(
+					interaction.interactionId,
+					"response.optionId",
+					`Option is disabled: ${value.optionId}`,
+				);
 			}
 			const feedback = "feedback" in value && typeof value.feedback === "string" ? value.feedback : undefined;
 			return { kind: "plan_decision", optionId: value.optionId, ...(feedback ? { feedback } : {}) };

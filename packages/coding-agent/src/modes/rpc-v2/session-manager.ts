@@ -16,6 +16,7 @@ import type { ExtensionUIContext } from "../../extensibility/extensions";
 import type { MCPManager } from "../../mcp/manager";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import type { CompactMode } from "../../session/compact-modes";
+import { summarizeToolArguments } from "../../session/exit-diagnostics";
 import { listAllSessions, type SessionInfo } from "../../session/session-listing";
 import type { TodoPhase, TodoStatus } from "../../tools/todo";
 import type { EventBus } from "../../utils/event-bus";
@@ -937,7 +938,9 @@ export class RpcV2SessionManager {
 		const limit = Math.min(Math.max(params.limit ?? 100, 1), 100);
 		const branch = active.session.sessionManager.getBranch();
 		const toolErrors = new Map<string, boolean>();
-		for (const entry of branch) if (entry.type === "message" && entry.message.role === "toolResult") toolErrors.set(entry.message.toolCallId, entry.message.isError === true);
+		for (const entry of branch)
+			if (entry.type === "message" && entry.message.role === "toolResult")
+				toolErrors.set(entry.message.toolCallId, entry.message.isError === true);
 		const projected: SessionMessage[] = [];
 		for (const entry of branch) {
 			if (entry.type !== "message") continue;
@@ -945,10 +948,69 @@ export class RpcV2SessionManager {
 			if (message.role !== "user" && message.role !== "assistant") continue;
 			if (message.role === "user" && (message.synthetic === true || message.steering === true)) continue;
 			const visible = visibleMessageText(message);
-			if (!visible.value) continue;
 			const content: unknown[] = Array.isArray(message.content) ? message.content : [];
-			const thinking = message.role === "assistant" ? content.filter(part => typeof part === "object" && part !== null && "type" in part && part.type === "thinking" && "thinking" in part && typeof part.thinking === "string").map(part => (part as { thinking: string }).thinking).join("") : "";
-			const toolCalls = message.role === "assistant" ? content.filter(part => typeof part === "object" && part !== null && "type" in part && part.type === "toolCall" && "id" in part && typeof part.id === "string" && "name" in part && typeof part.name === "string").map(part => { const tool = part as { id: string; name: string; intent?: string; summary?: string }; const intent = tool.intent ?? tool.summary; return { toolCallId: tool.id, toolName: tool.name, isError: toolErrors.get(tool.id) ?? false, ...(intent ? { intent: sanitizeRpcText(intent) } : {}) }; }) : [];
+			const thinking =
+				message.role === "assistant"
+					? content
+							.filter(
+								part =>
+									typeof part === "object" &&
+									part !== null &&
+									"type" in part &&
+									part.type === "thinking" &&
+									"thinking" in part &&
+									typeof part.thinking === "string",
+							)
+							.map(part => (part as { thinking: string }).thinking)
+							.join("")
+					: "";
+			const toolCalls =
+				message.role === "assistant"
+					? content
+							.filter(
+								part =>
+									typeof part === "object" &&
+									part !== null &&
+									"type" in part &&
+									part.type === "toolCall" &&
+									"id" in part &&
+									typeof part.id === "string" &&
+									"name" in part &&
+									typeof part.name === "string",
+							)
+							.map(part => {
+								const tool = part as {
+									id: string;
+									name: string;
+									intent?: string;
+									summary?: string;
+									arguments?: unknown;
+								};
+								const intent = tool.intent ?? tool.summary;
+								const argsSummary = summarizeToolArguments(tool.arguments);
+								return {
+									toolCallId: tool.id,
+									toolName: tool.name,
+									isError: toolErrors.get(tool.id) ?? false,
+									...(intent ? { intent: sanitizeRpcText(intent) } : {}),
+									...(argsSummary
+										? {
+												args: {
+													...(argsSummary.command
+														? { command: sanitizeRpcText(argsSummary.command, { maxChars: 500 }) }
+														: {}),
+													...(argsSummary.path
+														? { path: sanitizeRpcText(argsSummary.path, { maxChars: 500 }) }
+														: {}),
+												},
+											}
+										: {}),
+								};
+							})
+					: [];
+			// 纯工具调用（无正文）的 assistant 消息不能丢 —— 否则重放历史时这些
+			// 工具行整个消失（用户：「明明有好几个读取动作，一个都没显示」）。
+			if (!visible.value && toolCalls.length === 0 && !thinking) continue;
 			const timestamp = typeof message.timestamp === "number" ? message.timestamp : 0;
 			// stopReason/errorMessage 让客户端区分“正常结束”与“进程崩溃/中止留下
 			// 的半截消息”——后者正文不完整是数据事实，必须可视化而不是默默渲染。
@@ -960,10 +1022,24 @@ export class RpcV2SessionManager {
 				message.role === "assistant" && "errorMessage" in message && typeof message.errorMessage === "string"
 					? message.errorMessage
 					: undefined;
-			projected.push({ role: message.role, timestamp: new Date(timestamp).toISOString(), content: sanitizeRpcText(visible.value), entryId: entry.id, ...(visible.truncated ? { truncated: true } : {}), ...(thinking ? { thinking: sanitizeRpcText(thinking) } : {}), ...(toolCalls.length ? { toolCalls } : {}), ...(stopReason ? { stopReason } : {}), ...(errorMessage ? { errorMessage: sanitizeRpcText(errorMessage) } : {}) });
+			projected.push({
+				role: message.role,
+				timestamp: new Date(timestamp).toISOString(),
+				content: sanitizeRpcText(visible.value),
+				entryId: entry.id,
+				...(visible.truncated ? { truncated: true } : {}),
+				...(thinking ? { thinking: sanitizeRpcText(thinking) } : {}),
+				...(toolCalls.length ? { toolCalls } : {}),
+				...(stopReason ? { stopReason } : {}),
+				...(errorMessage ? { errorMessage: sanitizeRpcText(errorMessage) } : {}),
+			});
 		}
 		const offset = decodeCursor(params.cursor);
-		return { messages: projected.slice(offset, offset + limit), nextCursor: offset + limit < projected.length ? encodeCursor(offset + limit) : null, total: projected.length };
+		return {
+			messages: projected.slice(offset, offset + limit),
+			nextCursor: offset + limit < projected.length ? encodeCursor(offset + limit) : null,
+			total: projected.length,
+		};
 	}
 
 	assertSession(sessionId?: string): ActiveSession {
@@ -1099,10 +1175,20 @@ export class RpcV2SessionManager {
 				.then(async title => {
 					if (title && !active.session.sessionManager.getSessionName()) {
 						await active.session.setSessionName(title, "auto");
-						await this.emitCustom(active, "session.title.changed", { title }, { operationId: accepted.operationId });
+						await this.emitCustom(
+							active,
+							"session.title.changed",
+							{ title },
+							{ operationId: accepted.operationId },
+						);
 					}
 				})
-				.catch(error => logger.warn("title-generator: uncaught auto-title error", { sessionId: active.session.sessionId, error: error instanceof Error ? error.message : String(error) }));
+				.catch(error =>
+					logger.warn("title-generator: uncaught auto-title error", {
+						sessionId: active.session.sessionId,
+						error: error instanceof Error ? error.message : String(error),
+					}),
+				);
 		}
 		this.#launchPrompt(active, accepted.runId, resolved);
 		return accepted;

@@ -1260,6 +1260,84 @@
           ],
           "additionalProperties": false
         },
+        "provider.config.update": {
+          "type": "object",
+          "properties": {
+            "providerId": {
+              "type": "string"
+            },
+            "baseUrl": {
+              "type": "string"
+            },
+            "api": {
+              "enum": [
+                "openai-completions",
+                "openai-responses",
+                "openai-codex-responses",
+                "azure-openai-responses",
+                "anthropic-messages",
+                "google-generative-ai",
+                "google-gemini-cli",
+                "google-vertex"
+              ]
+            },
+            "auth": {
+              "enum": [
+                "apiKey",
+                "none"
+              ]
+            },
+            "discovery": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "openai-models-list",
+                    "proxy",
+                    "litellm",
+                    "ollama",
+                    "llama.cpp",
+                    "lm-studio"
+                  ]
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            },
+            "apiKey": {
+              "type": "string"
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "providerId",
+            "baseUrl",
+            "meta"
+          ],
+          "additionalProperties": false
+        },
+        "provider.config.delete": {
+          "type": "object",
+          "properties": {
+            "providerId": {
+              "type": "string"
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "providerId",
+            "meta"
+          ],
+          "additionalProperties": false
+        },
         "provider.model.add": {
           "type": "object",
           "properties": {
@@ -1309,6 +1387,97 @@
           "required": [
             "providerId",
             "modelId",
+            "meta"
+          ],
+          "additionalProperties": false
+        },
+        "provider.model.update": {
+          "type": "object",
+          "properties": {
+            "providerId": {
+              "type": "string"
+            },
+            "modelId": {
+              "type": "string"
+            },
+            "displayName": {
+              "type": "string"
+            },
+            "api": {
+              "enum": [
+                "openai-completions",
+                "openai-responses",
+                "openai-codex-responses",
+                "azure-openai-responses",
+                "anthropic-messages",
+                "google-generative-ai",
+                "google-gemini-cli",
+                "google-vertex"
+              ]
+            },
+            "contextWindow": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxTokens": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "reasoning": {
+              "type": "boolean"
+            },
+            "supportsImage": {
+              "type": "boolean"
+            },
+            "supportsTools": {
+              "type": "boolean"
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "providerId",
+            "modelId",
+            "meta"
+          ],
+          "additionalProperties": false
+        },
+        "provider.model.remove": {
+          "type": "object",
+          "properties": {
+            "providerId": {
+              "type": "string"
+            },
+            "modelId": {
+              "type": "string"
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "providerId",
+            "modelId",
+            "meta"
+          ],
+          "additionalProperties": false
+        },
+        "provider.models.refresh": {
+          "type": "object",
+          "properties": {
+            "providerId": {
+              "type": "string"
+            },
+            "meta": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "providerId",
             "meta"
           ],
           "additionalProperties": false
@@ -2762,6 +2931,7 @@
             "retry.completed",
             "retry.fallback.applied",
             "retry.fallback.succeeded",
+            "thinking.changed",
             "model.route.resolved",
             "model.route.changed",
             "integration.changed",
@@ -2880,7 +3050,12 @@
       "auth.login.start",
       "auth.login.cancel",
       "provider.config.create",
+      "provider.config.update",
+      "provider.config.delete",
       "provider.model.add",
+      "provider.model.update",
+      "provider.model.remove",
+      "provider.models.refresh",
       "command.list",
       "todo.set",
       "integration.list",
@@ -2995,6 +3170,7 @@
       "retry.completed",
       "retry.fallback.applied",
       "retry.fallback.succeeded",
+      "thinking.changed",
       "model.route.resolved",
       "model.route.changed",
       "integration.changed",

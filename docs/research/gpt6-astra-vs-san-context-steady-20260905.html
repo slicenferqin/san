@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPT-6 Astra / Codex 与 San 上下文稳态：同一方向，不同层次</title>
+<style>
+:root{color-scheme:light;--ink:#182735;--muted:#526475;--line:#d7e1e9;--accent:#075985;--bg:#f4f7fa;--panel:#fff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.8 system-ui,-apple-system,"PingFang SC",sans-serif}main{max-width:1120px;margin:auto;padding:42px 28px 72px}h1{font-size:30px;line-height:1.4;margin:8px 0 14px}h2{font-size:23px;margin:38px 0 14px}h3{font-size:18px;margin:25px 0 8px}p{margin:10px 0}a{color:var(--accent);text-underline-offset:3px}code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.88em}code{overflow-wrap:anywhere}pre{background:#edf3f7;padding:18px;border-radius:10px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6}.meta,.small{color:var(--muted);font-size:14px}.lead{background:var(--panel);border-left:5px solid var(--accent);padding:18px 22px;margin:24px 0;border-radius:4px 12px 12px 4}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;background:var(--panel);margin:16px 0;font-size:14px}th,td{padding:13px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}th{background:#e8f0f6;color:#16445f}td:first-child{min-width:135px}blockquote{margin:14px 0;padding:12px 18px;border-left:3px solid #7fa8bf;background:#edf4f8}ul,ol{padding-left:25px}li{margin:6px 0}.layers{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.layer{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:17px}.layer strong{display:block;color:var(--accent);margin-bottom:8px}.note{background:#fff8e8;border:1px solid #ead8a8;padding:15px 18px;border-radius:10px}.sources li{font-size:14px;overflow-wrap:anywhere}footer{border-top:1px solid var(--line);margin-top:36px;padding-top:16px;color:var(--muted);font-size:13px}@media(max-width:720px){main{padding:24px 16px 48px}h1{font-size:25px}.layers{grid-template-columns:1fr}th,td{padding:10px;font-size:13px}}@media print{body{background:white}main{padding:0;max-width:none}.layer,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<p class="meta">核验日期：2026-09-05 · 官方资料 + San 当前源码 · 研究分析，不修改运行时代码</p>
+<h1>GPT-6 Astra / Codex 与 San 上下文稳态<br>同一方向，不同层次</h1>
+<div class="lead"><strong>[INFERENCE] 核心结论：</strong>“跨窗口笔记 + 历史可回查 + 按需带入当前工作集”与 San Context Steady 属于同一类上下文管理范式；但不能把整套 Astra 能力都等同于上下文稳态。循环深度是模型内部计算，百万窗口是单请求容量，持久笔记是 Codex 的运行时功能，San 则还明确控制每次请求的上下文规模。</div>
+</header>
+
+<section>
+<h2>一、先校正原文的事实边界</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>原文主题</th><th>本次核验结果</th><th>应当如何理解</th></tr></thead>
+<tbody>
+<tr><td>Astra 已发布</td><td>官方发布页与系统卡可核验；系统卡发布日期为 2026-09-03。<a href="#s1">[1]</a><a href="#s2">[2]</a></td><td>不是只凭新闻标题判断存在与定位。</td></tr>
+<tr><td>Looped Transformer、循环上限</td><td>已读的官方发布页与完整系统卡没有给出足以核验具体循环层数、路由策略、最大循环数的架构说明。Raschka 的文章是在解释和纠正围绕相关报道的推论，并非披露 Astra 完整结构。<a href="#s3">[3]</a></td><td>可讨论“层复用”这一机制，但不把传闻细节作为已确认的 Astra 技术参数。API 的 <code>xhigh/max</code> 是 effort 档位，不是公开的循环次数。</td></tr>
+<tr><td>层复用没有额外代价</td><td>Raschka 明确指出：重复使用权重不必重复存储权重，但多次通过网络会增加计算；他举的双循环示例接近两倍计算。并明确指出层复用本身不抑制可见 CoT。<a href="#s3">[3]</a></td><td>“不增加权重份数”不能改写成“总显存、计算、延迟都不增加”，也不能推出“无需显式推理链”。</td></tr>
+<tr><td>1.05M / 128K 与 MRCR</td><td>官方模型页：1,050,000 上下文、128,000 最大输出；支持 <code>low/medium/high/xhigh/max</code>。官方发布表中 MRCR v2 8-needle 两段成绩为 100.0% 与 96.3%。<a href="#s1">[1]</a><a href="#s4">[4]</a></td><td>是窗口规格与特定基准成绩；不是任意长会话中绝不丢约束、绝不忘记失败原因的保证。</td></tr>
+<tr><td>跨窗口持久笔记与历史检索</td><td>官方明确写的是 <strong>In Codex</strong>：笔记跨窗口保存，先前窗口仍可搜索；发布时为实验功能，可配置开启，计划在之后几周成为 Astra 的默认体验。<a href="#s1">[1]</a></td><td>是 Astra 与 Codex 的组合能力。仅把 San 的模型 ID 换成 Astra，不能据此认定 Codex 的笔记、历史索引和窗口管理也被带进了 San。</td></tr>
+<tr><td>“Surgical Context Pulling”</td><td>官方措辞是训练模型只把相关上下文放进 <strong>outputs</strong>，避免在产物中重复无关内容。<a href="#s1">[1]</a></td><td>这是输出选择能力；官方这句话没有定义一个同名的输入上下文规划 API，更不等于 San 的输入投影器。</td></tr>
+<tr><td>Mid-turn steering</td><td>官方确认 Astra 支持 Responses WebSocket 的 <code>response.steer</code>；accepted 只是排队，随后在完成当前输出项和已开始的托管工具工作后接续。不会撤销既有输出或已开始的工具。<a href="#s5">[5]</a></td><td>传输层支持与模型更善于保留任务主线，是两个互补条件；都不构成“永不跑偏”的硬保证。</td></tr>
+</tbody></table></div>
+<blockquote>官方关于笔记的关键原话：<br>“In Codex, Astra can keep notes across context windows … Earlier context windows remain searchable …”<br><span class="small">范围限定词 In Codex，以及 experimental feature，不能在转述中省略。</span></blockquote>
+<p class="note"><strong>“废弃了 Compaction”说得过头。</strong>压缩当前请求的活跃上下文，与删除磁盘上的原始历史不是同一个操作。真正需要避免的是“只有一个不断重写的摘要，又没有有效的原文回查通道”，而不是把所有 compaction 一概视为不可逆删除。</p>
+</section>
+
+<section>
+<h2>二、哪些属于同一个概念？</h2>
+<div class="layers">
+<div class="layer"><strong>模型计算层</strong>隐藏状态、权重、推理深度。Looped Transformer 属于这一层。San 不修改模型权重或内部循环。</div>
+<div class="layer"><strong>模型能力与 API 层</strong>原生上下文容量、长文本检索能力、effort、WebSocket steering。它们影响运行时能做什么，不替运行时保存业务状态。</div>
+<div class="layer"><strong>Agent 上下文管理层</strong>原始历史、笔记、索引、当前工作集、窗口切换。Codex 的新笔记方案与 San Context Steady 的主要重叠在这里。</div>
+</div>
+<p><strong>[INFERENCE] 两者共享的原则：</strong>历史可以持续增长，但不必每次全塞给模型；当前请求只带任务所需的工作集，细节不足时再回到原始记录。</p>
+<pre>保存层：原始对话 / 工具结果 / 中间状态
+               ↓                    ↑ 按需回查
+工作记忆：笔记、结构化摘要、检查点、引用
+               ↓ 选择 / 裁剪 / 组合
+当前请求：当前任务 + 必须保留的原文 + 相关历史
+               ↓
+模型执行 → 新结果继续记录</pre>
+<p>San 中“稳态”的额外含义，是对<strong>整个 provider 输入</strong>持续设定目标区间、弹性上沿与硬上限，而不是只有“窗口满了以后还能记住”。它不是每一步 token 数完全相等，也不是保证永远不需要压缩。</p>
+</section>
+
+<section>
+<h2>三、San 当前已经做到了什么</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>能力</th><th>当前实现</th><th>与 Codex 描述的关系 / 限制</th></tr></thead>
+<tbody>
+<tr><td>分离历史与当前输入</td><td><code>materializeContextPlanMessages</code> 根据计划生成 provider 消息视图，对工具结果替换为小型引用；不修改传入的原始消息。<a href="#c1">[C1]</a></td><td>核心方向一致：不把“没发给模型”当作“历史已删除”。</td></tr>
+<tr><td>结构化工作记忆</td><td><code>TurnDigest</code> 记录源区间、用户意图、动作、决策、文件、工具结果摘要、风险与后续步骤。<code>ContextCheckpoint</code> 累积摘要及原始引用。<a href="#c2">[C2]</a></td><td>承担相近角色，但不等同于模型主动编辑和持续维护一份技术笔记。检查点仍合并、截断摘要字段。</td></tr>
+<tr><td>回查摘要漏掉的原文</td><td><code>context_expand(ref)</code> 根据 digest 的源区间读取当前分支历史；源细节不必先出现在 digest 文本中。<a href="#c3">[C3]</a></td><td><strong>按已知引用展开，不是一个任意自然语言搜索所有旧窗口的接口。</strong>仅开启稳态的根会话提供；默认返回上限 30,000 字符，超出截头留尾。文本渲染也不是原始多模态消息的逐字节还原。</td></tr>
+<tr><td>控制输入规模</td><td>默认有效目标 240K，控制上沿为目标的 13/12，默认 burst 上限 320K；再按模型窗口与预留空间下调。system/tools/messages 都计入总输入。<a href="#c4">[C4]</a></td><td>这是 San 比“有笔记、有搜索”描述更明确的控制策略。不能据此推出质量优于 Codex。</td></tr>
+<tr><td>摘要不能改写用户任务</td><td>目标锚从当前执行契约对应的真实用户记录取原文；模板声明历史计划只作背景，最新真实用户请求优先。<a href="#c5">[C5]</a></td><td>这是宿主提供的来源与优先级约束，不是模型行为的绝对保证。缺少有效目标来源时不会凭摘要编造目标。</td></tr>
+<tr><td>持续运行时的回收</td><td>pre-prompt 与 mid-turn 路径仍可执行自动 compaction；只有 segment 到期而未触发物理压力时可仅写 checkpoint/segment。物理维护带恢复区间，避免每步反复压缩。<a href="#c6">[C6]</a></td><td>San 没有消灭 compaction，而是把它放在可回查的分层历史与输入控制机制中。</td></tr>
+<tr><td>半途补充任务</td><td><code>AgentSession.steer</code> 排入 steering 队列；agent loop 在调用边界、工具轮次结束和退出前吸收消息。<a href="#c7">[C7]</a></td><td>已有运行时 steering，但不是同一个 Responses <code>response.steer</code> 协议。本次搜索相关 provider/runtime 源码未找到原生该事件的接入。</td></tr>
+</tbody></table></div>
+<h3>默认状态不能与“代码里存在”混为一谈</h3>
+<p>当前源码中 <code>san.contextSteady.enabled</code> 默认 <strong>false</strong>；开启后通常达到 240K 阈值才激活，已激活状态可跨 compaction/resume 保留。<code>stableProjection</code>、老工具输出 offload、老图片 offload、recall、LLM digest 均有独立开关，默认并非全部开启。这里列的是<strong>源码默认值</strong>，没有读取或变更本机私有配置。<a href="#c8">[C8]</a></p>
+<p>还需注意：checkpoint 的覆盖检查验证的是“条目是否有对应的表示或引用”，不是“摘要是否完整保留了该条目的每一个语义”。代码会保护原文并限制不可信 fallback 摘要的替代权限，但无法通过引用关系证明模型理解正确。</p>
+</section>
+
+<section>
+<h2>四、直接运行的小型验证</h2>
+<p>本次执行了现有纯函数，不调用真实模型、不新增测试、不修改运行时：</p>
+<ol>
+<li>以模型窗口 1,050,000、源码默认稳态设置调用 <code>resolveContextPlanBudget</code>，得到：<strong>steadyTarget=240000，controlMax=260000，burstCeiling=320000</strong>。</li>
+<li>构造两条历史原文和一条刻意未记录失败细节的 digest，调用 <code>expandDigestSpan</code>。成功返回两条原文，找回 <code>FIRST_ATTEMPT_FAILED: null receiver at import boundary; exit=1.</code>；<code>truncated=false</code>，原始输入结构未改变。</li>
+</ol>
+<p><strong>能证明：</strong>有界输入策略存在；已知摘要引用可恢复未写入摘要的源细节。<strong>不能证明：</strong>模型会主动想到去找、能在海量历史中找到未知引用，或多天任务质量与 Astra/Codex 相同。没有进行两套系统的长任务对跑。</p>
+</section>
+
+<section>
+<h2>五、对 San 的判断与可采纳方向</h2>
+<h3>1. 保留稳态，不因为换 Astra 就关掉</h3>
+<p><strong>[INFERENCE]</strong>更强的模型与更可靠的上下文管理是互补关系。模型页还明确规定，输入超过 272K 时整次请求适用更高费率；百万窗口不是零成本工作区。实际目标窗口应结合任务成功率、延迟、总输入与缓存成本选择，而非直接取模型容量上限。Astra 的长窗口和检索能力可以提高回查后的利用率，但不会自动替 San 建立 Codex 的历史索引。<a href="#s4">[4]</a></p>
+<h3>2. 下一处最明确的差距，是“能找”而不只是“能展开”</h3>
+<p><strong>[INFERENCE / 建议]</strong>在现有源记录与引用之上，优先验证“用户只记得失败含义、不知道 digest ID 时，能否定位相关原文”。检索结果应能精确展开、分页并限定会话/分支；否则 30K 截头可能又丢掉恰好要找的旧细节。这里是建议，不是已经实现的能力。</p>
+<h3>3. 工作笔记与用户目标必须分开</h3>
+<p><strong>[INFERENCE / 建议]</strong>可让工作记忆更明确保存“失败方法及原因、尚未验证的假设、当前状态、引用”，但不让模型生成的笔记决定用户目标或把未验证结果升级成已完成。模型写得更像真的，不等于它更有权威；保留宿主给出的用户来源与真实工具结果。</p>
+<h3>4. 原生 steering 是单独的传输接入，不是稳态改名</h3>
+<p><strong>[INFERENCE / 建议]</strong>若后续接入 Responses <code>response.steer</code>，需按其 accepted/pending/failed、后继 response、工具回执以及连接断开语义处理。官方特别说明排队输入只存在于当前连接，断开后不能假定仍在；每个自动后继 response 的 token/tool-call 限额独立。因此仍要保留 San 对完整任务状态和整体执行限制的管理。<a href="#s5">[5]</a></p>
+<div class="lead"><strong>最终表述：</strong><br>我们与 Codex 的新上下文机制走在同一条路线：<strong>持久历史 + 可引用工作记忆 + 有限工作集 + 按需回查</strong>。San 已有其中的核心结构，并加入了明确的输入控制；但“主动维护笔记”和“未知历史的精准搜索”不能直接宣称等价。至于 Looped Transformer，与这一机制不是同一层，不能混着比较。</div>
+</section>
+
+<section>
+<h2>资料与源码定位</h2>
+<h3>外部来源</h3>
+<ol class="sources">
+<li id="s1"><a href="https://openai.com/index/gpt-6-astra/">OpenAI：GPT-6 Astra: A new generation of intelligence</a>。发布定位、Codex 实验性笔记与可搜索旧窗口、输出相关性、异步询问、目标保留与 MRCR 数据。</li>
+<li id="s2"><a href="https://deploymentsafety.openai.com/gpt-6-astra">OpenAI：GPT-6 Astra System Card</a>。发布日期、安全与 monitorability；不把其表述替换成未公开的具体循环结构。</li>
+<li id="s3"><a href="https://sebastianraschka.com/blog/2026/openai-astra-looped-transformers.html">Sebastian Raschka：OpenAI Astra and Looped Transformers</a>。专家对报道的解释与纠偏，不是 OpenAI 架构披露。</li>
+<li id="s4"><a href="https://developers.openai.com/api/docs/models/gpt-6-astra">OpenAI API：GPT-6 Astra 模型页</a>。窗口、最大输出、effort 与长输入定价；通过真实浏览器读取。</li>
+<li id="s5"><a href="https://developers.openai.com/api/docs/guides/steering">OpenAI API：Mid-turn steering</a>。通过真实浏览器读取完整语义，包括排队、后继 response、工具等待和断线限制。</li>
+<li id="s6"><a href="https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json">OpenAI Codex：config.schema.json</a>。本次读取的主分支含 <code>ContextManagementConfigToml.experimental_mode</code> 与 token-budget 的 <code>use_history_notes_extension</code>、窗口滚动前 note-taking 配置；主分支会变化，不作为固定版本承诺。</li>
+</ol>
+<h3>San 源码（本次读取时的行号）</h3>
+<ul class="sources">
+<li id="c1">[C1] <a href="../../packages/coding-agent/src/context-steady/materialize.ts">context-steady/materialize.ts</a>：325–399 provider-only 投影与替换，461–502 投影条目校验。</li>
+<li id="c2">[C2] <a href="../../packages/coding-agent/src/context-steady/types.ts">context-steady/types.ts</a>：86–129 TurnDigest，337–365 ContextCheckpoint；<a href="../../packages/coding-agent/src/context-steady/checkpoint.ts">checkpoint.ts</a>：147–310 合并、截断、保留源引用；<a href="../../packages/coding-agent/src/context-steady/session.ts">session.ts</a>：211–213 digest 追加保存。</li>
+<li id="c3">[C3] <a href="../../packages/coding-agent/src/tools/context-expand.ts">tools/context-expand.ts</a>：10–12 单一 ref 参数；<a href="../../packages/coding-agent/src/context-steady/expand.ts">context-steady/expand.ts</a>：37–38 默认上限、110–142 区间恢复；<a href="../../packages/coding-agent/src/session/agent-session.ts">session/agent-session.ts</a>：9778–9787 当前分支、根会话与开关限制。</li>
+<li id="c4">[C4] <a href="../../packages/coding-agent/src/context-steady/budget.ts">context-steady/budget.ts</a>：21–55 预算公式；<a href="../../packages/coding-agent/src/context-steady/planner.ts">planner.ts</a>：622–692 必须保留条目、弹性模式与目标锚。</li>
+<li id="c5">[C5] <a href="../../packages/coding-agent/src/session/agent-session.ts">session/agent-session.ts</a>：9721–9753 目标来源；<a href="../../packages/coding-agent/src/prompts/context-steady/context-plan.md">context-plan.md</a> 与 <a href="../../packages/coding-agent/src/prompts/context-steady/continuation-authority.md">continuation-authority.md</a>：历史材料不替代当前用户请求。</li>
+<li id="c6">[C6] <a href="../../packages/coding-agent/src/session/agent-session.ts">session/agent-session.ts</a>：15242–15352 物理维护区间与 pre-prompt compaction；15527–15598 mid-turn 的 checkpoint/物理维护分流。</li>
+<li id="c7">[C7] <a href="../../packages/coding-agent/src/session/agent-session.ts">session/agent-session.ts</a>：12348–12434 steering 入队；<a href="../../packages/agent/src/agent-loop.ts">agent/agent-loop.ts</a>：790–793、1138–1179 队列吸收边界。</li>
+<li id="c8">[C8] <a href="../../packages/coding-agent/src/config/settings-schema.ts">config/settings-schema.ts</a>：2924–3022 默认值与独立功能开关；<a href="../../packages/coding-agent/src/session/agent-session.ts">session/agent-session.ts</a>：10551–10598 激活阈值与恢复时保持激活。</li>
+</ul>
+</section>
+<footer>核验范围：官方网页、官方 Codex 配置 schema、当前 San 源码及两个纯函数小型运行。没有测量 Astra 内部循环，没有复现官方 MRCR，没有进行 Codex/San 长任务效果排名。所有设计判断标为 [INFERENCE]。</footer>
+</main>
+</body>
+</html>

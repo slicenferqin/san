@@ -2,6 +2,18 @@
 
 RPC mode runs the coding agent as a newline-delimited JSON protocol over stdio.
 
+## RPC v2 model and thinking synchronization
+
+The JSON-RPC v2 transport is selected with `san --mode rpc --rpc-protocol 2`. The legacy command reference below describes the default transport.
+
+- Switching models preserves a supported session thinking selection, including explicit `off` or `auto`. An unsupported or absent effort resolves through the target model's default/clamping policy. An explicit `thinking.set` or `run.start.thinking` still takes precedence.
+- `model.select` returns `thinkingState: { configured, effective }` alongside its existing model fields and legacy `thinking` value. Both `thinkingState` fields are explicitly `null` when unavailable. `configured` is the selected mode; `effective` is the currently resolved effort, so `auto` can differ from its effective value.
+- Changes to configured or effective thinking publish a durable `session.event` with `type: "thinking.changed"` and `data: { configured, effective }`, including changes caused by model selection or automatic failover. Unavailable values are explicit `null`, allowing clients to clear stale controls. These events are replayable through `session.events.list` and cursor-based `session.sync`.
+- A full `session.sync` snapshot contains `snapshot.thinking: { configured?, effective? }`; unavailable fields are omitted. Replace the client's thinking state from the snapshot rather than merging it with an old selection.
+- Desktop selectors should consume the returned configured/effective state and subsequent events, not infer the session setting from a model's advertised default. After a model change, `run.start` can omit `thinking` and uses the synchronized session setting without another thinking click.
+
+## Legacy transport overview
+
 - **stdin**: commands (`RpcCommand`), extension UI responses, and host-tool updates/results
 - **stdout**: a ready frame, command responses (`RpcResponse`), session/agent events, extension UI requests, host-tool requests/cancellations
 

@@ -1,11 +1,28 @@
 import { describe, expect, test } from "bun:test";
-import { RPC_V2_METHODS } from "@san/coding-agent/modes/rpc-v2/protocol/methods";
+import { RPC_V2_METHODS, RPC_V2_MUTATION_METHODS } from "@san/coding-agent/modes/rpc-v2/protocol/methods";
 import { paramsSchemaForMethod, RPC_V2_SCHEMA } from "@san/coding-agent/modes/rpc-v2/protocol/schema";
 import { validateRpcV2Params } from "@san/coding-agent/modes/rpc-v2/protocol/validate";
 
 describe("RPC v2 schema contract", () => {
 	test("publishes params schemas for every routed method", () => {
 		for (const method of RPC_V2_METHODS) expect(paramsSchemaForMethod(method), method).toBeDefined();
+	});
+
+	test("mutation methods do not reject the metadata required by dispatch", () => {
+		// Transport-control methods intentionally have no idempotency contract.
+		const transportMethods: Record<string, true> = {
+			"server.shutdown": true,
+			"stream.configure": true,
+			"host.capabilities.update": true,
+		};
+		for (const method of RPC_V2_MUTATION_METHODS) {
+			if (transportMethods[method]) continue;
+			const errors = validateRpcV2Params(method, { meta: { idempotencyKey: "mutation-contract" } });
+			expect(
+				errors.filter(error => error.path === "params.meta" || error.path.startsWith("params.meta.")),
+				method,
+			).toEqual([]);
+		}
 	});
 
 	test("rejects missing, mistyped, and unknown fields from the shared schema", () => {
@@ -25,6 +42,35 @@ describe("RPC v2 schema contract", () => {
 			reason: "unknown_field",
 			message: "Unknown field is not allowed",
 		});
+	});
+
+	const providerMutations: Array<[string, Record<string, unknown>]> = [
+		["provider.config.create", { providerId: "custom", baseUrl: "http://localhost/v1", auth: "none" }],
+		["provider.config.update", { providerId: "custom", baseUrl: "http://localhost/v1" }],
+		["provider.config.delete", { providerId: "custom" }],
+		["provider.model.add", { providerId: "custom", modelId: "model" }],
+		["provider.model.update", { providerId: "custom", modelId: "model", supportsImage: true }],
+		["provider.model.remove", { providerId: "custom", modelId: "model" }],
+		["provider.models.refresh", { providerId: "custom" }],
+	];
+
+	test.each(
+		providerMutations,
+	)("%s accepts desktop mutation metadata without relaxing field validation", (method, params) => {
+		const valid = { ...params, meta: { idempotencyKey: "desktop-mutation" } };
+		expect(validateRpcV2Params(method, valid)).toEqual([]);
+		expect(validateRpcV2Params(method, params)).toContainEqual(
+			expect.objectContaining({ path: "params.meta", reason: "required" }),
+		);
+		expect(validateRpcV2Params(method, { ...valid, meta: "invalid" })).toContainEqual(
+			expect.objectContaining({ path: "params.meta", reason: "invalid_type" }),
+		);
+		expect(validateRpcV2Params(method, { ...valid, providerId: 1 })).toContainEqual(
+			expect.objectContaining({ path: "params.providerId", reason: "invalid_type" }),
+		);
+		expect(validateRpcV2Params(method, { ...valid, unexpected: true })).toContainEqual(
+			expect.objectContaining({ path: "params.unexpected", reason: "unknown_field" }),
+		);
 	});
 
 	test("session.changes.revert accepts its write-lease fields", () => {

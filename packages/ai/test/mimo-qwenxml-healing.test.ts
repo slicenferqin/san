@@ -25,7 +25,7 @@ import { getBundledModel } from "@san/catalog/models";
  */
 
 const MIMO_MIRROR =
-	"<tool_call>\n<function=bash>\n<parameter=command>git log --oneline -5 2>/dev/null || echo \"tag not reachable\"</parameter>\n<parameter i>Check latest tag content</parameter>\n</function>\n</tool_call>";
+	'<tool_call>\n<function=bash>\n<parameter=command>git log --oneline -5 2>/dev/null || echo "tag not reachable"</parameter>\n<parameter i>Check latest tag content</parameter>\n</function>\n</tool_call>';
 
 function mimoModel(): Model<"openai-completions"> {
 	return buildModel({
@@ -87,7 +87,8 @@ describe("MiMo Qwen-XML leak pattern selection", () => {
 
 	it("bundled opencode-go mimo compat resolves the qwenxml pattern", () => {
 		const model = getBundledModel("opencode-go", "mimo-v2.5");
-		expect(model.compat?.streamMarkupHealingPattern).toBe("qwenxml");
+		const compat = model.compat as Record<string, unknown> | undefined;
+		expect(compat?.["streamMarkupHealingPattern"]).toBe("qwenxml");
 	});
 });
 
@@ -95,7 +96,10 @@ describe("StreamMarkupHealing qwenxml grammar", () => {
 	it("recovers the mirrored call and strips its markup from visible text", () => {
 		const healing = new StreamMarkupHealing({ pattern: "qwenxml" });
 		const events = healing.feedEvents(`查一下标签。\n${MIMO_MIRROR}\n`);
-		const text = events.filter(e => e.type === "text").map(e => e.text).join("");
+		const text = events
+			.filter(e => e.type === "text")
+			.map(e => e.text)
+			.join("");
 		const calls = events.filter(e => e.type === "toolCall").map(e => e.call);
 		expect(text).toBe("查一下标签。\n\n");
 		expect(calls).toHaveLength(1);
@@ -127,7 +131,10 @@ describe("StreamMarkupHealing qwenxml grammar", () => {
 	it("suppresses the mirrored call when structured tool_calls are authoritative", () => {
 		const healing = new StreamMarkupHealing({ pattern: "qwenxml" });
 		const events = healing.feedEventsWithoutCalls(`前缀。\n${MIMO_MIRROR}`);
-		const text = events.filter(e => e.type === "text").map(e => e.text).join("");
+		const text = events
+			.filter(e => e.type === "text")
+			.map(e => e.text)
+			.join("");
 		expect(text).toBe("前缀。\n");
 		expect(events.some(e => e.type === "toolCall")).toBe(false);
 	});
@@ -140,7 +147,10 @@ describe("StreamMarkupHealing qwenxml grammar", () => {
 
 		const malformed = new StreamMarkupHealing({ pattern: "qwenxml" });
 		const events = malformed.feedEvents("<tool_call>\nnot a function block\n</tool_call>");
-		const text = events.filter(e => e.type === "text").map(e => e.text).join("");
+		const text = events
+			.filter(e => e.type === "text")
+			.map(e => e.text)
+			.join("");
 		expect(text).toContain("not a function block");
 	});
 });

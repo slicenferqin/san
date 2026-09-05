@@ -482,11 +482,11 @@ export function createRpcV2SessionFactory(args: RpcV2SessionFactoryOptions): Rpc
 				throw new Error(`Credentials already exist for provider id "${providerId}"`);
 			}
 			const providerConfig = {
-			name: providerId,
-			baseUrl: input.baseUrl.trim(),
-			api: input.api ?? "openai-completions",
-			auth,
-			...(input.discovery ? { discovery: input.discovery } : {}),
+				name: providerId,
+				baseUrl: input.baseUrl.trim(),
+				api: input.api ?? "openai-completions",
+				auth,
+				...(input.discovery ? { discovery: input.discovery } : {}),
 			};
 			await validateCustomProviderConfigDestination(providerConfig);
 			let wroteConfig = false;
@@ -1407,7 +1407,10 @@ export async function runRootCommand(
 	// client depends on server-generated titles — don't force PI_NO_TITLE
 	// there. An explicit user-set PI_NO_TITLE is still honored everywhere.
 	const isRpcV2 = (parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui") && parsedArgs.rpcProtocol === "2";
-	if (parsedArgs.noTitle || ((parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui" || parsedArgs.mode === "acp") && !isRpcV2)) {
+	if (
+		parsedArgs.noTitle ||
+		((parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui" || parsedArgs.mode === "acp") && !isRpcV2)
+	) {
 		Bun.env.PI_NO_TITLE = "1";
 	}
 	const mode = parsedArgs.mode || "text";

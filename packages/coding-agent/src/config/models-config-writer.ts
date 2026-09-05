@@ -215,7 +215,8 @@ export async function updateCustomProviderConfig(
 		patches.push({ op: "set", path: ["providers", providerId, "baseUrl"], value: patch.baseUrl.trim() });
 	}
 	if (patch.api !== undefined) patches.push({ op: "set", path: ["providers", providerId, "api"], value: patch.api });
-	if (patch.auth !== undefined) patches.push({ op: "set", path: ["providers", providerId, "auth"], value: patch.auth });
+	if (patch.auth !== undefined)
+		patches.push({ op: "set", path: ["providers", providerId, "auth"], value: patch.auth });
 	if (patch.discovery !== undefined)
 		patches.push({ op: "set", path: ["providers", providerId, "discovery"], value: patch.discovery });
 	const configPath = modelsConfigPath(options?.modelsPath);
@@ -227,7 +228,6 @@ export async function updateCustomProviderConfig(
 	);
 	return { path: configPath, changed: result.changed, persisted: true };
 }
-
 
 export async function removeCustomProviderConfig(
 	providerId: string,
@@ -415,12 +415,17 @@ export async function updateCustomModelConfig(
 			);
 		});
 		if (index < 0) throw new Error(`Model id "${id}" does not exist for provider "${providerId}"`);
-		return patchYamlFile(configPath, [{ op: "set", path: ["providers", providerId, "models", index], value: modelValue }], {
-			validateSource: current => {
-				const currentModels = readProviderModels(current, providerId);
-				if (currentModels.length !== models.length) throw new Error("models.yml changed while updating the model");
+		return patchYamlFile(
+			configPath,
+			[{ op: "set", path: ["providers", providerId, "models", index], value: modelValue }],
+			{
+				validateSource: current => {
+					const currentModels = readProviderModels(current, providerId);
+					if (currentModels.length !== models.length)
+						throw new Error("models.yml changed while updating the model");
+				},
 			},
-		});
+		);
 	});
 	return { path: configPath, changed: result.changed, persisted: true };
 }
