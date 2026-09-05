@@ -152,8 +152,6 @@ function collectToolPairs(entries: readonly SessionEntry[]): ContextPlanToolPair
 	return pairs;
 }
 
-
-
 /**
  * 标记 superseded mutation:同一路径存在**更晚的完整** mutation pair 时,
  * 较早的完整 pair 记 `supersededByToolCallId`。最后一次 mutation、未闭合
@@ -194,7 +192,6 @@ function collectTurnBundles(entries: readonly SessionEntry[]): ContextPlanTurnBu
 	if (current && current.entryIds.length > 0) bundles.push({ kind: "turn_bundle", ...current });
 	return bundles;
 }
-
 
 function collectFileEvidence(entries: readonly SessionEntry[]): ContextPlanFileEvidenceSource[] {
 	const sources: ContextPlanFileEvidenceSource[] = [];

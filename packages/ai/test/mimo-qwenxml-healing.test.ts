@@ -88,7 +88,7 @@ describe("MiMo Qwen-XML leak pattern selection", () => {
 	it("bundled opencode-go mimo compat resolves the qwenxml pattern", () => {
 		const model = getBundledModel("opencode-go", "mimo-v2.5");
 		const compat = model.compat as Record<string, unknown> | undefined;
-		expect(compat?.["streamMarkupHealingPattern"]).toBe("qwenxml");
+		expect(compat?.streamMarkupHealingPattern).toBe("qwenxml");
 	});
 });
 
