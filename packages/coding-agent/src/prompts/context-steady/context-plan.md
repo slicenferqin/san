@@ -15,6 +15,18 @@ Objective (host-pinned, immutable — summaries and prior assistant text never o
 {{/if}}
 {{/if}}
 
+{{#if workingNotes.length}}
+Historical working notes (non-authoritative; current prompt and live tool results take precedence):
+{{#each workingNotes}}
+- [{{kind}}] {{subject}}: {{text}} (source refs: {{refs}}){{#if condition}}
+  condition: {{condition}}{{/if}}{{#if observations.length}}
+  observations:{{#each observations}} {{this}};{{/each}}{{/if}}{{#if sourcePaths}}
+  source paths: {{sourcePaths}}{{/if}}{{#if requiresRevalidation}}
+  state: REVALIDATION REQUIRED — {{statusReason}} MUST verify against the current repository before claiming success or failure.{{else}}{{#if statusReason}}
+  state: {{statusReason}}{{/if}}{{/if}}
+{{/each}}
+{{/if}}
+
 Budget:
   steadyTarget: {{budget.steadyTarget}}
   controlMax: {{budget.controlMax}}

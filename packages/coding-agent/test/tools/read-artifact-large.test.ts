@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { type AgentToolContext, countTokens } from "@san/agent";
 import { Settings } from "@san/coding-agent/config/settings";
 import {
 	registerArtifactsDir,
 	resetRegisteredArtifactDirsForTests,
 } from "@san/coding-agent/internal-urls/registry-helpers";
 import type { ToolSession } from "@san/coding-agent/tools";
+import { stripOutputNotice, wrapToolWithMetaNotice } from "@san/coding-agent/tools/output-meta";
 import { ReadTool } from "@san/coding-agent/tools/read";
 
 function getTextOutput(result: { content: Array<{ type: string; text?: string }> }): string {
@@ -116,5 +118,51 @@ describe("read tool large artifact handling", () => {
 		} finally {
 			homeSpy.mockRestore();
 		}
+	});
+
+	it("recovers original source pages after the logical-turn output budget is exhausted", async () => {
+		const saved: string[] = [];
+		const settings = Settings.isolated({ "tools.logicalTurnOutputTokens": 1 });
+		const sessionManager = {
+			saveArtifact: async (text: string) => {
+				saved.push(text);
+				const id = String(saved.length);
+				await Bun.write(path.join(artifactDir, `${id}.read.log`), text);
+				return id;
+			},
+		};
+		const context = {
+			settings,
+			sessionManager,
+			executionScopeId: "artifact-recovery",
+			model: { contextWindow: 100_000 },
+		} as unknown as AgentToolContext;
+		const wrapped = wrapToolWithMetaNotice(new ReadTool({ ...makeSession(testDir), settings }));
+		const original = Array.from(
+			{ length: 240 },
+			(_, index) => `diagnostic-${index + 1}: original failure reason for step ${index + 1}`,
+		).join("\n");
+		await Bun.write(path.join(artifactDir, "0.mcp.log"), original);
+		await wrapped.execute("burn", { path: "artifact://0:raw:1-1" }, undefined, undefined, context);
+		const full = await wrapped.execute("full", { path: "artifact://0:raw:1-240" }, undefined, undefined, context);
+		const fullBody = stripOutputNotice(getTextOutput(full), full.details?.meta);
+		expect(countTokens(fullBody)).toBeLessThanOrEqual(512);
+		expect(fullBody).toContain("diagnostic-");
+		expect(saved).toEqual([original]);
+		expect(getTextOutput(full)).toContain("artifact://1");
+		const recovered: string[] = [];
+		for (let start = 1; start <= 240; start += 8) {
+			const page = await wrapped.execute(
+				`page-${start}`,
+				{ path: `artifact://1:raw:${start}-${start + 7}` },
+				undefined,
+				undefined,
+				context,
+			);
+			expect(page.details?.meta?.truncation?.artifactId).toBeUndefined();
+			recovered.push(stripOutputNotice(getTextOutput(page), page.details?.meta));
+		}
+		expect(recovered.join("\n")).toBe(original);
+		expect(saved).toHaveLength(1);
 	});
 });

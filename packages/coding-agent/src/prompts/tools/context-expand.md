@@ -1,9 +1,11 @@
-Re-read the original messages behind a summarized turn digest.
+Re-read bounded original session history.
 
-The context packet lists recent turn digests, each tagged `[ref: <id>]`. Digests are lossy summaries — when you need exact details from an earlier settled turn (precise wording of a user request, an exact error message, the concrete diff or command output), call this tool with that ref to expand the digest back into the raw transcript span it replaced.
+The context packet lists recent turn digests, each tagged `[ref: <id>]`. Pass that digest ref to recover the raw transcript span it replaced when you need exact wording, an exact error, a concrete diff, or command output.
+
+`context_search` returns direct source refs such as `source:<entry-id>` when you do not know which digest contains the detail. Pass those refs here to read the matching journal entry exactly.
 
 Use it when:
-- A digest mentions a decision, file, or error you must act on, but omits the exact content.
+- A digest or search result mentions a decision, file, or error you must act on, but omits the exact content.
 - The user refers to something from an earlier part of the session that is no longer in your working context.
 
-The output is bounded; very large spans are truncated from the oldest side. Everything returned is read-only history — the current user prompt remains authoritative.
+Results are bounded. For a large source entry, use the returned `nextOffset` as `offset` in a follow-up call; keep `maxChars` bounded. Legacy digest refs without `offset` keep their tail-preserving behavior. Everything returned is read-only history — the current user prompt remains authoritative.

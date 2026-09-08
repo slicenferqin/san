@@ -8,7 +8,9 @@ import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const contextExpandSchema = type({
-	ref: type("string").describe("digest ref from the context packet (the id inside [ref: …])"),
+	ref: type("string").describe("digest ref or source ref returned by context_search"),
+	"maxChars?": type("number").describe("maximum characters to return in one page"),
+	"offset?": type("number").describe("character offset for the next source page"),
 });
 
 type ContextExpandParams = typeof contextExpandSchema.infer;
@@ -19,6 +21,8 @@ export interface ContextExpandToolDetails {
 	toEntryId?: string;
 	messageCount?: number;
 	truncated?: boolean;
+	offset?: number;
+	nextOffset?: number;
 	meta?: OutputMeta;
 }
 
@@ -38,8 +42,7 @@ export class ContextExpandTool implements AgentTool<typeof contextExpandSchema, 
 	readonly strict = true;
 	readonly loadMode = "discoverable";
 	readonly intent = (args: Partial<ContextExpandParams>) =>
-		args.ref ? `expanding digest ${args.ref}` : "expanding digest";
-
+		args.ref ? `expanding context ${args.ref}` : "expanding context";
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(contextExpandDescription);
 	}
@@ -59,22 +62,26 @@ export class ContextExpandTool implements AgentTool<typeof contextExpandSchema, 
 		const expand = this.session.expandContextDigest;
 		if (!expand) throw new ToolError("Context expansion is not available in this session.");
 		const ref = params.ref.trim();
-		if (!ref) throw new ToolError("A digest ref is required (the id inside [ref: …] in the context packet).");
-		const result = expand(ref);
+		if (!ref) throw new ToolError("A digest ref or source ref is required.");
+		const result = expand(ref, { maxChars: params.maxChars, offset: params.offset });
 		if (!result) {
 			throw new ToolError(
-				`No expandable turn digest found for ref ${ref}. Use a ref listed in the current context packet.`,
+				`No expandable context source found for ref ${ref}. Use a ref listed in the current context packet or context_search results.`,
 			);
 		}
+		const kind = ref.startsWith("source:") ? "source" : "digest";
+		const page = result.nextOffset === undefined ? "" : `, next offset ${result.nextOffset}`;
 		const header =
-			`Expanded digest ${ref} (${result.messageCount} message${result.messageCount === 1 ? "" : "s"}, ` +
-			`span ${result.fromEntryId} … ${result.toEntryId}${result.truncated ? ", truncated" : ""}):`;
+			`Expanded ${kind} ${ref} (${result.messageCount} message${result.messageCount === 1 ? "" : "s"}, ` +
+			`span ${result.fromEntryId} … ${result.toEntryId}${result.truncated ? ", truncated" : ""}${page}):`;
 		return toolResult<ContextExpandToolDetails>({
 			ref,
 			fromEntryId: result.fromEntryId,
 			toEntryId: result.toEntryId,
 			messageCount: result.messageCount,
 			truncated: result.truncated,
+			offset: result.offset,
+			nextOffset: result.nextOffset,
 		})
 			.text(`${header}\n\n${result.text}`)
 			.done();

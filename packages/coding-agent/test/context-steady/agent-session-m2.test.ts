@@ -813,6 +813,76 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		expect(customEntries(sessionManager, CONTEXT_PACKET_CUSTOM_TYPE)).toHaveLength(0);
 	});
 
+	it("recalls matching branch tool output when no memory backend is available", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mockModel = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mockModel.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "Investigate the parser failure." }],
+			timestamp: 1,
+		});
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [
+				{ type: "toolCall", id: "old-test", name: "bash", arguments: { command: "bun test src/parser.ts" } },
+			],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			usage: {
+				input: 10,
+				output: 5,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 15,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: 2,
+		});
+		const resultEntryId = sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: "old-test",
+			toolName: "bash",
+			content: [
+				{
+					type: "text",
+					text: `FAIL E_PARSE_17: tokenizer retained stale delimiter state. ${RAW_BODY}`,
+				},
+			],
+			isError: true,
+			timestamp: 3,
+		});
+		const settings = Settings.isolated({
+			...BASE_SETTINGS,
+			"memory.backend": "off",
+			"san.contextSteady.recall.enabled": true,
+			"san.contextSteady.recall.maxItems": 2,
+			"san.contextSteady.recall.maxTokens": 500,
+			"san.contextSteady.recall.maxQueryChars": 2000,
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		await session.prompt("What caused E_PARSE_17 previously?");
+		await session.waitForIdle();
+
+		const providerInput = JSON.stringify(mockModel.calls[0]?.context.messages);
+		expect(providerInput).toContain("Retrieved context");
+		expect(providerInput).toContain("tokenizer retained stale delimiter state");
+		expect(providerInput).toContain(`source:${resultEntryId}`);
+	});
+
 	it("restores stable system prompt when San recall replaces legacy memory prompt injection", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mockModel = createMockModel({
@@ -979,7 +1049,7 @@ describe("Context Steady State M2 — AgentSession ContextPlan integration", () 
 		const recallMaterial = (finalPlan.materials as Array<Record<string, unknown>>).find(
 			material => material.representation === "recall",
 		);
-		expect(recallMaterial).toMatchObject({ entryRefs: ["mem-1", "mem-2"] });
+		expect(recallMaterial?.entryRefs).toEqual(expect.arrayContaining(["mem-1", "mem-2"]));
 	});
 
 	it("writes a digest for a tool-using turn after injecting ContextPlan", async () => {

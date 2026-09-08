@@ -1,3 +1,4 @@
+import { persistContextWorkNotesFromDigest } from "./working-notes";
 /**
  * TurnDigest orchestration: input collection, LLM digest, and fallback digest.
  *
@@ -208,6 +209,7 @@ export async function generateDigest(
 
 	try {
 		const entryId = appendTurnDigest(sessionManager, persistedDigest);
+		persistContextWorkNotesFromDigest(sessionManager, persistedDigest, messages);
 		logger.debug("TurnDigest persisted", {
 			turnId: persistedDigest.turnId,
 			fallback: persistedDigest.fallback,
@@ -423,23 +425,41 @@ function obfuscateDigestText(obfuscator: ContextSteadyDigestObfuscator | undefin
 }
 
 function formatDigestUserMessage(messages: readonly unknown[], fallbackDigest: TurnDigest): string {
-	const body = JSON.stringify(
-		{
-			source: fallbackDigest.source,
-			fallbackEvidence: {
-				userIntent: fallbackDigest.userIntent,
-				filesTouched: fallbackDigest.filesTouched,
-				toolEvidence: fallbackDigest.toolEvidence,
-				tokenStats: fallbackDigest.tokenStats,
-			},
-			turnSpan: messages.map(formatMessageForDigest),
-		},
-		null,
-		2,
-	);
-	return body.length <= MAX_TRANSCRIPT_CHARS
-		? body
-		: `${body.slice(0, MAX_TRANSCRIPT_CHARS)}\n...[truncated for digest generation]`;
+	const formatted = messages.map(formatMessageForDigest);
+	const source = fallbackDigest.source;
+	const fallbackEvidence = JSON.stringify({
+		userIntent: fallbackDigest.userIntent,
+		filesTouched: fallbackDigest.filesTouched,
+		toolEvidence: fallbackDigest.toolEvidence,
+		tokenStats: fallbackDigest.tokenStats,
+	});
+	const tail = formatted.slice();
+	let omitted = 0;
+	const render = (): string =>
+		JSON.stringify({
+			source,
+			fallbackEvidence: JSON.parse(fallbackEvidence),
+			turnSpan: tail,
+			omittedMessages: omitted,
+		});
+	while (tail.length > 0 && render().length > MAX_TRANSCRIPT_CHARS) {
+		tail.shift();
+		omitted++;
+	}
+	let result = render();
+	if (result.length <= MAX_TRANSCRIPT_CHARS) return result;
+	let evidenceText = fallbackEvidence;
+	while (evidenceText.length > 0) {
+		evidenceText = evidenceText.slice(0, Math.max(0, evidenceText.length - 256));
+		result = JSON.stringify({
+			source,
+			fallbackEvidence: evidenceText,
+			turnSpan: [],
+			omittedMessages: formatted.length,
+		});
+		if (result.length <= MAX_TRANSCRIPT_CHARS) return result;
+	}
+	return JSON.stringify({ source, fallbackEvidence: "", turnSpan: [], omittedMessages: formatted.length });
 }
 
 function formatMessageForDigest(message: unknown): Record<string, unknown> {

@@ -676,6 +676,21 @@ function logicalTurnRemainingTokens(
 	return Math.max(0, limit - state.spentTokens);
 }
 
+function logicalTurnEmergencyRemainingTokens(
+	context: AgentToolContext | undefined,
+	configuredLimit: number,
+	emergencyLimit: number,
+): number | undefined {
+	const sessionManager = context?.sessionManager;
+	const scopeId = context?.executionScopeId;
+	if (!sessionManager || !scopeId || configuredLimit === 0) return undefined;
+	const contextWindow = context.model?.contextWindow ?? undefined;
+	const windowLimit = contextWindow === undefined ? configuredLimit : Math.max(1, Math.floor(contextWindow * 0.2));
+	const limit = Math.min(configuredLimit, windowLimit);
+	const state = logicalTurnOutput.get(sessionManager);
+	const spentTokens = state?.scopeId === scopeId ? state.spentTokens : 0;
+	return Math.max(0, limit + emergencyLimit - spentTokens);
+}
 function reserveLogicalTurnTokens(context: AgentToolContext | undefined, tokens: number): void {
 	const sessionManager = context?.sessionManager;
 	const scopeId = context?.executionScopeId;
@@ -754,7 +769,18 @@ async function spillLargeResultToArtifact(
 	const totalBytes = Buffer.byteLength(fullText, "utf-8");
 	const totalTokens = countTokens(fullText);
 	const turnRemaining = logicalTurnRemainingTokens(context, config.logicalTurnTokens);
-	const visibleTokenLimit = Math.min(config.previewTokens, turnRemaining ?? config.previewTokens);
+	const emergencyPreviewTokens = Math.min(config.previewTokens, 512);
+	const emergencyRemaining = logicalTurnEmergencyRemainingTokens(
+		context,
+		config.logicalTurnTokens,
+		emergencyPreviewTokens,
+	);
+	const visibleTokenLimit =
+		turnRemaining === undefined
+			? config.previewTokens
+			: turnRemaining > 0
+				? Math.min(config.previewTokens, turnRemaining)
+				: Math.min(config.previewTokens, emergencyRemaining ?? 0);
 	const exceedsBudget = totalBytes > config.threshold || totalTokens > visibleTokenLimit;
 	if (!exceedsBudget) {
 		reserveLogicalTurnTokens(context, totalTokens);

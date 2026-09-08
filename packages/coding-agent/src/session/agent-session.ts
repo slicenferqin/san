@@ -1,3 +1,4 @@
+import type { ContextWorkNoteProjection, ContextWorkNoteStateRecord } from "../context-steady/working-notes";
 /**
  * AgentSession - Core abstraction for agent lifecycle and session management.
  *
@@ -184,16 +185,12 @@ import {
 } from "../brain/activation";
 import { runSanBrainAutoDecisions } from "../brain/auto-decision";
 import { captureSanBrainTurn, recordSanBrainCaptureError } from "../brain/capture";
-import {
-	appendSanBrainActivation,
-	appendSanBrainProjectionNotification,
-	appendSanBrainRecallAudit,
-} from "../brain/ledger";
+import { appendSanBrainActivation, appendSanBrainProjectionNotification } from "../brain/ledger";
 import { runSanBrainProjections } from "../brain/projection";
 import { buildSanBrainRecallPlan } from "../brain/recall";
 import { resolveSanBrainRuntimePolicy } from "../brain/runtime-policy";
 import { type SanBrainActiveStateRecord, SanBrainStore } from "../brain/store";
-import type { SanBrainActivation, SanBrainScope } from "../brain/types";
+import { type SanBrainActivation, type SanBrainScope, summarizeSanBrainCandidate } from "../brain/types";
 import { reset as resetCapabilities } from "../capability";
 import type { Rule } from "../capability/rule";
 import { filterPresentedCodeGraphTools } from "../code-intelligence";
@@ -237,8 +234,9 @@ import {
 	rebaseActiveContinuationState,
 } from "../context-steady/continuation";
 import { generateDigest as generateContextSteadyDigest } from "../context-steady/digest";
-import { type ContextExpandResult, expandDigestSpan } from "../context-steady/expand";
+import type { ContextExpandResult } from "../context-steady/expand";
 import { generateFallbackDigest } from "../context-steady/fallback";
+import type { ContextHistorySearchResult } from "../context-steady/history-search";
 import {
 	auditProjectionCoverage,
 	buildContextRecallMessage,
@@ -268,7 +266,8 @@ import {
 	type ContextProbeRequestKind,
 	contextProbeFilePath,
 } from "../context-steady/probe";
-import { buildContextSteadyRecallQuery, normalizeContextSteadyRecallItems } from "../context-steady/recall";
+import { buildContextSteadyRecallQuery } from "../context-steady/recall";
+import { runContextSteadyRecall } from "../context-steady/recall-runtime";
 import { isTopicShiftPrompt } from "../context-steady/relevance";
 import {
 	appendContextSegment,
@@ -283,6 +282,7 @@ import {
 	isAuthoritativeUserEntry,
 	skipContextPacketPreludeInDigestSource,
 } from "../context-steady/session";
+import { ContextSteadySessionRuntime } from "../context-steady/session-runtime";
 import {
 	buildContextSummaryAuthorityAudit,
 	COMPACTION_SUMMARY_REPAIR_INSTRUCTIONS,
@@ -2222,6 +2222,8 @@ export class AgentSession {
 	#unsubscribeModelRoles?: () => void;
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
+	/** Context-steady branch projection, history index, and working-note runtime. */
+	#contextSteadyRuntime: ContextSteadySessionRuntime;
 	#eventListeners: AgentSessionEventListener[] = [];
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
 
@@ -3086,6 +3088,7 @@ export class AgentSession {
 			destination: { kind: "current", manager: this.sessionManager },
 		};
 		this.settings = config.settings;
+		this.#contextSteadyRuntime = new ContextSteadySessionRuntime(() => this.sessionManager.getBranch());
 		this.#responseDocuments = new ResponseDocumentRuntime(this.sessionManager, this.settings);
 		this.#sessionWritesEnabled = config.sessionAccess !== "read_only";
 		this.#autoApprove = config.autoApprove === true;
@@ -9777,14 +9780,24 @@ export class AgentSession {
 	}
 
 	/**
-	 * Context-steady 自助召回(`context_expand` 工具的会话侧能力):按 digest
-	 * entry id 把其 source 区间从当前分支 journal 解压为有界文本。仅根会话
-	 * 且 context steady 开启时提供;固定 scope 的子会话读的是父的历史,不提供。
+	 * Context-steady read-only recovery: digest spans and direct `source:<entryId>` refs.
+	 * Only root sessions with context steady enabled expose this capability to tools.
 	 */
-	expandContextDigest(digestEntryId: string): ContextExpandResult | undefined {
-		if (this.settings.get("san.contextSteady.enabled") !== true) return undefined;
-		if (this.#executionScopeId !== undefined) return undefined;
-		return expandDigestSpan(this.sessionManager.getBranch(), digestEntryId);
+	expandContextDigest(ref: string, options?: { maxChars?: number; offset?: number }): ContextExpandResult | undefined {
+		if (this.settings.get("san.contextSteady.enabled") !== true || this.#executionScopeId !== undefined)
+			return undefined;
+		return this.#contextSteadyRuntime.expand(ref, options);
+	}
+
+	/** Search the current root branch without persisting query or result entries. */
+	searchContextHistory(
+		query: string,
+		options?: { limit?: number; maxExcerptChars?: number },
+	): ContextHistorySearchResult {
+		if (this.settings.get("san.contextSteady.enabled") !== true || this.#executionScopeId !== undefined) {
+			return { query, hits: [], total: 0 };
+		}
+		return this.#contextSteadyRuntime.search(query, options);
 	}
 
 	getLastCompletedRewind(): CompletedRewindState | undefined {
@@ -10683,6 +10696,8 @@ export class AgentSession {
 					? "topic_shift"
 					: undefined;
 		const resolvedRebaseReason = pendingReason ?? rebaseBoundary?.reason;
+		const goalAnchorInput = this.#buildGoalAnchorInput();
+
 		const commonOptions = {
 			entries: planningEntries,
 			sessionId: this.sessionId,
@@ -10719,7 +10734,8 @@ export class AgentSession {
 			archivedEntryCount: activeScope.archivedEntryCount,
 			activeCutoffEntryId: activeScope.activeCutoffEntryId,
 			maintenanceId: this.#contextSteadyMaintenanceId,
-			goalAnchor: this.#buildGoalAnchorInput(),
+			...(goalAnchorInput ? { goalAnchor: goalAnchorInput } : {}),
+			workingNotes: this.#contextWorkingNotes(expandedText),
 			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
 		};
 		const plan = this.#buildContextSteadyPlanForProvider(commonOptions, messages, planningEntries);
@@ -10891,6 +10907,7 @@ export class AgentSession {
 		const commonOptionsWithGoalAnchor = {
 			...commonOptions,
 			goalAnchor: this.#buildGoalAnchorInput(),
+			workingNotes: this.#contextWorkingNotes(),
 		};
 		let plan = this.#buildContextSteadyPlanForProvider(
 			commonOptionsWithGoalAnchor,
@@ -11654,6 +11671,37 @@ export class AgentSession {
 		}
 	}
 
+	#activeSanBrainStates(operation: string): SanBrainActiveStateRecord[] {
+		if (!resolveSanBrainRuntimePolicy(this.settings).activationEnabled) return [];
+		const store = SanBrainStore.open(this.settings.getAgentDir());
+		try {
+			store.syncSessionEntries(this.sessionId, this.sessionManager.getEntries());
+			return store.listActiveStates(1000);
+		} catch (error) {
+			logger.debug(`San Brain ${operation} failed`, { error: String(error), sessionId: this.sessionId });
+			return [];
+		} finally {
+			store.close();
+		}
+	}
+
+	#contextWorkingNotes(currentPrompt?: string): ContextWorkNoteProjection[] {
+		const stateRecords: ContextWorkNoteStateRecord[] = this.#activeSanBrainStates("working-note projection").map(
+			state => {
+				const text = summarizeSanBrainCandidate(state.kind, state.candidate);
+				return {
+					noteId: `brain:${state.decisionId}`,
+					subject: text,
+					kind: state.kind === "experience" ? "method" : "decision",
+					text,
+					updatedAt: state.updatedAt,
+					observationKind: "model_hypothesis",
+				};
+			},
+		);
+		return this.#contextSteadyRuntime.workingNotes(currentPrompt, stateRecords);
+	}
+
 	async #resolveSanBrainScopes(cwd = path.resolve(this.sessionManager.getCwd())): Promise<SanBrainScope[]> {
 		const identity = await this.#resolveSanBrainIdentity(cwd);
 		return [
@@ -11686,23 +11734,9 @@ export class AgentSession {
 
 		const maxItems = clampPositiveInteger(this.settings.get("san.contextSteady.recall.maxItems") as number, 3);
 		const maxTokens = clampPositiveInteger(this.settings.get("san.contextSteady.recall.maxTokens") as number, 1000);
-		const scopes = await this.#resolveSanBrainScopes();
-		let activeStates: SanBrainActiveStateRecord[] = [];
-		const brainPolicy = resolveSanBrainRuntimePolicy(this.settings);
-		if (brainPolicy.activationEnabled) {
-			const store = SanBrainStore.open(this.settings.getAgentDir());
-			try {
-				store.syncSessionEntries(this.sessionId, this.sessionManager.getEntries());
-				activeStates = store.listActiveStates(1000);
-			} catch (error) {
-				logger.debug("San Brain recall policy lookup failed", { error: String(error), sessionId: this.sessionId });
-			} finally {
-				store.close();
-			}
-		}
-		const recallPlan = buildSanBrainRecallPlan(activeStates, {
+		const recallPlan = buildSanBrainRecallPlan(this.#activeSanBrainStates("recall policy lookup"), {
 			role: "primary",
-			scopes,
+			scopes: await this.#resolveSanBrainScopes(),
 			promptText: expandedText,
 			baseQuery,
 			maxItems,
@@ -11710,86 +11744,36 @@ export class AgentSession {
 			minConfidence: this.settings.get("san.brain.activation.minConfidence") as number,
 			maxQueryChars,
 		});
-		const turnId = `brain_recall_${this.#promptGeneration + 1}`;
-		const appendRecallAudit = (
-			backend: "off" | "local" | "hindsight" | "mnemopi",
-			outcome: "applied" | "suppressed" | "backend_unavailable" | "search_unsupported" | "failed",
-			resultCount: number,
-			durationMs: number,
-			errorCode?: "backend_unavailable" | "search_unsupported" | "external_failure",
-		): void => {
-			appendSanBrainRecallAudit(this.sessionManager, {
-				schemaVersion: 1,
-				recallId: `brain_recall_${Bun.randomUUIDv7()}`,
-				sessionId: this.sessionId,
-				turnId,
-				policyVersion: recallPlan.policyVersion,
-				selectedPolicyIds: recallPlan.selectedPolicyIds,
-				...(recallPlan.queryTemplateId ? { queryTemplateId: recallPlan.queryTemplateId } : {}),
-				backend,
-				outcome,
-				resultCount,
-				durationMs,
-				skipReasons: recallPlan.skipReasons,
-				...(errorCode ? { errorCode } : {}),
-				createdAt: new Date().toISOString(),
-			});
-		};
-		if (!recallPlan.query) {
-			appendRecallAudit(this.settings.get("memory.backend"), "suppressed", 0, 0);
-			return undefined;
+		const branch = this.sessionManager.getBranch();
+		let currentEntryId: string | undefined;
+		for (let index = branch.length - 1; index >= 0; index--) {
+			const entry = branch[index];
+			if (entry && isAuthoritativeUserEntry(entry)) {
+				currentEntryId = entry.id;
+				break;
+			}
 		}
-
-		const backend = await resolveMemoryBackend(this.settings);
-		if (!backend.search) {
-			const outcome = backend.id === "off" ? "backend_unavailable" : "search_unsupported";
-			appendRecallAudit(backend.id, outcome, 0, 0, outcome);
-			return undefined;
-		}
-
-		const startedAt = performance.now();
-		try {
-			const result = await backend.search(
-				{ agentDir: this.settings.getAgentDir(), cwd: this.sessionManager.getCwd(), session: this },
-				recallPlan.query,
-				{
-					limit: recallPlan.maxItems,
-					maxTokens: recallPlan.tokenBudget,
-					memoryTypes: recallPlan.memoryTypes,
-					scopeKeys: recallPlan.scopeKeys,
-				},
-			);
-			const items = normalizeContextSteadyRecallItems(result.items, {
-				maxItems: recallPlan.maxItems,
-				maxTokens: recallPlan.tokenBudget,
-				memoryTypes: recallPlan.memoryTypes,
-				scopeKeys: recallPlan.scopeKeys,
-			});
-			appendRecallAudit(backend.id, "applied", items.length, Math.max(0, Math.round(performance.now() - startedAt)));
-			if (items.length === 0) return undefined;
-			return {
-				query: result.query,
-				items,
-				tokenBudget: recallPlan.tokenBudget,
-				policyVersion: recallPlan.policyVersion,
-				selectedPolicyIds: recallPlan.selectedPolicyIds,
-				...(recallPlan.queryTemplateId ? { queryTemplateId: recallPlan.queryTemplateId } : {}),
-				skipReasons: recallPlan.skipReasons,
-			};
-		} catch (error) {
-			appendRecallAudit(
-				backend.id,
-				"failed",
-				0,
-				Math.max(0, Math.round(performance.now() - startedAt)),
-				"external_failure",
-			);
-			logger.debug("San context steady recall failed", {
-				backend: backend.id,
-				error: String(error),
-			});
-			return undefined;
-		}
+		const localItems = this.#contextSteadyRuntime.recall(expandedText, {
+			maxItems: recallPlan.maxItems,
+			maxTokens: recallPlan.tokenBudget,
+			currentEntryId,
+			fallbackQuery: baseQuery,
+		});
+		return runContextSteadyRecall({
+			baseQuery,
+			localItems,
+			plan: recallPlan,
+			configuredBackend: this.settings.get("memory.backend"),
+			resolveBackend: () => resolveMemoryBackend(this.settings),
+			backendContext: {
+				agentDir: this.settings.getAgentDir(),
+				cwd: this.sessionManager.getCwd(),
+				session: this,
+			},
+			sessionManager: this.sessionManager,
+			sessionId: this.sessionId,
+			turnId: `brain_recall_${this.#promptGeneration + 1}`,
+		});
 	}
 
 	async promptCustomMessage<T = unknown>(

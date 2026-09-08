@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@san/agent";
 import type { ContextCheckpoint, ContextPacketRecallLayer, TurnDigest } from "./types";
+import type { ContextWorkNoteProjection } from "./working-notes";
 
 export const CONTEXT_PLAN_SCHEMA_VERSION = 1;
 export const CONTEXT_PLAN_CUSTOM_TYPE = "san.context_plan";
@@ -14,6 +15,7 @@ export type ContextPlanSourceKind =
 	| "turn_digest"
 	| "checkpoint"
 	| "recall"
+	| "working_note"
 	| "live_tail"
 
 	/** Audit-only: no runtime material exists; marks degraded history representation. */
@@ -232,11 +234,18 @@ export interface ContextPlanGoalAnchorMaterial {
 	coveredEntryRefs: string[];
 }
 
+export interface ContextPlanWorkingNoteMaterial {
+	audit: ContextPlanMaterialAudit;
+	note: ContextWorkNoteProjection;
+	coveredEntryRefs: string[];
+}
+
 export type ContextPlanMaterial =
 	| ContextPlanDigestMaterial
 	| ContextPlanCheckpointMaterial
 	| ContextPlanRecallMaterial
 	| ContextPlanToolStubMaterial
+	| ContextPlanWorkingNoteMaterial
 	| ContextPlanGoalAnchorMaterial;
 
 export interface ContextPlanDigestSource {
