@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@san/utils";
 import { appendSanBrainRecallAudit } from "../brain/ledger";
 import type { SanBrainRecallPlan } from "../brain/recall";
 import type { SanBrainProjectionErrorCode, SanBrainRecallOutcome } from "../brain/types";
