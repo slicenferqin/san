@@ -4,7 +4,9 @@ export * from "./continuation";
 export * from "./coverage";
 export * from "./digest";
 export * from "./dogfood";
+export * from "./expand";
 export * from "./fallback";
+export * from "./history-search";
 export * from "./materialize";
 export * from "./normalize";
 export {
@@ -18,6 +20,7 @@ export * from "./planner";
 export * from "./probe";
 export * from "./prune";
 export * from "./quality-gate";
+export * from "./recall";
 export * from "./segment";
 // Legacy ContextPacket / prune engines: read-only compat + regression tests only.
 // Active runtime uses ContextPlan (planner + materialize).
@@ -28,3 +31,4 @@ export * from "./source-index";
 export * from "./summary-authority";
 export * from "./tool-progress-guard";
 export * from "./types";
+export * from "./working-notes";

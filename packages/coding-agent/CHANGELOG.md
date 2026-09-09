@@ -3,13 +3,20 @@
 ## [Unreleased]
 
 ### Added
+- Added append-only, source-linked working notes to context-steady projections, with stable cross-turn revisions and mutation-triggered revalidation of stale tool observations.
+- Added bounded branch-local automatic recall over the active session journal, merged with configured memory results and available when the external memory backend is disabled.
 
 - Added RPC v2 session change listing, diff statistics, structured file diffs, and revision/hash-guarded revert support for desktop review workflows.
+- Added root-only `context_search` recovery over the append-only session branch, with stable source refs and bounded paged `context_expand` reads for exact historical messages and tool results.
 - Added RPC v2 agent capability management surface under the `agent.capabilities` capability: `mcp.list`/`mcp.add`/`mcp.remove` (user/project scoped MCP server config CRUD), `skill.list`/`skill.enable`, `hook.list`/`hook.enable` (capability provider enumeration and persisted enable/disable), and `memory.list`/`memory.delete` backed by Mnemopi.
 - Added RPC v2 worktree apply support: a git-backed apply port (`patch` and `merge_commit` strategies with expected-target-snapshot CAS and merge-conflict abort semantics) wired into the worktree lifecycle service, plus session metadata updates (`session.update` for pinned/archived/unread with `session.summary.changed` emission), approval policy presets (`approval.preset.list`/`approval.preset.apply`), project grouping metadata on session summaries (`projectRoot`/`gitCommonDir`/`branch`), and a debounced `session.diff.changed` event emitted after file-mutating tool calls.
 
 
 ### Fixed
+
+- Split Context Steady history, recall, message projection, and tool-observation state out of `AgentSession`; fixed hidden metadata leakage, stale frozen notes, backend/local recall starvation, structured-query punctuation, evolving note revisions, and logical-turn preview overrun.
+- Kept tool results readable when the shared output allowance is nearly exhausted, preserving bounded artifact paging instead of empty previews.
+- Fixed context working notes being mixed into the current objective instead of rendered separately; preserved note supersession and kept generated method descriptions non-authoritative. Note-write failures no longer mark an already persisted turn digest as failed.
 
 - Fixed model switches and automatic route failover resetting a supported thinking selection to the target model's default; RPC v2 now returns configured/effective thinking with model selection and publishes durable thinking changes so desktop controls stay synchronized without another click.
 - Fixed RPC v2 provider/model updates, removals, and model refresh rejecting the mutation metadata required by the dispatcher, preventing desktop model management from reaching the configuration writer.

@@ -707,7 +707,17 @@ describe("LLM digest orchestration", () => {
 		sessionManager.appendCustomEntry(TURN_DIGEST_CUSTOM_TYPE, fallback);
 		const entries = sessionManager.getEntries();
 		expect(result).toMatchObject({ persisted: true, reused: false, upgraded: true });
-		expect(entries).toHaveLength(3);
+		expect(
+			entries.filter(entry => entry.type === "custom" && entry.customType === TURN_DIGEST_CUSTOM_TYPE),
+		).toHaveLength(3);
+		expect(
+			entries
+				.filter(entry => entry.type === "custom" && entry.customType === "san.context_work_note")
+				.every(entry => {
+					const data = entry.data as { sourceEntryRefs?: string[] };
+					return data.sourceEntryRefs?.includes("e1") && data.sourceEntryRefs.includes("e2");
+				}),
+		).toBe(true);
 		expect(result?.digest).toMatchObject({
 			turnId: "turn-existing",
 			fallback: false,

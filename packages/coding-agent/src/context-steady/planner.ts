@@ -30,6 +30,7 @@ import {
 } from "./relevance";
 import { buildContextSourceIndex } from "./source-index";
 import type { ContextPacketRecallLayer } from "./types";
+import type { ContextWorkNoteProjection } from "./working-notes";
 
 export interface BuildContextPlanOptions {
 	entries: readonly SessionEntry[];
@@ -74,6 +75,8 @@ export interface BuildContextPlanOptions {
 	offloadAgedImages?: boolean;
 	/** 目标锚事实(宿主注入);缺省或 objective 为空时不产生锚材料。 */
 	goalAnchor?: ContextPlanGoalAnchorInput;
+	/** Current bounded working-note projection, rendered independently of the goal anchor. */
+	workingNotes?: readonly ContextWorkNoteProjection[];
 }
 
 function materialTokenEstimate(value: unknown): number {
@@ -158,7 +161,7 @@ function buildGoalAnchorMaterial(
 	input: ContextPlanGoalAnchorInput | undefined,
 	sourceIndex: ContextSourceIndex,
 ): ContextPlanGoalAnchorMaterial | undefined {
-	const objective = input?.objective.trim();
+	const objective = input?.objective?.trim();
 	if (!objective) return undefined;
 	const latestDigest = sourceIndex.digests.at(-1)?.digest;
 	const material: ContextPlanGoalAnchorMaterial = {
@@ -181,6 +184,32 @@ function buildGoalAnchorMaterial(
 	};
 	material.audit.tokenEstimate = materialTokenEstimate(material);
 	return material;
+}
+
+const WORKING_NOTE_LIMITS = { notes: 12, subjectChars: 120, textChars: 320, refs: 8, refChars: 120 } as const;
+function buildWorkingNoteMaterials(notes: readonly ContextWorkNoteProjection[] | undefined): ContextPlanMaterial[] {
+	return (notes ?? []).slice(-WORKING_NOTE_LIMITS.notes).map((note, index) => {
+		const projection: ContextWorkNoteProjection = {
+			...note,
+			subject: note.subject.slice(0, WORKING_NOTE_LIMITS.subjectChars),
+			text: note.text.slice(0, WORKING_NOTE_LIMITS.textChars),
+			sourceEntryRefs: note.sourceEntryRefs
+				.slice(0, WORKING_NOTE_LIMITS.refs)
+				.map(ref => ref.slice(0, WORKING_NOTE_LIMITS.refChars)),
+		};
+		return {
+			audit: {
+				materialId: `working_note_${note.noteId}_${index}`,
+				kind: "working_note",
+				representation: "exact",
+				entryRefs: [...projection.sourceEntryRefs],
+				tokenEstimate: materialTokenEstimate(projection),
+				reason: "current working-note projection; non-authoritative",
+			},
+			note: projection,
+			coveredEntryRefs: [],
+		};
+	});
 }
 
 /**
@@ -506,6 +535,11 @@ function fitMaterialsToPlanBudget(
 			selected = selected.filter((_, index) => index !== recallIndex);
 			continue;
 		}
+		const noteIndex = selected.findIndex(material => "note" in material);
+		if (noteIndex >= 0) {
+			selected = selected.filter((_, index) => index !== noteIndex);
+			continue;
+		}
 		const firstDigestIndex = selected.findIndex(material => "digest" in material);
 		if (firstDigestIndex >= 0) {
 			selected = selected.filter((_, index) => index !== firstDigestIndex);
@@ -676,16 +710,19 @@ export function buildContextPlan(options: BuildContextPlanOptions): BuiltContext
 	// Stable-projection keeps recall out of the rendered plan (volatile channel)
 	// and reuses epoch-frozen materials verbatim on gate recomputes so a
 	// pressure rebuild never reselects the history representation.
-	const candidateMaterials = options.frozenMaterials
-		? [...options.frozenMaterials]
-		: buildMaterials(
-				sourceIndex,
-				options.maxDigestMaterials ?? 5,
-				options.stableProjection === true ? undefined : options.recall,
-				budget.planTokenBudget,
-				options.currentPromptText,
-				contextPressure,
-			);
+	const candidateMaterials = [
+		...(options.frozenMaterials
+			? options.frozenMaterials.filter(material => !("objective" in material) && !("note" in material))
+			: buildMaterials(
+					sourceIndex,
+					options.maxDigestMaterials ?? 5,
+					options.stableProjection === true ? undefined : options.recall,
+					budget.planTokenBudget,
+					options.currentPromptText,
+					contextPressure,
+				)),
+		...buildWorkingNoteMaterials(options.workingNotes),
+	];
 	// 目标锚置于材料列表最前:渲染在 plan 消息头部,且 fit 裁剪(只认
 	// recall/digest/checkpoint 字段)永远碰不到它。
 	const goalAnchorMaterial = buildGoalAnchorMaterial(options.goalAnchor, sourceIndex);

@@ -135,9 +135,24 @@ function materialViews(materials: readonly ContextPlanMaterial[]) {
 	const digests = [];
 	const recalls = [];
 	let goalAnchor: { objective: string; todoLines: string[]; pendingGates: string[]; nextSteps: string[] } | undefined;
+	const workingNotes = [];
 	for (const material of materials) {
-		if ("objective" in material) {
-			// 目标锚:最多一个,渲染在 plan 头部。
+		if ("note" in material) {
+			workingNotes.push({
+				noteId: material.note.noteId,
+				subject: clampString(material.note.subject, 120),
+				kind: material.note.kind,
+				text: clampString(material.note.text, 320),
+				refs: material.note.sourceEntryRefs.join(", "),
+				condition: material.note.condition ? clampString(material.note.condition, 320) : undefined,
+				requiresRevalidation: material.note.requiresRevalidation === true,
+				statusReason: material.note.statusReason ? clampString(material.note.statusReason, 320) : undefined,
+				observations: (material.note.observations ?? []).map(
+					observation => `${observation.toolName} ${observation.outcome} [source:${observation.entryId}]`,
+				),
+				sourcePaths: (material.note.sourcePaths ?? []).join(", "),
+			});
+		} else if ("objective" in material) {
 			goalAnchor = {
 				objective: material.objective,
 				todoLines: material.todoLines,
@@ -201,7 +216,7 @@ function materialViews(materials: readonly ContextPlanMaterial[]) {
 		// tool_stub materials act on payload projection only — never rendered
 		// into the plan message.
 	}
-	return { checkpoints, digests, recalls, goalAnchor };
+	return { checkpoints, digests, recalls, goalAnchor, workingNotes };
 }
 
 export function renderContextPlanContent(plan: Pick<BuiltContextPlan, "audit" | "materials">): string {

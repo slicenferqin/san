@@ -3,7 +3,11 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { auditProjectionCoverage, materializeContextPlanMessages } from "../../src/context-steady/materialize";
+import {
+	auditProjectionCoverage,
+	materializeContextPlanMessages,
+	renderContextPlanContent,
+} from "../../src/context-steady/materialize";
 import {
 	type BuiltContextPlan,
 	CONTEXT_PLAN_SCHEMA_VERSION,
@@ -208,6 +212,48 @@ describe("materializeContextPlanMessages", () => {
 		expect(text).not.toContain("old plan");
 		expect(text).toContain("context plan");
 		expect(text).toContain("current prompt");
+	});
+
+	test("renders observation provenance and required revalidation into model context", () => {
+		const rendered = renderContextPlanContent(
+			plan({
+				materials: [
+					{
+						audit: {
+							materialId: "working-note-1",
+							kind: "working_note",
+							representation: "exact",
+							entryRefs: ["result-read"],
+							tokenEstimate: 80,
+							reason: "current working-note projection; non-authoritative",
+						},
+						note: {
+							noteId: "parser-state",
+							subject: "parser state",
+							kind: "method",
+							text: "The parser source was read before editing.",
+							sourceEntryRefs: ["result-read"],
+							status: "active",
+							revision: 1,
+							condition: "read(src/parser.ts)",
+							observations: [
+								{ entryId: "result-read", toolCallId: "read-1", toolName: "read", outcome: "success" },
+							],
+							sourcePaths: ["src/parser.ts"],
+							requiresRevalidation: true,
+							statusReason: "Affected source changed after this observation: src/parser.ts.",
+						},
+						coveredEntryRefs: [],
+					},
+				],
+			}),
+		);
+
+		expect(rendered).toContain("condition: read(src/parser.ts)");
+		expect(rendered).toContain("read success [source:result-read]");
+		expect(rendered).toContain("source paths: src/parser.ts");
+		expect(rendered).toContain("REVALIDATION REQUIRED");
+		expect(rendered).toContain("MUST verify against the current repository");
 	});
 });
 

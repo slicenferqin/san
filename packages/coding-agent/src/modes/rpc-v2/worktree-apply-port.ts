@@ -15,7 +15,7 @@
 import { existsSync } from "node:fs";
 import * as path from "node:path";
 
-import { $which, logger } from "@oh-my-pi/pi-utils";
+import { $which, logger } from "@san/utils";
 
 import { GitCommandError, patch, repo, withRepoLock } from "../../utils/git";
 import type { ManagedWorktree, WorktreeApplyPlan, WorktreeApplyStrategy } from "./dto/worktree";

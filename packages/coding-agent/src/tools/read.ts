@@ -3226,7 +3226,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			sourcePath: resource.sourcePath,
 			sourceInternal: url,
 			entityLabel: "resource",
-			ignoreResultLimits: scheme === "skill",
+			ignoreResultLimits: scheme === "skill" || (scheme === "artifact" && limit !== undefined && limit <= 16),
 			immutable: resource.immutable,
 			raw,
 		});

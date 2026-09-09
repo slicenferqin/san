@@ -9,6 +9,8 @@
  *
  * 纯函数、无 IO:branch 由调用方(AgentSession)提供。
  */
+import { parseContextSourceRef } from "./history-search";
+import { type ContextMessageShape, contextMessageRoleLabel, contextMessageText } from "./message-text";
 import { extractSpanMessages } from "./session";
 import { TURN_DIGEST_CUSTOM_TYPE, type TurnDigest } from "./types";
 
@@ -30,6 +32,10 @@ export interface ContextExpandResult {
 	readonly toEntryId: string;
 	readonly messageCount: number;
 	readonly truncated: boolean;
+	/** Character offset used for a bounded page. */
+	readonly offset?: number;
+	/** Character offset for the next bounded page, when more source remains. */
+	readonly nextOffset?: number;
 	/** Rendered plain-text transcript of the expanded span. */
 	readonly text: string;
 }
@@ -37,49 +43,7 @@ export interface ContextExpandResult {
 /** 默认输出上限(字符)。原文区间可能很大;超限从头部截断并标注。 */
 export const DEFAULT_EXPAND_MAX_CHARS = 30_000;
 
-interface SpanMessageShape {
-	readonly role?: unknown;
-	readonly content?: unknown;
-	readonly customType?: unknown;
-	readonly entryId?: unknown;
-}
-
-function blockToText(block: unknown): string {
-	if (!block || typeof block !== "object") return "";
-	const record = block as { type?: unknown; text?: unknown; name?: unknown; arguments?: unknown; content?: unknown };
-	if (record.type === "text" && typeof record.text === "string") return record.text;
-	if (record.type === "toolCall") {
-		const name = typeof record.name === "string" ? record.name : "tool";
-		let args = "";
-		try {
-			args = JSON.stringify(record.arguments ?? {});
-		} catch {
-			args = "<unserializable args>";
-		}
-		if (args.length > 400) args = `${args.slice(0, 400)}…`;
-		return `[tool call: ${name} ${args}]`;
-	}
-	if (record.type === "thinking") return "";
-	return "";
-}
-
-function messageText(message: SpanMessageShape): string {
-	const content = message.content;
-	if (typeof content === "string") return content;
-	if (Array.isArray(content)) {
-		return content
-			.map(blockToText)
-			.filter(part => part.length > 0)
-			.join("\n");
-	}
-	return "";
-}
-
-function roleLabel(message: SpanMessageShape): string {
-	const role = typeof message.role === "string" ? message.role : "unknown";
-	if (role === "custom" && typeof message.customType === "string") return `custom:${message.customType}`;
-	return role;
-}
+type SpanMessageShape = ContextMessageShape;
 
 /**
  * 在 branch 中定位一条 turn digest entry 并返回其 TurnDigest 负载。
@@ -107,36 +71,83 @@ export function findDigestEntry(
  * 把 digest 的 source 区间解压为有界文本转录。digest 不存在、类型不符或
  * source 区间不完整时返回 undefined(调用方给用户可解释的错误)。
  */
+function boundedOffset(value: number | undefined): number {
+	if (value === undefined || !Number.isFinite(value)) return 0;
+	return Math.max(0, Math.floor(value));
+}
+
+function renderMessages(
+	messages: SpanMessageShape[],
+	maxChars: number,
+	options: { paged: boolean; offset: number },
+): {
+	text: string;
+	truncated: boolean;
+	nextOffset?: number;
+} {
+	const sections: string[] = [];
+	for (const message of messages) {
+		const text = contextMessageText(message, { includeAttachments: true, includeError: true }).trim();
+		if (!text) continue;
+		sections.push(`── ${contextMessageRoleLabel(message)} ──\n${text}`);
+	}
+	const fullText = sections.join("\n\n");
+	if (options.paged) {
+		const start = Math.min(options.offset, fullText.length);
+		const end = Math.min(fullText.length, start + maxChars);
+		const page = fullText.slice(start, end);
+		return {
+			text: `${start > 0 ? "[… previous content omitted …]\n\n" : ""}${page}${end < fullText.length ? "\n\n[… more content available …]" : ""}`,
+			truncated: start > 0 || end < fullText.length,
+			nextOffset: end < fullText.length ? end : undefined,
+		};
+	}
+	if (fullText.length <= maxChars) return { text: fullText, truncated: false };
+	return {
+		text: `[… truncated: span exceeds ${maxChars} chars; oldest content dropped …]\n\n${fullText.slice(fullText.length - maxChars)}`,
+		truncated: true,
+	};
+}
+
+/** Expand either a persisted digest source span or a direct journal source ref. */
 export function expandDigestSpan(
 	branch: readonly ExpandableBranchEntry[],
 	digestEntryId: string,
-	options: { maxChars?: number } = {},
+	options: { maxChars?: number; offset?: number } = {},
 ): ContextExpandResult | undefined {
-	const digest = findDigestEntry(branch, digestEntryId);
-	if (!digest) return undefined;
-	const { fromEntryId, toEntryId } = digest.source;
-	const messages = extractSpanMessages(branch, fromEntryId, toEntryId) as SpanMessageShape[];
-	const maxChars = Math.max(1_000, options.maxChars ?? DEFAULT_EXPAND_MAX_CHARS);
-
-	const sections: string[] = [];
-	for (const message of messages) {
-		const text = messageText(message).trim();
-		if (!text) continue;
-		sections.push(`── ${roleLabel(message)} ──\n${text}`);
+	const sourceEntryId = parseContextSourceRef(digestEntryId);
+	let fromEntryId: string;
+	let toEntryId: string;
+	let messages: SpanMessageShape[];
+	if (sourceEntryId) {
+		const sourceEntry = branch.find(entry => entry.id === sourceEntryId);
+		if (!sourceEntry || (sourceEntry.type !== "message" && sourceEntry.type !== "custom_message")) return undefined;
+		fromEntryId = sourceEntryId;
+		toEntryId = sourceEntryId;
+		messages = extractSpanMessages(branch, sourceEntryId, sourceEntryId) as SpanMessageShape[];
+	} else {
+		const digest = findDigestEntry(branch, digestEntryId);
+		if (!digest) return undefined;
+		({ fromEntryId, toEntryId } = digest.source);
+		messages = extractSpanMessages(branch, fromEntryId, toEntryId) as SpanMessageShape[];
 	}
-	let text = sections.join("\n\n");
-	let truncated = false;
-	if (text.length > maxChars) {
-		// 截头留尾:区间尾部离当前工作更近,信息价值通常更高。
-		text = `[… truncated: span exceeds ${maxChars} chars; oldest content dropped …]\n\n${text.slice(text.length - maxChars)}`;
-		truncated = true;
-	}
+	const requestedMaxChars = options.maxChars ?? DEFAULT_EXPAND_MAX_CHARS;
+	const maxChars = Number.isFinite(requestedMaxChars)
+		? Math.min(DEFAULT_EXPAND_MAX_CHARS, Math.max(1_000, Math.floor(requestedMaxChars)))
+		: DEFAULT_EXPAND_MAX_CHARS;
+	const offset = boundedOffset(options.offset);
+	const rendered = renderMessages(messages, maxChars, {
+		paged: sourceEntryId !== undefined || options.offset !== undefined,
+		offset,
+	});
 	return {
 		digestEntryId,
 		fromEntryId,
 		toEntryId,
 		messageCount: messages.length,
-		truncated,
-		text,
+		truncated: rendered.truncated,
+		offset: sourceEntryId !== undefined || options.offset !== undefined ? offset : undefined,
+		nextOffset: rendered.nextOffset,
+		text: rendered.text,
 	};
 }

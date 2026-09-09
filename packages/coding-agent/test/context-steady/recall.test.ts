@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { buildContextSteadyRecallQuery, normalizeContextSteadyRecallItems } from "../../src/context-steady/recall";
+import {
+	buildContextSteadyRecallQuery,
+	normalizeContextSteadyRecallItems,
+	recallFromContextBranch,
+} from "../../src/context-steady/recall";
 import { isTextRelevantToPrompt } from "../../src/context-steady/relevance";
 import { TURN_DIGEST_CUSTOM_TYPE, TURN_DIGEST_SCHEMA_VERSION, type TurnDigest } from "../../src/context-steady/types";
 import type { SessionEntry } from "../../src/session/session-entries";
@@ -34,6 +38,16 @@ function digestEntry(id: string, data: TurnDigest): SessionEntry {
 		customType: TURN_DIGEST_CUSTOM_TYPE,
 		data,
 	};
+}
+
+function messageEntry(id: string, message: Record<string, unknown>): SessionEntry {
+	return {
+		type: "message",
+		id,
+		parentId: null,
+		timestamp: "2026-06-30T00:00:00.000Z",
+		message,
+	} as unknown as SessionEntry;
 }
 
 describe("Context steady recall quality helpers", () => {
@@ -131,5 +145,66 @@ describe("Context steady recall quality helpers", () => {
 	test("does not treat one-token CJK overlap as topic relevance", () => {
 		expect(isTextRelevantToPrompt("模型", "模型价格调研")).toBe(false);
 		expect(isTextRelevantToPrompt("上下文稳态", "上下文稳态验收报告")).toBe(true);
+	});
+
+	test("recalls matching raw tool results from real branch entries", () => {
+		const branch = [
+			messageEntry("old-failure", {
+				role: "toolResult",
+				toolCallId: "call-old",
+				toolName: "bash",
+				content: [{ type: "text", text: "FAIL E_PARSE_17: stale delimiter state" }],
+				isError: true,
+				timestamp: 1,
+			}),
+			messageEntry("current-prompt", {
+				role: "user",
+				content: [{ type: "text", text: "What caused E_PARSE_17 previously?" }],
+				timestamp: 2,
+			}),
+		];
+
+		expect(
+			recallFromContextBranch(branch, "What caused E_PARSE_17 previously?", {
+				maxItems: 3,
+				maxTokens: 1000,
+				currentEntryId: "current-prompt",
+			}),
+		).toEqual([
+			expect.objectContaining({
+				id: "old-failure",
+				source: "source:old-failure",
+				content: expect.stringContaining("stale delimiter state"),
+				memoryType: "context-journal",
+				scope: "branch-local",
+			}),
+		]);
+	});
+
+	test("uses digest context for thin continuation and ignores unrelated new tasks", () => {
+		const branch = [
+			messageEntry("old-failure", {
+				role: "toolResult",
+				toolCallId: "call-old",
+				toolName: "bash",
+				content: [{ type: "text", text: "E_PARSE_17 failed because delimiter state was stale" }],
+				isError: true,
+				timestamp: 1,
+			}),
+		];
+
+		expect(
+			recallFromContextBranch(branch, "continue", {
+				maxItems: 3,
+				maxTokens: 1000,
+				fallbackQuery: "Repair parser E_PARSE_17 and preserve delimiter state",
+			}),
+		).toEqual([expect.objectContaining({ source: "source:old-failure" })]);
+		expect(
+			recallFromContextBranch(branch, "Implement unrelated authentication middleware", {
+				maxItems: 3,
+				maxTokens: 1000,
+			}),
+		).toEqual([]);
 	});
 });

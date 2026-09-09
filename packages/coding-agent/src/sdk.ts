@@ -1830,6 +1830,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		};
 		const toolSession: ToolSession = {
+			...(settings.get("san.contextSteady.enabled") === true &&
+			!options.parentTaskPrefix &&
+			(options.taskDepth ?? 0) === 0
+				? {
+						expandContextDigest: (ref: string, expandOptions?: { maxChars?: number; offset?: number }) =>
+							session.expandContextDigest(ref, expandOptions),
+						searchContextHistory: (query: string, searchOptions?: { limit?: number; maxExcerptChars?: number }) =>
+							session.searchContextHistory(query, searchOptions),
+					}
+				: {}),
 			get cwd() {
 				return sessionManager.getCwd();
 			},

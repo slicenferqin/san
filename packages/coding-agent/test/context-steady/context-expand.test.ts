@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { expandDigestSpan } from "../../src/context-steady/expand";
+import { makeContextSourceRef, searchContextHistory } from "../../src/context-steady/history-search";
 import { buildContextPacket } from "../../src/context-steady/packet";
 import type { ContextPacketSettings, TurnDigest } from "../../src/context-steady/types";
 import { TURN_DIGEST_CUSTOM_TYPE, TURN_DIGEST_SCHEMA_VERSION } from "../../src/context-steady/types";
@@ -101,13 +102,52 @@ describe("expandDigestSpan", () => {
 		expect(result.text).not.toContain("please fix the login timeout");
 	});
 
-	test("returns undefined for unknown ids and non-digest entries", () => {
+	test("reads a direct source ref in bounded head pages", () => {
+		const branch = sampleBranch();
+		branch.push(
+			messageEntry("m5", {
+				role: "assistant",
+				content: `${"head-marker ".repeat(120)}middle-marker ${"tail-marker ".repeat(120)}`,
+				timestamp: 5,
+			}),
+		);
+		const first = expandDigestSpan(branch as unknown as Branch, makeContextSourceRef("m5"), { maxChars: 1_000 });
+		expect(first?.fromEntryId).toBe("m5");
+		expect(first?.offset).toBe(0);
+		expect(first?.text).toContain("head-marker");
+		expect(first?.nextOffset).toBeDefined();
+		const second = expandDigestSpan(branch as unknown as Branch, makeContextSourceRef("m5"), {
+			maxChars: 1_000,
+			offset: first?.nextOffset,
+		});
+		expect(second?.offset).toBe(first?.nextOffset);
+		expect(second?.text).toContain("middle-marker");
+	});
+
+	test("search hits can be expanded into the omitted exact failure", () => {
+		const branch = sampleBranch();
+		const search = searchContextHistory(
+			branch as unknown as Parameters<typeof searchContextHistory>[0],
+			"token refresh expired",
+		);
+		const hit = search.hits[0];
+		expect(hit?.ref).toBe(makeContextSourceRef("m3"));
+		const expanded = hit ? expandDigestSpan(branch as unknown as Branch, hit.ref) : undefined;
+		expect(expanded?.text).toContain("1 fail: token refresh expired");
+	});
+
+	test("retains a tool error field when content is empty", () => {
+		const branch = [messageEntry("error-entry", { role: "toolResult", error: "credential rejected by upstream" })];
+		const expanded = expandDigestSpan(branch as unknown as Branch, makeContextSourceRef("error-entry"));
+		expect(expanded?.text).toContain("credential rejected by upstream");
+	});
+
+	test("rejects direct refs for missing or metadata-only entries", () => {
 		const branch = sampleBranch() as unknown as Branch;
-		expect(expandDigestSpan(branch, "missing")).toBeUndefined();
-		expect(expandDigestSpan(branch, "m1")).toBeUndefined();
+		expect(expandDigestSpan(branch, "source:missing")).toBeUndefined();
+		expect(expandDigestSpan(branch, "source:d1")).toBeUndefined();
 	});
 });
-
 describe("context packet digest refs", () => {
 	test("renders each digest with its expandable entry ref", () => {
 		const settings: ContextPacketSettings = {
