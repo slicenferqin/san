@@ -768,6 +768,16 @@ async function spillLargeResultToArtifact(
 	const fullText = textParts.length === 1 ? textParts[0] : textParts.join("\n");
 	const totalBytes = Buffer.byteLength(fullText, "utf-8");
 	const totalTokens = countTokens(fullText);
+	const existingSource = existingMeta?.source;
+	const isSmallArtifactPage =
+		existingSource?.type === "internal" &&
+		existingSource.value.startsWith("artifact://") &&
+		totalTokens <= 512 &&
+		totalBytes <= config.threshold;
+	if (isSmallArtifactPage) {
+		reserveLogicalTurnTokens(context, totalTokens);
+		return result;
+	}
 	const turnRemaining = logicalTurnRemainingTokens(context, config.logicalTurnTokens);
 	const emergencyPreviewTokens = Math.min(config.previewTokens, 512);
 	const emergencyRemaining = logicalTurnEmergencyRemainingTokens(

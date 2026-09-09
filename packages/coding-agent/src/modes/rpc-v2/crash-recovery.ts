@@ -160,7 +160,7 @@ export async function assertNoForeignLiveSessionSettled(
 	await promise;
 	const second = await statJournal();
 	if (!second) return;
-	if (second.mtimeMs !== first.mtimeMs || Date.now() - second.mtimeMs < settleMs) {
+	if (second.mtimeMs !== first.mtimeMs || second.size !== first.size || Date.now() - second.mtimeMs < settleMs) {
 		throw new Error("SESSION_LOCKED");
 	}
 }
