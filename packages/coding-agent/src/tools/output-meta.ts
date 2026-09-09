@@ -775,6 +775,17 @@ async function spillLargeResultToArtifact(
 		config.logicalTurnTokens,
 		emergencyPreviewTokens,
 	);
+	const recoveryAllowance = Math.min(config.previewTokens, emergencyRemaining ?? 0);
+	const preservesSmallRecovery =
+		turnRemaining !== undefined &&
+		turnRemaining > 0 &&
+		totalTokens > turnRemaining &&
+		totalTokens <= recoveryAllowance &&
+		totalBytes <= config.threshold;
+	if (preservesSmallRecovery) {
+		reserveLogicalTurnTokens(context, totalTokens);
+		return result;
+	}
 	const visibleTokenLimit =
 		turnRemaining === undefined
 			? config.previewTokens

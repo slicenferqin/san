@@ -89,7 +89,7 @@ describe("centralized tool output budgets", () => {
 		expect(saved).toHaveLength(3);
 	});
 
-	test("keeps exhausted previews readable, bounded, and resets artifacts by scope", async () => {
+	test("caps exhausted previews across one scope and resets artifacts by scope", async () => {
 		const saved: string[] = [];
 		const sessionManager = {
 			saveArtifact: async (content: string) => {
@@ -122,8 +122,8 @@ describe("centralized tool output budgets", () => {
 		};
 
 		expect(bodyTokens(exhausted)).toBeGreaterThan(0);
-		expect(bodyTokens(repeated)).toBeGreaterThan(0);
-		expect(bodyTokens(repeated)).toBeLessThanOrEqual(512);
+		expect(bodyTokens(repeated)).toBe(0);
+		expect(bodyTokens(first) + bodyTokens(exhausted) + bodyTokens(repeated)).toBeLessThanOrEqual(532);
 		expect(exhausted.details?.meta?.truncation?.artifactId).toBe("artifact-2");
 		expect(repeated.details?.meta?.truncation?.artifactId).toBe("artifact-3");
 		expect(bodyTokens(reset)).toBe(bodyTokens(first));
