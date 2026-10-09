@@ -15,9 +15,10 @@ import {
 import type { ImageContent, TextContent } from "@san/ai";
 import { logger } from "@san/utils";
 import { getDefault, type Settings } from "../config/settings";
+import { withStagedProvenance } from "../edit/file-snapshot-store";
+import { parseInternalUrl } from "../internal-urls/parse";
 import { formatGroupedDiagnosticMessages } from "../lsp/utils";
 import type { Theme } from "../modes/theme/theme";
-import type { ReadonlySessionManager } from "../session/session-manager";
 import { type OutputSummary, type TruncationResult, truncateMiddle, truncateTail } from "../session/streaming-output";
 import { formatBytes, wrapBrackets } from "./render-utils";
 import { renderError } from "./tool-errors";
@@ -142,12 +143,12 @@ export class OutputMetaBuilder {
 		if (isMiddle) {
 			const elidedLines = result.elidedLines ?? Math.max(0, effectiveTotalLines - outputLines);
 			const elidedBytes = result.elidedBytes ?? Math.max(0, result.totalBytes - outputBytes);
-			// Reconstruct head/tail line ranges. The kept output spans the first
-			// `headLines` lines and the last `tailLines` lines of the source; lines
-			// in the middle (count == elidedLines) are dropped.
+			// Reconstruct head/tail line ranges. Producers that know their exact
+			// per-window split report it; the half/half guess only covers results
+			// whose byte budgets happened to be symmetric.
 			const keptLines = Math.max(0, outputLines - 1); // -1 for marker line
-			const headLines = Math.ceil(keptLines / 2);
-			const tailLines = keptLines - headLines;
+			const headLines = result.headLines ?? Math.ceil(keptLines / 2);
+			const tailLines = result.tailLines ?? keptLines - headLines;
 			this.#meta.truncation = {
 				direction: "middle",
 				truncatedBy: "middle",
@@ -207,10 +208,9 @@ export class OutputMetaBuilder {
 
 		// Middle elision: the sink retained head + tail with an elision marker.
 		if (summary.elidedBytes != null && summary.elidedBytes > 0) {
-			const elidedLines = summary.elidedLines ?? Math.max(0, totalLines - summary.outputLines);
 			const keptLines = Math.max(0, summary.outputLines - 1); // -1 for marker line
-			const headLines = Math.ceil(keptLines / 2);
-			const tailLines = keptLines - headLines;
+			const headLines = summary.headLines ?? Math.ceil(keptLines / 2);
+			const tailLines = summary.tailLines ?? keptLines - headLines;
 			this.#meta.truncation = {
 				direction: "middle",
 				truncatedBy: "middle",
@@ -221,7 +221,7 @@ export class OutputMetaBuilder {
 				headRange: headLines > 0 ? { start: 1, end: headLines } : undefined,
 				tailRange: tailLines > 0 ? { start: totalLines - tailLines + 1, end: totalLines } : undefined,
 				elidedBytes: summary.elidedBytes,
-				elidedLines,
+				elidedLines: Math.max(0, totalLines - summary.outputLines),
 				artifactId: summary.artifactId,
 			};
 			return this;
@@ -615,8 +615,7 @@ function getSpillConfig(s: Settings | undefined) {
 		| "tools.artifactTailBytes"
 		| "tools.artifactTailLines"
 		| "tools.artifactHeadBytes"
-		| "tools.outputPreviewTokens"
-		| "tools.logicalTurnOutputTokens";
+		| "tools.outputPreviewTokens";
 	const get = <P extends Path>(path: P) => s?.get(path) ?? getDefault(path);
 	return {
 		threshold: get("tools.artifactSpillThreshold") * 1024,
@@ -624,7 +623,6 @@ function getSpillConfig(s: Settings | undefined) {
 		tailLines: get("tools.artifactTailLines"),
 		headBytes: get("tools.artifactHeadBytes") * 1024,
 		previewTokens: Math.max(1, Math.floor(get("tools.outputPreviewTokens"))),
-		logicalTurnTokens: Math.max(0, Math.floor(get("tools.logicalTurnOutputTokens"))),
 	};
 }
 
@@ -646,61 +644,9 @@ export function resolveOutputMaxColumns(s: Settings | undefined): number {
 	return s?.get("tools.outputMaxColumns") ?? getDefault("tools.outputMaxColumns");
 }
 
-interface LogicalTurnOutputState {
-	scopeId: string;
-	spentTokens: number;
-}
-
 interface VisibleTruncation {
 	result: TruncationResult;
 	maxBytes: number;
-}
-
-const logicalTurnOutput = new WeakMap<ReadonlySessionManager, LogicalTurnOutputState>();
-
-function logicalTurnRemainingTokens(
-	context: AgentToolContext | undefined,
-	configuredLimit: number,
-): number | undefined {
-	const sessionManager = context?.sessionManager;
-	const scopeId = context?.executionScopeId;
-	if (!sessionManager || !scopeId || configuredLimit === 0) return undefined;
-	const contextWindow = context.model?.contextWindow ?? undefined;
-	const windowLimit = contextWindow === undefined ? configuredLimit : Math.max(1, Math.floor(contextWindow * 0.2));
-	const limit = Math.min(configuredLimit, windowLimit);
-	let state = logicalTurnOutput.get(sessionManager);
-	if (!state || state.scopeId !== scopeId) {
-		state = { scopeId, spentTokens: 0 };
-		logicalTurnOutput.set(sessionManager, state);
-	}
-	return Math.max(0, limit - state.spentTokens);
-}
-
-function logicalTurnEmergencyRemainingTokens(
-	context: AgentToolContext | undefined,
-	configuredLimit: number,
-	emergencyLimit: number,
-): number | undefined {
-	const sessionManager = context?.sessionManager;
-	const scopeId = context?.executionScopeId;
-	if (!sessionManager || !scopeId || configuredLimit === 0) return undefined;
-	const contextWindow = context.model?.contextWindow ?? undefined;
-	const windowLimit = contextWindow === undefined ? configuredLimit : Math.max(1, Math.floor(contextWindow * 0.2));
-	const limit = Math.min(configuredLimit, windowLimit);
-	const state = logicalTurnOutput.get(sessionManager);
-	const spentTokens = state?.scopeId === scopeId ? state.spentTokens : 0;
-	return Math.max(0, limit + emergencyLimit - spentTokens);
-}
-function reserveLogicalTurnTokens(context: AgentToolContext | undefined, tokens: number): void {
-	const sessionManager = context?.sessionManager;
-	const scopeId = context?.executionScopeId;
-	if (!sessionManager || !scopeId || tokens <= 0) return;
-	let state = logicalTurnOutput.get(sessionManager);
-	if (!state || state.scopeId !== scopeId) {
-		state = { scopeId, spentTokens: 0 };
-		logicalTurnOutput.set(sessionManager, state);
-	}
-	state.spentTokens += tokens;
 }
 
 function truncateResultToVisibleBudget(
@@ -768,43 +714,9 @@ async function spillLargeResultToArtifact(
 	const fullText = textParts.length === 1 ? textParts[0] : textParts.join("\n");
 	const totalBytes = Buffer.byteLength(fullText, "utf-8");
 	const totalTokens = countTokens(fullText);
-	const existingSource = existingMeta?.source;
-	const isSmallArtifactPage =
-		existingSource?.type === "internal" &&
-		existingSource.value.startsWith("artifact://") &&
-		totalTokens <= 512 &&
-		totalBytes <= config.threshold;
-	if (isSmallArtifactPage) {
-		reserveLogicalTurnTokens(context, totalTokens);
-		return result;
-	}
-	const turnRemaining = logicalTurnRemainingTokens(context, config.logicalTurnTokens);
-	const emergencyPreviewTokens = Math.min(config.previewTokens, 512);
-	const emergencyRemaining = logicalTurnEmergencyRemainingTokens(
-		context,
-		config.logicalTurnTokens,
-		emergencyPreviewTokens,
-	);
-	const recoveryAllowance = Math.min(config.previewTokens, emergencyRemaining ?? 0);
-	const preservesSmallRecovery =
-		turnRemaining !== undefined &&
-		turnRemaining > 0 &&
-		totalTokens > turnRemaining &&
-		totalTokens <= recoveryAllowance &&
-		totalBytes <= config.threshold;
-	if (preservesSmallRecovery) {
-		reserveLogicalTurnTokens(context, totalTokens);
-		return result;
-	}
-	const visibleTokenLimit =
-		turnRemaining === undefined
-			? config.previewTokens
-			: turnRemaining > 0
-				? Math.min(config.previewTokens, turnRemaining)
-				: Math.min(config.previewTokens, emergencyRemaining ?? 0);
+	const visibleTokenLimit = config.previewTokens;
 	const exceedsBudget = totalBytes > config.threshold || totalTokens > visibleTokenLimit;
 	if (!exceedsBudget) {
-		reserveLogicalTurnTokens(context, totalTokens);
 		return result;
 	}
 
@@ -816,9 +728,22 @@ async function spillLargeResultToArtifact(
 		tailLines: config.tailLines,
 	});
 	const truncated = visible.result;
-	reserveLogicalTurnTokens(context, countTokens(truncated.content));
 
 	let artifactId = existingArtifactId;
+	if (
+		!artifactId &&
+		toolName === "read" &&
+		!("isError" in result && result.isError === true) &&
+		existingMeta?.source?.type === "internal"
+	) {
+		try {
+			const source = parseInternalUrl(existingMeta.source.value);
+			const id = source.rawHost || source.hostname;
+			if (source.protocol === "artifact:" && /^\d+$/.test(id)) artifactId = id;
+		} catch {
+			// Unrecognized source metadata cannot establish a recovery reference.
+		}
+	}
 	if (!artifactId) {
 		try {
 			artifactId = await sessionManager.saveArtifact(fullText, toolName);
@@ -829,6 +754,7 @@ async function spillLargeResultToArtifact(
 			});
 		}
 	}
+	if (!artifactId) return result;
 
 	const newContent: (TextContent | ImageContent)[] = [];
 	let insertedPreview = false;
@@ -858,14 +784,13 @@ async function spillLargeResultToArtifact(
 			elidedLines: Math.max(0, priorTruncation.totalLines - outputLines),
 			elidedBytes: Math.max(0, priorTruncation.totalBytes - outputBytes),
 			artifactId,
-			nextOffset: priorTruncation.nextOffset,
 		};
 	} else if (truncated.truncatedBy === "middle") {
 		const elidedLines = truncated.elidedLines ?? Math.max(0, truncated.totalLines - outputLines);
 		const elidedBytes = truncated.elidedBytes ?? Math.max(0, truncated.totalBytes - outputBytes);
 		const keptLines = Math.max(0, outputLines - 1);
-		const headLines = Math.ceil(keptLines / 2);
-		const tailLineCount = keptLines - headLines;
+		const headLines = truncated.headLines ?? Math.ceil(keptLines / 2);
+		const tailLineCount = truncated.tailLines ?? keptLines - headLines;
 		truncationMeta = {
 			direction: "middle",
 			truncatedBy: "middle",
@@ -918,18 +843,48 @@ async function wrappedExecute(
 	const originalExecute = this[kUnwrappedExecute];
 
 	try {
-		let result = await originalExecute.call(this, toolCallId, params, signal, onUpdate, context);
-
-		// Spill large results to artifact, truncate to tail
-		result = await spillLargeResultToArtifact(result, this.name, context);
+		// Producers stage the lines they displayed instead of recording them:
+		// only after the spill below has decided what the model actually
+		// receives can a displayed line be called seen. The scope is committed
+		// by handle once it has exited: the delivered text is not known until
+		// the producer's output comes back, and the commit must not depend on
+		// the async context still being active.
+		const provenance = withStagedProvenance(async () => {
+			const produced = await originalExecute.call(this, toolCallId, params, signal, onUpdate, context);
+			// Spill large results to artifact, truncate to tail
+			const spilled = await spillLargeResultToArtifact(produced, this.name, context);
+			return { produced, spilled };
+		});
+		const { produced, spilled } = await provenance.result;
+		// Pre-notice text: the notice appended below is a generated footer, never
+		// a line of the body the producer claimed to have displayed.
+		let deliveredText = "";
+		for (const block of spilled.content) {
+			if (block.type === "text" && block.text) deliveredText += (deliveredText ? "\n" : "") + block.text;
+		}
+		let result = spilled;
 
 		// Append notices from meta
 		const meta: OutputMeta | undefined = result.details?.meta;
 		if (meta) {
-			return {
+			result = {
 				...result,
 				content: appendOutputNotice(result.content, meta),
 			};
+		}
+		if (provenance.isRoot && context?.deferOutputProvenance) {
+			const publishedText =
+				result === spilled
+					? deliveredText
+					: result.content
+							.filter(block => block.type === "text")
+							.map(block => block.text)
+							.join("\n");
+			context.deferOutputProvenance(toolCallId, finalText =>
+				provenance.commit(finalText, spilled === produced && finalText === publishedText),
+			);
+		} else {
+			provenance.commit(deliveredText, spilled === produced);
 		}
 		return result;
 	} catch (e) {

@@ -366,7 +366,7 @@ export interface ExecutionScopeSnapshot extends ExecutionScopeIdentity {
 	readonly supervisorDecisions: readonly SupervisorDecisionRef[];
 	readonly requests: readonly ExecutionRequestFact[];
 	readonly progress: readonly ProgressObservation[];
-	/** 本快照包含的记录身份集合，用于压缩后重放。 */
+	/** 本快照已覆盖的近端记录身份窗口（压缩/重放按 revision 判定覆盖，不依赖全集）。 */
 	readonly recordIds: readonly string[];
 	readonly updatedAt: string;
 }

@@ -6,6 +6,10 @@
 
 - Renamed the published package from `@oh-my-pi/hashline` to `@san/hashline`; consumers must update package dependencies and imports.
 
+### Fixed
+
+- 修复旧文件快照恢复绕过已读行校验的问题；恢复定位前验证原始锚点是否完整展示。
+
 ## [17.0.0] - 2026-07-15
 
 ### Added

@@ -8,11 +8,18 @@ import emergencyStubTemplate from "../prompts/context-steady/emergency-stub.md" 
 import offloadedImageTemplate from "../prompts/context-steady/offloaded-image.md" with { type: "text" };
 import supersededEditStubTemplate from "../prompts/context-steady/superseded-edit-stub.md" with { type: "text" };
 import type { CustomMessageEntry, SessionEntry, SessionMessageEntry } from "../session/session-entries";
+import { truncateHeadBytes } from "../session/streaming-output";
 import { validateContextPlanCoverage } from "./coverage";
 import { projectDigestTier } from "./decay";
 import type { BuiltContextPlan, ContextPlanMaterial, ContextPlanToolStubMaterial } from "./plan-types";
 import { CONTEXT_PLAN_MESSAGE_TYPE } from "./plan-types";
-import { CONTEXT_PACKET_MESSAGE_TYPE, CONTEXT_RECALL_MESSAGE_TYPE, type ContextPacketRecallLayer } from "./types";
+import { toolResultFullText } from "./source-index";
+import {
+	CONTEXT_CONTINUATION_MESSAGE_TYPE,
+	CONTEXT_PACKET_MESSAGE_TYPE,
+	CONTEXT_RECALL_MESSAGE_TYPE,
+	type ContextPacketRecallLayer,
+} from "./types";
 
 const DIGEST_PRUNABLE_CUSTOM_MESSAGE_TYPES: Record<string, true> = { "image-attachment-description": true };
 
@@ -296,6 +303,7 @@ export function buildContextRecallMessage(recall: ContextPacketRecallLayer): Age
 }
 
 function isToolStubMaterial(material: ContextPlanMaterial): material is ContextPlanToolStubMaterial {
+	// toolPair 材料也带 resultEntryId,身份判据必须是 stub 独有的 toolCallId。
 	return "toolCallId" in material && "resultEntryId" in material;
 }
 
@@ -337,22 +345,41 @@ function toolStubTargets(branchEntries: readonly SessionEntry[], stubs: readonly
 	return { byRef, byKey };
 }
 
-function substituteToolStub(message: AgentMessage, stub: ContextPlanToolStubMaterial): AgentMessage {
+export function substituteToolStub(message: AgentMessage, stub: ContextPlanToolStubMaterial): AgentMessage | undefined {
+	// 恢复入口是替换的前提:没有可读回原文的 artifact 时必须保留原始结果。
+	// stub 只能换掉"还能读回"的输出;否则宁可占上下文,也不能让模型永久丢失
+	// 这条结果(以及它携带的文件快照/命令输出)。宿主保证引用可读才写入。
+	if (!stub.recovery || message.role !== "toolResult") return undefined;
 	const template =
 		stub.stubKind === "emergency"
 			? emergencyStubTemplate
-			: stub.stubKind === "aged" || stub.stubKind === "duplicate"
+			: stub.stubKind === "aged" || stub.stubKind === "duplicate" || stub.stubKind === "preview"
 				? agedOutputStubTemplate
 				: supersededEditStubTemplate;
-	const text = prompt.render(template, { tool: stub.toolName, path: stub.path }).trim();
+	const preview =
+		stub.stubKind === "preview" && stub.previewBytes !== undefined
+			? `${truncateHeadBytes(toolResultFullText(message), Math.max(0, stub.previewBytes - 3)).text}…`
+			: undefined;
+	const text = prompt
+		.render(template, {
+			tool: stub.toolName,
+			path: stub.path,
+			artifactId: stub.recovery.artifactId,
+			preview,
+			// 原始结果自身的失败状态(截断是另一回事),取消息本身而不是计划期快照。
+			failed: "isError" in message ? message.isError === true : false,
+		})
+		.trim();
 	return {
 		...message,
-		content: [{ type: "text", text }],
+		content: [{ type: "text", text }, ...message.content.filter(block => block.type !== "text")],
 		// 原 details 可能携带完整 diff;替换为最小降级标记。
 		details: {
-			superseded: true,
+			...(stub.stubKind === "preview" ? { previewed: true } : { superseded: true }),
+			resultEntryId: stub.resultEntryId,
 			...(stub.stubKind ? { stubKind: stub.stubKind } : {}),
 			...(stub.path ? { path: stub.path } : {}),
+			recovery: stub.recovery,
 		},
 	} as AgentMessage;
 }
@@ -386,6 +413,7 @@ export function materializeContextPlanMessages(
 		return !consumeCount(messageKeys, messageKey) && !consumeCount(customKeys, customKey);
 	});
 	// 省略(coverage)先行,替换(stub)后行:已被省略的消息不需要 stub。
+	// 无恢复入口的 stub 保持原样 —— 替换是降低占用,不是丢弃输出。
 	const substituted =
 		stubs.length === 0
 			? projected
@@ -393,7 +421,7 @@ export function materializeContextPlanMessages(
 					const stub =
 						stubTargets.byRef.get(message) ??
 						(message.role === "toolResult" ? stubTargets.byKey.get(sessionMessageKey(message) ?? "") : undefined);
-					return stub ? substituteToolStub(message, stub) : message;
+					return (stub && substituteToolStub(message, stub)) || message;
 				});
 	// Image offload: projection-only content substitution. The current turn
 	// (last user message onward) keeps its images verbatim; earlier image
@@ -455,6 +483,7 @@ function estimateProjectedMessage(message: AgentMessage, estimate: (message: Age
 
 /** Journal custom_message types that are derived injections, not projectable sources. */
 const DERIVED_INJECTION_CUSTOM_TYPES: Record<string, true> = {
+	[CONTEXT_CONTINUATION_MESSAGE_TYPE]: true,
 	[CONTEXT_PACKET_MESSAGE_TYPE]: true,
 	[CONTEXT_PLAN_MESSAGE_TYPE]: true,
 	[CONTEXT_RECALL_MESSAGE_TYPE]: true,

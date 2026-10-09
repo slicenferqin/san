@@ -8,6 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { materializeContextPlanMessages } from "../../src/context-steady/materialize";
+import type { ContextPlanToolStubRecovery } from "../../src/context-steady/plan-types";
 import { buildContextPlan } from "../../src/context-steady/planner";
 import { buildContextSourceIndex } from "../../src/context-steady/source-index";
 
@@ -17,6 +18,14 @@ const SETTINGS = {
 	planMaxTokens: 240_000,
 	burstWindowTokens: 320_000,
 };
+
+/**
+ * Host-confirmed recovery for `r1`. The contract requires a readable original
+ * before a stub may replace it; without this map the result stays verbatim.
+ */
+const RECOVERY: ReadonlyMap<string, ContextPlanToolStubRecovery> = new Map([
+	["r1", { kind: "artifact", artifactId: "7", source: "captured" }],
+]);
 
 function messageEntry(id: string, message: Record<string, unknown>): Record<string, unknown> {
 	return { type: "message", id, parentId: null, timestamp: new Date().toISOString(), message };
@@ -133,6 +142,7 @@ describe("plan materialization with tool stubs", () => {
 			contextWindow: 500_000,
 			nonMessageTokens: 20_000,
 			currentPromptEntryRefs: ["u2"],
+			toolStubRecovery: RECOVERY,
 		});
 
 		const stubAudits = plan.audit.materials.filter(material => material.materialId.startsWith("tool_stub_"));
@@ -148,6 +158,18 @@ describe("plan materialization with tool stubs", () => {
 		const substituted = projected.find(message => message.role === "toolResult" && message.toolCallId === "tc-1");
 		expect(substituted).toBeDefined();
 		const substitutedText = JSON.stringify(substituted);
+		// Identity survives the replacement: the model can still map the stub
+		// back to the recorded call and its journal entry.
+		const stubMessage = substituted as unknown as {
+			toolCallId: string;
+			details: { resultEntryId?: string; recovery?: ContextPlanToolStubRecovery };
+		};
+		expect(stubMessage.toolCallId).toBe("tc-1");
+		expect(stubMessage.details.resultEntryId).toBe("r1");
+		// The replacement carries the host-confirmed reference, not a re-readable
+		// current path: the historical bytes are reachable only through it.
+		expect(substitutedText).toContain("artifact://7");
+		expect(stubMessage.details.recovery).toEqual({ kind: "artifact", artifactId: "7", source: "captured" });
 		expect(substitutedText).toContain("superseded");
 		expect(substitutedText).toContain("src/app.ts");
 		expect(substitutedText).not.toContain("edited v1 intermediate diff");
@@ -170,6 +192,7 @@ describe("plan materialization with tool stubs", () => {
 			contextWindow: 500_000,
 			nonMessageTokens: 20_000,
 			currentPromptEntryRefs: ["u2"],
+			toolStubRecovery: RECOVERY,
 		});
 		const cloned = (messages as unknown as Record<string, unknown>[]).map(message => ({
 			...message,
@@ -177,6 +200,34 @@ describe("plan materialization with tool stubs", () => {
 		const projected = materializeContextPlanMessages(cloned, entries, plan);
 		const substituted = projected.find(message => message.role === "toolResult" && message.toolCallId === "tc-1");
 		expect(JSON.stringify(substituted)).toContain("superseded");
+		// The historical snapshot stays reachable from the replacement itself.
+		expect(JSON.stringify(substituted)).toContain("artifact://7");
+		expect(JSON.stringify(substituted)).not.toContain("edited v1 intermediate diff");
+	});
+
+	test("keeps the superseded result verbatim when no recoverable original exists", () => {
+		const { entries, messages } = scenario();
+		const plan = buildContextPlan({
+			entries,
+			sessionId: "s1",
+			requestKey: "r1",
+			epochId: "e1",
+			promptGeneration: 2,
+			settings: SETTINGS,
+			contextWindow: 500_000,
+			nonMessageTokens: 20_000,
+			currentPromptEntryRefs: ["u2"],
+		});
+		// The stub material is still planned (the downgrade is a representation
+		// choice), but without a recovery reference materialization must not
+		// replace the message: the output would be lost permanently.
+		expect(plan.materials.some(material => "resultEntryId" in material && material.recovery === undefined)).toBe(
+			true,
+		);
+		const projected = materializeContextPlanMessages(messages, entries, plan);
+		const kept = projected.find(message => message.role === "toolResult" && message.toolCallId === "tc-1");
+		expect(JSON.stringify(kept)).toContain("edited v1 intermediate diff");
+		expect(JSON.stringify(kept)).not.toContain("superseded");
 	});
 
 	test("protected entries are never stubbed", () => {

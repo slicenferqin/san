@@ -331,11 +331,11 @@ describe("read → edit seen-line guard", () => {
 		expect(await Bun.file(file).text()).toBe(`${lines.join("\n")}\n`);
 	});
 
-	it("marks column-clipped read lines as seen (clipped-line check removed)", async () => {
-		// A 4KB single line — the read tool's column cap (default 512 chars)
-		// clips this into `<prefix>…` in the numbered output. The clipped-line
-		// exclusion was removed, so the displayed line counts as seen and a
-		// follow-up edit anchored there applies even with the guard enabled.
+	it("refuses an anchor on a column-clipped row and takes a hashline re-read instead", async () => {
+		// A 4KB single line — the read tool's column cap clips it to `<prefix>…`
+		// in the numbered output. The row proves the line number was displayed,
+		// never its content, so it must stay unauthorized and the hunk must
+		// instead be anchored on the re-read that emits the full line.
 		const file = path.join(tmpDir, "wide.txt");
 		const wide = "a".repeat(4096);
 		const content = `head\n${wide}\nfoot\n`;
@@ -346,10 +346,12 @@ describe("read → edit seen-line guard", () => {
 		const tag = tagFromOutput(resultText(read));
 
 		const seen = getFileSnapshotStore(session).byHash(canonicalSnapshotKey(file), tag)?.seenLines;
-		expect(seen?.has(2)).toBe(true);
+		expect(seen?.has(2) ?? false).toBe(false);
 
-		await executeHashlineSingle(execOptions(`[wide.txt#${tag}]\nSWAP 2.=2:\n+REPLACED`, session));
-		expect(await Bun.file(file).text()).toBe("head\nREPLACED\nfoot\n");
+		await expect(
+			executeHashlineSingle(execOptions(`[wide.txt#${tag}]\nSWAP 2.=2:\n+REPLACED`, session)),
+		).rejects.toThrow(/never displayed/);
+		expect(await Bun.file(file).text()).toBe(content);
 	});
 });
 

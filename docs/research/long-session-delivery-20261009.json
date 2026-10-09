@@ -1,0 +1,59 @@
+{
+  "date": "2026-10-09",
+  "baseCommit": "288738c2b62ec69e11310f871623f6f376443fe5",
+  "checks": {
+    "typescriptAndBiome": "passed",
+    "codingAgent": {
+      "pass": 844,
+      "fail": 0,
+      "files": 84
+    },
+    "agent": {
+      "pass": 381,
+      "fail": 0
+    },
+    "utils": {
+      "pass": 481,
+      "fail": 0
+    },
+    "hashline": {
+      "pass": 228,
+      "fail": 0
+    },
+    "fullBinaryBuild": "passed",
+    "binaryWorkerSmoke": "passed",
+    "sourceWorkerSmoke": "passed"
+  },
+  "projection": {
+    "fixtureBytes": 95489854,
+    "runtimeEntries": 74015,
+    "beforeMs": [
+      3667.6483340000004,
+      2449.5150830000002,
+      2359.788125
+    ],
+    "afterMs": [
+      1622.7324579999997,
+      1199.8309590000003,
+      1197.5359999999996
+    ],
+    "beforeSampledRssBytes": 2674966528,
+    "afterSampledRssBytes": 1855815680,
+    "afterOrphanReports": 0,
+    "remainingDiagnostic": "oversized legacy runtime uses full journal recovery"
+  },
+  "resume": {
+    "fixtureBytes": 30130744,
+    "contextEquivalent": true,
+    "fullOpenMs": 96.40008400000002,
+    "snapshotOpenMs": 144.40912500000002
+  },
+  "binarySha256": "f82604f3151a174794b90f21c6f83bce7e91ffb303dd9f26dbdf14fbd0833f2f",
+  "limits": [
+    "No live model calls: provider requests used a mock.",
+    "No Rust source changes; Rust tests were not rerun.",
+    "Oversized legacy execution journals can still exceed the 16 MiB resume cache cap.",
+    "Project contextPlan setting remains disabled; this change does not establish a latency bound for arbitrary sessions.",
+    "Unrelated model beta changes, prompts, project configuration, old research, and development probes remain outside this delivery."
+  ]
+}

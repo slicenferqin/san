@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Added
+- 增加会话恢复快照和日志尾部重放；保留完整历史，快照失效时使用完整日志恢复。
+- Added resume runtime projection (`selectResumeRuntimeEntries`): resumed sessions rehydrate from a compact branch — compaction-archived messages and execution-start markers drop while settings, customs, and the retained region pass through, and the execution-scope journal folds covered events into their newest snapshot — rebuilding identical context messages, pending-call state, and ledger/registry state from the full branch.
+- Added `nowMs` to `ExecutionRuntimeOptions`, threading a numeric clock into per-scope schedulers and their internal watchdog so decision timestamps (strategy issuance, leases) are controllable and deterministic in tests instead of implicitly reading the wall clock.
+- Added `SAN_TRACE_STRUCTURED_CLONE=1` to capture JavaScript callsites before native cloning, retaining up to 128 KiB of local diagnostics per process/thread for Bun crash investigation without logging cloned values.
 - Added append-only, source-linked working notes to context-steady projections, with stable cross-turn revisions and mutation-triggered revalidation of stale tool observations.
 - Added bounded branch-local automatic recall over the active session journal, merged with configured memory results and available when the external memory backend is disabled.
 
@@ -14,6 +18,10 @@
 
 ### Fixed
 
+- 移除累计轮输出额度对新工具结果的裁剪，保留单次输出上限、原文恢复和配置迁移；安全编辑只认可最终完整交付的文件行。
+- 修复检查点来源引用校验的平方级扫描，以及内部续作状态被误报为丢失对话内容的问题。
+- 超限恢复快照在深拷贝前拒绝保存，保留之前可用的快照和完整会话日志，避免反复复制及写入无法保存的状态。
+- Fixed the execution-scope ledger cloning its entire snapshot with `structuredClone` on every append: snapshots now share frozen subgraphs, `recordIds` keeps a bounded recent window (revision monotonicity covers replay), and in-memory records retain a bounded tail — eliminating quadratic clone cost and multi-gigabyte memory peaks in long subagent sessions.
 - Split Context Steady history, recall, message projection, and tool-observation state out of `AgentSession`; fixed hidden metadata leakage, stale frozen notes, backend/local recall starvation, structured-query punctuation, evolving note revisions, and logical-turn preview overrun.
 - Kept tool results readable when the shared output allowance is nearly exhausted, preserving bounded artifact paging instead of empty previews.
 - Fixed context working notes being mixed into the current objective instead of rendered separately; preserved note supersession and kept generated method descriptions non-authoritative. Note-write failures no longer mark an already persisted turn digest as failed.

@@ -20,6 +20,7 @@ import {
 	setProjectDir,
 	VERSION,
 } from "@san/utils";
+import { installStructuredCloneTracing } from "@san/utils/structured-clone-trace";
 import chalk from "chalk";
 import { reset as resetCapabilities } from "./capability";
 import { type Args, reportUnrecognizedFlags } from "./cli/args";
@@ -1004,7 +1005,7 @@ export async function createSessionManager(
 	// overriding them with CLI defaults.
 	if (activeSettings.get("autoResume")) {
 		const manager = await SessionManager.continueRecent(cwd, parsed.sessionDir);
-		if (manager.getEntries().length > 0) {
+		if (manager.getRuntimeEntries().length > 0) {
 			parsed.continue = true;
 		}
 		return manager;
@@ -1316,6 +1317,7 @@ export async function runRootCommand(
 	rawArgs: string[],
 	deps: RunRootCommandDependencies = DEFAULT_RUN_ROOT_DEPENDENCIES,
 ): Promise<void> {
+	if (process.env.SAN_TRACE_STRUCTURED_CLONE === "1") installStructuredCloneTracing();
 	logger.startTiming();
 	startStartupWatchdog();
 
@@ -1573,7 +1575,7 @@ export async function runRootCommand(
 	}
 
 	if (sessionManager && (parsedArgs.continue || parsedArgs.resume || parsedArgs.fork)) {
-		const pendingToolWarning = describePendingToolCalls(sessionManager.getBranch());
+		const pendingToolWarning = describePendingToolCalls(sessionManager.getRuntimeBranch());
 		if (pendingToolWarning) {
 			logger.warn("Resumed session has pending tool calls", {
 				sessionId: sessionManager.getSessionId(),

@@ -727,25 +727,6 @@ export const SETTINGS_SCHEMA = {
 			],
 		},
 	},
-	"tools.logicalTurnOutputTokens": {
-		type: "number",
-		default: 32_000,
-		ui: {
-			audience: "expert",
-			tab: "tools",
-			group: "Output Limits",
-			label: "Logical Turn Tool Output Tokens",
-			description:
-				"Shared provider-visible token budget across tool results in one logical turn; also capped at 20% of the model context window",
-			options: [
-				{ value: "0", label: "Off", description: "Disable the shared turn cap" },
-				{ value: "8000", label: "8K", description: "Tight" },
-				{ value: "16000", label: "16K" },
-				{ value: "32000", label: "32K", description: "Default" },
-				{ value: "64000", label: "64K", description: "Loose" },
-			],
-		},
-	},
 	"tools.artifactSpillThreshold": {
 		type: "number",
 		default: 50,

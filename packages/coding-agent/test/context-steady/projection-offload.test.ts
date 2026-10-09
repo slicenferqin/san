@@ -85,6 +85,9 @@ describe("M4 projection offload", () => {
 				["r2", 3000],
 			]),
 			toolOutputOffload: { minTokens: 2000 },
+			toolStubRecovery: new Map([
+				["r1", { kind: "artifact" as const, artifactId: "11", source: "captured" as const }],
+			]),
 		});
 
 		const aged = plan.materials.filter(material => "stubKind" in material && material.stubKind === "aged");
@@ -93,7 +96,7 @@ describe("M4 projection offload", () => {
 
 		const projected = materializeContextPlanMessages(messages, entries, plan);
 		const text = JSON.stringify(projected);
-		expect(text).toContain("earlier read output withheld");
+		expect(text).toContain("[earlier read output elided to save context]");
 		expect(text).toContain("old.txt");
 		expect(text).not.toContain("old file body");
 		// Protected recent output ships verbatim.
@@ -129,6 +132,9 @@ describe("M4 projection offload", () => {
 			tokenEstimateByEntryRef: new Map([
 				["r1", 3000],
 				["r2", 3000],
+			]),
+			toolStubRecovery: new Map([
+				["r1", { kind: "artifact" as const, artifactId: "12", source: "captured" as const }],
 			]),
 		};
 
@@ -190,6 +196,9 @@ describe("M4 projection offload", () => {
 				["r2", 1_000],
 			]),
 			toolOutputOffload: { minTokens: 2_000 },
+			toolStubRecovery: new Map([
+				["r1", { kind: "artifact" as const, artifactId: "13", source: "captured" as const }],
+			]),
 		});
 
 		expect(

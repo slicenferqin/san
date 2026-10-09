@@ -11,7 +11,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { materializeContextPlanMessages } from "../../src/context-steady/materialize";
-import type { ContextSourceIndex } from "../../src/context-steady/plan-types";
+import type { ContextPlanToolStubRecovery, ContextSourceIndex } from "../../src/context-steady/plan-types";
 import { buildContextPlan } from "../../src/context-steady/planner";
 import { evaluateContextPlanQualityGate } from "../../src/context-steady/quality-gate";
 
@@ -221,6 +221,11 @@ describe("plan-level emergency stubbing", () => {
 			currentPromptEntryRefs: ["u2"],
 			tokenEstimateByEntryRef: new Map([["r1", 60_000]]),
 			projectedInputTokens: 130_000,
+			// The host confirms a readable original before the downgrade; without
+			// it the planner keeps the result verbatim (see the companion test).
+			toolStubRecovery: new Map([
+				["r1", { kind: "artifact" as const, artifactId: "412", source: "captured" as const }],
+			]),
 		});
 		expect(plan.audit.qualityGate.reasons).toContain("emergency_tool_stub_downgrade");
 		const stubAudit = plan.audit.materials.find(material => material.materialId === "tool_stub_r1");
@@ -232,8 +237,76 @@ describe("plan-level emergency stubbing", () => {
 			plan,
 		);
 		const substituted = projected.find(message => message.role === "toolResult" && message.toolCallId === "tc-1");
+		expect(substituted).toBeDefined();
 		const text = JSON.stringify(substituted);
 		expect(text).toContain("elided under context pressure");
 		expect(text).not.toContain("huge old bash output");
+		// The pressure stub is only legal because the host confirmed a readable
+		// original; the replacement must carry that reference back.
+		const stubMessage = substituted as unknown as {
+			toolCallId: string;
+			details: { resultEntryId?: string; recovery?: ContextPlanToolStubRecovery };
+		};
+		expect(stubMessage.toolCallId).toBe("tc-1");
+		expect(stubMessage.details.resultEntryId).toBe("r1");
+		expect(stubMessage.details.recovery).toEqual({ kind: "artifact", artifactId: "412", source: "captured" });
+		expect(text).toContain("artifact://412");
+	});
+
+	test("keeps the original result when the host confirms no recoverable original", () => {
+		const user = { role: "user", content: "long session", timestamp: 1 };
+		const call = {
+			role: "assistant",
+			content: [{ type: "toolCall", id: "tc-1", name: "bash", arguments: { command: "bun test" } }],
+			timestamp: 2,
+		};
+		const result = {
+			role: "toolResult",
+			toolCallId: "tc-1",
+			toolName: "bash",
+			content: [{ type: "text", text: "huge old bash output" }],
+			timestamp: 3,
+		};
+		const currentUser = { role: "user", content: "current prompt", timestamp: 9 };
+		const entries = [
+			messageEntry("u1", user),
+			messageEntry("a1", call),
+			messageEntry("r1", result),
+			messageEntry("u2", currentUser),
+		] as unknown as PlanEntries;
+		const plan = buildContextPlan({
+			entries,
+			sessionId: "s1",
+			requestKey: "r1",
+			epochId: "e1",
+			promptGeneration: 2,
+			settings: {
+				qualityWindowTokens: 100_000,
+				reserveRatio: 0.2,
+				planMaxTokens: 100_000,
+				burstWindowTokens: 120_000,
+			},
+			contextWindow: 200_000,
+			nonMessageTokens: 10_000,
+			currentPromptEntryRefs: ["u2"],
+			tokenEstimateByEntryRef: new Map([["r1", 60_000]]),
+			projectedInputTokens: 130_000,
+		});
+		// The gate still names the entry, but the result must not be replaced:
+		// a downgrade without a readable original would lose the output forever.
+		expect(plan.audit.qualityGate.reasons).toContain("emergency_tool_stub_downgrade");
+		expect(plan.materials.some(material => "resultEntryId" in material && material.recovery === undefined)).toBe(
+			true,
+		);
+
+		const projected = materializeContextPlanMessages(
+			[user, call, result, currentUser] as unknown as PlanMessages,
+			entries,
+			plan,
+		);
+		const kept = projected.find(message => message.role === "toolResult" && message.toolCallId === "tc-1");
+		const text = JSON.stringify(kept);
+		expect(text).toContain("huge old bash output");
+		expect(text).not.toContain("elided under context pressure");
 	});
 });

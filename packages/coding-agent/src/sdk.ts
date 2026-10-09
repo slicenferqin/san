@@ -1360,7 +1360,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		adoptedRuntime ??
 		createExecutionRuntime({
 			rootSessionId: options.rootSessionId ?? sessionManager.getSessionId(),
-			branchEntries: sessionManager.getBranch(),
+			branchEntries: sessionManager.getRuntimeBranch(),
 			sessionManager,
 			taskRegistry: taskContractRegistry,
 			providerRegistry: providerHealthRegistry,
@@ -1415,12 +1415,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// evidence that the old process can no longer finish that turn. Preserve the
 	// partial transcript and append one terminal aborted assistant record before
 	// rebuilding runtime context. The helper is idempotent once that record exists.
-	let existingBranch = logger.time("getSessionBranch", () => sessionManager.getBranch());
+	let existingBranch = logger.time("getSessionBranch", () => sessionManager.getRuntimeBranch());
 	const interruptedTurnAbort =
 		options.sessionAccess === "read_only" ? undefined : createInterruptedTurnAbortMessage(existingBranch);
 	if (interruptedTurnAbort) {
 		sessionManager.appendMessage(interruptedTurnAbort);
-		existingBranch = logger.time("getRecoveredSessionBranch", () => sessionManager.getBranch());
+		existingBranch = logger.time("getRecoveredSessionBranch", () => sessionManager.getRuntimeBranch());
 	}
 	let existingSession = logger.time("loadSessionContext", () =>
 		deobfuscateSessionContext(sessionManager.buildSessionContext(), obfuscator),
@@ -2560,7 +2560,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			});
 			if (selectedModelAbort) {
 				sessionManager.appendMessage(selectedModelAbort);
-				existingBranch = logger.time("getRecoveredUserTailBranch", () => sessionManager.getBranch());
+				existingBranch = logger.time("getRecoveredUserTailBranch", () => sessionManager.getRuntimeBranch());
 				existingSession = logger.time("loadRecoveredUserTailContext", () =>
 					deobfuscateSessionContext(sessionManager.buildSessionContext(), obfuscator),
 				);
@@ -2612,7 +2612,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			localProtocolOptions,
 			autoApprove: options.autoApprove ?? false,
 		});
-		const toolContextStore = new ToolContextStore(getSessionContext);
+		const toolContextStore = new ToolContextStore(getSessionContext, (toolCallId, commit) => {
+			if (!session) throw new Error("Tool output arrived before the session was initialized");
+			session.deferToolOutputProvenance(toolCallId, commit);
+		});
 
 		const registeredTools = extensionRunner.getAllRegisteredTools();
 		const sdkCustomTools = options.customTools?.filter(tool => !isLegacyBuiltinToolDefinition(tool)) ?? [];
@@ -3248,7 +3251,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			hideThinkingSummary: settings.get("omitThinking"),
 			kimiApiFormat: settings.get("providers.kimiApiFormat") ?? "anthropic",
 			preferWebsockets: preferOpenAICodexWebsockets,
-			getToolContext: tc => toolContextStore.getContext(tc),
+			getToolContext: tc => toolContextStore.getContext(tc, true),
 			getApiKey: requestModel => modelRegistry.resolver(requestModel, agent.sessionId),
 			streamFn: providerHealthStreamFn,
 			cursorExecHandlers,

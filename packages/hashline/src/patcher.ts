@@ -509,22 +509,24 @@ export class Patcher {
 
 	/**
 	 * Reject an anchored edit that references a line the read which minted
-	 * `expected` never displayed. `matchedSnapshot` is the store version whose
-	 * text equals the live normalized content — the exact snapshot the model
-	 * anchored against. Absent means no provenance was recorded (the tag was
-	 * externally minted or aged out), so the edit applies as before. Only runs
-	 * on the no-drift path, where anchor line numbers index the tagged content
-	 * 1:1.
+	 * `expected` never displayed. The second argument is the version whose text
+	 * the anchors index: on a hash match the live content; after drift the
+	 * tagged snapshot recovery is about to remap from. Absent means no
+	 * provenance was recorded (the tag was externally minted or aged out), so
+	 * the edit applies as before.
 	 *
 	 * The rejection inlines the actual file content at the unseen anchor lines
-	 * (from `matchedSnapshot.text`, which by definition equals the live
-	 * normalized content) so the model can verify what it was about to touch.
+	 * (from the snapshot's text, the exact text those line numbers index) so
+	 * the model can verify what it was about to touch. Clearing the guard by
+	 * retry is not sufficient on its own when the tag is stale: recovery still
+	 * has to prove the anchor's line content is unchanged in the live file.
 	 * When the reveal covers EVERY unseen anchor line in full width
 	 * (`truncated === false`) those lines also merge into the snapshot's
-	 * seen-line set, so a straight retry with the same `[path#tag]` header
-	 * succeeds without a follow-up range read — the content the model
-	 * received in the error IS proof it has now seen those lines. When the
-	 * anchor range exceeds {@link SEEN_LINE_REVEAL_CAP} lines OR any
+	 * seen-line set: the content the model received in the error IS proof it
+	 * has now seen those lines, so a straight retry with the same
+	 * `[path#tag]` header is not re-rejected for the same reason (on a stale
+	 * tag the retry still has to satisfy drift recovery like any other edit).
+	 * When the anchor range exceeds {@link SEEN_LINE_REVEAL_CAP} lines OR any
 	 * revealed line exceeds {@link SEEN_LINE_REVEAL_MAX_COLUMNS} characters
 	 * (`truncated === true`), NO lines merge: the message keeps the
 	 * range-re-read guidance intact and the model cannot piecewise-reveal
@@ -532,12 +534,12 @@ export class Patcher {
 	 * (over-cap retry → tail reveal → next retry applies), nor coax the tool
 	 * into dumping a minified megabyte-wide line into the error preview.
 	 */
-	#assertSeenLines(section: PatchSection, expected: string, matchedSnapshot: Snapshot | null): void {
-		const seen = matchedSnapshot?.seenLines;
+	#assertSeenLines(section: PatchSection, expected: string, anchorSnapshot: Snapshot | null): void {
+		const seen = anchorSnapshot?.seenLines;
 		if (!seen || seen.size === 0) return;
 		const unseen = section.collectAnchorLines().filter(line => !seen.has(line));
 		if (unseen.length === 0) return;
-		const sourceLines = matchedSnapshot?.text.split("\n") ?? [];
+		const sourceLines = anchorSnapshot?.text.split("\n") ?? [];
 		const revealed: RevealedLine[] = [];
 		const revealCount = Math.min(unseen.length, SEEN_LINE_REVEAL_CAP);
 		let columnTruncated = false;
@@ -628,17 +630,21 @@ export class Patcher {
 				? result
 				: { ...result, warnings: [...resolveWarnings, ...(result.warnings ?? [])] };
 
+		// The line numbers in `edits` index the exact content the tag names: the
+		// live text on a hash match, else the tagged snapshot drift recovery is
+		// about to remap them from. Reject any anchor the read that minted the
+		// tag never displayed BEFORE recovery renumbers it onto live lines:
+		// editing lines the model has not seen is the off-by-memory mistake
+		// that mangles files, and a stale tag must not launder an unseen anchor
+		// onto content the model was never shown.
+		if (expected !== undefined && this.#enforceSeenLines) {
+			this.#assertSeenLines(section, expected, liveMatches ? matchedSnapshot : storedSnapshotForTag);
+		}
 		// No tag, or the tag still names the live content: an edit anchored at any
 		// line is safe to apply, and the resolved block spans line up with what
 		// the caller read, so echo them back. (A drifted file falls through to
 		// recovery below, where line numbers shift, so resolutions are dropped.)
 		if (expected === undefined || liveMatches) {
-			// The line numbers in `edits` index the exact content the tag names.
-			// Reject any anchor the read never displayed: editing lines the model
-			// has not seen is the off-by-memory mistake that mangles files.
-			if (expected !== undefined && this.#enforceSeenLines) {
-				this.#assertSeenLines(section, expected, matchedSnapshot);
-			}
 			const result = applyEdits(normalized, resolved);
 			return withResolveWarnings(blockResolutions.length > 0 ? { ...result, blockResolutions } : result);
 		}

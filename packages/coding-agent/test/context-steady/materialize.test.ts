@@ -14,6 +14,7 @@ import {
 	type ContextPlanMaterial,
 } from "../../src/context-steady/plan-types";
 import {
+	CONTEXT_CONTINUATION_MESSAGE_TYPE,
 	CONTEXT_PACKET_MESSAGE_TYPE,
 	TURN_DIGEST_SCHEMA_VERSION,
 	type TurnDigest,
@@ -258,6 +259,39 @@ describe("materializeContextPlanMessages", () => {
 });
 
 describe("auditProjectionCoverage", () => {
+	test("does not report internal continuation state as lost conversation content", () => {
+		const currentUser = { role: "user", content: "current prompt", timestamp: 2 };
+		const entries = asEntries([
+			messageEntry("u2", currentUser),
+			{
+				type: "custom_message",
+				id: "authority",
+				parentId: "u2",
+				timestamp: "2026-09-16T00:00:00.000Z",
+				customType: CONTEXT_CONTINUATION_MESSAGE_TYPE,
+				content: "internal continuation state",
+				display: false,
+			},
+			{
+				type: "custom_message",
+				id: "extension-note",
+				parentId: "authority",
+				timestamp: "2026-09-16T00:00:01.000Z",
+				customType: "extension-note",
+				content: "conversation content that must survive",
+				display: true,
+			},
+		]);
+		const base = plan();
+		const scoped = {
+			...base,
+			sourceIndex: { ...base.sourceIndex, entryIds: ["u2", "authority", "extension-note"] },
+		};
+		const audit = auditProjectionCoverage(asMessages([currentUser]), entries, scoped);
+		expect(audit.missingProjectableRefs).toEqual(["extension-note"]);
+		expect(audit.unmatchedNonProjectableRefs).toEqual(["authority"]);
+	});
+
 	const customEntryRecord = (id: string, customType: string, data: unknown): Record<string, unknown> => ({
 		type: "custom",
 		id,

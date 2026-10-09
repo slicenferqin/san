@@ -160,6 +160,7 @@ function createSessionManager(entries: Record<string, unknown>[] = []) {
 	const stored = [...entries];
 	return {
 		getEntries: () => stored,
+		getRuntimeEntries: () => stored,
 		appendCustomEntry(customType: string, data: unknown) {
 			const entry = centry(`custom-${stored.length + 1}`, customType, data);
 			stored.push(entry);

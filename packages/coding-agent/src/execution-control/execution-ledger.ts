@@ -51,6 +51,16 @@ function freezeDeep<T>(value: T): T {
 function cloneFrozen<T>(value: T): T {
 	return freezeDeep(structuredClone(value));
 }
+/** 快照 recordIds 仅保留近端窗口；窗口外身份由 #knownRecordIds 全集与 revision 单调校验兜底。 */
+const MAX_SNAPSHOT_RECORD_IDS = 256;
+
+/** 内存保留的最近记录条数；完整历史由订阅者逐条落盘到 session journal。 */
+const MAX_RETAINED_RECORDS = 256;
+
+function appendRecordIdWindow(ids: readonly string[], recordId: string): readonly string[] {
+	if (ids.length < MAX_SNAPSHOT_RECORD_IDS) return [...ids, recordId];
+	return [...ids.slice(ids.length - MAX_SNAPSHOT_RECORD_IDS + 1), recordId];
+}
 
 function stableSerialize(value: unknown): string {
 	if (value === null) return "null";
@@ -309,6 +319,7 @@ export class ExecutionLedger {
 		return this.#snapshot;
 	}
 
+	/** 近端窗口内的记录副本；完整历史以 session journal 为准。 */
 	entries(): readonly Readonly<ExecutionLedgerRecord>[] {
 		return this.#records.map(record => cloneFrozen(record));
 	}
@@ -373,24 +384,33 @@ export class ExecutionLedger {
 	}
 
 	#appendRecord(record: Readonly<ExecutionLedgerRecord>): ExecutionLedgerAppendResult {
+		// #reduce 以冻结共享派生新快照：旧子图全部 deep-frozen，直接复用引用，
+		// freezeDeep 只遍历新增节点。此前对整份快照 structuredClone 会随
+		// recordIds/集合字段的增长退化为每条事件 O(state) 的深拷贝。
 		const baseSnapshot =
 			this.#snapshot.objectiveContract || !record.objectiveContract
 				? this.#snapshot
-				: (cloneFrozen({
+				: (freezeDeep({
 						...this.#snapshot,
 						objectiveContract: record.objectiveContract,
 					}) as Readonly<ExecutionScopeSnapshot>);
 		const reduced = this.#reduce(baseSnapshot, record);
-		const next = cloneFrozen({
+		const next = freezeDeep({
 			...reduced,
 			revision: record.revision,
 			updatedAt: record.occurredAt,
-			recordIds: [...baseSnapshot.recordIds, record.recordId],
+			recordIds: appendRecordIdWindow(baseSnapshot.recordIds, record.recordId),
 		}) as Readonly<ExecutionScopeSnapshot>;
 		this.#snapshot = next;
 		this.#records.push(record);
 		this.#knownRecordIds.add(record.recordId);
 		this.#recordDigests.set(record.recordId, eventDigest(record));
+		// 完整历史以 session journal 为准；内存仅保留近端窗口做重放判重，
+		// 窗口外 recordId 仍由 #knownRecordIds 全集识别为重复。
+		if (this.#records.length > MAX_RETAINED_RECORDS) {
+			const evicted = this.#records.splice(0, this.#records.length - MAX_RETAINED_RECORDS);
+			for (const stale of evicted) this.#recordDigests.delete(stale.recordId);
+		}
 		const result: ExecutionLedgerAppendResult = {
 			accepted: true,
 			duplicate: false,

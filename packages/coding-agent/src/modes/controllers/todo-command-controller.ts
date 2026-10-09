@@ -138,7 +138,7 @@ export class TodoCommandController {
 	 * entries or falls back to the active session state.
 	 */
 	#currentPhases(): TodoPhase[] {
-		const fromEntries = getLatestTodoPhasesFromEntries(this.ctx.sessionManager.getBranch());
+		const fromEntries = getLatestTodoPhasesFromEntries(this.ctx.sessionManager.getRuntimeBranch());
 		if (fromEntries.length > 0) return fromEntries;
 		return this.ctx.session.getTodoPhases();
 	}

@@ -179,8 +179,26 @@ export function buildSessionContext(
 	byId?: Map<string, SessionEntry>,
 	options?: BuildSessionContextOptions,
 ): SessionContext {
+	return buildSessionContextInternal(entries, leafId, byId, options);
+}
+
+export function buildSessionContextFromBranch(
+	branch: readonly SessionEntry[],
+	options?: BuildSessionContextOptions,
+): SessionContext {
+	const entries = [...branch];
+	return buildSessionContextInternal(entries, entries.at(-1)?.id ?? null, undefined, options, true);
+}
+
+function buildSessionContextInternal(
+	entries: SessionEntry[],
+	leafId?: string | null,
+	byId?: Map<string, SessionEntry>,
+	options?: BuildSessionContextOptions,
+	orderedBranch = false,
+): SessionContext {
 	// Build uuid index if not available
-	if (!byId) {
+	if (!byId && !orderedBranch) {
 		byId = new Map<string, SessionEntry>();
 		for (const entry of entries) {
 			byId.set(entry.id, entry);
@@ -203,7 +221,7 @@ export function buildSessionContext(
 		};
 	}
 	if (leafId) {
-		leaf = byId.get(leafId);
+		leaf = byId?.get(leafId);
 	}
 	if (!leaf) {
 		// Fallback to last entry (when leafId is undefined)
@@ -223,14 +241,16 @@ export function buildSessionContext(
 		};
 	}
 
-	// Walk from leaf to root, collecting path
-	const path: SessionEntry[] = [];
-	let current: SessionEntry | undefined = leaf;
-	while (current) {
-		path.push(current);
-		current = current.parentId ? byId.get(current.parentId) : undefined;
+	// A compact branch is already ordered; its original parents may be archived.
+	const path: SessionEntry[] = orderedBranch ? entries : [];
+	if (!orderedBranch) {
+		let current: SessionEntry | undefined = leaf;
+		while (current) {
+			path.push(current);
+			current = current.parentId ? byId?.get(current.parentId) : undefined;
+		}
+		path.reverse();
 	}
-	path.reverse();
 
 	// Extract settings and find compaction
 	let thinkingLevel: string | undefined = "off";

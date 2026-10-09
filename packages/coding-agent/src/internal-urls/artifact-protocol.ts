@@ -39,16 +39,14 @@ function parseArtifactId(url: InternalUrl): string {
 export async function resolveArtifactFile(url: InternalUrl, context?: ResolveContext): Promise<ResolvedArtifactFile> {
 	const id = parseArtifactId(url);
 
-	// Artifact ids are per-session counters; in multi-session hosts the same
-	// id exists in several dirs. Pin resolution to the calling session's
-	// artifacts dir first so `artifact://3` means *this* session's #3.
-	const dirs = artifactsDirsFromRegistry();
+	// Numeric ids are local to a session. A bound lookup must never fall through
+	// to another session that happens to contain the same id.
 	const pinnedDir = context?.localProtocolOptions?.getArtifactsDir?.() ?? null;
-	if (pinnedDir) {
-		const pinnedIndex = dirs.indexOf(pinnedDir);
-		if (pinnedIndex >= 0) dirs.splice(pinnedIndex, 1);
-		dirs.unshift(pinnedDir);
-	}
+	const dirs = context?.localProtocolOptions?.getArtifactsDir
+		? pinnedDir
+			? [pinnedDir]
+			: []
+		: artifactsDirsFromRegistry();
 
 	if (dirs.length === 0) {
 		throw new Error("No session - artifacts unavailable");
