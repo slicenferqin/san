@@ -249,6 +249,7 @@ import {
 	type BuiltContextPlan,
 	CONTEXT_PLAN_CUSTOM_TYPE,
 	type ContextPlanGoalAnchorInput,
+	type ContextPlanToolStubRecovery,
 } from "../context-steady/plan-types";
 import {
 	applyContextPlanNetBenefitGate,
@@ -283,6 +284,11 @@ import {
 	skipContextPacketPreludeInDigestSource,
 } from "../context-steady/session";
 import { ContextSteadySessionRuntime } from "../context-steady/session-runtime";
+import {
+	buildContextSourceIndex,
+	collectLatestBatchEntryRefs,
+	toolResultFullText,
+} from "../context-steady/source-index";
 import {
 	buildContextSummaryAuthorityAudit,
 	COMPACTION_SUMMARY_REPAIR_INSTRUCTIONS,
@@ -550,7 +556,13 @@ import {
 	getRestorableSessionModels,
 } from "./session-context";
 import { formatSessionDumpText } from "./session-dump-format";
-import type { BranchSummaryEntry, CompactionEntry, NewSessionOptions, SessionEntry } from "./session-entries";
+import type {
+	BranchSummaryEntry,
+	CompactionEntry,
+	CustomEntry,
+	NewSessionOptions,
+	SessionEntry,
+} from "./session-entries";
 import { EPHEMERAL_MODEL_CHANGE_ROLE } from "./session-entries";
 import { formatSessionHistoryMarkdown } from "./session-history-format";
 import { cleanupEmptyMoveSession, type SessionManager } from "./session-manager";
@@ -2553,6 +2565,10 @@ export class AgentSession {
 	#contextSteadyCompactionDigestCoverage:
 		| { sessionId: string; boundaryEntryId: string | null; throughEntryId: string }
 		| undefined;
+	/** resultEntryId → 已落盘、可被 `artifact://` 读回的降级 stub 原文 artifact。 */
+	#contextSteadyToolStubArtifacts = new Map<string, string>();
+	#toolOutputSessionId: string | undefined;
+	#pendingToolOutputProvenance = new Map<string, (deliveredText: string) => void>();
 	#contextProbeWrite: Promise<void> = Promise.resolve();
 	#contextProbeLastPrefixFingerprint: { promptCacheKey: string; value: string } | undefined;
 	/**
@@ -3088,7 +3104,7 @@ export class AgentSession {
 			destination: { kind: "current", manager: this.sessionManager },
 		};
 		this.settings = config.settings;
-		this.#contextSteadyRuntime = new ContextSteadySessionRuntime(() => this.sessionManager.getBranch());
+		this.#contextSteadyRuntime = new ContextSteadySessionRuntime(() => this.sessionManager.getRuntimeBranch());
 		this.#responseDocuments = new ResponseDocumentRuntime(this.sessionManager, this.settings);
 		this.#sessionWritesEnabled = config.sessionAccess !== "read_only";
 		this.#autoApprove = config.autoApprove === true;
@@ -4579,10 +4595,12 @@ export class AgentSession {
 		if (!this.#sessionWritesEnabled) return;
 		if (this.#exitRecorded) return;
 		this.#exitRecorded = true;
-		const pendingToolCalls = collectPendingToolCalls(this.sessionManager.getBranch());
+		const pendingToolCalls = collectPendingToolCalls(this.sessionManager.getRuntimeBranch());
 		if (
 			pendingToolCalls.length === 0 &&
-			!this.sessionManager.getEntries().some(entry => entry.type === "message" && entry.message.role === "assistant")
+			!this.sessionManager
+				.getRuntimeEntries()
+				.some(entry => entry.type === "message" && entry.message.role === "assistant")
 		) {
 			return;
 		}
@@ -4794,7 +4812,7 @@ export class AgentSession {
 
 	#buildPersistedMessageKeySet(): Set<string> {
 		const keys = new Set<string>();
-		for (const entry of this.sessionManager.getBranch()) {
+		for (const entry of this.sessionManager.getRuntimeBranch()) {
 			if (entry.type !== "message") continue;
 			const key = sessionMessagePersistenceKey(entry.message);
 			if (key !== undefined) keys.add(key);
@@ -4813,7 +4831,7 @@ export class AgentSession {
 		if (key === undefined) return false;
 		const keys = this.#ensurePersistedMessageKeys();
 		if (!keys.has(key)) return false;
-		const branch = this.sessionManager.getBranch();
+		const branch = this.sessionManager.getRuntimeBranch();
 		for (let index = branch.length - 1; index >= 0; index--) {
 			const entry = branch[index];
 			if (entry.type !== "message") continue;
@@ -5335,13 +5353,14 @@ export class AgentSession {
 					);
 				}
 				if (semanticResult?.toolName === "checkpoint" && !isError) {
-					const checkpointEntryId = this.sessionManager.getEntries().at(-1)?.id ?? null;
+					const checkpointEntryId = this.sessionManager.getRuntimeEntries().at(-1)?.id ?? null;
 					this.#checkpointState = {
 						checkpointMessageCount: this.agent.state.messages.length,
 						checkpointEntryId,
 						startedAt:
 							(semanticDetails && stringProperty(semanticDetails, "startedAt")) ?? new Date().toISOString(),
 					};
+					this.#scheduleResumeSnapshotRefresh();
 					this.#pendingRewindReport = undefined;
 					this.#lastCompletedRewind = undefined;
 				}
@@ -5681,7 +5700,11 @@ export class AgentSession {
 				// consolidated digest. It uses #contextSteadyOriginalPreTurnLeafId
 				// if a continuation chain was active, or #contextSteadyPreTurnLeafId
 				// for a normal turn — covering the full logical turn in either case.
-				this.#trackPostPromptTask(this.#generateTurnDigest(settledLeafId));
+				this.#trackPostPromptTask(
+					this.#generateTurnDigest(settledLeafId).then(() => {
+						this.#scheduleResumeSnapshotRefresh();
+					}),
+				);
 			}
 			// When invalidated: no digest, no cleanup needed — the next prompt
 			// cycle will start fresh.
@@ -5763,7 +5786,7 @@ export class AgentSession {
 				const sessionManager = this.sessionManager;
 				const preTurnLeafId = originalBoundary;
 				const currentLeafId = settledLeafId ?? sessionManager.getLeafId();
-				const branch = sessionManager.getBranch();
+				const branch = sessionManager.getRuntimeBranch();
 				if (preTurnLeafId && !branch.some(entry => entry.id === preTurnLeafId)) {
 					logger.debug("preTurnLeafId not found in branch while generating TurnDigest", {
 						sessionId: this.sessionId,
@@ -5981,7 +6004,7 @@ export class AgentSession {
 					? "resume"
 					: "checkpoint");
 		// Branch-only: never fold digests/checkpoints from discarded sibling branches.
-		const built = buildContextCheckpoint(this.sessionManager.getBranch(), this.sessionId, {
+		const built = buildContextCheckpoint(this.sessionManager.getRuntimeBranch(), this.sessionId, {
 			enabled: true,
 			checkpointEveryTurns: this.settings.get("san.contextSteady.checkpoint.everyTurns") as number,
 			checkpointMaxTokens: this.settings.get("san.contextSteady.checkpoint.maxTokens") as number,
@@ -5992,6 +6015,7 @@ export class AgentSession {
 		appendContextCheckpoint(this.sessionManager, built.checkpoint);
 		if (rebaseReason === "budget_pressure") this.#contextSteadyPendingBudgetPressureRebase = false;
 		if (rebaseReason === "resume") this.#contextSteadyPendingResumeRebase = false;
+		this.#scheduleResumeSnapshotRefresh();
 	}
 
 	#dropSanLoopRoleContextMessagesFromActiveContext(): void {
@@ -6088,6 +6112,15 @@ export class AgentSession {
 			await task(signal);
 		})();
 		this.#trackPostPromptTask(scheduled);
+	}
+
+	/** Queue a durable resume snapshot after the current prompt settles. */
+	#scheduleResumeSnapshotRefresh(): void {
+		if (!this.#sessionWritesEnabled) return;
+		this.#schedulePostPromptTask(async signal => {
+			if (signal.aborted || this.#isDisposed) return;
+			await this.sessionManager.refreshResumeSnapshot();
+		});
 	}
 
 	#skipAgentContinue(reason: AgentContinueSkipReason, options: ScheduledAgentContinueOptions | undefined): void {
@@ -7897,7 +7930,7 @@ export class AgentSession {
 			throw new Error("Cannot repair an interrupted turn without Session write access");
 		const model = this.model;
 		const interruptedTurnAbort = createInterruptedTurnAbortMessage(
-			this.sessionManager.getBranch(),
+			this.sessionManager.getRuntimeBranch(),
 			model ? { api: model.api, provider: model.provider, model: model.id } : undefined,
 		);
 		if (!interruptedTurnAbort) return;
@@ -7989,6 +8022,8 @@ export class AgentSession {
 		const postPromptDrain = this.#cancelPostPromptTasks();
 		this.agent.abort();
 		await postPromptDrain;
+		this.#pendingToolOutputProvenance.clear();
+		this.#contextSteadyToolStubArtifacts.clear();
 		await this.#drainAutolearnCapture();
 		// Cancel jobs this agent registered so a subagent's teardown doesn't
 		// leak its background bash/task work into the parent's manager. Only
@@ -8194,7 +8229,7 @@ export class AgentSession {
 
 	/** Session-local model selector for subagents bound to the task role. */
 	getSubagentModelOverride(): string | undefined {
-		return getSessionSubagentModelOverride(this.sessionManager.getBranch());
+		return getSessionSubagentModelOverride(this.sessionManager.getRuntimeBranch());
 	}
 
 	/** Effective thinking level applied to the agent (the resolved level when `auto`). */
@@ -9222,6 +9257,18 @@ export class AgentSession {
 		return await this.#convertToLlm(transformedMessages);
 	}
 
+	#syncToolOutputSession(): void {
+		if (this.#toolOutputSessionId === this.sessionId) return;
+		this.#toolOutputSessionId = this.sessionId;
+		this.#pendingToolOutputProvenance.clear();
+		this.#contextSteadyToolStubArtifacts.clear();
+	}
+
+	deferToolOutputProvenance(toolCallId: string, commit: (deliveredText: string) => void): void {
+		this.#syncToolOutputSession();
+		this.#pendingToolOutputProvenance.set(toolCallId, commit);
+	}
+
 	async #transformContextForProvider(
 		messages: AgentMessage[],
 		signal?: AbortSignal | undefined,
@@ -9257,14 +9304,14 @@ export class AgentSession {
 			// surviving response documents at the final provider boundary.
 			const plannedMessages = materializeContextPlanMessages(
 				materializationMessages,
-				this.sessionManager.getBranch(),
+				this.sessionManager.getRuntimeBranch(),
 				plan,
 				this.#contextSteadyRecallMessage,
 			);
 			// End-to-end orphan audit: every projectable scope entry must be present,
 			// stubbed, or covered. Never throws in production — a violation is a loud
 			// log signal, not a broken request.
-			const projectionAudit = auditProjectionCoverage(plannedMessages, this.sessionManager.getBranch(), plan);
+			const projectionAudit = auditProjectionCoverage(plannedMessages, this.sessionManager.getRuntimeBranch(), plan);
 			if (projectionAudit.missingProjectableRefs.length > 0 || projectionAudit.invalidCoverage.length > 0) {
 				logger.error("ContextPlan projection orphaned projectable entries", {
 					sessionId: this.sessionId,
@@ -9293,7 +9340,18 @@ export class AgentSession {
 	 * nor overwrite the main turn's shipped-wire state.
 	 */
 	#recordProviderWireSequence(messages: AgentMessage[], record?: boolean): AgentMessage[] {
-		if (record !== true || this.settings.get("san.contextSteady.probe.enabled") !== true) return messages;
+		if (record !== true) return messages;
+		this.#syncToolOutputSession();
+		for (let index = messages.length - 1; index >= 0 && this.#pendingToolOutputProvenance.size > 0; index--) {
+			const message = messages[index];
+			if (message.role !== "toolResult") continue;
+			const commit = this.#pendingToolOutputProvenance.get(message.toolCallId);
+			if (!commit) continue;
+			this.#pendingToolOutputProvenance.delete(message.toolCallId);
+			commit(toolResultFullText(message));
+		}
+		this.#pendingToolOutputProvenance.clear();
+		if (this.settings.get("san.contextSteady.probe.enabled") !== true) return messages;
 		const tokens = contextWireSequenceTokens(messages);
 		const previous = this.#contextProbeAgentWireSequence;
 		this.#contextProbeAgentWireSequence = {
@@ -9417,7 +9475,7 @@ export class AgentSession {
 	 */
 	async #syncExecutionBranch(): Promise<void> {
 		if (!this.#executionRuntime || this.#executionScopeId !== undefined) return;
-		await this.#executionRuntime.syncBranch(this.sessionManager.getBranch());
+		await this.#executionRuntime.syncBranch(this.sessionManager.getRuntimeBranch());
 	}
 	/**
 	 * 真实宿主用户 turn 在首次 provider 派发前 mint 根 scope；同一 turn 内的
@@ -9445,7 +9503,7 @@ export class AgentSession {
 		let entryId: string | undefined;
 		if (this.#sessionMessageAlreadyPersisted(message)) {
 			const key = sessionMessagePersistenceKey(message);
-			const branch = this.sessionManager.getBranch();
+			const branch = this.sessionManager.getRuntimeBranch();
 			for (let index = branch.length - 1; index >= 0; index--) {
 				const entry = branch[index];
 				if (entry.type !== "message") continue;
@@ -9483,7 +9541,7 @@ export class AgentSession {
 		// 回显同理。任一载体存在都算"已回显",resume 的历史分支同样命中。
 		const isEchoType = (type: string | undefined): boolean =>
 			type === CONTRACT_ECHO_MESSAGE_TYPE || type === SKILL_CONTRACT_ECHO_MESSAGE_TYPE;
-		const hasEcho = this.sessionManager.getBranch().some(entry => {
+		const hasEcho = this.sessionManager.getRuntimeBranch().some(entry => {
 			if (entry.type === "custom_message" || entry.type === "custom") return isEchoType(entry.customType);
 			return entry.type === "message" && entry.message.role === "custom" && isEchoType(entry.message.customType);
 		});
@@ -9690,7 +9748,7 @@ export class AgentSession {
 		let completed: CompletedRewindState | undefined;
 		let pending: { entryId: string; startedAt: string; messageCount: number } | undefined;
 		let messageCount = 0;
-		for (const entry of this.sessionManager.getBranch()) {
+		for (const entry of this.sessionManager.getRuntimeBranch()) {
 			if (entry.type === "message") messageCount++;
 			if (isSuccessfulCheckpointEntry(entry)) {
 				completed = undefined;
@@ -9735,7 +9793,7 @@ export class AgentSession {
 		if (scopeId === undefined) return undefined;
 		const contract = runtime.getScope(scopeId)?.snapshot().objectiveContract;
 		if (!contract) return undefined;
-		const entry = this.sessionManager.getBranch().find(item => item.id === contract.authoritativeUserTurnId);
+		const entry = this.sessionManager.getRuntimeBranch().find(item => item.id === contract.authoritativeUserTurnId);
 		if (entry?.type !== "message" || entry.message.role !== "user") return undefined;
 		const objective = customMessageContentText(entry.message.content).trim();
 		if (!objective) return undefined;
@@ -10410,7 +10468,7 @@ export class AgentSession {
 	 * flips the epoch regardless of rebase side-effect ordering.
 	 */
 	#contextSteadyStableEpochKey(): string {
-		const branch = this.sessionManager.getBranch();
+		const branch = this.sessionManager.getRuntimeBranch();
 		const latestCompaction = getLatestCompactionEntry(branch);
 		const latestCheckpoint = latestContextCheckpoint(branch);
 		return [
@@ -10497,7 +10555,7 @@ export class AgentSession {
 
 	#contextSteadyPlanInputsChanged(plan: BuiltContextPlan, options?: { relaxed?: boolean }): boolean {
 		const sourceEntryIds = new Set(plan.sourceIndex.entryIds);
-		const latestCompaction = getLatestCompactionEntry(this.sessionManager.getBranch());
+		const latestCompaction = getLatestCompactionEntry(this.sessionManager.getRuntimeBranch());
 		if (latestCompaction && !sourceEntryIds.has(latestCompaction.id)) return true;
 		if (plan.audit.budget.contextWindow !== (this.model?.contextWindow ?? 0)) return true;
 		// Relaxed (stable-projection): non-message budget drift re-runs gates
@@ -10514,7 +10572,7 @@ export class AgentSession {
 		const knownToolCallIds = new Set(
 			plan.sourceIndex.toolPairs.filter(pair => pair.complete).map(pair => pair.toolCallId),
 		);
-		for (const entry of this.sessionManager.getBranch()) {
+		for (const entry of this.sessionManager.getRuntimeBranch()) {
 			if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
 			if (!knownEntryIds.has(entry.id) && !knownToolCallIds.has(entry.message.toolCallId)) return true;
 		}
@@ -10568,7 +10626,7 @@ export class AgentSession {
 
 		let persistedActivation = false;
 		if (this.#contextSteadyActivationScannedSessionId !== this.sessionId) {
-			for (const entry of this.sessionManager.getBranch()) {
+			for (const entry of this.sessionManager.getRuntimeBranch()) {
 				if (entry.type !== "custom") continue;
 				switch (entry.customType) {
 					case CONTEXT_STEADY_ACTIVATION_CUSTOM_TYPE:
@@ -10619,12 +10677,12 @@ export class AgentSession {
 	 * gate participates in the fixed point: a withdrawn plan ships raw history, so
 	 * the convergence target is the post-gate wire size, not the ungated estimate.
 	 */
-	#buildContextSteadyPlanForProvider(
+	async #buildContextSteadyPlanForProvider(
 		commonOptions: Omit<BuildContextPlanOptions, "projectedInputTokens">,
 		messages: readonly AgentMessage[],
 		planningEntries: readonly SessionEntry[],
 		mode: "pending" | "full" = "pending",
-	): BuiltContextPlan {
+	): Promise<BuiltContextPlan> {
 		const rawProjectedTokens = this.#estimateMaterializedProjectedInputTokens(messages, planningEntries, null, mode);
 		const gate = (candidate: BuiltContextPlan): BuiltContextPlan =>
 			applyContextPlanNetBenefitGate(candidate, {
@@ -10633,19 +10691,72 @@ export class AgentSession {
 			});
 		const shippedTokens = (candidate: BuiltContextPlan): number =>
 			candidate.withdrawn === true ? rawProjectedTokens : candidate.audit.netBenefit!.projectedTokens;
-
-		let plan = buildContextPlan(commonOptions);
-		let projectedInputTokens = shippedTokens(gate(plan));
-		for (let attempt = 0; attempt < 4; attempt++) {
-			plan = buildContextPlan({ ...commonOptions, projectedInputTokens });
-			const gated = gate(plan);
-			const shipped = shippedTokens(gated);
-			if (shipped === projectedInputTokens) return gated;
-			projectedInputTokens = shipped;
+		const build = (options: Omit<BuildContextPlanOptions, "projectedInputTokens">): BuiltContextPlan => {
+			let plan = buildContextPlan(options);
+			const buildOptions =
+				options.toolOutputOffload && rawProjectedTokens > plan.audit.budget.selectedInputLimit
+					? {
+							...options,
+							toolOutputOffload: { ...options.toolOutputOffload, budgetTokens: rawProjectedTokens },
+						}
+					: options;
+			if (buildOptions !== options) plan = buildContextPlan(buildOptions);
+			let projectedInputTokens = shippedTokens(gate(plan));
+			for (let attempt = 0; attempt < 4; attempt++) {
+				plan = buildContextPlan({ ...buildOptions, projectedInputTokens });
+				const gated = gate(plan);
+				const shipped = shippedTokens(gated);
+				if (shipped === projectedInputTokens) return gated;
+				projectedInputTokens = shipped;
+			}
+			return gate(buildContextPlan({ ...buildOptions, projectedInputTokens: Number.MAX_SAFE_INTEGER }));
+		};
+		let plan = await this.#buildPlanWithToolStubRecovery(commonOptions, planningEntries, build);
+		// A fresh tool batch is protected even with aged offload disabled, so an
+		// oversized batch can only be resolved by recovery compaction first; when
+		// pressure persists after it, the valve truncates the batch preview (fresh
+		// status and the recoverable snapshot stay intact). Outside recovery the
+		// first gate must surface hard_pressure untouched so the recovery path runs.
+		const hardPressure = plan.audit.qualityGate.outcome === "hard_pressure";
+		const inRecovery = this.#contextSteadyRecoveryAttempt > 0;
+		if (!commonOptions.toolOutputOffload && !(hardPressure && inRecovery)) return plan;
+		if (!hardPressure && shippedTokens(plan) <= plan.audit.budget.selectedInputLimit) return plan;
+		const latestRefs = new Set(commonOptions.latestBatchEntryRefs);
+		let previewBytes = 0;
+		for (const entry of planningEntries) {
+			if (!latestRefs.has(entry.id) || entry.type !== "message" || entry.message.role !== "toolResult") continue;
+			previewBytes = Math.max(previewBytes, Buffer.byteLength(toolResultFullText(entry.message), "utf8"));
 		}
-		// Fail-closed fallback pressures the gate into hard_pressure, which is
-		// never withdrawn — the shipped size then equals the ungated estimate.
-		return gate(buildContextPlan({ ...commonOptions, projectedInputTokens: Number.MAX_SAFE_INTEGER }));
+		// Consumed history has already been reclaimed. Keep fresh status, a readable
+		// body, and the original snapshot; never turn the batch into empty successes.
+		const minimumPreviewBytes = 256;
+		while (previewBytes > minimumPreviewBytes) {
+			previewBytes = Math.max(minimumPreviewBytes, Math.floor(previewBytes / 2));
+			plan = await this.#buildPlanWithToolStubRecovery(
+				{ ...commonOptions, latestBatchPreviewBytes: previewBytes },
+				planningEntries,
+				build,
+			);
+			if (shippedTokens(plan) <= plan.audit.budget.selectedInputLimit) break;
+		}
+		// Stamp the per-entry truncations so later re-gates in the same epoch
+		// re-apply them instead of resurrecting an oversized body once a newer
+		// result displaces it from the latest batch.
+		const truncated = plan.materials.flatMap(material =>
+			"resultEntryId" in material && material.stubKind === "preview" && material.previewBytes !== undefined
+				? [{ resultEntryId: material.resultEntryId, previewBytes: material.previewBytes }]
+				: [],
+		);
+		if (truncated.length > 0) {
+			const inherited = [...(commonOptions.previewTruncatedToolResults ?? new Map<string, number>())].map(
+				([resultEntryId, previewBytes]) => ({ resultEntryId, previewBytes }),
+			);
+			for (const item of truncated) {
+				if (!inherited.some(existing => existing.resultEntryId === item.resultEntryId)) inherited.push(item);
+			}
+			plan.previewTruncatedToolResults = inherited;
+		}
+		return plan;
 	}
 
 	async #buildContextSteadyRequestPlan(
@@ -10664,7 +10775,7 @@ export class AgentSession {
 		// the frozen plan; ships even when the plan itself is withdrawn.
 		this.#contextSteadyRecallMessage =
 			stableProjection && recall && recall.items.length > 0 ? buildContextRecallMessage(recall) : undefined;
-		const branchEntries = this.sessionManager.getBranch();
+		const branchEntries = this.sessionManager.getRuntimeBranch();
 		const activeScope = this.#contextSteadyActivePlanningEntries(branchEntries);
 		const rebaseBoundary = this.#contextSteadyRebaseBoundary(activeScope.entries);
 		// Prefer real journal ids when the prompt messages are already persisted;
@@ -10734,11 +10845,12 @@ export class AgentSession {
 			archivedEntryCount: activeScope.archivedEntryCount,
 			activeCutoffEntryId: activeScope.activeCutoffEntryId,
 			maintenanceId: this.#contextSteadyMaintenanceId,
+			latestBatchEntryRefs: collectLatestBatchEntryRefs(planningEntries),
 			...(goalAnchorInput ? { goalAnchor: goalAnchorInput } : {}),
 			workingNotes: this.#contextWorkingNotes(expandedText),
 			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
 		};
-		const plan = this.#buildContextSteadyPlanForProvider(commonOptions, messages, planningEntries);
+		const plan = await this.#buildContextSteadyPlanForProvider(commonOptions, messages, planningEntries);
 		if (stableProjection) plan.epochKey = this.#contextSteadyStableEpochKey();
 		if (plan.audit.qualityGate.outcome === "hard_pressure") {
 			this.#contextSteadyPendingBudgetPressureRebase = true;
@@ -10888,7 +11000,7 @@ export class AgentSession {
 	): Promise<ToolLoopPlanRefreshResult | undefined> {
 		const existing = this.#contextSteadyRequestPlan;
 		if (!existing) return undefined;
-		const branchEntries = this.sessionManager.getBranch();
+		const branchEntries = this.sessionManager.getRuntimeBranch();
 		// Tool-loop: `messages` is already the full transformed provider context.
 		const projected = this.#estimateMaterializedProjectedInputTokens(messages, branchEntries, existing, "full");
 		const controlMax = existing.audit.budget.controlMax;
@@ -10909,7 +11021,7 @@ export class AgentSession {
 			goalAnchor: this.#buildGoalAnchorInput(),
 			workingNotes: this.#contextWorkingNotes(),
 		};
-		let plan = this.#buildContextSteadyPlanForProvider(
+		let plan = await this.#buildContextSteadyPlanForProvider(
 			commonOptionsWithGoalAnchor,
 			messages,
 			planningEntries,
@@ -10992,9 +11104,8 @@ export class AgentSession {
 		messages: readonly AgentMessage[],
 		existing: BuiltContextPlan,
 	): { commonOptions: Omit<BuildContextPlanOptions, "projectedInputTokens">; planningEntries: SessionEntry[] } {
-		const branchEntries = this.sessionManager.getBranch();
+		const branchEntries = this.sessionManager.getRuntimeBranch();
 		const activeScope = this.#contextSteadyActivePlanningEntries(branchEntries);
-		const liveText = this.#contextSteadyLatestUserText(messages) ?? "";
 		// Synchronous rebuild path (no recall) so transformContext stays non-async beyond current await.
 		const pendingEntries = this.#contextSteadyPendingEntries(
 			messages.filter(message => {
@@ -11046,13 +11157,17 @@ export class AgentSession {
 				new Set(currentPromptEntryRefs),
 				tokenEstimateByEntryRef,
 			),
-			currentPromptEntryRefs,
-			liveTailEntryRefs,
-			tokenEstimateByEntryRef,
-			currentPromptText: liveText,
-			activeToolCallIds: this.#contextSteadyActiveToolCallIds(planningEntries),
-			activeEntryCount: planningEntries.length,
 			archivedEntryCount: activeScope.archivedEntryCount,
+			latestBatchEntryRefs: collectLatestBatchEntryRefs(planningEntries),
+			// Inherit the pressure-valve truncations already applied in this epoch so
+			// a re-gate re-truncates the same entries instead of resurrecting them.
+			...(existing.previewTruncatedToolResults?.length
+				? {
+						previewTruncatedToolResults: new Map(
+							existing.previewTruncatedToolResults.map(item => [item.resultEntryId, item.previewBytes]),
+						),
+					}
+				: {}),
 			activeCutoffEntryId: activeScope.activeCutoffEntryId,
 			maintenanceId: this.#contextSteadyMaintenanceId,
 			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
@@ -11069,7 +11184,7 @@ export class AgentSession {
 			recoveryAttempt: this.#contextSteadyRecoveryAttempt,
 			contextWindow: this.model?.contextWindow,
 		});
-		const compactionBefore = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
+		const compactionBefore = getLatestCompactionEntry(this.sessionManager.getRuntimeBranch())?.id;
 		const recovery = await this.#runAutoCompaction("threshold", false, false, false, {
 			autoContinue: false,
 			suppressContinuation: true,
@@ -11078,7 +11193,7 @@ export class AgentSession {
 			matchedTriggers: ["hard_pressure"],
 			phase: "mid_turn",
 		});
-		const compactionAfter = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
+		const compactionAfter = getLatestCompactionEntry(this.sessionManager.getRuntimeBranch())?.id;
 		if (compactionAfter === compactionBefore) {
 			// Compaction did not commit; no point rebuilding.
 			return {
@@ -11094,7 +11209,7 @@ export class AgentSession {
 		// history rather than the oversized pre-compaction tail.
 		const compactedMessages = this.messages;
 		const { commonOptions, planningEntries } = this.#buildToolLoopPlanCommonOptions(compactedMessages, existing);
-		const rebuiltPlan = this.#buildContextSteadyPlanForProvider(
+		const rebuiltPlan = await this.#buildContextSteadyPlanForProvider(
 			commonOptions,
 			compactedMessages,
 			planningEntries,
@@ -11115,22 +11230,6 @@ export class AgentSession {
 			outcome: rebuiltPlan.audit.qualityGate.outcome,
 		});
 		return { plan: rebuiltPlan, sourceMessages: compactedMessages };
-	}
-
-	#contextSteadyLatestUserText(messages: readonly AgentMessage[]): string | undefined {
-		for (let index = messages.length - 1; index >= 0; index--) {
-			const message = messages[index];
-			if (message?.role !== "user") continue;
-			if (typeof message.content === "string") return message.content;
-			if (Array.isArray(message.content)) {
-				const text = message.content
-					.filter((block): block is { type: "text"; text: string } => block.type === "text")
-					.map(block => block.text)
-					.join("\n");
-				if (text) return text;
-			}
-		}
-		return undefined;
 	}
 
 	#contextSteadyMergePlanningEntries(
@@ -11227,6 +11326,78 @@ export class AgentSession {
 		return [...pending].filter(id => !completed.has(id));
 	}
 
+	/**
+	 * 降级 stub 的原文捕获前置步骤。
+	 *
+	 * planner 保持纯同步、不知道存储;这里在发请求前先建一次 plan,只对**确实
+	 * 会被降级**的条目解析恢复入口,回填后重建 plan。
+	 *
+	 * 优先复用结果自身的原文引用;没有引用时由 SessionManager 保存,包括临时会话。
+	 * 捕获失败则保留原始结果,按实际未回收的内容重新计算请求容量。
+	 */
+	async #buildPlanWithToolStubRecovery(
+		commonOptions: Omit<BuildContextPlanOptions, "projectedInputTokens">,
+		planningEntries: readonly SessionEntry[],
+		build: (options: Omit<BuildContextPlanOptions, "projectedInputTokens">) => BuiltContextPlan,
+	): Promise<BuiltContextPlan> {
+		const probe = build({ ...commonOptions, toolStubRecovery: undefined });
+		const stubRefs = probe.materials
+			.filter(material => "toolCallId" in material && "resultEntryId" in material)
+			.filter(material => material.recovery === undefined)
+			.map(material => material.resultEntryId);
+		if (stubRefs.length === 0) return probe;
+		const recovery = await this.#contextSteadyToolStubRecovery(stubRefs, planningEntries);
+		return build({ ...commonOptions, toolStubRecovery: recovery });
+	}
+
+	/**
+	 * resultEntryId → 可读原文的 artifact 恢复入口。
+	 *
+	 * 优先级:该 result **自身** metadata 里已有的引用(逐字节原文早就在)→ 本会话
+	 * 已捕获记忆的 id → 宿主在替换前落盘原文。assistant 参数里出现过的
+	 * `artifact://` 只是某次调用的**输入**(例如模型自己 `read artifact://7`),
+	 * 复用它会把另一份内容冒充成本条输出,`existing` 只认 `result_metadata`。
+	 *
+	 * 捕获失败时该条目不进 map:调用方保持原始结果不动,
+	 * 绝不写入读不回来的引用。
+	 */
+	async #contextSteadyToolStubRecovery(
+		stubRefs: readonly string[],
+		planningEntries: readonly SessionEntry[],
+	): Promise<Map<string, ContextPlanToolStubRecovery>> {
+		this.#syncToolOutputSession();
+		const recovery = new Map<string, ContextPlanToolStubRecovery>();
+		const artifactRefs = buildContextSourceIndex(planningEntries).artifactRefs ?? [];
+		for (const entryRef of stubRefs) {
+			const existing = artifactRefs.find(ref => ref.entryId === entryRef && ref.origin === "result_metadata");
+			if (existing) {
+				recovery.set(entryRef, { kind: "artifact", artifactId: existing.artifactId, source: "existing" });
+				continue;
+			}
+			const memoized = this.#contextSteadyToolStubArtifacts.get(entryRef);
+			if (memoized) {
+				recovery.set(entryRef, { kind: "artifact", artifactId: memoized, source: "captured" });
+				continue;
+			}
+			const entry = planningEntries.find(candidate => candidate.id === entryRef);
+			if (entry?.type !== "message" || entry.message.role !== "toolResult") continue;
+			const text = toolResultFullText(entry.message);
+			if (text.length === 0) continue;
+			try {
+				const artifactId = await this.sessionManager.saveArtifact(text, "context-plan-stub");
+				if (!artifactId) continue;
+				this.#contextSteadyToolStubArtifacts.set(entryRef, artifactId);
+				recovery.set(entryRef, { kind: "artifact", artifactId, source: "captured" });
+			} catch (err) {
+				logger.debug("Context Steady stub capture failed; keeping the original tool result", {
+					entryRef,
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+		}
+		return recovery;
+	}
+
 	#contextSteadyPlanEnabled(): boolean {
 		if (this.settings.isConfigured("san.contextSteady.contextPlan.enabled")) {
 			return this.settings.get("san.contextSteady.contextPlan.enabled") === true;
@@ -11317,7 +11488,7 @@ export class AgentSession {
 	}
 
 	#contextSteadyPendingEntries(messages: readonly AgentMessage[]): SessionEntry[] {
-		const branch = this.sessionManager.getBranch();
+		const branch = this.sessionManager.getRuntimeBranch();
 		return messages.map((message, index): SessionEntry => {
 			// Prefer the real journal entry when the message is already persisted.
 			const existing = branch.find(entry => {
@@ -11345,7 +11516,7 @@ export class AgentSession {
 	 * entry ids so /context plan remains joinable to the journal.
 	 */
 	#remapContextSteadyPlanPendingRefs(plan: BuiltContextPlan): BuiltContextPlan {
-		const branch = this.sessionManager.getBranch();
+		const branch = this.sessionManager.getRuntimeBranch();
 		const remap = new Map<string, string>();
 		const exactByPending = new Map<string, AgentMessage>();
 		for (const exact of plan.sourceIndex.exactEntries) {
@@ -11404,7 +11575,7 @@ export class AgentSession {
 	/** Persist the request plan once, after pending_* refs have been remapped. */
 	#persistContextSteadyPlanAudit(plan: BuiltContextPlan): void {
 		const already = this.sessionManager
-			.getBranch()
+			.getRuntimeBranch()
 			.some(
 				entry =>
 					entry.type === "custom" &&
@@ -11529,7 +11700,7 @@ export class AgentSession {
 		this.#dropSanLoopRoleContextMessagesFromActiveContext();
 
 		// Active branch only — off-branch plan/packet refs must not pollute role context.
-		const built = buildSanLoopRoleContext(this.sessionManager.getBranch(), {
+		const built = buildSanLoopRoleContext(this.sessionManager.getRuntimeBranch(), {
 			role: "commander",
 			settings: {
 				tokenBudget: this.settings.get("san.executionLoop.roleContext.tokenBudget") as number,
@@ -11580,7 +11751,7 @@ export class AgentSession {
 					projectionId: projection.projectionId,
 					notifiedAt,
 				});
-				store.syncSessionEntries(this.sessionId, this.sessionManager.getEntries());
+				store.syncSessionEntries(this.sessionId, this.sessionManager.getRuntimeEntries());
 			}
 			if (unnotified.length > 0) {
 				this.emitNotice(
@@ -11609,7 +11780,7 @@ export class AgentSession {
 			const scopes = await this.#resolveSanBrainScopes(cwd);
 			const store = SanBrainStore.open(this.settings.getAgentDir());
 			try {
-				store.syncSessionEntries(this.sessionId, this.sessionManager.getEntries());
+				store.syncSessionEntries(this.sessionId, this.sessionManager.getRuntimeEntries());
 				return buildSanBrainStatePrelude(store.listActiveStates(1000), {
 					sessionId: this.sessionId,
 					turnId,
@@ -11675,7 +11846,7 @@ export class AgentSession {
 		if (!resolveSanBrainRuntimePolicy(this.settings).activationEnabled) return [];
 		const store = SanBrainStore.open(this.settings.getAgentDir());
 		try {
-			store.syncSessionEntries(this.sessionId, this.sessionManager.getEntries());
+			store.syncSessionEntries(this.sessionId, this.sessionManager.getRuntimeEntries());
 			return store.listActiveStates(1000);
 		} catch (error) {
 			logger.debug(`San Brain ${operation} failed`, { error: String(error), sessionId: this.sessionId });
@@ -11717,7 +11888,13 @@ export class AgentSession {
 	#recoverPersistedSanLoopRun(): void {
 		if (this.settings.get("san.executionLoop.enabled") !== true) return;
 		if (this.settings.get("san.executionLoop.ledger.enabled") !== true) return;
-		const latest = findLatestSanLoopRun(this.sessionManager.getEntries());
+		// Startup path: a lazily-hydrated resume must not read the full journal just to
+		// answer "is a run still active". The ledger rebuild is a pure fold over run
+		// snapshots and transitions in journal order; the runtime projection keeps both
+		// (it only drops summarized-away history and already-covered scope records), and
+		// a run interrupted by a compaction stays in the kept region because recovery
+		// (not compaction) is what makes it resumable.
+		const latest = findLatestSanLoopRun(this.sessionManager.getRuntimeEntries());
 		if (!latest || isSanLoopTerminalStatus(latest.data.status)) return;
 		recoverSanLoopRun(this.sessionManager, latest.data);
 	}
@@ -11726,7 +11903,7 @@ export class AgentSession {
 		if (this.settings.get("san.contextSteady.recall.enabled") !== true) return undefined;
 
 		const maxQueryChars = this.settings.get("san.contextSteady.recall.maxQueryChars") as number;
-		const baseQuery = buildContextSteadyRecallQuery(this.sessionManager.getEntries(), expandedText, {
+		const baseQuery = buildContextSteadyRecallQuery(this.sessionManager.getRuntimeEntries(), expandedText, {
 			recentDigests: this.#contextSteadyRecentDigests(),
 			maxQueryChars,
 		});
@@ -11744,7 +11921,7 @@ export class AgentSession {
 			minConfidence: this.settings.get("san.brain.activation.minConfidence") as number,
 			maxQueryChars,
 		});
-		const branch = this.sessionManager.getBranch();
+		const branch = this.sessionManager.getRuntimeBranch();
 		let currentEntryId: string | undefined;
 		for (let index = branch.length - 1; index >= 0; index--) {
 			const entry = branch[index];
@@ -12977,7 +13154,7 @@ export class AgentSession {
 	}
 
 	#syncTodoPhasesFromBranch(): void {
-		const phases = getLatestTodoPhasesFromEntries(this.sessionManager.getBranch());
+		const phases = getLatestTodoPhasesFromEntries(this.sessionManager.getRuntimeBranch());
 		this.setTodoPhases(phases);
 	}
 
@@ -14042,7 +14219,9 @@ export class AgentSession {
 	}
 
 	async #pruneToolOutputs(): Promise<{ prunedCount: number; tokensSaved: number } | undefined> {
-		const branchEntries = this.sessionManager.getBranch();
+		// Same contract as `#pruneStaleToolResults`: only the sent region is eligible, and the
+		// runtime projection plus the compaction boundary already bound it.
+		const branchEntries = this.sessionManager.getRuntimeBranch();
 		const keepBoundaryId = getLatestCompactionEntry(branchEntries)?.firstKeptEntryId;
 		const result = pruneToolOutputs(
 			branchEntries,
@@ -14084,7 +14263,10 @@ export class AgentSession {
 	async #pruneStaleToolResults(): Promise<{ prunedCount: number; tokensSaved: number } | undefined> {
 		const { supersedeReads, dropUseless } = this.settings.getGroup("compaction");
 		if (!supersedeReads && !dropUseless) return undefined;
-		const branchEntries = this.sessionManager.getBranch();
+		// The pass only ever touches the region the provider actually receives, and the runtime
+		// projection keeps that region verbatim (see `selectResumeRuntimeEntries`), so reading the
+		// full chain here would hydrate the whole journal for a per-turn no-op decision.
+		const branchEntries = this.sessionManager.getRuntimeBranch();
 		const keepBoundaryId = getLatestCompactionEntry(branchEntries)?.firstKeptEntryId;
 		const result = pruneSupersededToolResults(
 			branchEntries,
@@ -14653,6 +14835,7 @@ export class AgentSession {
 					...(summaryAuthority ? { summaryAuthority } : {}),
 				});
 			}
+			this.#scheduleResumeSnapshotRefresh();
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.buildDisplaySessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
@@ -15080,6 +15263,37 @@ export class AgentSession {
 		this.#queueContextProbeRecord(snapshot.sessionFile, record);
 	}
 
+	/**
+	 * Pre-compaction tokens the runtime projection no longer carries.
+	 *
+	 * The `snapcompact` boundary records its own pre-compaction size; a checkpoint
+	 * boundary only records the covered-source refs, so its region is summed. Both
+	 * are metadata the bounded projection already holds, which keeps the native
+	 * compaction baseline honest without reading the archived payloads back.
+	 */
+	#contextSteadyArchivedTokenEstimate(entries: readonly SessionEntry[], nonMessageTokens: number): number {
+		const compaction = getLatestCompactionEntry([...entries]);
+		if (compaction) return Math.max(0, compaction.tokensBefore - nonMessageTokens);
+		const checkpoint = [...entries].findLast(
+			(entry): entry is CustomEntry =>
+				entry.type === "custom" && entry.customType === CONTEXT_CHECKPOINT_CUSTOM_TYPE,
+		);
+		const checkpointData = checkpoint?.data;
+		const coveredSourceEntryRefs =
+			checkpointData && typeof checkpointData === "object" && "coveredSourceEntryRefs" in checkpointData
+				? checkpointData.coveredSourceEntryRefs
+				: undefined;
+		if (!Array.isArray(coveredSourceEntryRefs)) return 0;
+		const covered = new Set(coveredSourceEntryRefs.filter(ref => typeof ref === "string"));
+		if (covered.size === 0) return 0;
+		const coveredEntries = entries.filter(entry => covered.has(entry.id));
+		let archivedTokens = 0;
+		for (const estimate of this.#contextSteadyTokenEstimateByEntryRef(coveredEntries).values()) {
+			archivedTokens += estimate;
+		}
+		return archivedTokens;
+	}
+
 	#buildContextProbeSnapshot(
 		requestContextWindow?: number | null,
 		requestKind?: Exclude<ContextProbeRequestKind, "maintenance">,
@@ -15088,19 +15302,19 @@ export class AgentSession {
 		const sessionFile = this.sessionManager.getSessionFile();
 		if (!sessionFile) return;
 
-		const branch = this.sessionManager.getBranch();
+		// Probe accounting must never hydrate the journal it describes. The runtime
+		// projection already carries every payload the resumed session can still see,
+		// and the region a compaction replaced is reported from that compaction's own
+		// recorded pre-compaction size — re-summing archived payloads here would read
+		// (and parse) the entire journal on every single provider request.
+		const branch = this.sessionManager.getRuntimeBranch();
 		const compactionIds = branch.filter(entry => entry.type === "compaction").map(entry => entry.id);
 		const segmentIds = collectContextSegmentRefs(branch).map(ref => ref.segment.segmentId);
 		const contextWindow = requestContextWindow ?? this.model?.contextWindow ?? 0;
 		const activeEstimatedTokens = this.#estimateStoredContextTokens();
 		const nonMessageTokens = computeNonMessageTokens(this);
 		const rawJournalEstimatedTokens =
-			nonMessageTokens +
-			branch.reduce(
-				(sum, entry) =>
-					entry.type === "message" ? sum + this.#estimateProviderWireMessageTokens(entry.message) : sum,
-				0,
-			);
+			activeEstimatedTokens + this.#contextSteadyArchivedTokenEstimate(branch, nonMessageTokens);
 		const compactionSettings = this.settings.getGroup("compaction");
 		const nativeCompactionThresholdTokens =
 			contextWindow > 0 ? resolveThresholdTokens(contextWindow, compactionSettings) : 0;
@@ -15219,7 +15433,7 @@ export class AgentSession {
 			(plan
 				? estimateContextPlanProjectedTokens(
 						activeMessages,
-						this.sessionManager.getBranch(),
+						this.sessionManager.getRuntimeBranch(),
 						plan,
 						this.#contextSteadyStableProjection() ? this.#contextSteadyRecallMessage : undefined,
 						message => this.#estimateProviderWireMessageTokens(message, opts),
@@ -15381,7 +15595,7 @@ export class AgentSession {
 	}
 
 	#continuationAuthoritySourceMissing(): boolean {
-		return isContinuationAuthoritySourceMissing(this.sessionManager.getBranch());
+		return isContinuationAuthoritySourceMissing(this.sessionManager.getRuntimeBranch());
 	}
 
 	#contextSteadySegmentMaintenanceHint(): {
@@ -15395,7 +15609,10 @@ export class AgentSession {
 		if (!this.#contextSteadyIsActive() || this.settings.get("san.contextSteady.segment.enabled") !== true) {
 			return { required: false, tokenHint: false, durationHint: false, tokens: 0, elapsedMs: 0, boundaryId: "none" };
 		}
-		const entries = this.sessionManager.getBranch();
+		// Segment accounting spans this turn's own region, which the runtime
+		// projection carries verbatim; reading the full chain would hydrate every
+		// archived payload to measure a running segment (see `selectResumeRuntimeEntries`).
+		const entries = this.sessionManager.getRuntimeBranch();
 		let userIndex = -1;
 		for (let index = entries.length - 1; index >= 0; index--) {
 			const entry = entries[index];
@@ -15404,19 +15621,27 @@ export class AgentSession {
 				break;
 			}
 		}
-		if (userIndex < 0) {
-			return { required: false, tokenHint: false, durationHint: false, tokens: 0, elapsedMs: 0, boundaryId: "none" };
-		}
-
+		// A mid-run compaction can rewrite the branch so the turn's original user
+		// entry no longer appears in the runtime projection (its intent now lives in
+		// the compaction summary). The logical turn did not end there: when a
+		// Segment boundary exists, keep segment accounting running from it instead
+		// of silently dying. Without any recorded Segment there is no interval to
+		// continue, so the hint stays idle (hard-pressure recovery owns that path).
 		const latestSegment = collectContextSegmentRefs(entries).at(-1);
 		const latestSegmentIndex = latestSegment ? entries.findIndex(entry => entry.id === latestSegment.entryId) : -1;
-		const boundaryIndex = latestSegmentIndex > userIndex ? latestSegmentIndex : userIndex - 1;
+		const segmentAfterUser = userIndex >= 0 && latestSegmentIndex > userIndex;
+		if (userIndex < 0 && !latestSegment) {
+			return { required: false, tokenHint: false, durationHint: false, tokens: 0, elapsedMs: 0, boundaryId: "none" };
+		}
+		const boundaryIndex = segmentAfterUser ? latestSegmentIndex : userIndex >= 0 ? userIndex - 1 : latestSegmentIndex;
 		const estimates = this.#contextSteadyTokenEstimateByEntryRef(entries);
 		let tokens = 0;
 		for (const entry of entries.slice(boundaryIndex + 1)) tokens += estimates.get(entry.id) ?? 0;
 
 		const startedAt =
-			latestSegmentIndex > userIndex ? latestSegment?.segment.createdAt : entries[userIndex]?.timestamp;
+			segmentAfterUser || (userIndex < 0 && latestSegment)
+				? latestSegment?.segment.createdAt
+				: (userIndex >= 0 ? entries[userIndex] : entries[0])?.timestamp;
 		const parsedStartedAt = startedAt ? Date.parse(startedAt) : Number.NaN;
 		const elapsedMs = Number.isFinite(parsedStartedAt) ? Math.max(0, Date.now() - parsedStartedAt) : 0;
 		const maxTokens = this.#contextSteadySegmentTokenThreshold();
@@ -15426,13 +15651,17 @@ export class AgentSession {
 		);
 		const tokenHint = maxTokens > 0 && tokens >= maxTokens;
 		const durationHint = maxDurationMs > 0 && elapsedMs >= maxDurationMs;
+		const boundaryId =
+			segmentAfterUser || (userIndex < 0 && latestSegment)
+				? latestSegment!.entryId
+				: ((userIndex >= 0 ? entries[userIndex] : entries[0])?.id ?? "none");
 		return {
 			required: tokenHint || durationHint,
 			tokenHint,
 			durationHint,
 			tokens,
 			elapsedMs,
-			boundaryId: latestSegmentIndex > userIndex ? latestSegment!.entryId : entries[userIndex]!.id,
+			boundaryId,
 		};
 	}
 
@@ -15583,7 +15812,7 @@ export class AgentSession {
 		}
 
 		const messagesBefore = activeMessages.length;
-		const compactionBefore = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
+		const compactionBefore = getLatestCompactionEntry(this.sessionManager.getRuntimeBranch())?.id;
 		const matchedTriggers: ContextMaintenanceTrigger[] = [];
 		if (nativeMaintenanceRequired) matchedTriggers.push("native_threshold");
 		if (steadyMaintenanceRequired) matchedTriggers.push("steady_target");
@@ -15607,7 +15836,7 @@ export class AgentSession {
 		if (compactedMessages !== activeMessages) {
 			activeMessages.splice(0, activeMessages.length, ...compactedMessages);
 		}
-		const compactionAfter = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
+		const compactionAfter = getLatestCompactionEntry(this.sessionManager.getRuntimeBranch())?.id;
 		const committed =
 			maintenanceResult.historyRewritten === true ||
 			(compactionAfter !== undefined && compactionAfter !== compactionBefore);
@@ -15707,7 +15936,12 @@ export class AgentSession {
 		// The error shouldn't trigger another compaction since we already compacted.
 		// Example: opus fails -> switch to codex -> compact -> switch back to opus -> opus error
 		// is still in context but shouldn't trigger compaction again.
-		const branch = this.sessionManager.getBranch();
+		// Both reads below are projection-stable: the newest compaction and the newest assistant
+		// turn survive {@link SessionManager.getRuntimeBranch} in journal order, and an archived
+		// assistant turn only needs the timestamp fallback inside `#assistantPredatesCompaction`.
+		// Asking for the full chain here would force a synchronous whole-journal hydration on the
+		// first prompt after a snapshot-bootstrapped resume.
+		const branch = this.sessionManager.getRuntimeBranch();
 		const compactionEntry = getLatestCompactionEntry(branch);
 		const errorIsFromBeforeCompaction =
 			compactionEntry !== null && this.#assistantPredatesCompaction(assistantMessage, compactionEntry, branch);
@@ -21687,6 +21921,11 @@ export class AgentSession {
 			this.#rekeyHindsightMemoryForCurrentSessionId();
 			this.#rekeyMnemopiMemoryForCurrentSessionId();
 
+			// A reload/switch must replay the journal as it exists on disk NOW. The
+			// snapshot bootstrap may have served a lazy sidecar view that predates an
+			// external rewrite; hydrating first merges the disk truth (and advances
+			// the leaf along the active branch) before any consumer reads the context.
+			this.sessionManager.getBranch();
 			let sessionContext = this.buildDisplaySessionContext();
 			const didReloadConversationChange =
 				previousSessionContext !== undefined &&
@@ -22470,7 +22709,10 @@ export class AgentSession {
 		const categoryNonMessageTokens = skillsTokens + toolsTokens + systemContextTokens + systemPromptTokens;
 		const currentNonMessageTokens = computeNonMessageTokens(this);
 
-		const branchEntries = this.sessionManager.getBranch();
+		// Only the region at/after the newest compaction boundary is inspected below, and the
+		// runtime projection preserves it verbatim (archived history a summary replaced is dropped),
+		// so the full chain would be an equally-correct but unbounded read on a lazy resume.
+		const branchEntries = this.sessionManager.getRuntimeBranch();
 		const latestCompaction = getLatestCompactionEntry(branchEntries);
 		const compactionIndex = latestCompaction ? branchEntries.lastIndexOf(latestCompaction) : -1;
 

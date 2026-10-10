@@ -9,6 +9,7 @@
 ### Added
 
 - Added canonical `max` and `ultra` reasoning efforts for custom model capability surfaces, passing explicit extended ladders through verbatim while leaving inferred provider ladders unchanged.
+- Added optional `Model.betas` metadata, carried through `buildModel`, for Anthropic beta header passthrough on anthropic-messages models.
 
 ### Changed
 

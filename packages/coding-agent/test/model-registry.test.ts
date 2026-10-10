@@ -894,6 +894,93 @@ describe("ModelRegistry", () => {
 			expect(sonnetModels[0].baseUrl).toBe("https://my-proxy.example.com/v1");
 		});
 
+		test.each([
+			"custom/openrouter-beta-model",
+			"anthropic/claude-sonnet-4",
+		])("custom model definition preserves betas for %s", id => {
+			const betas = ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"];
+			writeRawModelsJson({
+				openrouter: {
+					baseUrl: "https://my-proxy.example.com/v1",
+					apiKey: "TEST_KEY",
+					api: "anthropic-messages",
+					models: [
+						{
+							id,
+							name: "Custom Beta Model",
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 100000,
+							maxTokens: 8000,
+							betas,
+						},
+					],
+				},
+			});
+
+			const configured = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(configured.getError()).toBeUndefined();
+			const models = getModelsForProvider(configured, "openrouter").filter(model => model.id === id);
+			expect(models).toHaveLength(1);
+			expect(models[0].betas).toEqual(betas);
+		});
+
+		test("invalid custom model definition betas report the indexed configuration path", () => {
+			writeRawModelsJson({
+				openrouter: {
+					baseUrl: "https://my-proxy.example.com/v1",
+					apiKey: "TEST_KEY",
+					api: "anthropic-messages",
+					models: [
+						{
+							id: "custom/openrouter-beta-model",
+							name: "Custom Beta Model",
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 100000,
+							maxTokens: 8000,
+							betas: 123,
+						},
+					],
+				},
+			});
+
+			const invalid = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(invalid.getError()?.message).toContain("Failed to load config file models, Schema error");
+			expect(invalid.getError()?.message).toContain("providers.openrouter.models.0.betas");
+			expect(invalid.find("openrouter", "custom/openrouter-beta-model")).toBeUndefined();
+		});
+
+		test("an empty model override beta array clears custom model definition betas", () => {
+			const id = "custom/openrouter-beta-model";
+			writeRawModelsJson({
+				openrouter: {
+					baseUrl: "https://my-proxy.example.com/v1",
+					apiKey: "TEST_KEY",
+					api: "anthropic-messages",
+					models: [
+						{
+							id,
+							name: "Custom Beta Model",
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 100000,
+							maxTokens: 8000,
+							betas: ["context-1m-2025-08-07"],
+						},
+					],
+					modelOverrides: { [id]: { betas: [] } },
+				},
+			});
+
+			const configured = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(configured.getError()).toBeUndefined();
+			expect(configured.find("openrouter", id)?.betas).toEqual([]);
+		});
+
 		test("custom same-id replacement does not keep bundled headers", () => {
 			const model = copilotReplace.find("github-copilot", "gpt-4o");
 			expect(model?.headers).toEqual({ "X-Proxy": "proxy" });
@@ -1394,6 +1481,37 @@ describe("ModelRegistry", () => {
 			expect(error?.message).toContain("providers.myprovider.compat.thinkingFormat");
 			expect(error?.message).toContain("deepseek");
 			expect(invalid.find("myprovider", "my-model")).toBeUndefined();
+		});
+
+		test.each([
+			123,
+			null,
+			"context-1m-2025-08-07",
+			[123],
+			["context-1m-2025-08-07", 123],
+		])("invalid model override betas report a configuration error: %j", betas => {
+			writeRawModelsJson({
+				openrouter: {
+					modelOverrides: { "anthropic/claude-sonnet-4": { betas } },
+				},
+			});
+
+			const invalid = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(invalid.getError()?.message).toContain("modelOverrides");
+			expect(invalid.getError()?.message).toContain("betas");
+		});
+
+		test("valid model override betas remain available on the configured model", () => {
+			const betas = ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"];
+			writeRawModelsJson({
+				openrouter: {
+					modelOverrides: { "anthropic/claude-sonnet-4": { betas } },
+				},
+			});
+
+			const configured = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(configured.getError()).toBeUndefined();
+			expect(configured.find("openrouter", "anthropic/claude-sonnet-4")?.betas).toEqual(betas);
 		});
 
 		test("model override can change cost fields partially", () => {

@@ -12,6 +12,7 @@ Shared utilities for [San](https://github.com/slicenferqin/san) packages. Zero c
 | `stream` | `readStream` / `readLines` helpers over `ReadableStream` |
 | `ptree` / `procmgr` | Process trees, `ChildProcess` wrapper, process lifecycle management |
 | `postmortem` | Cleanup callbacks on exit, signals, and fatal exceptions |
+| `structured-clone-trace` | Opt-in synchronous native-clone callsite tracing; bounded local output without argument contents |
 | `which` | `$which()` binary lookup with caching |
 | `fetch-retry` | `fetch` with retry/backoff policies |
 | `fs-error` | Errno guards (`isEnoent` and friends) |

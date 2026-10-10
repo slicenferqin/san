@@ -23,7 +23,6 @@ import {
 	canonicalSnapshotKey,
 	getFileSnapshotStore,
 	recordFileSnapshot,
-	recordSeenLines,
 	recordSeenLinesFromBody,
 	SNAPSHOT_MAX_BYTES,
 } from "../edit/file-snapshot-store";
@@ -348,14 +347,6 @@ function recordInMemorySeenLines(
 ): void {
 	if (!absolutePath || !path.isAbsolute(absolutePath) || !seenLines || seenLines.length === 0) return;
 	getFileSnapshotStore(session).record(canonicalSnapshotKey(absolutePath), normalizeToLF(fullText), seenLines);
-}
-
-function lineNumbersFromEntries(entries: readonly LineEntry[]): number[] {
-	const lines: number[] = [];
-	for (const entry of entries) {
-		if (entry.kind === "line") lines.push(entry.lineNumber);
-	}
-	return lines;
 }
 
 /** Inclusive line range describing one elided span in a structural summary. */
@@ -1357,6 +1348,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		const shouldAddHashLines = displayMode.hashLines;
 		const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
+		let rawSeenLines: number[] | undefined;
 		const hashContext =
 			shouldAddHashLines && options.sourcePath
 				? recordFullHashlineContext(
@@ -1367,8 +1359,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					)
 				: undefined;
 		let emittedHashlineHeader = false;
-		let seenLines: number[] | undefined;
-		let rawSeenLines: number[] | undefined;
+		// Whether the text this builder is about to return counts as a displayed
+		// body. Formatting a line-range selection is a display; the messages
+		// that replace it with a "too large"/"truncated" notice are not.
+		let bodyIsDisplayed = false;
 		const formatText = (content: string, startNum: number): string => {
 			const lineCount = countTextLines(content);
 			details.displayContent = {
@@ -1376,7 +1370,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				startLine: startNum,
 				lineNumbers: Array.from({ length: lineCount }, (_, i) => startNum + i),
 			};
-			if (shouldAddHashLines) seenLines = contiguousLineNumbers(startNum, lineCount);
+			if (shouldAddHashLines) bodyIsDisplayed = true;
 			const formatted = formatTextWithMode(content, startNum, shouldAddHashLines, shouldAddLineNumbers);
 			if (!hashContext || emittedHashlineHeader) return formatted;
 			emittedHashlineHeader = true;
@@ -1389,7 +1383,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				startLine: firstLine?.kind === "line" ? firstLine.lineNumber : startNum,
 				lineNumbers: entries.map(entry => (entry.kind === "line" ? entry.lineNumber : null)),
 			};
-			if (shouldAddHashLines) seenLines = lineNumbersFromEntries(entries);
+			if (shouldAddHashLines) bodyIsDisplayed = true;
 			const formatted = formatLineEntriesWithMode(entries, shouldAddHashLines, shouldAddLineNumbers);
 			if (!hashContext || emittedHashlineHeader) return formatted;
 			emittedHashlineHeader = true;
@@ -1462,9 +1456,11 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				outputText = formatLineEntries(buildLineEntries(endLine), startLineDisplay);
 			}
 		}
-
-		if (hashContext?.tag && options.sourcePath && seenLines) {
-			recordSeenLines(this.session, options.sourcePath, hashContext.tag, seenLines);
+		if (hashContext?.tag && options.sourcePath && bodyIsDisplayed) {
+			// The body itself is the claim: `recordSeenLinesFromBody` reads the
+			// numbered rows out of it, so a body that never reaches the model
+			// (the spill below can shorten it) cannot authorize its lines.
+			recordSeenLinesFromBody(this.session, options.sourcePath, hashContext.tag, outputText);
 		}
 		if (options.raw === true && options.sourcePath && options.immutable !== true && rawSeenLines) {
 			recordInMemorySeenLines(this.session, options.sourcePath, text, rawSeenLines);
@@ -1513,7 +1509,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				: undefined;
 		let emittedHashlineHeader = false;
 
-		let seenLines: number[] | undefined;
 		const resultBuilder = toolResult(details);
 		if (options.sourcePath) resultBuilder.sourcePath(options.sourcePath);
 		if (options.sourceUrl) resultBuilder.sourceUrl(options.sourceUrl);
@@ -1539,7 +1534,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			outputText = rawParts.length > 0 ? rawParts.join("\n\n…\n\n") : "";
 		} else if (visibleSpans.length > 0) {
 			const entries = buildLineEntriesWithBlockContext(allLines, visibleSpans, { path: options.sourcePath });
-			if (shouldAddHashLines) seenLines = lineNumbersFromEntries(entries);
 			const firstLine = entries.find(entry => entry.kind === "line");
 			if (firstLine?.kind === "line") {
 				details.displayContent = {
@@ -1559,13 +1553,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		}
 		const finalText =
 			notices.length > 0 ? (outputText ? `${outputText}\n${notices.join("\n")}` : notices.join("\n")) : outputText;
-		if (hashContext?.tag && options.sourcePath && seenLines) {
-			recordSeenLines(this.session, options.sourcePath, hashContext.tag, seenLines);
-		}
 		if (options.raw === true && options.sourcePath && options.immutable !== true && visibleSpans.length > 0) {
 			recordInMemorySeenLines(this.session, options.sourcePath, text, lineNumbersFromSpans(visibleSpans));
 		}
 		resultBuilder.text(finalText);
+		// Body-is-the-claim, same as the single-range builder: only the numbered
+		// rows that survive into the delivered result may authorize an edit.
+		if (hashContext?.tag && options.sourcePath) {
+			recordSeenLinesFromBody(this.session, options.sourcePath, hashContext.tag, outputText);
+		}
 		return resultBuilder.done();
 	}
 

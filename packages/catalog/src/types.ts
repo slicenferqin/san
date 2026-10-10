@@ -755,6 +755,12 @@ export interface Model<TApi extends Api = Api> {
 	omitMaxOutputTokens?: boolean;
 	headers?: Record<string, string>;
 	/**
+	 * Extra Anthropic beta features appended to the `anthropic-beta` request
+	 * header on `anthropic-messages` models (e.g. `context-1m-2025-08-07` for
+	 * relays that gate long context behind the flag). Ignored by other APIs.
+	 */
+	betas?: string[];
+	/**
 	 * Streaming transport override. When `"pi-native"`, `streamSimple` routes
 	 * the request to the model's `baseUrl` via the auth-gateway's
 	 * `POST /v1/pi/stream` endpoint instead of dispatching the per-API

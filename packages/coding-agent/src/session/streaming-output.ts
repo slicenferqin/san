@@ -39,6 +39,10 @@ export interface OutputSummary {
 	elidedBytes?: number;
 	/** Lines elided from the middle when head-retain mode is active. */
 	elidedLines?: number;
+	/** Lines kept from the head by head-retain mode (exact, not a guess). */
+	headLines?: number;
+	/** Lines kept from the tail by head-retain mode. */
+	tailLines?: number;
 	/** Bytes dropped by the per-line column cap (sum across all lines). */
 	columnDroppedBytes?: number;
 	/** Number of distinct lines that hit the per-line column cap. */
@@ -98,6 +102,14 @@ export interface TruncationResult {
 	elidedBytes?: number;
 	/** Lines elided from the middle (truncateMiddle only). */
 	elidedLines?: number;
+	/**
+	 * Lines kept from the head / tail windows (truncateMiddle only). Callers
+	 * that report a shown line range must use these: the byte split between the
+	 * windows is asymmetric whenever `maxHeadBytes` is, so re-deriving the split
+	 * from `outputLines` reproduces a guess rather than what was kept.
+	 */
+	headLines?: number;
+	tailLines?: number;
 	lastLinePartial?: boolean;
 	firstLineExceedsLimit?: boolean;
 }
@@ -569,6 +581,8 @@ export function truncateMiddle(content: string, options: TruncationOptions = {})
 		outputBytes: headBytesKept + tailBytesKept + markerBytes + 2,
 		elidedLines,
 		elidedBytes,
+		headLines: headLinesKept,
+		tailLines: tailLinesKept,
 		lastLinePartial: tail.lastLinePartial,
 		firstLineExceedsLimit: false,
 	};
@@ -588,6 +602,8 @@ export interface InlineByteCapOptions {
 	 * elided bytes stay recoverable.
 	 */
 	saveArtifact?: (full: string) => string | undefined | Promise<string | undefined>;
+	/** Reuse the saved original rather than capture an already-truncated preview. */
+	artifactId?: string;
 }
 
 /** Drop the partial last line of a head window (keep it if there is no newline at all). */
@@ -618,17 +634,36 @@ export async function enforceInlineByteCap(text: string, options: InlineByteCapO
 	const totalBytes = Buffer.byteLength(text, "utf-8");
 	if (totalBytes <= maxBytes) return text;
 
+	let artifactId = options.artifactId;
+	if (!artifactId) {
+		try {
+			artifactId = await options.saveArtifact?.(text);
+		} catch {
+			// Preserve the only full copy when artifact persistence fails.
+			return text;
+		}
+	}
+
 	const head = trimHeadToLineBoundary(truncateHeadBytes(text, Math.floor(maxBytes * 0.6)).text);
 	const tail = trimTailToLineBoundary(truncateTailBytes(text, Math.floor(maxBytes * 0.25)).text);
-	const elidedBytes = Math.max(0, totalBytes - Buffer.byteLength(head, "utf-8") - Buffer.byteLength(tail, "utf-8"));
+	const headBytes = Buffer.byteLength(head, "utf-8");
+	const tailBytes = Buffer.byteLength(tail, "utf-8");
+	const elidedBytes = Math.max(0, totalBytes - headBytes - tailBytes);
 	const marker = `[…${elidedBytes}B elided…]`;
-	let composed = `${head}\n${marker}\n${tail}`;
-
-	const artifactId = await options.saveArtifact?.(text);
-	if (artifactId) {
-		const sep = composed.endsWith(NL) ? "" : NL;
-		composed += `${sep}[raw output: artifact://${artifactId}]`;
+	const footer = artifactId ? `[raw output: artifact://${artifactId}]` : "";
+	const fixedBytes = Buffer.byteLength(marker, "utf-8") + Buffer.byteLength(footer, "utf-8") + 2;
+	const availableBytes = Math.max(0, maxBytes - fixedBytes);
+	let keptHead = head;
+	let keptTail = tail;
+	if (headBytes + tailBytes > availableBytes) {
+		const headBudget = Math.min(headBytes, Math.floor(availableBytes * 0.7));
+		const tailBudget = Math.max(0, availableBytes - headBudget);
+		keptHead = trimHeadToLineBoundary(truncateHeadBytes(head, headBudget).text);
+		keptTail = trimTailToLineBoundary(truncateTailBytes(tail, tailBudget).text);
 	}
+
+	let composed = `${keptHead}\n${marker}\n${keptTail}`;
+	if (footer) composed += `\n${footer}`;
 	return composed;
 }
 
@@ -1237,11 +1272,15 @@ export class OutputSink {
 		let outputLines: number;
 		let elidedBytes: number | undefined;
 		let elidedLines: number | undefined;
+		let headLinesKept: number | undefined;
+		let tailLinesKept: number | undefined;
 
 		if (headBytes > 0 && effectiveTotalBytes > headBytes + tailBytes) {
 			// Middle was elided. Emit head + marker + tail.
 			elidedBytes = Math.max(0, effectiveTotalBytes - headBytes - tailBytes);
 			elidedLines = Math.max(0, totalLines - headLines - tailLines);
+			headLinesKept = headLines;
+			tailLinesKept = tailLines;
 			const marker = formatMiddleElisionMarker(elidedLines, elidedBytes);
 			const markerBytes = Buffer.byteLength(marker, "utf-8");
 			const headSep = this.#head.endsWith("\n") ? "" : "\n";
@@ -1275,6 +1314,8 @@ export class OutputSink {
 			outputBytes,
 			elidedBytes,
 			elidedLines,
+			headLines: headLinesKept,
+			tailLines: tailLinesKept,
 			columnDroppedBytes: this.#columnDroppedBytes > 0 ? this.#columnDroppedBytes : undefined,
 			columnTruncatedLines: this.#columnTruncatedLines > 0 ? this.#columnTruncatedLines : undefined,
 			columnMax: this.#columnTruncatedLines > 0 ? this.#maxColumns : undefined,

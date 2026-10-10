@@ -120,17 +120,23 @@ describe("read tool large artifact handling", () => {
 		}
 	});
 
-	it("recovers original source pages after the logical-turn output budget is exhausted", async () => {
+	it("recovers the saved bytes exactly across 240 bounded continuation pages", async () => {
 		const saved: string[] = [];
-		const settings = Settings.isolated({ "tools.logicalTurnOutputTokens": 1 });
 		const sessionManager = {
 			saveArtifact: async (text: string) => {
 				saved.push(text);
-				const id = String(saved.length);
+				const id = String(saved.length + 99);
 				await Bun.write(path.join(artifactDir, `${id}.read.log`), text);
 				return id;
 			},
 		};
+		const settings = Settings.isolated({
+			"tools.artifactSpillThreshold": 1,
+			"tools.outputPreviewTokens": 12_000,
+			"tools.artifactHeadBytes": 1,
+			"tools.artifactTailBytes": 1,
+			"tools.artifactTailLines": 50,
+		});
 		const context = {
 			settings,
 			sessionManager,
@@ -138,31 +144,96 @@ describe("read tool large artifact handling", () => {
 			model: { contextWindow: 100_000 },
 		} as unknown as AgentToolContext;
 		const wrapped = wrapToolWithMetaNotice(new ReadTool({ ...makeSession(testDir), settings }));
+		// 2,400 sources of original text. The unwrapped read cannot return them in
+		// one result (700 lines per call, 50 KB raw ceiling), so recovery has to go
+		// through bounded pages of the stored artifact.
 		const original = Array.from(
-			{ length: 240 },
+			{ length: 2_400 },
 			(_, index) => `diagnostic-${index + 1}: original failure reason for step ${index + 1}`,
 		).join("\n");
-		await Bun.write(path.join(artifactDir, "0.mcp.log"), original);
-		await wrapped.execute("burn", { path: "artifact://0:raw:1-1" }, undefined, undefined, context);
-		const full = await wrapped.execute("full", { path: "artifact://0:raw:1-240" }, undefined, undefined, context);
-		const fullBody = stripOutputNotice(getTextOutput(full), full.details?.meta);
-		expect(countTokens(fullBody)).toBeLessThanOrEqual(512);
-		expect(fullBody).toContain("diagnostic-");
-		expect(saved).toEqual([original]);
-		expect(getTextOutput(full)).toContain("artifact://1");
+		await Bun.write(path.join(artifactDir, "97.mcp.log"), original);
+		const full = await wrapped.execute("full", { path: "artifact://97:raw:1-2400" }, undefined, undefined, context);
+
+		// The spill wrapper bounds the result and reuses the stored artifact it
+		// came from instead of writing a second copy of the same bytes.
+		expect(full.details?.meta?.truncation?.artifactId).toBe("97");
+		expect(saved).toEqual([]);
+		expect(getTextOutput(full)).toContain("artifact://97");
+		expect(countTokens(stripOutputNotice(getTextOutput(full), full.details?.meta))).toBeLessThanOrEqual(12_000);
+
 		const recovered: string[] = [];
-		for (let start = 1; start <= 240; start += 8) {
-			const page = await wrapped.execute(
-				`page-${start}`,
-				{ path: `artifact://1:raw:${start}-${start + 7}` },
+		for (let page = 0; page < 240; page++) {
+			const start = page * 10 + 1;
+			const result = await wrapped.execute(
+				`page-${page}`,
+				{ path: `artifact://97:raw:${start}-${start + 9}` },
 				undefined,
 				undefined,
 				context,
 			);
-			expect(page.details?.meta?.truncation?.artifactId).toBeUndefined();
-			recovered.push(stripOutputNotice(getTextOutput(page), page.details?.meta));
+			// A bounded page never claims an artifact of its own: recovery stays
+			// anchored to the one stable reference, so no chain forms.
+			expect(result.details?.meta?.truncation?.artifactId).toBeUndefined();
+			const chunk = stripOutputNotice(getTextOutput(result), result.details?.meta);
+			expect(chunk.length).toBeGreaterThan(0);
+			recovered.push(chunk);
 		}
+		expect(recovered).toHaveLength(240);
+		// Byte-exact recovery: the concatenated pages reconstruct the original.
 		expect(recovered.join("\n")).toBe(original);
-		expect(saved).toHaveLength(1);
+		// Paging an artifact back never writes another artifact.
+		expect(saved).toEqual([]);
+	});
+
+	it("never resolves a pinned session's numeric artifact id against another session", async () => {
+		const otherDir = path.join(testDir, "other-session");
+		await fs.mkdir(otherDir, { recursive: true });
+		// Same numeric id in both sessions: 0 is the pre-seeded mcp.log.
+		const otherText = "other-session original: 天地玄黄";
+		await Bun.write(path.join(otherDir, "0.mcp.log"), `${otherText}\n`);
+		const otherUnregister = registerArtifactsDir(otherDir);
+		const pinnedContext = {
+			localProtocolOptions: { getArtifactsDir: () => artifactDir },
+		} as unknown as AgentToolContext;
+
+		try {
+			// `artifact://0` is ambiguous across registered dirs; a session-pinned
+			// lookup must stay inside its own artifacts directory.
+			const pinned = await tool.execute(
+				"pinned",
+				{ path: "artifact://0:raw:1-1" },
+				undefined,
+				undefined,
+				pinnedContext,
+			);
+			expect(getTextOutput(pinned)).toContain("line-001");
+			expect(getTextOutput(pinned)).not.toContain(otherText);
+
+			// An id absent from the pinned session must NOT fall through to the
+			// other registered session that happens to hold it.
+			const missing = await tool
+				.execute("missing", { path: "artifact://99:raw:1-1" }, undefined, undefined, pinnedContext)
+				.then(
+					result => ({ ok: true as const, text: getTextOutput(result) }),
+					error => ({ ok: false as const, text: error instanceof Error ? error.message : String(error) }),
+				);
+			expect(missing.text).not.toContain(otherText);
+
+			// Repeated reads keep hitting the pinned session rather than whichever
+			// directory the registry resolves for the bare id.
+			for (let attempt = 0; attempt < 3; attempt++) {
+				const repeat = await tool.execute(
+					`repeat-${attempt}`,
+					{ path: "artifact://0:raw:1-1" },
+					undefined,
+					undefined,
+					pinnedContext,
+				);
+				expect(getTextOutput(repeat)).toContain("line-001");
+				expect(getTextOutput(repeat)).not.toContain(otherText);
+			}
+		} finally {
+			otherUnregister();
+		}
 	});
 });

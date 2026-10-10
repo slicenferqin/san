@@ -173,7 +173,7 @@ export async function generateDigest(
 ): Promise<TurnDigestGenerationResult | undefined> {
 	if (!steadySettings.enabled || !steadySettings.digest.enabled) return undefined;
 
-	const entries = sessionManager.getEntries();
+	const entries = sessionManager.getRuntimeEntries();
 	const existing = findExistingDigest(entries, source);
 	const existingDigest = existing?.type === "custom" ? (existing.data as TurnDigest) : undefined;
 	const canUpgrade =

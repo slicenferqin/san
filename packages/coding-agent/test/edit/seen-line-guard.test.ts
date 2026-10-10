@@ -7,6 +7,7 @@ import { type ExecuteHashlineSingleOptions, executeHashlineSingle } from "@san/c
 import { canonicalSnapshotKey, getFileSnapshotStore } from "@san/coding-agent/edit/file-snapshot-store";
 import { DEFAULT_MAX_BYTES } from "@san/coding-agent/session/streaming-output";
 import type { ToolSession } from "@san/coding-agent/tools";
+import { wrapToolWithMetaNotice } from "@san/coding-agent/tools/output-meta";
 import { ReadTool } from "@san/coding-agent/tools/read";
 import { removeWithRetries } from "@san/utils";
 import { GrepTool } from "../../src/tools/grep";
@@ -122,6 +123,52 @@ describe("read → edit seen-line guard", () => {
 
 		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
 		expect(await Bun.file(file).text()).toContain("EDITED");
+	});
+
+	it("rejects an unseen edit when a wrapped read delivers no complete file lines", async () => {
+		const file = path.join(tmpDir, "wide.txt");
+		const wideLine = "x".repeat(900);
+		const content = `${Array.from({ length: 100 }, () => wideLine).join("\n")}\n`;
+		await Bun.write(file, content);
+		const session = createSession(tmpDir);
+
+		const read = await wrapToolWithMetaNotice(new ReadTool(session)).execute("r1", { path: `${file}:40-40` });
+		const text = resultText(read);
+		const tag = tagFromOutput(text);
+		expect(text).toMatch(/^40:x+…$/m);
+		expect(text).not.toContain(wideLine);
+		expect(text).not.toMatch(/^90:/m);
+
+		await expect(
+			executeHashlineSingle(execOptions(`[wide.txt#${tag}]\nSWAP 90.=90:\n+EDITED`, session)),
+		).rejects.toThrow(/never displayed/);
+		expect(await Bun.file(file).text()).toBe(content);
+	});
+
+	it("keeps a previously displayed line editable after an all-clipped wrapped read of the same snapshot", async () => {
+		const file = path.join(tmpDir, "mixed.txt");
+		const wideLine = "x".repeat(900);
+		const lines = Array.from({ length: 100 }, (_, i) => (i === 2 ? "SHORT LINE" : wideLine));
+		const content = `${lines.join("\n")}\n`;
+		await Bun.write(file, content);
+		const session = createSession(tmpDir);
+		const readTool = wrapToolWithMetaNotice(new ReadTool(session));
+
+		const first = await readTool.execute("r1", { path: `${file}:3-3` });
+		const firstText = resultText(first);
+		const tag = tagFromOutput(firstText);
+		expect(firstText).toContain("3:SHORT LINE");
+
+		const second = await readTool.execute("r2", { path: `${file}:40-40` });
+		const secondText = resultText(second);
+		expect(tagFromOutput(secondText)).toBe(tag);
+		expect(secondText).toMatch(/^40:x+…$/m);
+		expect(secondText).not.toContain(wideLine);
+		expect(secondText).not.toContain("3:SHORT LINE");
+
+		await executeHashlineSingle(execOptions(`[mixed.txt#${tag}]\nSWAP 3.=3:\n+EDITED SHORT`, session));
+		lines[2] = "EDITED SHORT";
+		expect(await Bun.file(file).text()).toBe(`${lines.join("\n")}\n`);
 	});
 
 	it("records raw single-range reads as seen without emitting a hashline header", async () => {
@@ -331,11 +378,11 @@ describe("read → edit seen-line guard", () => {
 		expect(await Bun.file(file).text()).toBe(`${lines.join("\n")}\n`);
 	});
 
-	it("marks column-clipped read lines as seen (clipped-line check removed)", async () => {
-		// A 4KB single line — the read tool's column cap (default 512 chars)
-		// clips this into `<prefix>…` in the numbered output. The clipped-line
-		// exclusion was removed, so the displayed line counts as seen and a
-		// follow-up edit anchored there applies even with the guard enabled.
+	it("refuses an anchor on a column-clipped row and takes a hashline re-read instead", async () => {
+		// A 4KB single line — the read tool's column cap clips it to `<prefix>…`
+		// in the numbered output. The row proves the line number was displayed,
+		// never its content, so it must stay unauthorized and the hunk must
+		// instead be anchored on the re-read that emits the full line.
 		const file = path.join(tmpDir, "wide.txt");
 		const wide = "a".repeat(4096);
 		const content = `head\n${wide}\nfoot\n`;
@@ -346,10 +393,12 @@ describe("read → edit seen-line guard", () => {
 		const tag = tagFromOutput(resultText(read));
 
 		const seen = getFileSnapshotStore(session).byHash(canonicalSnapshotKey(file), tag)?.seenLines;
-		expect(seen?.has(2)).toBe(true);
+		expect(seen?.has(2) ?? false).toBe(false);
 
-		await executeHashlineSingle(execOptions(`[wide.txt#${tag}]\nSWAP 2.=2:\n+REPLACED`, session));
-		expect(await Bun.file(file).text()).toBe("head\nREPLACED\nfoot\n");
+		await expect(
+			executeHashlineSingle(execOptions(`[wide.txt#${tag}]\nSWAP 2.=2:\n+REPLACED`, session)),
+		).rejects.toThrow(/never displayed/);
+		expect(await Bun.file(file).text()).toBe(content);
 	});
 });
 

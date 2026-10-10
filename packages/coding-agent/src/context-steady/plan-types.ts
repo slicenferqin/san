@@ -76,6 +76,18 @@ export interface ContextPlanQualityGateOptions {
 	activeCutoffEntryId?: string;
 	maintenanceId?: string;
 	recoveryAttempt?: number;
+	/**
+	 * 最新一批尚未被模型消费的 toolResult entry:它们刚落地、还没有进入任何
+	 * 已完成的模型回合,降级就等于删掉本轮唯一的新事实。保护到下一次真正
+	 * 消费它们的模型请求为止,之后自然老去。
+	 */
+	latestBatchEntryRefs?: readonly string[];
+	/**
+	 * 已确认可读回原文的 stub 候选;undefined = 本轮不限制(提议 pass:宿主尚未
+	 * 捕获)。应急降级只允许计入可替换的条目 —— 否则审计会声称回收了一个物化层
+	 * 根本不会替换的输出。
+	 */
+	eligibleStubEntryRefs?: ReadonlySet<string>;
 }
 
 export interface ContextPlanMaterialAudit {
@@ -119,6 +131,8 @@ export interface ContextPlanToolPairSource {
 	path?: string;
 	/** 同一路径后续又有完整 mutation 时,指向取代它的那次调用。 */
 	supersededByToolCallId?: string;
+	/** 原始工具结果自身的失败状态(截断是另一回事):降级后必须仍然可见。 */
+	isError?: boolean;
 	/** 完全相同 read 结果的源身份,仅用于 provider projection 去重。 */
 	readIdentity?: ContextPlanReadIdentity;
 }
@@ -203,9 +217,32 @@ export interface ContextPlanToolStubMaterial {
 	resultEntryId: string;
 	toolName?: string;
 	path?: string;
-	/** 降级来源:superseded、emergency、aged 或 duplicate(完全相同 read identity)。 */
-	stubKind?: "superseded" | "emergency" | "aged" | "duplicate";
+	/** Replacement kind; previews retain fresh output instead of aging it. */
+	stubKind?: "superseded" | "emergency" | "aged" | "duplicate" | "preview";
+	/** Per-result body bytes, chosen only when the complete request cannot fit. */
+	previewBytes?: number;
+	/**
+	 * 原文恢复入口(宿主在替换前确认可读)。**没有**该字段的条目不允许被投影替换:
+	 * 无法保证读回原文时,唯一安全的行为是保留原始结果不动。
+	 */
+	recovery?: ContextPlanToolStubRecovery;
 	coveredEntryRefs: string[];
+}
+
+/**
+ * 降级 stub 的原文恢复入口。`artifactId` 必须能被 read 工具按
+ * `artifact://<id>` 解析回原文,否则不得写入该字段(stub 不得声称一个读不回来的副本)。
+ */
+export interface ContextPlanToolStubRecovery {
+	kind: "artifact";
+	artifactId: string;
+	/**
+	 * 引用来源语义。`existing` 是历史里本就存在的同一份原文引用(该 toolResult
+	 * 自己 meta 里的 artifactId,或本会话内已可见的引用),`captured` 是宿主在
+	 * 替换前落盘并验证可读的本条原文。两者都能读回,但 `existing` 的 id 不保证
+	 * 是"本条输出刚产生时"的快照,文案不得把它当成当前文件内容的替代。
+	 */
+	source: "existing" | "captured";
 }
 
 /** 调用方(会话宿主)注入的目标锚事实;objective 为空时不建锚材料。 */
@@ -270,6 +307,29 @@ export interface ContextSourceIndex {
 	digests: ContextPlanDigestSource[];
 	checkpoints: ContextPlanCheckpointSource[];
 	entryIds: string[];
+	/**
+	 * 从历史中直接可见的 artifact 引用:assistant 工具参数里的
+	 * `artifact://<id>` 和 toolResult.details.meta.truncation.artifactId。
+	 * 让降级 stub 复用**已经存在**的原文引用,而不是把只是"显示截断"的
+	 * 结果误判成内容已丢失。
+	 */
+	artifactRefs?: ContextPlanArtifactRef[];
+}
+
+export interface ContextPlanArtifactRef {
+	/** 可由 read 工具解析回逐字节原文的 artifact id(纯数字)。 */
+	artifactId: string;
+	/** 该引用的来源 journal entry(assistant toolCall 或 toolResult)。 */
+	entryId?: string;
+	/** toolCallId,用于把引用关联回工具对。 */
+	toolCallId?: string;
+	/**
+	 * 引用的来源语义。`result_metadata` 是**该结果自身**的原文引用,可以安全地
+	 * 当作这条 result 的恢复入口;`assistant_tool_call` 只是某个 assistant 参数
+	 * 里出现过的 URL(例如模型自己 `read artifact://7`),它属于那次调用的**输入**,
+	 * 不是这次结果的字节副本,复用它会把另一份内容冒充成本条输出。
+	 */
+	origin: "assistant_tool_call" | "result_metadata";
 }
 
 export interface BuiltContextPlan {
@@ -304,6 +364,13 @@ export interface BuiltContextPlan {
 	 * (no flag needed here); images are content substitution below.
 	 */
 	offloadAgedImages?: boolean;
+	/**
+	 * Pressure-valve preview truncations applied to tool results (per entry:
+	 * bytes). Carried on the plan so re-gates in the same epoch re-apply the
+	 * same truncation to those entries instead of resurrecting an oversized
+	 * body once a newer result displaces it from the latest batch.
+	 */
+	previewTruncatedToolResults?: Array<{ resultEntryId: string; previewBytes: number }>;
 }
 
 export interface ContextPlanCoverageValidationIssue {

@@ -371,6 +371,35 @@ describe("Patcher seen-line provenance", () => {
 
 		expect(result.sections[0]?.op).toBe("update");
 	});
+
+	it("enforces the seen-line guard before stale-tag drift recovery remaps the anchor", async () => {
+		const body = `${Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n")}\n`;
+		const fs = new InMemoryFilesystem([[PATH, body]]);
+		const snapshots = new InMemorySnapshotStore();
+		// A partial read displayed only lines 1-4. Line 15 is never seen.
+		const tag = snapshots.record(PATH, body, [1, 2, 3, 4]);
+		const patcher = new Patcher({ fs, snapshots });
+
+		// A seen-line edit succeeds and advances the tag to a new hash.
+		// Recovery refuses an unanchored line outright, so no reveal helper
+		// has to be involved for the anchor to slip through were the guard
+		// skipped.
+		await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 3.=3:\n+edited-3`));
+		expect(fs.get(PATH)?.split("\n")[2]).toBe("edited-3");
+		expect(snapshots.head(PATH)?.hash).not.toBe(tag);
+
+		// The stale tag must not launder unseen line 15 onto live content.
+		await expect(patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 15.=15:\n+BLIND-15`))).rejects.toThrow(
+			/never displayed \(it showed/,
+		);
+		expect(fs.get(PATH)?.split("\n")[14]).toBe("line 15");
+
+		// Legitimate recovery of a still-seen anchor under the same stale tag
+		// keeps working: recovery renumbers line 4 onto the live file.
+		const recovered = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 4.=4:\n+recovered-4`));
+		expect(recovered.sections[0]?.op).toBe("update");
+		expect(fs.get(PATH)?.split("\n")[3]).toBe("recovered-4");
+	});
 });
 
 describe("Patcher tag-based path recovery", () => {

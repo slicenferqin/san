@@ -493,6 +493,7 @@ interface ModelPatch {
 	omitMaxOutputTokens?: boolean;
 	useResponsesLite?: boolean;
 	headers?: Record<string, string>;
+	betas?: string[];
 	compat?: ModelSpec<Api>["compat"];
 	contextPromotionTarget?: string;
 	compactionModel?: string;
@@ -520,6 +521,7 @@ function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: ModelTr
 	if (patch.maxTokens !== undefined) result.maxTokens = patch.maxTokens;
 	if (patch.omitMaxOutputTokens !== undefined) result.omitMaxOutputTokens = patch.omitMaxOutputTokens;
 	if (patch.useResponsesLite !== undefined) result.useResponsesLite = patch.useResponsesLite;
+	if (patch.betas !== undefined) result.betas = patch.betas;
 	if (patch.contextPromotionTarget !== undefined) result.contextPromotionTarget = patch.contextPromotionTarget;
 	if (patch.compactionModel !== undefined) result.compactionModel = patch.compactionModel;
 	if (patch.remoteCompaction !== undefined) {
@@ -632,6 +634,7 @@ function buildCustomModelOverlay(
 		omitMaxOutputTokens: modelDef.omitMaxOutputTokens,
 		useResponsesLite: modelDef.useResponsesLite,
 		headers: mergeCustomModelHeaders(providerHeaders, modelDef.headers, authHeader, providerApiKey),
+		betas: modelDef.betas,
 		compat: mergeCompat(providerCompat, modelDef.compat),
 		contextPromotionTarget: modelDef.contextPromotionTarget,
 		compactionModel: modelDef.compactionModel,
@@ -673,6 +676,7 @@ function finalizeCustomModel(model: CustomModelOverlay, options: CustomModelBuil
 		contextWindow: resolvedModel.contextWindow ?? reference?.contextWindow ?? (options.useDefaults ? 128000 : null),
 		maxTokens: resolvedModel.maxTokens ?? reference?.maxTokens ?? (options.useDefaults ? 16384 : null),
 		headers: resolvedModel.headers,
+		betas: resolvedModel.betas,
 		omitMaxOutputTokens: resolvedModel.omitMaxOutputTokens ?? reference?.omitMaxOutputTokens,
 		useResponsesLite: resolvedModel.useResponsesLite ?? reference?.useResponsesLite,
 		compat: mergeCompat(reference?.compatConfig, resolvedModel.compat),

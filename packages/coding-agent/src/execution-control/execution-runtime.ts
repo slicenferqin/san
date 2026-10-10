@@ -68,6 +68,8 @@ export interface ExecutionRuntimeOptions {
 	/** 事件处理失败观察者；缺省为带运行时上下文的错误日志。 */
 	readonly onEventError?: (error: unknown, context: ExecutionRuntimeEventErrorContext) => void;
 	readonly now?: () => string;
+	/** 数值时钟（ms）：scheduler lease/watchdog 决策时间戳来源，测试可冻结。 */
+	readonly nowMs?: () => number;
 }
 
 export interface ExecutionScopeHandle {
@@ -265,9 +267,10 @@ function providerHealthFromJournal(journal: readonly ParsedExecutionScopeJournal
 export class ExecutionRuntimeImpl implements ExecutionRuntime {
 	readonly runtimeId: string;
 	readonly rootSessionId: string;
+	readonly #now: () => string;
+	readonly #nowMs: () => number;
 	readonly taskRegistry: TaskContractRegistry;
 	readonly providerRegistry: ProviderHealthRegistry;
-	readonly #now: () => string;
 	readonly #scopeRegistry: ExecutionScopeRegistry;
 	readonly #persistence: ExecutionScopePersistence;
 	readonly #onEventError: (error: unknown, context: ExecutionRuntimeEventErrorContext) => void;
@@ -290,6 +293,7 @@ export class ExecutionRuntimeImpl implements ExecutionRuntime {
 		this.taskRegistry = options.taskRegistry;
 		this.providerRegistry = options.providerRegistry;
 		this.#now = options.now ?? (() => new Date().toISOString());
+		this.#nowMs = options.nowMs ?? Date.now;
 		this.#onEventError =
 			options.onEventError ??
 			((error, context) => {
@@ -370,7 +374,7 @@ export class ExecutionRuntimeImpl implements ExecutionRuntime {
 		// 会话切到新 scope 后仍可继续派发/观察，互不干扰。
 		const scope = this.#requireScope(scopeId);
 		if (!scope.scheduler) {
-			scope.scheduler = new DurableScheduler({ ledger: scope.ledger });
+			scope.scheduler = new DurableScheduler({ ledger: scope.ledger, now: this.#nowMs });
 			this.#seedWatchdogDuplicates(scope);
 			this.#refreshRunnableNodes(scope);
 		}

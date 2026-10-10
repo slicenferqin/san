@@ -1,6 +1,13 @@
 import type { AgentMessage } from "@san/agent";
 import { getBlobsDir, isEnoent, parseJsonlLenientDetailed } from "@san/utils";
-import { BlobStore, isBlobRef, resolveImageData, resolveImageDataUrl } from "./blob-store";
+import {
+	BlobStore,
+	isBlobRef,
+	resolveImageData,
+	resolveImageDataSync,
+	resolveImageDataUrl,
+	resolveImageDataUrlSync,
+} from "./blob-store";
 import { buildSessionContext } from "./session-context";
 import {
 	type CompactionEntry,
@@ -194,6 +201,18 @@ export async function loadEntriesFromFileStream(filePath: string): Promise<{
 
 	return { entries: foldTitleSlot(entries, titleSlot), titleSlot, malformedCount };
 }
+/**
+ * Parse only the JSONL records beginning at a previously settled byte offset.
+ * The caller must validate the offset against a ResumeSnapshot boundary first.
+ */
+export async function loadEntriesFromFileRange(filePath: string, byteOffset: number): Promise<SessionEntry[]> {
+	if (!Number.isSafeInteger(byteOffset) || byteOffset < 0) return [];
+	const text = await Bun.file(filePath).slice(byteOffset).text();
+	if (!text) return [];
+	const parsed = parseJsonlLenientDetailed<RawFileEntry>(text);
+	if (parsed.malformedCount > 0) throw new Error("Session journal tail is malformed");
+	return parsed.entries as SessionEntry[];
+}
 
 /** Read only the fixed-size head window to detect a physical title slot. */
 export async function readTitleSlotFromFile(
@@ -210,6 +229,26 @@ export async function readTitleSlotFromFile(
 	const newlineIndex = head.indexOf("\n");
 	if (newlineIndex < 0) return undefined;
 	return parseTitleSlotLine(head.slice(0, newlineIndex));
+}
+
+/** Read only the bounded file prefix needed to discover a session header. */
+export async function readSessionHeaderFromFile(filePath: string): Promise<SessionHeader | undefined> {
+	const prefix = await Bun.file(filePath)
+		.slice(0, 256 * 1024)
+		.text();
+	for (const line of prefix.split("\n")) {
+		const candidate = line.trim();
+		if (!candidate || parseTitleSlotLine(candidate)) continue;
+		try {
+			const value: unknown = JSON.parse(candidate);
+			if (typeof value === "object" && value !== null && (value as { type?: unknown }).type === "session") {
+				return value as SessionHeader;
+			}
+		} catch {
+			return undefined;
+		}
+	}
+	return undefined;
 }
 /** Exported for compaction.test.ts */
 export function parseSessionEntries(content: string): FileEntry[] {
@@ -264,10 +303,7 @@ export async function loadEntriesFromFile(
 	return (await loadEntriesFromFileWithMetadata(filePath, storage)).entries;
 }
 
-/**
- * Resolve blob references in loaded entries, restoring both session image blocks and persisted
- * provider image URLs back to the inline data expected by downstream transports. Mutates entries in place.
- */
+/** Narrow `{ image_url: string }` holders written by persistence for provider transport images. */
 function hasImageUrl(value: unknown): value is { image_url: string } {
 	return typeof value === "object" && value !== null && "image_url" in value && typeof value.image_url === "string";
 }
@@ -277,41 +313,83 @@ function shouldResolveImagePayload(value: unknown, key: string | undefined): val
 	return (key === "content" && isImageBlock(value)) || key === "images";
 }
 
-async function resolvePersistedBlobRefs(value: unknown, blobStore: BlobStore, key?: string): Promise<void> {
-	if (shouldResolveImagePayload(value, key)) {
-		value.data = await resolveImageData(blobStore, value.data);
-		return;
-	}
-
-	if (Array.isArray(value)) {
-		await Promise.all(value.map(item => resolvePersistedBlobRefs(item, blobStore, key)));
-		return;
-	}
-
-	if (typeof value !== "object" || value === null) return;
-	if (
+function hasPersistedImageResult(value: object): value is { result: string } {
+	return (
 		"type" in value &&
 		value.type === "image_generation_call" &&
 		"result" in value &&
 		typeof value.result === "string" &&
 		isBlobRef(value.result)
-	) {
-		value.result = await resolveImageData(blobStore, value.result);
+	);
+}
+
+/** One externalized payload plus the exact slot it must be written back into. */
+interface PersistedBlobRef {
+	readonly kind: "data" | "result" | "image_url";
+	readonly ref: string;
+	readonly write: (value: string) => void;
+}
+
+function collectPersistedBlobRefs(value: unknown, key: string | undefined, out: PersistedBlobRef[]): void {
+	if (shouldResolveImagePayload(value, key)) {
+		const holder = value;
+		out.push({ kind: "data", ref: holder.data, write: resolved => (holder.data = resolved) });
+		return;
+	}
+
+	if (Array.isArray(value)) {
+		for (const item of value) collectPersistedBlobRefs(item, key, out);
+		return;
+	}
+
+	if (typeof value !== "object" || value === null) return;
+	if (hasPersistedImageResult(value)) {
+		const holder = value;
+		out.push({ kind: "result", ref: holder.result, write: resolved => (holder.result = resolved) });
 	}
 
 	if (hasImageUrl(value) && isBlobRef(value.image_url)) {
-		value.image_url = await resolveImageDataUrl(blobStore, value.image_url);
+		const holder = value;
+		out.push({ kind: "image_url", ref: holder.image_url, write: resolved => (holder.image_url = resolved) });
 	}
 
-	await Promise.all(
-		Object.entries(value).map(([childKey, item]) => resolvePersistedBlobRefs(item, blobStore, childKey)),
-	);
+	for (const [childKey, item] of Object.entries(value)) collectPersistedBlobRefs(item, childKey, out);
+}
+
+function entryBlobRefs(entries: readonly FileEntry[]): PersistedBlobRef[] {
+	const refs: PersistedBlobRef[] = [];
+	for (const entry of entries) {
+		if (entry.type === "session") continue;
+		collectPersistedBlobRefs(entry, undefined, refs);
+	}
+	return refs;
 }
 
 export async function resolveBlobRefsInEntries(entries: FileEntry[], blobStore: BlobStore): Promise<void> {
 	await Promise.all(
-		entries.filter(entry => entry.type !== "session").map(entry => resolvePersistedBlobRefs(entry, blobStore)),
+		entryBlobRefs(entries).map(async (ref: PersistedBlobRef) => {
+			const resolved =
+				ref.kind === "image_url"
+					? await resolveImageDataUrl(blobStore, ref.ref)
+					: await resolveImageData(blobStore, ref.ref);
+			ref.write(resolved);
+		}),
 	);
+}
+
+/**
+ * Synchronous variant of {@link resolveBlobRefsInEntries} for hydration paths that cannot await
+ * (a fenced full rewrite of a snapshot-backed journal). Uses the store's sync primitives so the
+ * resolved payloads are identical to the async path, including the missing-blob fallbacks.
+ */
+export function resolveBlobRefsInEntriesSync(entries: FileEntry[], blobStore: BlobStore): void {
+	for (const ref of entryBlobRefs(entries)) {
+		ref.write(
+			ref.kind === "image_url"
+				? resolveImageDataUrlSync(blobStore, ref.ref)
+				: resolveImageDataSync(blobStore, ref.ref),
+		);
+	}
 }
 
 /**

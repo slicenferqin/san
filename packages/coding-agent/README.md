@@ -90,3 +90,17 @@ The agent supports three mutually-exclusive memory backends, selected via the `m
    - `HINDSIGHT_BANK_MISSION`, `HINDSIGHT_DEBUG`
 
 Switching backends mid-session is honoured on the next system-prompt rebuild and the next `/memory` slash command. Existing users with `memories.enabled = true|false` are migrated to `memory.backend = "local"|"off"` exactly once on first launch.
+
+## Native crash diagnostics
+
+For native Bun crashes inside `structuredClone`, enable focused tracing on a new run:
+
+```sh
+SAN_TRACE_STRUCTURED_CLONE=1 san --resume <session-id>
+```
+
+The development launcher `sand` accepts the same environment variable. Tracing is off by default and adds synchronous I/O overhead; it collects diagnostic information, not a crash fix.
+
+The recorder writes `san.structured-clone.<pid>.<thread>.<timestamp>.jsonl` under the San log directory (`~/.san/logs/` on macOS), retaining at most 128 KiB per file. Records contain the JavaScript stack, current execution phase, argument count, and top-level input type, never cloned values, prompt bodies, or error contents. The active call is written synchronously before entering Bun, so a native crash can leave it available even when JavaScript cleanup never runs.
+
+After a crash, inspect the final record's `activeCall`: a non-null value identifies the outstanding clone. Nested clones restore the outer active call when they return, so the final event can be `return` while an outer clone remains active. Keep this trace alongside the normal San log and the operating system's crash report. Restart without the environment variable to disable tracing.

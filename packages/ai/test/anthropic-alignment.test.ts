@@ -419,6 +419,52 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(capturedBeta).toContain("mid-conversation-system-2026-04-07");
 	});
 
+	it.each([
+		["API-key", "sk-ant-api-test"],
+		["OAuth", "sk-ant-oat01-test"],
+	])("merges configured model and caller betas once in ordinary Anthropic %s request headers", async (authMode, apiKey) => {
+		const modelBeta = "model-configured-beta-2026-10-09";
+		const callerBeta = "caller-extra-beta-2026-10-09";
+		const sharedBeta = "shared-beta-2026-10-09";
+		const model: Model<"anthropic-messages"> = buildModel({
+			...ANTHROPIC_MODEL_SPEC,
+			betas: [modelBeta, sharedBeta],
+		});
+		let capturedHeaders: Headers | undefined;
+		const fetchMock = (async (_input: string | URL | Request, init?: RequestInit) => {
+			capturedHeaders = new Headers(init?.headers);
+			return new Response(
+				JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "captured" } }),
+				{ status: 400, headers: { "Content-Type": "application/json" } },
+			);
+		}) as typeof fetch;
+
+		await streamAnthropic(
+			model,
+			{ systemPrompt: ["Stay concise."], messages: [{ role: "user", content: "Hi", timestamp: Date.now() }] },
+			{ apiKey, thinkingEnabled: false, betas: [callerBeta, sharedBeta], fetch: fetchMock },
+		).result();
+
+		expect(capturedHeaders).toBeDefined();
+		const betas = capturedHeaders?.get("anthropic-beta")?.split(",") ?? [];
+		for (const beta of [modelBeta, callerBeta, sharedBeta, "interleaved-thinking-2025-05-14"]) {
+			expect(betas.filter(value => value === beta)).toHaveLength(1);
+		}
+		expect(capturedHeaders?.get("anthropic-version")).toBe("2023-06-01");
+		if (authMode === "OAuth") {
+			expect(betas.filter(value => value === "oauth-2025-04-20")).toHaveLength(1);
+			expect(betas).toContain("context-management-2025-06-27");
+			expect(betas).toContain("prompt-caching-scope-2026-01-05");
+			expect(capturedHeaders?.get("authorization")).toBe(`Bearer ${apiKey}`);
+			expect(capturedHeaders?.get("x-api-key")).toBeNull();
+		} else {
+			expect(betas).not.toContain("oauth-2025-04-20");
+			expect(betas).not.toContain("claude-code-20250219");
+			expect(capturedHeaders?.get("x-api-key")).toBe(apiKey);
+			expect(capturedHeaders?.get("authorization")).toBeNull();
+		}
+	});
+
 	it("gates the effort beta and field off google-vertex requests (#5614)", async () => {
 		let capturedBeta: string | undefined;
 		let capturedBody:

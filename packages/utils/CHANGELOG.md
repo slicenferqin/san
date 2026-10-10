@@ -7,6 +7,10 @@
 - Renamed the published package from `@oh-my-pi/pi-utils` to `@san/utils`; consumers must update package dependencies and imports.
 - Removed the public `getAutoresearchDir`, `getAutoresearchProjectDir`, `getAutoresearchDbPath`, and `getAutoresearchRunDir` path helpers with the Autoresearch experiment.
 
+### Added
+
+- Added opt-in synchronous `structuredClone` callsite tracing with bounded local output, nested-call attribution, and no cloned payload contents, preserving the active JavaScript call across native process crashes.
+
 ### Fixed
 
 - Parsed account-cap reset windows such as “Your limit will reset in 13 minutes” so credential backoff honors the provider's full reset duration.

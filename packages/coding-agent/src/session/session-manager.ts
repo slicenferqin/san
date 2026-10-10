@@ -10,6 +10,7 @@ import {
 	logger,
 	sanitizeText,
 	stringifyJson,
+	TempDir,
 	toError,
 } from "@san/utils";
 import { ArtifactManager } from "./artifacts";
@@ -24,7 +25,15 @@ import {
 	sanitizeRehydratedOpenAIResponsesAssistantMessage,
 	stripInternalDetailsFields,
 } from "./messages";
-import { type BuildSessionContextOptions, buildSessionContext, type SessionContext } from "./session-context";
+import {
+	assertResumeSnapshotRuntimeSize,
+	buildResumeSnapshotJournalRef,
+	loadResumeSnapshot,
+	persistResumeSnapshot,
+	type ResumeSnapshot,
+	sealResumeSnapshot,
+} from "./resume-snapshot";
+import { type BuildSessionContextOptions, buildSessionContextFromBranch, type SessionContext } from "./session-context";
 import {
 	type BranchSummaryEntry,
 	type CompactionEntry,
@@ -54,9 +63,13 @@ import {
 import { findMostRecentSession, listAllSessions, listSessions, type SessionInfo } from "./session-listing";
 import {
 	loadEntriesFromFile,
+	loadEntriesFromFileRange,
 	loadEntriesFromFileWithMetadata,
+	parseSessionContent,
+	readSessionHeaderFromFile,
 	readTitleSlotFromFile,
 	resolveBlobRefsInEntries,
+	resolveBlobRefsInEntriesSync,
 } from "./session-loader";
 import { generateId, migrateToCurrentVersion } from "./session-migrations";
 import {
@@ -66,6 +79,7 @@ import {
 	writeTerminalBreadcrumb,
 } from "./session-paths";
 import { prepareEntryForPersistence } from "./session-persistence";
+import { selectResumeRuntimeEntries } from "./session-runtime-projection";
 import {
 	FileSessionStorage,
 	MemorySessionStorage,
@@ -273,6 +287,11 @@ class SessionEntryIndex {
 		return { ...this.#usage };
 	}
 
+	/** Restore lifetime totals when only a runtime projection is resident. */
+	restoreUsage(usage: UsageStatistics): void {
+		this.#usage = { ...usage };
+	}
+
 	pathTo(id: string | null | undefined = this.#leaf): SessionEntry[] {
 		const branch: SessionEntry[] = [];
 		const seen = new Set<string>();
@@ -336,6 +355,8 @@ export type ReadonlySessionManager = Pick<
 	| "getEntry"
 	| "getLabel"
 	| "getBranch"
+	| "getRuntimeBranch"
+	| "getRuntimeEntries"
 	| "getHeader"
 	| "getEntries"
 	| "getTree"
@@ -364,6 +385,14 @@ interface SessionManagerStateSnapshot {
 	draftOnlySessionCleanupArmed: boolean;
 	header: SessionHeader;
 	entries: SessionEntry[];
+	leafId: string | null;
+	usage: UsageStatistics;
+	journalBacking: SessionJournalBacking | undefined;
+}
+
+interface SessionJournalBacking {
+	readonly path: string;
+	readonly links: Readonly<Record<string, string | null>>;
 }
 
 interface DiskQueueOptions {
@@ -400,6 +429,9 @@ export class SessionManager {
 	#titleUpdatedAt = "";
 	#hasTitleSlot = true;
 	#entries: SessionEntry[] = [];
+	/** Original journal metadata while only the compact runtime is resident. */
+	#snapshotBranch: SessionJournalBacking | undefined;
+
 	#index = new SessionEntryIndex();
 
 	/** File reflects all current entries; appends can go incrementally. */
@@ -451,8 +483,7 @@ export class SessionManager {
 	#artifactManager: ArtifactManager | null = null;
 	#artifactManagerSessionFile: string | null = null;
 	#adoptedArtifactManager: ArtifactManager | null = null;
-	#inMemoryArtifacts: Map<string, string> | null = null;
-	#inMemoryArtifactCounter = 0;
+	#temporaryArtifactDirs: TempDir[] | undefined;
 
 	#suppressBreadcrumb = false;
 	#sessionNameChangedCallbacks = new Set<() => void>();
@@ -563,10 +594,76 @@ export class SessionManager {
 	}
 
 	#fileBody(): string {
+		this.#ensureJournalHydratedSync();
 		let body = this.#titleSlotLine();
 		body += this.#lineFor(this.#header);
 		for (const entry of this.#entries) body += this.#lineFor(entry);
 		return body;
+	}
+	/** Hydrate the original journal only when an exact-history operation or rewrite requires it. */
+	#ensureJournalHydratedSync(): void {
+		if (!this.#snapshotBranch) return;
+		const content = fs.readFileSync(this.#snapshotBranch.path, "utf8");
+		const parsed = parseSessionContent(content);
+		if (parsed.entries.length === 0) throw new Error("Session journal is empty during snapshot hydration");
+		const header = parsed.entries[0] as SessionHeader;
+		if (header.id !== this.#sessionId) throw new Error("Session journal identity changed during snapshot hydration");
+		const ids = new Set<string>();
+		for (const entry of parsed.entries.slice(1)) {
+			if (ids.has(entry.id)) throw new Error(`Duplicate session entry id: ${entry.id}`);
+			ids.add(entry.id);
+		}
+		// Snapshot bootstrap may have resident tail entries and a mutated header.
+		// Merge disk history without allowing stale disk state to overwrite live state.
+		const residentById = new Map(this.#entries.map(entry => [entry.id, entry]));
+		const diskEntries = parsed.entries.slice(1) as SessionEntry[];
+		// Disk payloads are still persisted (blob-ref) form; restore them exactly as the
+		// full loader would before any of them can reach a rewrite or an exact-history read.
+		// Entries already resident were resolved on the way in and must stay untouched.
+		const unhydrated = diskEntries.filter(entry => !residentById.has(entry.id));
+		if (unhydrated.length > 0) resolveBlobRefsInEntriesSync(unhydrated, this.#blobs);
+		const merged: SessionEntry[] = [];
+		const mergedIds = new Set<string>();
+		for (const entry of diskEntries) {
+			merged.push(residentById.get(entry.id) ?? entry);
+			mergedIds.add(entry.id);
+		}
+		for (const entry of this.#entries) {
+			if (!mergedIds.has(entry.id)) merged.push(entry);
+		}
+		const leafId = this.#index.leafId();
+		this.#applyEntries(this.#header ?? header, merged);
+		// The disk journal is authoritative for history beyond a stale snapshot view:
+		// when the preserved leaf is an ancestor of the disk tail's last entry (the
+		// bootstrap served a snapshot that predates appended or rewritten lines), the
+		// leaf must advance to it. A rewound or branched leaf is not on that chain
+		// and stays untouched, so live navigation still wins over disk state.
+		const diskLast = diskEntries.at(-1);
+		let resolvedLeaf = leafId;
+		if (diskLast && diskLast.id !== leafId) {
+			let cursor: SessionEntry | undefined = this.#index.get(diskLast.id);
+			while (cursor && cursor.id !== leafId) {
+				cursor = cursor.parentId ? this.#index.get(cursor.parentId) : undefined;
+			}
+			if (cursor) resolvedLeaf = diskLast.id;
+		}
+		this.#index.setLeaf(resolvedLeaf);
+		// The full-journal load strips stale OpenAI Responses replay metadata from
+		// every entry (see setSessionFile). Hydration is that load, deferred: entries
+		// that were NOT resident at bootstrap (e.g. branches kept only on disk) must
+		// not reach runtime unsanitized. Resident entries were sanitized on the way
+		// in and may be live mid-turn — leave them untouched here.
+		let sanitizedOnHydration = false;
+		for (const entry of this.#entries) {
+			if (residentById.has(entry.id)) continue;
+			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+			const sanitized = sanitizeRehydratedOpenAIResponsesAssistantMessage(entry.message);
+			if (sanitized === entry.message) continue;
+			entry.message = sanitized;
+			sanitizedOnHydration = true;
+		}
+		if (sanitizedOnHydration) this.#rewriteRequired = true;
+		this.#sessionName = this.#sessionName ?? header.title;
 	}
 
 	#historyContainsAssistantMessage(): boolean {
@@ -780,6 +877,14 @@ export class SessionManager {
 		);
 	}
 
+	#recordEntry(entry: SessionEntry): void {
+		if (this.#released) return;
+		this.#entries.push(entry);
+		this.#index.insert(entry);
+		this.#appendToSessionFile(entry);
+		this.#notifyEntryAppended(entry);
+	}
+
 	#notifyEntryAppended(entry: SessionEntry): void {
 		const callback = this.onEntryAppended;
 		if (callback) {
@@ -814,6 +919,7 @@ export class SessionManager {
 
 		this.#entries = [];
 		this.#index.clear();
+		this.#snapshotBranch = undefined;
 		this.#fileIsCurrent = false;
 		this.#rewriteRequired = false;
 		this.#forceFileCreation = false;
@@ -825,8 +931,6 @@ export class SessionManager {
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
 		this.#adoptedArtifactManager = null;
-		this.#inMemoryArtifacts = null;
-		this.#inMemoryArtifactCounter = 0;
 
 		if (this.#persist) {
 			this.#sessionFile =
@@ -842,6 +946,7 @@ export class SessionManager {
 
 	#applyEntries(header: SessionHeader, entries: SessionEntry[]): void {
 		this.#header = header;
+		this.#snapshotBranch = undefined;
 		this.#entries = entries;
 		this.#sessionId = header.id;
 		this.#sessionName = header.title;
@@ -849,24 +954,75 @@ export class SessionManager {
 		this.#titleUpdatedAt = header.timestamp;
 		this.#index.rebuild(entries);
 	}
-
 	#freshEntryFields(): { id: string; parentId: string | null; timestamp: string } {
-		return {
-			id: generateId(this.#index),
-			parentId: this.#index.leafId(),
-			timestamp: nowIso(),
-		};
+		let id: string;
+		do {
+			id = generateId(this.#index);
+		} while (this.#snapshotBranch && Object.hasOwn(this.#snapshotBranch.links, id));
+		return { id, parentId: this.#index.leafId(), timestamp: nowIso() };
 	}
-
-	#recordEntry(entry: SessionEntry): void {
-		if (this.#released) {
-			logger.warn("Dropped session entry appended after terminal release", { type: entry.type });
-			return;
-		}
-		this.#entries.push(entry);
-		this.#index.insert(entry);
-		this.#appendToSessionFile(entry);
-		this.#notifyEntryAppended(entry);
+	/**
+	 * Publish a resume snapshot that makes the next open cheap: the compacted
+	 * runtime projection, the cumulative usage, and the full branch parent
+	 * metadata all come from immutable in-memory state captured before the first
+	 * `await`, while the durable byte boundary is verified against the file on
+	 * disk. A parse/read of the sidecar is never required to refresh, so this is
+	 * safe to call from a lazy manager.
+	 */
+	async refreshResumeSnapshot(): Promise<void> {
+		if (!(this.#storage instanceof FileSessionStorage)) return;
+		await this.#scheduleDiskWork(async () => {
+			if (!this.#persist || !this.#sessionFile || !this.#fileIsCurrent || this.#rewriteRequired || this.#released)
+				return;
+			const sessionFile = this.#sessionFile;
+			const epoch = this.#diskEpoch;
+			const entries = this.#entries;
+			const entryCount = entries.length;
+			const leafId = this.#index.leafId();
+			const header = this.#header;
+			const isCurrent = () =>
+				this.#diskEpoch === epoch &&
+				this.#sessionFile === sessionFile &&
+				this.#entries === entries &&
+				entries.length === entryCount &&
+				this.#index.leafId() === leafId &&
+				this.#header === header &&
+				!this.#rewriteRequired &&
+				!this.#released;
+			try {
+				const refs = this.#branchRefs();
+				const parentIndex: Record<string, string | null> = { ...this.#snapshotBranch?.links };
+				for (const [id, entry] of this.#index.entriesById()) parentIndex[id] = entry.parentId;
+				const runtimeState = {
+					header,
+					activeEntries: this.getRuntimeBranch(),
+					usage: this.getUsageStatistics(),
+				};
+				assertResumeSnapshotRuntimeSize(runtimeState);
+				const runtime = structuredClone(runtimeState);
+				const stat = await fs.promises.stat(sessionFile);
+				if (!isCurrent()) return;
+				const journal = await buildResumeSnapshotJournalRef({
+					path: sessionFile,
+					byteOffset: stat.size,
+					lastEntryId: entries.at(-1)?.id ?? null,
+					revision: Math.trunc(stat.mtimeMs),
+					size: stat.size,
+				});
+				if (!isCurrent()) return;
+				const snapshot = sealResumeSnapshot({
+					schemaVersion: 2,
+					sessionId: this.#sessionId,
+					createdAt: nowIso(),
+					journal,
+					branch: { leafId, rootId: refs[0] ?? null, activeEntryRefs: refs, parentIndex },
+					runtime,
+				});
+				await persistResumeSnapshot(sessionFile, snapshot, { commitGuard: isCurrent });
+			} catch (error) {
+				logger.warn("Resume snapshot refresh failed", { error: String(error) });
+			}
+		});
 	}
 
 	#draftPath(): string | null {
@@ -905,9 +1061,14 @@ export class SessionManager {
 
 		const sessionFile = this.#sessionFile;
 		if (!sessionFile) {
-			this.#artifactManager = null;
-			this.#artifactManagerSessionFile = null;
-			return null;
+			if (!this.#artifactManager || this.#artifactManagerSessionFile !== null) {
+				const directory = TempDir.createSync("@san-artifacts-");
+				if (!this.#temporaryArtifactDirs) this.#temporaryArtifactDirs = [];
+				this.#temporaryArtifactDirs.push(directory);
+				this.#artifactManager = new ArtifactManager(directory.path());
+				this.#artifactManagerSessionFile = null;
+			}
+			return this.#artifactManager;
 		}
 
 		if (this.#artifactManager && this.#artifactManagerSessionFile === sessionFile) return this.#artifactManager;
@@ -973,6 +1134,9 @@ export class SessionManager {
 			// active header/array wholesale, so rollback needs no deep clone.
 			header: this.#header,
 			entries: [...this.#entries],
+			leafId: this.#index.leafId(),
+			usage: this.getUsageStatistics(),
+			journalBacking: this.#snapshotBranch,
 		};
 	}
 
@@ -1010,6 +1174,9 @@ export class SessionManager {
 		this.#forceFileCreation = snapshot.onDisk;
 		this.#draftOnlySessionCleanupArmed = snapshot.draftOnlySessionCleanupArmed;
 		this.#applyEntries(snapshot.header, [...snapshot.entries]);
+		this.#index.setLeaf(snapshot.leafId);
+		this.#index.restoreUsage(snapshot.usage);
+		this.#snapshotBranch = snapshot.journalBacking;
 		this.#sessionName = snapshot.sessionName;
 		this.#titleSource = snapshot.titleSource;
 		this.#titleUpdatedAt = snapshot.titleUpdatedAt;
@@ -1032,7 +1199,95 @@ export class SessionManager {
 		const resolvedSessionFile = path.resolve(sessionFile);
 		this.#sessionFile = resolvedSessionFile;
 		this.#rememberBreadcrumb(this.#cwd, resolvedSessionFile);
+		let snapshot: ResumeSnapshot | null = null;
+		if (this.#storage instanceof FileSessionStorage) {
+			try {
+				snapshot = await loadResumeSnapshot(resolvedSessionFile);
+			} catch {
+				snapshot = null;
+			}
+		}
 		const titleSlot = await readTitleSlotFromFile(resolvedSessionFile, this.#storage);
+		if (snapshot?.runtime.header && snapshot.runtime.activeEntries) {
+			try {
+				const header = snapshot.runtime.header as SessionHeader;
+				const activeEntries = snapshot.runtime.activeEntries as unknown as SessionEntry[];
+				const tailEntries = await loadEntriesFromFileRange(resolvedSessionFile, snapshot.journal.byteOffset);
+				// A byte boundary followed by unread journal bytes that parse to zero
+				// entries means the journal was rewritten externally after this sidecar
+				// was written (the offset now lands mid-line): the snapshot is stale.
+				// Treat it as any other hydration doubt and take the full journal path.
+				if (
+					tailEntries.length === 0 &&
+					(await fs.promises.stat(resolvedSessionFile)).size > snapshot.journal.byteOffset
+				) {
+					throw new Error("Stale ResumeSnapshot byte boundary");
+				}
+				let previousId = snapshot.branch.leafId;
+				const tailIds = new Set<string>();
+				for (const entry of tailEntries) {
+					if (Object.hasOwn(snapshot.branch.parentIndex, entry.id) || tailIds.has(entry.id)) {
+						throw new Error("Duplicate ResumeSnapshot tail entry");
+					}
+					if (entry.parentId !== previousId) throw new Error("ResumeSnapshot tail changes the active branch");
+					tailIds.add(entry.id);
+					previousId = entry.id;
+				}
+				// The sidecar carries the live runtime view of each entry; the journal
+				// carries its persisted form (reasoning signatures dedup'd against the
+				// provider payload, oversized strings truncated, images externalized).
+				// Normalize the archived payloads through the same persistence
+				// transform their appended lines went through, then resolve the blob
+				// refs that transform may produce, so a snapshot-backed resume sees
+				// exactly what a full journal load sees.
+				const normalized = activeEntries.map(entry => prepareEntryForPersistence(entry, this.#blobs));
+				const replayed = [...normalized, ...tailEntries];
+				const migratedEntries = [header, ...replayed];
+				const migrated = migrateToCurrentVersion(migratedEntries);
+				await resolveBlobRefsInEntries(migratedEntries, this.#blobs);
+				this.#applyEntries(migratedEntries[0] as SessionHeader, migratedEntries.slice(1) as SessionEntry[]);
+				// The full-journal path strips stale OpenAI Responses replay metadata
+				// in memory after load (see sanitizeLoadedOpenAIResponsesReplayMetadata).
+				// Resident payloads must get the same treatment without hydrating the
+				// journal: a warmed GitHub Copilot session that replays assistant-side
+				// native history is rejected with 401.
+				let sanitizedReplayMetadata = false;
+				for (const entry of this.#entries) {
+					if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+					const sanitized = sanitizeRehydratedOpenAIResponsesAssistantMessage(entry.message);
+					if (sanitized === entry.message) continue;
+					entry.message = sanitized;
+					sanitizedReplayMetadata = true;
+				}
+				const adoptedCwd = header.cwd ? path.resolve(header.cwd) : undefined;
+				if (adoptedCwd && adoptedCwd !== path.resolve(this.#cwd) && (await directoryExists(adoptedCwd))) {
+					this.#cwd = adoptedCwd;
+					this.#sessionDir = path.dirname(resolvedSessionFile);
+				}
+				const usage = { ...snapshot.runtime.usage };
+				for (const entry of tailEntries) addUsage(usage, entryUsage(entry));
+				this.#index.restoreUsage(usage);
+				this.#titleUpdatedAt = titleSlot?.updatedAt ?? header.timestamp;
+				this.#hasTitleSlot = titleSlot !== undefined;
+				this.#fileIsCurrent = true;
+				this.#rewriteRequired = migrated || sanitizedReplayMetadata;
+				this.#forceFileCreation = true;
+				this.#artifactManager = null;
+				this.#artifactManagerSessionFile = null;
+				this.#adoptedArtifactManager = null;
+				// The runtime branch is served from the sidecar's own ordered views until
+				// the journal is hydrated: it is the only structure that still knows the
+				// ancestry of the archived payloads the snapshot dropped.
+				this.#snapshotBranch = {
+					path: resolvedSessionFile,
+					links: snapshot.branch.parentIndex,
+				};
+				this.#notifySessionIdentityListeners(previousSessionId);
+				return;
+			} catch {
+				// A snapshot is only an acceleration layer. Any hydration doubt uses the existing full journal path.
+			}
+		}
 		const loadedFile = await loadEntriesFromFileWithMetadata(resolvedSessionFile, this.#storage);
 		const fileEntries = loadedFile.entries;
 		if (fileEntries.length === 0) {
@@ -1041,7 +1296,6 @@ export class SessionManager {
 			this.#resetToNewSession(undefined, resolvedSessionFile);
 			this.#forceFileCreation = true;
 			await this.#rewriteAtomically();
-			this.#fileIsCurrent = true;
 			this.#notifySessionIdentityListeners(previousSessionId);
 			return;
 		}
@@ -1109,6 +1363,7 @@ export class SessionManager {
 		const parentSessionId = this.#sessionId;
 		await this.#drainAndCloseWriter();
 		this.#clearDiskError();
+		this.#ensureJournalHydratedSync();
 
 		const timestamp = nowIso();
 		this.#sessionId = mintSessionId();
@@ -1134,6 +1389,9 @@ export class SessionManager {
 		this.#draftOnlySessionCleanupArmed = false;
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
+		// The armed lazy branch points at the previous session's journal; the fork
+		// mints a new session id and file, so hydration must not consult it.
+		this.#snapshotBranch = undefined;
 		this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
 
 		await this.#rewriteAtomically();
@@ -1182,10 +1440,9 @@ export class SessionManager {
 
 			try {
 				if (sessionFileExisted && sessionPathChanged) {
-					await fs.promises.rename(oldSessionFile, newSessionFile);
+					await this.#storage.rename(oldSessionFile, newSessionFile);
 					sessionMoved = true;
 				}
-
 				if (artifactPathChanged) {
 					try {
 						const artifactStat = await fs.promises.stat(oldArtifactsDir);
@@ -1222,6 +1479,15 @@ export class SessionManager {
 			}
 
 			this.#sessionFile = newSessionFile;
+			// A lazily-hydrated snapshot runtime keeps serving archived ancestry
+			// through `#snapshotBranch`, and the journal it reads from is the file
+			// that just moved. Re-point the backing at the new path *here*: after the
+			// rename succeeded (rollback throws above and leaves the old path intact)
+			// and before the rewrite below can hydrate the journal from a path that
+			// no longer exists.
+			if (this.#snapshotBranch && sessionPathChanged) {
+				this.#snapshotBranch = { path: newSessionFile, links: this.#snapshotBranch.links };
+			}
 			this.#artifactManager = null;
 			this.#artifactManagerSessionFile = null;
 		}
@@ -1262,6 +1528,7 @@ export class SessionManager {
 		// on IndexedSessionStorage during `flushSync`) so callers relying on
 		// flush() see the write durably visible to readers.
 		await this.#storage.drain();
+		await this.refreshResumeSnapshot();
 		if (this.#diskFailure) throw this.#diskFailure;
 	}
 
@@ -1316,7 +1583,15 @@ export class SessionManager {
 
 	/** Flush, then close the append writer. */
 	async close(): Promise<void> {
-		if (!this.#persist) return;
+		if (!this.#persist) {
+			if (this.#temporaryArtifactDirs) {
+				await Promise.all(this.#temporaryArtifactDirs.map(directory => directory.remove()));
+				this.#temporaryArtifactDirs = undefined;
+			}
+			this.#artifactManager = null;
+			this.#artifactManagerSessionFile = null;
+			return;
+		}
 		await this.#scheduleDiskWork(async () => {
 			const hadWriter = this.#writer !== undefined;
 			await this.#closeWriterHandle();
@@ -1328,6 +1603,7 @@ export class SessionManager {
 		// tail) to become durable so a graceful shutdown does not exit while
 		// a fire-and-forget publish is still on the wire.
 		await this.#storage.drain();
+		await this.refreshResumeSnapshot();
 		if (this.#diskFailure) throw this.#diskFailure;
 	}
 
@@ -1350,6 +1626,7 @@ export class SessionManager {
 		this.seal();
 		this.#entries = [];
 		this.#index.clear();
+		this.#snapshotBranch = undefined;
 		this.#closeWriterEventually();
 	}
 
@@ -1357,6 +1634,11 @@ export class SessionManager {
 		return this.#cwd;
 	}
 
+	/**
+	 * Lifetime totals. A lazily-hydrated manager starts from the snapshot's sealed
+	 * value and layers the entries appended since; only an exact-history hydration
+	 * recomputes from the full journal.
+	 */
 	getUsageStatistics(): UsageStatistics {
 		return this.#index.usageSnapshot();
 	}
@@ -1395,6 +1677,7 @@ export class SessionManager {
 
 	getArtifactsDir(): string | null {
 		if (this.#adoptedArtifactManager) return this.#adoptedArtifactManager.dir;
+		if (!this.#sessionFile) return this.#artifactManager?.dir ?? null;
 		return artifactsDirectoryFor(this.#sessionFile);
 	}
 
@@ -1411,14 +1694,7 @@ export class SessionManager {
 	}
 
 	async saveArtifact(content: string, toolType: string): Promise<string | undefined> {
-		const manager = this.#artifactManagerForSession();
-		if (manager) return manager.save(content, toolType);
-
-		// Non-persistent session: keep an in-memory copy so spill truncation works.
-		this.#inMemoryArtifacts ??= new Map();
-		const id = String(this.#inMemoryArtifactCounter++);
-		this.#inMemoryArtifacts.set(id, content);
-		return id;
+		return this.#artifactManagerForSession()?.save(content, toolType);
 	}
 
 	async getArtifactPath(id: string): Promise<string | null> {
@@ -1749,10 +2025,17 @@ export class SessionManager {
 		return entry.id;
 	}
 
-	/** All unique TTSR rule names injected on the current branch (root → leaf). */
+	/**
+	 * All unique TTSR rule names injected on the current branch (root → leaf).
+	 *
+	 * Scans the runtime projection, not the full journal: rule injections are
+	 * cumulative, and the projection carries the pre-compaction state entries, so
+	 * this is both the correct and the bounded answer — a lazy resume must never
+	 * hydrate 30 MB of archived payloads to answer a startup metadata question.
+	 */
 	getInjectedTtsrRules(): string[] {
 		const names = new Set<string>();
-		for (const entry of this.getBranch()) {
+		for (const entry of this.getRuntimeBranch()) {
 			if (entry.type !== "ttsr_injection") continue;
 			for (const name of entry.injectedRules) names.add(name);
 		}
@@ -1762,113 +2045,92 @@ export class SessionManager {
 	getLeafId(): string | null {
 		return this.#index.leafId();
 	}
-
 	getLeafEntry(): SessionEntry | undefined {
 		return this.#index.leafEntry();
 	}
 
-	/**
-	 * The most recent model role on the current branch, or undefined when no
-	 * model change has been recorded.
-	 */
+	/** Role of the newest model change on the runtime projection (see getInjectedTtsrRules). */
 	getLastModelChangeRole(): string | undefined {
-		const branch = this.getBranch();
-		for (let index = branch.length - 1; index >= 0; index--) {
-			const entry = branch[index];
+		for (const entry of this.getRuntimeBranch().reverse()) {
 			if (entry.type === "model_change") return entry.role ?? "default";
 		}
 		return undefined;
 	}
 
 	getEntry(id: string): SessionEntry | undefined {
+		const resident = this.#index.get(id);
+		if (resident || !this.#snapshotBranch || !Object.hasOwn(this.#snapshotBranch.links, id)) return resident;
+		this.#ensureJournalHydratedSync();
 		return this.#index.get(id);
 	}
-
-	/** All direct children of an entry. */
 	getChildren(parentId: string): SessionEntry[] {
 		return this.#index.childrenOf(parentId);
 	}
-
 	getLabel(id: string): string | undefined {
 		return this.#index.labelFor(id);
 	}
 
-	/**
-	 * Set or clear a label on an entry. Pass undefined/empty to clear.
-	 */
 	appendLabelChange(targetId: string, label: string | undefined): string {
 		if (!this.#index.has(targetId)) throw new Error(`Entry ${targetId} not found`);
-
 		const entry: LabelEntry = { type: "label", ...this.#freshEntryFields(), targetId, label };
 		this.#recordEntry(entry);
 		return entry.id;
 	}
 
-	/**
-	 * Walk from an entry to root, returning entries in path order. Includes all
-	 * entry types; use buildSessionContext() for the resolved LLM messages.
-	 */
 	getBranch(fromId?: string): SessionEntry[] {
+		this.#ensureJournalHydratedSync();
 		return this.#index.pathTo(fromId ?? this.#index.leafId());
 	}
 
-	/**
-	 * Build the session context (LLM messages), or — with `{ transcript: true }` —
-	 * the full-history display transcript, from the current leaf path.
-	 */
-	buildSessionContext(options?: BuildSessionContextOptions): SessionContext {
-		return buildSessionContext(this.#entries, this.#index.leafId(), this.#index.entriesById(), options);
+	getRuntimeEntries(): SessionEntry[] {
+		return this.getRuntimeBranch();
 	}
 
-	/** Strip stale OpenAI Responses assistant replay metadata from loaded entries. */
+	buildSessionContext(options?: BuildSessionContextOptions): SessionContext {
+		const branch =
+			options?.transcript && !options.collapseCompactedHistory ? this.getBranch() : this.getRuntimeBranch();
+		return buildSessionContextFromBranch(branch, options);
+	}
+
 	sanitizeLoadedOpenAIResponsesReplayMetadata(): boolean {
+		this.#ensureJournalHydratedSync();
 		let changed = false;
 		for (const entry of this.#entries) {
 			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-
 			const sanitized = sanitizeRehydratedOpenAIResponsesAssistantMessage(entry.message);
 			if (sanitized === entry.message) continue;
-
 			entry.message = sanitized;
 			changed = true;
 		}
-
 		return changed;
 	}
 
 	getHeader(): SessionHeader | null {
 		return this.#header;
 	}
-
-	/** All session entries (excludes header). Returns a shallow copy. */
 	getEntries(): SessionEntry[] {
+		this.#ensureJournalHydratedSync();
 		return [...this.#entries];
 	}
-
-	/**
-	 * The session as a tree. A well-formed session has exactly one root; orphaned
-	 * entries (broken parent chain) are returned as roots too.
-	 */
 	getTree(): SessionTreeNode[] {
+		this.#ensureJournalHydratedSync();
 		return this.#index.tree(this.#entries);
 	}
 
-	/**
-	 * Move the leaf to an earlier entry so the next append forms a new branch.
-	 * Existing entries are never modified or deleted.
-	 */
 	branch(branchFromId: string): void {
+		this.#ensureJournalHydratedSync();
 		if (!this.#index.has(branchFromId)) throw new Error(`Entry ${branchFromId} not found`);
 		this.#index.setLeaf(branchFromId);
 	}
 
-	/** Reset the leaf to null so the next append creates a new root entry. */
 	resetLeaf(): void {
+		this.#ensureJournalHydratedSync();
 		this.#index.setLeaf(null);
 	}
 
 	/** Like branch(), but also records a branch_summary of the abandoned path. */
 	branchWithSummary(branchFromId: string | null, summary: string, details?: unknown, fromExtension?: boolean): string {
+		this.#ensureJournalHydratedSync();
 		if (branchFromId !== null && !this.#index.has(branchFromId)) throw new Error(`Entry ${branchFromId} not found`);
 
 		this.#index.setLeaf(branchFromId);
@@ -1884,6 +2146,42 @@ export class SessionManager {
 		};
 		this.#recordEntry(entry);
 		return entry.id;
+	}
+
+	/** Full ancestry, including archived metadata and newly appended entries. */
+	#branchRefs(): string[] {
+		const refs: string[] = [];
+		const seen = new Set<string>();
+		let id = this.#index.leafId();
+		while (id !== null) {
+			if (seen.has(id)) throw new Error("Cyclic session branch");
+			seen.add(id);
+			refs.push(id);
+			const entry = this.#index.get(id);
+			const parent = entry ? entry.parentId : this.#snapshotBranch?.links[id];
+			if (parent === undefined) throw new Error(`Missing session parent metadata: ${id}`);
+			id = parent;
+		}
+		return refs.reverse();
+	}
+
+	/**
+	 * The ordered projection an agent runtime rehydrates from.
+	 *
+	 * On a lazily-hydrated resume (snapshot bootstrap) this is served from the
+	 * sidecar's own two ordered views, which is what makes warm-open bounded:
+	 * `activeEntries` keeps the runtime payloads, and the branch index's
+	 * `parentIndex` supplies the journal-wide ancestry across the archived payloads
+	 * that are deliberately absent from memory. Once the journal is hydrated the
+	 * projection is recomputed from the real chain so live edits keep working.
+	 */
+	getRuntimeBranch(): SessionEntry[] {
+		const branch: SessionEntry[] = [];
+		for (const id of this.#branchRefs()) {
+			const entry = this.#index.get(id);
+			if (entry) branch.push(entry);
+		}
+		return selectResumeRuntimeEntries(branch);
 	}
 
 	/**
@@ -2059,8 +2357,12 @@ export class SessionManager {
 		storage: SessionStorage = new FileSessionStorage(),
 		options?: { initialCwd?: string; suppressBreadcrumb?: boolean },
 	): Promise<SessionManager> {
-		const loaded = await loadEntriesFromFile(filePath, storage);
-		const header = loaded.find(entry => entry.type === "session") as SessionHeader | undefined;
+		let header: SessionHeader | undefined;
+		try {
+			header = await readSessionHeaderFromFile(filePath);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
 		// Resume into the session's recorded cwd only when that directory still
 		// exists. A deleted project dir would make the constructor's #cwd — and the
 		// `setProjectDir` chdir interactive mode runs next — point at (and fail on)

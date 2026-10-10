@@ -1141,7 +1141,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// is idempotent and self-guards against an already-active plan/goal mode; it
 		// does not check plan.enabled itself.
 		const hasConversationContext = this.sessionManager.buildSessionContext().messages.length > 0;
-		const hasExplicitMode = this.sessionManager.getEntries().some(entry => entry.type === "mode_change");
+		const hasExplicitMode = this.sessionManager.getRuntimeEntries().some(entry => entry.type === "mode_change");
 		const isFreshSession = !hasConversationContext && !hasExplicitMode;
 		if (
 			isFreshSession &&

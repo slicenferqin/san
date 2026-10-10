@@ -123,6 +123,47 @@ describe("enforceInlineByteCap", () => {
 		expect(result).toMatch(MARKER_PATTERN);
 	});
 
+	it.each([
+		"synchronous throw",
+		"asynchronous rejection",
+	])("preserves the full over-cap text after saveArtifact fails with %s", async failureMode => {
+		const text = makeLines(500);
+		const maxBytes = 4096;
+		expect(Buffer.byteLength(text, "utf-8")).toBeGreaterThan(maxBytes);
+		let saved: string | undefined;
+		const result = await enforceInlineByteCap(text, {
+			maxBytes,
+			saveArtifact: full => {
+				saved = full;
+				const error = new Error("artifact storage unavailable");
+				if (failureMode === "synchronous throw") throw error;
+				return Promise.reject(error);
+			},
+		});
+		expect(saved).toBe(text);
+		expect(result).toBe(text);
+		expect(result).not.toMatch(MARKER_PATTERN);
+		expect(result).not.toContain("[raw output: artifact://");
+	});
+
+	it("reuses an existing artifact id without calling saveArtifact", async () => {
+		const text = makeLines(500);
+		const maxBytes = 4096;
+		let called = false;
+		const result = await enforceInlineByteCap(text, {
+			maxBytes,
+			artifactId: "17",
+			saveArtifact: () => {
+				called = true;
+				throw new Error("existing artifacts must not be saved again");
+			},
+		});
+		expect(called).toBe(false);
+		expect(result).toMatch(MARKER_PATTERN);
+		expect(Buffer.byteLength(result, "utf-8")).toBeLessThanOrEqual(maxBytes);
+		expect(result.endsWith("[raw output: artifact://17]")).toBe(true);
+	});
+
 	it("does not invoke saveArtifact for sub-cap text", async () => {
 		let called = false;
 		const text = "short output";

@@ -18,6 +18,8 @@ function requiredEntryRefs(options: ContextPlanQualityGateOptions): string[] {
 		...(options.baseRequiredEntryRefs ?? []),
 		...(options.currentPromptEntryRefs ?? []),
 		...(options.liveTailEntryRefs ?? []),
+		// 最新一批尚未被消费的结果:降级它们等于抹掉本轮唯一的新事实。
+		...(options.latestBatchEntryRefs ?? []),
 		...protectedToolPairRefs(options),
 	]);
 }
@@ -84,6 +86,11 @@ export function evaluateContextPlanQualityGate(options: ContextPlanQualityGateOp
 			if (reclaimed >= deficit) break;
 			if (!pair.complete || pair.resultEntryId === undefined) continue;
 			if (pair.entryIds.some(entryRef => protectedRefs.has(entryRef))) continue;
+			// 只计入"确实能替换回原文"的候选:资格集提供时,不可替换的输出连
+			// 回收字节都不算,否则 hard_pressure 会被一个不会发生的替换降档。
+			if (options.eligibleStubEntryRefs !== undefined && !options.eligibleStubEntryRefs.has(pair.resultEntryId)) {
+				continue;
+			}
 			const resultTokens = Math.max(0, Math.floor(options.tokenEstimateByEntryRef?.get(pair.resultEntryId) ?? 0));
 			// Stub 自身 ~40 token;没有正收益的候选不值得打扰缓存。
 			const reclaimable = resultTokens - 40;

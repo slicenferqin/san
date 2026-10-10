@@ -20,6 +20,7 @@ function createContext(cwd: string, phases: TodoPhase[]): InteractiveModeContext
 			appendCustomEntry: vi.fn(),
 			appendMessage: vi.fn(),
 			getBranch: () => [],
+			getRuntimeBranch: () => [],
 			getCwd: () => cwd,
 		},
 		setTodos: vi.fn(),

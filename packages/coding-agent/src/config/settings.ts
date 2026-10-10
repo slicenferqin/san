@@ -1344,6 +1344,13 @@ export class Settings {
 
 	/** Apply schema migrations to raw settings */
 	#migrateRawSettings(raw: RawSettings): RawSettings {
+		// Retired cumulative output cap; previews are bounded per result.
+		delete raw["tools.logicalTurnOutputTokens"];
+		if (isRecord(raw.tools)) {
+			delete raw.tools.logicalTurnOutputTokens;
+			if (Object.keys(raw.tools).length === 0) delete raw.tools;
+		}
+
 		// queueMode -> steeringMode
 		if ("queueMode" in raw && !("steeringMode" in raw)) {
 			raw.steeringMode = raw.queueMode;

@@ -4,7 +4,7 @@ import type { SessionEntry } from "../session/session-entries";
 import type { ContextPlanBudgetSettings } from "./budget";
 import { resolveContextPlanBudget } from "./budget";
 import { projectDigestTier, selectDigestTier } from "./decay";
-import { renderContextPlanContent } from "./materialize";
+import { renderContextPlanContent, substituteToolStub } from "./materialize";
 import {
 	type BuiltContextPlan,
 	CONTEXT_PLAN_CUSTOM_TYPE,
@@ -19,6 +19,7 @@ import {
 	type ContextPlanMaterial,
 	type ContextPlanRecallMaterial,
 	type ContextPlanToolStubMaterial,
+	type ContextPlanToolStubRecovery,
 	type ContextSourceIndex,
 } from "./plan-types";
 import { evaluateContextPlanQualityGate } from "./quality-gate";
@@ -28,7 +29,7 @@ import {
 	isDigestRelevantToPrompt,
 	isTopicShiftPrompt,
 } from "./relevance";
-import { buildContextSourceIndex } from "./source-index";
+import { buildContextSourceIndex, toolResultFullText } from "./source-index";
 import type { ContextPacketRecallLayer } from "./types";
 import type { ContextWorkNoteProjection } from "./working-notes";
 
@@ -52,6 +53,27 @@ export interface BuildContextPlanOptions {
 	activeCutoffEntryId?: string;
 	maintenanceId?: string;
 	recoveryAttempt?: number;
+	/**
+	 * 尚未被后续 assistant 消息消费的最新工具结果批次(含发起调用的 assistant
+	 * entry)。整批受保护到真正的下一次模型请求消费它为止,之后才允许老化 —
+	 * 平行结果与 pending_* 结果不会刚落地就被降级。
+	 */
+	latestBatchEntryRefs?: readonly string[];
+	/** Pressure-only body allowance; fresh result status and recovery remain protected. */
+	latestBatchPreviewBytes?: number;
+	/**
+	 * Per-entry preview truncations the pressure valve already applied in an
+	 * earlier build of this epoch. Those entries may no longer be part of the
+	 * current latest batch (a newer result landed), but their truncation must
+	 * survive re-gates — without it a full rebuild resurrects the oversized
+	 * body and re-trips hard_pressure.
+	 */
+	previewTruncatedToolResults?: ReadonlyMap<string, number>;
+	/**
+	 * 宿主在替换前捕获的原文恢复入口,按 resultEntryId 索引。缺省 = 本轮的
+	 * 候选资格不做限制(提议 pass:宿主还没开始捕获)。
+	 */
+	toolStubRecovery?: ReadonlyMap<string, ContextPlanToolStubRecovery>;
 	recall?: ContextPacketRecallLayer;
 	maxDigestMaterials?: number;
 	createdAt?: string;
@@ -70,7 +92,7 @@ export interface BuildContextPlanOptions {
 	 */
 	frozenMaterials?: readonly ContextPlanMaterial[];
 	/** M4 aged tool-output offload: stub old, large, non-protected results. */
-	toolOutputOffload?: { minTokens: number };
+	toolOutputOffload?: { minTokens: number; budgetTokens?: number };
 	/** M4 image offload: replace earlier-turn image blocks with a re-reference marker. */
 	offloadAgedImages?: boolean;
 	/** 目标锚事实(宿主注入);缺省或 objective 为空时不产生锚材料。 */
@@ -213,6 +235,23 @@ function buildWorkingNoteMaterials(notes: readonly ContextWorkNoteProjection[] |
 }
 
 /**
+ * 把宿主捕获的原文 artifact id 附加到 stub 材料上。只有真实可读的 id 才会
+ * 出现在拒绝/降级文案里——stub 不得声称已保存一个读不回来的副本。
+ */
+function withToolStubRecovery(
+	materials: ContextPlanToolStubMaterial[],
+	recovery: ReadonlyMap<string, ContextPlanToolStubRecovery> | undefined,
+): ContextPlanToolStubMaterial[] {
+	if (!recovery) return materials;
+	return materials.map(material => {
+		const entry = recovery.get(material.resultEntryId);
+		if (!entry) return material;
+		// 原样附加,不重建:{source} 一旦丢失,stub 就会把历史引用说成刚保存的快照。
+		return { ...material, recovery: entry };
+	});
+}
+
+/**
  * Superseded mutation 的表示降级材料(magic-context 研究 §4.4):同一文件
  * 存在更晚完整 mutation 时,旧 toolResult 的 diff/输出已无信息量,物化层
  * 将其替换为小型 stub。保护集内的 entry(活跃文件、最近工具对等 quality
@@ -222,6 +261,8 @@ function buildToolStubMaterials(
 	sourceIndex: ContextSourceIndex,
 	protectedEntryRefs: readonly string[],
 	emergencyStubEntryRefs: readonly string[] = [],
+	toolStubRecovery: ReadonlyMap<string, ContextPlanToolStubRecovery> | undefined,
+	eligibleStubEntryRefs: ReadonlySet<string> | undefined,
 	agedOffload?: {
 		tokenEstimateByEntryRef?: ReadonlyMap<string, number>;
 		minTokens: number;
@@ -231,9 +272,14 @@ function buildToolStubMaterials(
 	const protectedRefs = new Set(protectedEntryRefs);
 	const materials: ContextPlanToolStubMaterial[] = [];
 	const stubbedResultRefs = new Set<string>();
+	// 没有可读回原文的入口就不能降级:被替换的消息会永久失去输出。资格集在
+	// 提议 pass 为 undefined(宿主尚未捕获),其余 pass 只放行已验证可读的条目。
+	const eligible = (resultEntryId: string): boolean =>
+		eligibleStubEntryRefs === undefined || eligibleStubEntryRefs.has(resultEntryId);
 	for (const pair of sourceIndex.toolPairs) {
 		if (pair.supersededByToolCallId === undefined || pair.resultEntryId === undefined) continue;
 		if (protectedRefs.has(pair.resultEntryId)) continue;
+		if (!eligible(pair.resultEntryId)) continue;
 		if (pair.assistantEntryId !== undefined && protectedRefs.has(pair.assistantEntryId)) continue;
 		stubbedResultRefs.add(pair.resultEntryId);
 		materials.push({
@@ -262,6 +308,7 @@ function buildToolStubMaterials(
 				.map(pair => [pair.resultEntryId as string, pair]),
 		);
 		for (const resultEntryId of emergencyStubEntryRefs) {
+			if (!eligible(resultEntryId)) continue;
 			if (stubbedResultRefs.has(resultEntryId)) continue;
 			const pair = pairByResultRef.get(resultEntryId);
 			if (!pair) continue;
@@ -312,6 +359,7 @@ function buildToolStubMaterials(
 			for (const pair of group) {
 				if (pair.resultEntryId === undefined || pair.resultEntryId === retainedResultEntryId) continue;
 				if (stubbedResultRefs.has(pair.resultEntryId)) continue;
+				if (!eligible(pair.resultEntryId)) continue;
 				const identity = pair.readIdentity;
 				if (!identity) continue;
 				stubbedResultRefs.add(pair.resultEntryId);
@@ -346,6 +394,7 @@ function buildToolStubMaterials(
 			if (stubbedResultRefs.has(pair.resultEntryId)) continue;
 			if (protectedRefs.has(pair.resultEntryId)) continue;
 			if (pair.assistantEntryId !== undefined && protectedRefs.has(pair.assistantEntryId)) continue;
+			if (!eligible(pair.resultEntryId)) continue;
 			const estimate = Math.max(0, Math.floor(agedOffload.tokenEstimateByEntryRef?.get(pair.resultEntryId) ?? 0));
 			if (estimate < agedOffload.minTokens) continue;
 			const reclaimable = estimate - TOOL_STUB_TOKEN_ESTIMATE;
@@ -370,7 +419,7 @@ function buildToolStubMaterials(
 			});
 		}
 	}
-	return materials;
+	return withToolStubRecovery(materials, toolStubRecovery);
 }
 
 /** Non-continuation prompts use relevance to drop unrelated derived history. */
@@ -653,16 +702,71 @@ function coverageForMaterials(
 	return coverage;
 }
 
+function buildLatestBatchPreviews(options: BuildContextPlanOptions): ContextPlanToolStubMaterial[] {
+	const maxBytes = options.latestBatchPreviewBytes;
+	const stickyBytes = options.previewTruncatedToolResults;
+	if ((maxBytes === undefined || maxBytes <= 0) && !stickyBytes?.size) return [];
+	if (!options.latestBatchEntryRefs?.length && !stickyBytes?.size) return [];
+	const latestRefs = new Set(options.latestBatchEntryRefs ?? []);
+	const materials: ContextPlanToolStubMaterial[] = [];
+	for (const entry of options.entries) {
+		if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
+		const bytes = latestRefs.has(entry.id) ? maxBytes : stickyBytes?.get(entry.id);
+		if (bytes === undefined || bytes <= 0) continue;
+		const recovery = options.toolStubRecovery?.get(entry.id);
+		if (options.toolStubRecovery !== undefined && !recovery) continue;
+		if (Buffer.byteLength(toolResultFullText(entry.message), "utf8") <= bytes) continue;
+		const originalTokens = estimateTokens(entry.message);
+		const material: ContextPlanToolStubMaterial = {
+			audit: {
+				materialId: materialId("tool_preview", entry.id),
+				kind: "tool_pair",
+				representation: "evidence_stub",
+				entryRefs: [entry.id],
+				tokenEstimate: originalTokens,
+				reason: "bounded preview of an unconsumed result; original remains recoverable",
+			},
+			toolCallId: entry.message.toolCallId,
+			resultEntryId: entry.id,
+			toolName: entry.message.toolName,
+			stubKind: "preview",
+			previewBytes: bytes,
+			...(recovery ? { recovery } : {}),
+			coveredEntryRefs: [],
+		};
+		const preview = substituteToolStub(entry.message, material);
+		if (preview) {
+			material.audit.tokenEstimate = estimateTokens(preview);
+			if (material.audit.tokenEstimate >= originalTokens) continue;
+		}
+		materials.push(material);
+	}
+	return materials;
+}
+
 export function buildContextPlan(options: BuildContextPlanOptions): BuiltContextPlan {
 	const sourceIndex = buildContextSourceIndex(options.entries);
+	const latestPreviews = buildLatestBatchPreviews(options);
+	let tokenEstimateByEntryRef = options.tokenEstimateByEntryRef;
+	if (latestPreviews.length > 0) {
+		const estimates = new Map(tokenEstimateByEntryRef ?? []);
+		for (const preview of latestPreviews) {
+			if (preview.recovery) estimates.set(preview.resultEntryId, preview.audit.tokenEstimate);
+		}
+		tokenEstimateByEntryRef = estimates;
+	}
 	const steadyBudget = resolveContextPlanBudget({
 		settings: options.settings,
 		contextWindow: options.contextWindow,
 		nonMessageTokens: options.nonMessageTokens,
 	});
+	// 有资格被替换的条目集合只推导一次:提议 pass(宿主尚未捕获)为 undefined,
+	// 与 gate、材料构造共享同一判据 —— 审计声称回收的字节必须有真实替换对应。
+	const eligibleStubEntryRefs =
+		options.toolStubRecovery === undefined ? undefined : new Set(options.toolStubRecovery.keys());
 	const initialGate = evaluateContextPlanQualityGate({
 		sourceIndex,
-		tokenEstimateByEntryRef: options.tokenEstimateByEntryRef,
+		tokenEstimateByEntryRef,
 		baseRequiredEntryRefs: options.baseRequiredEntryRefs,
 		currentPromptEntryRefs: options.currentPromptEntryRefs,
 		liveTailEntryRefs: options.liveTailEntryRefs,
@@ -676,7 +780,9 @@ export function buildContextPlan(options: BuildContextPlanOptions): BuiltContext
 		archivedEntryCount: options.archivedEntryCount,
 		activeCutoffEntryId: options.activeCutoffEntryId,
 		maintenanceId: options.maintenanceId,
+		latestBatchEntryRefs: options.latestBatchEntryRefs,
 		recoveryAttempt: options.recoveryAttempt,
+		eligibleStubEntryRefs,
 	});
 	const shouldSelectBurst = initialGate.outcome === "burst_required";
 	const budget = resolveContextPlanBudget({
@@ -687,7 +793,7 @@ export function buildContextPlan(options: BuildContextPlanOptions): BuiltContext
 	});
 	const qualityGate = evaluateContextPlanQualityGate({
 		sourceIndex,
-		tokenEstimateByEntryRef: options.tokenEstimateByEntryRef,
+		tokenEstimateByEntryRef,
 		baseRequiredEntryRefs: options.baseRequiredEntryRefs,
 		currentPromptEntryRefs: options.currentPromptEntryRefs,
 		liveTailEntryRefs: options.liveTailEntryRefs,
@@ -701,7 +807,9 @@ export function buildContextPlan(options: BuildContextPlanOptions): BuiltContext
 		archivedEntryCount: options.archivedEntryCount,
 		activeCutoffEntryId: options.activeCutoffEntryId,
 		maintenanceId: options.maintenanceId,
+		latestBatchEntryRefs: options.latestBatchEntryRefs,
 		recoveryAttempt: options.recoveryAttempt,
+		eligibleStubEntryRefs,
 	});
 	// Decay 压力信号:整体投影输入占用率。projectedInputTokens 是调用方对
 	// 物化后 payload 的真实估算;缺省(如早期调用)回退到保护集占用。
@@ -782,22 +890,24 @@ export function buildContextPlan(options: BuildContextPlanOptions): BuiltContext
 		),
 	);
 	// Tool stubs 不进 plan 渲染与 planTokenBudget fitting:它们作用于 payload
-	// 投影(替换,不省略),在 fitting 定型后追加并补录审计。
 	const toolStubMaterials = buildToolStubMaterials(
 		sourceIndex,
 		qualityGate.protectedEntryRefs,
 		qualityGate.emergencyStubEntryRefs ?? [],
+		options.toolStubRecovery,
+		eligibleStubEntryRefs,
 		options.toolOutputOffload
 			? {
 					tokenEstimateByEntryRef: options.tokenEstimateByEntryRef,
 					minTokens: options.toolOutputOffload.minTokens,
-					// Aged offload is steady-state reclaim, not pressure recovery: cap it
-					// at a quarter of the message budget so one plan never rewrites most
-					// of the history payload in a single request.
-					budgetTokens: Math.max(0, Math.floor(budget.messageBudget / 4)),
+					// Normal aging limits cache churn; a request-pressure pass may reclaim
+					// every recoverable consumed result before reducing fresh output.
+					budgetTokens:
+						options.toolOutputOffload.budgetTokens ?? Math.max(0, Math.floor(budget.messageBudget / 4)),
 				}
 			: undefined,
 	);
+	toolStubMaterials.push(...latestPreviews);
 	const materials = [...fitted.materials, ...toolStubMaterials];
 	const audit: ContextPlanAudit = {
 		...fitted.audit,

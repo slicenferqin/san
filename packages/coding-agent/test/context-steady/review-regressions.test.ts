@@ -263,7 +263,7 @@ describe("context steady review regressions", () => {
 		expect(items).toEqual([expect.objectContaining({ source: "source:old-failure" })]);
 	});
 
-	test("bounds emergency previews across the whole logical turn", async () => {
+	test("preserves independent per-result previews across a logical turn", async () => {
 		const saved: string[] = [];
 		const sessionManager = {
 			saveArtifact: async (content: string) => {
@@ -272,7 +272,6 @@ describe("context steady review regressions", () => {
 			},
 		};
 		const settings = Settings.isolated({
-			"tools.logicalTurnOutputTokens": 1,
 			"tools.outputPreviewTokens": 96,
 		});
 		const tool = wrapToolWithMetaNotice({
@@ -287,7 +286,9 @@ describe("context steady review regressions", () => {
 			bodyTokens.push(countTokens(stripOutputNotice(text, result.details?.meta)));
 		}
 
-		expect(bodyTokens[1]).toBeGreaterThan(0);
-		expect(bodyTokens.reduce((sum, value) => sum + value, 0)).toBeLessThanOrEqual(97);
+		for (const tokens of bodyTokens) {
+			expect(tokens).toBeGreaterThan(0);
+			expect(tokens).toBeLessThanOrEqual(96);
+		}
 	});
 });

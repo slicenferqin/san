@@ -1,6 +1,8 @@
+import type { AgentMessage } from "@san/agent";
 import type { SessionEntry } from "../session/session-entries";
 import { collectContextCheckpoints } from "./checkpoint";
 import type {
+	ContextPlanArtifactRef,
 	ContextPlanAttachmentSource,
 	ContextPlanCheckpointSource,
 	ContextPlanDigestSource,
@@ -17,22 +19,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
-function sourceEntryRefsForDigest(entries: readonly SessionEntry[], digest: TurnDigest): string[] {
-	const fromIndex = entries.findIndex(entry => entry.id === digest.source.fromEntryId);
-	const toIndex = entries.findIndex(entry => entry.id === digest.source.toEntryId);
-	if (fromIndex < 0 || toIndex < 0 || fromIndex > toIndex) {
+function sourceEntryRefsForDigest(
+	entries: readonly SessionEntry[],
+	entryPositions: ReadonlyMap<string, number>,
+	digest: TurnDigest,
+): string[] {
+	const fromIndex = entryPositions.get(digest.source.fromEntryId);
+	const toIndex = entryPositions.get(digest.source.toEntryId);
+	if (fromIndex === undefined || toIndex === undefined || fromIndex > toIndex) {
 		return digest.toolEvidence
 			.flatMap(evidence => evidence.entryIds ?? [])
-			.filter(entryId => entries.some(entry => entry.id === entryId));
+			.filter(entryId => entryPositions.has(entryId));
 	}
 	return entries.slice(fromIndex, toIndex + 1).map(entry => entry.id);
 }
 
-function collectDigestSources(entries: readonly SessionEntry[]): ContextPlanDigestSource[] {
+function collectDigestSources(
+	entries: readonly SessionEntry[],
+	entryPositions: ReadonlyMap<string, number>,
+): ContextPlanDigestSource[] {
 	return collectDigestRefs(entries).map(ref => ({
 		entryId: ref.entryId,
 		digest: ref.digest,
-		sourceEntryRefs: sourceEntryRefsForDigest(entries, ref.digest),
+		sourceEntryRefs: sourceEntryRefsForDigest(entries, entryPositions, ref.digest),
 	}));
 }
 
@@ -96,6 +105,34 @@ function assistantToolCalls(entry: SessionEntry): Array<{
 		});
 	}
 	return calls;
+}
+
+/**
+ * 最新一批尚未被消费的工具结果(含发起调用的 assistant entry)。
+ *
+ * 从历史尾部向前扫:先连续收集已完成的 toolResult(平行调用会形成一段连续
+ * 结果),直到遇到发起这些调用的 assistant 消息并一并收集,然后停在第一条
+ * 更早的其它消息上 —— 那条消息就是消费了上一批结果、又引出这一批的边界。
+ * 尚未返回的调用(只有 assistant toolCall、没有对应结果)也会被收集:它们的
+ * 结果即将落地,不能刚进上下文就被降级。
+ */
+export function collectLatestBatchEntryRefs(entries: readonly SessionEntry[]): string[] {
+	const collected: string[] = [];
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index];
+		if (entry.type !== "message") continue;
+		const role = entry.message.role;
+		if (role === "toolResult") {
+			collected.unshift(entry.id);
+			continue;
+		}
+		if (role === "assistant") {
+			collected.unshift(entry.id);
+			break;
+		}
+		break;
+	}
+	return collected;
 }
 
 function collectToolPairs(entries: readonly SessionEntry[]): ContextPlanToolPairSource[] {
@@ -206,6 +243,79 @@ function collectFileEvidence(entries: readonly SessionEntry[]): ContextPlanFileE
 	return sources;
 }
 
+/** toolResult 的原文文本(注入消息含图片块,只取文本部分),用于降级前捕获。 */
+export function toolResultFullText(message: Extract<AgentMessage, { role: "toolResult" }>): string {
+	return contentText(message.content);
+}
+
+function contentText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter(
+			(block): block is { type: "text"; text: string } =>
+				!!block &&
+				typeof block === "object" &&
+				"type" in block &&
+				block.type === "text" &&
+				"text" in block &&
+				typeof block.text === "string",
+		)
+		.map(block => block.text)
+		.join("\n");
+}
+
+/** `artifact://<id>` 只接受纯数字 id(见 internal-urls/artifact-protocol.ts)。 */
+const ARTIFACT_URL_RE = /^artifact:\/\/(\d+)/;
+
+/**
+ * 从历史里直接可见的 `artifact://` 引用。降级 stub 的恢复入口优先复用这些
+ * 引用(逐字节原文已存在),只有**都没有**时才需要宿主新落盘一份。
+ *
+ * 两个来源:
+ * - assistant toolCall 参数:模型自己按 `Read artifact://7` 打开的引用;
+ * - toolResult.details.meta.truncation.artifactId:输出只是**显示截断**、
+ *   原文早已保存时记下的 id。
+ */
+function collectArtifactRefs(entries: readonly SessionEntry[]): ContextPlanArtifactRef[] {
+	const refs: ContextPlanArtifactRef[] = [];
+	const seen = new Set<string>();
+	for (const entry of entries) {
+		if (entry.type !== "message") continue;
+		const message = entry.message;
+		if (message.role === "assistant") {
+			if (!Array.isArray(message.content)) continue;
+			for (const block of message.content) {
+				const toolCallId = textToolCallId(block);
+				if (!toolCallId || !isRecord(block) || !isRecord(block.arguments)) continue;
+				for (const value of Object.values(block.arguments)) {
+					if (typeof value !== "string") continue;
+					const match = ARTIFACT_URL_RE.exec(value);
+					if (!match || seen.has(match[1])) continue;
+					seen.add(match[1]);
+					refs.push({ artifactId: match[1], entryId: entry.id, toolCallId, origin: "assistant_tool_call" });
+				}
+			}
+			continue;
+		}
+		if (message.role !== "toolResult") continue;
+		const details = message.details;
+		const meta = isRecord(details) && isRecord(details.meta) ? details.meta : undefined;
+		const truncation = meta && isRecord(meta.truncation) ? meta.truncation : undefined;
+		const artifactId =
+			truncation && typeof truncation.artifactId === "string" ? truncation.artifactId.trim() : undefined;
+		if (!artifactId) continue;
+		// dedup 键必须带 origin:同一条原文可能先被模型当参数读过(assistant
+		// toolCall),之后才以 result_metadata 形式标记;只按 artifactId 去重会
+		// 丢掉 result 自己的引用,使可复用的恢复入口查不到。
+		const seenKey = `result_metadata\0${artifactId}`;
+		if (seen.has(seenKey)) continue;
+		seen.add(seenKey);
+		refs.push({ artifactId, entryId: entry.id, toolCallId: message.toolCallId, origin: "result_metadata" });
+	}
+	return refs;
+}
+
 function collectAttachments(entries: readonly SessionEntry[]): ContextPlanAttachmentSource[] {
 	const attachments: ContextPlanAttachmentSource[] = [];
 	for (const entry of entries) {
@@ -218,18 +328,24 @@ function collectAttachments(entries: readonly SessionEntry[]): ContextPlanAttach
 }
 
 export function buildContextSourceIndex(entries: readonly SessionEntry[]): ContextSourceIndex {
+	// 检查点可能引用数万条历史，逐条扫描整个分支会产生平方级开销。
+	const entryPositions = new Map<string, number>();
+	for (const [index, entry] of entries.entries()) {
+		const id = entry.id;
+		if (!entryPositions.has(id)) entryPositions.set(id, index);
+	}
 	const exactEntries = collectExactEntries(entries);
 	const turnBundles = collectTurnBundles(entries);
 	const toolPairs = collectToolPairs(entries);
 	const fileEvidence = collectFileEvidence(entries);
 	const attachments = collectAttachments(entries);
-	const digests = collectDigestSources(entries);
+	const digests = collectDigestSources(entries, entryPositions);
 	const digestByEntryId = new Map(digests.map(digest => [digest.entryId, digest]));
 	const checkpoints: ContextPlanCheckpointSource[] = collectContextCheckpoints(entries).map(ref => {
 		const coveredDigestEntryRefs = ref.checkpoint.entryRefs.filter(entryRef => digestByEntryId.has(entryRef));
 		const authoritativeSourceRefs =
 			ref.checkpoint.coveredSourceEntryRefs && ref.checkpoint.coveredSourceEntryRefs.length > 0
-				? ref.checkpoint.coveredSourceEntryRefs.filter(entryRef => entries.some(entry => entry.id === entryRef))
+				? ref.checkpoint.coveredSourceEntryRefs.filter(entryRef => entryPositions.has(entryRef))
 				: coveredDigestEntryRefs.flatMap(entryRef => {
 						const digestSource = digestByEntryId.get(entryRef);
 						// Fallback digests cannot authorize raw omission via checkpoint expansion.
@@ -255,6 +371,7 @@ export function buildContextSourceIndex(entries: readonly SessionEntry[]): Conte
 		attachments,
 		digests,
 		checkpoints,
+		artifactRefs: collectArtifactRefs(entries),
 		entryIds: entries.map(entry => entry.id),
 	};
 }

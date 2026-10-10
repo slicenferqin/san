@@ -637,6 +637,29 @@ describe("Settings", () => {
 			expect(await readSettings()).toEqual({ providers: { tinyModelDevice: "cpu" }, setupVersion: 1 });
 		});
 
+		it("retires the cumulative output cap while keeping per-result tool settings", async () => {
+			await writeSettings({
+				tools: {
+					logicalTurnOutputTokens: 32_000,
+					outputPreviewTokens: 4_096,
+					artifactSpillThreshold: 32,
+					artifactTailLines: 80,
+				},
+				"tools.logicalTurnOutputTokens": 32_000,
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(settings.isConfigured("tools.artifactTailLines")).toBe(true);
+
+			settings.set("setupVersion", 1);
+			await settings.flush();
+
+			expect(await readSettings()).toEqual({
+				tools: { outputPreviewTokens: 4_096, artifactSpillThreshold: 32, artifactTailLines: 80 },
+				setupVersion: 1,
+			});
+		});
+
 		it("maps legacy hindsight.dynamicBankId=true onto hindsight.scoping=per-project", async () => {
 			await writeSettings({
 				hindsight: { dynamicBankId: true },

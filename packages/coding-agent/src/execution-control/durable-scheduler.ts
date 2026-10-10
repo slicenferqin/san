@@ -159,6 +159,7 @@ export class DurableScheduler {
 				ledger: this.#ledger,
 				mode: "enforce",
 				progressLeaseMs: this.#progressLeaseMs,
+				now: () => new Date(this.#now()).toISOString(),
 			});
 	}
 
