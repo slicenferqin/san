@@ -183,4 +183,92 @@ describe("SessionManager ResumeSnapshot", () => {
 		await resumed.close();
 		await manager.close();
 	});
+
+	it("preserves complete journal history when forking a lazily resumed instance", async () => {
+		const cwd = await root();
+		const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
+		const managers: SessionManager[] = [manager];
+		try {
+			const ids: string[] = [];
+			for (let index = 0; index < 100; index++) {
+				ids.push(
+					manager.appendMessage({
+						role: "user",
+						content: `history-${index}-`.padEnd(3_072, "x"),
+						timestamp: index,
+					}),
+				);
+			}
+			const firstKeptId = ids[95];
+			if (!firstKeptId) throw new Error("first kept entry missing");
+			const compactionId = manager.appendCompaction("historical summary", undefined, firstKeptId, 1000);
+			const currentId = manager.appendMessage({ role: "user", content: "current request", timestamp: 100 });
+			const originalEntries = manager.getEntries();
+			const parentSessionId = manager.getSessionId();
+			await manager.ensureOnDisk();
+			await manager.flush();
+			await manager.refreshResumeSnapshot();
+			const file = manager.getSessionFile();
+			if (!file) throw new Error("session file missing");
+			await manager.close();
+			managers.pop();
+			const originalText = await Bun.file(file).text();
+			expect(await Bun.file(resumeSnapshotPath(file)).exists()).toBe(true);
+
+			const reopened = await SessionManager.open(file, path.dirname(file));
+			managers.push(reopened);
+			const runtimeIds = reopened.getRuntimeBranch().map(entry => entry.id);
+			expect(runtimeIds).not.toContain(ids[0]);
+			expect(runtimeIds).toContain(firstKeptId);
+			expect(runtimeIds).toContain(compactionId);
+			expect(runtimeIds).toContain(currentId);
+			const result = await reopened.fork();
+			if (!result) throw new Error("fork did not create a session file");
+			expect(result.oldSessionFile).toBe(file);
+			expect(result.newSessionFile).not.toBe(file);
+
+			const forked = await SessionManager.open(result.newSessionFile, path.dirname(result.newSessionFile));
+			managers.push(forked);
+			const entries = forked.getEntries();
+			expect(entries).toHaveLength(102);
+			expect(entries.map(entry => entry.id)).toEqual([...ids, compactionId, currentId]);
+			expect(entries).toEqual(originalEntries);
+			expect(forked.getHeader()?.parentSession).toBe(parentSessionId);
+			expect(forked.getSessionId()).not.toBe(parentSessionId);
+			expect(await Bun.file(file).text()).toBe(originalText);
+		} finally {
+			await Promise.all(managers.map(openManager => openManager.close()));
+		}
+	});
+
+	it("retains archived messages only in uncollapsed transcript contexts", async () => {
+		const manager = SessionManager.inMemory(await root());
+		try {
+			const archived = "archived transcript content";
+			const kept = "kept transcript content";
+			manager.appendMessage({ role: "user", content: archived, timestamp: 1 });
+			const keptId = manager.appendMessage({ role: "user", content: kept, timestamp: 2 });
+			manager.appendCompaction("historical summary", undefined, keptId, 1000);
+
+			const transcript = manager.buildSessionContext({ transcript: true });
+			const uncollapsed = manager.buildSessionContext({ transcript: true, collapseCompactedHistory: false });
+			for (const context of [transcript, uncollapsed]) {
+				expect(context.messages.filter(message => message.role === "user").map(message => message.content)).toEqual(
+					[archived, kept],
+				);
+			}
+			expect(uncollapsed.messages).toEqual(transcript.messages);
+
+			const collapsed = manager.buildSessionContext({ transcript: true, collapseCompactedHistory: true });
+			const provider = manager.buildSessionContext();
+			for (const context of [collapsed, provider]) {
+				expect(context.messages.filter(message => message.role === "user").map(message => message.content)).toEqual(
+					[kept],
+				);
+				expect(JSON.stringify(context.messages)).not.toContain(archived);
+			}
+		} finally {
+			await manager.close();
+		}
+	});
 });

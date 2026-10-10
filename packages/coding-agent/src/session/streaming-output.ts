@@ -639,7 +639,8 @@ export async function enforceInlineByteCap(text: string, options: InlineByteCapO
 		try {
 			artifactId = await options.saveArtifact?.(text);
 		} catch {
-			// The inline result remains useful even when persistence is unavailable.
+			// Preserve the only full copy when artifact persistence fails.
+			return text;
 		}
 	}
 

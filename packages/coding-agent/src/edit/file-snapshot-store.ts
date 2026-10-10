@@ -116,8 +116,7 @@ export function recordSnapshotText(
  * tag must exist before the caller prints it, but a later stage can still
  * shorten the body those lines describe, and an eager record is exactly the
  * thing that authorizes lines the model never received. An empty `seenLines`
- * is dropped rather than recorded — the patcher reads an empty set as "no
- * provenance recorded" and therefore as a bypass.
+ * records a known-zero observation; only `undefined` leaves provenance unknown.
  */
 function recordSnapshotTextInternal(
 	session: FileSnapshotStoreOwner,
@@ -133,7 +132,7 @@ function recordSnapshotTextInternal(
 	// the async twin, where another mint of the same content could otherwise
 	// shift the LRU entry between `record` and `recordSeenLines`.
 	const tag = getFileSnapshotStore(session).record(canonicalSnapshotKey(absolutePath), normalized);
-	if (lines !== undefined && lines.length > 0) {
+	if (lines !== undefined) {
 		stageOrRecord({
 			kind: "text",
 			owner: session,
@@ -192,7 +191,6 @@ export function recordSeenLines(
 	tag: string,
 	lines: readonly number[],
 ): void {
-	if (lines.length === 0) return;
 	const key = canonicalSnapshotKey(absolutePath);
 	stageOrRecord({ kind: "lines", owner: session, key, tag, lines: Array.from(lines) });
 }
@@ -318,7 +316,6 @@ function verifiableLines(
 
 /** Records one resolved claim under its own tag. */
 function recordProvenance(claim: StagedProvenance, proven: readonly number[]): void {
-	if (proven.length === 0) return;
 	const store = getFileSnapshotStore(claim.owner);
 	if (claim.kind === "text") store.record(claim.key, claim.text, proven);
 	else store.recordSeenLines(claim.key, claim.tag, proven);
@@ -327,14 +324,13 @@ function recordProvenance(claim: StagedProvenance, proven: readonly number[]): v
 /** Returns 1 when a shortened body leaves the claim without proof. */
 function commitProvenance(claim: StagedProvenance, delivered: string, deliveredIsProducerOutput: boolean): number {
 	const proven = verifiableLines(claim, delivered, deliveredIsProducerOutput);
+	recordProvenance(claim, proven);
 	if (!deliveredIsProducerOutput && claim.kind === "lines") {
 		// The body was shortened and this claim carries no rows to check against
 		// it: an explicit line list cannot be matched to a body at all.
-		// Recording nothing leaves the tag without provenance rather than
-		// inventing some.
-		return proven.length > 0 ? 1 : 0;
+		// Record the known-zero observation without discarding prior seen lines.
+		return claim.lines.length > 0 ? 1 : 0;
 	}
-	recordProvenance(claim, proven);
 	return 0;
 }
 
@@ -344,11 +340,11 @@ function commitProvenance(claim: StagedProvenance, delivered: string, deliveredI
  * When `delivered` *is* the producer's own output the claims replay verbatim.
  * When a later stage shortened it, a claim is trusted only line by line: rows
  * present in `delivered` keep their lines, elided rows lose them, a row the
- * column cap clipped keeps nothing, and a claim with no rows to check is dropped.
- * Nothing is recorded as an empty set — an empty `seenLines` is a bypass, not
- * enforcement.
+ * column cap clipped keeps nothing, and a claim with no rows to check proves no
+ * lines. Zero-survivor observations record an empty set when no prior displayed
+ * lines exist; existing coverage is preserved by the store's union.
  *
- * Returns how many claims were dropped without proof, so the caller can report
+ * Returns how many explicit-line claims lost their proof, so the caller can report
  * that a shortened result carries no verifiable provenance.
  */
 export function commitStagedProvenance(

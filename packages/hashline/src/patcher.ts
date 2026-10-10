@@ -536,7 +536,7 @@ export class Patcher {
 	 */
 	#assertSeenLines(section: PatchSection, expected: string, anchorSnapshot: Snapshot | null): void {
 		const seen = anchorSnapshot?.seenLines;
-		if (!seen || seen.size === 0) return;
+		if (seen === undefined) return;
 		const unseen = section.collectAnchorLines().filter(line => !seen.has(line));
 		if (unseen.length === 0) return;
 		const sourceLines = anchorSnapshot?.text.split("\n") ?? [];

@@ -12,6 +12,7 @@
 - Added `AuthStorage.upsertLoginApiKey()` so interactive API-key entry can persist a distinct login-sourced key without replace-all wiping OAuth or sibling API-key accounts for the same provider, including through a remote auth broker.
 - Added OAuth provider unregistration so extension providers can replace or roll back login registrations without leaving stale global state.
 - Added a shared bounded retry wrapper for side-effect-free one-shot completions, covering resolved provider error stops and retryable thrown transport errors while honoring server backoff and cancellation.
+- Added per-model Anthropic beta passthrough: `Model.betas` entries are appended to the `anthropic-beta` header on anthropic-messages requests, so custom providers can declare relay-gated betas such as `context-1m-2025-08-07`.
 
 ### Changed
 

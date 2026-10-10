@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Added `betas` support for custom model definitions and model overrides in models.yml: declared Anthropic beta features (e.g. `context-1m-2025-08-07`) merge into the anthropic-messages `anthropic-beta` request header.
 - 增加会话恢复快照和日志尾部重放；保留完整历史，快照失效时使用完整日志恢复。
 - Added resume runtime projection (`selectResumeRuntimeEntries`): resumed sessions rehydrate from a compact branch — compaction-archived messages and execution-start markers drop while settings, customs, and the retained region pass through, and the execution-scope journal folds covered events into their newest snapshot — rebuilding identical context messages, pending-call state, and ledger/registry state from the full branch.
 - Added `nowMs` to `ExecutionRuntimeOptions`, threading a numeric clock into per-scope schedulers and their internal watchdog so decision timestamps (strategy issuance, leases) are controllable and deterministic in tests instead of implicitly reading the wall clock.
@@ -17,6 +18,11 @@
 
 
 ### Fixed
+
+- Fixed resumed session forks dropping archived journal entries and uncollapsed transcripts hiding messages before compaction.
+- Fixed fully clipped read results authorizing edits to undisplayed file lines while preserving previously displayed lines.
+- Fixed inline output truncation discarding the only full copy when artifact persistence fails.
+- Fixed invalid `betas` values in model overrides reaching request construction instead of reporting a configuration error.
 
 - 移除累计轮输出额度对新工具结果的裁剪，保留单次输出上限、原文恢复和配置迁移；安全编辑只认可最终完整交付的文件行。
 - 修复检查点来源引用校验的平方级扫描，以及内部续作状态被误报为丢失对话内容的问题。

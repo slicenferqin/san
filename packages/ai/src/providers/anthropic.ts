@@ -2769,7 +2769,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		};
 	}
 
-	const betaFeatures = [...extraBetas];
+	const betaFeatures = [...extraBetas, ...(model.betas ?? [])];
 	if (needsFineGrainedToolStreamingBeta) {
 		betaFeatures.push(fineGrainedToolStreamingBeta);
 	}

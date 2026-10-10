@@ -1363,6 +1363,7 @@ export class SessionManager {
 		const parentSessionId = this.#sessionId;
 		await this.#drainAndCloseWriter();
 		this.#clearDiskError();
+		this.#ensureJournalHydratedSync();
 
 		const timestamp = nowIso();
 		this.#sessionId = mintSessionId();
@@ -2086,7 +2087,9 @@ export class SessionManager {
 	}
 
 	buildSessionContext(options?: BuildSessionContextOptions): SessionContext {
-		return buildSessionContextFromBranch(this.getRuntimeBranch(), options);
+		const branch =
+			options?.transcript && !options.collapseCompactedHistory ? this.getBranch() : this.getRuntimeBranch();
+		return buildSessionContextFromBranch(branch, options);
 	}
 
 	sanitizeLoadedOpenAIResponsesReplayMetadata(): boolean {
